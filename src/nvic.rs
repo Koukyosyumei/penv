@@ -1,5 +1,6 @@
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
+const SCR: u32 = BASE + 0xd10;
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
@@ -12,6 +13,7 @@ const PRIORITY_END: u32 = PRIORITY + 31;
 pub struct Nvic {
     vector_base: Option<u32>,
     enabled: u32,
+    sleep_control: u32,
     pending: u32,
     priority: [u8; 32],
     system_priority: [u8; 8],
@@ -24,6 +26,7 @@ impl Nvic {
         Self {
             vector_base: None,
             enabled: 0,
+            sleep_control: 0,
             pending: 0,
             priority: [0; 32],
             system_priority: [0; 8],
@@ -32,9 +35,10 @@ impl Nvic {
         }
     }
 
-    pub const RANGES: [(u32, u32); 3] = [
+    pub const RANGES: [(u32, u32); 4] = [
         (ENABLE, PRIORITY_END + 1),
         (VTOR, VTOR + 4),
+        (SCR, SCR + 4),
         (SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1),
     ];
 
@@ -104,6 +108,7 @@ impl Nvic {
 
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         Some(match (address, width) {
+            (SCR, 4) => self.sleep_control,
             (VTOR, 4) => self.vector_base.unwrap_or(0),
             (ENABLE | DISABLE, 4) => self.enabled,
             (SET_PENDING | CLEAR_PENDING, 4) => self.pending,
@@ -125,6 +130,7 @@ impl Nvic {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
         match (address, width) {
+            (SCR, 4) => self.sleep_control = value & 0x16,
             (ENABLE, 4) => self.enabled |= value,
             (DISABLE, 4) => self.enabled &= !value,
             (SET_PENDING, 4) => self.pending |= value,
