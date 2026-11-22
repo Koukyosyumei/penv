@@ -1,0 +1,379 @@
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::{self, Read, Seek, SeekFrom},
+};
+
+use crate::bus::Bus;
+
+const SECTOR: u64 = 512;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Region {
+    Phy,
+    Core,
+    Reader,
+    Writer,
+}
+
+pub struct Registration {
+    pub base: u32,
+    pub size: u32,
+    pub region: Region,
+}
+
+#[derive(Default)]
+struct Dma {
+    address: [u8; 8],
+    length: [u8; 4],
+    enabled: bool,
+}
+
+impl Dma {
+    fn read(&self, offset: u32) -> u32 {
+        match offset {
+            0..=0x1c => u32::from(self.address[(offset / 4) as usize]),
+            0x20..=0x2c => u32::from(self.length[((offset - 0x20) / 4) as usize]),
+            0x30 => u32::from(self.enabled),
+            0x34 => 1,
+            _ => 0,
+        }
+    }
+
+    fn write(&mut self, offset: u32, value: u32) {
+        match offset {
+            0..=0x1c => self.address[(offset / 4) as usize] = value as u8,
+            0x20..=0x2c => self.length[((offset - 0x20) / 4) as usize] = value as u8,
+            0x30 => self.enabled = value & 1 != 0,
+            _ => {}
+        }
+    }
+
+    fn buffer<'a>(&self, bus: &'a mut Bus) -> Result<&'a mut [u8], ()> {
+        let address = u64::from_be_bytes(self.address) as u32;
+        let length = u32::from_be_bytes(self.length) as usize;
+        bus.memory(address, length).map_err(|_| ())
+    }
+}
+
+pub struct Card {
+    file: File,
+    file_size: u64,
+    capacity: u64,
+    overlay: BTreeMap<u64, Box<[u8; SECTOR as usize]>>,
+    state: u32,
+    rca: u16,
+    app: bool,
+    position: u64,
+    special: Option<Vec<u8>>,
+}
+
+impl Card {
+    pub fn new(file: File, capacity: u64) -> Result<Self, String> {
+        let file_size = file.metadata().map_err(|error| error.to_string())?.len();
+        if capacity < 2048
+            || file_size == 0
+            || file_size > capacity
+            || !capacity.is_multiple_of(SECTOR)
+        {
+            return Err("SD image must fit in a nonempty sector-aligned card".into());
+        }
+        Ok(Self {
+            file,
+            file_size,
+            capacity,
+            overlay: BTreeMap::new(),
+            state: 0,
+            rca: 0,
+            app: false,
+            position: 0,
+            special: None,
+        })
+    }
+
+    fn status(&self) -> u32 {
+        (self.state << 9) | (1 << 8) | (u32::from(self.app) << 5)
+    }
+
+    fn high_capacity(&self) -> bool {
+        self.capacity > (2 << 30)
+    }
+
+    fn csd(&self) -> u128 {
+        let common = (9 << 80) | (9 << 22) | (0x15 << 84) | (0x32 << 96);
+        if self.high_capacity() {
+            common | (1 << 126) | (u128::from(self.capacity / 524288 - 1).min(0x3f_ffff) << 48)
+        } else {
+            let multiplier = (0..=7)
+                .find(|&m| self.capacity / (2048 << m) <= 4096)
+                .unwrap_or(7);
+            let size = (self.capacity / (2048 << multiplier)).saturating_sub(1);
+            common | (u128::from(size.min(4095)) << 62) | ((multiplier as u128) << 47)
+        }
+    }
+
+    fn command(&mut self, command: u8, arg: u32) -> Option<(u8, u128)> {
+        let app = std::mem::take(&mut self.app);
+        self.special = None;
+        let long = |value| Some((2, value));
+        let short = |value: u32| Some((1, u128::from(value)));
+        let cid = 0xab00_0052_454e_4f44_0000_0000_0001_2800;
+        let ocr = 0x80ff_ff80 | (u32::from(self.high_capacity()) << 30);
+        if app {
+            match command {
+                6 | 23 => return short(self.status()),
+                13 => {
+                    self.special = Some(vec![0; 64]);
+                    return short(self.status());
+                }
+                41 => {
+                    self.state = 1;
+                    return short(ocr);
+                }
+                51 => {
+                    self.state = 5;
+                    self.special = Some(vec![0, 5, 0, 0, 0, 0, 0, 0]);
+                    return short(self.status());
+                }
+                _ => {}
+            }
+        }
+        match command {
+            0 => {
+                self.state = 0;
+                self.rca = 0;
+                Some((0, 0))
+            }
+            1 => short(ocr),
+            2 => {
+                self.state = 2;
+                long(cid)
+            }
+            3 => {
+                self.state = 3;
+                self.rca = self.rca.wrapping_add(1).max(1);
+                short((u32::from(self.rca) << 16) | self.status())
+            }
+            6 => {
+                let mut result = vec![0; 64];
+                result[47] = 1;
+                self.special = Some(result);
+                short(self.status())
+            }
+            7 => {
+                self.state = if arg >> 16 == u32::from(self.rca) && self.rca != 0 {
+                    4
+                } else {
+                    3
+                };
+                short(self.status())
+            }
+            8 => short(arg & 0xfff),
+            9 => long(self.csd()),
+            10 => long(cid),
+            12 => {
+                self.state = 4;
+                short(self.status())
+            }
+            13 | 16 | 23 => short(self.status()),
+            17 | 18 | 24 | 25 => {
+                self.position = u64::from(arg) * if self.high_capacity() { SECTOR } else { 1 };
+                self.state = if command <= 18 { 5 } else { 6 };
+                short(self.status())
+            }
+            55 => {
+                self.app = true;
+                short(self.status())
+            }
+            _ => None,
+        }
+    }
+
+    fn check_range(&self, offset: u64, size: usize) -> io::Result<()> {
+        if offset
+            .checked_add(size as u64)
+            .is_none_or(|end| end > self.capacity)
+        {
+            return Err(io::Error::other("access outside SD card capacity"));
+        }
+        Ok(())
+    }
+
+    fn backing(&mut self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
+        let available = self
+            .file_size
+            .saturating_sub(offset)
+            .min(bytes.len() as u64) as usize;
+        if available != 0 {
+            self.file.seek(SeekFrom::Start(offset))?;
+            self.file.read_exact(&mut bytes[..available])?;
+        }
+        bytes[available..].fill(0);
+        Ok(())
+    }
+
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<()> {
+        if let Some(data) = self.special.take() {
+            let available = bytes.len().min(data.len());
+            bytes[..available].copy_from_slice(&data[..available]);
+            bytes[available..].fill(0);
+        } else {
+            self.check_range(self.position, bytes.len())?;
+            self.backing(self.position, bytes)?;
+            let mut offset = self.position;
+            let mut position = 0;
+            while position < bytes.len() {
+                let within = (offset % SECTOR) as usize;
+                let length = (SECTOR as usize - within).min(bytes.len() - position);
+                if let Some(sector) = self.overlay.get(&(offset / SECTOR)) {
+                    bytes[position..position + length]
+                        .copy_from_slice(&sector[within..within + length]);
+                }
+                position += length;
+                offset += length as u64;
+            }
+            self.position = offset;
+        }
+        self.state = 4;
+        Ok(())
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.check_range(self.position, bytes.len())?;
+        let mut offset = self.position;
+        let mut position = 0;
+        while position < bytes.len() {
+            let index = offset / SECTOR;
+            let within = (offset % SECTOR) as usize;
+            let length = (SECTOR as usize - within).min(bytes.len() - position);
+            let mut sector = if let Some(sector) = self.overlay.remove(&index) {
+                sector
+            } else {
+                let mut sector = Box::new([0; SECTOR as usize]);
+                if within != 0 || length != sector.len() {
+                    self.backing(index * SECTOR, sector.as_mut_slice())?;
+                }
+                sector
+            };
+            sector[within..within + length].copy_from_slice(&bytes[position..position + length]);
+            self.overlay.insert(index, sector);
+            position += length;
+            offset += length as u64;
+        }
+        self.position = offset;
+        self.state = 4;
+        Ok(())
+    }
+}
+
+pub struct Controller {
+    pub name: String,
+    pub registrations: Vec<Registration>,
+    pub card: Option<Card>,
+    reader: Dma,
+    writer: Dma,
+    argument: [u8; 4],
+    response: [u8; 16],
+    command: u8,
+    flags: u8,
+    block_size: [u8; 2],
+    block_count: [u8; 4],
+    command_event: u32,
+    data_event: u32,
+}
+
+impl Controller {
+    pub const PHY_SIZE: u32 = 0x200;
+
+    pub fn new(name: String, registrations: Vec<Registration>) -> Self {
+        Self {
+            name,
+            registrations,
+            card: None,
+            reader: Dma::default(),
+            writer: Dma::default(),
+            argument: [0; 4],
+            response: [0; 16],
+            command: 0,
+            flags: 0,
+            block_size: [0; 2],
+            block_count: [0; 4],
+            command_event: 1,
+            data_event: 1,
+        }
+    }
+
+    pub fn locate(&self, address: u32) -> Option<(Region, u32)> {
+        self.registrations.iter().find_map(|registration| {
+            let offset = address.checked_sub(registration.base)?;
+            (registration.size.checked_sub(offset)? >= 4).then_some((registration.region, offset))
+        })
+    }
+
+    pub fn read(&self, region: Region, offset: u32) -> u32 {
+        match region {
+            Region::Phy => u32::from(offset == 0 && self.card.is_none()),
+            Region::Reader => self.reader.read(offset),
+            Region::Writer => self.writer.read(offset),
+            Region::Core => match offset {
+                0x00..=0x0c => u32::from(self.argument[(offset / 4) as usize]),
+                0x18 => u32::from(self.command),
+                0x1c => u32::from(self.flags),
+                0x24..=0x60 => u32::from(self.response[((offset - 0x24) / 4) as usize]),
+                0x64 => self.command_event,
+                0x68 => self.data_event,
+                0x6c..=0x70 => u32::from(self.block_size[((offset - 0x6c) / 4) as usize]),
+                0x74..=0x80 => u32::from(self.block_count[((offset - 0x74) / 4) as usize]),
+                _ => 0,
+            },
+        }
+    }
+
+    pub fn write(&mut self, region: Region, offset: u32, value: u32, bus: &mut Bus) {
+        match region {
+            Region::Phy => {}
+            Region::Reader => self.reader.write(offset, value),
+            Region::Writer => self.writer.write(offset, value),
+            Region::Core => match offset {
+                0x00..=0x0c => self.argument[(offset / 4) as usize] = value as u8,
+                0x18 => self.command = value as u8 & 0x7f,
+                0x1c => self.flags = value as u8,
+                0x20 if value & 1 != 0 => self.issue(bus),
+                0x6c..=0x70 => self.block_size[((offset - 0x6c) / 4) as usize] = value as u8,
+                0x74..=0x80 => self.block_count[((offset - 0x74) / 4) as usize] = value as u8,
+                _ => {}
+            },
+        }
+    }
+
+    fn issue(&mut self, bus: &mut Bus) {
+        self.command_event = 5;
+        self.data_event = 1;
+        let Some(card) = self.card.as_mut() else {
+            return;
+        };
+        let Some((kind, response)) = card.command(self.command, u32::from_be_bytes(self.argument))
+        else {
+            return;
+        };
+        if kind != self.flags & 7 {
+            return;
+        }
+        self.command_event = 1;
+        self.response = response.to_be_bytes();
+        let result = match (self.flags >> 5) & 7 {
+            1 if self.reader.enabled => self
+                .reader
+                .buffer(bus)
+                .and_then(|buffer| card.read(buffer).map_err(|_| ())),
+            2 if self.writer.enabled => self
+                .writer
+                .buffer(bus)
+                .and_then(|buffer| card.write(buffer).map_err(|_| ())),
+            _ => Ok(()),
+        };
+        if result.is_err() {
+            self.data_event = 3;
+        }
+    }
+}

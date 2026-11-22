@@ -8,6 +8,7 @@ mod litex_eth;
 mod litex_flash;
 mod litex_i2c;
 mod litex_panel;
+mod litex_sd;
 mod machine;
 mod monitor;
 mod murax;
@@ -227,6 +228,7 @@ fn run() -> Result<ExitCode, String> {
     let mut silence_ranges = Vec::new();
     let mut vex_supervisor_irq_mask = None;
     let mut buttons = Vec::new();
+    let mut sd_card = None;
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -255,6 +257,10 @@ fn run() -> Result<ExitCode, String> {
             let path = value.resolve(root, asset_dir.as_deref())?;
             binaries.push((path, address));
         }
+        if let Some((controller, image, capacity)) = boot.sd_card {
+            let path = image.resolve(root, asset_dir.as_deref())?;
+            sd_card = Some((controller, path, capacity));
+        }
         boot_pcs = boot.boot_pcs;
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
@@ -279,6 +285,12 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if let Some((controller, path, capacity)) = sd_card {
+        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let card =
+            litex_sd::Card::new(file, capacity).map_err(|e| format!("{}: {e}", path.display()))?;
+        machine.bus.attach_litex_sd(&controller, card)?;
+    }
     for (base, size) in silence_ranges {
         machine.bus.map_silencer(base, size)?;
     }

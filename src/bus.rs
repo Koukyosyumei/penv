@@ -9,6 +9,7 @@ use crate::{
     litex,
     litex_eth::{Ethernet, Phy, Registration},
     litex_panel::{ButtonAction, Panel},
+    litex_sd::{Card, Controller as SdController},
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -89,6 +90,7 @@ pub struct Bus {
     litex_gpio_irqs: Vec<(usize, usize, u8)>,
     litex_eth: Option<Ethernet>,
     litex_panel: Option<Panel>,
+    litex_sd: Option<SdController>,
     litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
@@ -279,6 +281,11 @@ impl Bus {
                     .bases
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, Panel::SIZE))
+            })
+            || self.litex_sd.as_ref().is_some_and(|sd| {
+                sd.registrations.iter().any(|registration| {
+                    overlaps_range(start, end, registration.base, registration.size)
+                })
             })
             || self.litex_io.iter().any(|(bases, device)| {
                 bases
@@ -591,6 +598,34 @@ impl Bus {
         }
         region.flash_pages = Some(vec![false; size / 4096]);
         self.litex_flash = Some((bases, index, crate::litex_flash::Flash::default()));
+        Ok(())
+    }
+
+    pub fn map_litex_sd(&mut self, sd: SdController) -> Result<(), String> {
+        for (index, region) in sd.registrations.iter().enumerate() {
+            let start = u64::from(region.base);
+            let end = start + u64::from(region.size);
+            self.check_litex_ranges(&[region.base], region.size)?;
+            if region.size == 0
+                || sd.registrations[..index]
+                    .iter()
+                    .any(|other| overlaps_range(start, end, other.base, other.size))
+            {
+                return Err(format!("invalid or overlapping SD range at {start:#010x}"));
+            }
+        }
+        self.litex_sd = Some(sd);
+        Ok(())
+    }
+
+    pub fn attach_litex_sd(&mut self, name: &str, card: Card) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        let controller = self
+            .litex_sd
+            .as_mut()
+            .filter(|controller| controller.name == name)
+            .ok_or_else(|| format!("unknown LiteX SD controller {name:?}"))?;
+        controller.card = Some(card);
         Ok(())
     }
 
@@ -958,6 +993,13 @@ impl Bus {
         {
             return Ok(panel.read(offset));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(sd) = self.litex_sd.as_ref()
+            && let Some((region, offset)) = sd.locate(address)
+        {
+            return Ok(sd.read(region, offset));
+        }
         if address as usize & (N - 1) == 0 && self.zero_mmio(address, N) {
             return Ok(0);
         }
@@ -1135,6 +1177,14 @@ impl Bus {
             && let Some(offset) = litex_offset(&panel.bases, Panel::SIZE, address)
         {
             panel.write(offset, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some((region, offset)) = self.litex_sd.as_ref().and_then(|sd| sd.locate(address))
+        {
+            let mut sd = self.litex_sd.take().unwrap();
+            sd.write(region, offset, value, self);
+            self.litex_sd = Some(sd);
             return Ok(());
         }
         if self.zero_mmio(address, width) {

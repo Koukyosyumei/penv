@@ -10,6 +10,7 @@ use crate::{
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     litex_i2c::{I2c, Sensor},
     litex_panel::{Button, Panel},
+    litex_sd::{self, Controller as SdController},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
     uart::LiteXTxTiming,
@@ -347,6 +348,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut spi_loopbacks = Vec::new();
     let mut litex_i2c = None;
     let mut sensor = None;
+    let mut litex_sd = None;
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus)?;
@@ -450,6 +452,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX timer is supported"));
                 }
             }
+            "SD.LiteSDCard" => {
+                keys(entry, &[])?;
+                if litex_sd.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX SD controller is supported"));
+                }
+            }
             "Network.LiteX_Ethernet" | "Network.LiteX_Ethernet_CSR32" => {
                 if litex_eth.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX Ethernet controller is supported"));
@@ -530,6 +538,28 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| controller.error(&e))?;
     } else if let Some(sensor) = sensor {
         return Err(sensor.error("expected a LiteX I2C controller attachment"));
+    }
+    if let Some(entry) = litex_sd {
+        let registrations = entry
+            .registration_list()
+            .ok_or_else(|| entry.error("expected LiteX SD PHY and core registrations"))?
+            .into_iter()
+            .map(|registration| sd_registration(entry, registration))
+            .collect::<Result<Vec<_>, _>>()?;
+        if ![litex_sd::Region::Phy, litex_sd::Region::Core]
+            .iter()
+            .all(|region| {
+                registrations
+                    .iter()
+                    .any(|registration| registration.region == *region)
+            })
+        {
+            return Err(entry.error("expected LiteX SD PHY and core registrations"));
+        }
+        machine
+            .bus
+            .map_litex_sd(SdController::new(entry.name.clone(), registrations))
+            .map_err(|e| entry.error(&e))?;
     }
     if let Some(chip) = flash_chip {
         let controller = flash_controller
@@ -1519,18 +1549,50 @@ fn map_litex_panel(
 }
 
 fn ethernet_registration(entry: &Entry, registration: &str) -> Result<Registration, String> {
-    let Some(properties) = registration
-        .strip_prefix("sysbus new Bus.BusMultiRegistration")
-        .map(str::trim)
-        .and_then(|text| text.strip_prefix('{'))
-        .and_then(|text| text.strip_suffix('}'))
-    else {
+    let Some((base, size, name)) = multi_registration(entry, registration)? else {
         return Ok(Registration {
             base: entry.registration_address(registration)?,
             size: Ethernet::MAC_SIZE,
             region: EthernetRegion::Mac,
         });
     };
+    let region = match name {
+        "buffer" => EthernetRegion::Buffer,
+        "phy" => EthernetRegion::Phy,
+        _ => return Err(entry.error("unsupported Ethernet region")),
+    };
+    Ok(Registration { base, size, region })
+}
+
+fn sd_registration(entry: &Entry, registration: &str) -> Result<litex_sd::Registration, String> {
+    let Some((base, size, name)) = multi_registration(entry, registration)? else {
+        return Ok(litex_sd::Registration {
+            base: entry.registration_address(registration)?,
+            size: SdController::PHY_SIZE,
+            region: litex_sd::Region::Phy,
+        });
+    };
+    let region = match name {
+        "core" => litex_sd::Region::Core,
+        "reader" => litex_sd::Region::Reader,
+        "writer" => litex_sd::Region::Writer,
+        _ => return Err(entry.error("unsupported LiteX SD region")),
+    };
+    Ok(litex_sd::Registration { base, size, region })
+}
+
+fn multi_registration<'a>(
+    entry: &Entry,
+    registration: &'a str,
+) -> Result<Option<(u32, u32, &'a str)>, String> {
+    let Some(properties) = registration.strip_prefix("sysbus new Bus.BusMultiRegistration") else {
+        return Ok(None);
+    };
+    let properties = properties
+        .trim()
+        .strip_prefix('{')
+        .and_then(|text| text.strip_suffix('}'))
+        .ok_or_else(|| entry.error("expected multi-registration properties"))?;
     let mut base = None;
     let mut size = None;
     let mut region = None;
@@ -1538,23 +1600,24 @@ fn ethernet_registration(entry: &Entry, registration: &str) -> Result<Registrati
         let (key, value) = property
             .split_once(':')
             .map(|(key, value)| (key.trim(), value.trim()))
-            .ok_or_else(|| entry.error("invalid Ethernet registration property"))?;
+            .ok_or_else(|| entry.error("invalid multi-registration property"))?;
         match key {
             "address" if base.is_none() => base = Some(number(value).map_err(|e| entry.error(&e))?),
             "size" if size.is_none() => size = Some(number(value).map_err(|e| entry.error(&e))?),
             "region" if region.is_none() => {
-                region = Some(match value {
-                    "\"buffer\"" => EthernetRegion::Buffer,
-                    "\"phy\"" => EthernetRegion::Phy,
-                    _ => return Err(entry.error("unsupported Ethernet region")),
-                })
+                region = Some(
+                    value
+                        .strip_prefix('"')
+                        .and_then(|text| text.strip_suffix('"'))
+                        .ok_or_else(|| entry.error("expected a quoted registration region"))?,
+                );
             }
-            _ => return Err(entry.error("unsupported or duplicate Ethernet registration property")),
+            _ => return Err(entry.error("unsupported or duplicate multi-registration property")),
         }
     }
     match (base, size, region) {
-        (Some(base), Some(size), Some(region)) => Ok(Registration { base, size, region }),
-        _ => Err(entry.error("expected Ethernet address, size and region")),
+        (Some(base), Some(size), Some(region)) => Ok(Some((base, size, region))),
+        _ => Err(entry.error("expected address, size and region")),
     }
 }
 

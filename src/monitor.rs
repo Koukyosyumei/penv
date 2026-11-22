@@ -7,6 +7,7 @@ use std::{
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(Asset, u32)>,
+    pub sd_card: Option<(String, Asset, u64)>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
@@ -229,6 +230,25 @@ fn execute(
                 Asset::new(file, script),
                 crate::parse_address(resolve(address)?)?,
             ));
+        }
+        [
+            "machine",
+            "SdCardFromFile",
+            image,
+            controller,
+            size,
+            "False" | "false",
+        ] if boot.platform.is_some() && boot.sd_card.is_none() => {
+            let image = resolve(image)?
+                .strip_prefix('@')
+                .ok_or("expected @SD-image-path")?;
+            let size = resolve(size)?.replace('_', "");
+            let capacity = match size.strip_prefix("0x") {
+                Some(hex) => u64::from_str_radix(hex, 16),
+                None => size.parse(),
+            }
+            .map_err(|_| "invalid SD card capacity")?;
+            boot.sd_card = Some((controller.to_string(), Asset::new(image, script), capacity));
         }
         ["sysbus", "SilenceRange", start, size] if boot.platform.is_some() => {
             let start = start
