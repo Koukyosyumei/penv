@@ -68,6 +68,18 @@ impl Nvic {
         }
     }
 
+    pub fn sleep_on_exit(&self) -> bool {
+        self.sleep_control & (1 << 1) != 0
+    }
+
+    pub fn send_event_on_pending(&self) -> bool {
+        self.sleep_control & (1 << 4) != 0
+    }
+
+    pub fn pending_exceptions(&self) -> u64 {
+        u64::from(self.pending) << 16
+    }
+
     pub fn priority(&self, exception: u8) -> u8 {
         match exception {
             11 => self.system_priority[3],

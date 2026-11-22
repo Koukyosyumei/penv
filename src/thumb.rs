@@ -2,8 +2,17 @@ use std::io::Write;
 
 use crate::{
     bus::Bus,
-    systick::{PENDSV, SYSTICK},
+    nvic::Nvic,
+    systick::{PENDSV, SYSTICK, SysTick},
 };
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Sleep {
+    #[default]
+    Running,
+    Interrupt,
+    Event,
+}
 
 #[derive(Clone, Default)]
 pub struct Thumb {
@@ -15,7 +24,9 @@ pub struct Thumb {
     active_exception: u8,
     active_exceptions: u64,
     interrupts_masked: bool,
-    waiting_for_interrupt: bool,
+    sleep: Sleep,
+    event: bool,
+    pending: u64,
     thread_uses_psp: bool,
     msp: u32,
     psp: u32,
@@ -293,6 +304,9 @@ impl Thumb {
             }
             if previous == 0 {
                 self.thread_uses_psp = use_psp;
+                if bus.nvic.as_ref().is_some_and(Nvic::sleep_on_exit) {
+                    self.sleep = Sleep::Interrupt;
+                }
             }
             r[13] = stack.wrapping_add(32 + ((xpsr >> 7) & 4));
             r[14] = lr;
@@ -309,8 +323,16 @@ impl Thumb {
         Ok(target & !1)
     }
 
-    pub fn waiting_for_interrupt(&self) -> bool {
-        self.waiting_for_interrupt
+    pub fn sleeping(&self) -> bool {
+        self.sleep != Sleep::Running
+    }
+
+    fn signal_event(&mut self) {
+        if self.sleep == Sleep::Event {
+            self.sleep = Sleep::Running;
+        } else {
+            self.event = true;
+        }
     }
 
     pub fn service_interrupts(
@@ -323,7 +345,15 @@ impl Thumb {
         if let Some(timer) = bus.systick.as_mut() {
             timer.tick();
         }
-        if self.interrupts_masked && !self.waiting_for_interrupt {
+        let pending = bus.nvic.as_ref().map_or(0, Nvic::pending_exceptions)
+            | bus.systick.as_ref().map_or(0, SysTick::pending_exceptions);
+        if pending & !self.pending != 0
+            && bus.nvic.as_ref().is_some_and(Nvic::send_event_on_pending)
+        {
+            self.signal_event();
+        }
+        self.pending = pending;
+        if self.interrupts_masked && self.sleep != Sleep::Interrupt {
             return Ok(false);
         }
         let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
@@ -355,7 +385,7 @@ impl Thumb {
         if let Some((exception, _)) =
             selected.filter(|(_, priority)| u16::from(*priority) < current_priority)
         {
-            self.waiting_for_interrupt = false;
+            self.sleep = Sleep::Running;
             if self.interrupts_masked {
                 return Ok(false);
             }
@@ -365,6 +395,7 @@ impl Thumb {
             } else {
                 bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
             }
+            self.pending &= !(1 << exception);
             return Ok(true);
         }
         Ok(false)
@@ -610,8 +641,14 @@ impl Thumb {
                 };
             }
             0xbe00..=0xbeff => return Ok(false),
-            0xbf00 => {}
-            0xbf30 => self.waiting_for_interrupt = true,
+            0xbf00 | 0xbf10 => {} // NOP and scheduler yield.
+            0xbf20 => {
+                if !std::mem::take(&mut self.event) {
+                    self.sleep = Sleep::Event;
+                }
+            }
+            0xbf30 => self.sleep = Sleep::Interrupt,
+            0xbf40 => self.signal_event(),
             0xc000..=0xcfff if inst & 0xff != 0 => {
                 let registers = inst & 0xff;
                 let base_register = ((inst >> 8) & 7) as usize;
@@ -1036,27 +1073,27 @@ mod wait_tests {
                 .unwrap()
         );
         assert_eq!(pc, 2);
-        assert!(thumb.waiting_for_interrupt());
+        assert!(thumb.sleeping());
         assert!(
             !thumb
                 .service_interrupts(&mut pc, &mut registers, &mut bus)
                 .unwrap()
         );
-        assert!(thumb.waiting_for_interrupt());
+        assert!(thumb.sleeping());
         bus.write(0xe000_e200, 4, 1, &mut output).unwrap();
         assert!(
             !thumb
                 .service_interrupts(&mut pc, &mut registers, &mut bus)
                 .unwrap()
         );
-        assert!(thumb.waiting_for_interrupt());
+        assert!(thumb.sleeping());
         bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
         assert!(
             !thumb
                 .service_interrupts(&mut pc, &mut registers, &mut bus)
                 .unwrap()
         );
-        assert!(!thumb.waiting_for_interrupt());
+        assert!(!thumb.sleeping());
         assert_eq!(pc, 2);
     }
 }

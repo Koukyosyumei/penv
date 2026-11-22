@@ -61,6 +61,10 @@ impl SysTick {
         }
     }
 
+    pub fn pending_exceptions(&self) -> u64 {
+        (u64::from(self.pending) << SYSTICK) | (u64::from(self.pendsv_pending) << PENDSV)
+    }
+
     pub fn pending(&self, exception: u8) -> bool {
         match exception {
             PENDSV => self.pendsv_pending,

@@ -419,7 +419,7 @@ impl Hart {
             {
                 return Ok(Step::Trap);
             }
-            if thumb.waiting_for_interrupt() {
+            if thumb.sleeping() {
                 return Ok(Step::Trap);
             }
             return thumb
