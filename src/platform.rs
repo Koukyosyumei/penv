@@ -295,10 +295,19 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .map_err(|error| entry.error(&error))?;
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
-                let (_, size) = keys(entry, &["size"])?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| entry.error("missing memory size"))?;
+                let init = entry.body.iter().position(|(_, text)| text == "init:");
+                let (properties, commands) = init
+                    .map_or((entry.body.as_slice(), &[][..]), |index| {
+                        (&entry.body[..index], &entry.body[index + 1..])
+                    });
+                let size = match properties {
+                    [(_, text)] => text
+                        .split_once(':')
+                        .filter(|(key, _)| key.trim() == "size")
+                        .map(|(_, value)| value.trim()),
+                    _ => None,
+                }
+                .ok_or_else(|| entry.error("expected one memory size property before init"))?;
                 let size = number(size).map_err(|e| entry.error(&e))?;
                 let address = if let Some(range) = entry
                     .registration
@@ -324,6 +333,29 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .bus
                     .map_ram(address, size as usize)
                     .map_err(|e| entry.error(&e))?;
+                for (line, command) in commands {
+                    let error = |detail: &str| {
+                        format!(
+                            "{}:{line}: {}: {detail}",
+                            entry.source.display(),
+                            entry.name
+                        )
+                    };
+                    let (offset, width, value) =
+                        memory_init(command, address).map_err(|e| error(&e))?;
+                    if offset
+                        .checked_add(width as u32)
+                        .is_none_or(|end| end > size)
+                    {
+                        return Err(error("memory init write exceeds the declared region"));
+                    }
+                    let target = address + offset;
+                    machine
+                        .bus
+                        .memory(target, width)
+                        .map_err(|e| error(&e.to_string()))?
+                        .copy_from_slice(&value.to_le_bytes()[..width]);
+                }
                 ram = true;
             }
             "GPIOPort.Murax_GPIO" => {
@@ -1068,6 +1100,38 @@ fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
     }
 }
 
+fn memory_init(command: &str, base: u32) -> Result<(u32, usize, u32), String> {
+    const RANDOM_WORD: &str = r#"`py "print emulationManager.Instance.CurrentEmulation.RandomGenerator.NextUlong() & 0xffffffff"`"#;
+    let (operation, arguments) = command
+        .split_once(char::is_whitespace)
+        .ok_or("expected a memory init write")?;
+    let width = match operation {
+        "WriteWord" => 2,
+        "WriteDoubleWord" => 4,
+        _ => return Err(format!("unsupported memory init command {operation:?}")),
+    };
+    let (offset, value) = arguments
+        .trim_start()
+        .split_once(char::is_whitespace)
+        .ok_or("expected a memory init offset and value")?;
+    let offset = number(offset)?;
+    let value = match value.trim() {
+        RANDOM_WORD if width == 4 => {
+            // Mix the destination into a stable simulated ID without a Python runtime.
+            let mut word = (u64::from(base) << 32) | u64::from(offset);
+            word = word.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            word = (word ^ (word >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            word = (word ^ (word >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            (word ^ (word >> 31)) as u32
+        }
+        value => number(value)?,
+    };
+    if width == 2 && value > u32::from(u16::MAX) {
+        return Err("memory init value exceeds 16 bits".into());
+    }
+    Ok((offset, width, value))
+}
+
 fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)>, String> {
     let mut seen = HashSet::new();
     entry
@@ -1086,4 +1150,46 @@ fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)
                 })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_init_loads_system_words_and_rejects_cross_region_writes() {
+        let path =
+            std::env::temp_dir().join(format!("penv-memory-init-{}.repl", std::process::id()));
+        let repl = r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+system_flash_ro: Memory.MappedMemory @ sysbus 0x1ff00000
+    size: 0x20000
+    init:
+        WriteDoubleWord 0x1e800 `py "print emulationManager.Instance.CurrentEmulation.RandomGenerator.NextUlong() & 0xffffffff"`
+        WriteDoubleWord 0x1e804 `py "print emulationManager.Instance.CurrentEmulation.RandomGenerator.NextUlong() & 0xffffffff"`
+        WriteWord 0x1e880 0x800
+"#;
+        fs::write(&path, repl).unwrap();
+        let first = load(&path, None).unwrap();
+        let second = load(&path, None).unwrap();
+        let uid = |machine: &Machine, offset: u32| {
+            machine.bus.read_ram::<4>(0x1ff0_0000 + offset).unwrap()
+        };
+        assert_eq!(uid(&first, 0x1e800), uid(&second, 0x1e800));
+        assert_ne!(uid(&first, 0x1e800), uid(&first, 0x1e804));
+        assert_eq!(first.bus.read_ram::<2>(0x1ff1_e880).unwrap(), 0x800);
+        assert_eq!(first.bus.read_ram::<2>(0x1ff1_e882).unwrap(), 0);
+
+        fs::write(&path, repl.replace("0x1e880 0x800", "0x1ffff 0x800")).unwrap();
+        let result = load(&path, None);
+        fs::remove_file(&path).unwrap();
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .contains("memory init write exceeds the declared region")
+        );
+        assert!(memory_init("WriteWord 0 0x10000", 0).is_err());
+        assert!(memory_init("WriteDoubleWord 0 `py \"print 1\"`", 0).is_err());
+    }
 }

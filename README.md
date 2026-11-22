@@ -135,8 +135,8 @@ target/release/penv run --script "$smp" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 400000000 --stats
 ```
 
-- `cargo test` はユニットテスト 45 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
-- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。`eaef188` は `stm32h7.repl:225` の `Video.STM32LTDC` で停止しました。現行コードは LTDC の宣言を通過し、`stm32h7.repl:500` のシステムフラッシュ初期化 `init:` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
+- `cargo test` はユニットテスト 46 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
+- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。`eaef188` は `stm32h7.repl:225` の `Video.STM32LTDC` で停止しました。`0de37fd` は `stm32h7.repl:500` のシステムフラッシュ初期化 `init:` で停止しました。現行コードは初期化を通過し、`stm32h7.repl:524` の `Timers.STM32L0_LpTimer`（`lptimer1`）で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
 双方向 Ethernet の回帰テストは個別に実行できます。STM32H7 の DMA 記述子から LiteX の受信スロットへフレームを送り、逆方向では LiteX の送信スロットから STM32H7 の受信バッファーへ返した内容を照合します。
@@ -157,7 +157,7 @@ CARGO_TARGET_DIR="$baseline/target" cargo build --release --manifest-path "$base
 
 ### 公開 STM32H7 ELF の USART2 スモークテスト
 
-検証スクリプトは同じ上流 RESC のリセットマクロを使い、REPL の参照だけを生成した診断構成に差し替えます。診断構成は上流 REPL から起動に必要な宣言を抽出し、Cortex-M7、480 MHz の SysTick、USART2 の EXTI 配線を使います。DBGMCU ID と CAN CCFG は定数応答です。システムフラッシュの REPL 初期化スクリプトは省いています。ELF は上流 URL から取得し、SHA-1 を検証します。キャッシュ済みファイルを使う場合は `PENV_ASSET_DIR` を指定できます。
+検証スクリプトは同じ上流 RESC のリセットマクロを使い、REPL の参照だけを生成した診断構成に差し替えます。診断構成は上流 REPL から起動に必要な宣言を抽出し、Cortex-M7、480 MHz の SysTick、USART2 の EXTI 配線を使います。DBGMCU ID と CAN CCFG は定数応答です。システムフラッシュは上流の `init:` ブロックを含めて読み込みます。ELF は上流 URL から取得し、SHA-1 を検証します。キャッシュ済みファイルを使う場合は `PENV_ASSET_DIR` を指定できます。
 
 ```sh
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc tests/stm32h7-zephyr-smoke.sh
@@ -247,3 +247,23 @@ printf 'P6\n1 1\n255\n\x34\xab\xcd' | cmp - "$work/frame.ppm"
 ```
 
 公開 Zephyr ELF の Shell と VEML7700 スモークテストも通過しました。上流 `STM32LTDC.robot` が指定する STM32H747I display ELF は、USART1 と SDRAM を追加した診断構成で試し、`pc=0x080031a2` の `0x5802648c` への未マップアクセスで停止しました。専用デモの表示、レイヤー合成、CLUT、走査タイミング、垂直帰線時の再読み込み、FIFO アンダーランは未検証または未実装です。
+
+### システムフラッシュの REPL 初期化
+
+メモリの `init:` では、領域先頭からのオフセットを指定する `WriteWord` と `WriteDoubleWord` を読み込み時に適用します。上流 STM32H7 の UID 生成式は、アドレスとオフセットから得た再現可能な値で処理します。同じ配置のマシン同士では UID も同じ値になります。任意の Python 式やその他の初期化コマンドは未対応です。
+
+USART2 スモークテストが表示した診断用ディレクトリを `work`、公開 ELF の保存先を `assets` に設定して実行します。
+
+```bash
+events=()
+step=1000000
+for command in '0x1ff1e880 16' '0x1ff1e800 32' '0x1ff1e804 32' '0x1ff1e808 32'; do
+    printf 'devmem %s\r' "$command" > "$work/flash-$step.txt"
+    events+=(--uart-event "$step:$work/flash-$step.txt")
+    step=$((step + 200000))
+done
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root ../renode --asset-dir "$assets" --max-steps "$step" "${events[@]}"
+```
+
+公開 Zephyr ELF の Shell から、容量ワード `0x800` と UID の `0x08e827a7`、`0x175bcde3`、`0x6ae78d93` を確認しました。同じ初期化を含む診断構成で、VEML7700 の `499.000000` lux と、DMA2D から LTDC に渡した PPM の RGB 値 `34 ab cd` も再確認しました。未変更の上流 RESC での起動には、次の `Timers.STM32L0_LpTimer` への対応が残っています。
