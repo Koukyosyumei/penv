@@ -50,6 +50,7 @@ Options:
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
+  --litex-timer-alias BASE  Map the existing LiteX timer at an additional address
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
@@ -100,6 +101,7 @@ fn run() -> Result<ExitCode, String> {
     let mut max_steps = 10_000_000;
     let mut extra_ram = Vec::new();
     let mut clint = None;
+    let mut litex_timer_aliases = Vec::new();
     let mut mtvec = None;
     let mut vex_irq_mask = None;
     let mut platform_path = None;
@@ -178,6 +180,13 @@ fn run() -> Result<ExitCode, String> {
                 if target.replace(parse_address(&value)?).is_some() {
                     return Err(format!("{option} may only be specified once"));
                 }
+            }
+            Some("--litex-timer-alias") => {
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--litex-timer-alias requires BASE")?;
+                litex_timer_aliases.push(parse_address(&value)?);
             }
             Some("--clint") => {
                 let value = args
@@ -304,6 +313,9 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    for base in litex_timer_aliases {
+        machine.bus.map_litex_timer_alias(base)?;
+    }
     if enable_litex_uart_legacy_console {
         machine.bus.enable_litex_uart_legacy_console()?;
     }

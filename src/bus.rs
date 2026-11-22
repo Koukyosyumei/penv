@@ -539,6 +539,16 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_litex_timer_alias(&mut self, base: u32) -> Result<(), String> {
+        let timer = self
+            .litex_timer
+            .as_ref()
+            .ok_or("--litex-timer-alias requires a LiteX timer")?;
+        self.check_litex_ranges(&[base], timer.timer.size())?;
+        self.litex_timer.as_mut().unwrap().bases.push(base);
+        Ok(())
+    }
+
     pub fn map_litex_cpu_timer(&mut self, base: u32, frequency: u32) -> Result<(), String> {
         self.check_litex_ranges(&[base], litex::CpuTimer::SIZE)?;
         self.litex_cpu_timer = Some(litex::CpuTimer::new(base, frequency));
