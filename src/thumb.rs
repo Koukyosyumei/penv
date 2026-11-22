@@ -15,6 +15,7 @@ pub struct Thumb {
     active_exception: u8,
     active_exceptions: u64,
     interrupts_masked: bool,
+    waiting_for_interrupt: bool,
     thread_uses_psp: bool,
     msp: u32,
     psp: u32,
@@ -308,6 +309,10 @@ impl Thumb {
         Ok(target & !1)
     }
 
+    pub fn waiting_for_interrupt(&self) -> bool {
+        self.waiting_for_interrupt
+    }
+
     pub fn service_interrupts(
         &mut self,
         pc: &mut u32,
@@ -318,7 +323,7 @@ impl Thumb {
         if let Some(timer) = bus.systick.as_mut() {
             timer.tick();
         }
-        if self.interrupts_masked {
+        if self.interrupts_masked && !self.waiting_for_interrupt {
             return Ok(false);
         }
         let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
@@ -350,6 +355,10 @@ impl Thumb {
         if let Some((exception, _)) =
             selected.filter(|(_, priority)| u16::from(*priority) < current_priority)
         {
+            self.waiting_for_interrupt = false;
+            if self.interrupts_masked {
+                return Ok(false);
+            }
             *pc = self.exception_entry(exception, *pc, r, bus)?;
             if matches!(exception, PENDSV | SYSTICK) {
                 bus.systick.as_mut().unwrap().acknowledge(exception);
@@ -602,6 +611,7 @@ impl Thumb {
             }
             0xbe00..=0xbeff => return Ok(false),
             0xbf00 => {}
+            0xbf30 => self.waiting_for_interrupt = true,
             0xc000..=0xcfff if inst & 0xff != 0 => {
                 let registers = inst & 0xff;
                 let base_register = ((inst >> 8) & 7) as usize;
@@ -1000,5 +1010,53 @@ mod tests {
         assert!(thumb.negative);
         assert!(!thumb.zero);
         assert_eq!(thumb.active_exception, 0);
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+
+    #[test]
+    fn wfi_wakes_on_an_enabled_interrupt_even_while_primask_is_set() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x200).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        let mut output = std::io::sink();
+        bus.write(0, 2, 0xbf30, &mut output).unwrap();
+        let mut thumb = Thumb {
+            interrupts_masked: true,
+            ..Thumb::default()
+        };
+        let mut pc = 0;
+        let mut registers = [0; 32];
+        assert!(
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap()
+        );
+        assert_eq!(pc, 2);
+        assert!(thumb.waiting_for_interrupt());
+        assert!(
+            !thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert!(thumb.waiting_for_interrupt());
+        bus.write(0xe000_e200, 4, 1, &mut output).unwrap();
+        assert!(
+            !thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert!(thumb.waiting_for_interrupt());
+        bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
+        assert!(
+            !thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert!(!thumb.waiting_for_interrupt());
+        assert_eq!(pc, 2);
     }
 }

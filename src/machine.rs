@@ -395,6 +395,9 @@ impl Hart {
             {
                 return Ok(Step::Trap);
             }
+            if thumb.waiting_for_interrupt() {
+                return Ok(Step::Trap);
+            }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
                 .map(|retired| {
