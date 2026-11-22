@@ -16,7 +16,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                 entry.model.as_str(),
                 "I2C.STM32F7_I2C"
                     | "SPI.STM32SPI"
-                    | "Timers.STM32_Timer"
                     | "CAN.STMCAN"
                     | "Timers.STM32F4_RTC"
                     | "DMA.STM32G0DMA"
@@ -47,7 +46,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                     !text.starts_with("invertedAFPins:")
                 });
             }
-            "UART.STM32F7_USART" => {
+            "UART.STM32F7_USART" | "Timers.STM32_Timer" => {
                 entry.body.retain_mut(|(_, text)| {
                     let Some((source, targets)) = text.split_once("->") else {
                         return true;
@@ -59,6 +58,10 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                             let Some((name, _)) = target.split_once('@') else {
                                 return true;
                             };
+                            if name.contains('#') && entry.model == "Timers.STM32_Timer" {
+                                gpio_wiring = true;
+                                return false;
+                            }
                             omitted
                                 .get(name.trim())
                                 .is_none_or(|model| model != "DMA.STM32G0DMA")
@@ -88,6 +91,15 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
             match previous.model.as_str() {
                 "GPIOPort.STM32_GPIOPort"
                     if entry.body.iter().all(|(_, text)| text.contains("->")) =>
+                {
+                    gpio_wiring |= !entry.body.is_empty();
+                }
+                "Timers.STM32_Timer"
+                    if entry.body.iter().all(|(_, text)| {
+                        text.split_once("->").is_some_and(|(_, locations)| {
+                            locations.split('|').all(|location| location.contains('#'))
+                        })
+                    }) =>
                 {
                     gpio_wiring |= !entry.body.is_empty();
                 }

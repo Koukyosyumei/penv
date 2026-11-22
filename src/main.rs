@@ -15,6 +15,7 @@ mod stm32_crc;
 mod stm32_exti;
 mod stm32_gpio;
 mod stm32_rcc;
+mod stm32_timer;
 mod stm32_uart;
 mod sv32;
 mod systick;

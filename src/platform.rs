@@ -9,6 +9,7 @@ use std::{
 use crate::{
     machine::{MAX_HARTS, Machine},
     stm32_gpio::Stm32Gpio,
+    stm32_timer::Stm32Timer,
     stm32_uart::Stm32Irq,
 };
 
@@ -222,6 +223,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut ram = false;
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
+    let mut stm32_timers = Vec::new();
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
@@ -351,6 +353,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_stm32f0_rcc(entry.address()?)
                     .map_err(|e| entry.error(&e))?;
             }
+            "Timers.STM32_Timer" => stm32_timers.push(entry),
             "UART.STM32F7_USART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
@@ -558,6 +561,63 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         } else {
             0
         };
+        for timer in stm32_timers {
+            let mut frequency = None;
+            let mut limit = None;
+            let mut routes = [0; 8];
+            for (_, text) in &timer.body {
+                if let Some((source, destinations)) = text.split_once("->") {
+                    let flags = match source.trim() {
+                        "" | "IRQ" => 0xff,
+                        "UpdateInterrupt" => 1,
+                        "CaptureCompareInterrupt" => 0x1e,
+                        "CommutationInterrupt" => 0x20,
+                        "TriggerInterrupt" => 0x40,
+                        "BreakInterrupt" => 0x80,
+                        _ => return Err(timer.error("unsupported STM32 timer output")),
+                    };
+                    for destination in destinations.split('|') {
+                        let (target, pin) = destination
+                            .split_once('@')
+                            .ok_or_else(|| timer.error("invalid STM32 timer wiring"))?;
+                        let irq = if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
+                            irq_index(pin, 32).map_err(|e| timer.error(&e))?
+                        } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
+                            irq_index(pin, count).map_err(|e| timer.error(&e))?;
+                            irq
+                        } else {
+                            return Err(timer.error("unsupported STM32 timer interrupt target"));
+                        };
+                        for (index, route) in routes.iter_mut().enumerate() {
+                            if flags & (1 << index) != 0 {
+                                *route |= 1 << irq;
+                            }
+                        }
+                    }
+                } else if let Some((key, value)) = text.split_once(':') {
+                    let value = number(value.trim()).map_err(|e| timer.error(&e))?;
+                    match key.trim() {
+                        "frequency" if frequency.is_none() && value != 0 => frequency = Some(value),
+                        "initialLimit" if limit.is_none() => limit = Some(value),
+                        _ => {
+                            return Err(timer
+                                .error("unsupported, duplicate, or invalid STM32 timer property"));
+                        }
+                    }
+                } else {
+                    return Err(timer.error("expected STM32 timer property or interrupt wiring"));
+                }
+            }
+            machine
+                .bus
+                .map_stm32_timer(Stm32Timer::new(
+                    timer.address()?,
+                    frequency.ok_or_else(|| timer.error("missing STM32 timer frequency"))?,
+                    limit.ok_or_else(|| timer.error("missing STM32 timer initialLimit"))?,
+                    routes,
+                ))
+                .map_err(|e| timer.error(&e))?;
+        }
         for uart in stm32_uarts {
             let mut irq = None;
             let mut low_power = None;
@@ -617,6 +677,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(timer) = stm32_timers.first() {
+        return Err(timer.error("STM32 timer requires a Cortex-M platform"));
     }
     if let Some(uart) = stm32_uarts.first() {
         return Err(uart.error("STM32 USART requires a Cortex-M platform"));
