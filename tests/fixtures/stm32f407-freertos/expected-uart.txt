@@ -1,0 +1,7 @@
+STM32F407 FreeRTOS V11.1.0
+task A tick=01
+task B tick=03
+task A tick=05
+task B tick=07
+task A tick=09
+task B tick=11

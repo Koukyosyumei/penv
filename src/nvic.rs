@@ -45,6 +45,7 @@ pub struct Nvic {
     cpacr: u32,
     fault_enables: u32,
     mpu: Option<Mpu>,
+    has_cache: bool,
     cache_selector: u32,
     pub uart_irq: Option<u8>,
 }
@@ -110,6 +111,7 @@ impl Nvic {
             cpacr: 0,
             fault_enables: 0,
             mpu: None,
+            has_cache: false,
             cache_selector: 0,
             uart_irq,
         }
@@ -140,7 +142,8 @@ impl Nvic {
         self.ccr & (1 << 4) != 0
     }
 
-    pub fn configure_mpu(&mut self, count: u8) {
+    pub fn configure_mpu(&mut self, count: u8, has_cache: bool) {
+        self.has_cache = has_cache;
         self.mpu = Some(Mpu {
             count,
             enabled: 0,
@@ -220,7 +223,7 @@ impl Nvic {
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         if width == 4 {
             let offset = address.wrapping_sub(BASE);
-            if self.mpu.is_some() {
+            if self.has_cache {
                 match offset {
                     0xd78 => return Some(0x0300_0003), // L1 instruction and data caches
                     0xd7c => return Some(0x8333_8003),
@@ -281,7 +284,7 @@ impl Nvic {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
         let offset = address.wrapping_sub(BASE);
-        if width == 4 && self.mpu.is_some() {
+        if width == 4 && self.has_cache {
             if offset == 0xd84 {
                 self.cache_selector = value & 1;
                 return true;

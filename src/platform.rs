@@ -8,7 +8,7 @@ use crate::{
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
-    stm32_uart::Stm32Irq,
+    stm32_uart::{Stm32Irq, UsartLayout},
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -50,6 +50,28 @@ impl Entry {
             .filter(|s| s.starts_with(char::is_whitespace))
             .ok_or_else(|| self.error("unsupported bus registration"))?;
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
+    }
+
+    fn address_with_optional_range(&self, size: u32) -> Result<u32, String> {
+        let Some(range) = self
+            .registration
+            .as_deref()
+            .and_then(|text| text.strip_prefix("sysbus <"))
+            .and_then(|text| text.strip_suffix('>'))
+        else {
+            return self.address();
+        };
+        let (address, length) = range
+            .split_once(',')
+            .ok_or_else(|| self.error("invalid sysbus range"))?;
+        let length = length
+            .trim()
+            .strip_prefix('+')
+            .ok_or_else(|| self.error("expected +size in sysbus range"))?;
+        if number(length).map_err(|e| self.error(&e))? != size {
+            return Err(self.error("invalid USART range size"));
+        }
+        number(address.trim()).map_err(|e| self.error(&e))
     }
 
     fn address(&self) -> Result<u32, String> {
@@ -343,7 +365,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
-            "UART.STM32F7_USART" => stm32_uarts.push(entry),
+            "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
@@ -429,13 +451,18 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 _ => unreachable!(),
             }
         }
-        let thumb2 = match cpu_type {
-            Some(r#""cortex-m0""# | r#""cortex-m0+""#) => false,
-            Some(r#""cortex-m7""#) => true,
-            _ => return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M7 cpuType")),
+        let (thumb2, default_mpu_regions, has_cache) = match cpu_type {
+            Some(r#""cortex-m0""# | r#""cortex-m0+""#) => (false, 0, false),
+            Some(r#""cortex-m4""#) => (true, 8, false),
+            Some(r#""cortex-m7""#) => (true, 16, true),
+            _ => {
+                return Err(
+                    entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4 or Cortex-M7 cpuType")
+                );
+            }
         };
         if !thumb2 && mpu_regions.is_some() {
-            return Err(entry.error("MPU regions require Cortex-M7"));
+            return Err(entry.error("MPU regions require Cortex-M4 or Cortex-M7"));
         }
         if let Some(dwt) = dwt {
             let (_, frequency) = keys(dwt, &["frequency"])?
@@ -596,6 +623,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         stm32h7_gpio_platform::configure(&entries, exti, exti_lines, &mut machine)?;
         stm32h7_rtc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
         for uart in stm32_uarts {
+            let legacy = uart.model == "UART.STM32_UART";
             let mut irq = None;
             let mut low_power = None;
             let mut frequency = None;
@@ -622,7 +650,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 } else if let Some((key, value)) = text.split_once(':') {
                     let value = value.trim();
                     match key.trim() {
-                        "lowPowerMode" if low_power.is_none() => {
+                        "lowPowerMode" if !legacy && low_power.is_none() => {
                             low_power = Some(
                                 value
                                     .parse::<bool>()
@@ -641,9 +669,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(uart.error("unsupported USART IRQ wiring"));
                 }
             }
+            let layout = if legacy {
+                UsartLayout::F4
+            } else {
+                UsartLayout::F7 {
+                    low_power: low_power.unwrap_or(false),
+                }
+            };
+            let base = uart.address_with_optional_range(layout.size())?;
             machine
                 .bus
-                .map_stm32_usart(uart.address()?, irq, low_power.unwrap_or(false))
+                .map_stm32_usart(base, irq, layout)
                 .map_err(|e| uart.error(&e))?;
         }
         machine
@@ -658,7 +694,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .nvic
                 .as_mut()
                 .unwrap()
-                .configure_mpu(mpu_regions.unwrap_or(16));
+                .configure_mpu(mpu_regions.unwrap_or(default_mpu_regions), has_cache);
         }
         crate::network_platform::configure(
             &entries,

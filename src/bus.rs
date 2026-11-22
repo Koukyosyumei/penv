@@ -15,7 +15,7 @@ use crate::{
     plic::Plic,
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
-    stm32_uart::{Stm32Irq, Stm32Usart},
+    stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -531,7 +531,7 @@ impl Bus {
             })
             || self.stm32_uarts.iter().any(|uart| {
                 let other = u64::from(uart.base);
-                start < other + u64::from(Stm32Usart::SIZE) && other < end
+                start < other + u64::from(uart.size()) && other < end
             })
             || self.ns16550.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
@@ -821,16 +821,16 @@ impl Bus {
         &mut self,
         base: u32,
         irq: Option<Stm32Irq>,
-        low_power: bool,
+        layout: UsartLayout,
     ) -> Result<(), String> {
         let start = u64::from(base);
-        let end = start + u64::from(Stm32Usart::SIZE);
+        let end = start + u64::from(layout.size());
         if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
             return Err(format!(
                 "invalid or overlapping STM32 USART range at {base:#010x}"
             ));
         }
-        self.stm32_uarts.push(Stm32Usart::new(base, irq, low_power));
+        self.stm32_uarts.push(Stm32Usart::new(base, irq, layout));
         Ok(())
     }
 

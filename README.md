@@ -176,3 +176,67 @@ Zephyr version 4.4.99
 変更前の診断実行で停止した `pc=0x080036b6` は、ITCM を初期化する `strd r0, r1, [r3], #8`（先頭半語 `0xe8e3`）でした。Thumb-2 のデコーダーはローカル nRF52840 担当の `fe1911b` を再利用し、Cortex-M7 の実行ログで必要になった命令を追加しました。CRC の演算モデルはローカル STM32F0 の実装を再利用しています。起動時のバスアクセスに合わせて、RCC、SysTick、RNG、TIM3、CRC、QuadSPI の初期化・識別・SFDP と受信送信割り込み、FDCAN の設定レジスターを配線しました。
 
 残課題は未変更の上流 REPL のロード、I2C 配下のセンサー、QuadSPI のフラッシュデータ操作、CAN フレーム送受信です。診断実行では LSM6DSO の初期化失敗と外部フラッシュのマウント失敗 `err=-45` が出力されます。MPU とキャッシュはファームウェアの初期化レジスターに応答する範囲です。
+
+## STM32F407 Discovery と FreeRTOS
+
+`penv/stm32f407` は `3686ab4` を起点に、Cortex-M4 の整数命令を既存の
+Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の処理も共用します。
+`UART.STM32_UART` は F4 の SR/DR/CR1 レイアウトを使用し、既存の STM32 USART の
+入出力と割り込み配送を共用します。
+
+上流の `stm32f4_discovery.resc` は Contiki 用で、`PerformanceInMips` の解釈で停止します。
+ボード定義だけを読み込む場合は `MTD.STM32F4_FlashController` が最初の未対応モデルです。
+FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
+GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
+128 KiB メイン SRAM、SysTick はリセット時の HSI 16 MHz を使用します。
+ファームウェアは PC10/PC11 の AF8 を設定し、UART4 から 115200 baud 設定で送信します。
+[`stm32f4_discovery.resc`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/stm32f4_discovery.resc)
+[`stm32f4.repl`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/stm32f4.repl)
+[STM32F407VG データシート](https://www.st.com/resource/en/datasheet/stm32f407vg.pdf)
+
+### ビルドと実行
+
+Git、Clang、LLD、Rust/Cargo が必要です。下記は Linux x86_64 上で Clang/LLD 15.0.7 と
+ホストリンカー GCC を使った実行例です。ビルドスクリプトは公式 FreeRTOS-Kernel
+V11.1.0（`dbf70559b27d39c1fdb68dfb9a32140b6a6777a0`）を取得し、公式
+`portable/GCC/ARM_CM3` の整数ポートを `-mcpu=cortex-m4 -mfloat-abi=soft` で
+リンクします。起動コード、メモリー配置、タスクは
+`tests/fixtures/stm32f407-freertos/` にあります。
+[FreeRTOS-Kernel V11.1.0 の ARM_CM3 ポート](https://github.com/FreeRTOS/FreeRTOS-Kernel/tree/dbf70559b27d39c1fdb68dfb9a32140b6a6777a0/portable/GCC/ARM_CM3)
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-freertos-smoke.sh target/stm32f407-freertos
+
+# 生成済み ELF を直接実行
+target/release/penv run --script target/stm32f407-freertos/boot.resc --max-steps 20000
+```
+
+期待する UART4 出力は以下のとおりです。スモークテストは標準出力を全行照合し、
+命令上限で終了コード 2 になることを確認します。
+
+```text
+STM32F407 FreeRTOS V11.1.0
+task A tick=01
+task B tick=03
+task A tick=05
+task B tick=07
+task A tick=09
+task B tick=11
+```
+
+- 両タスクは初回出力前と各出力後に `vTaskDelay` でブロックします。SysTick で
+  tick が進み、解除されたタスクへ PendSV が切り替えます。各タスクは出力前に tick 値を
+  検査し、A/B それぞれ 3 回の実行を確認できます。SysTick 周波数を 1 Hz に落とした
+  一時 REPL では、同じ 20,000 命令枠で起動バナーだけが出力されました。
+- `cargo test` はユニットテスト 43 件、CLI テスト 5 件が通過しました。既存の
+  `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
+  を確認しました。
+- 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
+  SHA-256 は `23afecca45003077fe382e8cdeca9397d0babd49b078f7c8114a3a4d58d2b4ad` です。
+
+残課題は FPU 命令と ARM_CM4F の浮動小数点コンテキスト、上流ボード全体の読み込み、
+実機での確認です。検証用 REPL ではフラッシュをメモリーとして扱い、RCC の有効化
+書き込みは定数応答モデルで受けます。PLL、クロックゲート、フラッシュ消去・書き込み、
+UART のビット時間や GPIO 信号線の動作は検証範囲外です。
