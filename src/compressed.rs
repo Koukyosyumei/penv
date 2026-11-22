@@ -32,12 +32,13 @@ fn expand_integer(insn: u32, rv64: bool) -> Option<u32> {
                 store(rs1_prime, rs2_prime, offset)
             }
         }
-        (0, kind @ (3 | 7)) if rv64 => {
+        (0, kind @ (1 | 3 | 5 | 7)) if rv64 => {
             let offset = (bits(5, 2) << 6) | (bits(10, 3) << 3);
-            if kind == 3 {
-                immediate(0x03, 3, rs2_prime, rs1_prime, offset)
-            } else {
-                store(rs1_prime, rs2_prime, offset) | (1 << 12)
+            match kind {
+                1 => immediate(0x07, 3, rs2_prime, rs1_prime, offset),
+                3 => immediate(0x03, 3, rs2_prime, rs1_prime, offset),
+                5 => store(rs1_prime, rs2_prime, offset) | (1 << 12) | 4,
+                _ => store(rs1_prime, rs2_prime, offset) | (1 << 12),
             }
         }
         (1, 1) if rv64 && rd != 0 => immediate(0x1b, 0, rd, rd, imm),
@@ -113,13 +114,13 @@ fn expand_integer(insn: u32, rv64: bool) -> Option<u32> {
             let offset = (bits(2, 2) << 6) | (bits(12, 1) << 5) | (bits(4, 3) << 2);
             immediate(0x03, 2, rd, 2, offset)
         }
-        (2, 3) if rv64 && rd != 0 => {
+        (2, kind @ (1 | 3)) if rv64 && (kind == 1 || rd != 0) => {
             let offset = (bits(2, 3) << 6) | (bits(12, 1) << 5) | (bits(5, 2) << 3);
-            immediate(0x03, 3, rd, 2, offset)
+            immediate(if kind == 1 { 0x07 } else { 0x03 }, 3, rd, 2, offset)
         }
-        (2, 7) if rv64 => {
+        (2, kind @ (5 | 7)) if rv64 => {
             let offset = (bits(7, 3) << 6) | (bits(10, 3) << 3);
-            store(2, rs2, offset) | (1 << 12)
+            store(2, rs2, offset) | (1 << 12) | (u32::from(kind == 5) << 2)
         }
         (2, 4) => match (bits(12, 1), rd, rs2) {
             (0, 0, 0) => return None,

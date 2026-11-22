@@ -281,13 +281,14 @@ impl Privilege {
         if (csr >> 10) == 3 || self.read(csr, misa, !1).is_none() {
             return false;
         }
+        let fp_mask = if misa & (1 << 5) == 0 { !FS } else { u64::MAX };
         match csr {
             1..=3 => {
                 let (mask, shift) = [(31, 0), (0xe0, 5), (0xff, 0)][csr as usize - 1];
                 self.fcsr = (self.fcsr & !mask) | ((value as u8) << shift & mask);
                 self.status |= FS;
             }
-            0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS),
+            0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS & fp_mask),
             0x104 => self.enable = (self.enable & !self.mideleg) | (value & self.mideleg),
             0x106 => self.supervisor_counter_enable = value & u64::from(u32::MAX),
             0x144 => {
@@ -297,7 +298,7 @@ impl Privilege {
             0x180 if matches!(value >> 60, 0 | 8 | 9) => self.satp = value,
             0x180 | 0x301 | 0xb03..=0xb1f | 0x323..=0x33f => {}
             0x300 => {
-                self.status = value & MSTATUS;
+                self.status = value & MSTATUS & fp_mask;
                 if self.status & MPP == 2 << 11 {
                     self.status &= !MPP;
                 }

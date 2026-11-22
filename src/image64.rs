@@ -21,13 +21,26 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         return Err("expected a little-endian RISC-V ELF64 executable".into());
     }
     let flags = word(&header, 48);
-    if flags & !1 != 0 {
+    if flags & !7 != 0 || flags & 6 == 6 {
         return Err(format!("unsupported RISC-V ELF64 ISA flags {flags:#x}"));
     }
     let compressed = flags & 1 != 0;
     if let Some(cpu) = &machine.primary.rv64 {
-        if compressed && !cpu.compressed() {
+        let isa = cpu.isa();
+        if compressed && !isa.compressed {
             return Err("ELF requires the RV64 compressed extension".into());
+        }
+        // A heterogeneous platform may start integer-only harts in the same
+        // image, so check whether any configured hart provides the ELF ABI.
+        let supported = |isa: Isa| match flags & 6 {
+            2 => isa.single,
+            4 => isa.double,
+            _ => true,
+        };
+        if !(0..machine.hart_count())
+            .any(|hart| supported(machine.hart_mut(hart).rv64.as_ref().unwrap().isa()))
+        {
+            return Err("RV64 platform lacks the ELF floating-point ABI extension".into());
         }
     } else if machine.primary.name.is_some() || machine.is_cortex_m() {
         return Err("RISC-V ELF64 requires an RV64 platform".into());
@@ -35,6 +48,8 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         machine.primary.rv64 = Some(Box::new(Rv64::new(Isa {
             compressed,
             atomic: true,
+            single: true,
+            double: true,
             ..Isa::IM
         })));
     }
@@ -48,7 +63,11 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
 
     let mut executable = false;
     let mut initialized: Vec<Range<u64>> = Vec::new();
-    let minimum = if compressed { 2 } else { 4 };
+    let minimum = if machine.primary.rv64.as_ref().unwrap().isa().compressed {
+        2
+    } else {
+        4
+    };
     for index in 0..count {
         let mut segment = [0; 56];
         read_at(&mut file, table + index * 56, &mut segment)?;

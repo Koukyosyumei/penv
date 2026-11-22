@@ -1,3 +1,5 @@
+mod floating;
+
 use std::io::Write;
 
 use crate::{
@@ -12,6 +14,7 @@ use crate::{
 pub struct Rv64 {
     pub pc: u64,
     registers: [u64; 32],
+    floating: [u64; 32],
     isa: Isa,
     pub privilege: Privilege,
     pub allow_unaligned: bool,
@@ -22,6 +25,8 @@ pub struct Isa {
     pub multiply: bool,
     pub atomic: bool,
     pub compressed: bool,
+    pub single: bool,
+    pub double: bool,
 }
 
 impl Isa {
@@ -32,6 +37,7 @@ impl Isa {
             .split('_');
         let base = extensions.next().unwrap_or("");
         if !base.starts_with(['i', 'g'])
+            || (base.contains('d') && !base.contains(['g', 'f']))
             || !base
                 .chars()
                 .all(|ext| matches!(ext, 'i' | 'g' | 'm' | 'a' | 'f' | 'd' | 'c'))
@@ -43,6 +49,8 @@ impl Isa {
             multiply: base.contains(['g', 'm']),
             atomic: base.contains(['g', 'a']),
             compressed: base.contains('c'),
+            single: base.contains(['g', 'f']),
+            double: base.contains(['g', 'd']),
         })
     }
 
@@ -50,6 +58,8 @@ impl Isa {
         multiply: true,
         atomic: false,
         compressed: false,
+        single: false,
+        double: false,
     };
 }
 
@@ -75,14 +85,15 @@ impl Rv64 {
         Self {
             pc: u64::from(RAM_BASE),
             registers: [0; 32],
+            floating: [0; 32],
             isa,
             privilege: Privilege::default(),
             allow_unaligned: false,
         }
     }
 
-    pub fn compressed(&self) -> bool {
-        self.isa.compressed
+    pub fn isa(&self) -> Isa {
+        self.isa
     }
 
     pub fn validate(&self, bus: &mut Bus) -> Result<(), String> {
@@ -199,6 +210,8 @@ impl Rv64 {
         base | (u64::from(self.isa.multiply) << 12)
             | u64::from(self.isa.atomic)
             | (u64::from(self.isa.compressed) << 2)
+            | (u64::from(self.isa.double) << 3)
+            | (u64::from(self.isa.single) << 5)
     }
 
     fn csr(&mut self, instruction: Instruction, operand: u64, hart: usize) -> Option<u64> {
@@ -309,6 +322,9 @@ impl Rv64 {
             0x13 | 0x1b => Some(immediate_alu(fields, lhs).ok_or(illegal)?),
             0x33 | 0x3b => Some(register_alu(fields, lhs, rhs, self.isa.multiply).ok_or(illegal)?),
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
+            0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
+                self.floating_instruction(fields, bus, output)?
+            }
             0x2f if self.isa.atomic => Some(self.atomic(fields, bus, hart, lhs, rhs)?),
             0x73 if fields.funct3() != 0 => Some(self.csr(fields, lhs, hart).ok_or(illegal)?),
             0x73 => {
