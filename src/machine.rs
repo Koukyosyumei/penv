@@ -257,7 +257,11 @@ impl Machine {
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
+        let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
+            if ethernet_link && self.elapsed_steps % 16_384 == 0 {
+                self.bus.poll_rv64_ethernet();
+            }
             let index = self.next_hart;
             if index == self.secondary.len() {
                 self.next_hart = 0;

@@ -276,8 +276,8 @@ impl Rv64 {
         };
         let value = match mode & 3 {
             1 => Some(operand),
-            2 if source != 0 => Some(old | operand),
-            3 if source != 0 => Some(old & !operand),
+            2 if source != 0 => Some(self.privilege.csr_rmw_value(index, old) | operand),
+            3 if source != 0 => Some(self.privilege.csr_rmw_value(index, old) & !operand),
             2 | 3 => None,
             _ => return None,
         };
@@ -795,4 +795,31 @@ fn multiply_divide(operation: u32, lhs: u64, rhs: u64, word: bool) -> Option<u64
         6 | 7 => lhs,
         _ => unreachable!(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mip_rmw_does_not_latch_external_seip() {
+        let mut cpu = Rv64::new(Isa::IM);
+        let seip = 1 << 9;
+        let stip = 1 << 5;
+        let instruction =
+            |operation: u32| Instruction((0x344 << 20) | (1 << 15) | (operation << 12));
+
+        cpu.privilege.tick(seip, 0);
+        assert_eq!(cpu.csr(instruction(2), stip, 0), Some(seip));
+        assert_eq!(cpu.csr(instruction(3), stip, 0), Some(seip | stip));
+        cpu.privilege.tick(0, 0);
+        assert_eq!(cpu.privilege.read(0x344, cpu.misa(), !3), Some(0));
+
+        // A guest can still set or clear the software contribution explicitly.
+        cpu.privilege.tick(seip, 0);
+        assert_eq!(cpu.csr(instruction(1), seip, 0), Some(seip));
+        cpu.privilege.tick(0, 0);
+        assert_eq!(cpu.csr(instruction(3), seip, 0), Some(seip));
+        assert_eq!(cpu.privilege.read(0x344, cpu.misa(), !3), Some(0));
+    }
 }

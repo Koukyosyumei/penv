@@ -20,6 +20,7 @@ const SXL: u64 = 2 << 34;
 const S_INTERRUPTS: u64 = 0x222;
 const M_INTERRUPTS: u64 = 0x888;
 const INTERRUPT: u64 = 1 << 63;
+const SEIP: u64 = 1 << 9;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Mode {
@@ -272,6 +273,16 @@ impl Privilege {
                 .or_else(|| self.pmp.as_ref()?.read(csr))?,
             _ => return None,
         })
+    }
+
+    pub fn csr_rmw_value(&self, csr: u32, read_value: u64) -> u64 {
+        if csr == 0x344 {
+            // MIP reads expose hardware OR software SEIP. CSRRS/CSRRC modify
+            // only the software contribution, even while the PLIC is asserted.
+            (read_value & !SEIP) | (self.injected & SEIP)
+        } else {
+            read_value
+        }
     }
 
     fn counter_access(&self, index: u32) -> bool {

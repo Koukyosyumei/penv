@@ -59,6 +59,7 @@ Options:
   --uart-stdin       Forward stdin to the platform UART while running
   --uart-device NAME  Select the RV64 platform UART that receives input
   --uart-input-at N Delay UART input until execution step N
+  --ethernet-loopback LOCAL:PEER  Link BeagleV MACs over localhost UDP ports
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RISC-V harts at the image entry (1–8)
@@ -112,6 +113,7 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_root = None;
     let mut uart_input = None;
     let mut uart_stdin = false;
+    let mut ethernet_loopback = None;
     let mut uart_device = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
@@ -127,6 +129,20 @@ fn run() -> Result<ExitCode, String> {
             Some("--rv64") => rv64 = true,
             Some("--stats") => stats = true,
             Some("--uart-stdin") => uart_stdin = true,
+            Some("--ethernet-loopback") => {
+                let value = args.next().and_then(|value| value.into_string().ok());
+                let ports = value
+                    .as_deref()
+                    .and_then(|value| value.split_once(':'))
+                    .and_then(|(local, peer)| {
+                        Some((local.parse::<u16>().ok()?, peer.parse::<u16>().ok()?))
+                    })
+                    .filter(|&(local, peer)| local != 0 && peer != 0 && local != peer)
+                    .ok_or("--ethernet-loopback requires distinct nonzero LOCAL:PEER ports")?;
+                if ethernet_loopback.replace(ports).is_some() {
+                    return Err("--ethernet-loopback may only be specified once".into());
+                }
+            }
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
                 | "--asset-dir"),
@@ -374,6 +390,9 @@ fn run() -> Result<ExitCode, String> {
         machine.set_named_entry(&cpu, address)?;
     }
     machine.validate_entry()?;
+    if let Some((local, peer)) = ethernet_loopback {
+        machine.bus.connect_rv64_ethernet(local, peer)?;
+    }
     if uart_stdin && !machine.bus.has_uart_input() {
         return Err("--uart-stdin requires a platform UART with input support".into());
     }

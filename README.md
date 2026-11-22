@@ -97,9 +97,24 @@ target/release/penv run --script "$resc" --platform-root ../renode \
 
 `buildroot login:` に `root`、`Password:` に上流デモのパスワード `starfive` を入力します。シェルで `id -u` と `uname -m` を実行すると、それぞれ `0` と `riscv64` を確認できます。`--uart-stdin` は標準入力のバイトを実行中の UART に送り、改行のないプロンプトも出力します。
 
-`90fb0b3` の BeagleV Ethernet は U-Boot 用の MAC・MDIO と TX DMA の完了をモデル化します。回帰テストはチェーンとリング折り返し、記述子の所有権返却、PLIC の claim・完了、DMA バスエラー後のリセットを検証します。ゲストは `eth0` を開いて DHCP Discover を送信します。65 億ステップの試行では DHCP 再試行中に上限へ達しました。上記の上限で、Discover 3 回と `udhcpc: no lease, failing` の後に `buildroot login:`、パスワード認証、`id -u` の `0` と `uname -m` の `riscv64` を確認しました。ゲストの DHCP サーバー起動は `FAIL` を報告しました。
+2 つの検証モードは同じ公開イメージを使います。上の手順で取得した `$assets` を指定してください。
 
-Ethernet の RX DMA、外部接続、MAC 送信無効時に TX DMA が先に記述子を取り込む動作は残課題です。上流 Robot の 2 台間 ping と外部 PMP のケースは今回の検証範囲外です。性能最適化と比較計測は互換性実装が揃った後に行います。
+```sh
+python3 scripts/verify-starlight.py "$assets"
+python3 scripts/verify-starlight.py "$assets" --ports 30451 30452
+```
+
+両方のモードでブートメッセージ、UART ログイン、`id -u` の `0` と `uname -m` の `riscv64` を確認します。ペア検証では、空いている UDP ポートを 2 つ指定します。スクリプトは 2 プロセスの `--ethernet-loopback LOCAL:PEER` を逆向きに指定し、`127.0.0.1` に限定した仮想リンクを作ります。ゲストの `eth0` に静的 IPv4 アドレスを割り当て、上流 Robot と同じ MTU 440 を指定します。56 バイトと 3200 バイトの ICMP ペイロードを両方向に各 10 回送り、各ゲストの `/proc/interrupts` で `eth0` の割り込み増加を確認します。3200 バイトのケースは IP フラグメントを使用します。ログは `target/starlight-verification/` に保存します。
+
+ゲストは起動中に DHCP Discover を送信します。DHCP 応答のない検証リンクでは、3 回の Discover と `udhcpc: no lease, failing` を経て `buildroot login:` に到達します。65 億ステップで切ると DHCP 再試行中に上限へ達します。ゲスト内の DHCP サーバー起動は `FAIL` を報告します。
+
+BeagleV MAC は通常記述子の TX/RX DMA、チェーンとリング折り返し、RX フレーム長と FCS、割り込みマスクと PLIC 配線をモデル化します。回帰テストでは RX の複数記述子と 2 バッファーへの転送、記述子不足からの復帰、完了 IRQ の抑止、PLIC の claim・完了、TX バスエラー後のリセットを検証します。
+
+Linux の通信試験では、PLIC の出力が下がってもゲストが supervisor 外部割り込みの処理を繰り返すことがありました。`mip` の CSRRS/CSRRC は命令の戻り値に外部信号を反映し、書き戻しには `SEIP` のソフトウェア側の値を使うよう修正しました。[RISC-V Privileged Architecture v1.10](https://riscv.org/wp-content/uploads/2017/05/riscv-privileged-v1.10.pdf)
+
+公開イメージによる無人のペア検証では、4 ケースすべてで 10/10 応答し、パケット損失は 0% でした。`eth0` の IRQ カウンターは A が 3 から 115、B が 3 から 110 に増加しました。`cargo test` は 44 件通過しました。
+
+残課題は外部ネットワーク接続、L2 スイッチ、多重化、マルチキャストハッシュの厳密な照合、チェックサムオフロード、MAC 送信無効時の TX 先読みです。上流 Robot の外部 PMP 付きケースは未検証です。性能最適化と比較計測は互換性実装が揃った後に行います。
 
 共通 CLI の回帰確認では、上記の Murax デモが UART に `Ant` を出力し、LiteX VexRiscv SMP デモがログイン後の `cat /proc/cpuinfo` で 4 ハートを出力しました。どちらも指定ステップ上限で終了します。
 
