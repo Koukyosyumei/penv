@@ -7,6 +7,7 @@ pub struct Stm32Gpio {
     pull: u32,
     output: u32,
     alternate: [u32; 2],
+    alternate_count: u32,
     lock: Lock,
 }
 
@@ -21,7 +22,7 @@ enum Lock {
 }
 
 impl Stm32Gpio {
-    pub fn new(base: u32, size: u32, mode: u32, speed: u32, pull: u32) -> Self {
+    pub fn new(base: u32, size: u32, [mode, speed, pull]: [u32; 3], alternate_count: u32) -> Self {
         Self {
             base,
             size,
@@ -31,6 +32,7 @@ impl Stm32Gpio {
             pull,
             output: 0,
             alternate: [0; 2],
+            alternate_count,
             lock: Lock::Idle,
         }
     }
@@ -73,13 +75,24 @@ impl Stm32Gpio {
         }
     }
 
+    pub fn read_halfword(&mut self, address: u32) -> u32 {
+        (self.read(address & !3) >> ((address & 2) * 8)) & 0xffff
+    }
+
+    pub fn write_halfword(&mut self, address: u32, value: u32) {
+        let word = address & !3;
+        let shift = (address & 2) * 8;
+        let preserved = self.read(word) & !(0xffff << shift);
+        self.write(word, preserved | ((value & 0xffff) << shift));
+    }
+
     pub fn write(&mut self, address: u32, value: u32) {
         let locked = match self.lock {
             Lock::Armed(pins) => u32::from(pins),
             _ => 0,
         };
         let offset = address - self.base;
-        let (register, mask) = match offset {
+        let (register, mut mask) = match offset {
             0x00 => (&mut self.mode, spread(locked, 2)),
             0x04 => (&mut self.output_type, locked | 0xffff_0000),
             0x08 => (&mut self.speed, spread(locked, 2)),
@@ -112,6 +125,13 @@ impl Stm32Gpio {
             }
             _ => return,
         };
+        if matches!(offset, 0x20 | 0x24) && self.alternate_count < 16 {
+            for shift in (0..32).step_by(4) {
+                if (value >> shift) & 0xf >= self.alternate_count {
+                    mask |= 0xf << shift;
+                }
+            }
+        }
         *register = (*register & mask) | (value & !mask);
     }
 }
@@ -132,7 +152,7 @@ mod tests {
 
     #[test]
     fn output_latch_drives_only_output_pins_and_set_wins_over_reset() {
-        let mut port = Stm32Gpio::new(0, 0x400, 1, 0, 0);
+        let mut port = Stm32Gpio::new(0, 0x400, [1, 0, 0], 16);
         port.write(0x18, 0x0001_0003);
         assert_eq!(port.read(0x14), 3);
         assert_eq!(port.read(0x10), 1);
@@ -142,8 +162,17 @@ mod tests {
     }
 
     #[test]
+    fn halfword_writes_preserve_other_fields_and_reject_invalid_functions() {
+        let mut port = Stm32Gpio::new(0, 0x400, [0, 0, 0], 8);
+        port.write(0x20, 0x7654_3210);
+        port.write_halfword(0x22, 0x1f98);
+        assert_eq!(port.read(0x20), 0x1654_3210);
+        assert_eq!(port.read_halfword(0x22), 0x1654);
+    }
+
+    #[test]
     fn configuration_lock_preserves_only_selected_pins() {
-        let mut port = Stm32Gpio::new(0, 0x400, 1, 0, 0);
+        let mut port = Stm32Gpio::new(0, 0x400, [1, 0, 0], 16);
         for value in [0x1_0001, 1, 0x1_0001] {
             port.write(0x1c, value);
         }

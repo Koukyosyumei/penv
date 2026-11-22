@@ -595,14 +595,18 @@ impl Bus {
         {
             return Ok(rcc.read(address));
         }
-        if N == 4
-            && address & 3 == 0
+        if matches!(N, 2 | 4)
+            && address as usize & (N - 1) == 0
             && let Some(gpio) = self
                 .stm32_gpios
                 .iter_mut()
                 .find(|gpio| gpio.contains(address))
         {
-            return Ok(gpio.read(address));
+            return Ok(if N == 2 {
+                gpio.read_halfword(address)
+            } else {
+                gpio.read(address)
+            });
         }
         if address as usize & (N - 1) == 0
             && let Some(crc) = &self.stm32_crc
@@ -735,13 +739,17 @@ impl Bus {
             rcc.write(address, value);
             return Ok(());
         }
-        if width == 4
+        if matches!(width, 2 | 4)
             && let Some(gpio) = self
                 .stm32_gpios
                 .iter_mut()
                 .find(|gpio| gpio.contains(address))
         {
-            gpio.write(address, value);
+            if width == 2 {
+                gpio.write_halfword(address, value);
+            } else {
+                gpio.write(address, value);
+            }
             return Ok(());
         }
         if let Some(crc) = self.stm32_crc.as_mut()

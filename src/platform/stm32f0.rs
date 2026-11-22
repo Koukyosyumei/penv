@@ -44,7 +44,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                         gpio_wiring = true;
                         return false;
                     }
-                    !text.starts_with("numberOfAFs:") && !text.starts_with("invertedAFPins:")
+                    !text.starts_with("invertedAFPins:")
                 });
             }
             "UART.STM32F7_USART" => {

@@ -288,29 +288,38 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     (number(registration), Ok(0x400))
                 };
                 let mut reset = [0; 3];
+                let mut alternate_count = 16;
                 for (key, value) in keys(
                     entry,
                     &[
                         "modeResetValue",
                         "outputSpeedResetValue",
                         "pullUpPullDownResetValue",
+                        "numberOfAFs",
                     ],
                 )? {
+                    let value = number(value).map_err(|e| entry.error(&e))?;
+                    if key == "numberOfAFs" {
+                        if !(1..=16).contains(&value) {
+                            return Err(entry.error("numberOfAFs must be in 1–16"));
+                        }
+                        alternate_count = value;
+                        continue;
+                    }
                     let index = match key {
                         "modeResetValue" => 0,
                         "outputSpeedResetValue" => 1,
                         _ => 2,
                     };
-                    reset[index] = number(value).map_err(|e| entry.error(&e))?;
+                    reset[index] = value;
                 }
                 machine
                     .bus
                     .map_stm32_gpio(Stm32Gpio::new(
                         base.map_err(|e| entry.error(&e))?,
                         size.map_err(|e| entry.error(&e))?,
-                        reset[0],
-                        reset[1],
-                        reset[2],
+                        reset,
+                        alternate_count,
                     ))
                     .map_err(|e| entry.error(&e))?;
             }
