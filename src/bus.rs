@@ -7,7 +7,7 @@ use std::{
 use crate::{
     clint::Clint,
     litex,
-    litex_eth::{Ethernet, Registration},
+    litex_eth::{Ethernet, Phy, Registration},
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -460,6 +460,7 @@ impl Bus {
         &mut self,
         registrations: Vec<Registration>,
         irq: Option<(usize, u8)>,
+        phy: Option<Phy>,
     ) -> Result<(), String> {
         for (index, registration) in registrations.iter().enumerate() {
             let start = u64::from(registration.base);
@@ -475,7 +476,7 @@ impl Bus {
                 ));
             }
         }
-        self.litex_eth = Some(Ethernet::new(registrations, irq));
+        self.litex_eth = Some(Ethernet::new(registrations, irq, phy));
         Ok(())
     }
 
@@ -758,11 +759,10 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
-        if N == 4
-            && address & 3 == 0
+        if address as usize & (N - 1) == 0
             && let Some(value) = self.litex_io.iter().find_map(|(bases, device)| {
-                let offset = litex_offset(bases, device.size(), address)?;
-                Some(device.read(offset))
+                let offset = device.offset(bases, address, N)?;
+                Some(device.read(offset, N))
             })
         {
             return Ok(value);
@@ -912,12 +912,10 @@ impl Bus {
             exti.write(address, value);
             return Ok(());
         }
-        if width == 4 {
-            for (bases, device) in &mut self.litex_io {
-                if let Some(offset) = litex_offset(bases, device.size(), address) {
-                    device.write(offset, value);
-                    return Ok(());
-                }
+        for (bases, device) in &mut self.litex_io {
+            if let Some(offset) = device.offset(bases, address, width) {
+                device.write(offset, width, value);
+                return Ok(());
             }
         }
         if let Some(eth) = self.litex_eth.as_mut()

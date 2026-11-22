@@ -7,7 +7,7 @@ use std::{
 use crate::{
     bus::Bus,
     litex::{Gpio, IoDevice, Spi},
-    litex_eth::{Ethernet, Region as EthernetRegion, Registration},
+    litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
 };
@@ -293,6 +293,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut litex_timer = None;
     let mut litex_soc = None;
     let mut litex_eth = None;
+    let mut litex_phy = None;
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus)?;
@@ -336,6 +337,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .map_litex_io(entry.addresses()?, IoDevice::Spi(Spi::default()))
                     .map_err(|e| entry.error(&e))?;
             }
+            "Miscellaneous.LiteX_MMCM_CSR32" => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_litex_io(entry.addresses()?, IoDevice::Mmcm(Box::default()))
+                    .map_err(|e| entry.error(&e))?;
+            }
             "GPIOPort.LiteX_GPIO" => {
                 let mut gpio = None;
                 for (key, value) in keys(entry, &["type", "enableIrq"])? {
@@ -370,6 +378,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             "Network.LiteX_Ethernet" => {
                 if litex_eth.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX Ethernet controller is supported"));
+                }
+            }
+            "Network.EthernetPhysicalLayer" => {
+                if litex_phy.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX Ethernet PHY is supported"));
                 }
             }
             "Miscellaneous.LiteX_SoC_Controller" => {
@@ -421,6 +434,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || litex_timer.is_some()
             || litex_soc.is_some()
             || litex_eth.is_some()
+            || litex_phy.is_some()
         {
             return Err(
                 entry.error("expected a single Cortex-M CPU without RISC-V interrupt controllers")
@@ -952,6 +966,32 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_litex_soc(entry.address()?)
             .map_err(|e| entry.error(&e))?;
     }
+    let phy = litex_phy
+        .map(|phy| {
+            let eth = litex_eth.ok_or_else(|| phy.error("expected a LiteX Ethernet controller"))?;
+            let mut registration = phy.registration.as_deref().unwrap_or("").split_whitespace();
+            let (Some(parent), Some(address), None) = (
+                registration.next(),
+                registration.next(),
+                registration.next(),
+            ) else {
+                return Err(phy.error("expected an Ethernet controller name and PHY address"));
+            };
+            if parent != eth.name {
+                return Err(phy.error("unknown LiteX Ethernet controller"));
+            }
+            let address =
+                irq_index(address, 32).map_err(|_| phy.error("expected PHY address in 0–31"))?;
+            let mut device = Phy::new(address);
+            for (key, value) in keys(phy, &["VendorSpecific1"])? {
+                device.registers[17] = number(value)
+                    .ok()
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| phy.error(&format!("invalid {key} register value")))?;
+            }
+            Ok(device)
+        })
+        .transpose()?;
     if let Some(entry) = litex_eth {
         let irq = match entry.body.as_slice() {
             [] => None,
@@ -978,7 +1018,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         machine
             .bus
-            .map_litex_eth(registrations, irq)
+            .map_litex_eth(registrations, irq, phy)
             .map_err(|e| entry.error(&e))?;
     }
     Ok(machine)
@@ -1149,4 +1189,54 @@ fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)
                 })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_litex_phy_and_clock_controller_from_repl() {
+        let directory = std::env::temp_dir().join(format!("penv-litex-phy-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("platform.repl");
+        fs::write(
+            &path,
+            r#"cpu: CPU.VexRiscv @ sysbus
+ram: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x1000
+eth: Network.LiteX_Ethernet @ {
+    sysbus 0xe0007800;
+    sysbus new Bus.BusMultiRegistration { address: 0xe0007000; size: 0x800; region: "phy" }
+}
+phy: Network.EthernetPhysicalLayer @ eth 0
+    VendorSpecific1: 0x4400
+clock0: Miscellaneous.LiteX_MMCM_CSR32 @ sysbus 0xe0004800
+"#,
+        )
+        .unwrap();
+        let machine = load(&path, None);
+        fs::remove_dir_all(directory).unwrap();
+
+        let mut bus = machine.unwrap().bus;
+        assert_eq!(bus.read::<4>(0xe000_4804).unwrap(), 1);
+        let mut sink = std::io::sink();
+        let mut tick = |bit: u32| {
+            bus.write(0xe000_7004, 4, bit << 2, &mut sink).unwrap();
+            bus.write(0xe000_7004, 4, (bit << 2) | 1, &mut sink)
+                .unwrap();
+            bus.read::<4>(0xe000_7008).unwrap()
+        };
+        for _ in 0..32 {
+            tick(1);
+        }
+        for bit in 0..16 {
+            tick((0x2206 >> bit) & 1);
+        }
+        let mut phy_status = 0;
+        for _ in 0..16 {
+            phy_status = (phy_status << 1) | tick(0);
+        }
+        assert_eq!(phy_status, 0x4400);
+    }
 }

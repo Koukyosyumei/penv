@@ -232,31 +232,111 @@ impl Gpio {
     }
 }
 
+pub struct Mmcm {
+    registers: [u16; 0x50],
+    address: u8,
+    data_write: u16,
+    data_read: u16,
+    ready: bool,
+}
+
+impl Default for Mmcm {
+    fn default() -> Self {
+        Self {
+            registers: [0; 0x50],
+            address: 0,
+            data_write: 0,
+            data_read: 0,
+            ready: false,
+        }
+    }
+}
+
+impl Mmcm {
+    fn read(&self, offset: u32) -> u32 {
+        let value = match offset & !3 {
+            0x04 => 1,
+            0x10 => u32::from(self.ready),
+            0x14 => u32::from(self.address),
+            0x1c => u32::from(self.data_read),
+            _ => 0,
+        };
+        value >> ((offset & 3) * 8)
+    }
+
+    fn write(&mut self, offset: u32, width: usize, value: u32) {
+        let lane = (offset & 3) * 8;
+        let trigger = lane == 0 && value & 1 != 0;
+        match offset & !3 {
+            0x00 if trigger => {
+                self.address = 0;
+                self.data_write = 0;
+                self.data_read = 0;
+                self.ready = false;
+            }
+            0x08 if trigger => {
+                if let Some(value) = self.registers.get(usize::from(self.address)) {
+                    self.data_read = *value;
+                    self.ready = true;
+                }
+            }
+            0x0c if trigger => {
+                if let Some(register) = self.registers.get_mut(usize::from(self.address)) {
+                    *register = self.data_write;
+                    self.ready = true;
+                }
+            }
+            0x10 if lane == 0 => self.ready = trigger,
+            0x14 if lane == 0 => self.address = value as u8,
+            0x18 if lane < 16 => {
+                let mask = if width == 1 { 0xff << lane } else { 0xffff };
+                self.data_write = (self.data_write & !mask) | ((value << lane) as u16 & mask);
+            }
+            _ => {}
+        }
+    }
+}
+
 pub enum IoDevice {
     Spi(Spi),
     Gpio(Gpio),
+    Mmcm(Box<Mmcm>),
 }
 
 impl IoDevice {
     pub fn size(&self) -> u32 {
         match self {
             Self::Spi(_) => 0x50,
+            Self::Mmcm(_) => 0x100,
             Self::Gpio(Gpio::InOut(_)) => 8,
             Self::Gpio(_) => 4,
         }
     }
 
-    pub fn read(&self, offset: u32) -> u32 {
-        match self {
-            Self::Spi(spi) => spi.read(offset),
-            Self::Gpio(gpio) => gpio.read(offset),
+    pub fn offset(&self, bases: &[u32], address: u32, width: usize) -> Option<u32> {
+        if width != 4 && !matches!(self, Self::Mmcm(_)) {
+            return None;
         }
+        bases.iter().find_map(|&base| {
+            let offset = address.checked_sub(base)?;
+            (width <= self.size().checked_sub(offset)? as usize).then_some(offset)
+        })
     }
 
-    pub fn write(&mut self, offset: u32, value: u32) {
+    pub fn read(&self, offset: u32, width: usize) -> u32 {
+        let value = match self {
+            Self::Spi(spi) => spi.read(offset),
+            Self::Gpio(gpio) => gpio.read(offset),
+            Self::Mmcm(mmcm) => mmcm.read(offset),
+        };
+        value & (u32::MAX >> ((4 - width) * 8))
+    }
+
+    pub fn write(&mut self, offset: u32, width: usize, value: u32) {
         match self {
             Self::Spi(spi) => spi.write(offset, value),
             Self::Gpio(gpio) => gpio.write(offset, value),
+            Self::Mmcm(mmcm) => mmcm.write(offset, width, value),
         }
     }
 }
@@ -264,6 +344,22 @@ impl IoDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mmcm_reset_keeps_internal_registers() {
+        let mut mmcm = Mmcm::default();
+        assert_eq!(mmcm.read(4), 1);
+        mmcm.write(0x14, 4, 0x4f);
+        mmcm.write(0x18, 1, 0x34);
+        mmcm.write(0x19, 1, 0x12);
+        mmcm.write(0x0c, 4, 1);
+        assert_eq!(mmcm.read(0x10), 1);
+        mmcm.write(0, 4, 1);
+        assert_eq!(mmcm.read(0x10), 0);
+        mmcm.write(0x14, 4, 0x4f);
+        mmcm.write(0x08, 4, 1);
+        assert_eq!(mmcm.read(0x1c), 0x1234);
+    }
 
     #[test]
     fn narrow_timer_latches_count_and_reloads() {

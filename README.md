@@ -70,7 +70,7 @@ Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr 
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
 ```
 
-検証結果には上流のコミット ID、UART 出力、標準エラー出力、各実行の終了コードが含まれます。LiteX Ibex は上流の `litex_ibex.resc` と `litex_ibex.repl` を使用し、BIOS の CRC 検証、シリアルブートの中断、`help` の実行を確認します。上流の `litex_vexriscv_zephyr.resc` では UART シェルの `version` を確認します。LiteX Ethernet はネットワーク未接続時のレジスターとパケットバッファーを実装しています。外部 PHY、パケット送受信、GPIO の外部配線、SPI スレーブ接続は未対応です。
+検証結果には上流のコミット ID、UART 出力、標準エラー出力、各実行の終了コードが含まれます。LiteX Ibex は上流の `litex_ibex.resc` と `litex_ibex.repl` を使用し、BIOS の CRC 検証、シリアルブートの中断、`help` の実行を確認します。上流の `litex_vexriscv_zephyr.resc` では UART シェルの `version` を確認します。LiteX Ethernet はネットワーク未接続時のレジスターとパケットバッファーを実装しています。REPL に接続された PHY のレジスターは MDIO で読み取れます。外部ネットワークとのパケット送受信、GPIO の外部配線、SPI スレーブ接続は未対応です。
 
 ## Cortex-M0 / Cortex-M0+
 

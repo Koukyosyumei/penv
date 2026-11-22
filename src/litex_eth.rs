@@ -15,6 +15,88 @@ pub struct Registration {
     pub region: Region,
 }
 
+pub struct Phy {
+    pub address: u8,
+    pub registers: [u16; 32],
+}
+
+impl Phy {
+    pub fn new(address: u8) -> Self {
+        let mut registers = [0; 32];
+        registers[1] = 0x24; // link up, autonegotiation complete
+        Self { address, registers }
+    }
+}
+
+#[derive(Default)]
+enum MdioState {
+    #[default]
+    Idle,
+    Preamble,
+    Command,
+    WriteData,
+}
+
+#[derive(Default)]
+struct Mdio {
+    state: MdioState,
+    clock: bool,
+    input: u16,
+    count: u32,
+    output: u16,
+    output_position: Option<u32>,
+}
+
+impl Mdio {
+    fn write(&mut self, value: u32, phy: &Phy) {
+        let clock = value & 1 != 0;
+        let rising = clock && !self.clock;
+        self.clock = clock;
+        if !rising {
+            return;
+        }
+        self.output_position = self
+            .output_position
+            .and_then(|position| position.checked_sub(1));
+        self.input |= (((value >> 2) & 1) as u16) << self.count;
+        self.count += 1;
+        if self.count != 16 {
+            return;
+        }
+        self.count = 0;
+        let word = std::mem::take(&mut self.input);
+        self.state = match self.state {
+            MdioState::Idle if word == 0xffff => MdioState::Preamble,
+            MdioState::Preamble if word == 0xffff => MdioState::Command,
+            MdioState::Command if word & 3 == 2 => {
+                let operation = (word >> 2) & 3;
+                let address = ((word >> 4) as u8).reverse_bits() >> 3;
+                let register = ((word >> 9) as u8).reverse_bits() >> 3;
+                match operation {
+                    1 => {
+                        self.output = if address == phy.address {
+                            phy.registers[usize::from(register)]
+                        } else {
+                            0
+                        };
+                        self.output_position = Some(16);
+                        MdioState::Idle
+                    }
+                    2 => MdioState::WriteData,
+                    _ => MdioState::Idle,
+                }
+            }
+            _ => MdioState::Idle,
+        };
+    }
+
+    fn read(&self) -> u32 {
+        self.output_position
+            .filter(|&position| position < 16)
+            .map_or(0, |position| u32::from((self.output >> position) & 1))
+    }
+}
+
 pub struct Ethernet {
     pub registrations: Vec<Registration>,
     pub vex_irq: Option<(usize, u8)>,
@@ -24,12 +106,18 @@ pub struct Ethernet {
     tx_pending: bool,
     tx_enabled: bool,
     rx_enabled: bool,
+    phy: Option<Phy>,
+    mdio: Mdio,
 }
 
 impl Ethernet {
     pub const MAC_SIZE: u32 = 0x100;
 
-    pub fn new(registrations: Vec<Registration>, vex_irq: Option<(usize, u8)>) -> Self {
+    pub fn new(
+        registrations: Vec<Registration>,
+        vex_irq: Option<(usize, u8)>,
+        phy: Option<Phy>,
+    ) -> Self {
         Self {
             registrations,
             vex_irq,
@@ -39,6 +127,8 @@ impl Ethernet {
             tx_pending: false,
             tx_enabled: false,
             rx_enabled: false,
+            phy,
+            mdio: Mdio::default(),
         }
     }
 
@@ -77,7 +167,7 @@ impl Ethernet {
                 value[..width].copy_from_slice(bytes);
                 u32::from_le_bytes(value)
             }
-            // Without a PHY attached, the upstream MDIO data line reads zero.
+            Region::Phy if offset == 8 => self.mdio.read(),
             Region::Phy => 0,
         }
     }
@@ -118,6 +208,11 @@ impl Ethernet {
                     bytes.copy_from_slice(&value.to_le_bytes()[..width]);
                 }
             }
+            Region::Phy if offset == 4 => {
+                if let Some(phy) = self.phy.as_ref() {
+                    self.mdio.write(value, phy);
+                }
+            }
             _ => {}
         }
     }
@@ -130,6 +225,30 @@ fn lane_mask(width: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_configured_phy_over_mdio() {
+        let mut phy = Phy::new(0);
+        phy.registers[17] = 0x4400;
+        let mut eth = Ethernet::new(Vec::new(), None, Some(phy));
+        let mut clock = |bit: u32| {
+            eth.write(Region::Phy, 4, 4, bit << 2);
+            eth.write(Region::Phy, 4, 4, (bit << 2) | 1);
+            eth.read(Region::Phy, 8, 4)
+        };
+        for _ in 0..32 {
+            clock(1);
+        }
+        let command = (0b10001u16 << 9) | (1 << 2) | 2;
+        for shift in 0..16 {
+            clock(u32::from((command >> shift) & 1));
+        }
+        let mut value = 0;
+        for _ in 0..16 {
+            value = (value << 1) | clock(0);
+        }
+        assert_eq!(value, 0x4400);
+    }
 
     #[test]
     fn shares_buffer_storage_and_signals_transmit_completion() {
@@ -145,7 +264,7 @@ mod tests {
                 region: Region::Buffer,
             },
         ];
-        let mut eth = Ethernet::new(regs, Some((0, 3)));
+        let mut eth = Ethernet::new(regs, Some((0, 3)), None);
         let (region, offset) = eth.locate(0x3000_1000, 4).unwrap();
         eth.write(region, offset, 4, 0x1234_5678);
         let (region, offset) = eth.locate(0xb000_1001, 1).unwrap();
