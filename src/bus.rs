@@ -74,6 +74,7 @@ pub struct Bus {
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
+    stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -320,6 +321,18 @@ impl Bus {
         }
         self.litex_uart = Some(LiteXUart::new(base));
         Ok(())
+    }
+
+    pub fn set_stm32f0_tags(&mut self, tags: Vec<std::ops::RangeInclusive<u32>>) {
+        self.stm32f0_tags = tags;
+    }
+
+    fn stm32f0_tagged(&self, address: u32, width: usize) -> bool {
+        address.checked_add(width as u32 - 1).is_some_and(|end| {
+            self.stm32f0_tags
+                .iter()
+                .any(|range| range.contains(&address) && range.contains(&end))
+        })
     }
 
     pub fn map_stm32_gpio(&mut self, gpio: Stm32Gpio) -> Result<(), String> {
@@ -573,7 +586,10 @@ impl Bus {
         {
             return Ok(gpio.read(address));
         }
-        self.read_ram::<N>(address)
+        match self.read_ram::<N>(address) {
+            Err(BusError::Unmapped(..)) if self.stm32f0_tagged(address, N) => Ok(0),
+            result => result,
+        }
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
@@ -704,8 +720,15 @@ impl Bus {
             gpio.write(address, value);
             return Ok(());
         }
-        self.memory(address, width)?
-            .copy_from_slice(&value.to_le_bytes()[..width]);
+        match self.memory(address, width) {
+            Ok(bytes) => bytes.copy_from_slice(&value.to_le_bytes()[..width]),
+            Err(error @ BusError::Unmapped(..)) => {
+                if !self.stm32f0_tagged(address, width) {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
         Ok(())
     }
 }

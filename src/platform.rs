@@ -1,3 +1,5 @@
+mod stm32f0;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -197,7 +199,7 @@ fn parse(
     Ok(())
 }
 
-pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
+pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -206,6 +208,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut entries,
     )?;
     let mut machine = Machine::without_default_ram();
+    if stm32f0_console {
+        machine
+            .bus
+            .set_stm32f0_tags(stm32f0::prepare(&mut entries)?);
+    }
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
     let mut clint = None;

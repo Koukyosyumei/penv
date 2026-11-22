@@ -44,6 +44,7 @@ Options:
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
+  --stm32f0-console  Load STM32F0 REPLs with console-focused peripheral support
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
@@ -97,6 +98,7 @@ fn run() -> Result<ExitCode, String> {
     let mut script = None;
     let mut asset_dir = None;
     let mut platform_root = None;
+    let mut stm32f0_console = false;
     let mut uart_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
@@ -109,6 +111,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some("--") => positional = true,
             Some("--raw") => raw = true,
+            Some("--stm32f0-console") => stm32f0_console = true,
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
@@ -264,9 +267,12 @@ fn run() -> Result<ExitCode, String> {
                         .into(),
                 );
             }
-            platform::load(&platform_path, platform_root.as_deref())?
+            platform::load(&platform_path, platform_root.as_deref(), stm32f0_console)?
         }
         None => {
+            if stm32f0_console {
+                return Err("--stm32f0-console requires --platform".into());
+            }
             if platform_root.is_some() {
                 return Err("--platform-root requires --platform".into());
             }
