@@ -33,7 +33,7 @@ pub fn is_network(entry: &Entry) -> bool {
     }
 }
 
-fn rcc_alias<'a>(entry: &'a Entry, alias: &str) -> Option<&'a str> {
+pub fn rcc_alias<'a>(entry: &'a Entry, alias: &str) -> Option<&'a str> {
     let list = entry
         .registration
         .as_deref()?
@@ -279,7 +279,10 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
         entry.model == crate::stm32h7_spi::SPI
             && rcc_alias(entry, "RegistrationPeripheralAlias.SPI4") == Some(&rcc.name)
     });
-    if ethernet.is_none() && !dma_or_adc && !gpio && !rtc && !spi {
+    let board_peripheral = entries
+        .iter()
+        .any(|entry| crate::stm32h7_board_platform::has_rcc_binding(entry, rcc));
+    if ethernet.is_none() && !dma_or_adc && !gpio && !rtc && !spi && !board_peripheral {
         return Err(rcc.error("STM32H7 RCC requires a supported peripheral binding"));
     }
     if peripherals.next().is_some() {

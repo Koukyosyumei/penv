@@ -7,8 +7,9 @@ const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
 const PRIORITY: u32 = BASE + 0x400;
-const SYSTEM_PRIORITY: u32 = BASE + 0xd1c;
-const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 7;
+const CPACR: u32 = BASE + 0xd88;
+const SYSTEM_PRIORITY: u32 = BASE + 0xd18;
+const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 11;
 const PRIORITY_END: u32 = PRIORITY + IRQ_LINES as u32 - 1;
 
 #[derive(Clone, Copy, Default)]
@@ -37,9 +38,62 @@ pub struct Nvic {
     enabled: [u32; BANKS],
     pending: [u32; BANKS],
     priority: [u8; IRQ_LINES],
-    system_priority: [u8; 8],
+    system_priority: [u8; 12],
     priority_mask: u8,
+    scr: u32,
+    ccr: u32,
+    cpacr: u32,
+    fault_enables: u32,
+    mpu: Option<Mpu>,
+    cache_selector: u32,
     pub uart_irq: Option<u8>,
+}
+
+struct Mpu {
+    count: u8,
+    enabled: u32,
+    selected: u8,
+    regions: [[u32; 2]; 16],
+}
+
+impl Mpu {
+    fn region(&self, offset: u32) -> Option<usize> {
+        let alias = ((offset - 0xd9c) / 8) as u8;
+        let region = if alias == 0 {
+            self.selected
+        } else {
+            (self.selected & !3) + alias
+        };
+        (region < self.count).then_some(usize::from(region))
+    }
+
+    fn read(&self, offset: u32) -> u32 {
+        match offset {
+            0xd90 => u32::from(self.count) << 8,
+            0xd94 => self.enabled,
+            0xd98 => u32::from(self.selected),
+            _ => self
+                .region(offset)
+                .map_or(0, |r| self.regions[r][usize::from(offset & 4 == 0)]),
+        }
+    }
+
+    fn write(&mut self, offset: u32, value: u32) {
+        match offset {
+            0xd90 => {}
+            0xd94 => self.enabled = value & 7,
+            0xd98 => self.selected = (value & 0xff) as u8,
+            _ => {
+                if offset & 4 != 0 && value & 0x10 != 0 {
+                    self.selected = (value & 0xf) as u8;
+                }
+                if let Some(r) = self.region(offset) {
+                    let index = usize::from(offset & 4 == 0);
+                    self.regions[r][index] = if index == 0 { value & !31 } else { value };
+                }
+            }
+        }
+    }
 }
 
 impl Nvic {
@@ -49,22 +103,50 @@ impl Nvic {
             enabled: [0; BANKS],
             pending: [0; BANKS],
             priority: [0; IRQ_LINES],
-            system_priority: [0; 8],
+            system_priority: [0; 12],
             priority_mask,
+            scr: 0,
+            ccr: 1 << 9,
+            cpacr: 0,
+            fault_enables: 0,
+            mpu: None,
+            cache_selector: 0,
             uart_irq,
         }
     }
 
-    pub const RANGES: [(u32, u32); 3] = [
+    pub const RANGES: [(u32, u32); 8] = [
         (ENABLE, PRIORITY_END + 1),
         (VTOR, VTOR + 4),
-        (SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1),
+        (CPACR, CPACR + 4),
+        (BASE + 0xd24, BASE + 0xd30),
+        (BASE + 0xd90, BASE + 0xdbc),
+        (BASE + 0xd78, BASE + 0xd88),
+        (BASE + 0xf50, BASE + 0xf78),
+        (BASE + 0xd10, SYSTEM_PRIORITY_END + 1),
     ];
 
     pub fn overlaps(start: u64, end: u64) -> bool {
         Self::RANGES
             .into_iter()
             .any(|(low, high)| start < u64::from(high) && end > u64::from(low))
+    }
+
+    pub fn unaligned_access_traps(&self) -> bool {
+        self.ccr & (1 << 3) != 0
+    }
+
+    pub fn divide_by_zero_traps(&self) -> bool {
+        self.ccr & (1 << 4) != 0
+    }
+
+    pub fn configure_mpu(&mut self, count: u8) {
+        self.mpu = Some(Mpu {
+            count,
+            enabled: 0,
+            selected: 0,
+            regions: [[0; 2]; 16],
+        });
     }
 
     pub fn vector_base(&self) -> Option<u32> {
@@ -89,9 +171,7 @@ impl Nvic {
 
     pub fn priority(&self, exception: u8) -> u8 {
         match exception {
-            11 => self.system_priority[3],
-            14 => self.system_priority[6],
-            15 => self.system_priority[7],
+            4..=15 => self.system_priority[usize::from(exception - 4)],
             16..=255 => self.priority[usize::from(exception - 16)],
             _ => 0,
         }
@@ -139,6 +219,40 @@ impl Nvic {
 
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         if width == 4 {
+            let offset = address.wrapping_sub(BASE);
+            if self.mpu.is_some() {
+                match offset {
+                    0xd78 => return Some(0x0300_0003), // L1 instruction and data caches
+                    0xd7c => return Some(0x8333_8003),
+                    0xd80 => {
+                        return Some(if self.cache_selector == 0 {
+                            (127 << 13) | (3 << 3) | 1 // 128 sets, 4 ways, 32-byte line
+                        } else {
+                            (255 << 13) | (1 << 3) | 1 // 256 sets, 2 ways, 32-byte line
+                        });
+                    }
+                    0xd84 => return Some(self.cache_selector),
+                    _ => {}
+                }
+            }
+            if (0xd90..=0xdb8).contains(&offset) {
+                return self.mpu.as_ref().map(|mpu| mpu.read(offset));
+            }
+            if address == BASE + 0xd10 {
+                return Some(self.scr);
+            }
+            if address == BASE + 0xd14 {
+                return Some(self.ccr);
+            }
+            if address == BASE + 0xd24 {
+                return Some(self.fault_enables);
+            }
+            if matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
+                return Some(0);
+            }
+            if address == CPACR {
+                return Some(self.cpacr);
+            }
             if address == VTOR {
                 return Some(self.vector_base.unwrap_or(0));
             }
@@ -166,6 +280,46 @@ impl Nvic {
     }
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
+        let offset = address.wrapping_sub(BASE);
+        if width == 4 && self.mpu.is_some() {
+            if offset == 0xd84 {
+                self.cache_selector = value & 1;
+                return true;
+            }
+            // Maintenance operations are synchronous on the coherent bus.
+            if matches!(
+                offset,
+                0xf50 | 0xf58 | 0xf5c | 0xf60 | 0xf64 | 0xf68 | 0xf6c | 0xf70 | 0xf74
+            ) {
+                return true;
+            }
+        }
+        if width == 4
+            && (0xd90..=0xdb8).contains(&offset)
+            && let Some(mpu) = &mut self.mpu
+        {
+            mpu.write(offset, value);
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd10 {
+            self.scr = value & 0x16;
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd14 {
+            self.ccr = value & 0x0007_031b;
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd24 {
+            self.fault_enables = value & (7 << 16);
+            return true;
+        }
+        if width == 4 && matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
+            return true;
+        }
+        if width == 4 && address == CPACR {
+            self.cpacr = value & (0xf << 20);
+            return true;
+        }
         if width == 4
             && let Some((base, bank)) = Self::bank(address)
         {
@@ -198,7 +352,7 @@ impl Nvic {
             return false;
         };
         for (index, (priority, value)) in bytes.iter_mut().zip(value.to_le_bytes()).enumerate() {
-            if !system || matches!(offset + index, 3 | 6 | 7) {
+            if !system || matches!(offset + index, 0..=2 | 7 | 8 | 10 | 11) {
                 *priority = value & self.priority_mask;
             }
         }

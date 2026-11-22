@@ -6,6 +6,7 @@ use crate::{
     stm32h7_adc::{Adc, AdcClock, CHANNELS},
     stm32h7_adc_dma::{AdcDma, DmaMux, DmaRequest, StreamTarget},
     stm32h7_bdma::Bdma,
+    stm32h7_board_platform::{registration, wire},
     stm32h7_spi::{SPI, Spi},
 };
 
@@ -314,55 +315,6 @@ fn fill_routes<T>(
         }
     }
     Ok(())
-}
-
-fn registration<'a>(entry: &'a Entry, entries: &[Entry]) -> Result<(u32, Option<&'a str>), String> {
-    let text = entry
-        .registration
-        .as_deref()
-        .ok_or("missing sysbus registration")?;
-    let Some(list) = text
-        .strip_prefix('{')
-        .and_then(|text| text.strip_suffix('}'))
-    else {
-        return Ok((entry.sysbus()?.ok_or("missing sysbus address")?, None));
-    };
-    let mut base = None;
-    let mut alias = None;
-    for registration in list
-        .split(';')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let mut words = registration.split_whitespace();
-        match (words.next(), words.next(), words.next()) {
-            (Some("sysbus"), Some(address), None) if base.is_none() => {
-                base = Some(number(address)?)
-            }
-            (Some(parent), Some(value), None)
-                if alias.is_none()
-                    && entries.iter().any(|entry| {
-                        entry.name == parent && entry.model == "Miscellaneous.STM32H7_RCC"
-                    }) =>
-            {
-                alias = Some(
-                    value
-                        .strip_prefix("RegistrationPeripheralAlias.")
-                        .ok_or("expected RCC registration alias")?,
-                );
-            }
-            _ => return Err("invalid peripheral bus or RCC registration".into()),
-        }
-    }
-    Ok((base.ok_or("missing sysbus address")?, alias))
-}
-
-fn wire(text: &str) -> Result<(&str, &str, &str), &'static str> {
-    let (from, to) = text.split_once("->").ok_or("expected peripheral wiring")?;
-    let (target, pins) = to
-        .split_once('@')
-        .ok_or("missing wiring destination index")?;
-    Ok((from.trim(), target.trim(), pins.trim()))
 }
 
 fn potentiometer(entry: &Entry) -> Result<u32, String> {

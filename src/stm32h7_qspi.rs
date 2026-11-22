@@ -1,0 +1,278 @@
+const TEF: u32 = 1;
+const TCF: u32 = 1 << 1;
+const FTF: u32 = 1 << 2;
+const SMF: u32 = 1 << 3;
+
+pub struct Qspi {
+    pub name: String,
+    pub base: u32,
+    pub rcc_bound: bool,
+    pub irq: Option<u8>,
+    capacity_code: Option<u8>,
+    registers: [u32; 13],
+    response: [u8; 88],
+    status_configuration: u8,
+    remaining: u32,
+    write_remaining: u32,
+    index: usize,
+    flags: u32,
+    write_enabled: bool,
+    reset_enabled: bool,
+}
+
+impl Qspi {
+    pub const MODEL: &str = "SPI.STM32H7_QuadSPI";
+    pub const FLASH: &str = "SPI.ISSI_IS25WP";
+    pub const SIZE: u32 = 0x400;
+    pub const DATA: u32 = 0x20;
+
+    pub fn new(name: String, base: u32, rcc_bound: bool, irq: Option<u8>) -> Self {
+        Self {
+            name,
+            base,
+            rcc_bound,
+            irq,
+            capacity_code: None,
+            registers: [0; 13],
+            response: [0; 88],
+            status_configuration: 0,
+            remaining: 0,
+            write_remaining: 0,
+            index: 0,
+            flags: 0,
+            write_enabled: false,
+            reset_enabled: false,
+        }
+    }
+
+    pub fn attach(&mut self, capacity: u32) -> Result<(), &'static str> {
+        if self.capacity_code.is_some() || !capacity.is_power_of_two() || capacity < 0x40000 {
+            return Err("invalid or duplicate ISSI SPI flash capacity");
+        }
+        self.capacity_code = Some(capacity.ilog2() as u8);
+        Ok(())
+    }
+
+    pub fn reset(&mut self) {
+        self.registers = [0; 13];
+        self.remaining = 0;
+        self.write_remaining = 0;
+        self.flags = 0;
+    }
+
+    pub fn contains(&self, address: u32) -> bool {
+        address.wrapping_sub(self.base) < Self::SIZE
+    }
+
+    pub fn interrupt(&self) -> Option<u8> {
+        self.irq
+            .filter(|_| (self.status() & (self.registers[0] >> 16) & 0xf) != 0)
+    }
+
+    fn status(&self) -> u32 {
+        let threshold = ((self.registers[0] >> 8) & 31) + 1;
+        let level = self.remaining.min(32);
+        self.flags
+            | (level << 8)
+            | (u32::from(level >= threshold || self.write_remaining != 0) * FTF)
+    }
+
+    pub fn read(&mut self, address: u32, width: usize) -> u32 {
+        let offset = address - self.base;
+        if offset == 8 {
+            return self.status();
+        }
+        if offset == Self::DATA {
+            let mut word = [0; 4];
+            for byte in &mut word[..width] {
+                if self.remaining == 0 {
+                    break;
+                }
+                *byte = self.response.get(self.index).copied().unwrap_or(0xff);
+                self.index = self.index.saturating_add(1);
+                self.remaining -= 1;
+            }
+            return u32::from_le_bytes(word);
+        }
+        self.registers
+            .get((offset / 4) as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn write(&mut self, address: u32, width: usize, value: u32) {
+        let offset = address - self.base;
+        match offset {
+            0 => {
+                self.registers[0] = value & !2;
+                if value & 2 != 0 {
+                    self.remaining = 0;
+                    self.write_remaining = 0;
+                }
+            }
+            8 => {}
+            0xc => self.flags &= !(value & (TEF | TCF | SMF)),
+            0x14 => {
+                self.registers[5] = value;
+                self.remaining = 0;
+                self.write_remaining = 0;
+                if value & (3 << 10) == 0 {
+                    self.command();
+                }
+            }
+            0x18 => {
+                self.registers[6] = value;
+                if self.registers[5] & (3 << 10) != 0 {
+                    self.command();
+                }
+            }
+            Self::DATA => {
+                if self.write_remaining != 0 {
+                    if self.registers[5] as u8 == 0x01 && self.write_enabled {
+                        self.status_configuration = value as u8 & 0xfc;
+                    }
+                    self.write_remaining = self.write_remaining.saturating_sub(width as u32);
+                    if self.write_remaining == 0 {
+                        self.write_enabled = false;
+                        self.flags |= TCF;
+                    }
+                }
+            }
+            _ => {
+                if let Some(register) = self.registers.get_mut((offset / 4) as usize) {
+                    *register = value;
+                }
+            }
+        }
+    }
+
+    fn command(&mut self) {
+        let ccr = self.registers[5];
+        if self.registers[0] & 1 == 0 || ccr & (3 << 8) == 0 {
+            return;
+        }
+        let Some(capacity) = self.capacity_code else {
+            self.flags |= TEF;
+            return;
+        };
+        let mode = (ccr >> 26) & 3;
+        let instruction = ccr as u8;
+        let status = (u8::from(self.write_enabled) << 1) | self.status_configuration;
+        if mode == 0 && ccr & (3 << 24) != 0 {
+            if instruction == 0x01 {
+                self.write_remaining = self.registers[4].saturating_add(1);
+            }
+            return;
+        }
+        self.response.fill(0xff);
+        self.index = 0;
+        match (mode, instruction) {
+            (0, 0x06) => self.write_enabled = true,
+            (0, 0x04) => self.write_enabled = false,
+            (0, 0x66) => self.reset_enabled = true,
+            (0, 0x99) => {
+                if self.reset_enabled {
+                    self.write_enabled = false;
+                    self.status_configuration = 0;
+                }
+                self.reset_enabled = false;
+            }
+            (0, 0xab | 0xb7 | 0xe9) => {}
+            (1, 0x9f) => self.response[..3].copy_from_slice(&[0x9d, 0x70, capacity]),
+            (1 | 2, 0x05) => self.response.fill(status),
+            (1, 0x5a) => {
+                self.response = sfdp(capacity);
+                self.index = self.registers[6] as usize;
+            }
+            _ => {
+                self.flags |= TEF;
+                return;
+            }
+        };
+        if mode == 2 {
+            let mask = self.registers[9];
+            let target = self.registers[10];
+            let equal = !(u32::from(status) ^ target);
+            let matched = if self.registers[0] & (1 << 23) == 0 {
+                equal & mask == mask
+            } else {
+                equal & mask != 0
+            };
+            if matched {
+                self.flags |= SMF;
+            }
+        } else {
+            if mode == 1 && ccr & (3 << 24) != 0 {
+                self.remaining = self.registers[4].saturating_add(1);
+            }
+            self.flags |= TCF;
+        }
+    }
+}
+
+// JEDEC basic flash parameter table for the modeled IS25WP features.
+fn sfdp(capacity: u8) -> [u8; 88] {
+    let mut data = [0xff; 88];
+    data[..16].copy_from_slice(&[
+        b'S', b'F', b'D', b'P', 6, 1, 0, 0xff, 0, 6, 1, 16, 24, 0, 0, 0xff,
+    ]);
+    let density = (1u64 << (capacity + 3)) - 1;
+    let density = if density <= 0x7fff_ffff {
+        density as u32
+    } else {
+        0x8000_0000 | u32::from(capacity + 3)
+    };
+    let parameters: [u32; 16] = [
+        0x0003_20fd | (1 << 17) | (1 << 20) | (1 << 21) | (1 << 22),
+        density,
+        0x6b08_eb44,
+        0xbb04_3b04,
+        0,
+        0,
+        0,
+        0xd812_200c,
+        0,
+        0,
+        8 << 4,
+        0,
+        0,
+        0,
+        2 << 20,
+        1 << 24,
+    ];
+    for (word, value) in data[24..].as_chunks_mut::<4>().0.iter_mut().zip(parameters) {
+        *word = value.to_le_bytes();
+    }
+    data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_sfdp_and_completes_status_register_write_via_irq() {
+        let mut qspi = Qspi::new("qspi".into(), 0, false, Some(92));
+        qspi.attach(0x0800_0000).unwrap();
+        qspi.write(0, 4, 1 | (TCF << 16) | (FTF << 16));
+        qspi.write(0x10, 4, 3);
+        qspi.write(0x14, 4, 0x0500_055a);
+        assert_eq!(qspi.interrupt(), None);
+        qspi.write(0x18, 4, 0);
+        assert_eq!(qspi.interrupt(), Some(92));
+        assert_eq!(qspi.read(Qspi::DATA, 4), u32::from_le_bytes(*b"SFDP"));
+        qspi.write(0xc, 4, TCF);
+        assert_eq!(qspi.interrupt(), None);
+
+        qspi.write(0x14, 4, 0x0106);
+        qspi.write(0xc, 4, TCF);
+        qspi.write(0x10, 4, 0);
+        qspi.write(0x14, 4, 0x0100_0101);
+        assert_eq!(qspi.read(8, 4), FTF);
+        assert_eq!(qspi.interrupt(), Some(92));
+        qspi.write(Qspi::DATA, 1, 0x40);
+        assert_eq!(qspi.read(8, 4), TCF);
+        qspi.write(0x14, 4, 0x0500_0105);
+        assert_eq!(qspi.read(Qspi::DATA, 1), 0x40);
+    }
+}

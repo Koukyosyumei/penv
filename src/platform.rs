@@ -223,7 +223,8 @@ fn parse(
             || stm32h7_adc_platform::has_regions(model)
             || model == stm32h7_gpio_platform::GPIO
             || model == stm32h7_rtc_platform::RTC
-            || model == crate::stm32h7_spi::SPI)
+            || model == crate::stm32h7_spi::SPI
+            || crate::stm32h7_board_platform::has_regions(model))
             && let Some(registration) = &registration
             && registration.starts_with('{')
         {
@@ -298,12 +299,30 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .into_iter()
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
+                let size = number(size).map_err(|e| entry.error(&e))?;
+                let address = if let Some(range) = entry
+                    .registration
+                    .as_deref()
+                    .and_then(|registration| registration.strip_prefix("sysbus <"))
+                    .and_then(|range| range.strip_suffix('>'))
+                {
+                    let (address, length) = range
+                        .split_once(',')
+                        .ok_or_else(|| entry.error("invalid memory range"))?;
+                    let length = length
+                        .trim()
+                        .strip_prefix('+')
+                        .ok_or_else(|| entry.error("expected +size in memory range"))?;
+                    if number(length).map_err(|e| entry.error(&e))? != size {
+                        return Err(entry.error("memory range size disagrees with size property"));
+                    }
+                    number(address.trim()).map_err(|e| entry.error(&e))?
+                } else {
+                    entry.address()?
+                };
                 machine
                     .bus
-                    .map_ram(
-                        entry.address()?,
-                        number(size).map_err(|e| entry.error(&e))? as usize,
-                    )
+                    .map_ram(address, size as usize)
                     .map_err(|e| entry.error(&e))?;
                 ram = true;
             }
@@ -360,7 +379,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 || stm32h7_adc_platform::is_device(&entry.model)
                 || stm32h7_gpio_platform::is_device(&entry.model)
                 || entry.model == stm32h7_rtc_platform::RTC
-                || entry.model == crate::stm32h7_spi::SPI => {}
+                || entry.model == crate::stm32h7_spi::SPI
+                || crate::stm32h7_board_platform::is_device(&entry.model) => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
     }
@@ -377,6 +397,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             );
         }
         let mut cpu_type = None;
+        let mut mpu_regions = None;
         let mut vectors = None;
         for (key, value) in keys(
             entry,
@@ -384,6 +405,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "cpuType",
                 "vectorTableOffset",
                 "InitVectorTableOffset",
+                "numberOfMPURegions",
                 "nvic",
             ],
         )? {
@@ -391,6 +413,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "cpuType" => cpu_type = Some(value),
                 "nvic" if nvic.is_some_and(|controller| controller.name == value) => {}
                 "nvic" => return Err(entry.error("unknown NVIC reference")),
+                "numberOfMPURegions" => {
+                    let count = number(value).map_err(|e| entry.error(&e))?;
+                    if count > 16 {
+                        return Err(entry.error("invalid MPU region count"));
+                    }
+                    mpu_regions = Some(count as u8);
+                }
                 "vectorTableOffset" | "InitVectorTableOffset" if vectors.is_none() => {
                     vectors = Some(number(value).map_err(|e| entry.error(&e))?);
                 }
@@ -400,8 +429,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 _ => unreachable!(),
             }
         }
-        if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) {
-            return Err(entry.error("expected Cortex-M0 or Cortex-M0+ cpuType"));
+        let thumb2 = match cpu_type {
+            Some(r#""cortex-m0""# | r#""cortex-m0+""#) => false,
+            Some(r#""cortex-m7""#) => true,
+            _ => return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M7 cpuType")),
+        };
+        if !thumb2 && mpu_regions.is_some() {
+            return Err(entry.error("MPU regions require Cortex-M7"));
         }
         if let Some(dwt) = dwt {
             let (_, frequency) = keys(dwt, &["frequency"])?
@@ -445,6 +479,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(controller.error("unsupported NVIC wiring"));
                 }
             }
+        }
+        if let Some(frequency) = frequency {
+            machine
+                .bus
+                .systick
+                .as_mut()
+                .unwrap()
+                .set_frequency(frequency);
         }
         if let Some(flash) = flash_controller {
             configure_h7_flash(flash, &entries, nvic, &mut machine)?;
@@ -550,6 +592,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             0
         };
         stm32h7_adc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
+        crate::stm32h7_board_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
         stm32h7_gpio_platform::configure(&entries, exti, exti_lines, &mut machine)?;
         stm32h7_rtc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
         for uart in stm32_uarts {
@@ -608,7 +651,15 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
-        machine.primary.configure_cortex_m(vectors);
+        machine.primary.configure_cortex_m(vectors, thumb2);
+        if thumb2 {
+            machine
+                .bus
+                .nvic
+                .as_mut()
+                .unwrap()
+                .configure_mpu(mpu_regions.unwrap_or(16));
+        }
         crate::network_platform::configure(
             &entries,
             &mut machine,
@@ -622,6 +673,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || stm32h7_gpio_platform::is_device(&entry.model)
             || entry.model == stm32h7_rtc_platform::RTC
             || entry.model == crate::stm32h7_spi::SPI
+            || crate::stm32h7_board_platform::is_device(&entry.model)
     }) {
         return Err(entry.error("STM32H7 peripherals require a Cortex-M CPU"));
     }

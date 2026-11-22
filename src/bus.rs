@@ -13,17 +13,23 @@ use crate::{
     ns16550::Ns16550,
     nvic::{ActiveExceptions, Nvic, VTOR},
     plic::Plic,
+    stm32_crc::Stm32Crc,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
     stm32h7_exti::H7Exti,
+    stm32h7_fdcan::Fdcan,
     stm32h7_flash::FlashController,
     stm32h7_gpio::Stm32Gpio,
+    stm32h7_i2c::I2c,
     stm32h7_net_control::{Change, NetworkControl},
+    stm32h7_qspi::Qspi,
+    stm32h7_rng::Rng,
     stm32h7_rtc::Stm32Rtc,
     stm32h7_spi::Spi,
+    stm32h7_timer::Timer as H7Timer,
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
 };
@@ -95,6 +101,12 @@ pub struct Bus {
     h7_gpio: Vec<Stm32Gpio>,
     h7_rtc: Vec<Stm32Rtc>,
     h7_spi: Vec<Spi>,
+    h7_i2c: Vec<I2c>,
+    h7_rng: Vec<Rng>,
+    h7_qspi: Vec<Qspi>,
+    h7_timers: Vec<H7Timer>,
+    h7_crc: Vec<Stm32Crc>,
+    h7_fdcan: Vec<Fdcan>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -336,6 +348,42 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_fdcan(&mut self, fdcan: Fdcan) -> Result<(), String> {
+        self.check_peripheral_range(fdcan.base, Fdcan::SIZE)?;
+        self.h7_fdcan.push(fdcan);
+        Ok(())
+    }
+
+    pub fn map_h7_crc(&mut self, crc: Stm32Crc) -> Result<(), String> {
+        self.check_peripheral_range(crc.base, Stm32Crc::SIZE)?;
+        self.h7_crc.push(crc);
+        Ok(())
+    }
+
+    pub fn map_h7_timer(&mut self, timer: H7Timer) -> Result<(), String> {
+        self.check_peripheral_range(timer.base, H7Timer::SIZE)?;
+        self.h7_timers.push(timer);
+        Ok(())
+    }
+
+    pub fn map_h7_qspi(&mut self, qspi: Qspi) -> Result<(), String> {
+        self.check_peripheral_range(qspi.base, Qspi::SIZE)?;
+        self.h7_qspi.push(qspi);
+        Ok(())
+    }
+
+    pub fn map_h7_rng(&mut self, rng: Rng) -> Result<(), String> {
+        self.check_peripheral_range(rng.base, Rng::SIZE)?;
+        self.h7_rng.push(rng);
+        Ok(())
+    }
+
+    pub fn map_h7_i2c(&mut self, i2c: I2c) -> Result<(), String> {
+        self.check_peripheral_range(i2c.base, I2c::SIZE)?;
+        self.h7_i2c.push(i2c);
+        Ok(())
+    }
+
     pub fn map_h7_spi(&mut self, spi: Spi) -> Result<(), String> {
         self.check_peripheral_range(spi.base, Spi::SIZE)?;
         self.h7_spi.push(spi);
@@ -357,6 +405,11 @@ impl Bus {
             regions: &mut self.regions,
             reservations: &mut self.reservations,
         };
+        for timer in &mut self.h7_timers {
+            if timer_clocked(control, timer) {
+                timer.tick();
+            }
+        }
         for rtc in &mut self.h7_rtc {
             if rtc_clocked(control, rtc) {
                 rtc.tick();
@@ -454,6 +507,16 @@ impl Bus {
                 .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE)))
                 .chain(self.h7_spi.iter().map(|spi| (spi.base, Spi::SIZE)))
+                .chain(self.h7_i2c.iter().map(|i2c| (i2c.base, I2c::SIZE)))
+                .chain(self.h7_rng.iter().map(|rng| (rng.base, Rng::SIZE)))
+                .chain(self.h7_qspi.iter().map(|qspi| (qspi.base, Qspi::SIZE)))
+                .chain(
+                    self.h7_timers
+                        .iter()
+                        .map(|timer| (timer.base, H7Timer::SIZE)),
+                )
+                .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
+                .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
                 .any(|(base, size)| {
                     let base = u64::from(base);
                     start < base + u64::from(size) && base < end
@@ -625,6 +688,18 @@ impl Bus {
                         .filter(|spi| spi_clocked(control, spi))
                         .filter_map(Spi::interrupt),
                 )
+                .chain(
+                    self.h7_i2c
+                        .iter()
+                        .filter(|i2c| i2c_clocked(control, i2c))
+                        .filter_map(I2c::interrupt),
+                )
+                .chain(
+                    self.h7_timers
+                        .iter()
+                        .filter(|timer| timer_clocked(control, timer))
+                        .filter_map(H7Timer::interrupt),
+                )
             {
                 match route {
                     Stm32Irq::Nvic(line) => nvic.set_line(line, true, active),
@@ -632,10 +707,23 @@ impl Bus {
                 }
             }
             for line in self
-                .h7_adc_dma
+                .h7_rng
                 .iter()
-                .filter(|device| dma_clocked(control, device))
-                .flat_map(AdcDma::interrupts)
+                .filter(|rng| rng_clocked(control, rng))
+                .filter_map(Rng::interrupt)
+                .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
+                .chain(
+                    self.h7_qspi
+                        .iter()
+                        .filter(|qspi| qspi_clocked(control, qspi))
+                        .filter_map(Qspi::interrupt),
+                )
+                .chain(
+                    self.h7_adc_dma
+                        .iter()
+                        .filter(|device| dma_clocked(control, device))
+                        .flat_map(AdcDma::interrupts),
+                )
             {
                 nvic.set_line(line, true, active);
             }
@@ -829,6 +917,32 @@ impl Bus {
             reservations: &mut self.reservations,
         };
         self.ethernet[nic].receive(frame, &mut dma);
+    }
+
+    pub fn read_exclusive(&mut self, address: u32) -> Result<u32, BusError> {
+        let value = self.read::<4>(address)?;
+        self.reservations[0] = Some(address);
+        Ok(value)
+    }
+
+    pub fn write_exclusive(
+        &mut self,
+        address: u32,
+        value: u32,
+        output: &mut impl Write,
+    ) -> Result<u32, BusError> {
+        if address & 3 != 0 {
+            return Err(BusError::Misaligned(address, 4));
+        }
+        if self.reservations[0].take() != Some(address) {
+            return Ok(1);
+        }
+        self.write(address, 4, value, output)?;
+        Ok(0)
+    }
+
+    pub fn clear_reservation(&mut self, hart: usize) {
+        self.reservations[hart] = None;
     }
 
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
@@ -1064,6 +1178,63 @@ impl Bus {
                 0
             });
         }
+        if matches!(N, 1 | 2 | 4)
+            && address as usize & (N - 1) == 0
+            && let Some(i2c) = self.h7_i2c.iter().find(|i2c| i2c.contains(address))
+        {
+            return Ok(if i2c_clocked(self.h7_network_control.as_ref(), i2c) {
+                i2c.read(address) & (u32::MAX >> (32 - 8 * N))
+            } else {
+                0
+            });
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(rng) = self.h7_rng.iter_mut().find(|rng| rng.contains(address))
+        {
+            return Ok(if rng_clocked(self.h7_network_control.as_ref(), rng) {
+                rng.read(address)
+            } else {
+                0
+            });
+        }
+        if address as usize & (N - 1) == 0
+            && let Some(qspi) = self.h7_qspi.iter_mut().find(|qspi| qspi.contains(address))
+        {
+            let readable = N == 4 || address - qspi.base == Qspi::DATA;
+            return Ok(
+                if readable && qspi_clocked(self.h7_network_control.as_ref(), qspi) {
+                    qspi.read(address, N)
+                } else {
+                    0
+                },
+            );
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(timer) = self.h7_timers.iter().find(|timer| timer.contains(address))
+        {
+            return Ok(if timer_clocked(self.h7_network_control.as_ref(), timer) {
+                timer.read(address)
+            } else {
+                0
+            });
+        }
+        if address as usize & (N - 1) == 0
+            && let Some(crc) = self.h7_crc.iter().find(|crc| crc.contains(address))
+        {
+            return Ok(if crc_clocked(self.h7_network_control.as_ref(), crc) {
+                crc.read(address, N)
+            } else {
+                0
+            });
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(fdcan) = self.h7_fdcan.iter().find(|fdcan| fdcan.contains(address))
+        {
+            return Ok(fdcan.read(address));
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1071,6 +1242,10 @@ impl Bus {
         if address as usize & (N - 1) != 0 {
             return Err(BusError::Misaligned(address, N));
         }
+        self.read_unaligned_ram::<N>(address)
+    }
+
+    pub fn read_unaligned_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
         for region in &self.regions {
             if let Some(offset) = region.offset(address, N) {
                 let mut bytes = [0; 4];
@@ -1213,6 +1388,34 @@ impl Bus {
             if control.rtc_in_reset() {
                 for rtc in self.h7_rtc.iter_mut().filter(|rtc| rtc.rcc_bound) {
                     rtc.reset();
+                }
+            }
+            for i2c in &mut self.h7_i2c {
+                if i2c.clock.is_some_and(|clock| control.i2c_in_reset(clock)) {
+                    i2c.reset();
+                }
+            }
+            for timer in &mut self.h7_timers {
+                if timer
+                    .clock
+                    .is_some_and(|clock| control.timer_in_reset(clock))
+                {
+                    timer.reset();
+                }
+            }
+            if control.crc_in_reset() {
+                for crc in self.h7_crc.iter_mut().filter(|crc| crc.rcc_bound) {
+                    crc.reset();
+                }
+            }
+            if control.qspi_in_reset() {
+                for qspi in self.h7_qspi.iter_mut().filter(|qspi| qspi.rcc_bound) {
+                    qspi.reset();
+                }
+            }
+            if control.rng_in_reset() {
+                for rng in self.h7_rng.iter_mut().filter(|rng| rng.rcc_bound) {
+                    rng.reset();
                 }
             }
             if control.spi4_in_reset() {
@@ -1367,6 +1570,54 @@ impl Bus {
             }
             return Ok(());
         }
+        if let Some(i2c) = self.h7_i2c.iter_mut().find(|i2c| i2c.contains(address)) {
+            if i2c_clocked(self.h7_network_control.as_ref(), i2c) {
+                i2c.write(address, value & (u32::MAX >> (32 - 8 * width)));
+            }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(rng) = self.h7_rng.iter_mut().find(|rng| rng.contains(address))
+        {
+            if rng_clocked(self.h7_network_control.as_ref(), rng) {
+                rng.write(address, value);
+            }
+            return Ok(());
+        }
+        if let Some(qspi) = self.h7_qspi.iter_mut().find(|qspi| qspi.contains(address)) {
+            if (width == 4 || address - qspi.base == Qspi::DATA)
+                && qspi_clocked(self.h7_network_control.as_ref(), qspi)
+            {
+                qspi.write(address, width, value);
+            }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(timer) = self
+                .h7_timers
+                .iter_mut()
+                .find(|timer| timer.contains(address))
+        {
+            if timer_clocked(self.h7_network_control.as_ref(), timer) {
+                timer.write(address, value);
+            }
+            return Ok(());
+        }
+        if let Some(crc) = self.h7_crc.iter_mut().find(|crc| crc.contains(address)) {
+            if crc_clocked(self.h7_network_control.as_ref(), crc) {
+                crc.write(address, width, value);
+            }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(fdcan) = self
+                .h7_fdcan
+                .iter_mut()
+                .find(|fdcan| fdcan.contains(address))
+        {
+            fdcan.write(address, value);
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
@@ -1392,6 +1643,29 @@ fn request_h7_stream(
         .iter_mut()
         .find(|dma| dma.base == target.base && bdma_clocked(control, dma))
         .is_some_and(|dma| dma.request(target.stream, source, value, memory))
+}
+
+fn crc_clocked(control: Option<&NetworkControl>, crc: &Stm32Crc) -> bool {
+    !crc.rcc_bound || control.is_some_and(NetworkControl::crc_enabled)
+}
+
+fn timer_clocked(control: Option<&NetworkControl>, timer: &H7Timer) -> bool {
+    timer
+        .clock
+        .is_none_or(|clock| control.is_some_and(|control| control.timer_enabled(clock)))
+}
+
+fn qspi_clocked(control: Option<&NetworkControl>, qspi: &Qspi) -> bool {
+    !qspi.rcc_bound || control.is_some_and(NetworkControl::qspi_enabled)
+}
+
+fn rng_clocked(control: Option<&NetworkControl>, rng: &Rng) -> bool {
+    !rng.rcc_bound || control.is_some_and(NetworkControl::rng_enabled)
+}
+
+fn i2c_clocked(control: Option<&NetworkControl>, i2c: &I2c) -> bool {
+    i2c.clock
+        .is_none_or(|clock| control.is_some_and(|control| control.i2c_enabled(clock)))
 }
 
 fn spi_clocked(control: Option<&NetworkControl>, spi: &Spi) -> bool {

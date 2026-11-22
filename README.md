@@ -100,7 +100,7 @@ start
 
 STM32H7 の `Network.SynopsysDWCEthernetQualityOfService` は MAC、MTL、DMA の各領域と単一の DMA チャネルに対応します。受信・送信リング、Clause 22 MDIO、NVIC への割り込みを利用できます。
 
-STM32H7 の REPL で `RegistrationPeripheralAlias.ETH1MAC` を指定すると、RCC の AHB1 クロックとリセットを MAC に接続します。`RegistrationPeripheralAlias.SYSCFG` は、APB4 クロックの有効化後に PMCR の MII/RMII 選択を MAC に反映します。この RCC/SYSCFG モデルの対応範囲は Ethernet に必要なレジスターです。
+STM32H7 の REPL で `RegistrationPeripheralAlias.ETH1MAC` を指定すると、RCC の AHB1 クロックとリセットを MAC に接続します。`RegistrationPeripheralAlias.SYSCFG` は、APB4 クロックの有効化後に PMCR の MII/RMII 選択を MAC に反映します。RCC は実装済みの STM32H7 周辺機器にクロックとリセットを配線します。
 
 STM32H7 参照ボードの PWR と FMC が使う定数応答の `Python.PythonPeripheral` を読み込めます。対応するスクリプトはオフセットごとに定数を返す形式です。Cortex-M 用の RESC では `EnableZephyrMode` が ELF の `z_impl_k_busy_wait` をフックし、待機時間中は仮想時間と SysTick を進めます。抑止シンボルを引数に指定した場合、ELF にそのシンボルがあればフックを設定しません。`VectorTableOffset` は数値またはバッククォート内の `sysbus GetSymbolAddress` を受け付けます。
 
@@ -135,8 +135,8 @@ target/release/penv run --script "$smp" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 400000000 --stats
 ```
 
-- `cargo test` はユニットテスト 36 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
-- STM32H7 の上流単一ノード RESC は、変更前の `aa62fb3` では `stm32h7.repl:193` の `SPI.STM32H7_SPI` で停止しました。変更後は SPI4 の宣言を越え、`stm32h7.repl:199` の `I2C.STM32F7_I2C` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
+- `cargo test` はユニットテスト 42 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
+- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。現行コードは両方の宣言を通過し、`stm32h7.repl:219` の `DMA.STM32DMA2D` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
 変更前の停止を同じ RESC で再現するには、基準コミットを一時ディレクトリに展開して実行します。
@@ -149,24 +149,22 @@ CARGO_TARGET_DIR="$baseline/target" cargo build --release --manifest-path "$base
     --platform-root "$renode" --asset-dir "$assets" --max-steps 1000000 --stats
 ```
 
-STM32H7 の ELF と SPI4 配線まで読み込ませて CPU 側の停止箇所を調べるには、同じ公開 ELF と RESC のリセットマクロを使い、プラットフォームだけを最小構成に置き換えます。以下の `cortex-m0` 指定は現行インタープリタで実行箇所を確認するための診断設定です。
+### 公開 STM32H7 ELF の USART2 スモークテスト
+
+検証スクリプトは同じ上流 RESC のリセットマクロを使い、REPL の参照だけを生成した診断構成に差し替えます。診断構成は上流 REPL から起動に必要な宣言を抽出し、Cortex-M7、480 MHz の SysTick、USART2 の EXTI 配線を使います。DBGMCU ID と CAN CCFG は定数応答です。システムフラッシュの REPL 初期化スクリプトは省いています。ELF は上流 URL から取得し、SHA-1 を検証します。キャッシュ済みファイルを使う場合は `PENV_ASSET_DIR` を指定できます。
 
 ```sh
-cat > "$assets/boot-probe.repl" <<'REPL'
-cpu: CPU.CortexM @ sysbus
-    cpuType: "cortex-m0"
-    nvic: nvic
-
-usart2: UART.STM32F7_USART @ sysbus 0x40004400
-
-REPL
-awk -v RS='' -v ORS='\n\n' \
-    '$1 ~ /^(nvic|dwt|flashBank1|dtcm|axiSram|sram3|rcc|spi4|dma1|dma2|dmamux1):$/' \
-    "$renode/platforms/cpus/stm32h7.repl" >> "$assets/boot-probe.repl"
-sed 's|@platforms/boards/stm32h7_renode_reference_board.repl|@boot-probe.repl|' \
-    "$h7" > "$assets/boot-probe.resc"
-target/release/penv run --script "$assets/boot-probe.resc" \
-    --platform-root "$renode" --asset-dir "$assets" --max-steps 1000000 --stats
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc tests/stm32h7-zephyr-smoke.sh
 ```
 
-この診断では、公開 ELF のリセット後に `pc=0x080036b6: unsupported Thumb instruction 0xe8e3` を確認しました。STM32H7 で Zephyr の UART 起動表示に到達するには、I2C 以降のボード定義への対応と、Cortex-M7 の起動に必要な Thumb-2 命令・システムレジスターの実装が残っています。
+スクリプトは USART2 の出力と Penv のログを一時ディレクトリに保存し、公開 ELF の起動バナー、シェルプロンプト、UART から入力した `help` への応答を検証します。期待するログは以下のとおりです。
+
+```text
+*** Booting STM32H7 Renode Platform Demo 6607bdd711f4 ***
+demo:~$ help
+Available commands:
+```
+
+変更前の診断実行で停止した `pc=0x080036b6` は、ITCM を初期化する `strd r0, r1, [r3], #8`（先頭半語 `0xe8e3`）でした。Thumb-2 のデコーダーはローカル nRF52840 担当の `fe1911b` を再利用し、Cortex-M7 の実行ログで必要になった命令を追加しました。CRC の演算モデルはローカル STM32F0 の実装を再利用しています。起動時のバスアクセスに合わせて、RCC、SysTick、RNG、TIM3、CRC、QuadSPI の初期化・識別・SFDP と受信送信割り込み、FDCAN の設定レジスターを配線しました。
+
+残課題は未変更の上流 REPL のロード、I2C 配下のセンサー、QuadSPI のフラッシュデータ操作、CAN フレーム送受信です。診断実行では LSM6DSO の初期化失敗と外部フラッシュのマウント失敗 `err=-45` が出力されます。MPU とキャッシュはファームウェアの初期化レジスターに応答する範囲です。

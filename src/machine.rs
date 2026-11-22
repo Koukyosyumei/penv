@@ -304,8 +304,10 @@ impl Machine {
 }
 
 impl Hart {
-    pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
-        self.thumb = Some(Thumb::new(vectors));
+    pub fn configure_cortex_m(&mut self, vectors: Option<u32>, thumb2: bool) {
+        let mut thumb = Thumb::new(vectors);
+        thumb.thumb2 = thumb2;
+        self.thumb = Some(thumb);
     }
 
     pub fn set_integer_extensions(&mut self, multiply: bool, atomic: bool, compressed: bool) {
@@ -433,6 +435,9 @@ impl Hart {
                 .service_interrupts(&mut self.pc, &mut self.registers, bus)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?
             {
+                return Ok(Step::Trap);
+            }
+            if thumb.sleeping() {
                 return Ok(Step::Trap);
             }
             if let Some(wait) = &mut self.busy_wait
