@@ -4,7 +4,10 @@ use std::{
 };
 
 use crate::{
-    machine::MAX_HARTS, ns16550::Ns16550, rv64_ethernet::Ethernet, rv64_starfive::ResetGenerator,
+    machine::MAX_HARTS,
+    ns16550::Ns16550,
+    rv64_ethernet::Ethernet,
+    rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
 #[derive(Default)]
@@ -14,6 +17,8 @@ pub struct Devices {
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
     pub fallback_ranges: Vec<FallbackRange>,
+    pub starlight_reset_pin: Option<StarLightResetPin>,
+    pub reset_requested: bool,
     lines: [u64; MAX_HARTS],
     input_uart: usize,
 }
@@ -79,6 +84,14 @@ impl Devices {
     }
 
     pub fn read(&mut self, address: u32, width: usize) -> Option<u32> {
+        if width == 4
+            && let Some(value) = self
+                .starlight_reset_pin
+                .as_ref()
+                .and_then(|pin| pin.read(address))
+        {
+            return Some(value);
+        }
         if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
             return uart.read(address, width);
         }
@@ -106,6 +119,15 @@ impl Devices {
         value: u32,
         output: &mut impl Write,
     ) -> Option<io::Result<()>> {
+        if width == 4
+            && let Some(reset) = self
+                .starlight_reset_pin
+                .as_mut()
+                .and_then(|pin| pin.write(address, value))
+        {
+            self.reset_requested |= reset;
+            return Some(Ok(()));
+        }
         if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
             return uart.write(address, width, value, output);
         }

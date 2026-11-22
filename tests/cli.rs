@@ -436,3 +436,52 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, b"I");
 }
+
+#[test]
+fn starlight_gpio_reboots_firmware_within_the_same_step_budget() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-starlight-reset-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("beaglev_starlight.repl");
+    let raw = directory.join("gpio-reset.bin");
+    fs::write(
+        &board,
+        r#"cpu: CPU.RiscV64 @ sysbus
+    cpuType: "rv64i"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.NS16550 @ sysbus 0x10000000
+gpio: GPIOPort.SiFive_GPIO @ sysbus 0x1191000
+"#,
+    )
+    .unwrap();
+    let instructions: [u32; 9] = [
+        0x1000_02b7, // lui t0, 0x10000
+        0x03e0_0313, // addi t1, zero, '>'
+        0x0062_8023, // sb t1, 0(t0)
+        0x1191_03b7, // lui t2, 0x11910
+        0x0010_0313, // addi t1, zero, 1
+        0x0a63_a023, // sw t1, 0xa0(t2): select high
+        0x0a03_a223, // sw zero, 0xa4(t2): enable output
+        0x0a03_a023, // sw zero, 0xa0(t2): drive reset low
+        0x0010_0073, // ebreak, unreachable after reset
+    ];
+    fs::write(
+        &raw,
+        instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--max-steps", "19", "--platform"])
+        .arg(&board)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert_eq!(result.status.code(), Some(2), "{result:?}");
+    assert_eq!(result.stdout, b">>>");
+}

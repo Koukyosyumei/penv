@@ -7,10 +7,10 @@ use crate::{
     rv64_devices::{FallbackRange, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
     rv64_priv::Pmp,
-    rv64_starfive::ResetGenerator,
+    rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
-pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
+pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
     let entries = merge(entries)?;
     let mut machine = Machine::without_default_ram();
     let mut cpus = Vec::new();
@@ -236,6 +236,19 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
     }
 
     map_ethernet(&mut machine, &entries, plic, sources)?;
+    if starlight
+        && let Some(gpio) = entries.iter().find(|entry| {
+            entry.name == "gpio"
+                && entry.model == "GPIOPort.SiFive_GPIO"
+                && entry
+                    .address()
+                    .is_ok_and(|address| matches!(address, 0x0119_1000 | 0x1191_0000))
+        })
+    {
+        // The upstream placeholder is a SiFive model; use the address in the guest DTB.
+        check_mapping(&machine, gpio, StarLightResetPin::DOUT, 8)?;
+        machine.bus.rv64_devices.starlight_reset_pin = Some(StarLightResetPin::default());
+    }
     Ok(machine)
 }
 

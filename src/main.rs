@@ -437,16 +437,14 @@ fn run() -> Result<ExitCode, String> {
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
-    let result = if uart_stdin {
-        run_with_uart_stdin(
-            &mut machine,
-            max_steps,
-            &mut output,
-            uart_stdin_reset.then_some(&boot_machine),
-        )
-    } else {
-        machine.run(max_steps, &mut output)
-    };
+    let result = run_machine(
+        &mut machine,
+        max_steps,
+        &mut output,
+        &boot_machine,
+        uart_stdin,
+        uart_stdin_reset,
+    );
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
@@ -467,12 +465,7 @@ fn run() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_with_uart_stdin(
-    machine: &mut Machine,
-    mut remaining: u64,
-    output: &mut impl Write,
-    reboot: Option<&dyn Fn() -> Result<Machine, String>>,
-) -> Result<(Stop, u64), String> {
+fn uart_stdin_receiver() -> Result<std::sync::mpsc::Receiver<io::Result<Vec<u8>>>, String> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(8);
     std::thread::Builder::new()
         .name("uart-stdin".into())
@@ -495,23 +488,47 @@ fn run_with_uart_stdin(
             }
         })
         .map_err(|error| format!("UART stdin: {error}"))?;
+    Ok(receiver)
+}
 
+fn reset_machine(
+    machine: &mut Machine,
+    output: &mut impl Write,
+    boot: &impl Fn() -> Result<Machine, String>,
+) -> Result<(), String> {
+    output.flush().map_err(|error| format!("UART: {error}"))?;
+    // Release the old RAM and socket before reloading firmware and rebinding.
+    drop(std::mem::replace(machine, Machine::without_default_ram()));
+    *machine = boot()?;
+    Ok(())
+}
+
+fn run_machine(
+    machine: &mut Machine,
+    mut remaining: u64,
+    output: &mut impl Write,
+    boot: &impl Fn() -> Result<Machine, String>,
+    uart_stdin: bool,
+    uart_stdin_reset: bool,
+) -> Result<(Stop, u64), String> {
+    let receiver = uart_stdin.then(uart_stdin_receiver).transpose()?;
     let mut retired = 0;
     let mut escaped = false;
     while remaining != 0 {
-        for bytes in receiver.try_iter().take(8) {
+        for bytes in receiver
+            .iter()
+            .flat_map(|receiver| receiver.try_iter())
+            .take(8)
+        {
             let bytes = bytes.map_err(|error| format!("UART stdin: {error}"))?;
-            if let Some(reboot) = reboot {
+            if uart_stdin_reset {
                 let mut uart = Vec::with_capacity(bytes.len());
                 for byte in bytes {
                     match (std::mem::take(&mut escaped), byte) {
                         (false, 0x1d) => escaped = true,
                         (true, b'r') => {
                             uart.clear();
-                            output.flush().map_err(|error| format!("UART: {error}"))?;
-                            // Release the old RAM and socket before reloading firmware and rebinding.
-                            drop(std::mem::replace(machine, Machine::without_default_ram()));
-                            *machine = reboot()?;
+                            reset_machine(machine, output, boot)?;
                         }
                         (true, 0x1d) | (false, _) => uart.push(byte),
                         (true, _) => uart.extend([0x1d, byte]),
@@ -522,15 +539,28 @@ fn run_with_uart_stdin(
                 machine.bus.queue_uart_input(bytes);
             }
         }
-        let batch = remaining.min(65_536);
+        let batch = if uart_stdin {
+            remaining.min(65_536)
+        } else {
+            remaining
+        };
+        let before = machine.elapsed_steps();
         let (stop, count) = machine.run(batch, output)?;
+        remaining -= machine.elapsed_steps().wrapping_sub(before);
         retired += count;
-        if stop != Stop::Limit {
-            return Ok((stop, retired));
+        match stop {
+            Stop::Reset if remaining != 0 => {
+                escaped = false;
+                reset_machine(machine, output, boot)?;
+            }
+            Stop::Reset | Stop::Limit => {
+                // Login and shell prompts are often written without a newline.
+                if uart_stdin {
+                    output.flush().map_err(|error| format!("UART: {error}"))?;
+                }
+            }
+            _ => return Ok((stop, retired)),
         }
-        // Login and shell prompts are often written without a newline.
-        output.flush().map_err(|error| format!("UART: {error}"))?;
-        remaining -= batch;
     }
     Ok((Stop::Limit, retired))
 }

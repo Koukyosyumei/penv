@@ -34,6 +34,7 @@ pub struct Hart {
 pub enum Stop {
     Ecall,
     Ebreak,
+    Reset,
     Limit,
 }
 
@@ -255,6 +256,10 @@ impl Machine {
         Ok(())
     }
 
+    pub fn elapsed_steps(&self) -> u64 {
+        self.elapsed_steps
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
@@ -286,6 +291,9 @@ impl Machine {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
+            }
+            if self.bus.rv64_devices.reset_requested {
+                return Ok((Stop::Reset, retired));
             }
         }
         Ok((Stop::Limit, retired))

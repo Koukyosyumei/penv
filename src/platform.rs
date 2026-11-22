@@ -245,7 +245,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut entries,
     )?;
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
-        return crate::rv64_platform::load(entries);
+        let starlight = path
+            .file_name()
+            .is_some_and(|name| name == "beaglev_starlight.repl");
+        return crate::rv64_platform::load(entries, starlight);
     }
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();

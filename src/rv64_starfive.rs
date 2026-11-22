@@ -47,3 +47,57 @@ impl ResetGenerator {
         self.asserted[index % self.words] = value;
     }
 }
+
+/// BeagleV StarLight routes the active-low board reset through JH7100 GPIO10.
+pub struct StarLightResetPin {
+    output: u32,
+    output_enable: u32,
+}
+
+impl Default for StarLightResetPin {
+    fn default() -> Self {
+        Self {
+            output: 0,
+            output_enable: 1,
+        }
+    }
+}
+
+impl StarLightResetPin {
+    pub const DOUT: u32 = 0x1191_00a0;
+    pub const DOEN: u32 = 0x1191_00a4;
+
+    pub fn read(&self, address: u32) -> Option<u32> {
+        match address {
+            Self::DOUT => Some(self.output),
+            Self::DOEN => Some(self.output_enable),
+            _ => None,
+        }
+    }
+
+    pub fn write(&mut self, address: u32, value: u32) -> Option<bool> {
+        match address {
+            Self::DOUT => self.output = value,
+            Self::DOEN => self.output_enable = value,
+            _ => return None,
+        }
+        // Constant zero selects a low output or asserts the active-low output enable.
+        Some(self.output == 0 && self.output_enable == 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StarLightResetPin;
+
+    #[test]
+    fn starlight_reset_requires_a_driven_low_pin() {
+        let mut pin = StarLightResetPin::default();
+        assert_eq!(pin.read(StarLightResetPin::DOEN), Some(1));
+        assert_eq!(pin.write(StarLightResetPin::DOUT, 0), Some(false));
+        assert_eq!(pin.write(StarLightResetPin::DOUT, 1), Some(false));
+        assert_eq!(pin.write(StarLightResetPin::DOEN, 0), Some(false));
+        assert_eq!(pin.write(StarLightResetPin::DOEN + 8, 0), None);
+        assert_eq!(pin.write(StarLightResetPin::DOUT, 0), Some(true));
+    }
+}

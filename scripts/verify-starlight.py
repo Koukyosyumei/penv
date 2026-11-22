@@ -19,7 +19,7 @@ class Guest:
             "--platform-root", args.renode, "--asset-dir", args.assets,
             "--uart-device", "uart3", "--uart-stdin", "--max-steps",
             "40000000000" if args.recovery else ("24000000000" if link else "14000000000"),
-            *link, *(["--uart-stdin-reset"] if args.recovery else []),
+            *link, *(["--uart-stdin-reset"] if args.recovery and not args.guest_reboot else []),
         ], stdin=subprocess.PIPE, stdout=self.log, stderr=self.errors, bufsize=0)
         self.name = name
         self.deadline = time.monotonic() + args.timeout
@@ -95,7 +95,19 @@ class Guest:
             raise RuntimeError(f"{self.name}: UART did not recover after Ethernet reopen")
         print(f"{self.name}: UART shell survived Ethernet reopen", flush=True)
 
-    def restart(self):
+    def restart(self, from_guest):
+        if from_guest:
+            # The FIT's active-low GPIO10 reset is usable even without gpio-restart.
+            self.checked_command("devmem 0x119100a0 32 1")
+            self.checked_command("devmem 0x119100a4 32 0")
+            high = self.checked_command("devmem 0x119100a0 32")
+            enabled = self.checked_command("devmem 0x119100a4 32")
+            if b"0x00000001" not in high or b"0x00000000" not in enabled:
+                raise RuntimeError(f"{self.name}: GPIO10 register readback failed")
+            self.checked_command("sync")
+            self.send(b"devmem 0x119100a0 32 0")
+            self.login()
+            return
         self.send(b"reboot")
         self.expect(rb"reboot: Restarting system")
         # The demo Linux image has no JH7100 restart handler. Apply the
@@ -131,7 +143,11 @@ def main():
                         help="connect the two guest ports to a local penv Ethernet switch")
     parser.add_argument("--recovery", action="store_true",
                         help="verify Ethernet reopen and reload one machine after Linux reboot")
+    parser.add_argument("--guest-reboot", action="store_true",
+                        help="drive the StarLight reset pin from the guest during recovery")
     args = parser.parse_args()
+    if args.guest_reboot and not args.recovery:
+        parser.error("--guest-reboot requires --recovery")
     if args.recovery and args.switch_port is None:
         parser.error("--recovery requires --switch-port and --ports")
     if args.switch_port is not None and not args.ports:
@@ -169,7 +185,7 @@ def main():
                 first.recover_ethernet("192.168.0.5")
                 first.ping("192.168.0.6", 56)
                 second.ping("192.168.0.5", 56)
-                first.restart()
+                first.restart(args.guest_reboot)
                 first.configure("66:34:B0:6C:DE:A0", "192.168.0.5")
                 for size in (56, 3200):
                     first.ping("192.168.0.6", size)
