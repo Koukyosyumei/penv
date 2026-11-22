@@ -1,29 +1,29 @@
 pub struct GpioLed {
     pub name: String,
-    pub port: u32,
     pub pin: u8,
     invert: bool,
     state: bool,
 }
 
 impl GpioLed {
-    pub fn new(name: String, port: u32, pin: u8, invert: bool) -> Self {
+    pub fn new(name: String, pin: u8, invert: bool) -> Self {
         Self {
             name,
-            port,
             pin,
             invert,
             state: invert,
         }
     }
 
-    pub fn sample(&mut self, levels: u16) -> Option<bool> {
+    pub fn sample(&mut self, levels: u16, report: bool) {
         let state = (levels & (1 << self.pin) != 0) ^ self.invert;
         if state == self.state {
-            return None;
+            return;
         }
         self.state = state;
-        Some(state)
+        if report {
+            eprintln!("LED {} {}", self.name, if state { "on" } else { "off" });
+        }
     }
 }
 

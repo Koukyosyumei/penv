@@ -87,7 +87,7 @@ pub struct Bus {
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
-    gpio_leds: Vec<GpioLed>,
+    gpio_leds: Vec<(u32, GpioLed)>,
     gpio_buttons: Vec<GpioButton>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
@@ -565,8 +565,8 @@ impl Bus {
         self.gpio_timer_inputs.push((port, pin, timer, channel));
     }
 
-    pub fn add_gpio_led(&mut self, led: GpioLed) {
-        self.gpio_leds.push(led);
+    pub fn add_gpio_led(&mut self, base: u32, led: GpioLed) {
+        self.gpio_leds.push((base, led));
         self.refresh_gpio_wiring();
     }
 
@@ -623,12 +623,9 @@ impl Bus {
                 timer.apply_capture_inputs();
             }
         }
-        for led in &mut self.gpio_leds {
-            if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == led.port)
-                && let Some(on) = led.sample(port.pins())
-                && self.led_events
-            {
-                eprintln!("LED {} {}", led.name, if on { "on" } else { "off" });
+        for (base, led) in &mut self.gpio_leds {
+            if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == *base) {
+                led.sample(port.pins(), self.led_events);
             }
         }
     }
@@ -1160,7 +1157,7 @@ impl Bus {
         }
         if let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address)) {
             let mask = u32::MAX >> (32 - width * 8);
-            spi.write(address, width, value & mask);
+            spi.write(address, width, value & mask, self.led_events);
             return Ok(());
         }
         if matches!(width, 2 | 4)

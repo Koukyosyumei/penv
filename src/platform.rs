@@ -15,7 +15,7 @@ use crate::{
     stm32_gpio_board::{GpioButton, GpioLed},
     stm32_i2c::{Eeprom, Stm32I2c},
     stm32_rtc::Stm32Rtc,
-    stm32_spi::Stm32F0Spi,
+    stm32_spi::{Stm32F0Spi, Stp08},
     stm32_timer::{Stm32Timer, TimerPin},
     stm32_uart::{Stm32Irq, Stm32Usart},
 };
@@ -234,6 +234,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut stm32_uarts = Vec::new();
     let mut stm32_timers = Vec::new();
     let mut stm32_spis = Vec::new();
+    let mut spi_shifts = Vec::new();
     let mut stm32_gpios = Vec::new();
     let mut gpio_leds = Vec::new();
     let mut gpio_buttons = Vec::new();
@@ -320,6 +321,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
+            "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
             "CAN.STMCAN" => stm32_cans.push(entry),
             "I2C.STM32F7_I2C" => stm32_i2cs.push(entry),
             "Memory.GenericI2cEeprom" => i2c_eeproms.push(entry),
@@ -606,17 +608,49 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .map_stm32_gpio(port)
                 .map_err(|e| entry.error(&e))?;
         }
+        let mut shift_targets = HashMap::new();
+        for shift in spi_shifts {
+            keys(shift, &[])?;
+            let parent = shift
+                .registration
+                .as_deref()
+                .filter(|name| stm32_spis.iter().any(|spi| spi.name == *name))
+                .ok_or_else(|| {
+                    shift.error("expected shift register attached to an STM32 SPI controller")
+                })?;
+            if shift_targets
+                .insert(parent, (shift.name.as_str(), Stp08 { leds: Vec::new() }))
+                .is_some()
+            {
+                return Err(shift.error("only one target per STM32 SPI controller is supported"));
+            }
+        }
         for led in gpio_leds {
-            let (port, pin) = led_inputs
-                .remove(led.name.as_str())
-                .ok_or_else(|| led.error("expected LED wired to a GPIO output"))?;
             let invert = keys(led, &["invert"])?
                 .first()
                 .map_or(Ok(false), |(_, value)| value.parse())
                 .map_err(|_| led.error("invalid LED invert property"))?;
-            machine
-                .bus
-                .add_gpio_led(GpioLed::new(led.name.clone(), port, pin, invert));
+            if let Some((port, pin)) = led_inputs.remove(led.name.as_str()) {
+                machine
+                    .bus
+                    .add_gpio_led(port, GpioLed::new(led.name.clone(), pin, invert));
+                continue;
+            }
+            let (target, pin) = led
+                .registration
+                .as_deref()
+                .and_then(|registration| registration.split_once(char::is_whitespace))
+                .ok_or_else(|| {
+                    led.error("expected LED wired to a GPIO output or attached to a shift register")
+                })?;
+            let (_, shift) = shift_targets
+                .values_mut()
+                .find(|(name, _)| target == *name)
+                .ok_or_else(|| {
+                    led.error("expected LED wired to a GPIO output or attached to a shift register")
+                })?;
+            let pin = irq_index(pin, 8).map_err(|e| led.error(&e))?;
+            shift.leds.push(GpioLed::new(led.name.clone(), pin, invert));
         }
         for button in gpio_buttons {
             let mut invert = None;
@@ -980,6 +1014,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             let mut device = Stm32F0Spi::new(spi.address()?, capacity.unwrap_or(4));
             device.irq = irq;
+            device.shift_register = shift_targets
+                .remove(spi.name.as_str())
+                .map(|(_, shift)| shift);
             device.dma_rx = dma_rx;
             device.dma_tx = dma_tx;
             machine
@@ -1195,7 +1232,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     if let Some(i2c) = stm32_i2cs.first().or(i2c_eeproms.first()) {
         return Err(i2c.error("STM32 I²C requires a Cortex-M platform"));
     }
-    if let Some(spi) = stm32_spis.first() {
+    if let Some(spi) = stm32_spis.first().or(spi_shifts.first()) {
         return Err(spi.error("STM32F0 SPI requires a Cortex-M platform"));
     }
     if let Some(timer) = stm32_timers.first() {

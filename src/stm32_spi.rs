@@ -1,3 +1,5 @@
+use crate::stm32_gpio_board::GpioLed;
+
 const ENABLE: u32 = 1 << 6;
 const RX_DMA_ENABLE: u32 = 1;
 const TX_DMA_ENABLE: u32 = 1 << 1;
@@ -5,11 +7,24 @@ const ERROR_IRQ: u32 = 1 << 5;
 const RX_IRQ: u32 = 1 << 6;
 const TX_IRQ: u32 = 1 << 7;
 
+pub struct Stp08 {
+    pub leds: Vec<GpioLed>,
+}
+
+impl Stp08 {
+    fn transmit(&mut self, byte: u8, report_leds: bool) {
+        for led in &mut self.leds {
+            led.sample(u16::from(byte), report_leds);
+        }
+    }
+}
+
 pub struct Stm32F0Spi {
     pub base: u32,
     pub irq: Option<u8>,
     pub dma_rx: u8,
     pub dma_tx: u8,
+    pub shift_register: Option<Stp08>,
     capacity: u32,
     receive_count: u32,
     overrun: bool,
@@ -29,6 +44,7 @@ impl Stm32F0Spi {
             irq: None,
             dma_rx: 0,
             dma_tx: 0,
+            shift_register: None,
             capacity,
             receive_count: 0,
             overrun: false,
@@ -101,7 +117,7 @@ impl Stm32F0Spi {
                 self.receive_count = self
                     .receive_count
                     .saturating_sub(self.frames_in_access(width));
-                0 // Unattached STM32F0 board SPI ports return zero on the receive line.
+                0 // Both an unattached port and the STP08 provide zero on the receive line.
             }
             _ if offset & 3 == 0 => self
                 .registers
@@ -112,16 +128,21 @@ impl Stm32F0Spi {
         }
     }
 
-    pub fn write(&mut self, address: u32, width: usize, value: u32) {
+    pub fn write(&mut self, address: u32, width: usize, value: u32, report_leds: bool) {
         match address - self.base {
             0x00 => self.registers[0] = value & 0xffff,
             0x04 => self.registers[1] = value & 0x1fff,
             0x0c if self.registers[0] & ENABLE != 0 => {
+                let frames = self.frames_in_access(width);
+                if let Some(target) = self.shift_register.as_mut() {
+                    target.transmit(value as u8, report_leds);
+                    if frames == 2 {
+                        target.transmit((value >> 8) as u8, report_leds);
+                    }
+                }
                 let bidi_transmit = self.registers[0] & (3 << 14) == 3 << 14;
                 if !bidi_transmit {
-                    let count = self
-                        .receive_count
-                        .saturating_add(self.frames_in_access(width));
+                    let count = self.receive_count.saturating_add(frames);
                     self.overrun |= count > self.capacity;
                     self.receive_count = count.min(self.capacity);
                 }
