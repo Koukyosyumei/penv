@@ -311,13 +311,20 @@ impl Thumb {
                     r[rd] = (numerator as i32).wrapping_div(denominator as i32) as u32;
                 }
             }
-            0xfb80..=0xfb8c | 0xfba0..=0xfbac
-                if low & 0xf0 == 0 && rt < 13 && rd < 13 && rt != rd && rm < 13 =>
+            0xfb80..=0xfb8e | 0xfba0..=0xfbae | 0xfbc0..=0xfbce | 0xfbe0..=0xfbee
+                if low & 0xf0 == 0
+                    && ![rn, rt, rd, rm].iter().any(|r| matches!(r, 13 | 15))
+                    && rt != rd =>
             {
                 let product = if high & 0x20 != 0 {
                     u64::from(r[rn]) * u64::from(r[rm])
                 } else {
                     (i64::from(r[rn] as i32) * i64::from(r[rm] as i32)) as u64
+                };
+                let product = if high & 0x40 != 0 {
+                    product.wrapping_add((u64::from(r[rd]) << 32) | u64::from(r[rt]))
+                } else {
+                    product
                 };
                 r[rt] = product as u32;
                 r[rd] = (product >> 32) as u32;

@@ -9,6 +9,7 @@ use crate::{
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
     stm32h7_timer::Timer,
+    veml7700::Veml7700,
 };
 
 pub fn has_regions(model: &str) -> bool {
@@ -19,7 +20,7 @@ pub fn has_regions(model: &str) -> bool {
 }
 
 pub fn is_device(model: &str) -> bool {
-    has_regions(model) || matches!(model, Qspi::FLASH | Fdcan::MODEL)
+    has_regions(model) || matches!(model, Qspi::FLASH | Fdcan::MODEL | Veml7700::MODEL)
 }
 
 pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
@@ -46,9 +47,40 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
+    let mut buses = Vec::new();
     for entry in entries.iter().filter(|entry| entry.model == I2C) {
         let i2c = parse_i2c(entry, entries, nvic, exti, exti_lines).map_err(|e| entry.error(&e))?;
-        machine.bus.map_h7_i2c(i2c).map_err(|e| entry.error(&e))?;
+        buses.push((entry, i2c));
+    }
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == Veml7700::MODEL)
+    {
+        let (parent, address) = entry
+            .registration
+            .as_deref()
+            .and_then(|text| text.split_once(char::is_whitespace))
+            .ok_or_else(|| entry.error("expected VEML7700 on an I2C address"))?;
+        let address = irq_index(address, 128).map_err(|e| entry.error(&e))?;
+        let (_, bus) = buses
+            .iter_mut()
+            .find(|(target, _)| target.name == parent)
+            .ok_or_else(|| entry.error("unknown VEML7700 I2C parent"))?;
+        let illuminance = match entry.body.as_slice() {
+            [] => 0.0,
+            [(_, text)] => text
+                .split_once(':')
+                .filter(|(key, _)| key.trim() == "Illuminance")
+                .and_then(|(_, value)| value.trim().parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .ok_or_else(|| entry.error("expected a nonnegative VEML7700 Illuminance value"))?,
+            _ => return Err(entry.error("unsupported VEML7700 properties")),
+        };
+        bus.attach(u16::from(address), Veml7700::new(illuminance))
+            .map_err(|e| entry.error(e))?;
+    }
+    for (entry, bus) in buses {
+        machine.bus.map_h7_i2c(bus).map_err(|e| entry.error(&e))?;
     }
 
     for entry in entries.iter().filter(|entry| entry.model == Rng::MODEL) {

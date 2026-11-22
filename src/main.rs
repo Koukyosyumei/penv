@@ -47,6 +47,7 @@ mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod veml7700;
 mod zephyr_boot;
 
 use std::{

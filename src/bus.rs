@@ -1180,7 +1180,7 @@ impl Bus {
         }
         if matches!(N, 1 | 2 | 4)
             && address as usize & (N - 1) == 0
-            && let Some(i2c) = self.h7_i2c.iter().find(|i2c| i2c.contains(address))
+            && let Some(i2c) = self.h7_i2c.iter_mut().find(|i2c| i2c.contains(address))
         {
             return Ok(if i2c_clocked(self.h7_network_control.as_ref(), i2c) {
                 i2c.read(address) & (u32::MAX >> (32 - 8 * N))

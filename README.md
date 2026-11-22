@@ -135,7 +135,7 @@ target/release/penv run --script "$smp" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 400000000 --stats
 ```
 
-- `cargo test` はユニットテスト 42 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
+- `cargo test` はユニットテスト 43 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
 - STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。現行コードは両方の宣言を通過し、`stm32h7.repl:219` の `DMA.STM32DMA2D` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
@@ -163,7 +163,7 @@ CARGO_TARGET_DIR="$baseline/target" cargo build --release --manifest-path "$base
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc tests/stm32h7-zephyr-smoke.sh
 ```
 
-スクリプトは USART2 の出力と Penv のログを一時ディレクトリに保存します。公開 ELF の起動バナーとシェルプロンプトに加え、実行ステップ 850,000 で入力した `help` への応答、1,300,000 で入力した `kernel version` への応答を検証します。実行は 2,000,000 ステップの上限で終了します。
+スクリプトは USART2 の出力と Penv のログを一時ディレクトリに保存します。公開 ELF の起動バナーとシェルプロンプトに加え、実行ステップ 850,000 で入力した `help` への応答、1,300,000 で入力した `kernel version` への応答を検証します。1,700,000 ステップで `sensor get veml7700@10 light` を送ります。実行は 2,600,000 ステップの上限で終了します。
 
 ```text
 *** Booting STM32H7 Renode Platform Demo 6607bdd711f4 ***
@@ -171,8 +171,31 @@ demo:~$ help
 Available commands:
 demo:~$ kernel version
 Zephyr version 4.4.99
+demo:~$ sensor get veml7700@10 light
+channel type=18(light) … (499.000000)
 ```
 
 変更前の診断実行で停止した `pc=0x080036b6` は、ITCM を初期化する `strd r0, r1, [r3], #8`（先頭半語 `0xe8e3`）でした。Thumb-2 のデコーダーはローカル nRF52840 担当の `fe1911b` を再利用し、Cortex-M7 の実行ログで必要になった命令を追加しました。CRC の演算モデルはローカル STM32F0 の実装を再利用しています。起動時のバスアクセスに合わせて、RCC、SysTick、RNG、TIM3、CRC、QuadSPI の初期化・識別・SFDP と受信送信割り込み、FDCAN の設定レジスターを配線しました。
 
-残課題は未変更の上流 REPL のロード、I2C 配下のセンサー、QuadSPI のフラッシュデータ操作、CAN フレーム送受信です。診断実行では LSM6DSO の初期化失敗と外部フラッシュのマウント失敗 `err=-45` が出力されます。MPU とキャッシュはファームウェアの初期化レジスターに応答する範囲です。
+残課題は未変更の上流 REPL のロード、VEML7700 以外の I²C センサー、QuadSPI のフラッシュデータ操作、CAN フレーム送受信です。診断実行では LSM6DSO の初期化失敗と外部フラッシュのマウント失敗 `err=-45` が出力されます。MPU とキャッシュはファームウェアの初期化レジスターに応答する範囲です。
+
+### VEML7700 のデータ転送と I²C IRQ
+
+診断構成は上流参照ボードの `Sensors.VEML7700 @ i2c1 0x10` を取り込み、静的な `Illuminance: 500` を指定します。公開デモ ELF の Zephyr ドライバーが設定とレジスター番号を書き、反復 START で ALS データを読みます。STM32 のイベント割り込みは I²C1 から EXTI 22 を経由して NVIC IRQ 31 へ届きます。500 lux 指定では UART が `499.000000`、1,000 lux 指定では `999.000000` を返しました。 [Renode の VEML7700 モデル](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Peripherals/Peripherals/Sensors/VEML7700.cs)
+
+次の比較は、スモークテストが表示した一時ディレクトリを `work` に、公開 ELF の保存先を `assets` に設定して実行します。後半は起動バナーを確認できる時点で、ゲストの `devmem` から NVIC の IRQ 31 を無効にします。同じセンサーコマンドが `Read failed` を返すことで、データ読み出しの完了が I²C1 イベント IRQ に依存することを確認できます。両方とも実行上限で終了します。
+
+```sh
+sed 's/Illuminance: 500/Illuminance: 1000/' "$work/boot.repl" > "$work/light1000.repl"
+sed 's/@boot.repl/@light1000.repl/' "$work/boot.resc" > "$work/light1000.resc"
+target/release/penv run --script "$work/light1000.resc" \
+    --platform-root ../renode --asset-dir "$assets" --max-steps 3500000 \
+    --uart-event "1700000:$work/sensor.txt"
+
+printf 'devmem 0xe000e180 32 0x80000000\r' > "$work/mask.txt"
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root ../renode --asset-dir "$assets" --max-steps 3500000 \
+    --uart-event "1400000:$work/mask.txt" --uart-event "1700000:$work/sensor.txt"
+```
+
+I²C DMA、スレーブ動作、VEML7700 の時系列入力は未対応です。別の上流 Nucleo H753ZI light polling ELF は診断構成で起動しましたが、非ゼロ測定値は確認できていません。
