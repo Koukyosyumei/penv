@@ -199,11 +199,59 @@ impl Bus {
 
     pub fn map_nrf_peripheral(&mut self, device: NrfPeripheral) -> Result<(), String> {
         let start = u64::from(device.base);
-        let end = start + u64::from(NrfPeripheral::SIZE);
+        let end = start + u64::from(device.size());
         if device.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
             return Err("invalid or overlapping nRF52840 peripheral mapping".into());
         }
         self.nrf_peripherals.push(device);
+        Ok(())
+    }
+
+    pub fn nrf_gpio_sample(&self, base: u32) -> (u32, bool) {
+        self.nrf_peripherals
+            .iter()
+            .find(|device| device.base == base)
+            .and_then(NrfPeripheral::gpio_sample)
+            .unwrap_or_default()
+    }
+
+    pub fn nrf_gpio_task(&mut self, base: u32, pin: u32, action: u32) {
+        if let Some(device) = self
+            .nrf_peripherals
+            .iter_mut()
+            .find(|device| device.base == base)
+        {
+            device.gpio_task(pin, action);
+        }
+    }
+
+    pub fn nrf_ppi_event_supported(&self, address: u32) -> bool {
+        self.nrf_peripherals
+            .iter()
+            .any(|device| device.ppi_event_supported(address))
+    }
+
+    pub fn nrf_ppi_task_supported(&self, address: u32) -> bool {
+        self.nrf_peripherals
+            .iter()
+            .any(|device| device.ppi_task_supported(address))
+    }
+
+    pub fn advance_nrf_ppi(&mut self, output: &mut impl Write) -> Result<(), BusError> {
+        let mut events = Vec::new();
+        for device in &mut self.nrf_peripherals {
+            device.take_raised_events(&mut events);
+        }
+        let Some(ppi) = self.nrf_peripherals.iter().find(|device| device.is_ppi()) else {
+            return Ok(());
+        };
+        let mut tasks = Vec::new();
+        for event in events {
+            ppi.ppi_tasks(event, &mut tasks);
+        }
+        for address in tasks {
+            self.write(address, 4, 1, output)?;
+        }
         Ok(())
     }
 
@@ -226,7 +274,7 @@ impl Bus {
     fn overlaps(&self, start: u64, end: u64) -> bool {
         self.nrf_peripherals.iter().any(|device| {
             let other = u64::from(device.base);
-            start < other + u64::from(NrfPeripheral::SIZE) && other < end
+            start < other + u64::from(device.size()) && other < end
         }) || self
             .nvic
             .as_ref()
@@ -445,9 +493,16 @@ impl Bus {
             .stm32_flash
             .as_mut()
             .is_some_and(Stm32F0Flash::take_reload_request);
-        if !system && !reload {
+        if !system
+            && !reload
+            && !self
+                .nrf_peripherals
+                .iter()
+                .any(NrfPeripheral::reset_requested)
+        {
             return false;
         }
+        self.reservations.fill(None);
         for device in &mut self.nrf_peripherals {
             device.reset();
         }
@@ -501,7 +556,16 @@ impl Bus {
         true
     }
 
-    pub fn sample_nvic(&mut self, active: u128) {
+    pub fn sample_nvic(&mut self, active: u128, sleeping: bool) {
+        if let Some((index, ports)) = self
+            .nrf_peripherals
+            .iter()
+            .enumerate()
+            .find_map(|(index, device)| device.gpiote_ports().map(|ports| (index, ports)))
+        {
+            let samples = ports.map(|base| self.nrf_gpio_sample(base));
+            self.nrf_peripherals[index].gpiote_sample(samples);
+        }
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
@@ -511,7 +575,7 @@ impl Bus {
                 active,
             );
             for device in &mut self.nrf_peripherals {
-                device.tick();
+                device.tick(sleeping);
                 nvic.set_line(device.irq, device.pending(), active);
             }
             let mut exti_inputs = self.gpio_exti_levels;
@@ -1028,6 +1092,10 @@ impl Bus {
         })
     }
 
+    pub fn clear_reservation(&mut self, hart: usize) {
+        self.reservations[hart] = None;
+    }
+
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
         let value = self.read_ram::<4>(address)?;
         self.reservations[hart] = self.canonical_ram_address(address, 4);
@@ -1070,6 +1138,50 @@ impl Bus {
             return Err(BusError::Misaligned(address, 4));
         }
         Ok(self.memory(address, 4)?.try_into().unwrap())
+    }
+
+    pub fn thumb_div_zero_trap(&self) -> bool {
+        self.nvic.as_ref().is_some_and(Nvic::div_zero_trap)
+    }
+
+    pub fn check_thumb_access(
+        &self,
+        address: u32,
+        width: usize,
+        write: bool,
+        execute: bool,
+    ) -> Result<(), String> {
+        if self
+            .nvic
+            .as_ref()
+            .is_some_and(|nvic| !nvic.thumb_mpu_permits(address, width, write, execute))
+        {
+            return Err(format!("Cortex-M MPU denied access at {address:#010x}"));
+        }
+        Ok(())
+    }
+
+    pub fn thumb_fetch(&self, address: u32) -> Result<u32, String> {
+        self.check_thumb_access(address, 2, false, true)?;
+        self.read_ram::<2>(address)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
+        self.check_thumb_access(address, N, false, false)?;
+        self.read::<N>(address).map_err(|error| error.to_string())
+    }
+
+    pub fn thumb_write(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+        uart: &mut impl Write,
+    ) -> Result<(), String> {
+        self.check_thumb_access(address, width, true, false)?;
+        self.write(address, width, value, uart)
+            .map_err(|error| error.to_string())
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {

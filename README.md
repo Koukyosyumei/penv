@@ -92,9 +92,11 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ### nRF52840 の段階検証
 
-nRF52840 用に Cortex-M4 のリセットと Thumb-2 の一部、BASEPRI、NVIC の第 2 IRQ バンク、共有 SRAM エイリアスを実装しています。周辺機器は CLOCK、RTC0–2、UART0–1 の EasyDMA モードに対応します。RTC は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。UART TX は即時に転送します。CLI 入力は REPL で最初に宣言した UART に届き、受信が開始されているときに SRAM へ転送します。UART の PPI/SHORTS、フロー制御、ボーレートに基づく転送時間は未実装です。RTC のイベントを PPI タスクに配送する経路も未実装です。
+nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、UARTE のイベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 
-上流スクリプトが指定する公開 ELF を取得して再現できます。参照した Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、CLOCK・RTC・UART モデルを確認した Renode Infrastructure は `09ac7c563095c5410258ecc1b1a6b841a013db85` です。
+RTC と Watchdog は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。Watchdog は有効な全リロード要求の受理でカウンターを再ロードします。タイムアウト割り込みを有効にした場合は 2 LFCLK サイクル後にリセットします。UART の TX は即時に転送され、CLI 入力は最初に宣言した UART が受信を開始していれば SRAM に転送されます。
+
+参照した Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、モデルを確認した Renode Infrastructure は `09ac7c563095c5410258ecc1b1a6b841a013db85` です。
 
 ```sh
 cargo test
@@ -105,22 +107,35 @@ url=$(sed -n 's/^\$bin?=@//p' "$resc")
 elf="$assets/${url##*/}"
 curl -fL "$url" -o "$elf"
 printf '%s  %s\n' c00fbffd6b65c6238877c4fe52e8228c2a38bf1f "$elf" | sha1sum -c -
-
 target/release/penv run --script "$resc" --platform-root ../renode \
   --asset-dir "$assets" --max-steps 100000
 ```
 
-修正前は RESC 11 行目の `showAnalyzer uart0` で停止しました。現在はその指定を解析し、次の段階で REPL 16 行目の RTC 宣言も受理します。未変更のスクリプトは REPL 28 行目の `wdt: unsupported platform model "Timers.NRF52840_Watchdog"` で終了コード 1 を返します。Watchdog に続き PPI、TWI、SPI、GPIO/GPIOTE、汎用タイマー、I²S、PDM、RADIO、RNG、ECB、EGU のモデルが残っています。
+未変更のスクリプトは、以前停止していた Watchdog と PPI の宣言を通過し、上流 REPL 42 行目の `twi0: unsupported platform model "I2C.NRF52840_I2C"` で終了コード 1 を返します。TWI、SPI、汎用タイマー、I²S、PDM、RADIO、RNG、ECB、EGU のモデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
 
-次の検証では、実装済みの宣言を明示的に選んだ一時 REPL で同じ ELF を起動します。`sysbus` の FICR/UICR タグは初期化コードの読み出しに使います。上流 SVD の指定は診断用メタデータとして受理します。
+実機ファームウェアの検証では、実装済みの宣言を明示的に選んだ一時 REPL を使用します。`sysbus` の FICR/UICR タグは初期化コードの読み出しに使います。SVD の指定は診断用メタデータとして受理します。
 
 ```sh
-awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|flash|ram|clock|sysbus):$/) } keep' \
+awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
   ../renode/platforms/cpus/nrf52840.repl > "$assets/boot.repl"
-target/release/penv run --platform "$assets/boot.repl" --max-steps 100000 "$elf"
+printf 'help\r' > "$assets/help.txt"
+target/release/penv run --platform "$assets/boot.repl" \
+  --uart-event "100000:$assets/help.txt" --max-steps 1000000 "$elf"
 ```
 
-この構成では `z_platform_init` 冒頭の `B.W`（PC `0x0000b77a`）を通過し、`SystemInit`、メモリ初期化、IRQ 優先度設定を経て `z_cstart` に到達します。最初に失敗するアクセスは PC `0x00007e34` からの SCB CCR（`0xe000ed14`）の読み出しです。続く初期化には SCB のフォルト制御や追加の Thumb-2 命令も必要です。Zephyr のバナー、シェルプロンプト、コマンド応答は未確認です。
+Shell ELF は前回停止した SCB CCR の読み出しを通過し、MPU と UARTE の初期化を経て `uart:~$` を表示します。`help` のコマンド一覧が表示され、プロンプトに戻ります。ステップ上限での終了コードは 2 です。
+
+Renode の `tests/platforms/NRF52840.robot` が参照する Watchdog ELF も同じ REPL で実行できます。
+
+```sh
+wdt_asset=nrf52840--zephyr-watchdog.elf-s_889852-75a696a301c8439400645e646a322039963d74c8
+curl -fL "https://dl.antmicro.com/projects/renode/$wdt_asset" -o "$assets/watchdog.elf"
+printf '%s  %s\n' 75a696a301c8439400645e646a322039963d74c8 "$assets/watchdog.elf" | sha1sum -c -
+target/release/penv run --platform "$assets/boot.repl" \
+  --max-steps 130000000 "$assets/watchdog.elf"
+```
+
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 ## 現在の実装範囲
 

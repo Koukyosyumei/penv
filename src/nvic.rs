@@ -1,13 +1,24 @@
+mod mpu;
+
+use mpu::Mpu;
+
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
+const MPU_TYPE: u32 = BASE + 0xd90;
+const MPU_RASR: u32 = BASE + 0xda0;
 const CPACR: u32 = BASE + 0xd88;
 const AIRCR: u32 = BASE + 0xd0c;
 const SCR: u32 = BASE + 0xd10;
+const CCR: u32 = BASE + 0xd14;
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
 const PRIORITY: u32 = BASE + 0x400;
+const SHPR1: u32 = BASE + 0xd18;
+const SHCSR: u32 = BASE + 0xd24;
+const CFSR: u32 = BASE + 0xd28;
+const HFSR: u32 = BASE + 0xd2c;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd1c;
 const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 7;
 const PRIORITY_END: u32 = PRIORITY + 63;
@@ -25,7 +36,10 @@ pub struct Nvic {
     reset_requested: bool,
     pending: u64,
     priority: [u8; 64],
-    system_priority: [u8; 8],
+    system_priority: [u8; 12],
+    fault_enables: u32,
+    div_zero_trap: bool,
+    mpu: Mpu,
     priority_mask: u8,
     pub uart_irq: Option<u8>,
 }
@@ -40,7 +54,10 @@ impl Nvic {
             reset_requested: false,
             pending: 0,
             priority: [0; 64],
-            system_priority: [0; 8],
+            system_priority: [0; 12],
+            fault_enables: 0,
+            div_zero_trap: false,
+            mpu: Mpu::default(),
             priority_mask,
             uart_irq,
         }
@@ -53,7 +70,9 @@ impl Nvic {
             Some((AIRCR, AIRCR + 4)),
             Some((SCR, SCR + 4)),
             Some((SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1)),
+            cortex_m4.then_some((CCR, HFSR + 4)),
             cortex_m4.then_some((CPACR, CPACR + 4)),
+            cortex_m4.then_some((MPU_TYPE, MPU_RASR + 4)),
         ]
         .into_iter()
         .flatten()
@@ -106,9 +125,7 @@ impl Nvic {
 
     pub fn priority(&self, exception: u8) -> u8 {
         match exception {
-            11 => self.system_priority[3],
-            14 => self.system_priority[6],
-            15 => self.system_priority[7],
+            4..=6 | 11 | 14 | 15 => self.system_priority[usize::from(exception - 4)],
             16..=79 => self.priority[usize::from(exception - 16)],
             _ => 0,
         }
@@ -133,8 +150,8 @@ impl Nvic {
             PRIORITY..=PRIORITY_END if self.cortex_m4 || address < PRIORITY + 32 => {
                 Some((false, (address - PRIORITY) as usize))
             }
-            SYSTEM_PRIORITY..=SYSTEM_PRIORITY_END => {
-                Some((true, (address - SYSTEM_PRIORITY) as usize))
+            SHPR1..=SYSTEM_PRIORITY_END if self.cortex_m4 || address >= SYSTEM_PRIORITY => {
+                Some((true, (address - SHPR1) as usize))
             }
             _ => None,
         }
@@ -144,10 +161,28 @@ impl Nvic {
         self.pending &= !(1 << line);
     }
 
+    pub fn div_zero_trap(&self) -> bool {
+        self.div_zero_trap
+    }
+
+    pub fn thumb_mpu_permits(
+        &self,
+        address: u32,
+        width: usize,
+        write: bool,
+        execute: bool,
+    ) -> bool {
+        self.mpu.permits(address, width, write, execute)
+    }
+
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         Some(match (address, width) {
             (AIRCR, 4) => 0xfa05_0000,
             (CPACR, 4) if self.cortex_m4 => 0,
+            (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => return self.mpu.read(address - MPU_TYPE),
+            (CCR, 4) if self.cortex_m4 => (1 << 9) | (u32::from(self.div_zero_trap) << 4),
+            (SHCSR, 4) if self.cortex_m4 => self.fault_enables,
+            (CFSR | HFSR, 4) if self.cortex_m4 => 0,
             (SCR, 4) => self.sleep_control,
             (VTOR, 4) => self.vector_base.unwrap_or(0),
             (ENABLE | DISABLE, 4) => self.enabled as u32,
@@ -182,7 +217,15 @@ impl Nvic {
             return false;
         }
         match (address, width) {
+            (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => {
+                return self.mpu.write(address - MPU_TYPE, value);
+            }
             (CPACR, 4) if self.cortex_m4 && value & 0x00f0_0000 == 0 => {}
+            (CCR, 4) if self.cortex_m4 && value & !0x10 == 1 << 9 => {
+                self.div_zero_trap = value & 0x10 != 0
+            }
+            (SHCSR, 4) if self.cortex_m4 && value & !0x70000 == 0 => self.fault_enables = value,
+            (CFSR | HFSR, 4) if self.cortex_m4 => {}
             (AIRCR, 4) => {
                 self.reset_requested |= value >> 16 == 0x05fa && value & (1 << 2) != 0;
             }
@@ -214,7 +257,7 @@ impl Nvic {
                 for (index, (priority, value)) in
                     bytes.iter_mut().zip(value.to_le_bytes()).enumerate()
                 {
-                    if !system || matches!(offset + index, 3 | 6 | 7) {
+                    if !system || matches!(offset + index, 0..=2 | 7 | 10 | 11) {
                         *priority = value & self.priority_mask;
                     }
                 }

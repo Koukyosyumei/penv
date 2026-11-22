@@ -308,6 +308,19 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
+            "Miscellaneous.NRF52840_PPI" if cortex_m4 => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_nrf_peripheral(crate::nrf52840::Peripheral::ppi(
+                        entry.address()?,
+                        entry.name.clone(),
+                    ))
+                    .map_err(|e| entry.error(&e))?;
+            }
+            "GPIOPort.NRF52840_GPIO" if cortex_m4 => {
+                nrf52840::map_gpio(entry, &mut machine.bus)?;
+            }
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
             "Miscellaneous.Button" => gpio_buttons.push(entry),
@@ -360,7 +373,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("only one STM32F0 ADC is supported"));
                 }
             }
-            "UART.NRF52840_UART" | "Miscellaneous.NRF_CLOCK" | "Timers.NRF52840_RTC"
+            "UART.NRF52840_UART"
+            | "Miscellaneous.NRF_CLOCK"
+            | "Timers.NRF52840_RTC"
+            | "Timers.NRF52840_Watchdog"
+            | "GPIOPort.NRF52840_GPIOTasksEvents"
                 if cortex_m4 =>
             {
                 nrf_peripherals.push(entry)
@@ -441,7 +458,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         for peripheral in nrf_peripherals {
             let controller =
                 nvic.ok_or_else(|| peripheral.error("nRF52840 peripherals require NVIC"))?;
-            nrf52840::map_peripheral(peripheral, controller, &mut machine.bus)?;
+            nrf52840::map_peripheral(peripheral, controller, &entries, &mut machine.bus)?;
         }
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
         let mut priority = None;

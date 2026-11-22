@@ -24,11 +24,17 @@ pub(super) fn map_aliases(entry: &Entry, bus: &mut Bus, size: usize) -> Result<(
     Ok(())
 }
 
-pub(super) fn map_peripheral(entry: &Entry, nvic: &Entry, bus: &mut Bus) -> Result<(), String> {
+pub(super) fn map_peripheral(
+    entry: &Entry,
+    nvic: &Entry,
+    entries: &[Entry],
+    bus: &mut Bus,
+) -> Result<(), String> {
     let uart = entry.model == "UART.NRF52840_UART";
     let mut irq = None;
     let mut easy_dma = false;
     let mut channels = None;
+    let mut ports = [None; 2];
     for (_, item) in &entry.body {
         if let Some(destination) = item.strip_prefix("->") {
             let (target, line) = destination
@@ -54,6 +60,18 @@ pub(super) fn map_peripheral(entry: &Entry, nvic: &Entry, bus: &mut Bus) -> Resu
                 return Err(entry.error("expected 1–4 RTC compare channels"));
             }
             channels = Some(count as usize);
+        } else if entry.model == "GPIOPort.NRF52840_GPIOTasksEvents"
+            && let Some((key @ ("port0" | "port1"), name)) = item.split_once(':')
+        {
+            let index = usize::from(key == "port1");
+            if ports[index].is_some() {
+                return Err(entry.error("duplicate GPIO port reference"));
+            }
+            let port = entries
+                .iter()
+                .find(|port| port.name == name.trim() && port.model == "GPIOPort.NRF52840_GPIO")
+                .ok_or_else(|| entry.error("unknown nRF52840 GPIO port"))?;
+            ports[index] = Some(port.address()?);
         } else {
             return Err(entry.error("unsupported nRF52840 peripheral property or wiring"));
         }
@@ -66,14 +84,40 @@ pub(super) fn map_peripheral(entry: &Entry, nvic: &Entry, bus: &mut Bus) -> Resu
         .ok_or_else(|| entry.error("expected an nRF52840 NVIC IRQ in 0–47"))?;
     let base = entry.address()?;
     let name = entry.name.clone();
+    if entry.model == "Miscellaneous.NRF_CLOCK" && base == 0x4000_0000 {
+        bus.map_nrf_peripheral(Peripheral::nvmc())
+            .map_err(|e| entry.error(&e))?;
+    }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
     } else if entry.model == "Timers.NRF52840_RTC" {
         Peripheral::rtc(base, irq as u8, name, channels.unwrap_or(4))
+    } else if entry.model == "GPIOPort.NRF52840_GPIOTasksEvents" {
+        let [Some(port0), Some(port1)] = ports else {
+            return Err(entry.error("GPIOTE requires both GPIO ports"));
+        };
+        if port0 == port1 {
+            return Err(entry.error("GPIOTE requires distinct GPIO ports"));
+        }
+        Peripheral::gpiote(base, irq as u8, name, [port0, port1])
+    } else if entry.model == "Timers.NRF52840_Watchdog" {
+        Peripheral::watchdog(base, irq as u8, name)
     } else {
         Peripheral::clock(base, irq as u8, name)
     };
     bus.map_nrf_peripheral(device).map_err(|e| entry.error(&e))
+}
+
+pub(super) fn map_gpio(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
+    super::keys(entry, &[])?;
+    let address = entry.address()?;
+    let pins = match address {
+        0x5000_0500 => 32,
+        0x5000_0800 => 16,
+        _ => return Err(entry.error("expected an nRF52840 GPIO port base")),
+    };
+    bus.map_nrf_peripheral(Peripheral::gpio(address, entry.name.clone(), pins))
+        .map_err(|e| entry.error(&e))
 }
 
 pub(super) fn map_tags(entry: &Entry, bus: &mut Bus) -> Result<(), String> {

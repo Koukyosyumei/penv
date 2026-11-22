@@ -21,6 +21,8 @@ pub struct Thumb {
     vectors: Option<u32>,
     pub(crate) thumb2: bool,
     basepri: u8,
+    faultmask: bool,
+    itstate: u8,
     negative: bool,
     zero: bool,
     carry: bool,
@@ -214,6 +216,7 @@ impl Thumb {
             }
             16 => u32::from(self.interrupts_masked),
             17 if self.thumb2 => u32::from(self.basepri),
+            19 if self.thumb2 => self.faultmask.into(),
             20 => u32::from(self.uses_psp()) << 1,
             _ => return None,
         })
@@ -235,6 +238,7 @@ impl Thumb {
                     self.basepri = value;
                 }
             }
+            19 if self.thumb2 => self.faultmask = value & 1 != 0,
             20 => self.select_thread_stack(value & 2 != 0, r),
             _ => return false,
         }
@@ -265,7 +269,14 @@ impl Thumb {
         }
         let sp = r[13];
         let stack = (sp & !7).wrapping_sub(32);
-        let xpsr = self.apsr() | (1 << 24) | ((sp & 4) << 7) | u32::from(self.active_exception);
+        bus.check_thumb_access(stack, 32, true, false)?;
+        let it = u32::from(self.itstate);
+        let xpsr = self.apsr()
+            | (1 << 24)
+            | ((sp & 4) << 7)
+            | ((it & 3) << 25)
+            | ((it & 0xfc) << 8)
+            | u32::from(self.active_exception);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
         let memory = bus.memory(stack, 32).map_err(|error| error.to_string())?;
         for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
@@ -283,8 +294,10 @@ impl Thumb {
                 0xffff_fff1
             };
         }
+        bus.clear_reservation(0);
         self.active_exceptions |= 1 << exception;
         self.active_exception = exception;
+        self.itstate = 0;
         Ok(handler & !1)
     }
 
@@ -292,6 +305,7 @@ impl Thumb {
         if self.active_exception != 0 && matches!(target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd) {
             let use_psp = target == 0xffff_fffd;
             let stack = if use_psp { self.psp } else { r[13] };
+            bus.check_thumb_access(stack, 32, false, false)?;
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
                 *word = bus
@@ -322,7 +336,9 @@ impl Thumb {
             }
             r[13] = stack.wrapping_add(32 + ((xpsr >> 7) & 4));
             r[14] = lr;
+            self.faultmask = false;
             self.set_apsr(xpsr);
+            self.itstate = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
             return Ok(pc);
@@ -353,7 +369,7 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<bool, String> {
-        bus.sample_nvic(self.active_exceptions);
+        bus.sample_nvic(self.active_exceptions, self.sleeping());
         if let Some(timer) = bus.systick.as_mut() {
             timer.tick();
         }
@@ -368,7 +384,7 @@ impl Thumb {
             self.signal_event();
         }
         self.pending = pending;
-        if self.interrupts_masked && self.sleep != Sleep::Interrupt {
+        if self.faultmask || (self.interrupts_masked && self.sleep != Sleep::Interrupt) {
             return Ok(false);
         }
         let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
@@ -431,6 +447,7 @@ impl Thumb {
             return Err(format!("unaligned stack pointer {sp:#010x}"));
         }
         if pop {
+            bus.check_thumb_access(sp, bytes as usize, false, false)?;
             let mut restored = *r;
             let mut target = None;
             let mut address = sp;
@@ -454,6 +471,7 @@ impl Thumb {
             *r = restored;
         } else {
             let new_sp = sp.wrapping_sub(bytes);
+            bus.check_thumb_access(new_sp, bytes as usize, true, false)?;
             let stack = bus
                 .memory(new_sp, bytes as usize)
                 .map_err(|error| error.to_string())?;
@@ -474,12 +492,26 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<bool, String> {
-        let inst = bus.read_ram::<2>(*pc).map_err(|error| error.to_string())?;
+        let inst = bus.thumb_fetch(*pc)?;
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);
         let rd = (inst & 7) as usize;
         let rn = ((inst >> 3) & 7) as usize;
+        let in_it = self.itstate != 0;
+        if in_it {
+            let condition = self.condition(u32::from(self.itstate >> 4));
+            self.itstate = if self.itstate & 7 == 0 {
+                0
+            } else {
+                (self.itstate & 0xe0) | ((self.itstate << 1) & 0x1f)
+            };
+            if !condition {
+                *pc = pc.wrapping_add(if inst >= 0xe800 { 4 } else { 2 });
+                return Ok(true);
+            }
+        }
+        let saved_flags = self.apsr();
         match inst {
             0x1800..=0x1fff => {
                 let field = ((inst >> 6) & 7) as usize;
@@ -571,8 +603,7 @@ impl Thumb {
             }
             0x4800..=0x4fff => {
                 let address = (architectural_pc & !3).wrapping_add((inst & 0xff) << 2);
-                r[((inst >> 8) & 7) as usize] =
-                    bus.read::<4>(address).map_err(|error| error.to_string())?;
+                r[((inst >> 8) & 7) as usize] = bus.thumb_read::<4>(address)?;
             }
             0x5000..=0x5fff => {
                 let offset = ((inst >> 6) & 7) as usize;
@@ -580,13 +611,12 @@ impl Thumb {
                 let operation = (inst >> 9) & 7;
                 if operation < 3 {
                     let width = [4, 2, 1][operation as usize];
-                    bus.write(address, width, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.thumb_write(address, width, r[rd], output)?;
                 } else {
                     let value = match operation {
-                        3 | 6 => bus.read::<1>(address),
-                        5 | 7 => bus.read::<2>(address),
-                        _ => bus.read::<4>(address),
+                        3 | 6 => bus.thumb_read::<1>(address),
+                        5 | 7 => bus.thumb_read::<2>(address),
+                        _ => bus.thumb_read::<4>(address),
                     }
                     .map_err(|error| error.to_string())?;
                     r[rd] = match operation {
@@ -604,13 +634,12 @@ impl Thumb {
                 };
                 let address = r[rn].wrapping_add(((inst >> 6) & 31) * width);
                 if inst & 0x800 == 0 {
-                    bus.write(address, width as usize, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.thumb_write(address, width as usize, r[rd], output)?;
                 } else {
                     r[rd] = match width {
-                        1 => bus.read::<1>(address),
-                        2 => bus.read::<2>(address),
-                        _ => bus.read::<4>(address),
+                        1 => bus.thumb_read::<1>(address),
+                        2 => bus.thumb_read::<2>(address),
+                        _ => bus.thumb_read::<4>(address),
                     }
                     .map_err(|error| error.to_string())?;
                 }
@@ -619,10 +648,9 @@ impl Thumb {
                 let register = ((inst >> 8) & 7) as usize;
                 let address = r[13].wrapping_add((inst & 0xff) << 2);
                 if inst & 0x800 == 0 {
-                    bus.write(address, 4, r[register], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.thumb_write(address, 4, r[register], output)?;
                 } else {
-                    r[register] = bus.read::<4>(address).map_err(|error| error.to_string())?;
+                    r[register] = bus.thumb_read::<4>(address)?;
                 }
             }
             0xa000..=0xafff => {
@@ -655,6 +683,12 @@ impl Thumb {
                 }
                 self.stack_transfer(mask, pop, &mut next, r, bus)?;
             }
+            0xb661 | 0xb663 | 0xb671 | 0xb673 if self.thumb2 => {
+                self.faultmask = inst & 0x10 != 0;
+                if inst & 2 != 0 {
+                    self.interrupts_masked = self.faultmask;
+                }
+            }
             0xb662 => self.interrupts_masked = false, // cpsie i
             0xb672 => self.interrupts_masked = true,  // cpsid i
             0xb200..=0xb2ff => {
@@ -683,6 +717,9 @@ impl Thumb {
             }
             0xbf30 => self.sleep = Sleep::Interrupt,
             0xbf40 => self.signal_event(),
+            0xbf01..=0xbfff if self.thumb2 && !in_it && inst & 15 != 0 && inst & 0xf0 < 0xe0 => {
+                self.itstate = inst as u8;
+            }
             0xc000..=0xcfff if inst & 0xff != 0 => {
                 let registers = inst & 0xff;
                 let base_register = ((inst >> 8) & 7) as usize;
@@ -694,6 +731,7 @@ impl Thumb {
                         "unaligned multiple-register transfer at {address:#010x}"
                     ));
                 }
+                bus.check_thumb_access(address, count as usize * 4, !load, false)?;
                 let selected = (0..8).filter(|register| registers & (1 << register) != 0);
                 if load {
                     let mut values = *r;
@@ -725,7 +763,9 @@ impl Thumb {
                     next = architectural_pc.wrapping_add(((inst as i8 as i32) * 2) as u32);
                 }
             }
-            0xdf00..=0xdfff if self.active_exception == 0 && !self.interrupts_masked => {
+            0xdf00..=0xdfff
+                if self.active_exception == 0 && !self.interrupts_masked && !self.faultmask =>
+            {
                 next = self.exception_entry(11, next, r, bus)?;
             }
             0xdf00..=0xdfff => return Err("Cortex-M SVC escalation is unsupported".into()),
@@ -734,7 +774,7 @@ impl Thumb {
                 next = architectural_pc.wrapping_add(offset);
             }
             0xf000..=0xf7ff => {
-                let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
+                let low = bus.thumb_fetch(next)?;
                 let link = low & 0xd000 == 0xd000;
                 if link || (self.thumb2 && low & 0xd000 == 0x9000) {
                     let sign = (inst >> 10) & 1;
@@ -750,12 +790,33 @@ impl Thumb {
                         r[14] = architectural_pc | 1;
                     }
                     next = architectural_pc.wrapping_add(offset);
-                } else if self.thumb2 && self.modified_immediate(inst, low, r) {
+                } else if self.thumb2 && low & 0xd000 == 0x8000 && (inst >> 6) & 15 < 14 {
+                    let offset = ((inst & 0x400) << 10)
+                        | ((low & 0x800) << 8)
+                        | ((low & 0x2000) << 5)
+                        | ((inst & 0x3f) << 12)
+                        | ((low & 0x7ff) << 1);
+                    let offset = ((offset << 11) as i32 >> 11) as u32;
+                    if self.condition((inst >> 6) & 15) {
+                        next = architectural_pc.wrapping_add(offset);
+                    } else {
+                        next = architectural_pc;
+                    }
+                } else if self.thumb2
+                    && (self.move_wide(inst, low, r)
+                        || self.extract_bits(inst, low, r)
+                        || self.insert_bits(inst, low, r)
+                        || self.modified_immediate(inst, low, r))
+                {
                     next = architectural_pc;
                 } else {
                     let sysm = low & 0xff;
                     match (inst, low) {
-                        (0xf3bf, 0x8f4f | 0x8f5f | 0x8f6f) => {
+                        (0xf3bf, 0x8f2f) if self.thumb2 => bus.clear_reservation(0),
+                        (0xf3bf, 0x8f4f | 0x8f5f | 0x8f6f) => {}
+                        (0xf3bf, 0x8f40..=0x8f5f)
+                            if self.thumb2 && matches!(low & 15, 2 | 3 | 6 | 7 | 10 | 11 | 14) =>
+                        {
                             // Bus operations execute synchronously and instruction fetch reads RAM.
                         }
                         (0xf3ef, 0x8000..=0x8fff) => {
@@ -783,7 +844,7 @@ impl Thumb {
                 }
             }
             0xe800..=0xefff | 0xf800..=0xffff if self.thumb2 => {
-                let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
+                let low = bus.thumb_fetch(next)?;
                 next = architectural_pc;
                 if matches!(inst, 0xe92d | 0xe8bd)
                     && low.count_ones() >= 2
@@ -792,10 +853,16 @@ impl Thumb {
                 {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
                 } else {
-                    self.execute_thumb2(inst, low, r, bus, output)?;
+                    self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
                 }
             }
             _ => return Err(unsupported()),
+        }
+        if in_it
+            && (inst < 0x2800 || matches!(inst, 0x3000..=0x43ff))
+            && !(inst & 0xfc00 == 0x4000 && matches!((inst >> 6) & 15, 8 | 10 | 11))
+        {
+            self.set_apsr(saved_flags);
         }
         *pc = next;
         Ok(true)

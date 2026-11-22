@@ -1,3 +1,13 @@
+mod gpio;
+mod ppi;
+
+use ppi::Ppi;
+mod watchdog;
+
+use gpio::{Gpio, Gpiote};
+
+use watchdog::Watchdog;
+
 use std::{collections::VecDeque, io::Write};
 
 use crate::bus::{Bus, BusError};
@@ -15,6 +25,11 @@ enum Device {
     Clock(Clock),
     Uarte(Uarte),
     Rtc(Rtc),
+    Watchdog(Watchdog),
+    Gpio(Gpio),
+    Gpiote(Gpiote),
+    Ppi(Box<Ppi>),
+    Nvmc { cache_config: u32 },
 }
 
 #[derive(Default)]
@@ -23,11 +38,13 @@ struct Clock {
     events: u32,
     interrupts: u32,
     lf_source: u32,
+    dcdc: u32,
 }
 
 struct Uarte {
     enabled: u32,
     events: u32,
+    raised: u32,
     interrupts: u32,
     pins: [u32; 4],
     baud: u32,
@@ -47,6 +64,7 @@ impl Default for Uarte {
         Self {
             enabled: 0,
             events: 0,
+            raised: 0,
             interrupts: 0,
             pins: [u32::MAX; 4],
             baud: 0x0400_0000,
@@ -96,10 +114,133 @@ impl Peripheral {
         }
     }
 
-    pub fn tick(&mut self) {
-        if let Device::Rtc(rtc) = &mut self.device {
-            rtc.tick();
+    pub fn ppi(base: u32, name: String) -> Self {
+        Self {
+            base,
+            irq: 0,
+            name,
+            device: Device::Ppi(Box::default()),
         }
+    }
+
+    pub fn is_ppi(&self) -> bool {
+        matches!(self.device, Device::Ppi(_))
+    }
+
+    pub fn ppi_event_supported(&self, address: u32) -> bool {
+        self.is_uart()
+            && self.contains(address)
+            && address & 3 == 0
+            && Uarte::event(address - self.base).is_some()
+    }
+
+    pub fn ppi_task_supported(&self, address: u32) -> bool {
+        self.contains(address)
+            && (self.is_uart() && matches!(address - self.base, 0 | 4 | 8 | 12)
+                || self.is_ppi() && address - self.base <= 0x2c && address & 3 == 0)
+    }
+
+    pub fn take_raised_events(&mut self, events: &mut Vec<u32>) {
+        if let Device::Uarte(uart) = &mut self.device {
+            let mut raised = std::mem::take(&mut uart.raised);
+            while raised != 0 {
+                let index = raised.trailing_zeros();
+                raised &= raised - 1;
+                events.push(self.base + 0x100 + index * 4);
+            }
+        }
+    }
+
+    pub fn ppi_tasks(&self, event: u32, tasks: &mut Vec<u32>) {
+        if let Device::Ppi(ppi) = &self.device {
+            ppi.tasks(event, tasks);
+        }
+    }
+
+    pub fn gpiote(base: u32, irq: u8, name: String, ports: [u32; 2]) -> Self {
+        let mut gpiote = Gpiote::default();
+        gpiote.ports = ports;
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Gpiote(gpiote),
+        }
+    }
+
+    pub fn gpio_sample(&self) -> Option<(u32, bool)> {
+        if let Device::Gpio(gpio) = &self.device {
+            Some(gpio.sample())
+        } else {
+            None
+        }
+    }
+
+    pub fn gpio_task(&mut self, pin: u32, action: u32) {
+        if let Device::Gpio(gpio) = &mut self.device {
+            gpio.task_pin(pin, action);
+        }
+    }
+
+    pub fn gpiote_ports(&self) -> Option<[u32; 2]> {
+        if let Device::Gpiote(gpiote) = &self.device {
+            Some(gpiote.ports)
+        } else {
+            None
+        }
+    }
+
+    pub fn gpiote_sample(&mut self, samples: [(u32, bool); 2]) {
+        if let Device::Gpiote(gpiote) = &mut self.device {
+            gpiote.sample(samples);
+        }
+    }
+
+    pub fn gpio(base: u32, name: String, pins: usize) -> Self {
+        Self {
+            base,
+            irq: 0,
+            name,
+            device: Device::Gpio(Gpio::new(pins)),
+        }
+    }
+
+    pub fn size(&self) -> u32 {
+        if matches!(self.device, Device::Gpio(_)) {
+            0x300
+        } else {
+            Self::SIZE
+        }
+    }
+
+    pub fn nvmc() -> Self {
+        Self {
+            base: 0x4001_e000,
+            irq: 0,
+            name: "nvmc".into(),
+            device: Device::Nvmc { cache_config: 0 },
+        }
+    }
+
+    pub fn watchdog(base: u32, irq: u8, name: String) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Watchdog(Watchdog::default()),
+        }
+    }
+
+    pub fn tick(&mut self, sleeping: bool) {
+        match &mut self.device {
+            Device::Rtc(rtc) => rtc.tick(),
+            Device::Watchdog(watchdog) => watchdog.tick(sleeping),
+            _ => {}
+        }
+    }
+
+    pub fn reset_requested(&self) -> bool {
+        matches!(&self.device, Device::Watchdog(watchdog) if watchdog.reset_requested)
     }
 
     pub fn is_uart(&self) -> bool {
@@ -108,7 +249,12 @@ impl Peripheral {
 
     pub fn reset(&mut self) {
         match &mut self.device {
+            Device::Gpio(gpio) => gpio.reset(),
+            Device::Gpiote(gpiote) => gpiote.reset(),
+            Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
+            Device::Nvmc { cache_config } => *cache_config = 0,
+            Device::Watchdog(watchdog) => *watchdog = Watchdog::default(),
             Device::Uarte(uart) => *uart = Uarte::default(),
             Device::Rtc(rtc) => {
                 *rtc = Rtc {
@@ -120,13 +266,16 @@ impl Peripheral {
     }
 
     pub fn contains(&self, address: u32) -> bool {
-        address.wrapping_sub(self.base) < Self::SIZE
+        address.wrapping_sub(self.base) < self.size()
     }
 
     pub fn pending(&self) -> bool {
         match &self.device {
             Device::Clock(clock) => clock.events & clock.interrupts != 0,
+            Device::Nvmc { .. } | Device::Gpio(_) | Device::Ppi(_) => false,
+            Device::Watchdog(watchdog) => watchdog.pending(),
             Device::Uarte(uart) => uart.events & uart.interrupts != 0,
+            Device::Gpiote(gpiote) => gpiote.pending(),
             Device::Rtc(rtc) => rtc.events & rtc.interrupts != 0,
         }
     }
@@ -150,6 +299,11 @@ impl Peripheral {
         let offset = address - self.base;
         match &self.device {
             Device::Clock(clock) => clock.read(offset),
+            Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
+            Device::Gpio(gpio) => gpio.read(offset),
+            Device::Gpiote(gpiote) => gpiote.read(offset),
+            Device::Ppi(ppi) => ppi.read(offset),
+            Device::Watchdog(watchdog) => watchdog.read(offset),
             Device::Uarte(uart) => uart.read(offset),
             Device::Rtc(rtc) => rtc.read(offset),
         }
@@ -165,6 +319,26 @@ impl Peripheral {
         let offset = address - self.base;
         let supported = match &mut self.device {
             Device::Clock(clock) => clock.write(offset, value),
+            Device::Nvmc { cache_config } => {
+                if offset == 0x540 && value & !1 == 0 {
+                    *cache_config = value;
+                    true
+                } else {
+                    false
+                }
+            }
+            Device::Gpio(gpio) => gpio.write(offset, value),
+            Device::Gpiote(gpiote) => gpiote.write(offset, value, bus),
+            Device::Ppi(ppi) => ppi.write(
+                offset,
+                value,
+                |event| bus.nrf_ppi_event_supported(event),
+                |task| {
+                    (self.base..=self.base + 0x2c).contains(&task) && task & 3 == 0
+                        || bus.nrf_ppi_task_supported(task)
+                },
+            ),
+            Device::Watchdog(watchdog) => watchdog.write(offset, value),
             Device::Uarte(uart) => uart.write(offset, value, bus, output)?,
             Device::Rtc(rtc) => rtc.write(offset, value),
         };
@@ -189,6 +363,7 @@ impl Clock {
             0x40c => (self.running & 1) * 0x10001,
             0x418 => ((self.running & 2) << 15) | (self.lf_source & 3),
             0x518 => self.lf_source,
+            0x578 => self.dcdc,
             _ => return None,
         })
     }
@@ -212,6 +387,7 @@ impl Clock {
             0x304 => self.interrupts |= value & 0xb,
             0x308 => self.interrupts &= !value,
             0x518 => self.lf_source = value & 0x30003,
+            0x578 => self.dcdc = value & 1,
             _ => return false,
         }
         true
@@ -219,6 +395,11 @@ impl Clock {
 }
 
 impl Uarte {
+    fn raise(&mut self, events: u32) {
+        self.events |= events;
+        self.raised |= events;
+    }
+
     fn dma_address(address: u32, length: usize) -> Result<u32, BusError> {
         const RAM_BASE: u32 = 0x2000_0000;
         const RAM_END: u32 = 0x2004_0000;
@@ -272,12 +453,12 @@ impl Uarte {
             0x000 if trigger => {
                 self.rx_amount = 0;
                 self.rx_active = Some((self.rx_pointer, self.rx_count));
-                self.events |= Self::RX_STARTED;
+                self.raise(Self::RX_STARTED);
                 self.receive(bus)?;
             }
             0x004 if trigger => {
                 self.rx_active = None;
-                self.events |= Self::END_RX | Self::RX_TIMEOUT;
+                self.raise(Self::END_RX | Self::RX_TIMEOUT);
             }
             0x008 if trigger => {
                 if self.tx_count != 0 {
@@ -287,9 +468,12 @@ impl Uarte {
                     output.write_all(bytes).map_err(BusError::Output)?;
                 }
                 self.tx_amount = self.tx_count;
-                self.events |= Self::TX_STARTED | Self::END_TX | Self::TX_READY | Self::TX_STOPPED;
+                self.raise(Self::TX_STARTED | Self::END_TX | Self::TX_READY);
+                if self.tx_count == 0 {
+                    self.raise(Self::TX_STOPPED);
+                }
             }
-            0x00c if trigger => self.events |= Self::TX_STOPPED,
+            0x00c if trigger => self.raise(Self::TX_STOPPED),
             0x000 | 0x004 | 0x008 | 0x00c | 0x480 => {}
             0x200 if value == 0 => {}
             0x300 => self.interrupts = value & UART_EVENTS,
@@ -335,11 +519,11 @@ impl Uarte {
                 *destination = byte;
             }
             self.rx_amount += length as u32;
-            self.events |= Self::RX_READY;
+            self.raise(Self::RX_READY);
         }
         if self.rx_amount == count {
             self.rx_active = None;
-            self.events |= Self::END_RX;
+            self.raise(Self::END_RX);
         }
         Ok(())
     }
@@ -483,7 +667,7 @@ mod tests {
         }
         assert_eq!(output, b"abc");
         assert_eq!(bus.read::<4>(uart + 0x54c).unwrap(), 3);
-        bus.sample_nvic(0);
+        bus.sample_nvic(0, false);
         assert_eq!(bus.nvic.as_ref().unwrap().next_irq(0), Some((40, 0)));
         for (address, value) in [
             (uart + 0x120, 0),
@@ -494,7 +678,7 @@ mod tests {
         ] {
             bus.write(address, 4, value, &mut output).unwrap();
         }
-        bus.sample_nvic(0);
+        bus.sample_nvic(0, false);
         assert_eq!(bus.nvic.as_ref().unwrap().next_irq(0), None);
         bus.queue_uart_input(b"XY".to_vec()).unwrap();
         assert_eq!(
@@ -502,9 +686,97 @@ mod tests {
             u32::from(u16::from_le_bytes(*b"XY"))
         );
         assert_eq!(bus.read::<4>(uart + 0x53c).unwrap(), 2);
-        bus.sample_nvic(0);
+        bus.sample_nvic(0, false);
         assert_eq!(bus.nvic.as_ref().unwrap().next_irq(0), Some((40, 0)));
         assert!(bus.read::<4>(uart + 0x600).is_err());
+    }
+
+    #[test]
+    fn gpiote_tasks_drive_the_selected_port_and_a_sense_event_sets_irq() {
+        let mut bus = Bus::default();
+        let p0 = 0x5000_0500;
+        let p1 = 0x5000_0800;
+        let gpiote = 0x4000_6000;
+        bus.map_nrf_peripheral(Peripheral::gpio(p0, "gpio0".into(), 32))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::gpio(p1, "gpio1".into(), 16))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::gpiote(gpiote, 6, "gpiote".into(), [p0, p1]))
+            .unwrap();
+        bus.map_nvic(0xe0, None, true).unwrap();
+        let mut output = Vec::new();
+        for (address, value) in [
+            (crate::nvic::BASE + 0x100, 1 << 6),
+            (gpiote + 0x304, 1 << 31),
+            (gpiote + 0x510, (1 << 13) | (2 << 8) | 3),
+            (p1 + 0x208, (2 << 16) | 1),
+            (gpiote + 0x030, 1),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        assert_eq!(bus.read::<4>(p0 + 4).unwrap(), 0);
+        assert_eq!(bus.read::<4>(p1 + 4).unwrap(), 4);
+        bus.sample_nvic(0, false);
+        assert_eq!(bus.read::<4>(gpiote + 0x17c).unwrap(), 1);
+        assert_eq!(bus.nvic.as_ref().unwrap().next_irq(0), Some((6, 0)));
+    }
+
+    #[test]
+    fn ppi_routes_a_fresh_dma_event_to_stop_tx() {
+        let mut bus = Bus::default();
+        let uart = 0x4000_2000;
+        let ppi = 0x4001_f000;
+        let ram = 0x2000_0000;
+        let mut output = Vec::new();
+        bus.map_ram(ram, 8).unwrap();
+        bus.memory(ram, 1).unwrap()[0] = b'A';
+        bus.map_nrf_peripheral(Peripheral::uarte(uart, 2, "uart0".into()))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::ppi(ppi, "ppi".into()))
+            .unwrap();
+        assert!(bus.write(ppi + 0x510, 4, 0x4000_b140, &mut output).is_err());
+        for (address, value) in [
+            (ppi + 0x510, uart + 0x120),
+            (ppi + 0x514, uart + 0x00c),
+            (ppi + 0x504, 1),
+            (uart + 0x500, 8),
+            (uart + 0x544, ram),
+            (uart + 0x548, 1),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        for _ in 0..2 {
+            bus.write(uart + 0x008, 4, 1, &mut output).unwrap();
+            assert_eq!(bus.read::<4>(uart + 0x158).unwrap(), 0);
+            bus.advance_nrf_ppi(&mut output).unwrap();
+            assert_eq!(bus.read::<4>(uart + 0x158).unwrap(), 1);
+            bus.write(uart + 0x158, 4, 0, &mut output).unwrap();
+        }
+        assert_eq!(output, b"AA");
+    }
+
+    #[test]
+    fn watchdog_reset_clears_peripheral_state_and_preserves_ram() {
+        let mut bus = Bus::default();
+        let wdt = 0x4001_0000;
+        let ram = 0x2000_0000;
+        bus.map_ram(ram, 4).unwrap();
+        bus.map_nvic(0xe0, None, true).unwrap();
+        bus.map_nrf_peripheral(Peripheral::watchdog(wdt, 16, "wdt".into()))
+            .unwrap();
+        bus.memory(ram, 1).unwrap()[0] = 42;
+        let mut output = Vec::new();
+        bus.write(wdt + 0x504, 4, 15, &mut output).unwrap();
+        bus.write(wdt, 4, 1, &mut output).unwrap();
+        for _ in 0..48_828 {
+            bus.sample_nvic(0, false);
+        }
+        assert!(!bus.reset_cortex_m_if_requested());
+        bus.sample_nvic(0, false);
+        assert!(bus.reset_cortex_m_if_requested());
+        assert_eq!(bus.read::<4>(wdt + 0x400).unwrap(), 0);
+        assert_eq!(bus.read::<1>(ram).unwrap(), 42);
+        assert!(!bus.reset_cortex_m_if_requested());
     }
 
     #[test]
