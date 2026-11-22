@@ -258,6 +258,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
+            "Miscellaneous.STM32F0_RCC" => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_stm32f0_rcc(entry.address()?)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "UART.STM32F7_USART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {

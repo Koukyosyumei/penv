@@ -11,6 +11,7 @@ use crate::{
     nvic::{Nvic, VTOR},
     plic::Plic,
     stm32_exti::Exti,
+    stm32_rcc::Stm32F0Rcc,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
@@ -71,6 +72,7 @@ pub struct Bus {
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
+    stm32_rcc: Option<Stm32F0Rcc>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
     pub nvic: Option<Nvic>,
@@ -139,6 +141,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.stm32_rcc.as_ref().is_some_and(|rcc| {
+                let other = u64::from(rcc.base);
+                start < other + u64::from(Stm32F0Rcc::SIZE) && other < end
             })
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
@@ -307,6 +313,18 @@ impl Bus {
             ));
         }
         self.litex_uart = Some(LiteXUart::new(base));
+        Ok(())
+    }
+
+    pub fn map_stm32f0_rcc(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(Stm32F0Rcc::SIZE);
+        if self.stm32_rcc.is_some() || base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32F0 RCC range at {base:#010x}"
+            ));
+        }
+        self.stm32_rcc = Some(Stm32F0Rcc::new(base));
         Ok(())
     }
 
@@ -515,6 +533,13 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(rcc) = self.stm32_rcc.as_ref()
+            && rcc.contains(address)
+        {
+            return Ok(rcc.read(address));
+        }
         self.read_ram::<N>(address)
     }
 
@@ -628,6 +653,13 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(rcc) = self.stm32_rcc.as_mut()
+            && rcc.contains(address)
+        {
+            rcc.write(address, value);
             return Ok(());
         }
         self.memory(address, width)?
