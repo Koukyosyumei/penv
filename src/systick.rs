@@ -1,3 +1,5 @@
+use crate::bus::CORTEX_M_STEP_HZ;
+
 pub const PENDSV: u8 = 14;
 pub const SYSTICK: u8 = 15;
 const CSR: u32 = 0xe000_e010;
@@ -14,6 +16,8 @@ pub struct SysTick {
     count_flag: bool,
     pending: bool,
     pendsv_pending: bool,
+    frequency: Option<u32>,
+    phase: u64,
 }
 
 impl SysTick {
@@ -25,10 +29,27 @@ impl SysTick {
             .any(|(low, high)| start < u64::from(high) && end > u64::from(low))
     }
 
+    pub fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = Some(frequency);
+        self.phase = 0;
+    }
+
     pub fn tick(&mut self) {
         if self.control & 1 == 0 {
             return;
         }
+        if let Some(frequency) = self.frequency {
+            self.phase += u64::from(frequency);
+            while self.phase >= CORTEX_M_STEP_HZ {
+                self.phase -= CORTEX_M_STEP_HZ;
+                self.cycle();
+            }
+        } else {
+            self.cycle();
+        }
+    }
+
+    fn cycle(&mut self) {
         if self.current == 0 {
             self.current = self.reload;
         } else {

@@ -27,8 +27,8 @@ use crate::{
     uart::{LiteXUart, MuraxUart},
 };
 
-// STM32 peripheral time advances by 10 ns per Cortex-M execution step.
-pub(crate) const STM32_STEP_HZ: u64 = 100_000_000;
+// Cortex-M peripheral time advances by 10 ns per execution step.
+pub(crate) const CORTEX_M_STEP_HZ: u64 = 100_000_000;
 
 pub const RAM_BASE: u32 = 0x8000_0000;
 pub const UART_TX: u32 = 0x1000_0000;

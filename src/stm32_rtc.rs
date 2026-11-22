@@ -1,4 +1,4 @@
-use crate::{bus::STM32_STEP_HZ, stm32_uart::Stm32Irq};
+use crate::{bus::CORTEX_M_STEP_HZ, stm32_uart::Stm32Irq};
 
 const FORMAT_12H: u32 = 1 << 6;
 const ALARM_ENABLE: u32 = 1 << 8;
@@ -155,9 +155,9 @@ impl Stm32Rtc {
 
     pub fn tick(&mut self) -> u32 {
         self.phase += u64::from(self.frequency);
-        if self.phase >= STM32_STEP_HZ {
-            let cycles = self.phase / STM32_STEP_HZ;
-            self.phase %= STM32_STEP_HZ;
+        if self.phase >= CORTEX_M_STEP_HZ {
+            let cycles = self.phase / CORTEX_M_STEP_HZ;
+            self.phase %= CORTEX_M_STEP_HZ;
             for _ in 0..cycles {
                 self.advance();
             }

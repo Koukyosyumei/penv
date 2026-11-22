@@ -216,10 +216,12 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         &mut entries,
     )?;
     let mut machine = Machine::without_default_ram();
-    if stm32f0_console {
+    if stm32f0::is_stm32f0(&entries) {
         machine
             .bus
             .set_stm32f0_tags(stm32f0::prepare(&mut entries)?);
+    } else if stm32f0_console {
+        return Err("--stm32f0-console requires a platform with an STM32F0 RCC".into());
     }
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
@@ -428,6 +430,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(controller.error("unsupported NVIC wiring"));
                 }
             }
+        }
+        if let Some(frequency) = frequency {
+            machine
+                .bus
+                .systick
+                .as_mut()
+                .unwrap()
+                .set_frequency(frequency);
         }
         let mut uart_irq = None;
         if let Some(uart) = uart {

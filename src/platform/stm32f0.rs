@@ -2,13 +2,13 @@ use std::{collections::HashMap, ops::RangeInclusive};
 
 use super::{Entry, number};
 
-pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32>>, String> {
-    if !entries
+pub(super) fn is_stm32f0(entries: &[Entry]) -> bool {
+    entries
         .iter()
         .any(|entry| entry.model == "Miscellaneous.STM32F0_RCC")
-    {
-        return Err("--stm32f0-console requires a platform with an STM32F0 RCC".into());
-    }
+}
+
+pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32>>, String> {
     let mut tags = Vec::new();
     let mut definitions = HashMap::new();
     let mut loaded: Vec<Entry> = Vec::with_capacity(entries.len());

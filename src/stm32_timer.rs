@@ -1,4 +1,4 @@
-use crate::bus::STM32_STEP_HZ;
+use crate::bus::CORTEX_M_STEP_HZ;
 
 const ENABLE: u32 = 1;
 const UPDATE_DISABLE: u32 = 1 << 1;
@@ -160,11 +160,11 @@ impl Stm32Timer {
     pub fn tick(&mut self) -> u32 {
         if self.registers[0] & ENABLE != 0 && self.active_arr != 0 {
             self.phase += u64::from(self.frequency);
-            while self.phase >= STM32_STEP_HZ
+            while self.phase >= CORTEX_M_STEP_HZ
                 && self.registers[0] & ENABLE != 0
                 && self.active_arr != 0
             {
-                self.phase -= STM32_STEP_HZ;
+                self.phase -= CORTEX_M_STEP_HZ;
                 if self.prescaler >= self.registers[10] {
                     self.prescaler = 0;
                     self.count();

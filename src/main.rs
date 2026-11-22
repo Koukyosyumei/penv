@@ -56,7 +56,7 @@ Options:
   --button-event STEP:NAME:STATE  Schedule a button press or release (repeatable)
   --led-events       Print board LED transitions to stderr
   --adc-input CHANNEL:VOLTS  Set an STM32 ADC channel voltage (repeatable)
-  --stm32f0-console  Load STM32F0 REPLs with console-focused peripheral support
+  --stm32f0-console  Require an STM32F0 REPL (legacy console option)
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART

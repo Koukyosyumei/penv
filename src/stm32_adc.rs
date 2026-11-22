@@ -1,4 +1,4 @@
-use crate::bus::STM32_STEP_HZ;
+use crate::bus::CORTEX_M_STEP_HZ;
 
 const READY: u32 = 1;
 const EOC: u32 = 1 << 2;
@@ -142,8 +142,8 @@ impl Stm32F0Adc {
     pub fn tick(&mut self) -> bool {
         if self.started && self.config & (EXTERNAL_TRIGGER | CONTINUOUS) != 0 {
             self.phase += u64::from(self.trigger_frequency);
-            if self.phase >= STM32_STEP_HZ {
-                self.phase %= STM32_STEP_HZ;
+            if self.phase >= CORTEX_M_STEP_HZ {
+                self.phase %= CORTEX_M_STEP_HZ;
                 if self.config & WAIT == 0 || self.status & EOC == 0 {
                     self.start_sample();
                 }
