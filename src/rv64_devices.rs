@@ -9,10 +9,27 @@ use crate::{machine::MAX_HARTS, ns16550::Ns16550};
 pub struct Devices {
     pub plic: Option<Plic>,
     pub uarts: Vec<Uart>,
+    pub fallback_ranges: Vec<FallbackRange>,
     lines: [u64; MAX_HARTS],
 }
 
+pub struct FallbackRange {
+    pub start: u64,
+    pub end: u64,
+    pub value: u64,
+}
+
 impl Devices {
+    pub fn fallback(&self, address: u64, width: usize) -> Option<u64> {
+        let end = address.checked_add(width as u64 - 1)?;
+        let range = self
+            .fallback_ranges
+            .iter()
+            .rev()
+            .find(|range| address >= range.start && end <= range.end)?;
+        Some(range.value & (u64::MAX >> (64 - width * 8)))
+    }
+
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
         if let Some(uart) = self.uarts.first_mut() {
             match &mut uart.kind {

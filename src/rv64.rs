@@ -437,25 +437,33 @@ impl Rv64 {
         if let Some(value) = ram_read(bus, physical, width) {
             return Ok(value);
         }
-        let physical = u32::try_from(physical).map_err(|_| Fault::new(5, address))?;
-        if let Some(value) = bus.rv64_devices.read(physical, width) {
-            return Ok(u64::from(value));
+        if let Ok(low) = u32::try_from(physical) {
+            if let Some(value) = bus.rv64_devices.read(low, width) {
+                return Ok(u64::from(value));
+            }
+            let result = match width {
+                1 => bus.read::<1>(low).map(u64::from),
+                2 => bus.read::<2>(low).map(u64::from),
+                4 => bus.read::<4>(low).map(u64::from),
+                8 => bus
+                    .clint
+                    .as_ref()
+                    .filter(|clint| clint.contains(low))
+                    .map(|clint| {
+                        u64::from(clint.read(low)) | (u64::from(clint.read(low + 4)) << 32)
+                    })
+                    .ok_or(BusError::Unmapped(low, 8)),
+                _ => unreachable!(),
+            };
+            match result {
+                Ok(value) => return Ok(value),
+                Err(BusError::Unmapped(..)) => {}
+                Err(_) => return Err(Fault::new(5, address)),
+            }
         }
-        let result = match width {
-            1 => bus.read::<1>(physical).map(u64::from),
-            2 => bus.read::<2>(physical).map(u64::from),
-            4 => bus.read::<4>(physical).map(u64::from),
-            8 => bus
-                .clint
-                .as_ref()
-                .filter(|clint| clint.contains(physical))
-                .map(|clint| {
-                    u64::from(clint.read(physical)) | (u64::from(clint.read(physical + 4)) << 32)
-                })
-                .ok_or(BusError::Unmapped(physical, 8)),
-            _ => unreachable!(),
-        };
-        result.map_err(|_| Fault::new(5, address))
+        bus.rv64_devices
+            .fallback(physical, width)
+            .ok_or(Fault::new(5, address))
     }
 
     fn store(
@@ -492,33 +500,41 @@ impl Rv64 {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
             return Ok(());
         }
-        let physical = u32::try_from(physical).map_err(|_| Fault::new(7, address))?;
-        if width == 8 {
-            let clint = bus
-                .clint
-                .as_mut()
-                .filter(|clint| clint.contains(physical))
-                .ok_or(Fault::new(7, address))?;
-            clint.write(physical, value as u32);
-            clint.write(physical + 4, (value >> 32) as u32);
-            return Ok(());
+        if let Ok(low) = u32::try_from(physical) {
+            let result = if width == 8 {
+                if let Some(clint) = bus.clint.as_mut().filter(|clint| clint.contains(low)) {
+                    clint.write(low, value as u32);
+                    clint.write(low + 4, (value >> 32) as u32);
+                    return Ok(());
+                }
+                Err(BusError::Unmapped(low, width))
+            } else {
+                bus.rv64_devices
+                    .write(low, width, value as u32, output)
+                    .map_or_else(
+                        || bus.write(low, width, value as u32, output),
+                        |result| result.map_err(BusError::Output),
+                    )
+            };
+            match result {
+                Ok(()) => return Ok(()),
+                Err(BusError::Unmapped(..)) => {}
+                Err(BusError::Output(error)) => {
+                    return Err(Fault {
+                        cause: 7,
+                        value: address,
+                        output: Some(error),
+                    });
+                }
+                Err(_) => return Err(Fault::new(7, address)),
+            }
         }
-        let result = bus
-            .rv64_devices
-            .write(physical, width, value as u32, output)
-            .map_or_else(
-                || bus.write(physical, width, value as u32, output),
-                |result| result.map_err(BusError::Output),
-            );
-        result.map_err(|error| match error {
-            BusError::Output(error) => Fault {
-                cause: 7,
-                value: address,
-                output: Some(error),
-            },
-            _ => Fault::new(7, address),
-        })
+        bus.rv64_devices
+            .fallback(physical, width)
+            .map(|_| ())
+            .ok_or(Fault::new(7, address))
     }
+
     fn compare_swap(
         &mut self,
         inst: Instruction,

@@ -4,7 +4,7 @@ use crate::{
     machine::{MAX_HARTS, Machine},
     platform::Entry,
     rv64::{Isa, Rv64},
-    rv64_devices::{Plic, Uart},
+    rv64_devices::{FallbackRange, Plic, Uart},
     rv64_priv::Pmp,
 };
 
@@ -19,6 +19,14 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
 
     for entry in &entries {
         if entry.registration.as_deref() == Some("none") {
+            continue;
+        }
+        if entry.name == "sysbus" && entry.model.is_empty() {
+            for (_, command) in &entry.body {
+                if let Some(range) = fallback_range(entry, command)? {
+                    machine.bus.rv64_devices.fallback_ranges.push(range);
+                }
+            }
             continue;
         }
         match entry.model.as_str() {
@@ -189,6 +197,61 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
         machine.bus.rv64_devices.uarts.push(uart);
     }
     Ok(machine)
+}
+
+fn fallback_range(entry: &Entry, command: &str) -> Result<Option<FallbackRange>, String> {
+    let Some((command, arguments)) = command.split_once(char::is_whitespace) else {
+        return Ok(None);
+    };
+    if !matches!(command, "Tag" | "SilenceRange") {
+        return Ok(None);
+    }
+    let (bounds, rest) = arguments
+        .trim()
+        .strip_prefix('<')
+        .and_then(|text| text.split_once('>'))
+        .ok_or_else(|| entry.error("invalid tagged address range"))?;
+    let (start, end) = if let Some((start, end)) = bounds.split_once(',') {
+        let start = number(entry, start)?;
+        let end = if let Some(size) = end.trim().strip_prefix('+') {
+            range_end(entry, start, number(entry, size)?)?
+        } else {
+            number(entry, end)?
+        };
+        (start, end)
+    } else {
+        let (start, size) = bounds
+            .trim()
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| entry.error("tagged range requires a start and size"))?;
+        let start = number(entry, start)?;
+        (start, range_end(entry, start, number(entry, size)?)?)
+    };
+    if end < start {
+        return Err(entry.error("reversed tagged address range"));
+    }
+    let mut value = 0;
+    if command == "Tag" {
+        let (_, tail) = rest
+            .trim()
+            .strip_prefix('"')
+            .and_then(|label| label.split_once('"'))
+            .ok_or_else(|| entry.error("Tag requires a quoted name"))?;
+        if let Some(default) = tail
+            .split_whitespace()
+            .next()
+            .filter(|token| !token.starts_with('#'))
+        {
+            value = number(entry, default)?;
+        }
+    }
+    Ok(Some(FallbackRange { start, end, value }))
+}
+
+fn range_end(entry: &Entry, start: u64, size: u64) -> Result<u64, String> {
+    size.checked_sub(1)
+        .and_then(|last| start.checked_add(last))
+        .ok_or_else(|| entry.error("invalid tagged address range size"))
 }
 
 fn create_cpu(entry: &Entry, clint: Option<&Entry>) -> Result<Rv64, String> {
