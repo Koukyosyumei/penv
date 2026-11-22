@@ -32,7 +32,7 @@ pub(super) fn map_peripheral(
 ) -> Result<(), String> {
     let uart = entry.model == "UART.NRF52840_UART";
     let mut irq = None;
-    let mut easy_dma = false;
+    let mut easy_dma = None;
     let mut channels = None;
     let mut ports = [None; 2];
     for (_, item) in &entry.body {
@@ -44,13 +44,16 @@ pub(super) fn map_peripheral(
                 return Err(entry.error("expected one IRQ connection to NVIC"));
             }
             irq = Some(number(line.trim()).map_err(|e| entry.error(&e))?);
-        } else if uart
-            && !easy_dma
-            && item
-                .split_once(':')
-                .is_some_and(|(name, value)| name.trim() == "easyDMA" && value.trim() == "true")
+        } else if (uart || entry.model == "SPI.NRF52840_SPI")
+            && easy_dma.is_none()
+            && let Some(("easyDMA", value)) = item.split_once(':')
         {
-            easy_dma = true;
+            easy_dma = Some(
+                value
+                    .trim()
+                    .parse::<bool>()
+                    .map_err(|_| entry.error("invalid easyDMA property"))?,
+            );
         } else if entry.model == "Timers.NRF52840_RTC"
             && channels.is_none()
             && let Some(("numberOfEvents", count)) = item.split_once(':')
@@ -76,7 +79,7 @@ pub(super) fn map_peripheral(
             return Err(entry.error("unsupported nRF52840 peripheral property or wiring"));
         }
     }
-    if uart && !easy_dma {
+    if uart && easy_dma != Some(true) {
         return Err(entry.error("only the EasyDMA UART mode is supported"));
     }
     let irq = irq
@@ -100,6 +103,19 @@ pub(super) fn map_peripheral(
             return Err(entry.error("GPIOTE requires distinct GPIO ports"));
         }
         Peripheral::gpiote(base, irq as u8, name, [port0, port1])
+    } else if entry.model == "SPI.NRF52840_SPI" {
+        if easy_dma == Some(true) {
+            return Err(entry.error("nRF52840 SPIM EasyDMA is unsupported"));
+        }
+        let mut children = entries.iter().filter(|child| {
+            child.model == "SPI.SPILoopback"
+                && child.registration.as_deref() == Some(entry.name.as_str())
+        });
+        let loopback = children.next().is_some();
+        if let Some(extra) = children.next() {
+            return Err(extra.error("nRF52840 SPI accepts only one attached device"));
+        }
+        Peripheral::spi(base, irq as u8, name, loopback)
     } else if entry.model == "I2C.NRF52840_I2C" {
         let mut twi = Peripheral::twi(base, irq as u8, name);
         for child in entries
@@ -126,6 +142,17 @@ pub(super) fn map_peripheral(
         Peripheral::clock(base, irq as u8, name)
     };
     bus.map_nrf_peripheral(device).map_err(|e| entry.error(&e))
+}
+
+pub(super) fn validate_spi_loopback(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    super::keys(entry, &[])?;
+    if !entries.iter().any(|parent| {
+        parent.model == "SPI.NRF52840_SPI"
+            && entry.registration.as_deref() == Some(parent.name.as_str())
+    }) {
+        return Err(entry.error("expected SPILoopback registered on an nRF52840 SPI controller"));
+    }
+    Ok(())
 }
 
 pub(super) fn map_gpio(entry: &Entry, bus: &mut Bus) -> Result<(), String> {

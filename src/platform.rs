@@ -353,6 +353,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "SPI.SPILoopback" if cortex_m4 => nrf52840::validate_spi_loopback(entry, &entries)?,
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
             "CAN.STMCAN" => stm32_cans.push(entry),
@@ -376,6 +377,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             "UART.NRF52840_UART"
             | "Miscellaneous.NRF_CLOCK"
             | "I2C.NRF52840_I2C"
+            | "SPI.NRF52840_SPI"
             | "Timers.NRF52840_RTC"
             | "Timers.NRF52840_Watchdog"
             | "GPIOPort.NRF52840_GPIOTasksEvents"

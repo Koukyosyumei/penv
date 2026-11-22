@@ -3,6 +3,8 @@ use twi::Twi;
 
 mod gpio;
 mod ppi;
+mod spi;
+use spi::Spi;
 
 use ppi::Ppi;
 mod watchdog;
@@ -29,6 +31,7 @@ enum Device {
     Uarte(Uarte),
     Rtc(Rtc),
     Twi(Twi),
+    Spi(Spi),
     Watchdog(Watchdog),
     Gpio(Gpio),
     Gpiote(Gpiote),
@@ -118,6 +121,15 @@ impl Peripheral {
         }
     }
 
+    pub fn spi(base: u32, irq: u8, name: String, loopback: bool) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Spi(Spi::new(loopback)),
+        }
+    }
+
     pub fn twi(base: u32, irq: u8, name: String) -> Self {
         Self {
             base,
@@ -157,6 +169,7 @@ impl Peripheral {
             && match self.device {
                 Device::Uarte(_) => Uarte::event(address - self.base).is_some(),
                 Device::Twi(_) => Twi::event(address - self.base).is_some(),
+                Device::Spi(_) => address - self.base == 0x108,
                 _ => false,
             }
     }
@@ -175,6 +188,7 @@ impl Peripheral {
         let mut raised = match &mut self.device {
             Device::Uarte(uart) => std::mem::take(&mut uart.raised),
             Device::Twi(twi) => std::mem::take(&mut twi.raised),
+            Device::Spi(spi) => std::mem::take(&mut spi.raised),
             _ => return,
         };
         while raised != 0 {
@@ -284,6 +298,7 @@ impl Peripheral {
         match &mut self.device {
             Device::Gpio(gpio) => gpio.reset(),
             Device::Twi(twi) => twi.reset(),
+            Device::Spi(spi) => spi.reset(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -312,6 +327,7 @@ impl Peripheral {
             Device::Gpiote(gpiote) => gpiote.pending(),
             Device::Rtc(rtc) => rtc.events & rtc.interrupts != 0,
             Device::Twi(twi) => twi.pending(),
+            Device::Spi(spi) => spi.pending(),
         }
     }
 
@@ -335,6 +351,7 @@ impl Peripheral {
         match &mut self.device {
             Device::Clock(clock) => clock.read(offset),
             Device::Twi(twi) => twi.read(offset),
+            Device::Spi(spi) => spi.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -378,6 +395,7 @@ impl Peripheral {
             Device::Uarte(uart) => uart.write(offset, value, bus, output)?,
             Device::Rtc(rtc) => rtc.write(offset, value),
             Device::Twi(twi) => twi.write(offset, value),
+            Device::Spi(spi) => spi.write(offset, value),
         };
         if supported {
             Ok(())
