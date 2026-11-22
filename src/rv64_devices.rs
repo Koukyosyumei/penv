@@ -200,7 +200,10 @@ impl Uart {
 
     fn read(&mut self, address: u32, width: usize) -> Option<u32> {
         match &mut self.kind {
-            UartKind::Ns16550(uart) => Some(uart.read(ns16550_register(uart, address, width)?)),
+            UartKind::Ns16550(uart) => {
+                let register = ns16550_register(uart, address, width)?;
+                Some(read_ns16550(uart, register))
+            }
             UartKind::SiFive {
                 receive,
                 tx_control,
@@ -257,6 +260,21 @@ impl Uart {
             _ => None,
         }
     }
+}
+
+fn read_ns16550(uart: &mut Ns16550, register: u32) -> u32 {
+    match register {
+        6 => {
+            let control = uart.read(4);
+            if control & 0x10 != 0 {
+                // In loopback OUT2, OUT1, DTR, and RTS drive the modem inputs.
+                return ((control & 0x0c) << 4) | ((control & 1) << 5) | ((control & 2) << 3);
+            }
+        }
+        0x14 => return uart.read(5),
+        _ => {}
+    }
+    uart.read(register)
 }
 
 fn ns16550_register(uart: &Ns16550, address: u32, width: usize) -> Option<u32> {
