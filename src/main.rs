@@ -17,6 +17,7 @@ mod stm32_dma;
 mod stm32_exti;
 mod stm32_gpio;
 mod stm32_rcc;
+mod stm32_rtc;
 mod stm32_spi;
 mod stm32_timer;
 mod stm32_uart;

@@ -14,11 +14,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
         .filter(|entry| {
             matches!(
                 entry.model.as_str(),
-                "I2C.STM32F7_I2C"
-                    | "CAN.STMCAN"
-                    | "Timers.STM32F4_RTC"
-                    | "Miscellaneous.LED"
-                    | "Miscellaneous.Button"
+                "I2C.STM32F7_I2C" | "CAN.STMCAN" | "Miscellaneous.LED" | "Miscellaneous.Button"
             )
         })
         .map(|entry| (entry.name.clone(), entry.model.clone()))

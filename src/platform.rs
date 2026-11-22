@@ -11,6 +11,7 @@ use crate::{
     stm32_adc::Stm32F0Adc,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
+    stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
@@ -229,6 +230,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut stm32_timers = Vec::new();
     let mut stm32_spis = Vec::new();
     let mut stm32_adc = None;
+    let mut stm32_rtc = None;
     let mut stm32_dma = None;
     let mut plic = None;
     let mut timer = None;
@@ -361,6 +363,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
+            "Timers.STM32F4_RTC" => {
+                if stm32_rtc.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32 RTC is supported"));
+                }
+            }
             "DMA.STM32G0DMA" => {
                 if stm32_dma.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 DMA controller is supported"));
@@ -578,6 +585,67 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         } else {
             0
         };
+        if let Some(rtc) = stm32_rtc {
+            let mut frequency = None;
+            let mut errata = None;
+            let mut routes = [None; 2];
+            for (_, text) in &rtc.body {
+                if let Some((source, destination)) = text.split_once("->") {
+                    let slot = match source.trim() {
+                        "AlarmIRQ" => &mut routes[0],
+                        "WakeupIRQ" => &mut routes[1],
+                        _ => return Err(rtc.error("unsupported STM32 RTC output")),
+                    };
+                    let (target, pin) = destination
+                        .split_once('@')
+                        .ok_or_else(|| rtc.error("invalid STM32 RTC output target"))?;
+                    if slot.is_some() {
+                        return Err(rtc.error("duplicate STM32 RTC output"));
+                    }
+                    *slot = Some(if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
+                        Stm32Irq::Nvic(irq_index(pin, 32).map_err(|e| rtc.error(&e))?)
+                    } else if exti.is_some_and(|exti| exti.name == target.trim()) {
+                        Stm32Irq::Exti(irq_index(pin, exti_lines).map_err(|e| rtc.error(&e))?)
+                    } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
+                        irq_index(pin, count).map_err(|e| rtc.error(&e))?;
+                        Stm32Irq::Nvic(irq)
+                    } else {
+                        return Err(rtc.error("unsupported STM32 RTC interrupt target"));
+                    });
+                } else if let Some((key, value)) = text.split_once(':') {
+                    match key.trim() {
+                        "wakeupTimerFrequency" if frequency.is_none() => {
+                            let value = number(value.trim()).map_err(|e| rtc.error(&e))?;
+                            if value == 0 {
+                                return Err(rtc.error("RTC wakeupTimerFrequency must be positive"));
+                            }
+                            frequency = Some(value);
+                        }
+                        "WakeupTimerRegisterErrata" if errata.is_none() => {
+                            errata = Some(
+                                value
+                                    .trim()
+                                    .parse()
+                                    .map_err(|_| rtc.error("invalid WakeupTimerRegisterErrata"))?,
+                            );
+                        }
+                        _ => return Err(rtc.error("unsupported or duplicate STM32 RTC property")),
+                    }
+                } else {
+                    return Err(rtc.error("expected STM32 RTC property or wiring"));
+                }
+            }
+            let mut device = Stm32Rtc::new(
+                rtc.address()?,
+                frequency.unwrap_or(32768),
+                errata.unwrap_or(false),
+            );
+            device.routes = routes;
+            machine
+                .bus
+                .map_stm32_rtc(device)
+                .map_err(|e| rtc.error(&e))?;
+        }
         let dma_channels = if let Some(dma) = stm32_dma {
             let count = dma
                 .body
@@ -913,6 +981,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(rtc) = stm32_rtc {
+        return Err(rtc.error("STM32 RTC requires a Cortex-M platform"));
     }
     if let Some(dma) = stm32_dma {
         return Err(dma.error("STM32 DMA requires a Cortex-M platform"));

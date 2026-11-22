@@ -16,6 +16,7 @@ use crate::{
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
     stm32_rcc::Stm32F0Rcc,
+    stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
@@ -89,6 +90,7 @@ pub struct Bus {
     stm32_dma: Option<Stm32Dma>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
+    stm32_rtc: Option<Stm32Rtc>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
     pub nvic: Option<Nvic>,
@@ -181,6 +183,10 @@ impl Bus {
             || self.stm32_crc.as_ref().is_some_and(|crc| {
                 let other = u64::from(crc.base);
                 start < other + u64::from(Stm32F0Crc::SIZE) && other < end
+            })
+            || self.stm32_rtc.as_ref().is_some_and(|rtc| {
+                let other = u64::from(rtc.base);
+                start < other + u64::from(Stm32Rtc::SIZE) && other < end
             })
             || self.stm32_rcc.as_ref().is_some_and(|rcc| {
                 let other = u64::from(rcc.base);
@@ -337,6 +343,18 @@ impl Bus {
             for uart in &self.stm32_uarts {
                 if uart.interrupt_pending() {
                     match uart.irq {
+                        Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
+                        Some(Stm32Irq::Exti(line)) => exti_inputs |= 1 << line,
+                        None => {}
+                    }
+                }
+            }
+            if let Some(rtc) = self.stm32_rtc.as_mut() {
+                let mut signals = rtc.tick();
+                while signals != 0 {
+                    let signal = signals.trailing_zeros() as usize;
+                    signals &= signals - 1;
+                    match rtc.routes[signal] {
                         Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
                         Some(Stm32Irq::Exti(line)) => exti_inputs |= 1 << line,
                         None => {}
@@ -522,6 +540,23 @@ impl Bus {
             ));
         }
         self.stm32_crc = Some(Stm32F0Crc::new(base, configurable_poly));
+        Ok(())
+    }
+
+    pub fn map_stm32_rtc(&mut self, rtc: Stm32Rtc) -> Result<(), String> {
+        let start = u64::from(rtc.base);
+        let end = start + u64::from(Stm32Rtc::SIZE);
+        if self.stm32_rtc.is_some()
+            || rtc.base & 3 != 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping STM32 RTC range at {:#010x}",
+                rtc.base
+            ));
+        }
+        self.stm32_rtc = Some(rtc);
         Ok(())
     }
 
@@ -740,6 +775,13 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(rtc) = self.stm32_rtc.as_mut()
+            && rtc.contains(address)
+        {
+            return Ok(rtc.read(address));
+        }
+        if N == 4
+            && address & 3 == 0
             && let Some(rcc) = self.stm32_rcc.as_ref()
             && rcc.contains(address)
         {
@@ -914,6 +956,13 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(rtc) = self.stm32_rtc.as_mut()
+            && rtc.contains(address)
+        {
+            rtc.write(address, value);
             return Ok(());
         }
         if width == 4
