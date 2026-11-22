@@ -89,11 +89,6 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
     }
 
     if let Some(entry) = clint {
-        if let Some(frequency) = property(entry, "frequency")
-            && number(entry, frequency)? == 0
-        {
-            return Err(entry.error("CLINT frequency must be positive"));
-        }
         let targets = property(entry, "numberOfTargets")
             .map_or(Ok(cpus.len() as u64), |value| number(entry, value))?;
         let targets = usize::try_from(targets)
@@ -117,6 +112,24 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
             .bus
             .map_clint(entry.address()?, targets)
             .map_err(|error| entry.error(&error))?;
+        if let Some(frequency) = property(entry, "frequency") {
+            let frequency = number(entry, frequency)?;
+            let divider =
+                property(entry, "divider").map_or(Ok(1), |divider| number(entry, divider))?;
+            // Renode's default rate is 100 million instructions per second per
+            // hart. A scheduler round represents one instruction on each hart.
+            const DEFAULT_INSTRUCTIONS_PER_SECOND: u64 = 100_000_000;
+            let steps = (DEFAULT_INSTRUCTIONS_PER_SECOND * targets as u64)
+                .checked_mul(divider)
+                .filter(|steps| *steps != 0 && frequency != 0)
+                .ok_or_else(|| entry.error("invalid CLINT frequency or divider"))?;
+            machine
+                .bus
+                .clint
+                .as_mut()
+                .unwrap()
+                .set_step_rate(frequency, steps);
+        }
     }
 
     let mut sources = 0;

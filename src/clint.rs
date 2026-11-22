@@ -9,7 +9,27 @@ struct Target {
 pub struct Clint {
     pub base: u32,
     time: u64,
+    clock: Option<StepClock>,
     targets: Vec<Target>,
+}
+
+struct StepClock {
+    whole: u64,
+    remainder: u64,
+    divisor: u64,
+    fraction: u64,
+}
+
+impl StepClock {
+    fn advance(&mut self) -> u64 {
+        let carry = self.fraction >= self.divisor - self.remainder;
+        if carry {
+            self.fraction -= self.divisor - self.remainder;
+        } else {
+            self.fraction += self.remainder;
+        }
+        self.whole + u64::from(carry)
+    }
 }
 
 impl Clint {
@@ -19,6 +39,7 @@ impl Clint {
         Self {
             base,
             time: 0,
+            clock: None,
             targets: (0..target_count)
                 .map(|_| Target {
                     compare: u64::MAX,
@@ -32,8 +53,18 @@ impl Clint {
         u64::from(address.wrapping_sub(self.base)) < Self::SIZE
     }
 
+    pub fn set_step_rate(&mut self, frequency: u64, steps_per_second: u64) {
+        self.clock = Some(StepClock {
+            whole: frequency / steps_per_second,
+            remainder: frequency % steps_per_second,
+            divisor: steps_per_second,
+            fraction: 0,
+        });
+    }
+
     pub fn tick(&mut self, hart: usize) -> u32 {
-        self.time = self.time.wrapping_add(1);
+        let ticks = self.clock.as_mut().map_or(1, StepClock::advance);
+        self.time = self.time.wrapping_add(ticks);
         self.targets.get(hart).map_or(0, |target| {
             (u32::from(target.software) * SOFTWARE)
                 | (u32::from(self.time >= target.compare) * TIMER)

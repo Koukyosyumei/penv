@@ -73,7 +73,7 @@ target/release/penv run --platform ../renode/platforms/cpus/sifive-fu740.repl \
   --platform-root ../renode --stats firmware64.elf
 ```
 
-`CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。複数の UART がある場合は `--uart-device NAME` で入力先を選択できます。REPL の `Tag` と `SilenceRange` で指定した範囲では既定値を返します。BeagleV StarLight では U-Boot 用のリセットレジスター、Ethernet MAC の制御レジスターと MDIO PHY の読み出しに対応します。Ethernet のパケット転送は未実装です。その他の未実装アドレスへのアクセスはゲストの例外になります。
+`CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。CLINT の REPL に `frequency` がある場合、各ハートが既定の 100 MIPS で進む仮想時間に合わせて `mtime` を更新します。複数の UART がある場合は `--uart-device NAME` で入力先を選択できます。REPL の `Tag` と `SilenceRange` で指定した範囲では既定値を返します。BeagleV StarLight では U-Boot 用のリセットレジスター、Ethernet MAC の制御レジスターと MDIO PHY の読み出しに対応します。Ethernet のパケット転送は未実装です。その他の未実装アドレスへのアクセスはゲストの例外になります。
 
 ## Cortex-M0 / Cortex-M0+
 
