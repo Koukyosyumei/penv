@@ -210,7 +210,9 @@ impl Bus {
             })
             || self.stm32_flash.as_ref().is_some_and(|flash| {
                 let other = u64::from(flash.base);
-                start < other + u64::from(Stm32F0Flash::SIZE) && other < end
+                let options = u64::from(Stm32F0Flash::OPTION_BASE);
+                (start < other + u64::from(Stm32F0Flash::SIZE) && other < end)
+                    || (start < options + u64::from(Stm32F0Flash::OPTION_SIZE) && options < end)
             })
             || self.stm32_rcc.as_ref().is_some_and(|rcc| {
                 let other = u64::from(rcc.base);
@@ -394,6 +396,13 @@ impl Bus {
                 .as_mut()
                 .map_or(0, |exti| exti.sample(exti_inputs));
             irqs |= timer_irqs;
+            if self
+                .stm32_flash
+                .as_ref()
+                .is_some_and(Stm32F0Flash::interrupt_pending)
+            {
+                irqs |= 1 << Stm32F0Flash::IRQ;
+            }
             if let Some(adc) = self.stm32_adc.as_mut()
                 && adc.tick()
                 && let Some(line) = adc.irq
@@ -738,8 +747,11 @@ impl Bus {
             return Ok(());
         };
         let start = u64::from(Stm32F0Flash::BASE);
-        if self.overlaps(start, start + u64::from(Stm32F0Flash::SIZE)) {
-            return Err("STM32F072 flash registers overlap another mapping".into());
+        let options = u64::from(Stm32F0Flash::OPTION_BASE);
+        if self.overlaps(start, start + u64::from(Stm32F0Flash::SIZE))
+            || self.overlaps(options, options + u64::from(Stm32F0Flash::OPTION_SIZE))
+        {
+            return Err("STM32F072 flash registers or option bytes overlap another mapping".into());
         }
         self.regions[index].bytes.fill(0xff);
         self.stm32_flash = Some(Stm32F0Flash::new(BANK));
@@ -966,6 +978,12 @@ impl Bus {
         {
             return Ok(rtc.read(address));
         }
+        if address as usize & (N - 1) == 0
+            && let Some(flash) = self.stm32_flash.as_ref()
+            && flash.contains_options(address, N)
+        {
+            return Ok(flash.read_options(address, N));
+        }
         if N == 4
             && address & 3 == 0
             && let Some(flash) = self.stm32_flash.as_ref()
@@ -1168,6 +1186,12 @@ impl Bus {
             && rtc.contains(address)
         {
             rtc.write(address, value);
+            return Ok(());
+        }
+        if let Some(flash) = self.stm32_flash.as_mut()
+            && flash.contains_options(address, width)
+        {
+            flash.program_option(address, width, value);
             return Ok(());
         }
         if width == 4
