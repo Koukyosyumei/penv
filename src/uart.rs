@@ -119,7 +119,14 @@ impl LiteXUart {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum UartLineEnd {
+    Lf,
+    Cr,
+}
+
 pub struct UartLineMatch {
+    end: u8,
     pattern: Vec<u8>,
     tail: VecDeque<u8>,
     contains: bool,
@@ -127,8 +134,12 @@ pub struct UartLineMatch {
 }
 
 impl UartLineMatch {
-    pub fn new(pattern: &str) -> Self {
+    pub fn new(pattern: &str, end: UartLineEnd) -> Self {
         Self {
+            end: match end {
+                UartLineEnd::Lf => b'\n',
+                UartLineEnd::Cr => b'\r',
+            },
             pattern: pattern.as_bytes().to_vec(),
             tail: VecDeque::new(),
             contains: false,
@@ -140,7 +151,7 @@ impl UartLineMatch {
         if self.matched {
             return;
         }
-        if byte == b'\n' {
+        if byte == self.end {
             self.matched = self.contains;
             self.tail.clear();
             self.contains = false;

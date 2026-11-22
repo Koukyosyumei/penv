@@ -8,7 +8,7 @@ use std::{
 use crate::{
     bus::CORTEX_M_STEP_HZ,
     machine::{Machine, Stop},
-    uart::UartLineMatch,
+    uart::{UartLineEnd, UartLineMatch},
 };
 
 #[derive(PartialEq, Eq, Debug)]
@@ -38,7 +38,7 @@ enum Action {
     RunFor(u64),
     Button(String, bool),
     Adc(String, usize, f64),
-    WaitForUart(Option<String>, String),
+    WaitForUart(Option<String>, String, UartLineEnd),
     WriteUartLine(String, String, &'static [u8]),
 }
 
@@ -90,9 +90,9 @@ pub fn run(
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
                 .map(|()| None),
-            Action::WaitForUart(target, pattern) => {
+            Action::WaitForUart(target, pattern, end) => {
                 let start = machine.elapsed_steps();
-                wait_for_uart(machine, target.as_deref(), pattern, budget, output).and_then(
+                wait_for_uart(machine, target.as_deref(), pattern, *end, budget, output).and_then(
                     |(stop, count)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -125,18 +125,19 @@ fn wait_for_uart(
     machine: &mut Machine,
     target: Option<&str>,
     pattern: &str,
+    end: UartLineEnd,
     budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
-        machine.bus.watch_stm32_uart(target, pattern)?;
+        machine.bus.watch_stm32_uart(target, pattern, end)?;
         let result = machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched());
         machine.bus.clear_stm32_uart_watch();
         result
     } else {
         let mut matcher = UartLine {
             output,
-            line: UartLineMatch::new(pattern),
+            line: UartLineMatch::new(pattern, end),
         };
         machine.run_until(budget, &mut matcher, |_, uart| uart.line.matched)
     }
@@ -258,21 +259,21 @@ fn execute(
                     .ok_or("expected waitForUart [USART] \"literal text\"")?;
                 (Some(resolve(target)?.to_owned()), line.trim_start())
             };
-            let pattern = quoted_text(line)
-                .filter(|value| !value.is_empty())
-                .ok_or("expected waitForUart [USART] \"literal text\"")?;
-            Some(Action::WaitForUart(target, pattern.to_owned()))
+            let (pattern, ending) = quoted_argument(line)
+                .filter(|(pattern, _)| !pattern.is_empty())
+                .ok_or("expected waitForUart [USART] \"literal text\" [LF|CR]")?;
+            let end = match ending {
+                "" | "LF" => UartLineEnd::Lf,
+                "CR" => UartLineEnd::Cr,
+                _ => return Err("expected waitForUart ending LF or CR".into()),
+            };
+            Some(Action::WaitForUart(target, pattern.to_owned(), end))
         }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();
-            let (line, ending) = args
-                .strip_prefix('"')
-                .and_then(|args| args.split_once('"'))
+            let (line, ending) = quoted_argument(args)
                 .ok_or("expected USART WriteLine \"literal text\" [line ending]")?;
-            if !ending.is_empty() && !ending.starts_with(char::is_whitespace) {
-                return Err("expected space before USART WriteLine ending".into());
-            }
-            let ending: &[u8] = match ending.trim() {
+            let ending: &[u8] = match ending {
                 "" | "CR" | "true" => b"\r",
                 "LF" => b"\n",
                 "CRLF" => b"\r\n",
@@ -385,11 +386,9 @@ fn execute(
     Ok(())
 }
 
-fn quoted_text(value: &str) -> Option<&str> {
-    value
-        .strip_prefix('"')?
-        .strip_suffix('"')
-        .filter(|text| !text.contains('"'))
+fn quoted_argument(value: &str) -> Option<(&str, &str)> {
+    let (text, rest) = value.strip_prefix('"')?.split_once('"')?;
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| (text, rest.trim()))
 }
 
 fn duration_steps(value: &str) -> Result<u64, String> {
@@ -508,7 +507,7 @@ mod tests {
         let mut output = Vec::new();
         let mut uart = UartLine {
             output: &mut output,
-            line: UartLineMatch::new("ADC reading: 745"),
+            line: UartLineMatch::new("ADC reading: 745", UartLineEnd::Lf),
         };
         uart.write_all(b"ADC reading: \n745\r\n").unwrap();
         assert!(!uart.line.matched);

@@ -63,6 +63,58 @@ fn upstream_stm32f072_console_echo_accepts_resc_uart_input() {
 }
 
 #[test]
+fn waits_for_a_cr_only_guest_uart_line() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-cr-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let script = directory.join("boot.resc");
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x1000
+usart1: UART.STM32F7_USART @ sysbus 0x40013800
+"#,
+    )
+    .unwrap();
+    // Thumb guest enables USART1, sends A and CR, then executes BKPT.
+    fs::write(
+        directory.join("firmware.hex"),
+        concat!(
+            ":020000040800F2\n",
+            ":1C0000000010002009000008034809210160412181620D21816200BE0038014040\n",
+            ":00000001FF\n",
+        ),
+    )
+    .unwrap();
+    let run = |wait| {
+        fs::write(
+            &script,
+            format!(
+                "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadHEX @firmware.hex\n{wait}\n"
+            ),
+        )
+        .unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--stats", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let selected = run("waitForUart sysbus.usart1 \"A\" CR");
+    let merged = run("waitForUart \"A\" CR");
+    let default = run("waitForUart sysbus.usart1 \"A\"");
+    fs::remove_dir_all(directory).unwrap();
+    for result in [selected, merged] {
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"A\r");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete"));
+    }
+    assert_eq!(default.status.code(), Some(1), "{default:?}");
+    assert!(String::from_utf8_lossy(&default.stderr).contains("(Ebreak)"));
+}
+
+#[test]
 fn boots_resc_hex_and_runs_bounded_cortex_m_intervals() {
     let directory = std::env::temp_dir().join(format!("penv-resc-hex-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

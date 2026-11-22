@@ -238,7 +238,30 @@ PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
 
 `WriteLine "文字列"` の後ろに `CR`、`LF`、`CRLF`、`None` を指定できます。省略と `true` は CR、`false` は行終端なしです。Console Echo の公開 ELF で明示的な CRLF を、ADC の公開 ELF で USART を指定した `Booting Zephyr` → `745` → `1489` の待機を確認しました。両 ELF を用意済みの場合は、上のテスト名を `upstream_stm32f072` にすると両方を実行できます。通常の `cargo test` は 50 件成功し、別ポートからの同一文字列と行終端引数の全指定を検査します。
 
-残課題は STM32 USART 以外の名前付き待機、CR 単独で終端する出力行、待機開始前の履歴、正規表現、Robot の UART 入力・LED テスターです。
+#### CR で終端する UART 出力の待機
+
+`waitForUart sysbus.usart1 "期待文字列" CR` は、対象 USART が CR を送信した時点で行を照合します。USART 名を省略して標準出力全体を照合する場合も `CR` を指定できます。終端引数の省略または `LF` は従来どおり LF を待ち、LF と CRLF の行に対応します。CRLF の出力に `CR` を指定した場合は、後続の LF より先に進みます。
+
+```sh
+cargo test
+assets=$(mktemp -d)
+for sample in echo adc; do
+  url=$(sed -n 's/^sysbus LoadELF @//p' "tests/fixtures/stm32f072-$sample.resc")
+  curl -fL "$url" -o "$assets/${url##*/}"
+done
+PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
+  cargo test --release upstream_stm32f072 -- --ignored
+
+cargo build --release
+sed '$s/$/ CR/' tests/fixtures/stm32f072-echo.resc >"$assets/echo-cr.resc"
+target/release/penv run --script "$assets/echo-cr.resc" --platform-root ../renode \
+  --asset-dir "$assets" --max-steps 3000000 >"$assets/echo-cr.out"
+tail -c 14 "$assets/echo-cr.out" | od -An -tx1
+```
+
+通常の `cargo test` は 51 件成功しました。CR の直後に BKPT を実行する STM32 USART のテスト用 HEX で、USART 指定あり・なしの両方が CR で終了し、既定の LF 待機はゲスト停止で失敗することを確認しました。公開 Console Echo と ADC の既存回帰も成功し、最後の待機だけを CR にした Console Echo は `Echo working?` の直後の `0d` で終了しました。
+
+待機開始前の履歴、STM32 USART 以外の名前付き待機、正規表現、Robot の UART 入力・LED テスターは残課題です。
 
 ## 現在の実装範囲
 
