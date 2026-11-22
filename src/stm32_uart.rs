@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    io::{self, Write},
-};
+use std::{collections::VecDeque, io};
 
 const UE: u32 = 1;
 const RE: u32 = 1 << 2;
@@ -111,7 +108,7 @@ impl Stm32Usart {
         address: u32,
         width: usize,
         value: u32,
-        output: &mut impl Write,
+        transmit: impl FnOnce(u8) -> io::Result<()>,
     ) -> io::Result<()> {
         let offset = address - self.base;
         let shift = (offset & 3) * 8;
@@ -127,7 +124,7 @@ impl Stm32Usart {
             0x28 if offset & 3 == 0 => {
                 self.registers[10] = value & 0xff;
                 if self.registers[0] & (UE | TE) == UE | TE {
-                    output.write_all(&[value as u8])?;
+                    transmit(value as u8)?;
                     self.complete = true;
                 }
             }
@@ -150,15 +147,19 @@ mod tests {
         let mut uart = Stm32Usart::new("uart".into(), 0, Some(Stm32Irq::Nvic(3)), false);
         let mut output = Vec::new();
         uart.queue_input(b"X".to_vec());
-        uart.write(0, 1, UE | RE | TE | RXNE, &mut output).unwrap();
+        uart.write(0, 1, UE | RE | TE | RXNE, |_| Ok(())).unwrap();
         uart.queue_input(b"Y".to_vec());
         assert!(uart.interrupt_pending());
         assert_ne!(uart.read(0x1c, 4) & RXNE, 0);
         assert_eq!(uart.read(0x24, 1), u32::from(b'Y'));
         assert!(!uart.interrupt_pending());
-        uart.write(0x28, 1, u32::from(b'Y'), &mut output).unwrap();
+        uart.write(0x28, 1, u32::from(b'Y'), |byte| {
+            output.push(byte);
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(output, b"Y");
-        uart.write(0x20, 1, TC, &mut output).unwrap();
+        uart.write(0x20, 1, TC, |_| Ok(())).unwrap();
         assert_eq!(uart.read(0x1c, 1) & TC, 0);
     }
 }

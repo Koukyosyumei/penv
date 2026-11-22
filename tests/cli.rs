@@ -41,7 +41,7 @@ fn upstream_stm32f072_adc_waits_for_uart_between_voltage_changes() {
     let error = String::from_utf8(timeout.stderr).unwrap();
     assert!(
         error.contains(
-            "stm32f072-adc.resc:4: UART line containing \"Booting Zephyr\" was not received (Limit)"
+            "stm32f072-adc.resc:4: UART line containing \"Booting Zephyr\" was not received on sysbus.usart1 (Limit)"
         ),
         "{error}"
     );

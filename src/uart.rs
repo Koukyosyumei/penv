@@ -118,3 +118,38 @@ impl LiteXUart {
         Ok(())
     }
 }
+
+pub struct UartLineMatch {
+    pattern: Vec<u8>,
+    tail: VecDeque<u8>,
+    contains: bool,
+    pub matched: bool,
+}
+
+impl UartLineMatch {
+    pub fn new(pattern: &str) -> Self {
+        Self {
+            pattern: pattern.as_bytes().to_vec(),
+            tail: VecDeque::new(),
+            contains: false,
+            matched: false,
+        }
+    }
+
+    pub fn receive(&mut self, byte: u8) {
+        if self.matched {
+            return;
+        }
+        if byte == b'\n' {
+            self.matched = self.contains;
+            self.tail.clear();
+            self.contains = false;
+        } else if !self.contains {
+            if self.tail.len() == self.pattern.len() {
+                self.tail.pop_front();
+            }
+            self.tail.push_back(byte);
+            self.contains = self.tail.iter().eq(self.pattern.iter());
+        }
+    }
+}

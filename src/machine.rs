@@ -280,7 +280,7 @@ impl Machine {
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
-        self.run_until(limit, output, |_| false)
+        self.run_until(limit, output, |_, _| false)
     }
 
     pub fn elapsed_steps(&self) -> u64 {
@@ -291,7 +291,7 @@ impl Machine {
         &mut self,
         limit: u64,
         output: &mut W,
-        matched: impl Fn(&W) -> bool,
+        matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
@@ -336,7 +336,7 @@ impl Machine {
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
             }
-            if matched(output) {
+            if matched(&self.bus, output) {
                 return Ok((Stop::OutputMatch, retired));
             }
         }

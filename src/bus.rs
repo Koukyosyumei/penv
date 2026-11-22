@@ -25,7 +25,7 @@ use crate::{
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
-    uart::{LiteXUart, MuraxUart},
+    uart::{LiteXUart, MuraxUart, UartLineMatch},
 };
 
 // Cortex-M peripheral time advances by 10 ns per execution step.
@@ -85,6 +85,7 @@ pub struct Bus {
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
+    stm32_uart_match: Option<(u32, UartLineMatch)>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
@@ -896,16 +897,44 @@ impl Bus {
         }
     }
 
-    pub fn write_stm32_uart_line(&mut self, target: &str, text: &str) -> Result<(), String> {
+    fn stm32_usart_index(&self, target: &str) -> Result<usize, String> {
         let name = target.strip_prefix("sysbus.").unwrap_or(target);
-        let uart = self
-            .stm32_uarts
-            .iter_mut()
-            .find(|uart| uart.name == name)
-            .ok_or_else(|| format!("unknown STM32 USART {target:?}"))?;
-        // Renode writes the low byte of each UTF-16 code unit, then CR.
-        uart.queue_input(text.encode_utf16().map(|unit| unit as u8).chain([b'\r']));
+        self.stm32_uarts
+            .iter()
+            .position(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 USART {target:?}"))
+    }
+
+    pub fn write_stm32_uart_line(
+        &mut self,
+        target: &str,
+        text: &str,
+        ending: &[u8],
+    ) -> Result<(), String> {
+        let index = self.stm32_usart_index(target)?;
+        // Renode writes the low byte of each UTF-16 code unit before the ending.
+        self.stm32_uarts[index].queue_input(
+            text.encode_utf16()
+                .map(|unit| unit as u8)
+                .chain(ending.iter().copied()),
+        );
         Ok(())
+    }
+
+    pub fn watch_stm32_uart(&mut self, target: &str, pattern: &str) -> Result<(), String> {
+        let index = self.stm32_usart_index(target)?;
+        self.stm32_uart_match = Some((self.stm32_uarts[index].base, UartLineMatch::new(pattern)));
+        Ok(())
+    }
+
+    pub fn stm32_uart_matched(&self) -> bool {
+        self.stm32_uart_match
+            .as_ref()
+            .is_some_and(|(_, line)| line.matched)
+    }
+
+    pub fn clear_stm32_uart_watch(&mut self) {
+        self.stm32_uart_match = None;
     }
 
     pub fn tick_plic(&mut self) -> u32 {
@@ -1276,8 +1305,17 @@ impl Bus {
             .iter_mut()
             .find(|device| device.contains(address))
         {
+            let source = device.base;
             return device
-                .write(address, width, value, uart)
+                .write(address, width, value, |byte| {
+                    uart.write_all(&[byte])?;
+                    if let Some((base, line)) = &mut self.stm32_uart_match
+                        && source == *base
+                    {
+                        line.receive(byte);
+                    }
+                    Ok(())
+                })
                 .map_err(BusError::Output);
         }
         if width == 4
@@ -1425,11 +1463,46 @@ mod tests {
         for base in [usart1, usart2] {
             bus.write(base, 4, 0b101, &mut std::io::sink()).unwrap();
         }
-        bus.write_stm32_uart_line("sysbus.usart2", "A").unwrap();
+        bus.write_stm32_uart_line("sysbus.usart2", "A", b"\r")
+            .unwrap();
         assert_eq!(bus.read::<4>(usart1 + 0x1c).unwrap() & (1 << 5), 0);
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'A'));
         assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'\r'));
-        assert!(bus.write_stm32_uart_line("sysbus.usart3", "A").is_err());
+        assert!(
+            bus.write_stm32_uart_line("sysbus.usart3", "A", b"\r")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn uart_watch_ignores_other_ports_without_filtering_stdout() {
+        let mut bus = Bus::default();
+        let usart1 = 0x4001_3800;
+        let usart2 = 0x4000_4400;
+        let mut output = Vec::new();
+        for (name, base) in [("usart1", usart1), ("usart2", usart2)] {
+            bus.map_stm32_usart(Stm32Usart::new(name.into(), base, None, false))
+                .unwrap();
+            bus.write(base, 4, 0b1001, &mut output).unwrap();
+        }
+        assert!(bus.watch_stm32_uart("sysbus.usart3", "OK").is_err());
+        bus.watch_stm32_uart("sysbus.usart2", "OK").unwrap();
+        for (base, bytes) in [
+            (usart2, b"O".as_slice()),
+            (usart1, b"OK\n"),
+            (usart2, b"K\r"),
+        ] {
+            for &byte in bytes {
+                bus.write(base + 0x28, 1, byte.into(), &mut output).unwrap();
+            }
+            assert!(!bus.stm32_uart_matched());
+        }
+        bus.write(usart2 + 0x28, 1, b'\n'.into(), &mut output)
+            .unwrap();
+        assert!(bus.stm32_uart_matched());
+        assert_eq!(output, b"OOK\nK\r\n");
+        bus.clear_stm32_uart_watch();
+        assert!(!bus.stm32_uart_matched());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -8,6 +8,7 @@ use std::{
 use crate::{
     bus::CORTEX_M_STEP_HZ,
     machine::{Machine, Stop},
+    uart::UartLineMatch,
 };
 
 #[derive(PartialEq, Eq, Debug)]
@@ -37,36 +38,20 @@ enum Action {
     RunFor(u64),
     Button(String, bool),
     Adc(String, usize, f64),
-    WaitForUart(String),
-    WriteUartLine(String, String),
+    WaitForUart(Option<String>, String),
+    WriteUartLine(String, String, &'static [u8]),
 }
 
 struct UartLine<'a, W> {
     output: &'a mut W,
-    pattern: &'a [u8],
-    tail: VecDeque<u8>,
-    contains: bool,
-    matched: bool,
+    line: UartLineMatch,
 }
 
 impl<W: Write> Write for UartLine<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.output.write(bytes)?;
         for &byte in &bytes[..written] {
-            if self.matched {
-                break;
-            }
-            if byte == b'\n' {
-                self.matched = self.contains;
-                self.tail.clear();
-                self.contains = false;
-            } else if !self.contains {
-                if self.tail.len() == self.pattern.len() {
-                    self.tail.pop_front();
-                }
-                self.tail.push_back(byte);
-                self.contains = self.tail.iter().copied().eq(self.pattern.iter().copied());
-            }
+            self.line.receive(byte);
         }
         Ok(written)
     }
@@ -105,32 +90,26 @@ pub fn run(
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
                 .map(|()| None),
-            Action::WaitForUart(pattern) => {
-                let mut matcher = UartLine {
-                    output,
-                    pattern: pattern.as_bytes(),
-                    tail: VecDeque::new(),
-                    contains: false,
-                    matched: false,
-                };
+            Action::WaitForUart(target, pattern) => {
                 let start = machine.elapsed_steps();
-                machine
-                    .run_until(budget, &mut matcher, |uart| uart.matched)
-                    .and_then(|(stop, count)| {
+                wait_for_uart(machine, target.as_deref(), pattern, budget, output).and_then(
+                    |(stop, count)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
                         if stop == Stop::OutputMatch {
                             Ok(None)
                         } else {
+                            let source = target.as_ref().map_or_else(String::new, |target| format!(" on {target}"));
                             Err(format!(
-                                "UART line containing {pattern:?} was not received ({stop:?})"
+                                "UART line containing {pattern:?} was not received{source} ({stop:?})"
                             ))
                         }
-                    })
+                    },
+                )
             }
-            Action::WriteUartLine(target, text) => machine
+            Action::WriteUartLine(target, text, ending) => machine
                 .bus
-                .write_stm32_uart_line(target, text)
+                .write_stm32_uart_line(target, text, ending)
                 .map(|()| None),
         };
         if let Some(stop) =
@@ -140,6 +119,27 @@ pub fn run(
         }
     }
     Ok((Stop::ScriptComplete, retired))
+}
+
+fn wait_for_uart(
+    machine: &mut Machine,
+    target: Option<&str>,
+    pattern: &str,
+    budget: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    if let Some(target) = target {
+        machine.bus.watch_stm32_uart(target, pattern)?;
+        let result = machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched());
+        machine.bus.clear_stm32_uart_watch();
+        result
+    } else {
+        let mut matcher = UartLine {
+            output,
+            line: UartLineMatch::new(pattern),
+        };
+        machine.run_until(budget, &mut matcher, |_, uart| uart.line.matched)
+    }
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
@@ -249,18 +249,44 @@ fn execute(
     };
     let action = match words.as_slice() {
         ["waitForUart", ..] => {
-            let pattern = text["waitForUart".len()..].trim();
-            let pattern = quoted_text(pattern)
+            let args = text["waitForUart".len()..].trim();
+            let (target, line) = if args.starts_with('"') {
+                (None, args)
+            } else {
+                let (target, line) = args
+                    .split_once(char::is_whitespace)
+                    .ok_or("expected waitForUart [USART] \"literal text\"")?;
+                (Some(resolve(target)?.to_owned()), line.trim_start())
+            };
+            let pattern = quoted_text(line)
                 .filter(|value| !value.is_empty())
-                .ok_or("expected waitForUart \"literal text\"")?;
-            Some(Action::WaitForUart(pattern.to_owned()))
+                .ok_or("expected waitForUart [USART] \"literal text\"")?;
+            Some(Action::WaitForUart(target, pattern.to_owned()))
         }
         [target, "WriteLine", ..] => {
-            let line = text[target.len()..].trim_start()["WriteLine".len()..].trim();
-            let line = quoted_text(line).ok_or("expected USART WriteLine \"literal text\"")?;
+            let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();
+            let (line, ending) = args
+                .strip_prefix('"')
+                .and_then(|args| args.split_once('"'))
+                .ok_or("expected USART WriteLine \"literal text\" [line ending]")?;
+            if !ending.is_empty() && !ending.starts_with(char::is_whitespace) {
+                return Err("expected space before USART WriteLine ending".into());
+            }
+            let ending: &[u8] = match ending.trim() {
+                "" | "CR" | "true" => b"\r",
+                "LF" => b"\n",
+                "CRLF" => b"\r\n",
+                "None" | "false" => b"",
+                _ => {
+                    return Err(
+                        "expected USART WriteLine ending CR, LF, CRLF, None, true or false".into(),
+                    );
+                }
+            };
             Some(Action::WriteUartLine(
                 resolve(target)?.to_owned(),
                 line.to_owned(),
+                ending,
             ))
         }
         ["emulation", "RunFor", duration] => {
@@ -427,22 +453,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_renode_uart_write_line_endings() {
+        let mut boot = Boot {
+            platform: Some("board.repl".into()),
+            image: Some(("firmware.elf".into(), ImageFormat::Elf)),
+            ..Boot::default()
+        };
+        let mut machine = true;
+        let script = Path::new("test.resc");
+        let root = Path::new(".");
+        let variables = HashMap::new();
+        for (suffix, expected) in [
+            ("", b"\r".as_slice()),
+            (" CR", b"\r"),
+            (" LF", b"\n"),
+            (" CRLF", b"\r\n"),
+            (" None", b""),
+            (" true", b"\r"),
+            (" false", b""),
+        ] {
+            let command = format!("sysbus.usart1 WriteLine \"with spaces\"{suffix}");
+            execute(
+                &command,
+                &variables,
+                &mut machine,
+                &mut boot,
+                script,
+                root,
+                1,
+            )
+            .unwrap();
+            let command = boot.runtime.pop().unwrap();
+            assert!(matches!(command.action,
+                Action::WriteUartLine(target, line, ending)
+                if target == "sysbus.usart1" && line == "with spaces" && ending == expected
+            ));
+        }
+        assert!(
+            execute(
+                "sysbus.usart1 WriteLine \"x\" invalid",
+                &variables,
+                &mut machine,
+                &mut boot,
+                script,
+                root,
+                1
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn uart_match_requires_a_completed_line_and_never_spans_lines() {
         let mut output = Vec::new();
         let mut uart = UartLine {
             output: &mut output,
-            pattern: b"ADC reading: 745",
-            tail: VecDeque::new(),
-            contains: false,
-            matched: false,
+            line: UartLineMatch::new("ADC reading: 745"),
         };
         uart.write_all(b"ADC reading: \n745\r\n").unwrap();
-        assert!(!uart.matched);
+        assert!(!uart.line.matched);
         uart.write_all(b"ADC reading: 7").unwrap();
         uart.write_all(b"45\r").unwrap();
-        assert!(!uart.matched);
+        assert!(!uart.line.matched);
         uart.write_all(b"\n").unwrap();
-        assert!(uart.matched);
+        assert!(uart.line.matched);
         assert_eq!(output, b"ADC reading: \n745\r\nADC reading: 745\r\n");
     }
 

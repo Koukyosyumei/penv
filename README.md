@@ -216,13 +216,13 @@ PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
 
 公開 ELF で `Booting Zephyr`、`ADC reading: 745`、`ADC reading: 1489` の順序と、最後の一致行での停止を確認しました。ステップ上限を 1 にした実行では、最初の待機で失敗することも確認しています。通常の `cargo test` は外部ファイルなしで実行でき、公開 ELF の回帰は上のコマンドで実行します。
 
-現在の待機対象は CLI の UART 標準出力で、端末ごとの選択、待機開始前の履歴、正規表現、Robot の UART 入力・LED テスターは残課題です。
+UART の選択方法と待機の残課題は、下の Console Echo の節に記載しています。
 
 #### USART への RESC 入力で Console Echo を再現
 
 上流の `Should Run Zephyr Console Echo Sample` を、上流 REPL と公開 ELF を使う `tests/fixtures/stm32f072-echo.resc` に転記しました。変更前のログで最初に失敗した操作は 5 行目の `sysbus.usart1 WriteLine "Echo working?"` でした。
 
-`WriteLine` は REPL 名で STM32 USART を選択し、Renode の既定と同じ CR を付けて受信 FIFO に入力します。この回帰では入力案内を待ってから送信し、受信割り込みを処理したファームウェアが返す `Echo working?` を待ちます。CLI で入力ステップを指定せずにシナリオを再現できます。
+`WriteLine` は REPL 名で STM32 USART を選択し、Renode の既定と同じ CR を付けて受信 FIFO に入力します。この回帰では `waitForUart` の対象を `sysbus.usart1` に指定して入力案内を待ち、`sysbus.usart1 WriteLine "Echo working?" CRLF` を実行します。その後、受信割り込みを処理したファームウェアが返す `Echo working?` を同じ USART で待ちます。CLI で入力ステップを指定せずにシナリオを再現できます。
 
 ```sh
 assets=$(mktemp -d)
@@ -234,7 +234,11 @@ PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
 
 公開 ELF で案内の次の行が `Echo working?` になり、終了コード 0 を返すことを確認しました。公開 ADC ELF の既存回帰と Hello World HEX の RESC 起動も再確認しました。通常の `cargo test` は 48 件成功しました。これには名前で選んだ USART だけに本文と CR が届くテストと、フラッシュのロック、半ワード書き込み、オプション再ロードでの保持、ページ消去の確認が含まれます。
 
-`WriteLine` は STM32 USART と二重引用符で囲んだリテラルをサポートします。Renode の明示的な行終端引数と、期待出力を UART ごとに選ぶ機能は残課題です。
+`waitForUart sysbus.usart1 "期待文字列"` は、指定した USART が送信した LF または CRLF 終端の行だけを照合します。標準出力にはすべての UART 出力が流れます。USART を省略した従来の形式は、その標準出力を照合します。
+
+`WriteLine "文字列"` の後ろに `CR`、`LF`、`CRLF`、`None` を指定できます。省略と `true` は CR、`false` は行終端なしです。Console Echo の公開 ELF で明示的な CRLF を、ADC の公開 ELF で USART を指定した `Booting Zephyr` → `745` → `1489` の待機を確認しました。両 ELF を用意済みの場合は、上のテスト名を `upstream_stm32f072` にすると両方を実行できます。通常の `cargo test` は 50 件成功し、別ポートからの同一文字列と行終端引数の全指定を検査します。
+
+残課題は STM32 USART 以外の名前付き待機、CR 単独で終端する出力行、待機開始前の履歴、正規表現、Robot の UART 入力・LED テスターです。
 
 ## 現在の実装範囲
 
