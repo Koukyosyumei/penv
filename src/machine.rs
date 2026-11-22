@@ -620,6 +620,8 @@ impl Hart {
             }
             // Every instruction fetch reads current RAM, so FENCE.I needs no invalidation.
             0x0f if funct3 <= 1 => None,
+            // Renode VexRiscv accepts the custom whole-data-cache flush.
+            0x0f if insn == 0x0000_500f && self.csr.vex_irq_mask.is_some() => None,
             0x73 if insn == 0x0000_0073 => {
                 return Ok(self.environment_trap(self.csr.ecall_cause(), Stop::Ecall));
             }
@@ -674,6 +676,34 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vexriscv_accepts_its_data_cache_operations() {
+        let mut machine = Machine::new(16).unwrap();
+        let instructions = [
+            0x0000_500fu32, // VexRiscv data cache flush
+            0xcc0a_d073,    // csrwi 0xcc0, 21
+            0xcc00_2573,    // csrr a0, 0xcc0
+            0x0010_0073,    // ebreak
+        ];
+        machine
+            .bus
+            .memory(RAM_BASE, 16)
+            .unwrap()
+            .copy_from_slice(instructions.map(u32::to_le_bytes).as_flattened());
+        assert!(
+            machine
+                .run(1, &mut std::io::sink())
+                .unwrap_err()
+                .contains("unsupported instruction")
+        );
+        machine.primary.enable_vex_irq_controller();
+        assert_eq!(
+            machine.run(5, &mut std::io::sink()).unwrap(),
+            (Stop::Ebreak, 3)
+        );
+        assert_eq!(machine.primary.registers[10], 21);
+    }
 
     #[test]
     fn handles_ecall_and_returns_to_guest_code() {

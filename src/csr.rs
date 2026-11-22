@@ -88,6 +88,7 @@ pub struct Csr {
     pub ibex: bool,
     pub vex_irq_mask: Option<u32>,
     pub vex_irq_pending: u32,
+    vex_dcache_info: u32,
     vector: Option<u32>,
     scratch: u32,
     exception_pc: u32,
@@ -113,6 +114,7 @@ impl Default for Csr {
             ibex: false,
             vex_irq_mask: None,
             vex_irq_pending: 0,
+            vex_dcache_info: 0,
             vector: None,
             scratch: 0,
             exception_pc: 0,
@@ -289,6 +291,7 @@ impl Csr {
             0x344 => self.pending_interrupts(),
             0x7c0 if self.ibex => 0,
             0xbc0 => self.vex_irq_mask?,
+            0xcc0 if self.vex_irq_mask.is_some() => self.vex_dcache_info,
             0xfc0 if self.vex_irq_mask.is_some() => self.vex_irq_pending,
             _ => return self.pmp.as_ref()?.read(address),
         })
@@ -357,6 +360,7 @@ impl Csr {
             }
             0x7c0 if self.ibex => {}
             0xbc0 if self.vex_irq_mask.is_some() => self.vex_irq_mask = Some(value),
+            0xcc0 if self.vex_irq_mask.is_some() => self.vex_dcache_info = value,
             0x340 => self.scratch = value,
             0x341 => self.exception_pc = value & self.epc_mask(),
             0x342 => self.cause = value,

@@ -634,7 +634,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut configs = Vec::new();
     for entry in cpus {
         let ibex = entry.model == "CPU.IbexRiscV32";
-        let mut isa = ibex.then_some((true, false, true));
+        let mut isa = match entry.model.as_str() {
+            "CPU.IbexRiscV32" => Some((true, false, true)),
+            "CPU.VexRiscv" => Some((true, false, false)),
+            _ => None,
+        };
         let mut id = 0;
         let mut pmp = entry.model != "CPU.VexRiscv";
         for (key, value) in keys(
@@ -649,12 +653,20 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         )? {
             match (key, value) {
                 ("cpuType", value) => {
-                    isa = match value.trim_matches('"') {
+                    isa = match value.trim_matches('"').to_ascii_lowercase().as_str() {
                         "rv32i" => Some((false, false, false)),
-                        "rv32im" | "rv32im_zicsr_zifencei" => Some((true, false, false)),
-                        "rv32ima" | "rv32ima_zicsr_zifencei" => Some((true, true, false)),
-                        "rv32imac" | "rv32imac_zicsr_zifencei" => Some((true, true, true)),
-                        "rv32imc" | "rv32imc_zicsr_zifencei" => Some((true, false, true)),
+                        "rv32im" | "rv32im_zicsr" | "rv32im_zicsr_zifencei" => {
+                            Some((true, false, false))
+                        }
+                        "rv32ima" | "rv32ima_zicsr" | "rv32ima_zicsr_zifencei" => {
+                            Some((true, true, false))
+                        }
+                        "rv32imac" | "rv32imac_zicsr" | "rv32imac_zicsr_zifencei" => {
+                            Some((true, true, true))
+                        }
+                        "rv32imc" | "rv32imc_zicsr" | "rv32imc_zicsr_zifencei" => {
+                            Some((true, false, true))
+                        }
                         "rv32imcu_zicsr_zifencei" if ibex => Some((true, false, true)),
                         _ => return Err(entry.error(&format!("unsupported CPU type {value}"))),
                     };
