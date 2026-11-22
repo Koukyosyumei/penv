@@ -617,6 +617,11 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        // Mapped devices cannot overlap RAM. Try the common RAM access first.
+        let ram_error = match self.read_ram::<N>(address) {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
         if N == 4
             && address & 3 == 0
             && let Some(uart) = self.uart.as_mut()
@@ -712,7 +717,7 @@ impl Bus {
         if address as usize & (N - 1) == 0 && self.silenced(address, N) {
             return Ok(0);
         }
-        self.read_ram::<N>(address)
+        Err(ram_error)
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
@@ -742,6 +747,13 @@ impl Bus {
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));
         }
+        let ram_error = match self.memory(address, width) {
+            Ok(bytes) => {
+                bytes.copy_from_slice(&value.to_le_bytes()[..width]);
+                return Ok(());
+            }
+            Err(error) => error,
+        };
         if width == 4
             && let Some(device) = self.uart.as_mut()
             && device.contains(address)
@@ -852,9 +864,7 @@ impl Bus {
         if self.silenced(address, width) {
             return Ok(());
         }
-        self.memory(address, width)?
-            .copy_from_slice(&value.to_le_bytes()[..width]);
-        Ok(())
+        Err(ram_error)
     }
 }
 
