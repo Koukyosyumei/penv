@@ -4,6 +4,7 @@ use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
     litex_panel::ButtonAction,
+    litex_video::ReferenceFrame,
     sv32::TranslationCache,
     thumb::Thumb,
 };
@@ -25,6 +26,7 @@ enum Input {
     PhyVendorSpecific1 { name: String, value: u16 },
     LedAssertion { name: String, expected: bool },
     FramebufferCapture(PathBuf),
+    FrameWait(Box<ReferenceFrame>),
 }
 
 #[derive(Clone)]
@@ -40,6 +42,7 @@ pub struct Hart {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stop {
+    FrameMatched(u64),
     Ecall,
     Ebreak,
     Limit,
@@ -287,12 +290,27 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_frame_wait(
+        &mut self,
+        step: u64,
+        reference: ReferenceFrame,
+    ) -> Result<(), String> {
+        if self.bus.litex_video.is_none() {
+            return Err("--wait-for-frame requires a LiteX framebuffer".into());
+        }
+        self.schedule_input(step, Input::FrameWait(Box::new(reference)));
+        Ok(())
+    }
+
     pub fn verify_required_events_completed(&self) -> Result<(), String> {
         for (step, input) in &self.inputs {
             let event = match input {
                 Input::LedAssertion { name, .. } => format!("LED assertion for {name:?}"),
                 Input::FramebufferCapture(path) => {
                     format!("framebuffer capture to {}", path.display())
+                }
+                Input::FrameWait(_) => {
+                    return Err("execution ended before the reference frame matched".into());
                 }
                 _ => continue,
             };
@@ -311,17 +329,6 @@ impl Machine {
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
-            let index = self.next_hart;
-            if index == self.secondary.len() {
-                self.next_hart = 0;
-            } else {
-                self.next_hart += 1;
-            }
-            let hart = if index == 0 {
-                &mut self.primary
-            } else {
-                &mut self.secondary[index - 1]
-            };
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
             while self
                 .inputs
@@ -333,6 +340,22 @@ impl Machine {
                     Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
                     Input::PhyVendorSpecific1 { name, value } => {
                         self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+                    }
+                    Input::FrameWait(reference) => {
+                        let video = self
+                            .bus
+                            .litex_video
+                            .as_ref()
+                            .ok_or("no LiteX framebuffer")?;
+                        if video.matches(&self.bus, &reference)? {
+                            return Ok((Stop::FrameMatched(self.elapsed_steps), retired));
+                        }
+                        const FRAME_POLL_STEPS: u64 = 1_000_000;
+                        let next = self
+                            .elapsed_steps
+                            .checked_add(FRAME_POLL_STEPS)
+                            .ok_or("step counter exhausted before the reference frame matched")?;
+                        self.schedule_input(next, Input::FrameWait(reference));
                     }
                     Input::FramebufferCapture(path) => {
                         self.bus.capture_litex_framebuffer(&path).map_err(|error| {
@@ -356,6 +379,17 @@ impl Machine {
                     }
                 }
             }
+            let index = self.next_hart;
+            if index == self.secondary.len() {
+                self.next_hart = 0;
+            } else {
+                self.next_hart += 1;
+            }
+            let hart = if index == 0 {
+                &mut self.primary
+            } else {
+                &mut self.secondary[index - 1]
+            };
             self.bus
                 .tick_litex_uart(self.elapsed_steps, output)
                 .map_err(|error| format!("UART: {error}"))?;

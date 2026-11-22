@@ -137,7 +137,29 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-
 
 回帰スクリプトは上流の BIOS ELF と SD イメージのサイズと SHA-1 を確認します。BIOS の自動起動を `Q` で中断し、`sdcardboot` を実行します。ステップ 675,000,000 でロゴを保存し、Buildroot にログインしてから `cat /etc/motd > /dev/tty0` を実行し、ステップ 720,000,000 で MOTD 画面を保存します。上流の参照 PNG を RGB に変換し、`penguin_logo.png` は左上 75×80 の ROI、`penguin_with_litex_logo.png` は 800×600 全体を SHA-256 で照合します。ロゴ撮影時はコンソールのカーソルが ROI 外の 16 ピクセルに影響するため、ロゴの照合範囲は上流テストと同じ ROI にしました。結果は `nexys-video.frames.log` と `nexys-video.uart.log` に出力されます。
 
-画面が一致するまで待つ Renode の `WaitForFrame` と `WaitForFrameROI` の API 互換性は残課題です。今回の回帰では指定ステップの PPM を保存して照合します。
+### Nexys Video のフレーム一致待機
+
+`--wait-for-frame STEP:PATH` は指定ステップから 1,000,000 ステップごとに有効なフレームの寸法と全 RGB ピクセルを比較します。一致したステップのゲスト命令を実行する前に停止し、終了コード 0 を返します。実行上限やゲストの終了までに一致を観測できなければ終了コード 1 です。参照形式は `--framebuffer-out` が出力する P6 RGB PPM（マジック、幅と高さ、最大値 255 がそれぞれ独立した行）です。
+
+変更前の `49e1a6e` ではこのオプションが `unknown option` でした。上記の回帰コマンドを実行した後、上流 PNG 由来の SHA-256 と照合済みの PPM を参照にして次の手順で再現できます。
+
+```sh
+artifacts=/tmp/penv-upstream
+penv=target/release/penv
+"$penv" run --script ../renode/scripts/single-node/litex_nexys_video_vexriscv_linux.resc \
+  --platform-root ../renode --asset-dir "$artifacts/assets" --max-steps 730000000 \
+  --uart-event "35000000:$artifacts/nexys-video-abort.input" \
+  --uart-event "40000000:$artifacts/nexys-video-sd.input" \
+  --uart-event "680000000:$artifacts/nexys-video-login.input" \
+  --uart-event "690000000:$artifacts/nexys-video-prompt.input" \
+  --uart-event "700000000:$artifacts/nexys-video-motd.input" \
+  --framebuffer-event "700000000:$artifacts/pre-motd.ppm" \
+  --wait-for-frame "700000000:$artifacts/nexys-video-motd.ppm" \
+  --framebuffer-out "$artifacts/matched.ppm"
+cmp "$artifacts/nexys-video-motd.ppm" "$artifacts/matched.ppm"
+```
+
+上流の `penguin_with_litex_logo.png` から独立に変換した参照で、開始ステップでは不一致、708,000,000 ステップで一致を確認しました。一致時に保存した RGB PPM は参照とバイト単位で一致しました。上限を 2,000,000 ステップとして BIOS 起動直後から待った場合は、未一致の診断と終了コード 1 を確認しました。ROI の動的待機、PNG の直接読み込み、Robot Framework からの呼び出しは残課題です。
 
 ## Cortex-M0 / Cortex-M0+
 

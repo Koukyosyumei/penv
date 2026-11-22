@@ -47,6 +47,7 @@ Usage: penv run [OPTIONS] IMAGE
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
+  --wait-for-frame STEP:PATH  Stop when the LiteX framebuffer matches a P6 RGB PPM
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
@@ -123,6 +124,7 @@ fn run() -> Result<ExitCode, String> {
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
+    let mut frame_wait = None;
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
     let mut path = None;
@@ -210,18 +212,23 @@ fn run() -> Result<ExitCode, String> {
                     .ok_or("--litex-button-event action must be Press, Release, or Toggle")?;
                 button_events.push((step, name.to_string(), action));
             }
-            Some("--framebuffer-event") => {
-                const FORMAT: &str = "--framebuffer-event requires STEP:PATH";
+            Some(option @ ("--framebuffer-event" | "--wait-for-frame")) => {
+                let format = || format!("{option} requires STEP:PATH");
                 let value = args
                     .next()
                     .and_then(|value| value.into_string().ok())
-                    .ok_or(FORMAT)?;
+                    .ok_or_else(format)?;
                 let (step, path) = value
                     .split_once(':')
                     .filter(|(_, path)| !path.is_empty())
-                    .ok_or(FORMAT)?;
-                let step = step.parse::<u64>().map_err(|_| FORMAT)?;
-                framebuffer_events.push((step, PathBuf::from(path)));
+                    .ok_or_else(format)?;
+                let step = step.parse::<u64>().map_err(|_| format())?;
+                let event = (step, PathBuf::from(path));
+                if option == "--framebuffer-event" {
+                    framebuffer_events.push(event);
+                } else if frame_wait.replace(event).is_some() {
+                    return Err("--wait-for-frame may only be specified once".into());
+                }
             }
             Some("--uart-event") => {
                 let value = args
@@ -502,6 +509,12 @@ fn run() -> Result<ExitCode, String> {
     for (step, path) in framebuffer_events {
         machine.schedule_framebuffer_capture(step, path)?;
     }
+    if let Some((step, path)) = frame_wait {
+        let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let reference = litex_video::ReferenceFrame::parse(data)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        machine.schedule_frame_wait(step, reference)?;
+    }
     machine.validate_entry()?;
     for action in &post_run {
         if let monitor::PostRun::DisposePcm(name) = action
@@ -600,6 +613,9 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(path) = framebuffer_out {
         machine.bus.capture_litex_framebuffer(&path)?;
+    }
+    if let Stop::FrameMatched(step) = stop {
+        eprintln!("penv: framebuffer matched at step {step}");
     }
     if stats {
         eprintln!(
