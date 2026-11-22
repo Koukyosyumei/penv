@@ -72,12 +72,14 @@ struct LiteXTimer {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    silencers: Vec<(u32, u32)>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     litex_timer: Option<LiteXTimer>,
+    litex_soc: Option<litex::SocController>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     plic: Option<Plic>,
@@ -197,6 +199,10 @@ impl Bus {
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, device.timer.size()))
             })
+            || self
+                .litex_soc
+                .as_ref()
+                .is_some_and(|soc| overlaps_range(start, end, soc.base, litex::SocController::SIZE))
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
                 start < other + u64::from(Exti::SIZE) && other < end
@@ -228,6 +234,10 @@ impl Bus {
                     start < other + size && other < end
                 })
             })
+            || self
+                .silencers
+                .iter()
+                .any(|&(base, size)| overlaps_range(start, end, base, size))
             || self.regions.iter().any(|region| {
                 std::iter::once(&region.base)
                     .chain(&region.aliases)
@@ -400,6 +410,30 @@ impl Bus {
             timer,
             vex_irq,
         });
+        Ok(())
+    }
+
+    pub fn map_silencer(&mut self, base: u32, size: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(size);
+        if size == 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping SilenceRange at {base:#010x}"
+            ));
+        }
+        self.silencers.push((base, size));
+        Ok(())
+    }
+
+    fn silenced(&self, address: u32, width: usize) -> bool {
+        self.silencers.iter().any(|&(base, size)| {
+            address >= base && u64::from(address - base) + width as u64 <= u64::from(size)
+        })
+    }
+
+    pub fn map_litex_soc(&mut self, base: u32) -> Result<(), String> {
+        self.check_litex_ranges(&[base], litex::SocController::SIZE)?;
+        self.litex_soc = Some(litex::SocController::new(base));
         Ok(())
     }
 
@@ -622,6 +656,13 @@ impl Bus {
             return Ok(device.timer.read(offset, N));
         }
         if N == 4
+            && address & 3 == 0
+            && let Some(soc) = self.litex_soc.as_ref()
+            && soc.contains(address)
+        {
+            return Ok(soc.read(address));
+        }
+        if N == 4
             && let Some(timer) = self.systick.as_mut()
             && let Some(value) = timer.read(address)
         {
@@ -646,6 +687,9 @@ impl Bus {
             && exti.contains(address)
         {
             return Ok(exti.read(address));
+        }
+        if address as usize & (N - 1) == 0 && self.silenced(address, N) {
+            return Ok(0);
         }
         self.read_ram::<N>(address)
     }
@@ -731,6 +775,13 @@ impl Bus {
             return Ok(());
         }
         if width == 4
+            && let Some(soc) = self.litex_soc.as_mut()
+            && soc.contains(address)
+        {
+            soc.write(address, value);
+            return Ok(());
+        }
+        if width == 4
             && let Some(timer) = self.systick.as_mut()
             && timer.write(address, value)
         {
@@ -767,6 +818,9 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if self.silenced(address, width) {
             return Ok(());
         }
         self.memory(address, width)?

@@ -133,6 +133,41 @@ impl Timer {
     }
 }
 
+pub struct SocController {
+    pub base: u32,
+    scratch: [u8; 4],
+}
+
+impl SocController {
+    pub const SIZE: u32 = 0x100;
+
+    pub fn new(base: u32) -> Self {
+        Self {
+            base,
+            scratch: [0x12, 0x34, 0x56, 0x78],
+        }
+    }
+
+    pub fn contains(&self, address: u32) -> bool {
+        address.wrapping_sub(self.base) < Self::SIZE
+    }
+
+    pub fn read(&self, address: u32) -> u32 {
+        let offset = address - self.base;
+        match offset {
+            4..=0x10 => u32::from(self.scratch[(offset / 4 - 1) as usize]),
+            _ => 0,
+        }
+    }
+
+    pub fn write(&mut self, address: u32, value: u32) {
+        let offset = address - self.base;
+        if (4..=0x10).contains(&offset) {
+            self.scratch[(offset / 4 - 1) as usize] = value as u8;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

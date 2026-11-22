@@ -85,6 +85,7 @@ pub struct Csr {
     supervisor: Option<Supervisor>,
     interrupt_enable: u32,
     pending: u32,
+    pub ibex: bool,
     pub vex_irq_mask: Option<u32>,
     pub vex_irq_pending: u32,
     vector: Option<u32>,
@@ -109,6 +110,7 @@ impl Default for Csr {
             supervisor: None,
             interrupt_enable: 0,
             pending: 0,
+            ibex: false,
             vex_irq_mask: None,
             vex_irq_pending: 0,
             vector: None,
@@ -285,6 +287,7 @@ impl Csr {
             0x342 => self.cause,
             0x343 => self.trap_value,
             0x344 => self.pending_interrupts(),
+            0x7c0 if self.ibex => 0,
             0xbc0 => self.vex_irq_mask?,
             0xfc0 if self.vex_irq_mask.is_some() => self.vex_irq_pending,
             _ => return self.pmp.as_ref()?.read(address),
@@ -352,6 +355,7 @@ impl Csr {
                 set_counter_half(&mut self.counters.instret, value, address & 0x80 != 0);
                 self.counters.instret_written = true;
             }
+            0x7c0 if self.ibex => {}
             0xbc0 if self.vex_irq_mask.is_some() => self.vex_irq_mask = Some(value),
             0x340 => self.scratch = value,
             0x341 => self.exception_pc = value & self.epc_mask(),

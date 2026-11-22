@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    bus::Bus,
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
 };
@@ -265,12 +266,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut plic = None;
     let mut timer = None;
     let mut litex_timer = None;
+    let mut litex_soc = None;
     for entry in &entries {
+        if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
+            map_silence_ranges(entry, &mut machine.bus)?;
+            continue;
+        }
         if !names.insert(&entry.name) {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
         match entry.model.as_str() {
-            "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
+            "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.IbexRiscV32" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
@@ -305,6 +311,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             "Timers.LiteX_Timer" | "Timers.LiteX_Timer_CSR32" => {
                 if litex_timer.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX timer is supported"));
+                }
+            }
+            "Miscellaneous.LiteX_SoC_Controller" => {
+                if litex_soc.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX SoC controller is supported"));
                 }
             }
             "IRQControllers.PlatformLevelInterruptController" => {
@@ -349,6 +360,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || plic.is_some()
             || timer.is_some()
             || litex_timer.is_some()
+            || litex_soc.is_some()
         {
             return Err(
                 entry.error("expected a single Cortex-M CPU without RISC-V interrupt controllers")
@@ -592,9 +604,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     }
     let mut configs = Vec::new();
     for entry in cpus {
-        let mut isa = None;
+        let ibex = entry.model == "CPU.IbexRiscV32";
+        let mut isa = ibex.then_some((true, false, true));
         let mut id = 0;
-        let mut pmp = entry.model == "CPU.RiscV32";
+        let mut pmp = entry.model != "CPU.VexRiscv";
         for (key, value) in keys(
             entry,
             &[
@@ -613,11 +626,15 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         "rv32ima" | "rv32ima_zicsr_zifencei" => Some((true, true, false)),
                         "rv32imac" | "rv32imac_zicsr_zifencei" => Some((true, true, true)),
                         "rv32imc" | "rv32imc_zicsr_zifencei" => Some((true, false, true)),
+                        "rv32imcu_zicsr_zifencei" if ibex => Some((true, false, true)),
                         _ => return Err(entry.error(&format!("unsupported CPU type {value}"))),
                     };
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_10") => {}
+                ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_11")
+                | ("timeProvider", "empty")
+                    if ibex => {}
                 ("timeProvider", name) if clint.is_some_and(|clint| clint.name == name) => {}
                 ("pmpEntryCount", "0") => pmp = false,
                 ("pmpEntryCount", "16") => pmp = true,
@@ -652,7 +669,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             hart.enable_vex_irq_controller();
         }
         hart.enable_user_mode();
-        hart.enable_supervisor_mode();
+        if entry.model == "CPU.IbexRiscV32" {
+            hart.enable_ibex();
+        } else {
+            hart.enable_supervisor_mode();
+        }
         if pmp {
             hart.enable_pmp();
         }
@@ -852,7 +873,42 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_litex_timer(entry.addresses()?, timer, irq)
             .map_err(|e| entry.error(&e))?;
     }
+    if let Some(entry) = litex_soc {
+        keys(entry, &[])?;
+        machine
+            .bus
+            .map_litex_soc(entry.address()?)
+            .map_err(|e| entry.error(&e))?;
+    }
     Ok(machine)
+}
+
+fn map_silence_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
+    let [(_, init), ranges @ ..] = entry.body.as_slice() else {
+        return Err(entry.error("expected a sysbus init add block"));
+    };
+    if init != "init add:" || ranges.is_empty() {
+        return Err(entry.error("expected a sysbus init add block"));
+    }
+    for (line, text) in ranges {
+        let error = |detail: &str| format!("{}:{line}: {detail}", entry.source.display());
+        let text = text.split('#').next().unwrap().trim();
+        let range = text
+            .strip_prefix("SilenceRange")
+            .map(str::trim)
+            .and_then(|text| text.strip_prefix('<'))
+            .and_then(|text| text.strip_suffix('>'));
+        let mut values = range.unwrap_or_default().split_whitespace();
+        let (Some(start), Some(size), None) = (values.next(), values.next(), values.next()) else {
+            return Err(error("expected SilenceRange <start size>"));
+        };
+        bus.map_silencer(
+            number(start).map_err(|e| error(&e))?,
+            number(size).map_err(|e| error(&e))?,
+        )
+        .map_err(|e| error(&e))?;
+    }
+    Ok(())
 }
 
 type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool), bool);

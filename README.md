@@ -64,13 +64,13 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 同じステップに複数のイベントを指定した場合は、CLI に指定した順に受信 FIFO へ追加します。
 
-Murax の UART エコーと LiteX SMP Linux の起動・ログイン・4 ハートの表示をまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。
+Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX SMP Linux の起動・ログイン・4 ハートの表示をまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。
 
 ```sh
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
 ```
 
-検証結果には上流のコミット ID、UART 出力、標準エラー出力、各実行の終了コードが含まれます。
+検証結果には上流のコミット ID、UART 出力、標準エラー出力、各実行の終了コードが含まれます。LiteX Ibex は上流の `litex_ibex.resc` と `litex_ibex.repl` を使用し、BIOS の CRC 検証、シリアルブートの中断、`help` の実行を確認します。
 
 ## Cortex-M0 / Cortex-M0+
 

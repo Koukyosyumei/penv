@@ -280,6 +280,10 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
+    pub fn enable_ibex(&mut self) {
+        self.csr.ibex = true;
+    }
+
     pub fn enable_vex_irq_controller(&mut self) {
         self.csr.vex_irq_mask = Some(0);
     }
