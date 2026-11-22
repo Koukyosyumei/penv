@@ -257,7 +257,7 @@ fn run() -> Result<ExitCode, String> {
     let mut pcm_inputs = Vec::new();
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
-    let mut post_run_echoes = Vec::new();
+    let mut post_run = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -303,7 +303,7 @@ fn run() -> Result<ExitCode, String> {
         }
         pcm_outputs = boot.pcm_outputs;
         run_steps = boot.run_steps;
-        post_run_echoes = boot.post_run_echoes;
+        post_run = boot.post_run;
         boot_pcs = boot.boot_pcs;
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
@@ -417,6 +417,18 @@ fn run() -> Result<ExitCode, String> {
         machine.bus.set_litex_button(&name, action)?;
     }
     machine.validate_entry()?;
+    for action in &post_run {
+        if let monitor::PostRun::DisposePcm(name) = action
+            && !machine
+                .bus
+                .litex_i2s
+                .iter()
+                .any(|device| device.name == *name && device.transmit)
+        {
+            return Err(format!("unknown LiteX I2S transmitter {name:?}"));
+        }
+    }
+
     for (name, path) in pcm_inputs {
         let device = machine
             .bus
@@ -475,6 +487,25 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    let completed_run_for = stop == Stop::Limit && run_steps == Some(limit);
+    if completed_run_for {
+        for action in post_run {
+            match action {
+                monitor::PostRun::Echo(message) => eprintln!("{message}"),
+                monitor::PostRun::DisposePcm(name) => {
+                    let device = machine
+                        .bus
+                        .litex_i2s
+                        .iter_mut()
+                        .find(|device| device.name == name && device.transmit)
+                        .expect("validated LiteX I2S transmitter");
+                    device
+                        .dispose()
+                        .map_err(|error| format!("{name}: {error}"))?;
+                }
+            }
+        }
+    }
     for device in &mut machine.bus.litex_i2s {
         device
             .flush()
@@ -497,13 +528,7 @@ fn run() -> Result<ExitCode, String> {
             machine.primary.pc
         );
     }
-    if stop == Stop::Limit && run_steps == Some(limit) {
-        for message in post_run_echoes {
-            eprintln!("{message}");
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-    if stop == Stop::Limit {
+    if stop == Stop::Limit && !completed_run_for {
         eprintln!(
             "penv: instruction limit reached at pc={:#010x}",
             machine.primary.pc

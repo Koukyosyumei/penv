@@ -13,7 +13,7 @@ pub struct Boot {
     pub pcm_inputs: Vec<(String, Asset)>,
     pub pcm_outputs: Vec<(String, PathBuf)>,
     pub run_steps: Option<u64>,
-    pub post_run_echoes: Vec<String>,
+    pub post_run: Vec<PostRun>,
     pub sd_card: Option<(String, Asset, u64)>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -25,6 +25,11 @@ pub struct Boot {
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
     started: bool,
+}
+
+pub enum PostRun {
+    Echo(String),
+    DisposePcm(String),
 }
 
 #[derive(Debug)]
@@ -258,15 +263,24 @@ fn execute(
     if matches!(words, [] | ["using", "sysbus"]) {
         return Ok(());
     }
-    if boot.run_steps.is_some()
-        && let ["echo", value] = words
-    {
-        let value = unquote(resolve(variables, value)?);
-        boot.post_run_echoes
-            .push(path_value(value.strip_prefix('@').unwrap_or(value)));
-        return Ok(());
-    }
     if boot.started {
+        if boot.run_steps.is_some() {
+            match words {
+                ["echo", value] => {
+                    let value = unquote(resolve(variables, value)?);
+                    boot.post_run.push(PostRun::Echo(path_value(
+                        value.strip_prefix('@').unwrap_or(value),
+                    )));
+                    return Ok(());
+                }
+                [device, "Dispose"] => {
+                    let name = device.strip_prefix("sysbus.").unwrap_or(device);
+                    boot.post_run.push(PostRun::DisposePcm(name.into()));
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         return Err("commands after start are unsupported in a boot script".into());
     }
     let resolve = |value| resolve(variables, value);

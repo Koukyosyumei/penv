@@ -83,6 +83,12 @@ impl I2s {
         Ok(())
     }
 
+    pub fn dispose(&mut self) -> io::Result<()> {
+        self.flush()?;
+        self.output = None;
+        Ok(())
+    }
+
     pub fn tick(&mut self, step: u64) {
         self.step = step;
         if self.transmit || !self.enabled || self.position == self.input.len() {
