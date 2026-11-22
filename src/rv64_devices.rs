@@ -306,7 +306,6 @@ pub struct Plic {
 
 struct Context {
     route: Option<(usize, u32)>,
-    threshold: u32,
     enable: Vec<u32>,
 }
 
@@ -331,7 +330,6 @@ impl Plic {
                 .into_iter()
                 .map(|route| Context {
                     route,
-                    threshold: 0,
                     enable: vec![0; words],
                 })
                 .collect(),
@@ -358,8 +356,9 @@ impl Plic {
         }
     }
 
-    fn select(&self, context: &Context, mut threshold: u32) -> usize {
+    fn select(&self, context: &Context) -> usize {
         let mut selected = 0;
+        let mut selected_priority = 0;
         for (word, (&pending, &enabled)) in self.pending.iter().zip(&context.enable).enumerate() {
             let mut candidates = pending & enabled;
             while candidates != 0 {
@@ -370,9 +369,9 @@ impl Plic {
                 } else {
                     1
                 };
-                if priority > threshold {
+                if priority > selected_priority {
                     selected = source;
-                    threshold = priority;
+                    selected_priority = priority;
                 }
             }
         }
@@ -383,7 +382,7 @@ impl Plic {
         self.contexts.iter().fold(0, |bits, context| {
             if let Some((target, pin)) = context.route
                 && target == hart
-                && self.select(context, context.threshold) != 0
+                && self.select(context) != 0
             {
                 bits | (1 << pin)
             } else {
@@ -419,9 +418,10 @@ impl Plic {
                     return 0;
                 };
                 match offset % 0x1000 {
-                    0 => context.threshold,
+                    // The Renode REPL PLIC has a fixed zero priority threshold.
+                    0 => 0,
                     4 => {
-                        let source = self.select(context, 0);
+                        let source = self.select(context);
                         if source != 0 {
                             self.pending[source / 32] &= !(1 << (source % 32));
                             self.claimed_by[source] = Some(index);
@@ -461,20 +461,13 @@ impl Plic {
             0x20_0000.. => {
                 let offset = offset - 0x20_0000;
                 let index = (offset / 0x1000) as usize;
-                let Some(context) = self.contexts.get_mut(index) else {
-                    return;
-                };
-                match offset % 0x1000 {
-                    0 if self.priorities => context.threshold = value,
-                    4 => {
-                        let source = value as usize;
-                        if self.claimed_by.get(source) == Some(&Some(index)) {
-                            self.claimed_by[source] = None;
-                            let bit = 1 << (source % 32);
-                            self.pending[source / 32] |= self.level[source / 32] & bit;
-                        }
+                if index < self.contexts.len() && offset % 0x1000 == 4 {
+                    let source = value as usize;
+                    if self.claimed_by.get(source) == Some(&Some(index)) {
+                        self.claimed_by[source] = None;
+                        let bit = 1 << (source % 32);
+                        self.pending[source / 32] |= self.level[source / 32] & bit;
                     }
-                    _ => {}
                 }
             }
             _ => {}
