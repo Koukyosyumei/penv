@@ -64,6 +64,7 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    rv64_reservations: [Option<(u64, usize)>; crate::machine::MAX_HARTS],
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -398,6 +399,13 @@ impl Bus {
         for region in &mut self.regions {
             if let Some(offset) = region.offset(address, width) {
                 if width != 0 {
+                    for reservation in &mut self.rv64_reservations {
+                        if reservation.is_some_and(|(start, size)| {
+                            address < start + size as u64 && start < address + width as u64
+                        }) {
+                            *reservation = None;
+                        }
+                    }
                     for reservation in &mut self.reservations {
                         if reservation.is_some_and(|reserved| {
                             address < u64::from(reserved) + 4
@@ -411,6 +419,14 @@ impl Bus {
             }
         }
         None
+    }
+
+    pub fn reserve64(&mut self, hart: usize, address: u64, width: usize) {
+        self.rv64_reservations[hart] = Some((address, width));
+    }
+
+    pub fn take_reservation64(&mut self, hart: usize) -> Option<(u64, usize)> {
+        self.rv64_reservations[hart].take()
     }
 
     pub fn ram64(&self, address: u64, width: usize) -> Option<&[u8]> {

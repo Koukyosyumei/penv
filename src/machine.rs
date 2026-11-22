@@ -226,7 +226,7 @@ impl Machine {
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(cpu) = &hart.rv64 {
-                cpu.validate(&self.bus)?;
+                cpu.validate(&mut self.bus)?;
                 continue;
             }
             if let Some(thumb) = &hart.thumb {
@@ -412,7 +412,7 @@ impl Hart {
         output: &mut impl Write,
     ) -> Result<Step, String> {
         if let Some(cpu) = &mut self.rv64 {
-            return cpu.step(bus, output);
+            return cpu.step(bus, self.csr.hart_id, elapsed_steps, output);
         }
         if let Some(thumb) = self.thumb.as_mut() {
             if thumb

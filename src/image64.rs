@@ -34,6 +34,7 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
     } else {
         machine.primary.rv64 = Some(Box::new(Rv64::new(Isa {
             compressed,
+            atomic: true,
             ..Isa::IM
         })));
     }

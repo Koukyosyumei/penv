@@ -13,6 +13,8 @@ mod platform;
 mod plic;
 mod pmp;
 mod rv64;
+mod rv64_priv;
+mod rv64_vm;
 mod stm32_exti;
 mod stm32_uart;
 mod sv32;
@@ -161,12 +163,12 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or_else(|| format!("{option} requires a number"))?;
-                let target = if option == "--mtvec" {
-                    &mut mtvec
+                let previous = if option == "--mtvec" {
+                    mtvec.replace(parse_address64(&value)?).is_some()
                 } else {
-                    &mut vex_irq_mask
+                    vex_irq_mask.replace(parse_address(&value)?).is_some()
                 };
-                if target.replace(parse_address(&value)?).is_some() {
+                if previous {
                     return Err(format!("{option} may only be specified once"));
                 }
             }
@@ -239,7 +241,7 @@ fn run() -> Result<ExitCode, String> {
             .unwrap_or(std::path::Path::new("."));
         let boot = monitor::load(&script, root)?;
         platform_path = boot.platform;
-        mtvec = mtvec.or(boot.mtvec);
+        mtvec = mtvec.or(boot.mtvec.map(u64::from));
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         if path.is_some() && boot.image.is_none() {
             return Err("a firmware override requires a LoadELF command in the script".into());
@@ -302,15 +304,21 @@ fn run() -> Result<ExitCode, String> {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         machine.schedule_uart_input(step, bytes)?;
     }
-    if let Some(value) = mtvec {
-        machine.primary.set_mtvec(value);
-    }
     if let Some(value) = vex_irq_mask {
         machine.primary.set_vex_irq_mask(value)?;
     }
     if let Some(path) = path {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    if let Some(value) = mtvec {
+        if let Some(cpu) = &mut machine.primary.rv64 {
+            cpu.privilege.set_vector(value);
+        } else {
+            machine
+                .primary
+                .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
+        }
     }
     for (path, address) in binaries {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;

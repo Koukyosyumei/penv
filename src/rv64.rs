@@ -3,6 +3,9 @@ use std::io::Write;
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     machine::{Step, Stop},
+    pmp::{EXECUTE, READ, WRITE},
+    rv64_priv::{Mode, Privilege},
+    rv64_vm::translate,
 };
 
 #[derive(Clone)]
@@ -10,30 +13,38 @@ pub struct Rv64 {
     pub pc: u64,
     registers: [u64; 32],
     isa: Isa,
+    pub privilege: Privilege,
 }
 
 #[derive(Clone, Copy)]
 pub struct Isa {
     pub multiply: bool,
+    pub atomic: bool,
     pub compressed: bool,
 }
 
 impl Isa {
     pub const IM: Self = Self {
         multiply: true,
+        atomic: false,
         compressed: false,
     };
 }
 
 #[derive(Debug)]
-struct Fault {
+pub(crate) struct Fault {
     cause: u64,
     value: u64,
+    output: Option<std::io::Error>,
 }
 
 impl Fault {
-    fn new(cause: u64, value: u64) -> Self {
-        Self { cause, value }
+    pub(crate) fn new(cause: u64, value: u64) -> Self {
+        Self {
+            cause,
+            value,
+            output: None,
+        }
     }
 }
 
@@ -43,6 +54,7 @@ impl Rv64 {
             pc: u64::from(RAM_BASE),
             registers: [0; 32],
             isa,
+            privilege: Privilege::default(),
         }
     }
 
@@ -50,13 +62,16 @@ impl Rv64 {
         self.isa.compressed
     }
 
-    pub fn validate(&self, bus: &Bus) -> Result<(), String> {
+    pub fn validate(&self, bus: &mut Bus) -> Result<(), String> {
         self.fetch(bus)
             .map(|_| ())
             .map_err(|fault| self.describe(&fault))
     }
 
     fn describe(&self, fault: &Fault) -> String {
+        if let Some(error) = &fault.output {
+            return format!("RV64 pc={:#018x}: UART: {error}", self.pc);
+        }
         format!(
             "RV64 pc={:#018x}: exception {}, value={:#018x}",
             self.pc, fault.cause, fault.value
@@ -71,33 +86,124 @@ impl Rv64 {
         Ok(address)
     }
 
-    fn fetch(&self, bus: &Bus) -> Result<(u32, u64), Fault> {
+    fn fetch(&self, bus: &mut Bus) -> Result<(u32, u64), Fault> {
         let pc = self.align_target(self.pc)?;
         let width = if self.isa.compressed { 2 } else { 4 };
-        let low = ram_read(bus, pc, width).ok_or(Fault::new(1, pc))? as u32;
-        if width == 4 {
-            return Ok((low, 4));
-        }
-        if low & 3 != 3 {
-            return Ok((low, 2));
+        let physical = translate(bus, &self.privilege, pc, width, EXECUTE)?;
+        let low = ram_read(bus, physical, width).ok_or(Fault::new(1, pc))? as u32;
+        if width == 4 || low & 3 != 3 {
+            return Ok((low, width as u64));
         }
         let upper = pc.wrapping_add(2);
-        let high = ram_read(bus, upper, 2).ok_or(Fault::new(1, upper))? as u32;
+        let physical = if pc & 0xfff == 0xffe {
+            translate(bus, &self.privilege, upper, 2, EXECUTE)?
+        } else {
+            if self
+                .privilege
+                .pmp
+                .as_ref()
+                .is_some_and(|pmp| !pmp.permits(physical, 4, EXECUTE, self.privilege.mode))
+            {
+                return Err(Fault::new(1, pc));
+            }
+            physical + 2
+        };
+        let high = ram_read(bus, physical, 2).ok_or(Fault::new(1, upper))? as u32;
         Ok((low | high << 16, 4))
     }
 
-    pub fn step(&mut self, bus: &mut Bus, output: &mut impl Write) -> Result<Step, String> {
-        let (instruction, length) = self.fetch(bus).map_err(|fault| self.describe(&fault))?;
-        let decoded = if length == 2 {
-            crate::compressed::expand_rv64(instruction)
-        } else {
-            Some(instruction)
-        };
-        match decoded {
-            Some(instruction) => self.execute(instruction, length, bus, output),
-            None => Err(Fault::new(2, u64::from(instruction))),
+    pub fn step(
+        &mut self,
+        bus: &mut Bus,
+        hart: usize,
+        elapsed: u64,
+        output: &mut impl Write,
+    ) -> Result<Step, String> {
+        let (mut pending, time) = bus
+            .clint
+            .as_mut()
+            .map_or((0, elapsed), |clint| (clint.tick(hart), clint.time()));
+        if hart == 0 {
+            pending |= bus.tick_plic();
         }
-        .map_err(|fault| self.describe(&fault))
+        let count_retired = self.privilege.tick(u64::from(pending), time);
+        if let Some(target) = self.privilege.interrupt(self.pc) {
+            self.pc = target;
+            return Ok(Step::Trap);
+        }
+
+        let result = self.fetch(bus).and_then(|(instruction, length)| {
+            let decoded = if length == 2 {
+                crate::compressed::expand_rv64(instruction)
+                    .ok_or_else(|| Fault::new(2, u64::from(instruction)))?
+            } else {
+                instruction
+            };
+            self.execute(decoded, length, bus, hart, output)
+                .map_err(|mut fault| {
+                    if fault.cause == 2 {
+                        fault.value = u64::from(instruction);
+                    }
+                    fault
+                })
+        });
+        match result {
+            Ok(Step::Retired) if count_retired => {
+                self.privilege.retire();
+                Ok(Step::Retired)
+            }
+            Ok(step) => Ok(step),
+            Err(fault) => {
+                if fault.output.is_some() {
+                    return Err(self.describe(&fault));
+                }
+                if let Some(target) = self.privilege.trap(self.pc, fault.cause, fault.value) {
+                    self.pc = target;
+                    return Ok(Step::Trap);
+                }
+                match fault.cause {
+                    3 => Ok(Step::Stop(Stop::Ebreak)),
+                    8 | 9 | 11 => Ok(Step::Stop(Stop::Ecall)),
+                    _ => Err(self.describe(&fault)),
+                }
+            }
+        }
+    }
+
+    fn misa(&self) -> u64 {
+        let base = (2 << 62) | (1 << 8) | (1 << 18) | (1 << 20);
+        base | (u64::from(self.isa.multiply) << 12)
+            | u64::from(self.isa.atomic)
+            | (u64::from(self.isa.compressed) << 2)
+    }
+
+    fn csr(&mut self, instruction: Instruction, operand: u64, hart: usize) -> Option<u64> {
+        let index = instruction.0 >> 20;
+        let mode = instruction.funct3();
+        let source = instruction.rs1();
+        let operand = if mode & 4 != 0 {
+            source as u64
+        } else {
+            operand
+        };
+        let misa = self.misa();
+        let alignment_mask = if self.isa.compressed { !1 } else { !3 };
+        let old = if index == 0xf14 && self.privilege.mode == Mode::Machine {
+            hart as u64
+        } else {
+            self.privilege.read(index, misa, alignment_mask)?
+        };
+        let value = match mode & 3 {
+            1 => Some(operand),
+            2 if source != 0 => Some(old | operand),
+            3 if source != 0 => Some(old & !operand),
+            2 | 3 => None,
+            _ => return None,
+        };
+        if value.is_some_and(|value| !self.privilege.write(index, value, misa)) {
+            return None;
+        }
+        Some(old)
     }
 
     fn execute(
@@ -105,6 +211,7 @@ impl Rv64 {
         instruction: u32,
         length: u64,
         bus: &mut Bus,
+        hart: usize,
         output: &mut impl Write,
     ) -> Result<Step, Fault> {
         let fields = Instruction(instruction);
@@ -178,8 +285,22 @@ impl Rv64 {
             0x13 | 0x1b => Some(immediate_alu(fields, lhs).ok_or(illegal)?),
             0x33 | 0x3b => Some(register_alu(fields, lhs, rhs, self.isa.multiply).ok_or(illegal)?),
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
-            0x73 if instruction == 0x73 => return Ok(Step::Stop(Stop::Ecall)),
-            0x73 if instruction == 0x0010_0073 => return Ok(Step::Stop(Stop::Ebreak)),
+            0x2f if self.isa.atomic => Some(self.atomic(fields, bus, hart, lhs, rhs)?),
+            0x73 if fields.funct3() != 0 => Some(self.csr(fields, lhs, hart).ok_or(illegal)?),
+            0x73 => {
+                let epc_mask = if self.isa.compressed { !1 } else { !3 };
+                match instruction {
+                    0x0000_0073 => return Err(Fault::new(8 + self.privilege.mode as u64, 0)),
+                    0x0010_0073 => return Err(Fault::new(3, self.pc)),
+                    0x3020_0073 => next = self.privilege.mret(epc_mask).ok_or(illegal)?,
+                    0x1020_0073 => next = self.privilege.sret(epc_mask).ok_or(illegal)?,
+                    0x1050_0073 if self.privilege.allows_wfi() => {}
+                    _ if instruction & 0xfe00_7fff == 0x1200_0073
+                        && self.privilege.allows_sfence() => {}
+                    _ => return Err(illegal),
+                }
+                None
+            }
             _ => return Err(illegal),
         };
         if let Some(value) = result
@@ -195,10 +316,11 @@ impl Rv64 {
         if address & (width as u64 - 1) != 0 {
             return Err(Fault::new(4, address));
         }
-        if let Some(value) = ram_read(bus, address, width) {
+        let physical = translate(bus, &self.privilege, address, width, READ)?;
+        if let Some(value) = ram_read(bus, physical, width) {
             return Ok(value);
         }
-        let physical = u32::try_from(address).map_err(|_| Fault::new(5, address))?;
+        let physical = u32::try_from(physical).map_err(|_| Fault::new(5, address))?;
         let result = match width {
             1 => bus.read::<1>(physical).map(u64::from),
             2 => bus.read::<2>(physical).map(u64::from),
@@ -227,11 +349,12 @@ impl Rv64 {
         if address & (width as u64 - 1) != 0 {
             return Err(Fault::new(6, address));
         }
-        if let Some(bytes) = bus.memory64(address, width) {
+        let physical = translate(bus, &self.privilege, address, width, WRITE)?;
+        if let Some(bytes) = bus.memory64(physical, width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
             return Ok(());
         }
-        let physical = u32::try_from(address).map_err(|_| Fault::new(7, address))?;
+        let physical = u32::try_from(physical).map_err(|_| Fault::new(7, address))?;
         if width == 8 {
             let clint = bus
                 .clint
@@ -243,11 +366,82 @@ impl Rv64 {
             return Ok(());
         }
         bus.write(physical, width, value as u32, output)
-            .map_err(|_| Fault::new(7, address))
+            .map_err(|error| match error {
+                BusError::Output(error) => Fault {
+                    cause: 7,
+                    value: address,
+                    output: Some(error),
+                },
+                _ => Fault::new(7, address),
+            })
+    }
+    fn atomic(
+        &self,
+        inst: Instruction,
+        bus: &mut Bus,
+        hart: usize,
+        address: u64,
+        rhs: u64,
+    ) -> Result<u64, Fault> {
+        let illegal = || Fault::new(2, u64::from(inst.0));
+        let width = match inst.funct3() {
+            2 => 4,
+            3 => 8,
+            _ => return Err(illegal()),
+        };
+        let operation = inst.0 >> 27;
+        let permission = match operation {
+            2 if inst.rs2() == 0 => READ,
+            3 => WRITE,
+            0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => READ | WRITE,
+            _ => return Err(illegal()),
+        };
+        let load = permission == READ;
+        let reservation = if operation == 3 {
+            bus.take_reservation64(hart)
+        } else {
+            None
+        };
+        if address & (width as u64 - 1) != 0 {
+            return Err(Fault::new(if load { 4 } else { 6 }, address));
+        }
+        let physical = translate(bus, &self.privilege, address, width, permission)?;
+        let fault = || Fault::new(if load { 5 } else { 7 }, address);
+        let previous = ram_read(bus, physical, width).ok_or_else(fault)?;
+        if operation == 2 {
+            bus.reserve64(hart, physical, width);
+        } else if operation == 3 {
+            if reservation != Some((physical, width)) {
+                return Ok(1);
+            }
+            bus.memory64(physical, width)
+                .ok_or_else(fault)?
+                .copy_from_slice(&rhs.to_le_bytes()[..width]);
+            return Ok(0);
+        } else {
+            let old = sign(previous, width as u32 * 8);
+            let rhs = sign(rhs, width as u32 * 8);
+            let value = match operation {
+                0 => old.wrapping_add(rhs),
+                1 => rhs,
+                4 => old ^ rhs,
+                8 => old | rhs,
+                12 => old & rhs,
+                16 => (old as i64).min(rhs as i64) as u64,
+                20 => (old as i64).max(rhs as i64) as u64,
+                24 => old.min(rhs),
+                28 => old.max(rhs),
+                _ => unreachable!(),
+            };
+            bus.memory64(physical, width)
+                .ok_or_else(fault)?
+                .copy_from_slice(&value.to_le_bytes()[..width]);
+        }
+        Ok(sign(previous, width as u32 * 8))
     }
 }
 
-fn ram_read(bus: &Bus, address: u64, width: usize) -> Option<u64> {
+pub(crate) fn ram_read(bus: &Bus, address: u64, width: usize) -> Option<u64> {
     let mut bytes = [0; 8];
     bytes[..width].copy_from_slice(bus.ram64(address, width)?);
     Some(u64::from_le_bytes(bytes))
