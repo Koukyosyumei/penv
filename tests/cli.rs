@@ -108,7 +108,10 @@ fn loads_platform_includes_and_uses_declared_memory() {
         "cpu: CPU.RiscV32 @ sysbus
     cpuType: \"rv32i\"
     timeProvider: clint
-ram: Memory.MappedMemory @ sysbus 0x8000_0000
+ram: Memory.MappedMemory @ {
+    sysbus 0x8000_0000;
+    sysbus 0xc000_0000 // shadow
+}
     size: 0x2000
 clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x0200_0000
     [0, 1] -> cpu@[3, 7]

@@ -46,6 +46,30 @@ impl Entry {
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
     }
 
+    fn addresses(&self) -> Result<Vec<u32>, String> {
+        if let Some(list) = self
+            .registration
+            .as_deref()
+            .and_then(|value| value.strip_prefix('{'))
+            .and_then(|value| value.strip_suffix('}'))
+        {
+            return list
+                .split_terminator(';')
+                .map(|registration| {
+                    let address = registration
+                        .trim()
+                        .strip_prefix("sysbus")
+                        .filter(|address| address.starts_with(char::is_whitespace))
+                        .ok_or_else(|| {
+                            self.error("expected a sysbus address in registration list")
+                        })?;
+                    number(address.trim()).map_err(|e| self.error(&e))
+                })
+                .collect();
+        }
+        Ok(vec![self.address()?])
+    }
+
     fn address(&self) -> Result<u32, String> {
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
@@ -137,7 +161,8 @@ fn parse(
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut current: Option<Entry> = None;
-    for (index, raw) in content.lines().enumerate() {
+    let mut lines = content.lines().enumerate();
+    while let Some((index, raw)) = lines.next() {
         let line = without_comment(raw);
         let text = line.trim();
         let lineno = index + 1;
@@ -179,7 +204,30 @@ fn parse(
         }
         let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
-            Some((model, registration)) => (model.trim(), Some(registration.trim().into())),
+            Some((model, registration)) => {
+                let mut registration = registration.trim().to_string();
+                if registration.starts_with('{') {
+                    let mut depth = 0_i32;
+                    for (_, brace) in unquoted_delimiters(&registration, &['{', '}']) {
+                        depth += if brace == '{' { 1 } else { -1 };
+                    }
+                    while depth > 0 {
+                        let (_, line) = lines
+                            .next()
+                            .ok_or_else(|| error("unterminated registration list"))?;
+                        let line = without_comment(line).trim();
+                        for (_, brace) in unquoted_delimiters(line, &['{', '}']) {
+                            depth += if brace == '{' { 1 } else { -1 };
+                        }
+                        registration.push(' ');
+                        registration.push_str(line);
+                    }
+                    if depth != 0 || !registration.ends_with('}') {
+                        return Err(error("invalid registration list"));
+                    }
+                }
+                (model.trim(), Some(registration))
+            }
             None => (declaration.trim(), None),
         };
         current = Some(Entry {
@@ -234,8 +282,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .ok_or_else(|| entry.error("missing memory size"))?;
                 machine
                     .bus
-                    .map_ram(
-                        entry.address()?,
+                    .map_ram_views(
+                        &entry.addresses()?,
                         number(size).map_err(|e| entry.error(&e))? as usize,
                     )
                     .map_err(|e| entry.error(&e))?;

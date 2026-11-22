@@ -58,6 +58,7 @@ impl fmt::Display for BusError {
 
 struct Region {
     base: u32,
+    aliases: Vec<u32>,
     bytes: Vec<u8>,
 }
 
@@ -95,12 +96,19 @@ impl Region {
         // SAFETY: Global allocation with u8 alignment and size bytes, all initialized.
         // Vec takes ownership and deallocates with the same layout.
         let bytes = unsafe { Vec::from_raw_parts(allocation, size, size) };
-        Ok(Self { base, bytes })
+        Ok(Self {
+            base,
+            aliases: Vec::new(),
+            bytes,
+        })
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<usize> {
-        let offset = address.checked_sub(self.base)? as usize;
-        (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        let at = |base| {
+            let offset = address.checked_sub(base)? as usize;
+            (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        };
+        at(self.base).or_else(|| self.aliases.iter().find_map(|&base| at(base)))
     }
 }
 
@@ -124,6 +132,40 @@ impl Bus {
         }
         self.regions.push(Region::new(base, size)?);
         Ok(())
+    }
+
+    pub fn map_ram_views(&mut self, bases: &[u32], size: usize) -> Result<(), String> {
+        let Some((&base, aliases)) = bases.split_first() else {
+            return Err("expected at least one RAM address".into());
+        };
+        for (index, &base) in bases.iter().enumerate() {
+            let start = u64::from(base);
+            let end = start.saturating_add(size as u64);
+            if end > 1 << 32
+                || self.overlaps(start, end)
+                || bases[..index].iter().any(|&other| {
+                    let other = u64::from(other);
+                    start < other + size as u64 && other < end
+                })
+            {
+                return Err(format!("invalid or overlapping RAM view at {base:#010x}"));
+            }
+        }
+        let mut region = Region::new(base, size)?;
+        region.aliases.extend_from_slice(aliases);
+        self.regions.push(region);
+        Ok(())
+    }
+
+    fn reservation_address(&self, address: u32) -> u32 {
+        self.regions
+            .iter()
+            .find_map(|region| {
+                region
+                    .offset(address, 4)
+                    .map(|offset| region.base + offset as u32)
+            })
+            .unwrap_or(address)
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
@@ -172,8 +214,12 @@ impl Bus {
                 })
             })
             || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
-                start < other + region.bytes.len() as u64 && other < end
+                std::iter::once(&region.base)
+                    .chain(&region.aliases)
+                    .any(|&base| {
+                        let other = u64::from(base);
+                        start < other + region.bytes.len() as u64 && other < end
+                    })
             })
     }
 
@@ -388,10 +434,11 @@ impl Bus {
         for region in &mut self.regions {
             if let Some(offset) = region.offset(address, width) {
                 if width != 0 {
+                    let address = u64::from(region.base) + offset as u64;
                     for reservation in &mut self.reservations {
                         if reservation.is_some_and(|reserved| {
-                            u64::from(address) < u64::from(reserved) + 4
-                                && u64::from(reserved) < u64::from(address) + width as u64
+                            address < u64::from(reserved) + 4
+                                && u64::from(reserved) < address + width as u64
                         }) {
                             *reservation = None;
                         }
@@ -405,7 +452,7 @@ impl Bus {
 
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
         let value = self.read_ram::<4>(address)?;
-        self.reservations[hart] = Some(address);
+        self.reservations[hart] = Some(self.reservation_address(address));
         Ok(value)
     }
 
@@ -415,7 +462,8 @@ impl Bus {
         address: u32,
         value: u32,
     ) -> Result<u32, BusError> {
-        let reserved = self.reservations[hart].take() == Some(address);
+        let canonical = self.reservation_address(address);
+        let reserved = self.reservations[hart].take() == Some(canonical);
         if reserved {
             self.atomic_word(address)?
                 .copy_from_slice(&value.to_le_bytes());
@@ -633,5 +681,31 @@ impl Bus {
         self.memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ram_views_share_contents_and_reservations() {
+        let mut bus = Bus::default();
+        let base = 0x4000_0000;
+        let shadow = 0xc000_0000;
+        bus.map_ram_views(&[base, shadow], 0x1000).unwrap();
+        assert!(bus.map_ram(shadow + 0x800, 0x1000).is_err());
+        assert!(bus.map_ram_views(&[0, 0x800], 0x1000).is_err());
+        bus.map_ram(0, 0x1000).unwrap();
+
+        bus.memory(base + 4, 4)
+            .unwrap()
+            .copy_from_slice(&[1, 2, 3, 4]);
+        assert_eq!(bus.load_reserved(0, shadow + 4).unwrap(), 0x0403_0201);
+        assert_eq!(bus.store_conditional(0, base + 4, 42).unwrap(), 0);
+        assert_eq!(bus.load_reserved(0, base + 4).unwrap(), 42);
+        bus.write(shadow + 5, 1, 1, &mut io::sink()).unwrap();
+        assert_eq!(bus.store_conditional(0, base + 4, 0).unwrap(), 1);
+        assert_eq!(bus.read_ram::<4>(shadow + 4).unwrap(), 0x12a);
     }
 }
