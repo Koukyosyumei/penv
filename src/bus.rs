@@ -11,6 +11,7 @@ use crate::{
     nvic::{Nvic, VTOR},
     plic::Plic,
     stm32_exti::Exti,
+    stm32_gpio::Stm32Gpio,
     stm32_rcc::Stm32F0Rcc,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
@@ -72,6 +73,7 @@ pub struct Bus {
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
+    stm32_gpios: Vec<Stm32Gpio>,
     stm32_rcc: Option<Stm32F0Rcc>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -141,6 +143,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.stm32_gpios.iter().any(|gpio| {
+                let other = u64::from(gpio.base);
+                start < other + u64::from(gpio.size) && other < end
             })
             || self.stm32_rcc.as_ref().is_some_and(|rcc| {
                 let other = u64::from(rcc.base);
@@ -313,6 +319,24 @@ impl Bus {
             ));
         }
         self.litex_uart = Some(LiteXUart::new(base));
+        Ok(())
+    }
+
+    pub fn map_stm32_gpio(&mut self, gpio: Stm32Gpio) -> Result<(), String> {
+        let start = u64::from(gpio.base);
+        let end = start + u64::from(gpio.size);
+        if gpio.base & 3 != 0
+            || gpio.size < 0x2c
+            || gpio.size & 3 != 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping STM32 GPIO range at {:#010x}",
+                gpio.base
+            ));
+        }
+        self.stm32_gpios.push(gpio);
         Ok(())
     }
 
@@ -540,6 +564,15 @@ impl Bus {
         {
             return Ok(rcc.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(gpio) = self
+                .stm32_gpios
+                .iter_mut()
+                .find(|gpio| gpio.contains(address))
+        {
+            return Ok(gpio.read(address));
+        }
         self.read_ram::<N>(address)
     }
 
@@ -660,6 +693,15 @@ impl Bus {
             && rcc.contains(address)
         {
             rcc.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(gpio) = self
+                .stm32_gpios
+                .iter_mut()
+                .find(|gpio| gpio.contains(address))
+        {
+            gpio.write(address, value);
             return Ok(());
         }
         self.memory(address, width)?

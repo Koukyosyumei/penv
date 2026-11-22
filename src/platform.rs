@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     machine::{MAX_HARTS, Machine},
+    stm32_gpio::Stm32Gpio,
     stm32_uart::Stm32Irq,
 };
 
@@ -257,6 +258,54 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 if plic.replace(entry).is_some() {
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
+            }
+            "GPIOPort.STM32_GPIOPort" => {
+                let registration = entry
+                    .registration
+                    .as_deref()
+                    .and_then(|s| s.strip_prefix("sysbus "))
+                    .ok_or_else(|| entry.error("expected GPIO registered on sysbus"))?
+                    .trim();
+                let (base, size) = if let Some(range) = registration
+                    .strip_prefix('<')
+                    .and_then(|s| s.strip_suffix('>'))
+                {
+                    let (base, size) = range
+                        .split_once(',')
+                        .and_then(|(base, size)| {
+                            Some((base.trim(), size.trim().strip_prefix('+')?.trim()))
+                        })
+                        .ok_or_else(|| entry.error("expected GPIO range <base, +size>"))?;
+                    (number(base), number(size))
+                } else {
+                    (number(registration), Ok(0x400))
+                };
+                let mut reset = [0; 3];
+                for (key, value) in keys(
+                    entry,
+                    &[
+                        "modeResetValue",
+                        "outputSpeedResetValue",
+                        "pullUpPullDownResetValue",
+                    ],
+                )? {
+                    let index = match key {
+                        "modeResetValue" => 0,
+                        "outputSpeedResetValue" => 1,
+                        _ => 2,
+                    };
+                    reset[index] = number(value).map_err(|e| entry.error(&e))?;
+                }
+                machine
+                    .bus
+                    .map_stm32_gpio(Stm32Gpio::new(
+                        base.map_err(|e| entry.error(&e))?,
+                        size.map_err(|e| entry.error(&e))?,
+                        reset[0],
+                        reset[1],
+                        reset[2],
+                    ))
+                    .map_err(|e| entry.error(&e))?;
             }
             "Miscellaneous.STM32F0_RCC" => {
                 keys(entry, &[])?;
