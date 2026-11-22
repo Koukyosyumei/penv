@@ -80,7 +80,7 @@ pub struct Csr {
     status: u32,
     counters: Counters,
     user_supported: bool,
-    pmp: Option<Pmp>,
+    pmp: Option<Box<Pmp>>,
     privilege: Privilege,
     supervisor: Option<Supervisor>,
     interrupt_enable: u32,
@@ -171,8 +171,8 @@ impl Csr {
         self.supervisor = Some(Supervisor::default());
     }
 
-    pub fn enable_pmp(&mut self) {
-        self.pmp = Some(Pmp::default());
+    pub fn enable_pmp(&mut self, entries: usize) {
+        self.pmp = Some(Box::new(Pmp::new(entries)));
     }
 
     fn effective_privilege(&self, fetch: bool) -> Privilege {

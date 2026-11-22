@@ -332,8 +332,8 @@ impl Hart {
         self.csr.enable_supervisor_mode();
     }
 
-    pub fn enable_pmp(&mut self) {
-        self.csr.enable_pmp();
+    pub fn enable_pmp(&mut self, entries: usize) {
+        self.csr.enable_pmp(entries);
     }
 
     fn translate(
@@ -710,7 +710,7 @@ impl Hart {
                     .csr
                     .access(insn, a)
                     .map_err(|error| Fault::InvalidCsr(insn, error))?;
-                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3a3 | 0x3b0..=0x3bf) {
+                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3af | 0x3b0..=0x3ef) {
                     self.translations.clear();
                 }
                 Some(value)
@@ -1043,7 +1043,7 @@ mod tests {
     fn pmp_blocks_user_load_from_machine_memory() {
         let mut machine = Machine::new(64).unwrap();
         machine.primary.enable_user_mode();
-        machine.primary.enable_pmp();
+        machine.primary.enable_pmp(16);
         let user = RAM_BASE + 4;
         machine.primary.set_mtvec(RAM_BASE + 32);
         machine.primary.csr.access(0x3410_9073, user).unwrap();
@@ -1123,7 +1123,7 @@ mod tests {
         let mut machine = Machine::new(0x4000).unwrap();
         machine.primary.enable_user_mode();
         machine.primary.enable_supervisor_mode();
-        machine.primary.enable_pmp();
+        machine.primary.enable_pmp(16);
         machine.primary.set_mtvec(RAM_BASE + 0x40);
         let root = RAM_BASE + 0x1000;
         let leaf = RAM_BASE + 0x2000;

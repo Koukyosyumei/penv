@@ -872,7 +872,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             _ => None,
         };
         let mut id = 0;
-        let mut pmp = matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32");
+        let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
+            16
+        } else {
+            0
+        };
         for (key, value) in keys(
             entry,
             &[
@@ -918,8 +922,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     if entry.model == "CPU.VexRiscv" => {}
                 ("allowUnalignedAccesses", "true" | "false" | "True" | "False")
                     if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") => {}
-                ("pmpEntryCount", "0") => pmp = false,
-                ("pmpEntryCount", "16") => pmp = true,
+                ("pmpEntryCount", "0") => pmp = 0,
+                ("pmpEntryCount", "16") => pmp = 16,
+                ("pmpEntryCount", "64") => pmp = 64,
                 _ => return Err(entry.error(&format!("unsupported CPU property {key} = {value}"))),
             }
         }
@@ -969,8 +974,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 hart.enable_supervisor_mode();
             }
         }
-        if pmp {
-            hart.enable_pmp();
+        if pmp != 0 {
+            hart.enable_pmp(pmp);
         }
     }
     let cpu = configs[0].1;
@@ -1777,7 +1782,7 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
     Ok(())
 }
 
-type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool), bool);
+type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool), usize);
 
 fn uses_vex_irq(entry: &Entry) -> bool {
     entry.model == "CPU.VexRiscv"
