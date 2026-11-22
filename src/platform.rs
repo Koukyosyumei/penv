@@ -12,7 +12,7 @@ use crate::{
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
-    stm32h7_gpio_platform,
+    stm32h7_gpio_platform, stm32h7_rtc_platform,
 };
 
 type Properties = Vec<(usize, String)>;
@@ -221,7 +221,8 @@ fn parse(
         };
         if (crate::network_platform::has_regions(model)
             || stm32h7_adc_platform::has_regions(model)
-            || model == stm32h7_gpio_platform::GPIO)
+            || model == stm32h7_gpio_platform::GPIO
+            || model == stm32h7_rtc_platform::RTC)
             && let Some(registration) = &registration
             && registration.starts_with('{')
         {
@@ -356,7 +357,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
             _ if crate::network_platform::is_network(entry)
                 || stm32h7_adc_platform::is_device(&entry.model)
-                || stm32h7_gpio_platform::is_device(&entry.model) => {}
+                || stm32h7_gpio_platform::is_device(&entry.model)
+                || entry.model == stm32h7_rtc_platform::RTC => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
     }
@@ -547,6 +549,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         };
         stm32h7_adc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
         stm32h7_gpio_platform::configure(&entries, exti, exti_lines, &mut machine)?;
+        stm32h7_rtc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
         for uart in stm32_uarts {
             let mut irq = None;
             let mut low_power = None;
@@ -615,6 +618,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     if let Some(entry) = entries.iter().find(|entry| {
         stm32h7_adc_platform::is_device(&entry.model)
             || stm32h7_gpio_platform::is_device(&entry.model)
+            || entry.model == stm32h7_rtc_platform::RTC
     }) {
         return Err(entry.error("STM32H7 peripherals require a Cortex-M CPU"));
     }

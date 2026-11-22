@@ -33,6 +33,8 @@ mod stm32h7_flash;
 mod stm32h7_gpio;
 mod stm32h7_gpio_platform;
 mod stm32h7_net_control;
+mod stm32h7_rtc;
+mod stm32h7_rtc_platform;
 mod sv32;
 mod systick;
 mod thumb;

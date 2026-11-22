@@ -20,6 +20,8 @@ pub struct NetworkControl {
     ahb4_reset: u32,
     ahb4_clock: u32,
     apb4_clock: u32,
+    backup_control: u32,
+    lsi_enabled: bool,
     syscfg_mode: u32,
     exticr: [u32; 4],
 }
@@ -43,6 +45,8 @@ impl NetworkControl {
             ahb4_reset: 0,
             ahb4_clock: 0,
             apb4_clock: 0,
+            backup_control: 0,
+            lsi_enabled: false,
             syscfg_mode: 0,
             exticr: [0; 4],
         }
@@ -88,6 +92,14 @@ impl NetworkControl {
         self.ahb1_reset & mask != 0
     }
 
+    pub fn rtc_enabled(&self) -> bool {
+        self.backup_control & (3 << 15) == 1 << 15
+    }
+
+    pub fn rtc_in_reset(&self) -> bool {
+        self.backup_control & (1 << 16) != 0
+    }
+
     pub fn gpio_enabled(&self, port: u8) -> bool {
         (self.ahb4_clock & !self.ahb4_reset) & (1 << port) != 0
     }
@@ -119,6 +131,8 @@ impl NetworkControl {
             return Some(self.exticr[index]);
         }
         Some(match address.wrapping_sub(self.rcc_base) {
+            0x70 => self.backup_control | ((self.backup_control & 1) << 1),
+            0x74 => u32::from(self.lsi_enabled) * 3,
             0x80 => self.ahb1_reset,
             0x88 => self.ahb4_reset,
             0xd8 => self.ahb1_clock,
@@ -144,6 +158,14 @@ impl NetworkControl {
             return Some(Change::None);
         }
         Some(match address.wrapping_sub(self.rcc_base) {
+            0x70 => {
+                self.backup_control = value & 0x0001_837d;
+                Change::None
+            }
+            0x74 => {
+                self.lsi_enabled = value & 1 != 0;
+                Change::None
+            }
             0x80 => {
                 self.ahb1_reset = value & (ETH_MAC | ADC12 | 3);
                 if self.ahb1_reset & ETH_MAC != 0 {

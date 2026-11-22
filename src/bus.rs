@@ -22,6 +22,7 @@ use crate::{
     stm32h7_flash::FlashController,
     stm32h7_gpio::Stm32Gpio,
     stm32h7_net_control::{Change, NetworkControl},
+    stm32h7_rtc::Stm32Rtc,
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
 };
@@ -91,6 +92,7 @@ pub struct Bus {
     h7_dma_mux: Vec<DmaMux>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
+    h7_rtc: Vec<Stm32Rtc>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -326,6 +328,12 @@ impl Bus {
         self.gpio_exti_outputs = outputs;
     }
 
+    pub fn map_h7_rtc(&mut self, rtc: Stm32Rtc) -> Result<(), String> {
+        self.check_peripheral_range(rtc.base, Stm32Rtc::SIZE)?;
+        self.h7_rtc.push(rtc);
+        Ok(())
+    }
+
     fn check_peripheral_range(&self, base: u32, size: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(size);
@@ -341,6 +349,11 @@ impl Bus {
             regions: &mut self.regions,
             reservations: &mut self.reservations,
         };
+        for rtc in &mut self.h7_rtc {
+            if rtc_clocked(control, rtc) {
+                rtc.tick();
+            }
+        }
         for controller in &mut self.h7_bdma {
             if bdma_clocked(control, controller) {
                 controller.tick(&mut dma);
@@ -435,6 +448,7 @@ impl Bus {
                 )
                 .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
                 .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
+                .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE)))
                 .any(|(base, size)| {
                     let base = u64::from(base);
                     start < base + u64::from(size) && base < end
@@ -593,6 +607,12 @@ impl Bus {
                         .iter()
                         .filter(|device| bdma_clocked(control, device))
                         .flat_map(Bdma::interrupts),
+                )
+                .chain(
+                    self.h7_rtc
+                        .iter()
+                        .filter(|device| rtc_clocked(control, device))
+                        .flat_map(Stm32Rtc::interrupts),
                 )
             {
                 match route {
@@ -1010,6 +1030,19 @@ impl Bus {
                 port.read(address)
             });
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(rtc) = self
+                .h7_rtc
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            return Ok(if rtc_clocked(self.h7_network_control.as_ref(), rtc) {
+                rtc.read(address)
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1156,6 +1189,11 @@ impl Bus {
                     gpio.reset();
                 }
             }
+            if control.rtc_in_reset() {
+                for rtc in self.h7_rtc.iter_mut().filter(|rtc| rtc.rcc_bound) {
+                    rtc.reset();
+                }
+            }
             if let Some(nic) = control.nic
                 && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
             {
@@ -1262,6 +1300,17 @@ impl Bus {
             }
             return Ok(());
         }
+        if width == 4
+            && let Some(rtc) = self
+                .h7_rtc
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            if rtc_clocked(self.h7_network_control.as_ref(), rtc) {
+                rtc.write(address, value);
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
@@ -1286,4 +1335,8 @@ fn gpio_clocked(control: Option<&NetworkControl>, port: &Stm32Gpio) -> bool {
     control
         .zip(port.rcc_pin)
         .is_none_or(|(control, pin)| control.gpio_enabled(pin))
+}
+
+fn rtc_clocked(control: Option<&NetworkControl>, rtc: &Stm32Rtc) -> bool {
+    !rtc.rcc_bound || control.is_none_or(NetworkControl::rtc_enabled)
 }
