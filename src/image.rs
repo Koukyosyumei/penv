@@ -25,7 +25,12 @@ pub fn load_binary(machine: &mut Machine, mut file: File, address: u32) -> Resul
     file.read_exact(memory).map_err(|error| error.to_string())
 }
 
-pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), String> {
+pub fn load(
+    machine: &mut Machine,
+    mut file: File,
+    raw: bool,
+    script_virtual_addresses: Option<bool>,
+) -> Result<(), String> {
     if raw {
         return load_binary(machine, file, machine.raw_load_address());
     }
@@ -44,12 +49,19 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
     }
 
     let flags = word(&header, 36);
+    // Renode loads firmware independently of its linker's floating-point ABI.
+    // Any floating-point instructions still require an implemented ISA extension.
+    let abi_flags = if script_virtual_addresses.is_some() {
+        0x6
+    } else {
+        0
+    };
     if cortex_m {
         if half(&header, 18) != 40 || flags >> 24 != 5 || flags & 0x400 != 0 {
             return Err("expected an ARM EABI5 ELF32 executable without the hard-float ABI".into());
         }
     } else if half(&header, 18) != 243
-        || flags & !u32::from(machine.primary.compressed_instructions()) != 0
+        || flags & !(abi_flags | u32::from(machine.primary.compressed_instructions())) != 0
     {
         return Err("expected a RISC-V ELF32 executable with supported ISA flags".into());
     }
@@ -80,7 +92,7 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
 
         let offset = u64::from(word(&segment, 4));
         let virtual_address = word(&segment, 8);
-        let address = if cortex_m {
+        let address = if cortex_m || script_virtual_addresses == Some(false) {
             word(&segment, 12)
         } else {
             virtual_address

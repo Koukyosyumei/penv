@@ -11,6 +11,7 @@ pub struct Boot {
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
     pub image: Option<Asset>,
+    pub use_virtual_elf_addresses: bool,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
     started: bool,
@@ -205,7 +206,14 @@ fn execute(
                 .ok_or("expected @platform-path")?;
             boot.platform = Some(local_path(&path_value(file), script, root));
         }
-        ["sysbus", "LoadELF", value] if boot.platform.is_some() && boot.image.is_none() => {
+        ["sysbus", "LoadELF", value, options @ ..]
+            if boot.platform.is_some() && boot.image.is_none() && options.len() <= 1 =>
+        {
+            boot.use_virtual_elf_addresses = match options {
+                [] | ["false" | "False"] => false,
+                ["true" | "True"] => true,
+                _ => return Err("expected a boolean LoadELF address option".into()),
+            };
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;

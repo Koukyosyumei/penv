@@ -221,6 +221,7 @@ fn run() -> Result<ExitCode, String> {
 
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
+    let mut script_elf_addresses = None;
     let mut silence_ranges = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
@@ -234,6 +235,7 @@ fn run() -> Result<ExitCode, String> {
             .unwrap_or(std::path::Path::new("."));
         let boot = monitor::load(&script, root)?;
         platform_path = boot.platform;
+        script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         if path.is_some() && boot.image.is_none() {
@@ -298,7 +300,8 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(path) = path {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
+        image::load(&mut machine, file, raw, script_elf_addresses)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     for (path, address) in binaries {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
