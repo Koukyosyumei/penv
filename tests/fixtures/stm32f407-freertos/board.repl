@@ -24,6 +24,13 @@ cpu: CPU.CortexM @ sysbus
 uart4: UART.STM32_UART @ sysbus <0x40004C00, +0x100>
     -> nvic@52
 
+can1: CAN.STMCAN @ sysbus <0x40006400, +0x400>
+    [0-3] -> nvic@[19-22]
+
+can2: CAN.STMCAN @ sysbus <0x40006800, +0x400>
+    [0-3] -> nvic@[63-66]
+    master: can1
+
 timer2: Timers.STM32_Timer @ sysbus 0x40000000
     -> nvic@28
     frequency: 16000000
@@ -32,7 +39,7 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
 gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x40020800, +0x400>
     numberOfAFs: 16
 
-// UART, GPIO and TIM2 run without clock gates in this fixture. Accept the hardware
+// CAN, UART, GPIO and TIM2 run without clock gates in this fixture. Accept the hardware
 // startup writes to RCC_AHB1ENR and RCC_APB1ENR.
 rcc: Python.PythonPeripheral @ sysbus 0x40023800
     size: 0x400

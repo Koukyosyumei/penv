@@ -1,4 +1,5 @@
 STM32F407 FreeRTOS V11.1.0
+CAN loopback OK
 task A tick=01
 task B tick=03
 TIM2 queue=1

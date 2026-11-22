@@ -32,6 +32,8 @@ struct event {
 
 static QueueHandle_t events;
 
+void firmware_can_test(void);
+
 static void enable_irq(unsigned irq)
 {
     NVIC_IPR(irq) = configMAX_SYSCALL_INTERRUPT_PRIORITY;
@@ -41,7 +43,7 @@ static void enable_irq(unsigned irq)
 static void uart_init(void)
 {
     REG(0x40023830) = 1U << 2;   /* RCC AHB1ENR: GPIOC */
-    REG(0x40023840) = (1U << 19) | 1U;  /* RCC APB1ENR: UART4 and TIM2 */
+    REG(0x40023840) = (3U << 25) | (1U << 19) | 1U;  /* CAN1/2, UART4, TIM2 */
     (void)REG(0x40023840);
     REG(0x40020824) = 0x8800;    /* GPIOC AFRH: PC10/PC11 AF8 */
     REG(0x40020800) = 0xa00000;  /* GPIOC MODER: PC10/PC11 alternate function */
@@ -186,6 +188,8 @@ void firmware_main(void)
     configASSERT((FLASH_CR & (1U << 31)) != 0);
     configASSERT(FLASH_RDP == 0xaa && (FLASH_NWRP & 0xfff) == 0xfff);
     uart_text("STM32F407 FreeRTOS " tskKERNEL_VERSION_NUMBER "\n");
+    firmware_can_test();
+    uart_text("CAN loopback OK\n");
     configASSERT(xTaskCreateStatic(task, "A", configMINIMAL_STACK_SIZE, &workers[0],
                                    2, stacks[0], &tasks[0]) != NULL);
     configASSERT(xTaskCreateStatic(task, "B", configMINIMAL_STACK_SIZE, &workers[1],

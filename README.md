@@ -225,6 +225,7 @@ target/release/penv run --script "$work/boot.resc" --max-steps 36000 \
 
 ```text
 STM32F407 FreeRTOS V11.1.0
+CAN loopback OK
 task A tick=01
 task B tick=03
 TIM2 queue=1
@@ -247,11 +248,27 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 44 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 46 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `c957d0196a1b54c1c7e5ca103a3e0a3364e7b7d9a5934cbf514c9bebe5dd2608` です。
+  SHA-256 は `815ec3738cf124a81298748b3a22846d7813dcb87b354624eeec2efbc99126ff` です。
+
+### CAN1/CAN2 のローカル検証
+
+検証用 REPL は上流と同じ `CAN.STMCAN` の MMIO 範囲、NVIC 配線（CAN1 は IRQ 19–22、
+CAN2 は IRQ 63–66）、`master: can1` を使用します。CAN2 は CAN1 のフィルターバンクを
+共有し、`CAN2SB` で割り当てを分けます。割り込み出力は TX、RX FIFO0、RX FIFO1、
+SCE の順です。
+[Renode の STMCAN モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/CAN/STMCAN.cs)
+[RM0090 の bxCAN 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32bit-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF はスケジューラー開始前に CAN1/CAN2 のサイレント内部ループバックを
+実行します。CAN1 は ID `0x456` を受信フィルターで拒否し、ID `0x123` を FIFO0 に
+受信します。CAN2 は CAN1 が設定したバンク 14 を使用し、ID `0x456` を FIFO1 に受信します。
+ファームウェアは両フレームの ID、DLC、ペイロード、TX 完了、受信 IRQ と FIFO 解放、
+CAN1 のスリープ通知を確認して `CAN loopback OK` を表示します。その後に SysTick、
+TIM2、FreeRTOS キュー、UART4 を検証します。
 
 ### 未変更の上流 REPL
 
@@ -278,11 +295,14 @@ target/release/penv run --script "$work/upstream.repro.resc" \
     --platform-root ../renode --max-steps 36000
 ```
 
-現在は `stm32f4.repl:31: can1: unsupported platform model "CAN.STMCAN"` で終了コード 1
-になります。上流 REPL での ELF 起動はこのモデル以降の対応が必要です。
+`10cea9f` では `stm32f4.repl:31` の `CAN.STMCAN` で停止しました。現在は CAN1/CAN2
+の宣言を通過し、`stm32f4.repl:47: pwr: unsupported platform model "Miscellaneous.STM32_PWR"`
+で終了コード 1 になります。上流 REPL での ELF 起動には PWR 以降の対応が必要です。
 
 残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
 浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの
 プログラム動作、消去の所要時間と IRQ、RDP の強制、キャッシュ動作は未実装です。
 検証用 REPL では RCC の有効化書き込みを定数応答モデルで受けます。PLL、クロックゲート、
 UART のビット時間や GPIO 信号線の動作は検証範囲外です。
+CAN の通常モードでのノード間通信、CAN ハブ、ビット時間、バス仲裁、ACK やエラーの
+生成、RCC による CAN のクロック制御は残課題です。

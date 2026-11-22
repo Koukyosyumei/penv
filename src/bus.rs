@@ -13,6 +13,7 @@ use crate::{
     ns16550::Ns16550,
     nvic::{ActiveExceptions, Nvic, VTOR},
     plic::Plic,
+    stm32_can::{Filters, StmCan},
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
@@ -109,6 +110,7 @@ pub struct Bus {
     h7_timers: Vec<H7Timer>,
     h7_crc: Vec<Stm32Crc>,
     h7_fdcan: Vec<Fdcan>,
+    stm32_can: Vec<StmCan>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -364,6 +366,43 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_stm32_can(&mut self, can: StmCan) -> Result<(), String> {
+        self.check_peripheral_range(can.base, StmCan::SIZE)?;
+        self.stm32_can.push(can);
+        Ok(())
+    }
+
+    fn can_filters(&self, index: usize) -> &Filters {
+        let device = &self.stm32_can[index];
+        let owner = match device.master {
+            Some(base) => self
+                .stm32_can
+                .iter()
+                .find(|candidate| candidate.base == base)
+                .unwrap(),
+            None => device,
+        };
+        owner.filters.as_ref().unwrap()
+    }
+
+    fn write_stm32_can(&mut self, index: usize, address: u32, value: u32) {
+        let device = &mut self.stm32_can[index];
+        let offset = address - device.base;
+        if offset >= 0x200 {
+            if let Some(filters) = &mut device.filters {
+                filters.write(offset, value);
+            }
+            return;
+        }
+        device.write(offset, value);
+        let slave = device.master.is_some();
+        for frame in device.transmit().into_iter().flatten() {
+            if let Some((fifo, filter)) = self.can_filters(index).accept(slave, frame[0]) {
+                self.stm32_can[index].receive(fifo, filter, frame);
+            }
+        }
+    }
+
     pub fn map_h7_fdcan(&mut self, fdcan: Fdcan) -> Result<(), String> {
         self.check_peripheral_range(fdcan.base, Fdcan::SIZE)?;
         self.h7_fdcan.push(fdcan);
@@ -538,6 +577,7 @@ impl Bus {
                         .map(|timer| (timer.base, H7Timer::SIZE)),
                 )
                 .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
+                .chain(self.stm32_can.iter().map(|can| (can.base, StmCan::SIZE)))
                 .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
                 .any(|(base, size)| {
                     let base = u64::from(base);
@@ -733,6 +773,7 @@ impl Bus {
                 .iter()
                 .filter(|rng| rng_clocked(control, rng))
                 .filter_map(Rng::interrupt)
+                .chain(self.stm32_can.iter().flat_map(StmCan::interrupts))
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
                 .chain(
                     self.h7_qspi
@@ -1261,6 +1302,18 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(index) = self.stm32_can.iter().position(|can| can.contains(address))
+        {
+            let can = &self.stm32_can[index];
+            let offset = address - can.base;
+            return Ok(if offset >= 0x200 {
+                self.can_filters(index).read(offset)
+            } else {
+                can.read(offset)
+            });
+        }
+        if N == 4
+            && address & 3 == 0
             && let Some(fdcan) = self.h7_fdcan.iter().find(|fdcan| fdcan.contains(address))
         {
             return Ok(fdcan.read(address));
@@ -1646,6 +1699,12 @@ impl Bus {
             if crc_clocked(self.h7_network_control.as_ref(), crc) {
                 crc.write(address, width, value);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(index) = self.stm32_can.iter().position(|can| can.contains(address))
+        {
+            self.write_stm32_can(index, address, value);
             return Ok(());
         }
         if width == 4

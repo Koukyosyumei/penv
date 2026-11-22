@@ -20,6 +20,7 @@ mod platform;
 mod plic;
 mod pmp;
 mod simulation;
+mod stm32_can;
 mod stm32_crc;
 mod stm32_ethernet;
 mod stm32_exti;

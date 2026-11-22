@@ -8,6 +8,7 @@ use crate::{
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
+    stm32_can::StmCan,
     stm32_uart::{Stm32Irq, UsartLayout},
     stm32f4_flash::F4Flash,
     stm32h7_adc_platform,
@@ -70,7 +71,7 @@ impl Entry {
             .strip_prefix('+')
             .ok_or_else(|| self.error("expected +size in sysbus range"))?;
         if number(length).map_err(|e| self.error(&e))? != size {
-            return Err(self.error("invalid USART range size"));
+            return Err(self.error("invalid sysbus range size"));
         }
         number(address.trim()).map_err(|e| self.error(&e))
     }
@@ -299,6 +300,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut ram = false;
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
+    let mut stm32_can = Vec::new();
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
@@ -369,6 +371,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
+            StmCan::MODEL => stm32_can.push(entry),
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
@@ -526,6 +529,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 configure_h7_flash(flash, &entries, nvic, &mut machine)?;
             }
         }
+        configure_stm32_can(&stm32_can, nvic, &mut machine)?;
         let mut uart_irq = None;
         if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
@@ -729,6 +733,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(can) = stm32_can.first() {
+        return Err(can.error("STM32 CAN requires a Cortex-M CPU"));
     }
     if let Some(uart) = stm32_uarts.first() {
         return Err(uart.error("STM32 USART requires a Cortex-M platform"));
@@ -971,6 +978,64 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_stm32_can(
+    entries: &[&Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let mut devices = Vec::new();
+    for entry in entries {
+        let base = entry.address_with_optional_range(StmCan::SIZE)?;
+        let mut master = None;
+        let mut irq = [None; 4];
+        for (_, text) in &entry.body {
+            if let Some(name) = text.strip_prefix("master:")
+                && master.is_none()
+            {
+                master = Some(name.trim());
+                continue;
+            }
+            let Some((outputs, target)) = text.split_once("->") else {
+                return Err(entry.error("expected CAN master or NVIC wiring"));
+            };
+            let Some((name, inputs)) = target.split_once('@') else {
+                return Err(entry.error("missing CAN interrupt input"));
+            };
+            if !nvic.is_some_and(|nvic| nvic.name == name.trim()) {
+                return Err(entry.error("expected CAN interrupt routed to NVIC"));
+            }
+            let outputs = irq_list(outputs, 4).map_err(|error| entry.error(&error))?;
+            let inputs = irq_list(inputs, IRQ_LINES as u32).map_err(|error| entry.error(&error))?;
+            if outputs.len() != inputs.len() {
+                return Err(entry.error("mismatched CAN interrupt wiring widths"));
+            }
+            for (output, input) in outputs.into_iter().zip(inputs) {
+                if irq[usize::from(output)].replace(input).is_some() {
+                    return Err(entry.error("duplicate CAN interrupt output"));
+                }
+            }
+        }
+        devices.push((*entry, base, master, irq));
+    }
+
+    for &(entry, base, master, irq) in &devices {
+        let master = master
+            .map(|name| {
+                devices
+                    .iter()
+                    .find(|(candidate, _, parent, _)| candidate.name == name && parent.is_none())
+                    .map(|(_, address, _, _)| *address)
+                    .ok_or_else(|| entry.error("expected CAN master without its own master"))
+            })
+            .transpose()?;
+        machine
+            .bus
+            .map_stm32_can(StmCan::new(base, master, irq))
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
 }
 
 fn configure_f4_flash(
