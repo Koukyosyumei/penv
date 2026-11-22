@@ -1,3 +1,6 @@
+mod timer;
+use timer::Timer;
+
 mod twi;
 use twi::Twi;
 
@@ -30,6 +33,7 @@ enum Device {
     Clock(Clock),
     Uarte(Uarte),
     Rtc(Rtc),
+    Timer(Timer),
     Twi(Twi),
     Spi(Spi),
     Watchdog(Watchdog),
@@ -109,6 +113,15 @@ impl Peripheral {
         }
     }
 
+    pub fn timer(base: u32, irq: u8, name: String, channels: usize) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Timer(Timer::new(channels)),
+        }
+    }
+
     pub fn rtc(base: u32, irq: u8, name: String, channels: usize) -> Self {
         Self {
             base,
@@ -166,19 +179,21 @@ impl Peripheral {
     pub fn ppi_event_supported(&self, address: u32) -> bool {
         self.contains(address)
             && address & 3 == 0
-            && match self.device {
+            && match &self.device {
                 Device::Uarte(_) => Uarte::event(address - self.base).is_some(),
                 Device::Twi(_) => Twi::event(address - self.base).is_some(),
                 Device::Spi(_) => address - self.base == 0x108,
+                Device::Timer(timer) => timer.event(address - self.base),
                 _ => false,
             }
     }
 
     pub fn ppi_task_supported(&self, address: u32) -> bool {
         self.contains(address)
-            && match self.device {
+            && match &self.device {
                 Device::Uarte(_) => matches!(address - self.base, 0 | 4 | 8 | 12),
                 Device::Twi(_) => Twi::is_task(address - self.base),
+                Device::Timer(timer) => timer.task(address - self.base),
                 Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
                 _ => false,
             }
@@ -189,6 +204,7 @@ impl Peripheral {
             Device::Uarte(uart) => std::mem::take(&mut uart.raised),
             Device::Twi(twi) => std::mem::take(&mut twi.raised),
             Device::Spi(spi) => std::mem::take(&mut spi.raised),
+            Device::Timer(timer) => std::mem::take(&mut timer.raised),
             _ => return,
         };
         while raised != 0 {
@@ -281,6 +297,7 @@ impl Peripheral {
     pub fn tick(&mut self, sleeping: bool) {
         match &mut self.device {
             Device::Rtc(rtc) => rtc.tick(),
+            Device::Timer(timer) => timer.tick(),
             Device::Watchdog(watchdog) => watchdog.tick(sleeping),
             _ => {}
         }
@@ -299,6 +316,7 @@ impl Peripheral {
             Device::Gpio(gpio) => gpio.reset(),
             Device::Twi(twi) => twi.reset(),
             Device::Spi(spi) => spi.reset(),
+            Device::Timer(timer) => timer.reset(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -328,6 +346,7 @@ impl Peripheral {
             Device::Rtc(rtc) => rtc.events & rtc.interrupts != 0,
             Device::Twi(twi) => twi.pending(),
             Device::Spi(spi) => spi.pending(),
+            Device::Timer(timer) => timer.pending(),
         }
     }
 
@@ -352,6 +371,7 @@ impl Peripheral {
             Device::Clock(clock) => clock.read(offset),
             Device::Twi(twi) => twi.read(offset),
             Device::Spi(spi) => spi.read(offset),
+            Device::Timer(timer) => timer.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -396,6 +416,7 @@ impl Peripheral {
             Device::Rtc(rtc) => rtc.write(offset, value),
             Device::Twi(twi) => twi.write(offset, value),
             Device::Spi(spi) => spi.write(offset, value),
+            Device::Timer(timer) => timer.write(offset, value),
         };
         if supported {
             Ok(())

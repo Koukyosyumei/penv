@@ -54,13 +54,20 @@ pub(super) fn map_peripheral(
                     .parse::<bool>()
                     .map_err(|_| entry.error("invalid easyDMA property"))?,
             );
-        } else if entry.model == "Timers.NRF52840_RTC"
-            && channels.is_none()
+        } else if matches!(
+            entry.model.as_str(),
+            "Timers.NRF52840_RTC" | "Timers.NRF52840_Timer"
+        ) && channels.is_none()
             && let Some(("numberOfEvents", count)) = item.split_once(':')
         {
             let count = number(count.trim()).map_err(|e| entry.error(&e))?;
-            if !(1..=4).contains(&count) {
-                return Err(entry.error("expected 1–4 RTC compare channels"));
+            let max = if entry.model == "Timers.NRF52840_Timer" {
+                6
+            } else {
+                4
+            };
+            if !(1..=max).contains(&count) {
+                return Err(entry.error(&format!("expected 1–{max} compare channels")));
             }
             channels = Some(count as usize);
         } else if entry.model == "GPIOPort.NRF52840_GPIOTasksEvents"
@@ -93,6 +100,9 @@ pub(super) fn map_peripheral(
     }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
+    } else if entry.model == "Timers.NRF52840_Timer" {
+        let channels = channels.ok_or_else(|| entry.error("missing numberOfEvents"))?;
+        Peripheral::timer(base, irq as u8, name, channels)
     } else if entry.model == "Timers.NRF52840_RTC" {
         Peripheral::rtc(base, irq as u8, name, channels.unwrap_or(4))
     } else if entry.model == "GPIOPort.NRF52840_GPIOTasksEvents" {

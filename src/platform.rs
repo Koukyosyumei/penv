@@ -379,6 +379,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             | "I2C.NRF52840_I2C"
             | "SPI.NRF52840_SPI"
             | "Timers.NRF52840_RTC"
+            | "Timers.NRF52840_Timer"
             | "Timers.NRF52840_Watchdog"
             | "GPIOPort.NRF52840_GPIOTasksEvents"
                 if cortex_m4 =>
