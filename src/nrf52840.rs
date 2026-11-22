@@ -1,3 +1,6 @@
+mod twi;
+use twi::Twi;
+
 mod gpio;
 mod ppi;
 
@@ -25,6 +28,7 @@ enum Device {
     Clock(Clock),
     Uarte(Uarte),
     Rtc(Rtc),
+    Twi(Twi),
     Watchdog(Watchdog),
     Gpio(Gpio),
     Gpiote(Gpiote),
@@ -114,6 +118,26 @@ impl Peripheral {
         }
     }
 
+    pub fn twi(base: u32, irq: u8, name: String) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Twi(Twi::default()),
+        }
+    }
+
+    pub fn attach_eeprom(
+        &mut self,
+        address: u32,
+        target: crate::stm32_i2c::Eeprom,
+    ) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("expected an nRF52840 TWI controller".into());
+        };
+        twi.attach(address, target)
+    }
+
     pub fn ppi(base: u32, name: String) -> Self {
         Self {
             base,
@@ -128,26 +152,35 @@ impl Peripheral {
     }
 
     pub fn ppi_event_supported(&self, address: u32) -> bool {
-        self.is_uart()
-            && self.contains(address)
+        self.contains(address)
             && address & 3 == 0
-            && Uarte::event(address - self.base).is_some()
+            && match self.device {
+                Device::Uarte(_) => Uarte::event(address - self.base).is_some(),
+                Device::Twi(_) => Twi::event(address - self.base).is_some(),
+                _ => false,
+            }
     }
 
     pub fn ppi_task_supported(&self, address: u32) -> bool {
         self.contains(address)
-            && (self.is_uart() && matches!(address - self.base, 0 | 4 | 8 | 12)
-                || self.is_ppi() && address - self.base <= 0x2c && address & 3 == 0)
+            && match self.device {
+                Device::Uarte(_) => matches!(address - self.base, 0 | 4 | 8 | 12),
+                Device::Twi(_) => Twi::is_task(address - self.base),
+                Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
+                _ => false,
+            }
     }
 
     pub fn take_raised_events(&mut self, events: &mut Vec<u32>) {
-        if let Device::Uarte(uart) = &mut self.device {
-            let mut raised = std::mem::take(&mut uart.raised);
-            while raised != 0 {
-                let index = raised.trailing_zeros();
-                raised &= raised - 1;
-                events.push(self.base + 0x100 + index * 4);
-            }
+        let mut raised = match &mut self.device {
+            Device::Uarte(uart) => std::mem::take(&mut uart.raised),
+            Device::Twi(twi) => std::mem::take(&mut twi.raised),
+            _ => return,
+        };
+        while raised != 0 {
+            let index = raised.trailing_zeros();
+            raised &= raised - 1;
+            events.push(self.base + 0x100 + index * 4);
         }
     }
 
@@ -250,6 +283,7 @@ impl Peripheral {
     pub fn reset(&mut self) {
         match &mut self.device {
             Device::Gpio(gpio) => gpio.reset(),
+            Device::Twi(twi) => twi.reset(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -277,6 +311,7 @@ impl Peripheral {
             Device::Uarte(uart) => uart.events & uart.interrupts != 0,
             Device::Gpiote(gpiote) => gpiote.pending(),
             Device::Rtc(rtc) => rtc.events & rtc.interrupts != 0,
+            Device::Twi(twi) => twi.pending(),
         }
     }
 
@@ -295,10 +330,11 @@ impl Peripheral {
         Ok(())
     }
 
-    pub fn read(&self, address: u32) -> Option<u32> {
+    pub fn read(&mut self, address: u32) -> Option<u32> {
         let offset = address - self.base;
-        match &self.device {
+        match &mut self.device {
             Device::Clock(clock) => clock.read(offset),
+            Device::Twi(twi) => twi.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -341,6 +377,7 @@ impl Peripheral {
             Device::Watchdog(watchdog) => watchdog.write(offset, value),
             Device::Uarte(uart) => uart.write(offset, value, bus, output)?,
             Device::Rtc(rtc) => rtc.write(offset, value),
+            Device::Twi(twi) => twi.write(offset, value),
         };
         if supported {
             Ok(())
@@ -719,6 +756,32 @@ mod tests {
         bus.sample_nvic(0, false);
         assert_eq!(bus.read::<4>(gpiote + 0x17c).unwrap(), 1);
         assert_eq!(bus.nvic.as_ref().unwrap().next_irq(0), Some((6, 0)));
+    }
+
+    #[test]
+    fn twi_nack_can_trigger_stop_through_ppi() {
+        let mut bus = Bus::default();
+        let twi = 0x4000_3000;
+        let ppi = 0x4001_f000;
+        let mut output = Vec::new();
+        bus.map_nrf_peripheral(Peripheral::twi(twi, 3, "twi0".into()))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::ppi(ppi, "ppi".into()))
+            .unwrap();
+        for (address, value) in [
+            (ppi + 0x510, twi + 0x124),
+            (ppi + 0x514, twi + 0x014),
+            (ppi + 0x504, 1),
+            (twi + 0x500, 5),
+            (twi + 0x008, 1),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        assert_eq!(bus.read::<4>(twi + 0x4c4).unwrap(), 2);
+        assert_eq!(bus.read::<4>(twi + 0x104).unwrap(), 0);
+        bus.advance_nrf_ppi(&mut output).unwrap();
+        assert_eq!(bus.read::<4>(twi + 0x104).unwrap(), 1);
+        assert!(bus.write(twi + 0x500, 4, 6, &mut output).is_err());
     }
 
     #[test]

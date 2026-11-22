@@ -1190,7 +1190,7 @@ impl Bus {
             && address & 3 == 0
             && let Some(device) = self
                 .nrf_peripherals
-                .iter()
+                .iter_mut()
                 .find(|device| device.contains(address))
         {
             return device.read(address).ok_or(BusError::Unmapped(address, N));

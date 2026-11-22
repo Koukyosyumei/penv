@@ -375,6 +375,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             "UART.NRF52840_UART"
             | "Miscellaneous.NRF_CLOCK"
+            | "I2C.NRF52840_I2C"
             | "Timers.NRF52840_RTC"
             | "Timers.NRF52840_Watchdog"
             | "GPIOPort.NRF52840_GPIOTasksEvents"
@@ -963,6 +964,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .ok_or_else(|| {
                     eeprom.error("expected EEPROM registered on an I²C controller with an address")
                 })?;
+            if cortex_m4
+                && entries
+                    .iter()
+                    .any(|i2c| i2c.model == "I2C.NRF52840_I2C" && i2c.name == target)
+            {
+                // The nRF platform handler attaches targets when it maps the controller.
+                continue;
+            }
             if !stm32_i2cs.iter().any(|i2c| i2c.name == target) {
                 return Err(eeprom.error("unknown EEPROM I²C controller"));
             }

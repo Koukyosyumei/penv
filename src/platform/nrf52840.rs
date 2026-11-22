@@ -100,6 +100,26 @@ pub(super) fn map_peripheral(
             return Err(entry.error("GPIOTE requires distinct GPIO ports"));
         }
         Peripheral::gpiote(base, irq as u8, name, [port0, port1])
+    } else if entry.model == "I2C.NRF52840_I2C" {
+        let mut twi = Peripheral::twi(base, irq as u8, name);
+        for child in entries
+            .iter()
+            .filter(|child| child.model == "Memory.GenericI2cEeprom")
+        {
+            let Some((parent, address)) = child
+                .registration
+                .as_deref()
+                .and_then(|text| text.split_once(char::is_whitespace))
+            else {
+                continue;
+            };
+            if parent == entry.name {
+                let address = number(address.trim()).map_err(|e| child.error(&e))?;
+                twi.attach_eeprom(address, super::i2c_eeprom(child)?)
+                    .map_err(|e| child.error(&e))?;
+            }
+        }
+        twi
     } else if entry.model == "Timers.NRF52840_Watchdog" {
         Peripheral::watchdog(base, irq as u8, name)
     } else {
