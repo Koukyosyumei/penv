@@ -26,7 +26,7 @@ pub enum AdcClock {
 
 #[derive(Clone, Copy)]
 pub struct AdcRequest {
-    pub mux: u32,
+    pub endpoint: u32,
     pub id: u8,
 }
 

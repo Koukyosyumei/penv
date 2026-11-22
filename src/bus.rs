@@ -17,6 +17,7 @@ use crate::{
     stm32_uart::{Stm32Irq, Stm32Usart},
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux},
+    stm32h7_bdma::Bdma,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
     stm32h7_net_control::{Change, NetworkControl},
@@ -84,6 +85,7 @@ pub struct Bus {
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
     h7_adc: Vec<Adc>,
+    h7_bdma: Vec<Bdma>,
     h7_adc_dma: Vec<AdcDma>,
     h7_dma_mux: Vec<DmaMux>,
     h7_flash: Option<FlashController>,
@@ -233,12 +235,14 @@ impl Bus {
                 .zip(control.ranges().skip(1))
                 .any(|((start, end), (next, next_end))| start < next_end && next < end)
         {
-            return Err("invalid or overlapping STM32H7 Ethernet control registers".into());
+            return Err("invalid or overlapping STM32H7 clock control registers".into());
         }
-        let Controller::Stm32h7(device) = &mut self.ethernet[control.nic] else {
-            return Err("STM32H7 clock control requires an Ethernet QoS controller".into());
-        };
-        device.set_clock(false);
+        if let Some(nic) = control.nic {
+            let Some(Controller::Stm32h7(device)) = self.ethernet.get_mut(nic) else {
+                return Err("invalid STM32H7 Ethernet clock binding".into());
+            };
+            device.set_clock(false);
+        }
         self.h7_network_control = Some(control);
         Ok(())
     }
@@ -303,6 +307,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_bdma(&mut self, device: Bdma) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Bdma::SIZE)?;
+        self.h7_bdma.push(device);
+        Ok(())
+    }
+
     fn check_peripheral_range(&self, base: u32, size: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(size);
@@ -312,8 +322,17 @@ impl Bus {
         Ok(())
     }
 
-    pub fn tick_h7_adc(&mut self) {
+    pub fn tick_h7_peripherals(&mut self) {
         let control = self.h7_network_control.as_ref();
+        let mut dma = EthernetDma {
+            regions: &mut self.regions,
+            reservations: &mut self.reservations,
+        };
+        for controller in &mut self.h7_bdma {
+            if bdma_clocked(control, controller) {
+                controller.tick(&mut dma);
+            }
+        }
         for adc in &mut self.h7_adc {
             if !adc_clocked(control, adc) {
                 continue;
@@ -322,24 +341,36 @@ impl Bus {
             let Some((request, value)) = adc.take_request() else {
                 continue;
             };
-            let Some(mux) = self.h7_dma_mux.iter().find(|mux| mux.base == request.mux) else {
-                continue;
-            };
+            let source = adc.base + Adc::DATA;
             let mut transferred = false;
-            for target in mux.targets(request.id) {
-                if let Some(controller) = self
-                    .h7_adc_dma
-                    .iter_mut()
-                    .find(|dma| dma.base == target.base)
-                    && dma_clocked(control, controller)
-                {
-                    let mut dma = EthernetDma {
-                        regions: &mut self.regions,
-                        reservations: &mut self.reservations,
-                    };
-                    transferred |=
-                        controller.request(target.stream, adc.base + Adc::DATA, value, &mut dma);
+            if let Some(mux) = self
+                .h7_dma_mux
+                .iter()
+                .find(|mux| mux.base == request.endpoint)
+            {
+                for target in mux.targets(request.id) {
+                    if let Some(controller) = self
+                        .h7_adc_dma
+                        .iter_mut()
+                        .find(|dma| dma.base == target.base)
+                        && dma_clocked(control, controller)
+                    {
+                        transferred |= controller.request(target.stream, source, value, &mut dma);
+                    } else if let Some(controller) =
+                        self.h7_bdma.iter_mut().find(|dma| dma.base == target.base)
+                        && bdma_clocked(control, controller)
+                    {
+                        transferred |= controller.request(target.stream, source, value, &mut dma);
+                    }
                 }
+            } else if let Some(controller) = self
+                .h7_bdma
+                .iter_mut()
+                .find(|dma| dma.base == request.endpoint)
+                && bdma_clocked(control, controller)
+            {
+                transferred =
+                    controller.request(usize::from(request.id - 1), source, value, &mut dma);
             }
             if transferred {
                 adc.data_read();
@@ -389,6 +420,7 @@ impl Bus {
                         .iter()
                         .map(|device| (device.base, DmaMux::SIZE)),
                 )
+                .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
                 .any(|(base, size)| {
                     let base = u64::from(base);
                     start < base + u64::from(size) && base < end
@@ -542,6 +574,12 @@ impl Bus {
                 .iter()
                 .filter(|device| adc_clocked(control, device))
                 .filter_map(Adc::interrupt)
+                .chain(
+                    self.h7_bdma
+                        .iter()
+                        .filter(|device| bdma_clocked(control, device))
+                        .flat_map(Bdma::interrupts),
+                )
             {
                 match route {
                     Stm32Irq::Nvic(line) => nvic.set_line(line, true, active),
@@ -918,6 +956,16 @@ impl Bus {
                 return Ok(device.read(address));
             }
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self.h7_bdma.iter().find(|device| device.contains(address))
+        {
+            return Ok(if bdma_clocked(self.h7_network_control.as_ref(), device) {
+                device.read(address)
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1054,17 +1102,23 @@ impl Bus {
                     dma.reset();
                 }
             }
-            let Controller::Stm32h7(device) = &mut self.ethernet[control.nic] else {
-                unreachable!("network clock control is bound to STM32H7 Ethernet");
-            };
-            match change {
-                Change::None => {}
-                Change::Clock(enabled) => device.set_clock(enabled),
-                Change::Reset => {
-                    device.set_clock(false);
-                    device.reset();
+            if control.bdma_in_reset() {
+                for dma in self.h7_bdma.iter_mut().filter(|device| device.rcc_bound) {
+                    dma.reset();
                 }
-                Change::Interface(interface) => device.set_phy_interface(interface),
+            }
+            if let Some(nic) = control.nic
+                && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
+            {
+                match change {
+                    Change::None => {}
+                    Change::Clock(enabled) => device.set_clock(enabled),
+                    Change::Reset => {
+                        device.set_clock(false);
+                        device.reset();
+                    }
+                    Change::Interface(interface) => device.set_phy_interface(interface),
+                }
             }
             return Ok(());
         }
@@ -1136,6 +1190,17 @@ impl Bus {
                 return Ok(());
             }
         }
+        if width == 4
+            && let Some(device) = self
+                .h7_bdma
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            if bdma_clocked(self.h7_network_control.as_ref(), device) {
+                device.write(address, value);
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
@@ -1150,4 +1215,8 @@ fn adc_clocked(control: Option<&NetworkControl>, adc: &Adc) -> bool {
 
 fn dma_clocked(control: Option<&NetworkControl>, dma: &AdcDma) -> bool {
     control.is_none_or(|control| control.dma_enabled(dma.clock_mask))
+}
+
+fn bdma_clocked(control: Option<&NetworkControl>, dma: &Bdma) -> bool {
+    !dma.rcc_bound || control.is_none_or(NetworkControl::bdma_enabled)
 }

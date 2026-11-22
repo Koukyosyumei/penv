@@ -281,7 +281,7 @@ impl Machine {
                 &mut self.secondary[index - 1]
             };
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
-            self.bus.tick_h7_adc();
+            self.bus.tick_h7_peripherals();
             if let Some(dwt) = &mut self.bus.dwt {
                 dwt.tick();
             }

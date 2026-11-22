@@ -5,13 +5,14 @@ const ETH_CLOCKS: u32 = 7 << 15;
 const ETH_MAC: u32 = 1 << 15;
 const ADC12: u32 = 1 << 5;
 const ADC3: u32 = 1 << 24;
+const BDMA: u32 = 1 << 21;
 const SYSCFG_CLOCK: u32 = 1 << 1;
 const INTERFACE_MASK: u32 = 7 << 21;
 
 pub struct NetworkControl {
     pub rcc_base: u32,
     pub syscfg_base: Option<u32>,
-    pub nic: usize,
+    pub nic: Option<usize>,
     ahb1_reset: u32,
     ahb1_clock: u32,
     ahb1_sleep_clock: u32,
@@ -29,7 +30,7 @@ pub enum Change {
 }
 
 impl NetworkControl {
-    pub fn new(rcc_base: u32, syscfg_base: Option<u32>, nic: usize) -> Self {
+    pub fn new(rcc_base: u32, syscfg_base: Option<u32>, nic: Option<usize>) -> Self {
         Self {
             rcc_base,
             syscfg_base,
@@ -66,6 +67,14 @@ impl NetworkControl {
             AdcClock::Adc12 => self.ahb1_reset & ADC12 != 0,
             AdcClock::Adc3 => self.ahb4_reset & ADC3 != 0,
         }
+    }
+
+    pub fn bdma_enabled(&self) -> bool {
+        self.ahb4_clock & !self.ahb4_reset & BDMA != 0
+    }
+
+    pub fn bdma_in_reset(&self) -> bool {
+        self.ahb4_reset & BDMA != 0
     }
 
     pub fn dma_enabled(&self, mask: u32) -> bool {
@@ -114,7 +123,7 @@ impl NetworkControl {
                 }
             }
             0x88 => {
-                self.ahb4_reset = value & ADC3;
+                self.ahb4_reset = value & (ADC3 | BDMA);
                 Change::None
             }
             0xd8 => {

@@ -245,15 +245,28 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
         return Ok(());
     };
     if rccs.len() != 1 {
-        return Err(rcc.error("only one STM32H7 Ethernet clock controller is supported"));
+        return Err(rcc.error("only one STM32H7 clock controller is supported"));
     }
     let mut peripherals = entries.iter().filter(|entry| {
         entry.model == STM32H7_MAC
             && rcc_alias(entry, "RegistrationPeripheralAlias.ETH1MAC") == Some(&rcc.name)
     });
-    let ethernet = peripherals
-        .next()
-        .ok_or_else(|| rcc.error("STM32H7 RCC requires an ETH1MAC binding"))?;
+    let ethernet = peripherals.next();
+    let dma_or_adc = entries.iter().any(|entry| {
+        crate::stm32h7_adc_platform::has_regions(&entry.model)
+            && [
+                "RegistrationPeripheralAlias.ADC12",
+                "RegistrationPeripheralAlias.ADC3",
+                "RegistrationPeripheralAlias.DMA1",
+                "RegistrationPeripheralAlias.DMA2",
+                "RegistrationPeripheralAlias.BDMA",
+            ]
+            .into_iter()
+            .any(|alias| rcc_alias(entry, alias) == Some(&rcc.name))
+    });
+    if ethernet.is_none() && !dma_or_adc {
+        return Err(rcc.error("STM32H7 RCC requires a supported peripheral binding"));
+    }
     if peripherals.next().is_some() {
         return Err(rcc.error("multiple ETH1MAC clock bindings"));
     }
@@ -301,12 +314,16 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
     } else {
         None
     };
-    let nic = machine
-        .bus
-        .ethernet
-        .iter()
-        .position(|device| device.name() == ethernet.name)
-        .ok_or_else(|| ethernet.error("missing STM32H7 Ethernet controller"))?;
+    let nic = ethernet
+        .map(|ethernet| {
+            machine
+                .bus
+                .ethernet
+                .iter()
+                .position(|device| device.name() == ethernet.name)
+                .ok_or_else(|| ethernet.error("missing STM32H7 Ethernet controller"))
+        })
+        .transpose()?;
     machine
         .bus
         .map_h7_network_control(NetworkControl::new(rcc_base, syscfg_base, nic))

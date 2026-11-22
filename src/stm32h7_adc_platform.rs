@@ -5,19 +5,21 @@ use crate::{
     stm32_uart::Stm32Irq,
     stm32h7_adc::{Adc, AdcClock, AdcRequest, CHANNELS},
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
+    stm32h7_bdma::Bdma,
 };
 
 const ADC: &str = "Analog.STM32H7_ADC";
 const DMA: &str = "DMA.STM32DMA";
+const BDMA: &str = "DMA.STM32LDMA";
 const MUX: &str = "Miscellaneous.STM32_DMAMUX";
 const POTENTIOMETER: &str = "Analog.Potentiometer";
 
 pub fn has_regions(model: &str) -> bool {
-    matches!(model, ADC | DMA)
+    matches!(model, ADC | DMA | BDMA)
 }
 
 pub fn is_device(model: &str) -> bool {
-    matches!(model, ADC | DMA | MUX | POTENTIOMETER)
+    matches!(model, ADC | DMA | BDMA | MUX | POTENTIOMETER)
 }
 
 pub fn configure(
@@ -27,10 +29,10 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
-    let mut muxes = Vec::new();
+    let mut endpoints = Vec::new();
     for entry in entries.iter().filter(|entry| entry.model == MUX) {
         let mux = parse_mux(entry, entries).map_err(|e| entry.error(&e))?;
-        muxes.push((entry.name.as_str(), mux.0.base, mux.1));
+        endpoints.push((entry.name.as_str(), mux.0.base, mux.1));
         machine
             .bus
             .map_h7_dma_mux(mux.0)
@@ -59,9 +61,34 @@ pub fn configure(
             .map_err(|e| entry.error(&e))?;
     }
 
+    for entry in entries.iter().filter(|entry| entry.model == BDMA) {
+        let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
+        if !matches!(alias, None | Some("BDMA")) {
+            return Err(entry.error("invalid STM32 BDMA RCC alias"));
+        }
+        let mut outputs = [None; Bdma::CHANNELS];
+        for (_, text) in &entry.body {
+            let (from, target, to) = wire(text).map_err(|e| entry.error(e))?;
+            if nvic.is_some_and(|nvic| nvic.name == target) {
+                fill_routes(&mut outputs, from, to, IRQ_LINES as u32, Stm32Irq::Nvic)
+                    .map_err(|e| entry.error(&e))?;
+            } else if exti.is_some_and(|exti| exti.name == target) {
+                fill_routes(&mut outputs, from, to, exti_lines, Stm32Irq::Exti)
+                    .map_err(|e| entry.error(&e))?;
+            } else {
+                return Err(entry.error("expected BDMA IRQ connected to NVIC or EXTI"));
+            }
+        }
+        endpoints.push((entry.name.as_str(), base, Bdma::CHANNELS as u32));
+        machine
+            .bus
+            .map_h7_bdma(Bdma::new(base, alias.is_some(), outputs))
+            .map_err(|e| entry.error(&e))?;
+    }
+
     let mut adcs = Vec::new();
     for entry in entries.iter().filter(|entry| entry.model == ADC) {
-        let adc = parse_adc(entry, entries, &muxes, nvic, exti, exti_lines)
+        let adc = parse_adc(entry, entries, &endpoints, nvic, exti, exti_lines)
             .map_err(|e| entry.error(&e))?;
         adcs.push((entry.name.as_str(), adc, [false; CHANNELS]));
     }
@@ -92,7 +119,7 @@ pub fn configure(
 fn parse_adc(
     entry: &Entry,
     entries: &[Entry],
-    muxes: &[(&str, u32, u32)],
+    endpoints: &[(&str, u32, u32)],
     nvic: Option<&Entry>,
     exti: Option<&Entry>,
     exti_lines: u32,
@@ -106,7 +133,7 @@ fn parse_adc(
     };
     let mut reference = None;
     let mut frequency = None;
-    let mut mux_name = None;
+    let mut dma_name = None;
     let mut request = None;
     let mut irq = None;
     for (_, text) in &entry.body {
@@ -115,7 +142,7 @@ fn parse_adc(
             match key.trim() {
                 "referenceVoltage" if reference.is_none() => reference = Some(voltage(value)?),
                 "externalEventFrequency" if frequency.is_none() => frequency = Some(number(value)?),
-                "dmaPeripheral" if mux_name.is_none() => mux_name = Some(value),
+                "dmaPeripheral" if dma_name.is_none() => dma_name = Some(value),
                 "dmaChannel" if request.is_none() => request = Some(number(value)?),
                 _ => return Err("unsupported or duplicate STM32H7 ADC property".into()),
             }
@@ -144,22 +171,22 @@ fn parse_adc(
     );
     adc.clock = clock;
     adc.irq = irq;
-    adc.dma = match (mux_name, request) {
+    adc.dma = match (dma_name, request) {
         (None, None | Some(0)) => None,
         (Some(name), Some(request)) => {
-            let &(_, mux, count) = muxes
+            let &(_, endpoint, count) = endpoints
                 .iter()
                 .find(|&&(candidate, _, _)| candidate == name)
-                .ok_or("expected ADC DMA peripheral to reference an STM32 DMAMUX")?;
+                .ok_or("expected ADC DMA peripheral to reference an STM32 DMAMUX or BDMA")?;
             if !(1..=count).contains(&request) {
                 return Err(format!("ADC DMA request must be in 1–{count}"));
             }
             Some(AdcRequest {
-                mux,
+                endpoint,
                 id: request as u8,
             })
         }
-        _ => return Err("ADC DMA requires both a DMAMUX and a request number".into()),
+        _ => return Err("ADC DMA requires both a peripheral and a request number".into()),
     };
     Ok(adc)
 }
@@ -198,7 +225,7 @@ fn parse_mux(entry: &Entry, entries: &[Entry]) -> Result<(DmaMux, u32), String> 
         let (from, name, to) = wire(text)?;
         let target = entries
             .iter()
-            .find(|entry| entry.model == DMA && entry.name == name)
+            .find(|entry| matches!(entry.model.as_str(), DMA | BDMA) && entry.name == name)
             .ok_or("expected DMAMUX output connected to an STM32 DMA stream")?;
         let base = registration(target, entries)?.0;
         fill_routes(&mut targets, from, to, AdcDma::STREAMS as u32, |pin| {

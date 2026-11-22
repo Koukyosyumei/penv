@@ -26,6 +26,7 @@ mod stm32_uart;
 mod stm32h7_adc;
 mod stm32h7_adc_dma;
 mod stm32h7_adc_platform;
+mod stm32h7_bdma;
 mod stm32h7_ethernet;
 mod stm32h7_exti;
 mod stm32h7_flash;
