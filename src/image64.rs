@@ -12,7 +12,8 @@ use crate::{
 pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), String> {
     let mut header = [0; 64];
     read_at(&mut file, 0, &mut header)?;
-    if half(&header, 16) != 2
+    if header[..7] != *b"\x7fELF\x02\x01\x01"
+        || half(&header, 16) != 2
         || half(&header, 18) != 243
         || word(&header, 20) != 1
         || half(&header, 52) != 64
@@ -21,17 +22,17 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         return Err("expected a little-endian RISC-V ELF64 executable".into());
     }
     let flags = word(&header, 48);
-    if flags & !7 != 0 || flags & 6 == 6 {
+    // The serialized hart scheduler also satisfies an ELF requiring RVTSO.
+    if flags & !0x17 != 0 || flags & 6 == 6 {
         return Err(format!("unsupported RISC-V ELF64 ISA flags {flags:#x}"));
     }
     let compressed = flags & 1 != 0;
-    if let Some(cpu) = &machine.primary.rv64 {
+    let default_isa = if let Some(cpu) = &machine.primary.rv64 {
         let isa = cpu.isa();
         if compressed && !isa.compressed {
             return Err("ELF requires the RV64 compressed extension".into());
         }
-        // A heterogeneous platform may start integer-only harts in the same
-        // image, so check whether any configured hart provides the ELF ABI.
+        // A shared image may start both integer-only and floating-point harts.
         let supported = |isa: Isa| match flags & 6 {
             2 => isa.single,
             4 => isa.double,
@@ -42,11 +43,12 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         {
             return Err("RV64 platform lacks the ELF floating-point ABI extension".into());
         }
+        None
     } else if machine.primary.name.is_some() || machine.is_cortex_m() {
         return Err("RISC-V ELF64 requires an RV64 platform".into());
     } else {
-        machine.primary.rv64 = Some(Box::new(Rv64::new(Isa::elf(compressed))));
-    }
+        Some(Isa::elf(compressed))
+    };
 
     let entry = double(&header, 24);
     let table = double(&header, 32);
@@ -56,12 +58,20 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
     }
 
     let mut executable = false;
-    let mut initialized: Vec<Range<u64>> = Vec::new();
-    let minimum = if machine.primary.rv64.as_ref().unwrap().isa().compressed {
+    let mut segments = Vec::new();
+    let minimum = if machine
+        .primary
+        .rv64
+        .as_ref()
+        .map_or(compressed, |cpu| cpu.isa().compressed)
+    {
         2
     } else {
         4
     };
+    if !entry.is_multiple_of(minimum) {
+        return Err(format!("misaligned ELF64 entry {entry:#018x}"));
+    }
     for index in 0..count {
         let mut segment = [0; 56];
         read_at(&mut file, table + index * 56, &mut segment)?;
@@ -80,29 +90,19 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         if memory_size == 0 {
             continue;
         }
-        let end = address
-            .checked_add(memory_size)
-            .ok_or("ELF64 segment address overflow")?;
         let size = usize::try_from(memory_size).map_err(|_| "ELF64 segment exceeds host limits")?;
-        let destination = machine
+        let (backing, start) = machine
             .bus
-            .memory64(address, size)
+            .ram_location64(address, size)
             .ok_or_else(|| format!("unmapped ELF64 segment at {address:#018x} ({size} bytes)"))?;
-        let (data, bss) = destination.split_at_mut(file_size as usize);
-        read_at(&mut file, offset, data)?;
-        let zero_start = address + file_size;
-        if zero_start < end {
-            for range in &initialized {
-                let start = range.start.max(zero_start);
-                let end = range.end.min(end);
-                if start < end {
-                    bss[(start - zero_start) as usize..(end - zero_start) as usize].fill(0);
-                }
-            }
-        }
-        if file_size != 0 {
-            initialized.push(address..zero_start);
-        }
+        segments.push(Segment {
+            offset,
+            address,
+            file_size: file_size as usize,
+            size,
+            backing,
+            start,
+        });
         executable |= word(&segment, 4) & 1 != 0
             && entry
                 .checked_sub(address)
@@ -111,8 +111,48 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
     if !executable {
         return Err("ELF64 entry is outside executable file-backed segments".into());
     }
+
+    let mut initialized: Vec<(usize, Range<usize>)> = Vec::new();
+    for segment in segments {
+        let destination = machine
+            .bus
+            .memory64(segment.address, segment.size)
+            .expect("validated ELF64 memory mapping");
+        let (data, bss) = destination.split_at_mut(segment.file_size);
+        read_at(&mut file, segment.offset, data)?;
+        let zero_start = segment.start + segment.file_size;
+        let end = segment.start + segment.size;
+        if zero_start < end {
+            // The backing starts demand-zero. Touch BSS only where previous
+            // segments wrote bytes, including through another RAM alias.
+            for (backing, range) in &initialized {
+                if *backing == segment.backing {
+                    let start = range.start.max(zero_start);
+                    let end = range.end.min(end);
+                    if start < end {
+                        bss[start - zero_start..end - zero_start].fill(0);
+                    }
+                }
+            }
+        }
+        if !data.is_empty() {
+            initialized.push((segment.backing, segment.start..zero_start));
+        }
+    }
+    if let Some(isa) = default_isa {
+        machine.primary.rv64 = Some(Box::new(Rv64::new(isa)));
+    }
     machine.set_rv64_entry(entry);
     Ok(())
+}
+
+struct Segment {
+    address: u64,
+    offset: u64,
+    size: usize,
+    file_size: usize,
+    backing: usize,
+    start: usize,
 }
 
 fn file_range(offset: u64, size: u64, length: u64) -> bool {

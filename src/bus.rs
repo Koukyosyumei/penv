@@ -62,6 +62,13 @@ struct Region {
     mapped: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Reservation64 {
+    backing: usize,
+    offset: usize,
+    width: usize,
+}
+
 struct RamAlias {
     backing: usize,
     base: u64,
@@ -73,7 +80,7 @@ pub struct Bus {
     regions: Vec<Region>,
     aliases: Vec<RamAlias>,
     pub rv64_devices: crate::rv64_devices::Devices,
-    rv64_reservations: [Option<(u64, usize)>; crate::machine::MAX_HARTS],
+    rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -447,13 +454,14 @@ impl Bus {
     }
 
     pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {
-        let (index, offset) = self.ram_offset(address, width)?;
-        let region = &mut self.regions[index];
-        let address = region.base + offset as u64;
+        let (backing, offset) = self.ram_location64(address, width)?;
+        let region = &mut self.regions[backing];
         if width != 0 {
             for reservation in &mut self.rv64_reservations {
-                if reservation.is_some_and(|(start, size)| {
-                    address < start + size as u64 && start < address + width as u64
+                if reservation.is_some_and(|reserved| {
+                    reserved.backing == backing
+                        && offset < reserved.offset + reserved.width
+                        && reserved.offset < offset + width
                 }) {
                     *reservation = None;
                 }
@@ -474,16 +482,20 @@ impl Bus {
         self.rv64_reservations[hart] = self.reservation_key64(address, width);
     }
 
-    pub fn reservation_key64(&self, address: u64, width: usize) -> Option<(u64, usize)> {
-        let (index, offset) = self.ram_offset(address, width)?;
-        Some((self.regions[index].base + offset as u64, width))
+    pub fn reservation_key64(&self, address: u64, width: usize) -> Option<Reservation64> {
+        let (backing, offset) = self.ram_location64(address, width)?;
+        Some(Reservation64 {
+            backing,
+            offset,
+            width,
+        })
     }
 
-    pub fn take_reservation64(&mut self, hart: usize) -> Option<(u64, usize)> {
+    pub fn take_reservation64(&mut self, hart: usize) -> Option<Reservation64> {
         self.rv64_reservations[hart].take()
     }
 
-    fn ram_offset(&self, address: u64, width: usize) -> Option<(usize, usize)> {
+    pub fn ram_location64(&self, address: u64, width: usize) -> Option<(usize, usize)> {
         for (index, region) in self.regions.iter().enumerate() {
             if let Some(offset) = region.offset(address, width) {
                 return Some((index, offset));
@@ -501,7 +513,7 @@ impl Bus {
     }
 
     pub fn ram64(&self, address: u64, width: usize) -> Option<&[u8]> {
-        let (index, offset) = self.ram_offset(address, width)?;
+        let (index, offset) = self.ram_location64(address, width)?;
         Some(&self.regions[index].bytes[offset..offset + width])
     }
 

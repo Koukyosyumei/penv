@@ -140,6 +140,10 @@ impl Privilege {
         self.pending | self.injected
     }
 
+    pub fn interrupt_enabled_and_pending(&self) -> bool {
+        self.enable & self.pending() != 0
+    }
+
     pub fn interrupt(&mut self, pc: u64) -> Option<u64> {
         let enabled = self.enable & self.pending();
         let machine = if self.mode < Mode::Machine || self.status & MIE != 0 {

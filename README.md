@@ -1,6 +1,6 @@
 # penv
 
-`penv` は、Renode のファームウェア実行機能を Rust で段階的に実装する CLI エミュレーターです。現在はベアメタル RV32IM を実行できます。外部クレートは不要です。
+`penv` は、Renode のファームウェア実行機能を Rust で段階的に実装する CLI エミュレーターです。ベアメタルの RV32、RV64、および Cortex-M ファームウェアを実行できます。外部クレートは不要です。
 
 ## ビルドと実行
 
@@ -11,7 +11,7 @@ target/release/penv run --raw --ram-mib 1 --max-steps 1000000 firmware.bin
 target/release/penv run --help
 ```
 
-ELF はリトルエンディアンの静的な RISC-V ELF32 実行ファイルを受け付けます。リンカースクリプトでロード対象の仮想アドレスを `0x80000000` から配置し、エントリーポイントを実行可能セグメント内に置いてください。raw イメージは同アドレスからロード・実行します。主 RAM の既定値は 16 MiB です。別アドレスにリンクした ELF では、たとえば `--map-ram 0x1000:0x40000` で RAM を追加できます。このオプションは複数回指定でき、容量の単位はバイトです。
+ELF はリトルエンディアンの静的な RISC-V ELF32 と ELF64 の実行ファイルを受け付けます。リンカースクリプトでロード対象の仮想アドレスを `0x80000000` から配置し、エントリーポイントを実行可能セグメント内に置いてください。raw イメージは同アドレスからロード・実行します。主 RAM の既定値は 16 MiB です。別アドレスにリンクした ELF では、たとえば `--map-ram 0x1000:0x40000` で RAM を追加できます。このオプションは複数回指定でき、容量の単位はバイトです。
 
 ゲストが `0x10000000` にバイトを書き込むと、UART 出力として標準出力に流れます。診断と `--stats` の実行情報は標準エラー出力に出ます。`mtvec` を設定する前の `ECALL` と `EBREAK` は終了コード 0 で停止します。`mtvec` 設定後は、これらに加えて不正命令、未対応 CSR、命令フェッチとロード・ストアのアドレス例外をゲストのトラップハンドラーへ配送します。実行ステップ数が上限に達すると終了コード 2、実行・入力エラーでは 1 を返します。
 
@@ -63,6 +63,17 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 ```
 
 同じステップに複数のイベントを指定した場合は、CLI に指定した順に受信 FIFO へ追加します。
+
+## RV64
+
+リトルエンディアンの静的な RISC-V ELF64 は、クラスから RV64 を自動選択します。セグメントは物理アドレスにロードされます。実行開始時にページ変換が無効なため、エントリーポイントはロードされた実行可能セグメント内の物理アドレスを指す必要があります。raw の RV64IM イメージには `--raw --rv64` を指定します。`--map-ram` には 4 GiB 以上のアドレスも指定できます。
+
+```sh
+target/release/penv run --platform ../renode/platforms/cpus/sifive-fu740.repl \
+  --platform-root ../renode --stats firmware64.elf
+```
+
+`CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。範囲外のボード周辺機器は未実装で、そのアドレスへのアクセスはゲストの例外になります。
 
 ## Cortex-M0 / Cortex-M0+
 

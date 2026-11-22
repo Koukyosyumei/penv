@@ -18,6 +18,9 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
     let mut ram = false;
 
     for entry in &entries {
+        if entry.registration.as_deref() == Some("none") {
+            continue;
+        }
         match entry.model.as_str() {
             "CPU.RiscV64" => {
                 let hart = property(entry, "hartId").map_or(Ok(0), |value| number(entry, value))?;
@@ -76,6 +79,11 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
     }
 
     if let Some(entry) = clint {
+        if let Some(frequency) = property(entry, "frequency")
+            && number(entry, frequency)? == 0
+        {
+            return Err(entry.error("CLINT frequency must be positive"));
+        }
         let targets = property(entry, "numberOfTargets")
             .map_or(Ok(cpus.len() as u64), |value| number(entry, value))?;
         let targets = usize::try_from(targets)

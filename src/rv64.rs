@@ -20,6 +20,7 @@ pub struct Rv64 {
     pub privilege: Privilege,
     translations: TranslationCache,
     pub allow_unaligned: bool,
+    waiting: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -118,6 +119,7 @@ impl Rv64 {
             privilege: Privilege::default(),
             translations: TranslationCache::default(),
             allow_unaligned: false,
+            waiting: false,
         }
     }
 
@@ -195,8 +197,16 @@ impl Rv64 {
         let pending = u64::from(pending) | bus.rv64_devices.tick(hart);
         let count_retired = self.privilege.tick(pending, time);
         if let Some(target) = self.privilege.interrupt(self.pc) {
+            self.waiting = false;
             self.pc = target;
             return Ok(Step::Trap);
+        }
+
+        if self.waiting {
+            if !self.privilege.interrupt_enabled_and_pending() {
+                return Ok(Step::Trap);
+            }
+            self.waiting = false;
         }
 
         let result = self.fetch(bus).and_then(|(instruction, length)| {
@@ -384,7 +394,7 @@ impl Rv64 {
                     0x0010_0073 => return Err(Fault::new(3, self.pc)),
                     0x3020_0073 => next = self.privilege.mret(epc_mask).ok_or(illegal)?,
                     0x1020_0073 => next = self.privilege.sret(epc_mask).ok_or(illegal)?,
-                    0x1050_0073 if self.privilege.allows_wfi() => {}
+                    0x1050_0073 if self.privilege.allows_wfi() => self.waiting = true,
                     _ if instruction & 0xfe00_7fff == 0x1200_0073
                         && self.privilege.allows_sfence() =>
                     {
