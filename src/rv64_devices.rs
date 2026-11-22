@@ -72,6 +72,12 @@ impl Devices {
         self.lines[hart] | self.plic.as_ref().map_or(0, |plic| plic.outputs(hart))
     }
 
+    pub fn set_ethernet_irq(&mut self, source: usize, active: bool) {
+        if let Some(plic) = &mut self.plic {
+            plic.line(source, active);
+        }
+    }
+
     pub fn read(&mut self, address: u32, width: usize) -> Option<u32> {
         if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
             return uart.read(address, width);
@@ -106,15 +112,6 @@ impl Devices {
         if width == 4
             && let Some(device) = self
                 .reset_generators
-                .iter_mut()
-                .find(|device| device.contains(address))
-        {
-            device.write(address, value);
-            return Some(Ok(()));
-        }
-        if width == 4
-            && let Some(device) = self
-                .ethernet
                 .iter_mut()
                 .find(|device| device.contains(address))
         {

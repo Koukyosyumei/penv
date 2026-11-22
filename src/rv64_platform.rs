@@ -235,11 +235,16 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
         }
     }
 
-    map_ethernet(&mut machine, &entries)?;
+    map_ethernet(&mut machine, &entries, plic, sources)?;
     Ok(machine)
 }
 
-fn map_ethernet(machine: &mut Machine, entries: &[Entry]) -> Result<(), String> {
+fn map_ethernet(
+    machine: &mut Machine,
+    entries: &[Entry],
+    plic: Option<&Entry>,
+    sources: u64,
+) -> Result<(), String> {
     let mut macs = HashMap::new();
     for entry in entries {
         if entry.model != "Network.SynopsysEthernetMAC"
@@ -253,8 +258,28 @@ fn map_ethernet(machine: &mut Machine, entries: &[Entry]) -> Result<(), String> 
             return Err(entry.error("unaligned Ethernet address"));
         }
         check_mapping(machine, entry, base, Ethernet::SIZE)?;
+        let mut source = 0;
+        for (_, line) in &entry.body {
+            if let Some((output, input)) = line.split_once("->")
+                && output.trim() == "IRQ"
+            {
+                let (controller, pin) = endpoint(entry, input)?;
+                let pin = number(entry, pin)?;
+                if !plic.is_some_and(|plic| plic.name == controller)
+                    || !(1..=sources).contains(&pin)
+                    || source != 0
+                {
+                    return Err(entry.error("invalid or duplicate Ethernet interrupt route"));
+                }
+                source = pin as usize;
+            }
+        }
         macs.insert(entry.name.as_str(), machine.bus.rv64_devices.ethernet.len());
-        machine.bus.rv64_devices.ethernet.push(Ethernet::new(base));
+        machine
+            .bus
+            .rv64_devices
+            .ethernet
+            .push(Ethernet::new(base, source));
     }
 
     for entry in entries

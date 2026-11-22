@@ -501,6 +501,9 @@ impl Rv64 {
             return Ok(());
         }
         if let Ok(low) = u32::try_from(physical) {
+            if bus.write_rv64_ethernet(low, width, value as u32) {
+                return Ok(());
+            }
             let result = if width == 8 {
                 if let Some(clint) = bus.clint.as_mut().filter(|clint| clint.contains(low)) {
                     clint.write(low, value as u32);
