@@ -56,7 +56,8 @@ Options:
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --button-event STEP:NAME:STATE  Schedule a button press or release (repeatable)
   --led-events       Print board LED transitions to stderr
-  --adc-input CHANNEL:VOLTS  Set an STM32 ADC channel voltage (repeatable)
+  --adc-input CHANNEL:VOLTS  Set the initial STM32 ADC channel voltage (repeatable)
+  --adc-event STEP:CHANNEL:VOLTS  Change an STM32 ADC channel voltage at a step (repeatable)
   --stm32f0-console  Require an STM32F0 REPL (legacy console option)
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
@@ -113,6 +114,7 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_root = None;
     let mut stm32f0_console = false;
     let mut adc_inputs = Vec::new();
+    let mut adc_events = Vec::new();
     let mut button_events = Vec::new();
     let mut led_events = false;
     let mut uart_input = None;
@@ -171,18 +173,42 @@ fn run() -> Result<ExitCode, String> {
                 };
                 button_events.push((step, name.to_owned(), pressed));
             }
-            Some("--adc-input") => {
+            Some(option @ ("--adc-input" | "--adc-event")) => {
+                let usage = || {
+                    format!(
+                        "{option} requires {}",
+                        if option == "--adc-event" {
+                            "STEP:CHANNEL:VOLTS"
+                        } else {
+                            "CHANNEL:VOLTS"
+                        }
+                    )
+                };
                 let value = args
                     .next()
                     .and_then(|value| value.into_string().ok())
-                    .ok_or("--adc-input requires CHANNEL:VOLTS")?;
-                let (channel, volts) = value
-                    .split_once(':')
-                    .ok_or("--adc-input requires CHANNEL:VOLTS")?;
-                adc_inputs.push((
-                    channel.parse().map_err(|_| "invalid --adc-input channel")?,
-                    volts.parse().map_err(|_| "invalid --adc-input voltage")?,
-                ));
+                    .ok_or_else(usage)?;
+                let (step, input) = if option == "--adc-event" {
+                    let (step, input) = value.split_once(':').ok_or_else(usage)?;
+                    let step = step
+                        .parse::<u64>()
+                        .map_err(|_| "invalid --adc-event step")?;
+                    (Some(step), input)
+                } else {
+                    (None, value.as_str())
+                };
+                let (channel, volts) = input.split_once(':').ok_or_else(usage)?;
+                let channel = channel
+                    .parse()
+                    .map_err(|_| format!("invalid {option} channel"))?;
+                let volts = volts
+                    .parse()
+                    .map_err(|_| format!("invalid {option} voltage"))?;
+                if let Some(step) = step {
+                    adc_events.push((step, channel, volts));
+                } else {
+                    adc_inputs.push((channel, volts));
+                }
             }
             Some("--uart-event") => {
                 let value = args
@@ -337,6 +363,9 @@ fn run() -> Result<ExitCode, String> {
     }
     for (channel, volts) in adc_inputs {
         machine.bus.set_stm32f0_adc_input(channel, volts)?;
+    }
+    for (step, channel, volts) in adc_events {
+        machine.schedule_adc_input(step, channel, volts)?;
     }
     for (base, size) in extra_ram {
         machine.bus.map_ram(base, size)?;

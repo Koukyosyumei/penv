@@ -17,6 +17,7 @@ pub struct Machine {
     elapsed_steps: u64,
     uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
+    adc_events: VecDeque<(u64, usize, f64)>,
 }
 
 #[derive(Clone)]
@@ -151,6 +152,7 @@ impl Machine {
             elapsed_steps: 0,
             uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
+            adc_events: VecDeque::new(),
         }
     }
 
@@ -245,6 +247,20 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_adc_input(
+        &mut self,
+        step: u64,
+        channel: usize,
+        volts: f64,
+    ) -> Result<(), String> {
+        self.bus.validate_stm32f0_adc_input(channel, volts)?;
+        let index = self
+            .adc_events
+            .partition_point(|(scheduled, _, _)| *scheduled <= step);
+        self.adc_events.insert(index, (step, channel, volts));
+        Ok(())
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
@@ -275,6 +291,14 @@ impl Machine {
             {
                 let (_, button, pressed) = self.button_events.pop_front().unwrap();
                 self.bus.set_button(button, pressed);
+            }
+            while self
+                .adc_events
+                .front()
+                .is_some_and(|(step, _, _)| *step <= self.elapsed_steps)
+            {
+                let (_, channel, volts) = self.adc_events.pop_front().unwrap();
+                self.bus.set_stm32f0_adc_input(channel, volts)?;
             }
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
                 Step::Retired => retired += 1,

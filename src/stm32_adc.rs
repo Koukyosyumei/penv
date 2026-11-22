@@ -73,15 +73,20 @@ impl Stm32F0Adc {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn set_input(&mut self, channel: usize, volts: f64) -> Result<(), String> {
+    pub fn validate_input(&self, channel: usize, volts: f64) -> Result<(), String> {
+        if channel >= self.inputs.len() {
+            return Err("STM32 ADC channel must be in 0–18".into());
+        }
         if !volts.is_finite() || volts < 0.0 {
             return Err("STM32 ADC input voltage must be finite and nonnegative".into());
         }
-        let input = self
-            .inputs
-            .get_mut(channel)
-            .ok_or("STM32 ADC channel must be in 0–18")?;
-        *input = ((volts / self.reference).min(1.0) * f64::from(u32::MAX)).round() as u32;
+        Ok(())
+    }
+
+    pub fn set_input(&mut self, channel: usize, volts: f64) -> Result<(), String> {
+        self.validate_input(channel, volts)?;
+        self.inputs[channel] =
+            ((volts / self.reference).min(1.0) * f64::from(u32::MAX)).round() as u32;
         Ok(())
     }
 

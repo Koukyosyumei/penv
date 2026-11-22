@@ -756,10 +756,17 @@ impl Bus {
         Ok(())
     }
 
+    pub fn validate_stm32f0_adc_input(&self, channel: usize, volts: f64) -> Result<(), String> {
+        self.stm32_adc
+            .as_ref()
+            .ok_or("ADC input requires an STM32F0 ADC")?
+            .validate_input(channel, volts)
+    }
+
     pub fn set_stm32f0_adc_input(&mut self, channel: usize, volts: f64) -> Result<(), String> {
         self.stm32_adc
             .as_mut()
-            .ok_or("--adc-input requires an STM32F0 ADC")?
+            .ok_or("ADC input requires an STM32F0 ADC")?
             .set_input(channel, volts)
     }
 
