@@ -15,6 +15,7 @@ use crate::{
     stm32_dma::Stm32Dma,
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
+    stm32_gpio_board::{GpioButton, GpioLed},
     stm32_i2c::Stm32I2c,
     stm32_rcc::Stm32F0Rcc,
     stm32_rtc::Stm32Rtc,
@@ -84,6 +85,10 @@ pub struct Bus {
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
+    gpio_exti_levels: u32,
+    gpio_leds: Vec<GpioLed>,
+    gpio_buttons: Vec<GpioButton>,
+    led_events: bool,
     stm32_timers: Vec<Stm32Timer>,
     stm32_spis: Vec<Stm32F0Spi>,
     stm32_i2cs: Vec<Stm32I2c>,
@@ -348,7 +353,7 @@ impl Bus {
                     .is_some_and(LiteXUart::interrupt_pending),
                 active,
             );
-            let mut exti_inputs = 0;
+            let mut exti_inputs = self.gpio_exti_levels;
             for uart in &self.stm32_uarts {
                 if uart.interrupt_pending() {
                     match uart.irq {
@@ -499,6 +504,53 @@ impl Bus {
         }
         self.stm32_timers.push(timer);
         Ok(())
+    }
+
+    pub fn add_gpio_led(&mut self, led: GpioLed) {
+        self.gpio_leds.push(led);
+        self.refresh_gpio_wiring();
+    }
+
+    pub fn add_gpio_button(&mut self, button: GpioButton) {
+        self.gpio_buttons.push(button);
+        self.set_button(self.gpio_buttons.len() - 1, false);
+    }
+
+    pub fn report_led_events(&mut self, enabled: bool) {
+        self.led_events = enabled;
+    }
+
+    pub fn board_button(&self, name: &str) -> Option<usize> {
+        self.gpio_buttons
+            .iter()
+            .position(|button| button.name == name)
+    }
+
+    pub fn set_button(&mut self, index: usize, pressed: bool) {
+        let button = &self.gpio_buttons[index];
+        if let Some(port) = self
+            .stm32_gpios
+            .iter_mut()
+            .find(|port| port.base == button.port)
+        {
+            port.set_external(button.pin, pressed ^ button.invert);
+            self.refresh_gpio_wiring();
+        }
+    }
+
+    fn refresh_gpio_wiring(&mut self) {
+        self.gpio_exti_levels = self
+            .stm32_gpios
+            .iter()
+            .fold(0, |levels, port| levels | port.exti_levels());
+        for led in &mut self.gpio_leds {
+            if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == led.port)
+                && let Some(on) = led.sample(port.pins())
+                && self.led_events
+            {
+                eprintln!("LED {} {}", led.name, if on { "on" } else { "off" });
+            }
+        }
     }
 
     pub fn map_stm32_gpio(&mut self, gpio: Stm32Gpio) -> Result<(), String> {
@@ -1043,6 +1095,7 @@ impl Bus {
             } else {
                 gpio.write(address, value);
             }
+            self.refresh_gpio_wiring();
             return Ok(());
         }
         if width == 4

@@ -1,0 +1,46 @@
+pub struct GpioLed {
+    pub name: String,
+    pub port: u32,
+    pub pin: u8,
+    invert: bool,
+    state: bool,
+}
+
+impl GpioLed {
+    pub fn new(name: String, port: u32, pin: u8, invert: bool) -> Self {
+        Self {
+            name,
+            port,
+            pin,
+            invert,
+            state: invert,
+        }
+    }
+
+    pub fn sample(&mut self, levels: u16) -> Option<bool> {
+        let state = (levels & (1 << self.pin) != 0) ^ self.invert;
+        if state == self.state {
+            return None;
+        }
+        self.state = state;
+        Some(state)
+    }
+}
+
+pub struct GpioButton {
+    pub name: String,
+    pub port: u32,
+    pub pin: u8,
+    pub invert: bool,
+}
+
+impl GpioButton {
+    pub fn new(name: String, port: u32, pin: u8, invert: bool) -> Self {
+        Self {
+            name,
+            port,
+            pin,
+            invert,
+        }
+    }
+}

@@ -16,6 +16,7 @@ mod stm32_crc;
 mod stm32_dma;
 mod stm32_exti;
 mod stm32_gpio;
+mod stm32_gpio_board;
 mod stm32_i2c;
 mod stm32_rcc;
 mod stm32_rtc;
@@ -51,6 +52,8 @@ Options:
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
+  --button-event STEP:NAME:STATE  Schedule a button press or release (repeatable)
+  --led-events       Print board LED transitions to stderr
   --adc-input CHANNEL:VOLTS  Set an STM32 ADC channel voltage (repeatable)
   --stm32f0-console  Load STM32F0 REPLs with console-focused peripheral support
   --platform-root DIR  Root for working-directory-relative REPL includes
@@ -108,6 +111,8 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_root = None;
     let mut stm32f0_console = false;
     let mut adc_inputs = Vec::new();
+    let mut button_events = Vec::new();
+    let mut led_events = false;
     let mut uart_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
@@ -140,6 +145,29 @@ fn run() -> Result<ExitCode, String> {
                 if target.replace(path).is_some() {
                     return Err(format!("{option} may only be specified once"));
                 }
+            }
+            Some("--led-events") => led_events = true,
+            Some("--button-event") => {
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--button-event requires STEP:NAME:STATE")?;
+                let mut fields = value.splitn(3, ':');
+                let step = fields
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .map_err(|_| "invalid --button-event step")?;
+                let name = fields
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .ok_or("--button-event requires a button name")?;
+                let pressed = match fields.next() {
+                    Some("press") => true,
+                    Some("release") => false,
+                    _ => return Err("--button-event state must be press or release".into()),
+                };
+                button_events.push((step, name.to_owned(), pressed));
             }
             Some("--adc-input") => {
                 let value = args
@@ -301,6 +329,10 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    machine.bus.report_led_events(led_events);
+    for (step, name, pressed) in button_events {
+        machine.schedule_button(step, &name, pressed)?;
+    }
     for (channel, volts) in adc_inputs {
         machine.bus.set_stm32f0_adc_input(channel, volts)?;
     }

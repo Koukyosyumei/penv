@@ -1,6 +1,8 @@
 pub struct Stm32Gpio {
     pub base: u32,
     pub size: u32,
+    pub exti_routes: [u32; 16],
+    external: u16,
     mode: u32,
     output_type: u32,
     speed: u32,
@@ -26,6 +28,8 @@ impl Stm32Gpio {
         Self {
             base,
             size,
+            exti_routes: [0; 16],
+            external: 0,
             mode,
             output_type: 0,
             speed,
@@ -41,14 +45,32 @@ impl Stm32Gpio {
         address.wrapping_sub(self.base) < self.size
     }
 
+    pub fn set_external(&mut self, pin: u8, high: bool) {
+        let bit = 1 << pin;
+        self.external = (self.external & !bit) | (u16::from(high) << pin);
+    }
+
     pub fn pins(&self) -> u16 {
         let mut pins = 0;
         for pin in 0..16 {
-            if (self.mode >> (pin * 2)) & 3 == 1 {
-                pins |= self.output & (1 << pin);
+            let mask = 1 << pin;
+            match (self.mode >> (pin * 2)) & 3 {
+                0 | 2 => pins |= self.external & mask,
+                1 => pins |= self.output as u16 & mask,
+                _ => {}
             }
         }
-        pins as u16
+        pins
+    }
+
+    pub fn exti_levels(&self) -> u32 {
+        let mut pins = self.pins();
+        let mut levels = 0;
+        while pins != 0 {
+            levels |= self.exti_routes[pins.trailing_zeros() as usize];
+            pins &= pins - 1;
+        }
+        levels
     }
 
     pub fn read(&mut self, address: u32) -> u32 {

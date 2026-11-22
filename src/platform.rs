@@ -11,6 +11,7 @@ use crate::{
     stm32_adc::Stm32F0Adc,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
+    stm32_gpio_board::{GpioButton, GpioLed},
     stm32_i2c::{Eeprom, Stm32I2c},
     stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
@@ -230,6 +231,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut stm32_uarts = Vec::new();
     let mut stm32_timers = Vec::new();
     let mut stm32_spis = Vec::new();
+    let mut stm32_gpios = Vec::new();
+    let mut gpio_leds = Vec::new();
+    let mut gpio_buttons = Vec::new();
     let mut stm32_i2cs = Vec::new();
     let mut i2c_eeproms = Vec::new();
     let mut stm32_adc = None;
@@ -279,63 +283,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
-            "GPIOPort.STM32_GPIOPort" => {
-                let registration = entry
-                    .registration
-                    .as_deref()
-                    .and_then(|s| s.strip_prefix("sysbus "))
-                    .ok_or_else(|| entry.error("expected GPIO registered on sysbus"))?
-                    .trim();
-                let (base, size) = if let Some(range) = registration
-                    .strip_prefix('<')
-                    .and_then(|s| s.strip_suffix('>'))
-                {
-                    let (base, size) = range
-                        .split_once(',')
-                        .and_then(|(base, size)| {
-                            Some((base.trim(), size.trim().strip_prefix('+')?.trim()))
-                        })
-                        .ok_or_else(|| entry.error("expected GPIO range <base, +size>"))?;
-                    (number(base), number(size))
-                } else {
-                    (number(registration), Ok(0x400))
-                };
-                let mut reset = [0; 3];
-                let mut alternate_count = 16;
-                for (key, value) in keys(
-                    entry,
-                    &[
-                        "modeResetValue",
-                        "outputSpeedResetValue",
-                        "pullUpPullDownResetValue",
-                        "numberOfAFs",
-                    ],
-                )? {
-                    let value = number(value).map_err(|e| entry.error(&e))?;
-                    if key == "numberOfAFs" {
-                        if !(1..=16).contains(&value) {
-                            return Err(entry.error("numberOfAFs must be in 1–16"));
-                        }
-                        alternate_count = value;
-                        continue;
-                    }
-                    let index = match key {
-                        "modeResetValue" => 0,
-                        "outputSpeedResetValue" => 1,
-                        _ => 2,
-                    };
-                    reset[index] = value;
-                }
-                machine
-                    .bus
-                    .map_stm32_gpio(Stm32Gpio::new(
-                        base.map_err(|e| entry.error(&e))?,
-                        size.map_err(|e| entry.error(&e))?,
-                        reset,
-                        alternate_count,
-                    ))
-                    .map_err(|e| entry.error(&e))?;
-            }
+            "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
+            "Miscellaneous.LED" => gpio_leds.push(entry),
+            "Miscellaneous.Button" => gpio_buttons.push(entry),
             "CRC.STM32_CRC" => {
                 let mut series = None;
                 let mut configurable_poly = false;
@@ -590,6 +540,94 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         } else {
             0
         };
+        let mut gpio_ports = HashMap::new();
+        let mut led_inputs = HashMap::new();
+        for entry in stm32_gpios {
+            let mut port = make_stm32_gpio(entry)?;
+            for (_, text) in &entry.body {
+                let Some((outputs, destinations)) = text.split_once("->") else {
+                    continue;
+                };
+                let outputs = irq_list(outputs, 16).map_err(|e| entry.error(&e))?;
+                for destination in destinations.split('|') {
+                    let (target, inputs) = destination
+                        .split_once('@')
+                        .ok_or_else(|| entry.error("invalid STM32 GPIO destination"))?;
+                    let target = target.trim();
+                    if exti.is_some_and(|exti| exti.name == target) {
+                        let inputs = irq_list(inputs, exti_lines).map_err(|e| entry.error(&e))?;
+                        if inputs.len() != outputs.len() {
+                            return Err(entry.error("mismatched GPIO and EXTI wiring widths"));
+                        }
+                        for (&pin, line) in outputs.iter().zip(inputs) {
+                            port.exti_routes[usize::from(pin)] |= 1 << line;
+                        }
+                    } else if gpio_leds.iter().any(|led| led.name == target) {
+                        if inputs.trim() != "0"
+                            || outputs.len() != 1
+                            || led_inputs.insert(target, (port.base, outputs[0])).is_some()
+                        {
+                            return Err(entry.error("invalid or duplicate GPIO LED wiring"));
+                        }
+                    } else {
+                        return Err(entry.error("unsupported STM32 GPIO destination"));
+                    }
+                }
+            }
+            gpio_ports.insert(entry.name.as_str(), port.base);
+            machine
+                .bus
+                .map_stm32_gpio(port)
+                .map_err(|e| entry.error(&e))?;
+        }
+        for led in gpio_leds {
+            let (port, pin) = led_inputs
+                .remove(led.name.as_str())
+                .ok_or_else(|| led.error("expected LED wired to a GPIO output"))?;
+            let invert = keys(led, &["invert"])?
+                .first()
+                .map_or(Ok(false), |(_, value)| value.parse())
+                .map_err(|_| led.error("invalid LED invert property"))?;
+            machine
+                .bus
+                .add_gpio_led(GpioLed::new(led.name.clone(), port, pin, invert));
+        }
+        for button in gpio_buttons {
+            let mut invert = None;
+            let mut target = None;
+            for (_, text) in &button.body {
+                if let Some((source, destination)) = text.split_once("->")
+                    && matches!(source.trim(), "" | "0" | "IRQ")
+                    && let Some((port, pin)) = destination.split_once('@')
+                    && target.is_none()
+                {
+                    let base = gpio_ports
+                        .get(port.trim())
+                        .ok_or_else(|| button.error("unknown button GPIO port"))?;
+                    let pin = irq_index(pin, 16).map_err(|e| button.error(&e))?;
+                    target = Some((*base, pin));
+                } else if let Some(value) = text.strip_prefix("invert:")
+                    && invert.is_none()
+                {
+                    invert = Some(
+                        value
+                            .trim()
+                            .parse()
+                            .map_err(|_| button.error("invalid button invert property"))?,
+                    );
+                } else {
+                    return Err(button.error("unsupported or duplicate button property or wiring"));
+                }
+            }
+            let (port, pin) =
+                target.ok_or_else(|| button.error("expected button wired to a GPIO input"))?;
+            machine.bus.add_gpio_button(GpioButton::new(
+                button.name.clone(),
+                port,
+                pin,
+                invert.unwrap_or(false),
+            ));
+        }
         if let Some(rtc) = stm32_rtc {
             let mut frequency = None;
             let mut errata = None;
@@ -1057,6 +1095,18 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     if let Some(adc) = stm32_adc {
         return Err(adc.error("STM32F0 ADC requires a Cortex-M platform"));
     }
+    if let Some(device) = gpio_leds.first().or(gpio_buttons.first()) {
+        return Err(device.error("STM32 board wiring requires a Cortex-M platform"));
+    }
+    for entry in stm32_gpios {
+        if entry.body.iter().any(|(_, text)| text.contains("->")) {
+            return Err(entry.error("STM32 GPIO interrupt wiring requires a Cortex-M platform"));
+        }
+        machine
+            .bus
+            .map_stm32_gpio(make_stm32_gpio(entry)?)
+            .map_err(|e| entry.error(&e))?;
+    }
     if let Some(i2c) = stm32_i2cs.first().or(i2c_eeproms.first()) {
         return Err(i2c.error("STM32 I²C requires a Cortex-M platform"));
     }
@@ -1305,6 +1355,58 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .map_err(|e| entry.error(&e))?;
     }
     Ok(machine)
+}
+
+fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
+    let registration = entry
+        .registration
+        .as_deref()
+        .and_then(|s| s.strip_prefix("sysbus"))
+        .filter(|s| s.starts_with(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected GPIO registered on sysbus"))?
+        .trim();
+    let (base, size) = if let Some(range) = registration
+        .strip_prefix('<')
+        .and_then(|s| s.strip_suffix('>'))
+    {
+        let (base, size) = range
+            .split_once(',')
+            .and_then(|(base, size)| Some((base.trim(), size.trim().strip_prefix('+')?.trim())))
+            .ok_or_else(|| entry.error("expected GPIO range <base, +size>"))?;
+        (number(base), number(size))
+    } else {
+        (number(registration), Ok(0x400))
+    };
+    let mut reset = [0; 3];
+    let mut alternate_count = 16;
+    let mut seen = HashSet::new();
+    for (_, text) in &entry.body {
+        if text.contains("->") {
+            continue;
+        }
+        let (key, value) = text
+            .split_once(':')
+            .ok_or_else(|| entry.error("expected STM32 GPIO property"))?;
+        let key = key.trim();
+        if !seen.insert(key) {
+            return Err(entry.error("duplicate STM32 GPIO property"));
+        }
+        let value = number(value.trim()).map_err(|e| entry.error(&e))?;
+        match key {
+            "numberOfAFs" if (1..=16).contains(&value) => alternate_count = value,
+            "numberOfAFs" => return Err(entry.error("numberOfAFs must be in 1–16")),
+            "modeResetValue" => reset[0] = value,
+            "outputSpeedResetValue" => reset[1] = value,
+            "pullUpPullDownResetValue" => reset[2] = value,
+            _ => return Err(entry.error("unsupported STM32 GPIO property")),
+        }
+    }
+    Ok(Stm32Gpio::new(
+        base.map_err(|e| entry.error(&e))?,
+        size.map_err(|e| entry.error(&e))?,
+        reset,
+        alternate_count,
+    ))
 }
 
 fn i2c_eeprom(entry: &Entry) -> Result<Eeprom, String> {

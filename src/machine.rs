@@ -16,6 +16,7 @@ pub struct Machine {
     next_hart: usize,
     elapsed_steps: u64,
     uart_input: VecDeque<(u64, Vec<u8>)>,
+    button_events: VecDeque<(u64, usize, bool)>,
 }
 
 #[derive(Clone)]
@@ -149,6 +150,7 @@ impl Machine {
             next_hart: 0,
             elapsed_steps: 0,
             uart_input: VecDeque::new(),
+            button_events: VecDeque::new(),
         }
     }
 
@@ -236,6 +238,18 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_button(&mut self, step: u64, name: &str, pressed: bool) -> Result<(), String> {
+        let button = self
+            .bus
+            .board_button(name)
+            .ok_or_else(|| format!("unknown STM32 board button {name:?}"))?;
+        let index = self
+            .button_events
+            .partition_point(|(scheduled, _, _)| *scheduled <= step);
+        self.button_events.insert(index, (step, button, pressed));
+        Ok(())
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
@@ -258,6 +272,14 @@ impl Machine {
             {
                 let (_, bytes) = self.uart_input.pop_front().unwrap();
                 self.bus.queue_uart_input(bytes);
+            }
+            while self
+                .button_events
+                .front()
+                .is_some_and(|(step, _, _)| *step <= self.elapsed_steps)
+            {
+                let (_, button, pressed) = self.button_events.pop_front().unwrap();
+                self.bus.set_button(button, pressed);
             }
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
                 Step::Retired => retired += 1,
