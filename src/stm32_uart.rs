@@ -19,6 +19,8 @@ pub enum Stm32Irq {
 pub struct Stm32Usart {
     pub base: u32,
     pub irq: Option<Stm32Irq>,
+    pub dma_rx: u8,
+    pub dma_tx: u8,
     receive: VecDeque<u8>,
     registers: [u32; 12],
     complete: bool,
@@ -32,6 +34,8 @@ impl Stm32Usart {
         Self {
             base,
             irq,
+            dma_rx: 0,
+            dma_tx: 0,
             receive: VecDeque::new(),
             registers: [0; 12],
             complete: true,
@@ -64,6 +68,23 @@ impl Stm32Usart {
         enabled & TXE != 0
             || (enabled & TC != 0 && self.complete)
             || (enabled & RXNE != 0 && !self.receive.is_empty())
+    }
+
+    pub fn pending_dma(&self) -> u8 {
+        let control = self.registers[0];
+        let dma = self.registers[2];
+        let rx =
+            if control & (UE | RE) == UE | RE && dma & (1 << 6) != 0 && !self.receive.is_empty() {
+                self.dma_rx
+            } else {
+                0
+            };
+        let tx = if control & (UE | TE) == UE | TE && dma & (1 << 7) != 0 {
+            self.dma_tx
+        } else {
+            0
+        };
+        rx | tx
     }
 
     pub fn read(&mut self, address: u32, width: usize) -> u32 {

@@ -389,6 +389,8 @@ impl Hart {
         output: &mut impl Write,
     ) -> Result<Step, String> {
         if let Some(thumb) = self.thumb.as_mut() {
+            bus.advance_stm32_dma(output)
+                .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
             if thumb
                 .service_interrupts(&mut self.pc, &mut self.registers, bus)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?

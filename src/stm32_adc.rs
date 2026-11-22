@@ -15,6 +15,7 @@ const CHANNEL_MASK: u32 = (1 << 19) - 1;
 pub struct Stm32F0Adc {
     pub base: u32,
     pub irq: Option<u8>,
+    pub dma_request: u8,
     reference: f64,
     inputs: [u32; 19],
     trigger_frequency: u32,
@@ -40,6 +41,7 @@ impl Stm32F0Adc {
         Self {
             base,
             irq,
+            dma_request: 0,
             reference,
             trigger_frequency,
             inputs: [0; 19],
@@ -126,6 +128,14 @@ impl Stm32F0Adc {
             0x28 if !self.started => self.selected = value & CHANNEL_MASK,
             0x308 => self.common = value & (7 << 22),
             _ => {}
+        }
+    }
+
+    pub fn pending_dma(&self) -> u8 {
+        if self.config & 1 != 0 && self.status & (EOC | OVERRUN) == EOC {
+            self.dma_request
+        } else {
+            0
         }
     }
 

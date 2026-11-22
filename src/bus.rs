@@ -12,6 +12,7 @@ use crate::{
     plic::Plic,
     stm32_adc::Stm32F0Adc,
     stm32_crc::Stm32F0Crc,
+    stm32_dma::Stm32Dma,
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
     stm32_rcc::Stm32F0Rcc,
@@ -83,6 +84,7 @@ pub struct Bus {
     stm32_timers: Vec<Stm32Timer>,
     stm32_crc: Option<Stm32F0Crc>,
     stm32_adc: Option<Stm32F0Adc>,
+    stm32_dma: Option<Stm32Dma>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
     plic: Option<Plic>,
@@ -161,6 +163,10 @@ impl Bus {
             || self.stm32_gpios.iter().any(|gpio| {
                 let other = u64::from(gpio.base);
                 start < other + u64::from(gpio.size) && other < end
+            })
+            || self.stm32_dma.as_ref().is_some_and(|dma| {
+                let other = u64::from(dma.base);
+                start < other + u64::from(Stm32Dma::SIZE) && other < end
             })
             || self.stm32_adc.as_ref().is_some_and(|adc| {
                 let other = u64::from(adc.base);
@@ -275,6 +281,37 @@ impl Bus {
         Ok(())
     }
 
+    pub fn advance_stm32_dma(&mut self, output: &mut impl Write) -> Result<(), BusError> {
+        let Some(dma) = &self.stm32_dma else {
+            return Ok(());
+        };
+        let mut requests = self.stm32_adc.as_ref().map_or(0, Stm32F0Adc::pending_dma);
+        for uart in &self.stm32_uarts {
+            requests |= uart.pending_dma();
+        }
+        let Some(transfer) = dma.next_transfer(requests) else {
+            return Ok(());
+        };
+        let value = match transfer.read_width {
+            1 => self.read::<1>(transfer.from),
+            2 => self.read::<2>(transfer.from),
+            4 => self.read::<4>(transfer.from),
+            _ => Err(BusError::Unmapped(transfer.from, transfer.read_width)),
+        };
+        let result = value.and_then(|value| match transfer.write_width {
+            width @ (1 | 2 | 4) => self.write(transfer.to, width, value, output),
+            width => Err(BusError::Unmapped(transfer.to, width)),
+        });
+        self.stm32_dma
+            .as_mut()
+            .unwrap()
+            .complete(transfer, result.is_ok());
+        match result {
+            Err(error @ BusError::Output(_)) => Err(error),
+            _ => Ok(()),
+        }
+    }
+
     pub fn sample_nvic(&mut self, active: u64) {
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
@@ -305,6 +342,9 @@ impl Bus {
                 && let Some(line) = adc.irq
             {
                 irqs |= 1 << line;
+            }
+            if let Some(dma) = &self.stm32_dma {
+                irqs |= dma.interrupts();
             }
             while irqs != 0 {
                 nvic.set_line(irqs.trailing_zeros() as u8, true, active);
@@ -396,6 +436,23 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_stm32_dma(&mut self, dma: Stm32Dma) -> Result<(), String> {
+        let start = u64::from(dma.base);
+        let end = start + u64::from(Stm32Dma::SIZE);
+        if self.stm32_dma.is_some()
+            || dma.base & 3 != 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping STM32 DMA range at {:#010x}",
+                dma.base
+            ));
+        }
+        self.stm32_dma = Some(dma);
+        Ok(())
+    }
+
     pub fn map_stm32f0_adc(&mut self, adc: Stm32F0Adc) -> Result<(), String> {
         let start = u64::from(adc.base);
         let end = start + u64::from(Stm32F0Adc::SIZE);
@@ -444,12 +501,8 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_stm32_usart(
-        &mut self,
-        base: u32,
-        irq: Option<Stm32Irq>,
-        low_power: bool,
-    ) -> Result<(), String> {
+    pub fn map_stm32_usart(&mut self, uart: Stm32Usart) -> Result<(), String> {
+        let base = uart.base;
         let start = u64::from(base);
         let end = start + u64::from(Stm32Usart::SIZE);
         if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
@@ -457,7 +510,7 @@ impl Bus {
                 "invalid or overlapping STM32 USART range at {base:#010x}"
             ));
         }
-        self.stm32_uarts.push(Stm32Usart::new(base, irq, low_power));
+        self.stm32_uarts.push(uart);
         Ok(())
     }
 
@@ -685,6 +738,13 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(dma) = &self.stm32_dma
+            && dma.contains(address)
+        {
+            return Ok(dma.read(address));
+        }
+        if matches!(N, 2 | 4)
+            && address & 3 == 0
             && let Some(adc) = self.stm32_adc.as_mut()
             && adc.contains(address)
         {
@@ -845,6 +905,13 @@ impl Bus {
             } else {
                 gpio.write(address, value);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(dma) = self.stm32_dma.as_mut()
+            && dma.contains(address)
+        {
+            dma.write(address, value);
             return Ok(());
         }
         if width == 4

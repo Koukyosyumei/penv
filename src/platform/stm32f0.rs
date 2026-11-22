@@ -18,12 +18,16 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                     | "SPI.STM32SPI"
                     | "CAN.STMCAN"
                     | "Timers.STM32F4_RTC"
-                    | "DMA.STM32G0DMA"
                     | "Miscellaneous.LED"
                     | "Miscellaneous.Button"
             )
         })
         .map(|entry| (entry.name.clone(), entry.model.clone()))
+        .collect();
+    let dma_names: Vec<_> = entries
+        .iter()
+        .filter(|e| e.model == "DMA.STM32G0DMA")
+        .map(|entry| entry.name.clone())
         .collect();
     let mut skipped = Vec::new();
     let mut tags = Vec::new();
@@ -45,21 +49,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                     !text.starts_with("invertedAFPins:")
                 });
             }
-            "Analog.STM32F0_ADC" => {
-                let omitted_dma = entry.body.iter().any(|(_, text)| {
-                    text.strip_prefix("dmaPeripheral:").is_some_and(|name| {
-                        omitted
-                            .get(name.trim())
-                            .is_some_and(|model| model == "DMA.STM32G0DMA")
-                    })
-                });
-                if omitted_dma {
-                    entry.body.retain(|(_, text)| {
-                        !text.starts_with("dmaPeripheral:") && !text.starts_with("dmaChannel:")
-                    });
-                }
-            }
-            "UART.STM32F7_USART" | "Timers.STM32_Timer" => {
+            "Timers.STM32_Timer" => {
                 entry.body.retain_mut(|(_, text)| {
                     let Some((source, targets)) = text.split_once("->") else {
                         return true;
@@ -71,13 +61,11 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                             let Some((name, _)) = target.split_once('@') else {
                                 return true;
                             };
-                            if name.contains('#') && entry.model == "Timers.STM32_Timer" {
+                            if name.contains('#') {
                                 gpio_wiring = true;
                                 return false;
                             }
-                            omitted
-                                .get(name.trim())
-                                .is_none_or(|model| model != "DMA.STM32G0DMA")
+                            !dma_names.iter().any(|dma| dma == name.trim())
                         })
                         .collect();
                     if remaining.is_empty() {

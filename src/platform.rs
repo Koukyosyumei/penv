@@ -9,9 +9,10 @@ use std::{
 use crate::{
     machine::{MAX_HARTS, Machine},
     stm32_adc::Stm32F0Adc,
+    stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
     stm32_timer::Stm32Timer,
-    stm32_uart::Stm32Irq,
+    stm32_uart::{Stm32Irq, Stm32Usart},
 };
 
 type Properties = Vec<(usize, String)>;
@@ -226,6 +227,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut stm32_uarts = Vec::new();
     let mut stm32_timers = Vec::new();
     let mut stm32_adc = None;
+    let mut stm32_dma = None;
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
@@ -356,6 +358,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "DMA.STM32G0DMA" => {
+                if stm32_dma.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32 DMA controller is supported"));
+                }
+            }
             "Analog.STM32F0_ADC" => {
                 if stm32_adc.replace(entry).is_some() {
                     return Err(entry.error("only one STM32F0 ADC is supported"));
@@ -568,8 +575,62 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         } else {
             0
         };
+        let dma_channels = if let Some(dma) = stm32_dma {
+            let count = dma
+                .body
+                .iter()
+                .find_map(|(_, text)| text.strip_prefix("numberOfChannels:"))
+                .ok_or_else(|| dma.error("missing DMA numberOfChannels"))?;
+            let count = number(count.trim()).map_err(|e| dma.error(&e))?;
+            if !(1..=7).contains(&count) {
+                return Err(dma.error("STM32 DMA supports 1–7 channels"));
+            }
+            let mut outputs = vec![None; count as usize];
+            let mut count_seen = false;
+            for (_, text) in &dma.body {
+                if text.starts_with("numberOfChannels:") && !count_seen {
+                    count_seen = true;
+                    continue;
+                }
+                let Some((channels, destination)) = text.split_once("->") else {
+                    return Err(dma.error("expected DMA interrupt wiring"));
+                };
+                let Some((target, pins)) = destination.split_once('@') else {
+                    return Err(dma.error("invalid DMA interrupt target"));
+                };
+                let routes = if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
+                    irq_list(pins, 32).map_err(|e| dma.error(&e))?
+                } else if let Some(&(size, irq)) = combined_routes.get(target.trim()) {
+                    irq_list(pins, size)
+                        .map_err(|e| dma.error(&e))?
+                        .into_iter()
+                        .map(|_| irq)
+                        .collect()
+                } else {
+                    return Err(dma.error("unsupported DMA interrupt target"));
+                };
+                let channels = irq_list(channels, count).map_err(|e| dma.error(&e))?;
+                if channels.len() != routes.len() {
+                    return Err(dma.error("mismatched DMA wiring widths"));
+                }
+                for (channel, irq) in channels.into_iter().zip(routes) {
+                    if outputs[usize::from(channel)].replace(irq).is_some() {
+                        return Err(dma.error("duplicate DMA output"));
+                    }
+                }
+            }
+            machine
+                .bus
+                .map_stm32_dma(Stm32Dma::new(dma.address()?, outputs))
+                .map_err(|e| dma.error(&e))?;
+            count
+        } else {
+            0
+        };
         if let Some(adc) = stm32_adc {
             let mut volts: Option<f64> = None;
+            let mut dma_ref = None;
+            let mut dma_channel = None;
             let mut frequency = None;
             let mut irq = None;
             for (_, text) in &adc.body {
@@ -588,6 +649,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     });
                 } else if let Some((key, value)) = text.split_once(':') {
                     match key.trim() {
+                        "dmaPeripheral" if dma_ref.is_none() => dma_ref = Some(value.trim()),
+                        "dmaChannel" if dma_channel.is_none() => dma_channel = Some(value.trim()),
                         "referenceVoltage" if volts.is_none() => {
                             volts = Some(
                                 value
@@ -611,9 +674,18 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             let frequency = frequency
                 .filter(|f| *f > 0)
                 .ok_or_else(|| adc.error("externalEventFrequency must be positive"))?;
+            let mut device = Stm32F0Adc::new(adc.address()?, irq, volts, frequency);
+            match (dma_ref, dma_channel) {
+                (Some(name), Some(channel)) if stm32_dma.is_some_and(|dma| dma.name == name) => {
+                    device.dma_request =
+                        dma_input(channel, dma_channels).map_err(|e| adc.error(&e))?;
+                }
+                (None, None) => {}
+                _ => return Err(adc.error("invalid STM32 ADC DMA configuration")),
+            }
             machine
                 .bus
-                .map_stm32f0_adc(Stm32F0Adc::new(adc.address()?, irq, volts, frequency))
+                .map_stm32f0_adc(device)
                 .map_err(|e| adc.error(&e))?;
         }
         for timer in stm32_timers {
@@ -677,24 +749,42 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             let mut irq = None;
             let mut low_power = None;
             let mut frequency = None;
+            let mut dma_rx = 0;
+            let mut dma_tx = 0;
             for (_, text) in &uart.body {
-                if let Some((pin, destination)) = text.split_once("->")
-                    && matches!(pin.trim(), "IRQ" | "")
-                    && let Some((name, line)) = destination.split_once('@')
-                    && irq.is_none()
-                {
-                    let name = name.trim();
-                    let route = if nvic.is_some_and(|controller| controller.name == name) {
-                        Stm32Irq::Nvic(irq_index(line, 32).map_err(|e| uart.error(&e))?)
-                    } else if exti.is_some_and(|controller| controller.name == name) {
-                        Stm32Irq::Exti(irq_index(line, exti_lines).map_err(|e| uart.error(&e))?)
-                    } else if let Some(&(pins, output)) = combined_routes.get(name) {
-                        irq_index(line, pins).map_err(|e| uart.error(&e))?;
-                        Stm32Irq::Nvic(output)
-                    } else {
-                        return Err(uart.error("unsupported USART IRQ target"));
-                    };
-                    irq = Some(route);
+                if let Some((source, destinations)) = text.split_once("->") {
+                    let source = source.trim();
+                    for destination in destinations.split('|') {
+                        let (name, line) = destination
+                            .split_once('@')
+                            .ok_or_else(|| uart.error("invalid USART output destination"))?;
+                        let name = name.trim();
+                        if stm32_dma.is_some_and(|dma| dma.name == name) {
+                            let mask =
+                                dma_input(line.trim(), dma_channels).map_err(|e| uart.error(&e))?;
+                            match source {
+                                "ReceiveDmaRequest" => dma_rx |= mask,
+                                "IRQ" | "TransmitDmaRequest" | "" => dma_tx |= mask,
+                                _ => return Err(uart.error("unsupported USART DMA output")),
+                            }
+                            continue;
+                        }
+                        if !matches!(source, "IRQ" | "") || irq.is_some() {
+                            return Err(
+                                uart.error("unsupported or duplicate USART interrupt wiring")
+                            );
+                        }
+                        irq = Some(if nvic.is_some_and(|controller| controller.name == name) {
+                            Stm32Irq::Nvic(irq_index(line, 32).map_err(|e| uart.error(&e))?)
+                        } else if exti.is_some_and(|controller| controller.name == name) {
+                            Stm32Irq::Exti(irq_index(line, exti_lines).map_err(|e| uart.error(&e))?)
+                        } else if let Some(&(pins, output)) = combined_routes.get(name) {
+                            irq_index(line, pins).map_err(|e| uart.error(&e))?;
+                            Stm32Irq::Nvic(output)
+                        } else {
+                            return Err(uart.error("unsupported USART IRQ target"));
+                        });
+                    }
                 } else if let Some((key, value)) = text.split_once(':') {
                     let value = value.trim();
                     match key.trim() {
@@ -717,9 +807,12 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(uart.error("unsupported USART IRQ wiring"));
                 }
             }
+            let mut device = Stm32Usart::new(uart.address()?, irq, low_power.unwrap_or(false));
+            device.dma_rx = dma_rx;
+            device.dma_tx = dma_tx;
             machine
                 .bus
-                .map_stm32_usart(uart.address()?, irq, low_power.unwrap_or(false))
+                .map_stm32_usart(device)
                 .map_err(|e| uart.error(&e))?;
         }
         machine
@@ -732,6 +825,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(dma) = stm32_dma {
+        return Err(dma.error("STM32 DMA requires a Cortex-M platform"));
     }
     if let Some(adc) = stm32_adc {
         return Err(adc.error("STM32F0 ADC requires a Cortex-M platform"));
@@ -978,6 +1074,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .map_err(|e| entry.error(&e))?;
     }
     Ok(machine)
+}
+
+fn dma_input(line: &str, count: u32) -> Result<u8, String> {
+    let channel = number(line.trim())?;
+    if !(1..=count).contains(&channel) {
+        return Err(format!("DMA input channel {channel} outside 1–{count}"));
+    }
+    Ok(1 << (channel - 1))
 }
 
 fn irq_index(value: &str, count: u32) -> Result<u8, String> {
