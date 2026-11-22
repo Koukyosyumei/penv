@@ -404,6 +404,10 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) {
             return Err(entry.error("expected Cortex-M0 or Cortex-M0+ cpuType"));
         }
+        machine
+            .bus
+            .map_stm32f072_flash()
+            .map_err(|e| entry.error(&e))?;
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
         let mut priority = None;
         let mut frequency = None;

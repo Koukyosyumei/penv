@@ -15,6 +15,7 @@ use crate::{
     stm32_crc::Stm32F0Crc,
     stm32_dma::Stm32Dma,
     stm32_exti::Exti,
+    stm32_flash::Stm32F0Flash,
     stm32_gpio::Stm32Gpio,
     stm32_gpio_board::{GpioButton, GpioLed},
     stm32_i2c::Stm32I2c,
@@ -100,6 +101,7 @@ pub struct Bus {
     stm32_dma: Option<Stm32Dma>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
+    stm32_flash: Option<Stm32F0Flash>,
     stm32_rtc: Option<Stm32Rtc>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -205,6 +207,10 @@ impl Bus {
             || self.stm32_rtc.as_ref().is_some_and(|rtc| {
                 let other = u64::from(rtc.base);
                 start < other + u64::from(Stm32Rtc::SIZE) && other < end
+            })
+            || self.stm32_flash.as_ref().is_some_and(|flash| {
+                let other = u64::from(flash.base);
+                start < other + u64::from(Stm32F0Flash::SIZE) && other < end
             })
             || self.stm32_rcc.as_ref().is_some_and(|rcc| {
                 let other = u64::from(rcc.base);
@@ -718,6 +724,28 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_stm32f072_flash(&mut self) -> Result<(), String> {
+        const BANK: std::ops::Range<u32> = 0x0800_0000..0x0802_0000;
+        if !self
+            .stm32f0_tags
+            .contains(&(Stm32F0Flash::BASE..=0x4002_23ff))
+        {
+            return Ok(());
+        }
+        let Some(index) = self.regions.iter().position(|region| {
+            region.base == BANK.start && region.bytes.len() == (BANK.end - BANK.start) as usize
+        }) else {
+            return Ok(());
+        };
+        let start = u64::from(Stm32F0Flash::BASE);
+        if self.overlaps(start, start + u64::from(Stm32F0Flash::SIZE)) {
+            return Err("STM32F072 flash registers overlap another mapping".into());
+        }
+        self.regions[index].bytes.fill(0xff);
+        self.stm32_flash = Some(Stm32F0Flash::new(BANK));
+        Ok(())
+    }
+
     pub fn map_stm32f0_rcc(&mut self, base: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(Stm32F0Rcc::SIZE);
@@ -940,6 +968,13 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(flash) = self.stm32_flash.as_ref()
+            && flash.contains(address)
+        {
+            return Ok(flash.read(address));
+        }
+        if N == 4
+            && address & 3 == 0
             && let Some(rcc) = self.stm32_rcc.as_ref()
             && rcc.contains(address)
         {
@@ -1136,6 +1171,17 @@ impl Bus {
             return Ok(());
         }
         if width == 4
+            && let Some(flash) = self.stm32_flash.as_mut()
+            && flash.contains(address)
+        {
+            if let Some(range) = flash.write(address, value) {
+                let result = self.memory(range.start, (range.end - range.start) as usize);
+                let success = result.map(|bytes| bytes.fill(0xff)).is_ok();
+                self.stm32_flash.as_mut().unwrap().finish(success);
+            }
+            return Ok(());
+        }
+        if width == 4
             && let Some(rcc) = self.stm32_rcc.as_mut()
             && rcc.contains(address)
         {
@@ -1205,6 +1251,19 @@ impl Bus {
             && crc.contains(address)
         {
             crc.write(address, width, value);
+            return Ok(());
+        }
+        if self
+            .stm32_flash
+            .as_ref()
+            .is_some_and(|flash| flash.contains_bank(address))
+        {
+            let old = self.read_ram::<2>(address & !1)? as u16;
+            let flash = self.stm32_flash.as_mut().unwrap();
+            if let Some(value) = flash.program(address, width, old, value as u16) {
+                self.memory(address, 2)?
+                    .copy_from_slice(&value.to_le_bytes());
+            }
             return Ok(());
         }
         match self.memory(address, width) {
