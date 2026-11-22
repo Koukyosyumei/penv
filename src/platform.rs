@@ -12,17 +12,17 @@ use crate::{
 type Properties = Vec<(usize, String)>;
 
 #[derive(Debug)]
-struct Entry {
-    name: String,
-    model: String,
-    registration: Option<String>,
-    body: Properties,
+pub(crate) struct Entry {
+    pub(crate) name: String,
+    pub(crate) model: String,
+    pub(crate) registration: Option<String>,
+    pub(crate) body: Properties,
     source: PathBuf,
     line: usize,
 }
 
 impl Entry {
-    fn error(&self, detail: &str) -> String {
+    pub(crate) fn error(&self, detail: &str) -> String {
         format!(
             "{}:{}: {}: {detail}",
             self.source.display(),
@@ -31,7 +31,7 @@ impl Entry {
         )
     }
 
-    fn sysbus(&self) -> Result<Option<u32>, String> {
+    pub(crate) fn sysbus(&self) -> Result<Option<u32>, String> {
         let registration = self
             .registration
             .as_deref()
@@ -52,7 +52,7 @@ impl Entry {
     }
 }
 
-fn number(value: &str) -> Result<u32, String> {
+pub(crate) fn number(value: &str) -> Result<u32, String> {
     let digits = value.replace('_', "");
     match digits.strip_prefix("0x") {
         Some(hex) => u32::from_str_radix(hex, 16),
@@ -137,12 +137,23 @@ fn parse(
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut current: Option<Entry> = None;
+    let mut registration_depth = 0;
     for (index, raw) in content.lines().enumerate() {
         let line = without_comment(raw);
         let text = line.trim();
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
         if text.is_empty() {
+            continue;
+        }
+        if registration_depth != 0 {
+            let registration = current.as_mut().unwrap().registration.as_mut().unwrap();
+            registration.push(' ');
+            registration.push_str(text);
+            registration_depth += brace_depth(text);
+            if registration_depth < 0 {
+                return Err(error("unexpected closing registration brace"));
+            }
             continue;
         }
         if line.starts_with(char::is_whitespace) {
@@ -179,9 +190,15 @@ fn parse(
         }
         let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
-            Some((model, registration)) => (model.trim(), Some(registration.trim().into())),
+            Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
         };
+        if crate::network_platform::is_mac(model)
+            && let Some(registration) = &registration
+            && registration.starts_with('{')
+        {
+            registration_depth = brace_depth(registration);
+        }
         current = Some(Entry {
             name: name.into(),
             model: model.into(),
@@ -191,9 +208,18 @@ fn parse(
             line: lineno,
         });
     }
+    if registration_depth != 0 {
+        return Err(current.unwrap().error("unterminated Ethernet registration"));
+    }
     entries.extend(current);
     visiting.remove(&canonical);
     Ok(())
+}
+
+fn brace_depth(text: &str) -> i32 {
+    unquoted_delimiters(text, &['{', '}'])
+        .map(|(_, brace)| if brace == '{' { 1 } else { -1 })
+        .sum()
 }
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
@@ -280,6 +306,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one CLINT is currently supported"));
                 }
             }
+            model if crate::network_platform::is_network(model) => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
     }
@@ -520,6 +547,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors);
+        crate::network_platform::configure(&entries, &mut machine, None)?;
         return Ok(machine);
     }
     if let Some(nvic) = nvic {
@@ -763,6 +791,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_murax_timer(entry.address()?, connected)
             .map_err(|e| entry.error(&e))?;
     }
+    let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
+    crate::network_platform::configure(&entries, &mut machine, vex_cpu)?;
     Ok(machine)
 }
 

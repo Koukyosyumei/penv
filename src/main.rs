@@ -2,15 +2,20 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod ethernet_switch;
 mod image;
+mod litex_ethernet;
 mod machine;
 mod monitor;
 mod murax;
+mod network_monitor;
+mod network_platform;
 mod ns16550;
 mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod simulation;
 mod stm32_exti;
 mod stm32_uart;
 mod sv32;
@@ -36,7 +41,7 @@ Usage: penv run [OPTIONS] IMAGE
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
-  --script PATH      Read boot settings from a Renode RESC file
+  --script PATH      Run a Renode RESC boot or network script
   --raw              Load a flat binary (default: ELF32)
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
@@ -49,7 +54,7 @@ Options:
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
-  --max-steps N      Stop after N execution steps (default: 10000000)
+  --max-steps N      Stop after N execution steps or simulation rounds (default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
@@ -228,7 +233,32 @@ fn run() -> Result<ExitCode, String> {
         let root = platform_root
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
-        let boot = monitor::load(&script, root)?;
+        let mut plan = network_monitor::Plan::load(&script, root)?;
+        if !plan.is_single_boot() {
+            if path.is_some()
+                || ram_mib.is_some()
+                || !extra_ram.is_empty()
+                || clint.is_some()
+                || harts.is_some()
+                || mtvec.is_some()
+                || vex_irq_mask.is_some()
+                || uart_input.is_some()
+                || uart_input_at.is_some()
+                || !uart_events.is_empty()
+            {
+                return Err(
+                    "single-machine overrides cannot be combined with a simulation script".into(),
+                );
+            }
+            return simulation::run(
+                plan,
+                platform_root.as_deref(),
+                asset_dir.as_deref(),
+                max_steps,
+                stats,
+            );
+        }
+        let boot = plan.nodes.pop().unwrap().boot;
         platform_path = boot.platform;
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);

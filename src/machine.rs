@@ -423,7 +423,12 @@ impl Hart {
         let plic = bus.tick_plic();
         let mut pending = clint;
         if self.csr.hart_id == 0 {
-            let lines = (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER);
+            let ethernet = bus
+                .ethernet
+                .iter()
+                .fold(0, |lines, device| lines | device.interrupt());
+            let lines =
+                (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER) | ethernet;
             let external = if let Some(mask) = self.csr.vex_irq_mask {
                 self.csr.vex_irq_pending = lines;
                 u32::from(lines & mask != 0) * EXTERNAL
@@ -436,6 +441,7 @@ impl Hart {
             || bus.uart.is_some()
             || bus.timer.is_some()
             || bus.has_plic()
+            || !bus.ethernet.is_empty()
             || self.csr.has_injected_interrupts())
             && let Some(target) = self.csr.interrupt(self.pc, pending)
         {

@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     clint::Clint,
+    litex_ethernet::LiteXEthernet,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -64,6 +65,7 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    pub ethernet: Vec<LiteXEthernet>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -126,6 +128,28 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_ethernet(&mut self, device: LiteXEthernet) -> Result<(), String> {
+        for (index, mapping) in device.mappings.iter().enumerate() {
+            let start = u64::from(mapping.base);
+            let end = start + u64::from(mapping.size);
+            if mapping.base & 3 != 0
+                || mapping.size == 0
+                || end > 1 << 32
+                || self.overlaps(start, end)
+                || device.mappings[..index].iter().any(|other| {
+                    let base = u64::from(other.base);
+                    start < base + u64::from(other.size) && base < end
+                })
+            {
+                return Err(format!(
+                    "invalid or overlapping Ethernet mapping at {start:#010x}"
+                ));
+            }
+        }
+        self.ethernet.push(device);
+        Ok(())
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
         (self.nvic.is_some() && Nvic::overlaps(start, end))
             || (self.systick.is_some() && SysTick::overlaps(start, end))
@@ -171,6 +195,14 @@ impl Bus {
                     start < other + size && other < end
                 })
             })
+            || self
+                .ethernet
+                .iter()
+                .flat_map(|device| &device.mappings)
+                .any(|mapping| {
+                    let base = u64::from(mapping.base);
+                    start < base + u64::from(mapping.size) && base < end
+                })
             || self.regions.iter().any(|region| {
                 let other = u64::from(region.base);
                 start < other + region.bytes.len() as u64 && other < end
@@ -515,6 +547,14 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if address as usize & (N - 1) == 0
+            && let Some(value) = self
+                .ethernet
+                .iter()
+                .find_map(|device| device.read(address, N))
+        {
+            return Ok(value);
+        }
         self.read_ram::<N>(address)
     }
 
@@ -628,6 +668,13 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if self
+            .ethernet
+            .iter_mut()
+            .any(|device| device.write(address, width, value))
+        {
             return Ok(());
         }
         self.memory(address, width)?
