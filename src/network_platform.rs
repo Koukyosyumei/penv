@@ -264,7 +264,14 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
             .into_iter()
             .any(|alias| rcc_alias(entry, alias) == Some(&rcc.name))
     });
-    if ethernet.is_none() && !dma_or_adc {
+    let gpio = entries.iter().any(|entry| {
+        entry.model == crate::stm32h7_gpio_platform::GPIO
+            && (b'A'..=b'K').any(|port| {
+                let alias = format!("RegistrationPeripheralAlias.GPIO{}", char::from(port));
+                rcc_alias(entry, &alias) == Some(&rcc.name)
+            })
+    });
+    if ethernet.is_none() && !dma_or_adc && !gpio {
         return Err(rcc.error("STM32H7 RCC requires a supported peripheral binding"));
     }
     if peripherals.next().is_some() {

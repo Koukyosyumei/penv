@@ -20,6 +20,7 @@ use crate::{
     stm32h7_bdma::Bdma,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
+    stm32h7_gpio::Stm32Gpio,
     stm32h7_net_control::{Change, NetworkControl},
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
@@ -89,6 +90,8 @@ pub struct Bus {
     h7_adc_dma: Vec<AdcDma>,
     h7_dma_mux: Vec<DmaMux>,
     h7_flash: Option<FlashController>,
+    h7_gpio: Vec<Stm32Gpio>,
+    gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -313,6 +316,16 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_gpio(&mut self, port: Stm32Gpio) -> Result<(), String> {
+        self.check_peripheral_range(port.base, port.size)?;
+        self.h7_gpio.push(port);
+        Ok(())
+    }
+
+    pub fn set_gpio_exti_outputs(&mut self, outputs: [Option<u8>; 16]) {
+        self.gpio_exti_outputs = outputs;
+    }
+
     fn check_peripheral_range(&self, base: u32, size: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(size);
@@ -421,6 +434,7 @@ impl Bus {
                         .map(|device| (device.base, DmaMux::SIZE)),
                 )
                 .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
+                .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
                 .any(|(base, size)| {
                     let base = u64::from(base);
                     start < base + u64::from(size) && base < end
@@ -593,6 +607,24 @@ impl Bus {
                 .flat_map(AdcDma::interrupts)
             {
                 nvic.set_line(line, true, active);
+            }
+            if let Some(control) = control {
+                for gpio in &self.h7_gpio {
+                    let Some(selector) = gpio.syscfg_port else {
+                        continue;
+                    };
+                    let mut pins = gpio.pins();
+                    while pins != 0 {
+                        let pin = pins.trailing_zeros() as usize;
+                        pins &= pins - 1;
+                        if let Some(input) = gpio.syscfg_inputs[pin]
+                            && control.syscfg_port(input) == selector
+                            && let Some(line) = self.gpio_exti_outputs[usize::from(input)]
+                        {
+                            exti_inputs[usize::from(line / 32)] |= 1 << (line % 32);
+                        }
+                    }
+                }
             }
             if let Some(exti) = self.h7_exti.as_mut() {
                 for line in exti.sample(exti_inputs) {
@@ -966,6 +998,18 @@ impl Bus {
                 0
             });
         }
+        if matches!(N, 2 | 4)
+            && address as usize & (N - 1) == 0
+            && let Some(port) = self.h7_gpio.iter_mut().find(|port| port.contains(address))
+        {
+            return Ok(if !gpio_clocked(self.h7_network_control.as_ref(), port) {
+                0
+            } else if N == 2 {
+                port.read_halfword(address)
+            } else {
+                port.read(address)
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1107,6 +1151,11 @@ impl Bus {
                     dma.reset();
                 }
             }
+            for gpio in &mut self.h7_gpio {
+                if gpio.rcc_pin.is_some_and(|port| control.gpio_in_reset(port)) {
+                    gpio.reset();
+                }
+            }
             if let Some(nic) = control.nic
                 && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
             {
@@ -1201,6 +1250,18 @@ impl Bus {
             }
             return Ok(());
         }
+        if matches!(width, 2 | 4)
+            && let Some(port) = self.h7_gpio.iter_mut().find(|port| port.contains(address))
+        {
+            if gpio_clocked(self.h7_network_control.as_ref(), port) {
+                if width == 2 {
+                    port.write_halfword(address, value);
+                } else {
+                    port.write(address, value);
+                }
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
@@ -1219,4 +1280,10 @@ fn dma_clocked(control: Option<&NetworkControl>, dma: &AdcDma) -> bool {
 
 fn bdma_clocked(control: Option<&NetworkControl>, dma: &Bdma) -> bool {
     !dma.rcc_bound || control.is_none_or(NetworkControl::bdma_enabled)
+}
+
+fn gpio_clocked(control: Option<&NetworkControl>, port: &Stm32Gpio) -> bool {
+    control
+        .zip(port.rcc_pin)
+        .is_none_or(|(control, pin)| control.gpio_enabled(pin))
 }

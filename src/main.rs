@@ -30,6 +30,8 @@ mod stm32h7_bdma;
 mod stm32h7_ethernet;
 mod stm32h7_exti;
 mod stm32h7_flash;
+mod stm32h7_gpio;
+mod stm32h7_gpio_platform;
 mod stm32h7_net_control;
 mod sv32;
 mod systick;

@@ -6,6 +6,7 @@ const ETH_MAC: u32 = 1 << 15;
 const ADC12: u32 = 1 << 5;
 const ADC3: u32 = 1 << 24;
 const BDMA: u32 = 1 << 21;
+const GPIO_PORTS: u32 = 0x7ff;
 const SYSCFG_CLOCK: u32 = 1 << 1;
 const INTERFACE_MASK: u32 = 7 << 21;
 
@@ -20,6 +21,7 @@ pub struct NetworkControl {
     ahb4_clock: u32,
     apb4_clock: u32,
     syscfg_mode: u32,
+    exticr: [u32; 4],
 }
 
 pub enum Change {
@@ -42,6 +44,7 @@ impl NetworkControl {
             ahb4_clock: 0,
             apb4_clock: 0,
             syscfg_mode: 0,
+            exticr: [0; 4],
         }
     }
 
@@ -85,6 +88,24 @@ impl NetworkControl {
         self.ahb1_reset & mask != 0
     }
 
+    pub fn gpio_enabled(&self, port: u8) -> bool {
+        (self.ahb4_clock & !self.ahb4_reset) & (1 << port) != 0
+    }
+
+    pub fn gpio_in_reset(&self, port: u8) -> bool {
+        self.ahb4_reset & (1 << port) != 0
+    }
+
+    pub fn syscfg_port(&self, line: u8) -> u8 {
+        let shift = (line % 4) * 4;
+        ((self.exticr[usize::from(line / 4)] >> shift) & 0xf) as u8
+    }
+
+    fn syscfg_line_register(&self, address: u32) -> Option<usize> {
+        let offset = address.wrapping_sub(self.syscfg_base?);
+        (matches!(offset, 8 | 12 | 16 | 20)).then(|| ((offset - 8) / 4) as usize)
+    }
+
     fn syscfg_mode_address(&self, address: u32) -> bool {
         self.syscfg_base
             .is_some_and(|base| address.wrapping_sub(base) == 4)
@@ -93,6 +114,9 @@ impl NetworkControl {
     pub fn read(&self, address: u32) -> Option<u32> {
         if self.syscfg_mode_address(address) {
             return Some(self.syscfg_mode);
+        }
+        if let Some(index) = self.syscfg_line_register(address) {
+            return Some(self.exticr[index]);
         }
         Some(match address.wrapping_sub(self.rcc_base) {
             0x80 => self.ahb1_reset,
@@ -113,6 +137,12 @@ impl NetworkControl {
             self.syscfg_mode = value & INTERFACE_MASK;
             return Some(Change::Interface(self.syscfg_mode >> 21));
         }
+        if let Some(index) = self.syscfg_line_register(address) {
+            if self.apb4_clock & SYSCFG_CLOCK != 0 {
+                self.exticr[index] = value & 0xffff;
+            }
+            return Some(Change::None);
+        }
         Some(match address.wrapping_sub(self.rcc_base) {
             0x80 => {
                 self.ahb1_reset = value & (ETH_MAC | ADC12 | 3);
@@ -123,7 +153,7 @@ impl NetworkControl {
                 }
             }
             0x88 => {
-                self.ahb4_reset = value & (ADC3 | BDMA);
+                self.ahb4_reset = value & (ADC3 | BDMA | GPIO_PORTS);
                 Change::None
             }
             0xd8 => {
