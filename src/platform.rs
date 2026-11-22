@@ -882,6 +882,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "privilegedArchitecture",
                 "pmpEntryCount",
                 "builtInIrqController",
+                "allowUnalignedAccesses",
             ],
         )? {
             match (key, value) {
@@ -915,6 +916,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         .is_some_and(|timer| timer.name == name) => {}
                 ("builtInIrqController", "true" | "false" | "True" | "False")
                     if entry.model == "CPU.VexRiscv" => {}
+                ("allowUnalignedAccesses", "true" | "false" | "True" | "False")
+                    if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") => {}
                 ("pmpEntryCount", "0") => pmp = false,
                 ("pmpEntryCount", "16") => pmp = true,
                 _ => return Err(entry.error(&format!("unsupported CPU property {key} = {value}"))),
@@ -943,6 +946,16 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     for &(id, entry, (multiply, atomic, compressed), pmp) in &configs {
         let hart = machine.hart_mut(id);
         hart.name = Some(entry.name.clone());
+        let unaligned = entry
+            .body
+            .iter()
+            .find_map(|(_, text)| {
+                let (key, value) = text.split_once(':')?;
+                (key.trim() == "allowUnalignedAccesses")
+                    .then(|| value.trim().eq_ignore_ascii_case("true"))
+            })
+            .unwrap_or(entry.model == "CPU.IbexRiscV32");
+        hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic, compressed);
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),

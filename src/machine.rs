@@ -24,6 +24,7 @@ pub struct Hart {
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    unaligned_accesses: bool,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -142,6 +143,7 @@ impl Machine {
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                unaligned_accesses: false,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -283,6 +285,10 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
+    pub fn set_unaligned_accesses(&mut self, enabled: bool) {
+        self.unaligned_accesses = enabled;
+    }
+
     pub fn enable_ibex(&mut self) {
         self.csr.ibex = true;
     }
@@ -355,12 +361,48 @@ impl Hart {
     }
 
     fn load<const N: usize>(&mut self, bus: &mut Bus, address: u32) -> Result<u32, Fault> {
+        if N > 1 && address as usize & (N - 1) != 0 && self.unaligned_accesses {
+            let mut value = 0;
+            for index in 0..N {
+                let byte = self.load::<1>(bus, address.wrapping_add(index as u32))?;
+                value |= byte << (index * 8);
+            }
+            return Ok(value);
+        }
         self.translate(bus, address, N, crate::pmp::READ)
             .and_then(|physical| {
                 bus.read::<N>(physical)
                     .map_err(|error| error.at_virtual(address))
             })
             .map_err(|error| Fault::Bus(Access::Load, error))
+    }
+
+    fn store(
+        &mut self,
+        bus: &mut Bus,
+        address: u32,
+        width: usize,
+        value: u32,
+        output: &mut impl Write,
+    ) -> Result<(), Fault> {
+        if address as usize & (width - 1) != 0 && self.unaligned_accesses {
+            for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
+                self.store(
+                    bus,
+                    address.wrapping_add(index as u32),
+                    1,
+                    u32::from(*byte),
+                    output,
+                )?;
+            }
+            return Ok(());
+        }
+        self.translate(bus, address, width, crate::pmp::WRITE)
+            .and_then(|physical| {
+                bus.write(physical, width, value, output)
+                    .map_err(|error| error.at_virtual(address))
+            })
+            .map_err(|error| Fault::Bus(Access::Store, error))
     }
 
     pub fn set_mtvec(&mut self, value: u32) {
@@ -574,12 +616,7 @@ impl Hart {
                     2 => 4,
                     _ => return Err(illegal()),
                 };
-                self.translate(bus, address, width, crate::pmp::WRITE)
-                    .and_then(|physical| {
-                        bus.write(physical, width, b, output)
-                            .map_err(|error| error.at_virtual(address))
-                    })
-                    .map_err(|error| Fault::Bus(Access::Store, error))?;
+                self.store(bus, address, width, b, output)?;
                 None
             }
             0x13 => Some(match funct3 {
