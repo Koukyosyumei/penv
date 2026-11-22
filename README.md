@@ -42,7 +42,7 @@ target/release/penv run --script ../renode/scripts/single-node/murax.resc \
 
 上流の `platforms/cpus/riscv_virt.repl` も読み込めます。単一ハートで最大 2 コンテキスト（マシンとスーパーバイザー）の PLIC と、そこに接続された NS16550 UART を構成できます。検証用ファームウェアで UART 受信割り込みを受け取り、PLIC の claim と complete を行って受信バイトを送信し直すところまで確認しました。
 
-上流の `platforms/cpus/litex_vexriscv_smp.repl` では、4 ハートから LiteX UART にハート ID を出力できることを確認しました。LiteX UART は即時送信とポーリング受信に対応し、バッファーの送信タイミングと IRQ 配線は未対応です。
+上流の `platforms/cpus/litex_vexriscv_smp.repl` では、4 ハートから LiteX UART にハート ID を出力できることを確認しました。LiteX UART は即時送信、ポーリング受信、VexRiscv のマシン外部 IRQ への接続に対応します。送信 FIFO の遅延は未対応です。LiteX の 8 ビットおよび 32 ビット CSR タイマーは、既定の 100 MIPS に相当する実行ステップと REPL の周波数から進行します。RAM、LiteX UART、LiteX タイマーの複数の sysbus アドレスは同じ状態を共有します。
 
 上流の `scripts/single-node/litex_vexriscv_smp.resc` は、OpenSBI、Linux、DTB、initramfs を指定アドレスへ読み込み、4 ハートそれぞれの起動 PC を設定します。参照されるファイルを URL の末尾と同じ名前で保存し、`--asset-dir` で場所を指定します。
 

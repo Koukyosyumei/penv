@@ -421,20 +421,22 @@ impl Hart {
             .is_some_and(|uart| uart.interrupt_pending());
         let timer = bus.timer.as_mut().is_some_and(|(_, timer)| timer.tick());
         let plic = bus.tick_plic();
+        let mut lines = bus.tick_litex(self.csr.hart_id);
         let mut pending = clint;
         if self.csr.hart_id == 0 {
-            let lines = (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER);
-            let external = if let Some(mask) = self.csr.vex_irq_mask {
-                self.csr.vex_irq_pending = lines;
-                u32::from(lines & mask != 0) * EXTERNAL
-            } else {
-                lines
-            };
-            pending |= plic | external;
+            lines |= (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER);
+            pending |= plic;
+        }
+        if let Some(mask) = self.csr.vex_irq_mask {
+            self.csr.vex_irq_pending = lines;
+            pending |= u32::from(lines & mask != 0) * EXTERNAL;
+        } else {
+            pending |= lines;
         }
         if (bus.clint.is_some()
             || bus.uart.is_some()
             || bus.timer.is_some()
+            || bus.has_litex_irq()
             || bus.has_plic()
             || self.csr.has_injected_interrupts())
             && let Some(target) = self.csr.interrupt(self.pc, pending)
@@ -1237,7 +1239,7 @@ mod tests {
     fn uart_events_arrive_in_step_order_and_append_to_existing_input() {
         const UART: u32 = 0xf000_1800;
         let mut machine = Machine::new(8).unwrap();
-        machine.bus.map_litex_uart(UART).unwrap();
+        machine.bus.map_litex_uart(vec![UART], None).unwrap();
         machine
             .bus
             .memory(RAM_BASE, 4)

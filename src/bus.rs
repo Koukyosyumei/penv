@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     clint::Clint,
+    litex,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -62,6 +63,12 @@ struct Region {
     bytes: Vec<u8>,
 }
 
+struct LiteXTimer {
+    bases: Vec<u32>,
+    timer: litex::Timer,
+    vex_irq: Option<(usize, u8)>,
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
@@ -70,6 +77,7 @@ pub struct Bus {
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
+    litex_timer: Option<LiteXTimer>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     plic: Option<Plic>,
@@ -179,8 +187,15 @@ impl Bus {
                 start < other + MuraxUart::SIZE && other < end
             })
             || self.litex_uart.as_ref().is_some_and(|uart| {
-                let other = u64::from(uart.base);
-                start < other + u64::from(LiteXUart::SIZE) && other < end
+                uart.bases
+                    .iter()
+                    .any(|&base| overlaps_range(start, end, base, LiteXUart::SIZE))
+            })
+            || self.litex_timer.as_ref().is_some_and(|device| {
+                device
+                    .bases
+                    .iter()
+                    .any(|&base| overlaps_range(start, end, base, device.timer.size()))
             })
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
@@ -344,16 +359,79 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_litex_uart(&mut self, base: u32) -> Result<(), String> {
-        let start = u64::from(base);
-        let end = start + u64::from(LiteXUart::SIZE);
-        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
-            return Err(format!(
-                "invalid or overlapping LiteX UART range at {base:#010x}"
-            ));
+    fn check_litex_ranges(&self, bases: &[u32], size: u32) -> Result<(), String> {
+        for (index, &base) in bases.iter().enumerate() {
+            let start = u64::from(base);
+            let end = start + u64::from(size);
+            if base & 3 != 0
+                || end > 1 << 32
+                || self.overlaps(start, end)
+                || bases[..index]
+                    .iter()
+                    .any(|&base| overlaps_range(start, end, base, size))
+            {
+                return Err(format!(
+                    "invalid or overlapping LiteX MMIO range at {base:#010x}"
+                ));
+            }
         }
-        self.litex_uart = Some(LiteXUart::new(base));
         Ok(())
+    }
+
+    pub fn map_litex_uart(
+        &mut self,
+        bases: Vec<u32>,
+        vex_irq: Option<(usize, u8)>,
+    ) -> Result<(), String> {
+        self.check_litex_ranges(&bases, LiteXUart::SIZE)?;
+        self.litex_uart = Some(LiteXUart::new(bases, vex_irq));
+        Ok(())
+    }
+
+    pub fn map_litex_timer(
+        &mut self,
+        bases: Vec<u32>,
+        timer: litex::Timer,
+        vex_irq: Option<(usize, u8)>,
+    ) -> Result<(), String> {
+        self.check_litex_ranges(&bases, timer.size())?;
+        self.litex_timer = Some(LiteXTimer {
+            bases,
+            timer,
+            vex_irq,
+        });
+        Ok(())
+    }
+
+    pub fn tick_litex(&mut self, hart: usize) -> u32 {
+        let mut lines = 0;
+        if let Some(device) = self.litex_timer.as_mut() {
+            device.timer.tick();
+            if let Some((target, line)) = device.vex_irq
+                && target == hart
+                && device.timer.interrupt_pending()
+            {
+                lines |= 1 << line;
+            }
+        }
+        if let Some(uart) = self.litex_uart.as_ref()
+            && let Some((target, line)) = uart.vex_irq
+            && target == hart
+            && uart.interrupt_pending()
+        {
+            lines |= 1 << line;
+        }
+        lines
+    }
+
+    pub fn has_litex_irq(&self) -> bool {
+        self.litex_timer
+            .as_ref()
+            .is_some_and(|device| device.vex_irq.is_some())
+            || self
+                .litex_uart
+                .as_ref()
+                .is_some_and(|uart| uart.vex_irq.is_some())
     }
 
     pub fn map_stm32_usart(
@@ -537,6 +615,12 @@ impl Bus {
         {
             return Ok(uart.read(offset));
         }
+        if (N == 1 || N == 4 && address & 3 == 0)
+            && let Some(device) = self.litex_timer.as_ref()
+            && let Some(offset) = litex_offset(&device.bases, device.timer.size(), address)
+        {
+            return Ok(device.timer.read(offset, N));
+        }
         if N == 4
             && let Some(timer) = self.systick.as_mut()
             && let Some(value) = timer.read(address)
@@ -639,6 +723,13 @@ impl Bus {
         {
             return device.write(offset, value, uart).map_err(BusError::Output);
         }
+        if matches!(width, 1 | 4)
+            && let Some(device) = self.litex_timer.as_mut()
+            && let Some(offset) = litex_offset(&device.bases, device.timer.size(), address)
+        {
+            device.timer.write(offset, width, value);
+            return Ok(());
+        }
         if width == 4
             && let Some(timer) = self.systick.as_mut()
             && timer.write(address, value)
@@ -682,6 +773,18 @@ impl Bus {
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }
+}
+
+fn overlaps_range(start: u64, end: u64, base: u32, size: u32) -> bool {
+    let base = u64::from(base);
+    start < base + u64::from(size) && base < end
+}
+
+fn litex_offset(bases: &[u32], size: u32, address: u32) -> Option<u32> {
+    bases.iter().find_map(|&base| {
+        let offset = address.wrapping_sub(base);
+        (offset < size).then_some(offset)
+    })
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ mod clint;
 mod compressed;
 mod csr;
 mod image;
+mod litex;
 mod machine;
 mod monitor;
 mod murax;

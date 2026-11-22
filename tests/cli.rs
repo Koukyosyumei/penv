@@ -385,3 +385,60 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, b"I");
 }
+
+#[test]
+fn litex_uart_and_timer_share_shadow_registers_and_drive_vex_interrupts() {
+    let directory = std::env::temp_dir().join(format!("penv-litex-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("board.repl");
+    let raw = directory.join("firmware.bin");
+    let input = directory.join("input");
+    fs::write(
+        &board,
+        r#"cpu: CPU.VexRiscv @ sysbus
+    cpuType: "rv32im"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.LiteX_UART @ { sysbus 0x60001800; sysbus 0xe0001800 }
+    -> cpu@2
+timer0: Timers.LiteX_Timer_CSR32 @ { sysbus 0x60002800; sysbus 0xe0002800 }
+    frequency: 100000000
+    IRQ -> cpu@1
+"#,
+    )
+    .unwrap();
+    let program = [
+        0x6000_22b7u32, // lui t0, 0x60002
+        0x8002_8293,    // addi t0, t0, -2048 (UART)
+        0x0020_0313,    // li t1, 2
+        0x0062_aa23,    // sw t1, 20(t0) (enable RX event)
+        0xe000_3337,    // lui t1, 0xe0003
+        0x8003_0313,    // addi t1, t1, -2048 (timer shadow)
+        0x0010_0393,    // li t2, 1
+        0x0073_2023,    // sw t2, 0(t1) (load)
+        0x0073_2e23,    // sw t2, 28(t1) (event enable)
+        0x0073_2423,    // sw t2, 8(t1) (start)
+        0xfc00_2e73,    // csrr t3, 0xfc0 (VexRiscv pending)
+        0x0060_0e93,    // li t4, 6 (UART | timer)
+        0x01de_1c63,    // bne t3, t4, +24 (skip output on mismatch)
+        0x0002_a383,    // lw t2, 0(t0) (receive byte)
+        0xe000_2337,    // lui t1, 0xe0002
+        0x8003_0313,    // addi t1, t1, -2048 (UART shadow)
+        0x0073_2023,    // sw t2, 0(t1) (transmit byte)
+        0x0010_0073,    // ebreak
+        0x0010_0073,    // ebreak
+    ];
+    fs::write(raw.as_path(), program.map(u32::to_le_bytes).as_flattened()).unwrap();
+    fs::write(&input, b"Q").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--platform"])
+        .arg(&board)
+        .arg("--uart-input")
+        .arg(&input)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"Q");
+}

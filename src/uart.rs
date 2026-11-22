@@ -61,7 +61,8 @@ impl MuraxUart {
 }
 
 pub struct LiteXUart {
-    pub base: u32,
+    pub bases: Vec<u32>,
+    pub vex_irq: Option<(usize, u8)>,
     receive: VecDeque<u8>,
     pending: u32,
     enabled: u32,
@@ -70,9 +71,10 @@ pub struct LiteXUart {
 impl LiteXUart {
     pub const SIZE: u32 = 0x100;
 
-    pub fn new(base: u32) -> Self {
+    pub fn new(bases: Vec<u32>, vex_irq: Option<(usize, u8)>) -> Self {
         Self {
-            base,
+            bases,
+            vex_irq,
             receive: VecDeque::new(),
             pending: 1,
             enabled: 0,
@@ -80,8 +82,13 @@ impl LiteXUart {
     }
 
     pub fn offset(&self, address: u32, width: usize) -> Option<u32> {
-        let offset = address.wrapping_sub(self.base);
-        (offset < Self::SIZE && matches!(width, 1 | 4)).then_some(offset)
+        if !matches!(width, 1 | 4) {
+            return None;
+        }
+        self.bases.iter().find_map(|base| {
+            let offset = address.wrapping_sub(*base);
+            (offset < Self::SIZE).then_some(offset)
+        })
     }
 
     pub fn queue_input(&mut self, bytes: Vec<u8>) {

@@ -264,6 +264,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut stm32_uarts = Vec::new();
     let mut plic = None;
     let mut timer = None;
+    let mut litex_timer = None;
     for entry in &entries {
         if !names.insert(&entry.name) {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
@@ -299,6 +300,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             "Timers.Murax_Timer" => {
                 if timer.replace(entry).is_some() {
                     return Err(entry.error("only one Murax timer is currently supported"));
+                }
+            }
+            "Timers.LiteX_Timer" | "Timers.LiteX_Timer_CSR32" => {
+                if litex_timer.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX timer is supported"));
                 }
             }
             "IRQControllers.PlatformLevelInterruptController" => {
@@ -338,7 +344,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         ));
     }
     if let Some(entry) = cpus.iter().find(|entry| entry.model == "CPU.CortexM") {
-        if cpus.len() != 1 || clint.is_some() || plic.is_some() || timer.is_some() {
+        if cpus.len() != 1
+            || clint.is_some()
+            || plic.is_some()
+            || timer.is_some()
+            || litex_timer.is_some()
+        {
             return Err(
                 entry.error("expected a single Cortex-M CPU without RISC-V interrupt controllers")
             );
@@ -421,7 +432,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
             machine
                 .bus
-                .map_litex_uart(uart.address()?)
+                .map_litex_uart(vec![uart.address()?], None)
                 .map_err(|e| uart.error(&e))?;
         }
         let mut combined_routes = HashMap::new();
@@ -762,10 +773,15 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_uart(entry.address()?, connected)
                 .map_err(|e| entry.error(&e))?;
         } else if entry.model == "UART.LiteX_UART" {
-            keys(entry, &[])?;
+            let mut irq = None;
+            if let [(_, wire)] = entry.body.as_slice() {
+                irq = Some(vex_irq(entry, wire, &configs)?);
+            } else {
+                keys(entry, &[])?;
+            }
             machine
                 .bus
-                .map_litex_uart(entry.address()?)
+                .map_litex_uart(entry.addresses()?, irq)
                 .map_err(|e| entry.error(&e))?;
         } else {
             let (plic, sources) =
@@ -811,7 +827,49 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_murax_timer(entry.address()?, connected)
             .map_err(|e| entry.error(&e))?;
     }
+    if let Some(entry) = litex_timer {
+        let mut frequency = None;
+        let mut irq = None;
+        for (_, text) in &entry.body {
+            if text.contains("->") && irq.is_none() {
+                irq = Some(vex_irq(entry, text, &configs)?);
+            } else if let Some(("frequency", value)) = text
+                .split_once(':')
+                .map(|(key, value)| (key.trim(), value.trim()))
+                && frequency.is_none()
+            {
+                frequency = Some(number(value).map_err(|e| entry.error(&e))?);
+            } else {
+                return Err(entry.error("unsupported or duplicate LiteX timer property"));
+            }
+        }
+        let frequency = frequency
+            .filter(|&frequency| frequency != 0)
+            .ok_or_else(|| entry.error("expected positive LiteX timer frequency"))?;
+        let timer = crate::litex::Timer::new(frequency, entry.model == "Timers.LiteX_Timer_CSR32");
+        machine
+            .bus
+            .map_litex_timer(entry.addresses()?, timer, irq)
+            .map_err(|e| entry.error(&e))?;
+    }
     Ok(machine)
+}
+
+type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool), bool);
+
+fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(usize, u8), String> {
+    if let Some((pin, target)) = wire.split_once("->")
+        && matches!(pin.trim(), "" | "IRQ")
+        && let Some((cpu, line)) = target.split_once('@')
+        && let Some(&(hart, _, _, _)) = configs
+            .iter()
+            .find(|(_, target, _, _)| target.name == cpu.trim() && target.model == "CPU.VexRiscv")
+    {
+        return irq_index(line.trim(), 32)
+            .map(|line| (hart, line))
+            .map_err(|e| entry.error(&e));
+    }
+    Err(entry.error("expected IRQ wired to a VexRiscv machine external interrupt"))
 }
 
 fn irq_index(value: &str, count: u32) -> Result<u8, String> {
