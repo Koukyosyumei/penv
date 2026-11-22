@@ -426,7 +426,7 @@ impl Hart {
             let ethernet = bus
                 .ethernet
                 .iter()
-                .fold(0, |lines, device| lines | device.interrupt());
+                .fold(0, |lines, device| lines | device.vex_irq());
             let lines =
                 (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER) | ethernet;
             let external = if let Some(mask) = self.csr.vex_irq_mask {

@@ -4,16 +4,20 @@ const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
+const ENABLE_HIGH: u32 = ENABLE + 4;
+const DISABLE_HIGH: u32 = DISABLE + 4;
+const SET_PENDING_HIGH: u32 = SET_PENDING + 4;
+const CLEAR_PENDING_HIGH: u32 = CLEAR_PENDING + 4;
 const PRIORITY: u32 = BASE + 0x400;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd1c;
 const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 7;
-const PRIORITY_END: u32 = PRIORITY + 31;
+const PRIORITY_END: u32 = PRIORITY + 63;
 
 pub struct Nvic {
     vector_base: Option<u32>,
-    enabled: u32,
-    pending: u32,
-    priority: [u8; 32],
+    enabled: u64,
+    pending: u64,
+    priority: [u8; 64],
     system_priority: [u8; 8],
     priority_mask: u8,
     pub uart_irq: Option<u8>,
@@ -25,7 +29,7 @@ impl Nvic {
             vector_base: None,
             enabled: 0,
             pending: 0,
-            priority: [0; 32],
+            priority: [0; 64],
             system_priority: [0; 8],
             priority_mask,
             uart_irq,
@@ -52,13 +56,13 @@ impl Nvic {
         self.vector_base = Some(address);
     }
 
-    pub fn set_uart_level(&mut self, high: bool, active: u64) {
+    pub fn set_uart_level(&mut self, high: bool, active: u128) {
         if let Some(line) = self.uart_irq {
             self.set_line(line, high, active);
         }
     }
 
-    pub fn set_line(&mut self, line: u8, high: bool, active: u64) {
+    pub fn set_line(&mut self, line: u8, high: bool, active: u128) {
         if high && active & (1 << (16 + line)) == 0 {
             self.pending |= 1 << line;
         }
@@ -69,13 +73,13 @@ impl Nvic {
             11 => self.system_priority[3],
             14 => self.system_priority[6],
             15 => self.system_priority[7],
-            16..=47 => self.priority[usize::from(exception - 16)],
+            16..=79 => self.priority[usize::from(exception - 16)],
             _ => 0,
         }
     }
 
-    pub fn next_irq(&self, active: u64) -> Option<(u8, u8)> {
-        let mut candidates = self.enabled & self.pending & !((active >> 16) as u32);
+    pub fn next_irq(&self, active: u128) -> Option<(u8, u8)> {
+        let mut candidates = self.enabled & self.pending & !((active >> 16) as u64);
         let mut selected = None;
         while candidates != 0 {
             let line = candidates.trailing_zeros() as u8;
@@ -105,8 +109,10 @@ impl Nvic {
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         Some(match (address, width) {
             (VTOR, 4) => self.vector_base.unwrap_or(0),
-            (ENABLE | DISABLE, 4) => self.enabled,
-            (SET_PENDING | CLEAR_PENDING, 4) => self.pending,
+            (ENABLE | DISABLE, 4) => self.enabled as u32,
+            (ENABLE_HIGH | DISABLE_HIGH, 4) => (self.enabled >> 32) as u32,
+            (SET_PENDING | CLEAR_PENDING, 4) => self.pending as u32,
+            (SET_PENDING_HIGH | CLEAR_PENDING_HIGH, 4) => (self.pending >> 32) as u32,
             (_, 1 | 4) => {
                 let (system, offset) = Self::priority_registers(address)?;
                 let priority = if system {
@@ -125,10 +131,14 @@ impl Nvic {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
         match (address, width) {
-            (ENABLE, 4) => self.enabled |= value,
-            (DISABLE, 4) => self.enabled &= !value,
-            (SET_PENDING, 4) => self.pending |= value,
-            (CLEAR_PENDING, 4) => self.pending &= !value,
+            (ENABLE, 4) => self.enabled |= u64::from(value),
+            (ENABLE_HIGH, 4) => self.enabled |= u64::from(value) << 32,
+            (DISABLE, 4) => self.enabled &= !u64::from(value),
+            (DISABLE_HIGH, 4) => self.enabled &= !(u64::from(value) << 32),
+            (SET_PENDING, 4) => self.pending |= u64::from(value),
+            (SET_PENDING_HIGH, 4) => self.pending |= u64::from(value) << 32,
+            (CLEAR_PENDING, 4) => self.pending &= !u64::from(value),
+            (CLEAR_PENDING_HIGH, 4) => self.pending &= !(u64::from(value) << 32),
             (_, 1 | 4) => {
                 let Some((system, offset)) = Self::priority_registers(address) else {
                     return false;

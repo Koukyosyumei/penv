@@ -13,7 +13,7 @@ pub struct Thumb {
     carry: bool,
     overflow: bool,
     active_exception: u8,
-    active_exceptions: u64,
+    active_exceptions: u128,
     interrupts_masked: bool,
     thread_uses_psp: bool,
     msp: u32,
@@ -280,7 +280,7 @@ impl Thumb {
             let valid_mode = if target != 0xffff_fff1 {
                 previous == 0 && remaining == 0
             } else {
-                previous != 0 && previous < 64 && remaining & (1 << previous) != 0
+                previous != 0 && previous < 80 && remaining & (1 << previous) != 0
             };
             if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
                 return Err("invalid Cortex-M exception return frame".into());

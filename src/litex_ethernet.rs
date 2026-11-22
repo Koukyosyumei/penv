@@ -1,19 +1,8 @@
+use crate::ethernet::{Mapping, Region, append_fcs};
+
 use std::collections::VecDeque;
 
 pub const SLOT_SIZE: usize = 0x800;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Region {
-    Registers,
-    Buffer,
-    Phy,
-}
-
-pub struct Mapping {
-    pub base: u32,
-    pub size: u32,
-    pub region: Region,
-}
 
 pub struct LiteXEthernet {
     pub name: String,
@@ -84,14 +73,7 @@ impl LiteXEthernet {
             let start = (self.rx_lengths.len() + self.tx_slot) * SLOT_SIZE;
             let mut frame = self.buffer[start..start + length].to_vec();
             frame.resize(length.max(60), 0);
-            let mut crc = u32::MAX;
-            for &byte in &frame {
-                crc ^= u32::from(byte);
-                for _ in 0..8 {
-                    crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-                }
-            }
-            frame.extend_from_slice(&(!crc).to_le_bytes());
+            append_fcs(&mut frame);
             self.outgoing = Some(frame);
         }
         self.tx_pending = true;
@@ -232,7 +214,7 @@ impl Phy {
             return;
         }
         if let Some((data, bit)) = self.reply {
-            self.input = bit < 16 && data & (1 << bit) != 0;
+            self.input = bit == 17 || (bit < 16 && data & (1 << bit) != 0);
             self.reply = bit.checked_sub(1).map(|next| (data, next));
             return;
         }
@@ -252,7 +234,7 @@ impl Phy {
             } else {
                 u16::MAX
             };
-            self.reply = Some((data, 16));
+            self.reply = Some((data, 17));
             self.input = true;
             self.bits = 0;
             self.command = 0;

@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     clint::Clint,
-    litex_ethernet::LiteXEthernet,
+    ethernet::Controller,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -65,7 +65,7 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
-    pub ethernet: Vec<LiteXEthernet>,
+    pub ethernet: Vec<Controller>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -79,6 +79,52 @@ pub struct Bus {
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
+}
+
+pub struct EthernetDma<'a> {
+    regions: &'a mut [Region],
+    reservations: &'a mut [Option<u32>],
+}
+
+impl<'a> EthernetDma<'a> {
+    pub fn read(&self, address: u32, width: usize) -> Option<&[u8]> {
+        self.regions.iter().find_map(|region| {
+            let offset = region.offset(address, width)?;
+            Some(&region.bytes[offset..offset + width])
+        })
+    }
+
+    pub fn write(&mut self, address: u32, bytes: &[u8]) -> bool {
+        let memory = EthernetDma {
+            regions: self.regions,
+            reservations: self.reservations,
+        };
+        if let Ok(target) = memory.memory(address, bytes.len()) {
+            target.copy_from_slice(bytes);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn memory(self, address: u32, width: usize) -> Result<&'a mut [u8], BusError> {
+        for region in self.regions {
+            if let Some(offset) = region.offset(address, width) {
+                if width != 0 {
+                    for reservation in self.reservations.iter_mut() {
+                        if reservation.is_some_and(|reserved| {
+                            u64::from(address) < u64::from(reserved) + 4
+                                && u64::from(reserved) < u64::from(address) + width as u64
+                        }) {
+                            *reservation = None;
+                        }
+                    }
+                }
+                return Ok(&mut region.bytes[offset..offset + width]);
+            }
+        }
+        Err(BusError::Unmapped(address, width))
+    }
 }
 
 impl Region {
@@ -128,15 +174,15 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_ethernet(&mut self, device: LiteXEthernet) -> Result<(), String> {
-        for (index, mapping) in device.mappings.iter().enumerate() {
+    pub fn map_ethernet(&mut self, device: Controller) -> Result<(), String> {
+        for (index, mapping) in device.mappings().iter().enumerate() {
             let start = u64::from(mapping.base);
             let end = start + u64::from(mapping.size);
             if mapping.base & 3 != 0
                 || mapping.size == 0
                 || end > 1 << 32
                 || self.overlaps(start, end)
-                || device.mappings[..index].iter().any(|other| {
+                || device.mappings()[..index].iter().any(|other| {
                     let base = u64::from(other.base);
                     start < base + u64::from(other.size) && base < end
                 })
@@ -198,7 +244,7 @@ impl Bus {
             || self
                 .ethernet
                 .iter()
-                .flat_map(|device| &device.mappings)
+                .flat_map(|device| device.mappings())
                 .any(|mapping| {
                     let base = u64::from(mapping.base);
                     start < base + u64::from(mapping.size) && base < end
@@ -273,7 +319,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn sample_nvic(&mut self, active: u64) {
+    pub fn sample_nvic(&mut self, active: u128) {
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
                 self.litex_uart
@@ -281,6 +327,9 @@ impl Bus {
                     .is_some_and(LiteXUart::interrupt_pending),
                 active,
             );
+            for line in self.ethernet.iter().filter_map(Controller::nvic_irq) {
+                nvic.set_line(line, true, active);
+            }
             let mut exti_inputs = 0;
             for uart in &self.stm32_uarts {
                 if uart.interrupt_pending() {
@@ -417,22 +466,19 @@ impl Bus {
     }
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
-        for region in &mut self.regions {
-            if let Some(offset) = region.offset(address, width) {
-                if width != 0 {
-                    for reservation in &mut self.reservations {
-                        if reservation.is_some_and(|reserved| {
-                            u64::from(address) < u64::from(reserved) + 4
-                                && u64::from(reserved) < u64::from(address) + width as u64
-                        }) {
-                            *reservation = None;
-                        }
-                    }
-                }
-                return Ok(&mut region.bytes[offset..offset + width]);
-            }
+        EthernetDma {
+            regions: &mut self.regions,
+            reservations: &mut self.reservations,
         }
-        Err(BusError::Unmapped(address, width))
+        .memory(address, width)
+    }
+
+    pub fn receive_ethernet(&mut self, nic: usize, frame: &[u8]) {
+        let mut dma = EthernetDma {
+            regions: &mut self.regions,
+            reservations: &mut self.reservations,
+        };
+        self.ethernet[nic].receive(frame, &mut dma);
     }
 
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
@@ -670,10 +716,14 @@ impl Bus {
             exti.write(address, value);
             return Ok(());
         }
+        let mut dma = EthernetDma {
+            regions: &mut self.regions,
+            reservations: &mut self.reservations,
+        };
         if self
             .ethernet
             .iter_mut()
-            .any(|device| device.write(address, width, value))
+            .any(|device| device.write(address, width, value, &mut dma))
         {
             return Ok(());
         }

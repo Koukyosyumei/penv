@@ -190,7 +190,7 @@ impl Simulation {
             .bus
             .ethernet
             .iter()
-            .position(|device| device.name == nic)
+            .position(|device| device.name() == nic)
             .ok_or_else(|| format!("{}: unknown Ethernet peripheral {nic:?}", device.name))?;
         let port = Port { node, nic };
         let attached = &mut device.switch_by_nic[nic];
@@ -250,14 +250,16 @@ impl Simulation {
 
     fn forward(&mut self, node: usize) {
         for nic in 0..self.nodes[node].switch_by_nic.len() {
-            let Some(frame) = self.nodes[node].machine.bus.ethernet[nic].take_frame() else {
-                continue;
-            };
-            let Some(switch) = self.nodes[node].switch_by_nic[nic] else {
-                continue;
-            };
-            for port in self.switches[switch].recipients(Port { node, nic }, &frame) {
-                self.nodes[port.node].machine.bus.ethernet[port.nic].receive(&frame);
+            while let Some(frame) = self.nodes[node].machine.bus.ethernet[nic].take_frame() {
+                let Some(switch) = self.nodes[node].switch_by_nic[nic] else {
+                    continue;
+                };
+                for port in self.switches[switch].recipients(Port { node, nic }, &frame) {
+                    self.nodes[port.node]
+                        .machine
+                        .bus
+                        .receive_ethernet(port.nic, &frame);
+                }
             }
         }
     }

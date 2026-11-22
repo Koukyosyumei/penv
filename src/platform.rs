@@ -547,7 +547,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors);
-        crate::network_platform::configure(&entries, &mut machine, None)?;
+        crate::network_platform::configure(
+            &entries,
+            &mut machine,
+            None,
+            nvic.map(|entry| entry.name.as_str()),
+        )?;
         return Ok(machine);
     }
     if let Some(nvic) = nvic {
@@ -792,7 +797,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| entry.error(&e))?;
     }
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
-    crate::network_platform::configure(&entries, &mut machine, vex_cpu)?;
+    crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
 }
 

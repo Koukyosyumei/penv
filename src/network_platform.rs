@@ -1,7 +1,9 @@
 use crate::{
-    litex_ethernet::{LiteXEthernet, Mapping, Phy, Region},
+    ethernet::{Controller, Mapping, Region},
+    litex_ethernet::{LiteXEthernet, Phy},
     machine::Machine,
     platform::{Entry, number},
+    stm32_ethernet::Stm32Ethernet,
 };
 
 pub fn is_mac(model: &str) -> bool {
@@ -12,13 +14,18 @@ pub fn is_mac(model: &str) -> bool {
 }
 
 pub fn is_network(model: &str) -> bool {
-    is_mac(model) || model == "Network.EthernetPhysicalLayer"
+    is_mac(model)
+        || matches!(
+            model,
+            "Network.EthernetPhysicalLayer" | "Network.SynopsysEthernetMAC"
+        )
 }
 
 pub fn configure(
     entries: &[Entry],
     machine: &mut Machine,
     vex_cpu: Option<&str>,
+    nvic: Option<&str>,
 ) -> Result<(), String> {
     for entry in entries.iter().filter(|entry| is_mac(&entry.model)) {
         let mut rx = None;
@@ -68,7 +75,41 @@ pub fn configure(
         device.mappings = mappings(entry).map_err(|e| entry.error(&e))?;
         machine
             .bus
-            .map_ethernet(device)
+            .map_ethernet(Controller::LiteX(device))
+            .map_err(|e| entry.error(&e))?;
+    }
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == "Network.SynopsysEthernetMAC")
+    {
+        let mut irq = None;
+        for (_, text) in &entry.body {
+            let (pin, target) = text
+                .split_once("->")
+                .ok_or_else(|| entry.error("expected STM32 Ethernet IRQ connection"))?;
+            let (target, line) = target
+                .split_once('@')
+                .ok_or_else(|| entry.error("expected STM32 Ethernet IRQ destination"))?;
+            let line = number(line.trim()).map_err(|e| entry.error(&e))?;
+            if !matches!(pin.trim(), "" | "IRQ")
+                || Some(target.trim()) != nvic
+                || irq.is_some()
+                || line >= 64
+            {
+                return Err(entry.error("expected one Ethernet IRQ wired to NVIC line 0–63"));
+            }
+            irq = Some(line as u8);
+        }
+        let base = entry
+            .sysbus()?
+            .ok_or_else(|| entry.error("missing STM32 Ethernet address"))?;
+        machine
+            .bus
+            .map_ethernet(Controller::Stm32(Stm32Ethernet::new(
+                entry.name.clone(),
+                base,
+                irq,
+            )))
             .map_err(|e| entry.error(&e))?;
     }
     for entry in entries
@@ -91,28 +132,53 @@ pub fn configure(
             .bus
             .ethernet
             .iter_mut()
-            .find(|device| device.name == parent)
-            .ok_or_else(|| entry.error("unknown LiteX Ethernet parent"))?;
-        if address > 31 || registration.next().is_some() || device.phy.is_some() {
-            return Err(entry.error("expected one PHY address in 0–31 per Ethernet device"));
+            .find(|device| device.name() == parent)
+            .ok_or_else(|| entry.error("unknown Ethernet parent"))?;
+        if address > 31 || registration.next().is_some() {
+            return Err(entry.error("expected a PHY address in 0–31"));
         }
         let mut phy = Phy::new(address as u8);
         for (_, text) in &entry.body {
             let (key, value) = text
                 .split_once(':')
                 .ok_or_else(|| entry.error("expected PHY register property"))?;
-            let register = match key.trim() {
-                "Id1" => 2,
-                "Id2" => 3,
-                "VendorSpecific1" => 16,
-                "VendorSpecific2" => 17,
-                _ => return Err(entry.error("unsupported PHY property")),
-            };
+            let key = key.trim();
+            let register = match key {
+                "BasicControl" => Some(0),
+                "BasicStatus" => Some(1),
+                "Id1" => Some(2),
+                "Id2" => Some(3),
+                "AutoNegotiationAdvertisement" => Some(4),
+                "AutoNegotiationLinkPartnerBasePageAbility" => Some(5),
+                "AutoNegotiationExpansion" => Some(6),
+                "AutoNegotiationNextPageTransmit" => Some(7),
+                "AutoNegotiationLinkPartnerReceivedNextPage" => Some(8),
+                "MasterSlaveControl" => Some(9),
+                "MasterSlaveStatus" => Some(10),
+                "ExtendedStatus" => Some(15),
+                _ => key
+                    .strip_prefix("VendorSpecific")
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .filter(|&index| index < 16)
+                    .map(|index| 16 + index),
+            }
+            .ok_or_else(|| entry.error("unsupported PHY property"))?;
             phy.registers[register] =
                 u16::try_from(number(value.trim()).map_err(|e| entry.error(&e))?)
                     .map_err(|_| entry.error("PHY register value exceeds 16 bits"))?;
         }
-        device.phy = Some(phy);
+        match device {
+            Controller::LiteX(device) if device.phy.is_none() => device.phy = Some(phy),
+            Controller::Stm32(device)
+                if !device
+                    .phys
+                    .iter()
+                    .any(|(address, _)| *address == phy.address) =>
+            {
+                device.phys.push((phy.address, phy.registers));
+            }
+            _ => return Err(entry.error("duplicate or unsupported additional Ethernet PHY")),
+        }
     }
     Ok(())
 }
