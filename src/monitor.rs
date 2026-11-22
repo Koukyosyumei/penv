@@ -15,6 +15,7 @@ pub struct Boot {
     pub use_virtual_elf_addresses: bool,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    pub supervisor_mask: Option<u32>,
     started: bool,
 }
 
@@ -250,6 +251,9 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
+        }
+        ["cpu" | "sysbus.cpu", "SetSupervisorIrqMask", value] if boot.platform.is_some() => {
+            boot.supervisor_mask = Some(crate::parse_address(resolve(value)?)?);
         }
         [button, action @ ("Press" | "Release" | "Toggle")] if boot.platform.is_some() => {
             use crate::litex_panel::ButtonAction;

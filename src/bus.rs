@@ -618,7 +618,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn tick_litex(&mut self, hart: usize) -> u32 {
+    pub fn tick_litex(&mut self, hart: usize) -> u64 {
         let mut lines = 0;
         if let Some(device) = self.litex_timer.as_mut() {
             device.timer.tick();

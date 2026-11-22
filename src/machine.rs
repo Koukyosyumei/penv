@@ -291,6 +291,14 @@ impl Hart {
         self.csr.vex_irq_mask = Some(0);
     }
 
+    pub fn set_vex_supervisor_irq_mask(&mut self, value: u32) -> Result<(), String> {
+        if self.csr.vex_irq_mask.is_none() {
+            return Err("SetSupervisorIrqMask requires a VexRiscv platform".into());
+        }
+        self.csr.vex_supervisor_irq_mask = value;
+        Ok(())
+    }
+
     pub fn set_vex_irq_mask(&mut self, value: u32) -> Result<(), String> {
         let mask = self
             .csr
@@ -437,16 +445,14 @@ impl Hart {
         let plic = bus.tick_plic();
         let mut lines = bus.tick_litex(self.csr.hart_id);
         if self.csr.hart_id == 0 {
-            lines |= (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER);
+            lines |=
+                u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));
             pending |= plic;
         }
-        if let Some(mask) = self.csr.vex_irq_mask {
-            self.csr.vex_irq_pending = lines;
-            pending |= u32::from(lines & mask != 0) * EXTERNAL;
-        } else {
-            pending |= lines;
-        }
-        if (bus.clint.is_some()
+        pending |= self.csr.sample_vex_irq(lines);
+        if (pending != 0
+            || self.csr.has_vex_irq_to_clear()
+            || bus.clint.is_some()
             || bus.litex_cpu_timer.is_some()
             || bus.uart.is_some()
             || bus.timer.is_some()

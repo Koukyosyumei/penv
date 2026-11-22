@@ -1388,11 +1388,14 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
             .iter()
             .find(|(_, target, _, _)| target.name == cpu.trim() && target.model == "CPU.VexRiscv")
     {
-        return irq_index(line.trim(), 32)
-            .map(|line| (hart, line))
-            .map_err(|e| entry.error(&e));
+        let line = number(line.trim()).map_err(|e| entry.error(&e))?;
+        return match line {
+            0..=31 => Ok((hart, line as u8)),
+            1000..=1031 => Ok((hart, (line - 1000 + 32) as u8)),
+            _ => Err(entry.error("VexRiscv external IRQ must be in 0–31 or 1000–1031")),
+        };
     }
-    Err(entry.error("expected IRQ wired to a VexRiscv machine external interrupt"))
+    Err(entry.error("expected IRQ wired to a VexRiscv external interrupt"))
 }
 
 fn irq_index(value: &str, count: u32) -> Result<u8, String> {

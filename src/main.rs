@@ -224,6 +224,7 @@ fn run() -> Result<ExitCode, String> {
     let mut boot_pcs = Vec::new();
     let mut script_elf_addresses = None;
     let mut silence_ranges = Vec::new();
+    let mut vex_supervisor_irq_mask = None;
     let mut buttons = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
@@ -240,6 +241,7 @@ fn run() -> Result<ExitCode, String> {
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);
+        vex_supervisor_irq_mask = boot.supervisor_mask;
         if path.is_some() && boot.image.is_none() {
             return Err("a firmware override requires a LoadELF command in the script".into());
         }
@@ -300,6 +302,9 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(value) = vex_irq_mask {
         machine.primary.set_vex_irq_mask(value)?;
+    }
+    if let Some(value) = vex_supervisor_irq_mask {
+        machine.primary.set_vex_supervisor_irq_mask(value)?;
     }
     if let Some(path) = path {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
