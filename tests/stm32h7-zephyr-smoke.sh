@@ -47,7 +47,7 @@ if request.Offset == 0:
 REPL
 awk -v RS='' -v ORS='\n\n' '
     $1 == "system_flash_ro:" {sub(/\n    init:.*/, ""); print}
-    $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|crc|fdcan[12]|canMessageRAM):$/ &&
+    $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|crc|fdcan[12]|canMessageRAM):$/ &&
     $2 ~ /[A-Z]/ {print}
 ' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$work/boot.repl"

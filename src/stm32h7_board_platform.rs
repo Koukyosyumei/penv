@@ -4,6 +4,7 @@ use crate::{
     platform::{Entry, irq_index, number},
     stm32_crc::Stm32Crc,
     stm32_uart::Stm32Irq,
+    stm32h7_dma2d::Dma2d,
     stm32h7_fdcan::Fdcan,
     stm32h7_i2c::{I2C, I2c},
     stm32h7_qspi::Qspi,
@@ -15,7 +16,7 @@ use crate::{
 pub fn has_regions(model: &str) -> bool {
     matches!(
         model,
-        I2C | Rng::MODEL | Qspi::MODEL | Timer::MODEL | Stm32Crc::MODEL
+        I2C | Rng::MODEL | Qspi::MODEL | Timer::MODEL | Stm32Crc::MODEL | Dma2d::MODEL
     )
 }
 
@@ -26,6 +27,7 @@ pub fn is_device(model: &str) -> bool {
 pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
     let accepted: &[&str] = match entry.model.as_str() {
         I2C => &["I2C1", "I2C2", "I2C3", "I2C4"],
+        Dma2d::MODEL => &["DMA2D"],
         Rng::MODEL => &["RNG"],
         Qspi::MODEL => &["QSPI"],
         Timer::MODEL => &[
@@ -47,6 +49,28 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
+    for entry in entries.iter().filter(|entry| entry.model == Dma2d::MODEL) {
+        let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
+        if !matches!(alias, None | Some("DMA2D")) {
+            return Err(entry.error("invalid STM32 DMA2D RCC alias"));
+        }
+        let irq = match entry.body.as_slice() {
+            [] => None,
+            [(_, text)] => {
+                let (pin, target, line) = wire(text).map_err(|e| entry.error(e))?;
+                if !matches!(pin, "" | "IRQ") || !nvic.is_some_and(|nvic| nvic.name == target) {
+                    return Err(entry.error("expected DMA2D IRQ connected to NVIC"));
+                }
+                Some(irq_index(line, IRQ_LINES as u32).map_err(|e| entry.error(&e))?)
+            }
+            _ => return Err(entry.error("expected at most one DMA2D IRQ")),
+        };
+        machine
+            .bus
+            .map_h7_dma2d(Dma2d::new(base, alias.is_some(), irq))
+            .map_err(|e| entry.error(&e))?;
+    }
+
     let mut buses = Vec::new();
     for entry in entries.iter().filter(|entry| entry.model == I2C) {
         let i2c = parse_i2c(entry, entries, nvic, exti, exti_lines).map_err(|e| entry.error(&e))?;

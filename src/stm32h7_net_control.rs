@@ -8,6 +8,7 @@ const ADC3: u32 = 1 << 24;
 const CRC: u32 = 1 << 19;
 const BDMA: u32 = 1 << 21;
 const GPIO_PORTS: u32 = 0x7ff;
+const DMA2D: u32 = 1 << 4;
 const SPI4: u32 = 1 << 13;
 const SYSCFG_CLOCK: u32 = 1 << 1;
 const INTERFACE_MASK: u32 = 7 << 21;
@@ -122,6 +123,14 @@ impl NetworkControl {
 
     pub fn crc_in_reset(&self) -> bool {
         self.ahb4_reset & CRC != 0
+    }
+
+    pub fn dma2d_enabled(&self) -> bool {
+        self.clocks[0xd4 / 4] & DMA2D != 0 && !self.dma2d_in_reset()
+    }
+
+    pub fn dma2d_in_reset(&self) -> bool {
+        self.ahb3_reset & DMA2D != 0
     }
 
     pub fn qspi_enabled(&self) -> bool {
@@ -325,7 +334,7 @@ impl NetworkControl {
                 Change::None
             }
             0x7c => {
-                self.ahb3_reset = value & (1 << 14);
+                self.ahb3_reset = value & (DMA2D | (1 << 14));
                 Change::None
             }
             0x80 => {

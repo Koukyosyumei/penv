@@ -135,8 +135,8 @@ target/release/penv run --script "$smp" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 400000000 --stats
 ```
 
-- `cargo test` はユニットテスト 43 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
-- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。現行コードは両方の宣言を通過し、`stm32h7.repl:219` の `DMA.STM32DMA2D` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
+- `cargo test` はユニットテスト 44 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
+- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。現行コードは DMA2D の宣言を通過し、`stm32h7.repl:225` の `Video.STM32LTDC` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
 双方向 Ethernet の回帰テストは個別に実行できます。STM32H7 の DMA 記述子から LiteX の受信スロットへフレームを送り、逆方向では LiteX の送信スロットから STM32H7 の受信バッファーへ返した内容を照合します。
@@ -199,3 +199,29 @@ target/release/penv run --script "$work/boot.resc" \
 ```
 
 I²C DMA、スレーブ動作、VEML7700 の時系列入力は未対応です。別の上流 Nucleo H753ZI light polling ELF は診断構成で起動しましたが、非ゼロ測定値は確認できていません。
+
+### DMA2D の転送と IRQ
+
+`DMA.STM32DMA2D` は 32 ビット MMIO、AHB3 のクロック・リセット、行オフセット付きの RAM コピーと単色塗りつぶし、完了・エラーフラグと NVIC IRQ に対応します。参照ボードの宣言は `0x52001000` と NVIC IRQ 90 を使います。ピクセル形式変換、ブレンディング、CLUT、転送中の停止、LTDC は未対応です。 [Renode の DMA2D モデル](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Peripherals/Peripherals/DMA/STM32DMA2D.cs)
+
+USART2 スモークテストは上流の DMA2D 宣言を含む診断用 REPL で、Zephyr Shell と VEML7700 の読み出しを確認します。そのスクリプトの一時ディレクトリを `work` に、公開 ELF の保存先を `assets` に設定すると、同じ公開 ELF の Shell から DMA2D を試せます。
+
+```bash
+sed 's/@boot.repl/@fill.repl/' "$work/boot.resc" > "$work/fill.resc"
+cp "$work/boot.repl" "$work/fill.repl"
+printf '\ndma2dScratch: Memory.MappedMemory @ sysbus 0x60000000\n    size: 0x1000\n' >> "$work/fill.repl"
+
+events=()
+step=1000000
+for command in '0x580244d4 32 0x10' '0x52001038 32 0x1234abcd' \
+    '0x5200103c 32 0x60000000' '0x52001044 32 0x00010001' \
+    '0x52001000 32 0x00030201' '0x52001004 32' '0x60000000 32' '0xe000e208 32'; do
+    printf 'devmem %s\r' "$command" > "$work/dma-$step.txt"
+    events+=(--uart-event "$step:$work/dma-$step.txt")
+    step=$((step + 200000))
+done
+target/release/penv run --script "$work/fill.resc" \
+    --platform-root ../renode --asset-dir "$assets" --max-steps 2800000 "${events[@]}"
+```
+
+読み戻しは順に DMA2D の完了フラグ `0x2`、RAM のピクセル値 `0x1234abcd`、NVIC の保留ビット `0x4000000` でした。ユニットテストでは IRQ 90 の保留と、完了フラグをクリアした後に再保留しないことも確認しています。

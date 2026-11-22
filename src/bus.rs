@@ -19,6 +19,7 @@ use crate::{
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
+    stm32h7_dma2d::Dma2d,
     stm32h7_exti::H7Exti,
     stm32h7_fdcan::Fdcan,
     stm32h7_flash::FlashController,
@@ -107,6 +108,7 @@ pub struct Bus {
     h7_timers: Vec<H7Timer>,
     h7_crc: Vec<Stm32Crc>,
     h7_fdcan: Vec<Fdcan>,
+    h7_dma2d: Vec<Dma2d>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -348,6 +350,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_dma2d(&mut self, device: Dma2d) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Dma2d::SIZE)?;
+        self.h7_dma2d.push(device);
+        Ok(())
+    }
+
     pub fn map_h7_fdcan(&mut self, fdcan: Fdcan) -> Result<(), String> {
         self.check_peripheral_range(fdcan.base, Fdcan::SIZE)?;
         self.h7_fdcan.push(fdcan);
@@ -517,6 +525,11 @@ impl Bus {
                 )
                 .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
                 .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
+                .chain(
+                    self.h7_dma2d
+                        .iter()
+                        .map(|device| (device.base, Dma2d::SIZE)),
+                )
                 .any(|(base, size)| {
                     let base = u64::from(base);
                     start < base + u64::from(size) && base < end
@@ -712,6 +725,12 @@ impl Bus {
                 .filter(|rng| rng_clocked(control, rng))
                 .filter_map(Rng::interrupt)
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
+                .chain(
+                    self.h7_dma2d
+                        .iter()
+                        .filter(|device| dma2d_clocked(control, device))
+                        .filter_map(Dma2d::interrupt),
+                )
                 .chain(
                     self.h7_qspi
                         .iter()
@@ -1235,6 +1254,16 @@ impl Bus {
         {
             return Ok(fdcan.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self.h7_dma2d.iter().find(|device| device.contains(address))
+        {
+            return Ok(if dma2d_clocked(self.h7_network_control.as_ref(), device) {
+                device.read(address)
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1406,6 +1435,11 @@ impl Bus {
             if control.crc_in_reset() {
                 for crc in self.h7_crc.iter_mut().filter(|crc| crc.rcc_bound) {
                     crc.reset();
+                }
+            }
+            if control.dma2d_in_reset() {
+                for device in self.h7_dma2d.iter_mut().filter(|device| device.rcc_bound) {
+                    device.reset();
                 }
             }
             if control.qspi_in_reset() {
@@ -1618,10 +1652,25 @@ impl Bus {
             fdcan.write(address, value);
             return Ok(());
         }
+        if width == 4
+            && let Some(device) = self
+                .h7_dma2d
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            if dma2d_clocked(self.h7_network_control.as_ref(), device) {
+                device.write(address, value, &mut dma);
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }
+}
+
+fn dma2d_clocked(control: Option<&NetworkControl>, device: &Dma2d) -> bool {
+    !device.rcc_bound || control.is_some_and(NetworkControl::dma2d_enabled)
 }
 
 fn request_h7_stream(
