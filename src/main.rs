@@ -12,6 +12,7 @@ mod platform;
 mod plic;
 mod pmp;
 mod stm32_adc;
+mod stm32_can;
 mod stm32_crc;
 mod stm32_dma;
 mod stm32_exti;

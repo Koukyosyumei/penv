@@ -11,6 +11,7 @@ use crate::{
     nvic::{Nvic, VTOR},
     plic::Plic,
     stm32_adc::Stm32F0Adc,
+    stm32_can::Stm32Can,
     stm32_crc::Stm32F0Crc,
     stm32_dma::Stm32Dma,
     stm32_exti::Exti,
@@ -93,6 +94,7 @@ pub struct Bus {
     stm32_spis: Vec<Stm32F0Spi>,
     stm32_i2cs: Vec<Stm32I2c>,
     stm32_crc: Option<Stm32F0Crc>,
+    stm32_cans: Vec<Stm32Can>,
     stm32_adc: Option<Stm32F0Adc>,
     stm32_dma: Option<Stm32Dma>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
@@ -166,6 +168,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.stm32_cans.iter().any(|can| {
+                let other = u64::from(can.base);
+                start < other + u64::from(can.size) && other < end
             })
             || self.stm32_i2cs.iter().any(|i2c| {
                 let other = u64::from(i2c.base);
@@ -390,6 +396,9 @@ impl Bus {
             {
                 irqs |= 1 << line;
             }
+            for can in &self.stm32_cans {
+                irqs |= can.interrupts();
+            }
             for i2c in &self.stm32_i2cs {
                 if i2c.interrupt_pending()
                     && let Some(line) = i2c.irq
@@ -465,6 +474,24 @@ impl Bus {
                 .iter()
                 .any(|range| range.contains(&address) && range.contains(&end))
         })
+    }
+
+    pub fn map_stm32_can(&mut self, can: Stm32Can) -> Result<(), String> {
+        let start = u64::from(can.base);
+        let end = start + u64::from(can.size);
+        if can.base & 3 != 0
+            || can.size < 0x320
+            || can.size & 3 != 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping STM32 CAN range at {:#010x}",
+                can.base
+            ));
+        }
+        self.stm32_cans.push(can);
+        Ok(())
     }
 
     pub fn map_stm32_i2c(&mut self, i2c: Stm32I2c) -> Result<(), String> {
@@ -868,6 +895,12 @@ impl Bus {
         {
             return Ok(rcc.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(can) = self.stm32_cans.iter().find(|can| can.contains(address))
+        {
+            return Ok(can.read(address));
+        }
         if address & 3 == 0
             && let Some(i2c) = self.stm32_i2cs.iter_mut().find(|i2c| i2c.contains(address))
         {
@@ -1057,6 +1090,12 @@ impl Bus {
             && rcc.contains(address)
         {
             rcc.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(can) = self.stm32_cans.iter_mut().find(|can| can.contains(address))
+        {
+            can.write(address, value);
             return Ok(());
         }
         if address & 3 == 0

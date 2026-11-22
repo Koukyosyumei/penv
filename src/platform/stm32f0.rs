@@ -9,26 +9,14 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
     {
         return Err("--stm32f0-console requires a platform with an STM32F0 RCC".into());
     }
-    let omitted: HashMap<_, _> = entries
-        .iter()
-        .filter(|entry| matches!(entry.model.as_str(), "CAN.STMCAN"))
-        .map(|entry| (entry.name.clone(), entry.model.clone()))
-        .collect();
     let timer_names: Vec<_> = entries
         .iter()
         .filter(|entry| entry.model == "Timers.STM32_Timer")
         .map(|entry| entry.name.clone())
         .collect();
-    let mut skipped = Vec::new();
     let mut tags = Vec::new();
     let mut gpio_wiring = false;
-    entries.retain_mut(|entry| {
-        if omitted.contains_key(&entry.name) {
-            if !entry.model.is_empty() {
-                skipped.push(format!("{} ({})", entry.name, entry.model));
-            }
-            return false;
-        }
+    for entry in &mut *entries {
         match entry.model.as_str() {
             "GPIOPort.STM32_GPIOPort" => {
                 entry
@@ -63,8 +51,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
             }
             _ => {}
         }
-        true
-    });
+    }
     let mut definitions = HashMap::new();
     let mut loaded: Vec<Entry> = Vec::with_capacity(entries.len());
     for entry in entries.drain(..) {
@@ -134,9 +121,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
         }
     }
     *entries = loaded;
-    if !skipped.is_empty() {
-        eprintln!("penv: STM32F0 console mode omits {}", skipped.join(", "));
-    }
     if gpio_wiring {
         eprintln!("penv: STM32F0 console mode omits timer GPIO alternate-function wiring");
     }

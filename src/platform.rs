@@ -9,6 +9,7 @@ use std::{
 use crate::{
     machine::{MAX_HARTS, Machine},
     stm32_adc::Stm32F0Adc,
+    stm32_can::Stm32Can,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
     stm32_gpio_board::{GpioButton, GpioLed},
@@ -235,6 +236,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut gpio_leds = Vec::new();
     let mut gpio_buttons = Vec::new();
     let mut stm32_i2cs = Vec::new();
+    let mut stm32_cans = Vec::new();
     let mut i2c_eeproms = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_rtc = None;
@@ -316,6 +318,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
+            "CAN.STMCAN" => stm32_cans.push(entry),
             "I2C.STM32F7_I2C" => stm32_i2cs.push(entry),
             "Memory.GenericI2cEeprom" => i2c_eeproms.push(entry),
             "Timers.STM32F4_RTC" => {
@@ -802,6 +805,42 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .map_stm32f0_adc(device)
                 .map_err(|e| adc.error(&e))?;
         }
+        for can in stm32_cans {
+            let (base, size) = sysbus_range(can, Stm32Can::SIZE)?;
+            let mut routes = [0; 4];
+            for (_, text) in &can.body {
+                let (source, outputs) = text
+                    .split_once("->")
+                    .ok_or_else(|| can.error("expected STM32 CAN output wiring"))?;
+                let source = irq_list(source, 4).map_err(|e| can.error(&e))?;
+                for output in outputs.split('|') {
+                    let (target, pins) = output
+                        .split_once('@')
+                        .ok_or_else(|| can.error("invalid STM32 CAN output target"))?;
+                    let pins = if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
+                        irq_list(pins, 32).map_err(|e| can.error(&e))?
+                    } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
+                        irq_list(pins, count)
+                            .map_err(|e| can.error(&e))?
+                            .into_iter()
+                            .map(|_| irq)
+                            .collect()
+                    } else {
+                        return Err(can.error("unsupported STM32 CAN output target"));
+                    };
+                    if source.len() != pins.len() {
+                        return Err(can.error("mismatched STM32 CAN wiring widths"));
+                    }
+                    for (&signal, line) in source.iter().zip(pins) {
+                        routes[usize::from(signal)] |= 1 << line;
+                    }
+                }
+            }
+            machine
+                .bus
+                .map_stm32_can(Stm32Can::new(base, size, routes))
+                .map_err(|e| can.error(&e))?;
+        }
         let mut eeproms = HashMap::<_, Vec<_>>::new();
         for eeprom in i2c_eeproms {
             let (target, address) = eeprom
@@ -1107,6 +1146,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .map_stm32_gpio(make_stm32_gpio(entry)?)
             .map_err(|e| entry.error(&e))?;
     }
+    if let Some(can) = stm32_cans.first() {
+        return Err(can.error("STM32 CAN requires a Cortex-M platform"));
+    }
     if let Some(i2c) = stm32_i2cs.first().or(i2c_eeproms.first()) {
         return Err(i2c.error("STM32 I²C requires a Cortex-M platform"));
     }
@@ -1357,13 +1399,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     Ok(machine)
 }
 
-fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
+fn sysbus_range(entry: &Entry, default_size: u32) -> Result<(u32, u32), String> {
     let registration = entry
         .registration
         .as_deref()
         .and_then(|s| s.strip_prefix("sysbus"))
         .filter(|s| s.starts_with(char::is_whitespace))
-        .ok_or_else(|| entry.error("expected GPIO registered on sysbus"))?
+        .ok_or_else(|| entry.error("expected peripheral registered on sysbus"))?
         .trim();
     let (base, size) = if let Some(range) = registration
         .strip_prefix('<')
@@ -1372,11 +1414,19 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
         let (base, size) = range
             .split_once(',')
             .and_then(|(base, size)| Some((base.trim(), size.trim().strip_prefix('+')?.trim())))
-            .ok_or_else(|| entry.error("expected GPIO range <base, +size>"))?;
+            .ok_or_else(|| entry.error("expected registration range <base, +size>"))?;
         (number(base), number(size))
     } else {
-        (number(registration), Ok(0x400))
+        (number(registration), Ok(default_size))
     };
+    Ok((
+        base.map_err(|e| entry.error(&e))?,
+        size.map_err(|e| entry.error(&e))?,
+    ))
+}
+
+fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
+    let (base, size) = sysbus_range(entry, 0x400)?;
     let mut reset = [0; 3];
     let mut alternate_count = 16;
     let mut seen = HashSet::new();
@@ -1401,12 +1451,7 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
             _ => return Err(entry.error("unsupported STM32 GPIO property")),
         }
     }
-    Ok(Stm32Gpio::new(
-        base.map_err(|e| entry.error(&e))?,
-        size.map_err(|e| entry.error(&e))?,
-        reset,
-        alternate_count,
-    ))
+    Ok(Stm32Gpio::new(base, size, reset, alternate_count))
 }
 
 fn i2c_eeprom(entry: &Entry) -> Result<Eeprom, String> {
