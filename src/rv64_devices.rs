@@ -3,12 +3,13 @@ use std::{
     io::{self, Write},
 };
 
-use crate::{machine::MAX_HARTS, ns16550::Ns16550};
+use crate::{machine::MAX_HARTS, ns16550::Ns16550, rv64_starfive::ResetGenerator};
 
 #[derive(Default)]
 pub struct Devices {
     pub plic: Option<Plic>,
     pub uarts: Vec<Uart>,
+    pub reset_generators: Vec<ResetGenerator>,
     pub fallback_ranges: Vec<FallbackRange>,
     lines: [u64; MAX_HARTS],
     input_uart: usize,
@@ -72,6 +73,14 @@ impl Devices {
         if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
             return uart.read(address, width);
         }
+        if width == 4
+            && let Some(device) = self
+                .reset_generators
+                .iter()
+                .find(|device| device.contains(address))
+        {
+            return Some(device.read(address));
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -85,6 +94,15 @@ impl Devices {
     ) -> Option<io::Result<()>> {
         if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
             return uart.write(address, width, value, output);
+        }
+        if width == 4
+            && let Some(device) = self
+                .reset_generators
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
+            return Some(Ok(()));
         }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| {

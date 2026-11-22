@@ -6,6 +6,7 @@ use crate::{
     rv64::{Isa, Rv64},
     rv64_devices::{FallbackRange, Plic, Uart},
     rv64_priv::Pmp,
+    rv64_starfive::ResetGenerator,
 };
 
 pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
@@ -203,6 +204,23 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
         check_mapping(&machine, entry, base, uart.size())?;
         machine.bus.rv64_devices.uarts.push(uart);
     }
+    for entry in &entries {
+        if entry.model != "Python.PythonPeripheral"
+            || !matches!(
+                entry.name.as_str(),
+                "rstgen" | "audiorstgen" | "voutsysrstgen"
+            )
+        {
+            continue;
+        }
+        let Ok(base) = entry.address() else { continue };
+        let size = required_number(entry, "size")?;
+        if let Some(device) = ResetGenerator::from_repl(&entry.name, base, size) {
+            check_mapping(&machine, entry, base, device.size())?;
+            machine.bus.rv64_devices.reset_generators.push(device);
+        }
+    }
+
     Ok(machine)
 }
 
@@ -316,6 +334,10 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         .uarts
         .iter()
         .any(|uart| start < u64::from(uart.base) + uart.size() && u64::from(uart.base) < end);
+    let overlaps = overlaps
+        || devices.reset_generators.iter().any(|device| {
+            start < u64::from(device.base) + device.size() && u64::from(device.base) < end
+        });
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
     }
