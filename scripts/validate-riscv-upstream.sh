@@ -16,6 +16,7 @@ mkdir -p "$assets"
 murax=$renode_root/scripts/single-node/murax.resc
 litex=$renode_root/scripts/single-node/litex_vexriscv_smp.resc
 ibex=$renode_root/scripts/single-node/litex_ibex.resc
+zephyr=$renode_root/scripts/single-node/litex_vexriscv_zephyr.resc
 git -C "$renode_root" rev-parse HEAD > "$artifacts/renode-revision"
 
 prepare_assets() {
@@ -91,6 +92,13 @@ for marker in 'BIOS CRC passed' 'Ibex @ 100MHz' 'Press Q or ESC to abort boot co
 done
 rg -aq 'litex(\x1b\[[0-9;]*m)?>' "$artifacts/litex-ibex.uart.log"
 
+prepare_assets "$zephyr"
+printf 'version\r' > "$artifacts/zephyr-version.input"
+run_to_step_limit litex-zephyr "$zephyr" --uart-event "4000000:$artifacts/zephyr-version.input" \
+    --max-steps 12000000
+rg -aqF 'uart:~$' "$artifacts/litex-zephyr.uart.log"
+rg -aqF 'Zephyr version' "$artifacts/litex-zephyr.uart.log"
+
 prepare_assets "$litex"
 printf 'root\r' > "$artifacts/litex-login.input"
 printf 'cat /proc/cpuinfo\r' > "$artifacts/litex-cpuinfo.input"
@@ -104,4 +112,4 @@ rg -aq 'Platform Max HARTs\s+: 4' "$artifacts/litex-smp.uart.log"
 for hart in 0 1 2 3; do
     rg -aq "^processor[[:blank:]]*: $hart\r*$" "$artifacts/litex-smp.uart.log"
 done
-printf 'Murax UART echo, LiteX Ibex BIOS shell, and LiteX SMP Linux verified. Logs are in %s\n' "$artifacts"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, and LiteX SMP Linux verified. Logs are in %s\n' "$artifacts"

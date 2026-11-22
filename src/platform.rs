@@ -7,6 +7,7 @@ use std::{
 use crate::{
     bus::Bus,
     litex::{Gpio, IoDevice, Spi},
+    litex_eth::{Ethernet, Region as EthernetRegion, Registration},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
 };
@@ -48,28 +49,51 @@ impl Entry {
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
     }
 
-    fn addresses(&self) -> Result<Vec<u32>, String> {
-        if let Some(list) = self
+    fn registration_list(&self) -> Option<Vec<&str>> {
+        let list = self
             .registration
-            .as_deref()
-            .and_then(|value| value.strip_prefix('{'))
-            .and_then(|value| value.strip_suffix('}'))
-        {
-            return list
-                .split_terminator(';')
-                .map(|registration| {
-                    let address = registration
-                        .trim()
-                        .strip_prefix("sysbus")
-                        .filter(|address| address.starts_with(char::is_whitespace))
-                        .ok_or_else(|| {
-                            self.error("expected a sysbus address in registration list")
-                        })?;
-                    number(address.trim()).map_err(|e| self.error(&e))
-                })
+            .as_deref()?
+            .strip_prefix('{')?
+            .strip_suffix('}')?;
+        let mut depth = 0;
+        let mut start = 0;
+        let mut registrations = Vec::new();
+        for (index, delimiter) in unquoted_delimiters(list, &['{', '}', ';']) {
+            match delimiter {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                ';' if depth == 0 => {
+                    registrations.push(list[start..index].trim());
+                    start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        if !list[start..].trim().is_empty() {
+            registrations.push(list[start..].trim());
+        }
+        Some(registrations)
+    }
+
+    fn addresses(&self) -> Result<Vec<u32>, String> {
+        if let Some(registrations) = self.registration_list() {
+            if registrations.is_empty() {
+                return Err(self.error("expected sysbus registrations"));
+            }
+            return registrations
+                .into_iter()
+                .map(|registration| self.registration_address(registration))
                 .collect();
         }
         Ok(vec![self.address()?])
+    }
+
+    fn registration_address(&self, registration: &str) -> Result<u32, String> {
+        let address = registration
+            .strip_prefix("sysbus")
+            .filter(|address| address.starts_with(char::is_whitespace))
+            .ok_or_else(|| self.error("expected a sysbus address in registration list"))?;
+        number(address.trim()).map_err(|e| self.error(&e))
     }
 
     fn address(&self) -> Result<u32, String> {
@@ -268,9 +292,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut timer = None;
     let mut litex_timer = None;
     let mut litex_soc = None;
+    let mut litex_eth = None;
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
-            map_silence_ranges(entry, &mut machine.bus)?;
+            map_sysbus_ranges(entry, &mut machine.bus)?;
             continue;
         }
         if !names.insert(&entry.name) {
@@ -342,6 +367,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX timer is supported"));
                 }
             }
+            "Network.LiteX_Ethernet" => {
+                if litex_eth.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX Ethernet controller is supported"));
+                }
+            }
             "Miscellaneous.LiteX_SoC_Controller" => {
                 if litex_soc.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX SoC controller is supported"));
@@ -390,6 +420,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || timer.is_some()
             || litex_timer.is_some()
             || litex_soc.is_some()
+            || litex_eth.is_some()
         {
             return Err(
                 entry.error("expected a single Cortex-M CPU without RISC-V interrupt controllers")
@@ -921,32 +952,115 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_litex_soc(entry.address()?)
             .map_err(|e| entry.error(&e))?;
     }
+    if let Some(entry) = litex_eth {
+        let irq = match entry.body.as_slice() {
+            [] => None,
+            [(_, wire)] => Some(vex_irq(entry, wire, &configs)?),
+            _ => return Err(entry.error("expected at most one LiteX Ethernet IRQ")),
+        };
+        let registrations = if let Some(registrations) = entry.registration_list() {
+            registrations
+                .into_iter()
+                .map(|registration| ethernet_registration(entry, registration))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            vec![Registration {
+                base: entry.address()?,
+                size: Ethernet::MAC_SIZE,
+                region: EthernetRegion::Mac,
+            }]
+        };
+        if !registrations
+            .iter()
+            .any(|registration| registration.region == EthernetRegion::Mac)
+        {
+            return Err(entry.error("expected a LiteX Ethernet MAC registration"));
+        }
+        machine
+            .bus
+            .map_litex_eth(registrations, irq)
+            .map_err(|e| entry.error(&e))?;
+    }
     Ok(machine)
 }
 
-fn map_silence_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
-    let [(_, init), ranges @ ..] = entry.body.as_slice() else {
-        return Err(entry.error("expected a sysbus init add block"));
+fn ethernet_registration(entry: &Entry, registration: &str) -> Result<Registration, String> {
+    let Some(properties) = registration
+        .strip_prefix("sysbus new Bus.BusMultiRegistration")
+        .map(str::trim)
+        .and_then(|text| text.strip_prefix('{'))
+        .and_then(|text| text.strip_suffix('}'))
+    else {
+        return Ok(Registration {
+            base: entry.registration_address(registration)?,
+            size: Ethernet::MAC_SIZE,
+            region: EthernetRegion::Mac,
+        });
     };
-    if init != "init add:" || ranges.is_empty() {
-        return Err(entry.error("expected a sysbus init add block"));
+    let mut base = None;
+    let mut size = None;
+    let mut region = None;
+    for property in properties.split_terminator(';') {
+        let (key, value) = property
+            .split_once(':')
+            .map(|(key, value)| (key.trim(), value.trim()))
+            .ok_or_else(|| entry.error("invalid Ethernet registration property"))?;
+        match key {
+            "address" if base.is_none() => base = Some(number(value).map_err(|e| entry.error(&e))?),
+            "size" if size.is_none() => size = Some(number(value).map_err(|e| entry.error(&e))?),
+            "region" if region.is_none() => {
+                region = Some(match value {
+                    "\"buffer\"" => EthernetRegion::Buffer,
+                    "\"phy\"" => EthernetRegion::Phy,
+                    _ => return Err(entry.error("unsupported Ethernet region")),
+                })
+            }
+            _ => return Err(entry.error("unsupported or duplicate Ethernet registration property")),
+        }
+    }
+    match (base, size, region) {
+        (Some(base), Some(size), Some(region)) => Ok(Registration { base, size, region }),
+        _ => Err(entry.error("expected Ethernet address, size and region")),
+    }
+}
+
+fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
+    let [(_, init), ranges @ ..] = entry.body.as_slice() else {
+        return Err(entry.error("expected a sysbus init block"));
+    };
+    if !matches!(init.as_str(), "init:" | "init add:") || ranges.is_empty() {
+        return Err(entry.error("expected a sysbus init block"));
     }
     for (line, text) in ranges {
         let error = |detail: &str| format!("{}:{line}: {detail}", entry.source.display());
         let text = text.split('#').next().unwrap().trim();
-        let range = text
-            .strip_prefix("SilenceRange")
-            .map(str::trim)
-            .and_then(|text| text.strip_prefix('<'))
-            .and_then(|text| text.strip_suffix('>'));
-        let mut values = range.unwrap_or_default().split_whitespace();
+        let (command, range) = text
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| error("expected a sysbus init command"))?;
+        let (range, tail) = range
+            .trim_start()
+            .strip_prefix('<')
+            .and_then(|text| text.split_once('>'))
+            .ok_or_else(|| error("expected <start size>"))?;
+        let mut values = range.split_whitespace();
         let (Some(start), Some(size), None) = (values.next(), values.next(), values.next()) else {
-            return Err(error("expected SilenceRange <start size>"));
+            return Err(error("expected <start size>"));
         };
-        bus.map_silencer(
-            number(start).map_err(|e| error(&e))?,
-            number(size).map_err(|e| error(&e))?,
-        )
+        let start = number(start).map_err(|e| error(&e))?;
+        let size = number(size).map_err(|e| error(&e))?;
+        let tail = tail.trim();
+        match command {
+            "SilenceRange" if tail.is_empty() => bus.map_silencer(start, size),
+            "Tag"
+                if tail
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .is_some_and(|name| !name.is_empty() && !name.contains('"')) =>
+            {
+                bus.map_tag(start, size)
+            }
+            _ => return Err(error("expected SilenceRange or Tag")),
+        }
         .map_err(|e| error(&e))?;
     }
     Ok(())

@@ -4,6 +4,7 @@ mod compressed;
 mod csr;
 mod image;
 mod litex;
+mod litex_eth;
 mod machine;
 mod monitor;
 mod murax;

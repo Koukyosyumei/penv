@@ -7,6 +7,7 @@ use std::{
 use crate::{
     clint::Clint,
     litex,
+    litex_eth::{Ethernet, Registration},
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -73,6 +74,7 @@ struct LiteXTimer {
 pub struct Bus {
     regions: Vec<Region>,
     silencers: Vec<(u32, u32)>,
+    tags: Vec<(u32, u32)>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -81,6 +83,7 @@ pub struct Bus {
     litex_timer: Option<LiteXTimer>,
     litex_soc: Option<litex::SocController>,
     litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
+    litex_eth: Option<Ethernet>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     plic: Option<Plic>,
@@ -199,6 +202,11 @@ impl Bus {
                     .bases
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, device.timer.size()))
+            })
+            || self.litex_eth.as_ref().is_some_and(|eth| {
+                eth.registrations.iter().any(|registration| {
+                    overlaps_range(start, end, registration.base, registration.size)
+                })
             })
             || self.litex_io.iter().any(|(bases, device)| {
                 bases
@@ -431,10 +439,44 @@ impl Bus {
         Ok(())
     }
 
-    fn silenced(&self, address: u32, width: usize) -> bool {
-        self.silencers.iter().any(|&(base, size)| {
-            address >= base && u64::from(address - base) + width as u64 <= u64::from(size)
-        })
+    pub fn map_tag(&mut self, base: u32, size: u32) -> Result<(), String> {
+        if size == 0 || u64::from(base) + u64::from(size) > 1 << 32 {
+            return Err(format!("invalid Tag range at {base:#010x}"));
+        }
+        self.tags.push((base, size));
+        Ok(())
+    }
+
+    fn zero_mmio(&self, address: u32, width: usize) -> bool {
+        self.silencers
+            .iter()
+            .chain(&self.tags)
+            .any(|&(base, size)| {
+                address >= base && u64::from(address - base) + width as u64 <= u64::from(size)
+            })
+    }
+
+    pub fn map_litex_eth(
+        &mut self,
+        registrations: Vec<Registration>,
+        irq: Option<(usize, u8)>,
+    ) -> Result<(), String> {
+        for (index, registration) in registrations.iter().enumerate() {
+            let start = u64::from(registration.base);
+            let end = start + u64::from(registration.size);
+            self.check_litex_ranges(&[registration.base], registration.size)?;
+            if registration.size == 0
+                || registrations[..index]
+                    .iter()
+                    .any(|other| overlaps_range(start, end, other.base, other.size))
+            {
+                return Err(format!(
+                    "invalid or overlapping Ethernet range at {start:#010x}"
+                ));
+            }
+        }
+        self.litex_eth = Some(Ethernet::new(registrations, irq));
+        Ok(())
     }
 
     pub fn map_litex_io(&mut self, bases: Vec<u32>, device: litex::IoDevice) -> Result<(), String> {
@@ -467,6 +509,13 @@ impl Bus {
         {
             lines |= 1 << line;
         }
+        if let Some(eth) = self.litex_eth.as_ref()
+            && let Some((target, line)) = eth.vex_irq
+            && target == hart
+            && eth.interrupt_pending()
+        {
+            lines |= 1 << line;
+        }
         lines
     }
 
@@ -478,6 +527,10 @@ impl Bus {
                 .litex_uart
                 .as_ref()
                 .is_some_and(|uart| uart.vex_irq.is_some())
+            || self
+                .litex_eth
+                .as_ref()
+                .is_some_and(|eth| eth.vex_irq.is_some())
     }
 
     pub fn map_stm32_usart(
@@ -714,7 +767,13 @@ impl Bus {
         {
             return Ok(value);
         }
-        if address as usize & (N - 1) == 0 && self.silenced(address, N) {
+        if address as usize & (N - 1) == 0
+            && let Some(eth) = self.litex_eth.as_ref()
+            && let Some((region, offset)) = eth.locate(address, N)
+        {
+            return Ok(eth.read(region, offset, N));
+        }
+        if address as usize & (N - 1) == 0 && self.zero_mmio(address, N) {
             return Ok(0);
         }
         Err(ram_error)
@@ -861,7 +920,13 @@ impl Bus {
                 }
             }
         }
-        if self.silenced(address, width) {
+        if let Some(eth) = self.litex_eth.as_mut()
+            && let Some((region, offset)) = eth.locate(address, width)
+        {
+            eth.write(region, offset, width, value);
+            return Ok(());
+        }
+        if self.zero_mmio(address, width) {
             return Ok(());
         }
         Err(ram_error)
