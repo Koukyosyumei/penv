@@ -48,15 +48,16 @@ impl Exti {
         self.pending |=
             ((rising & self.rising) | (falling & self.falling)) & self.mask & !self.direct;
         self.levels = inputs & self.direct;
-        self.outputs
-            .iter()
-            .enumerate()
-            .fold(0, |active, (line, output)| match output {
-                Some(irq) if (self.levels | self.pending | self.software) & (1 << line) != 0 => {
-                    active | (1 << irq)
-                }
-                _ => active,
-            })
+        let mut asserted = self.levels | self.pending | self.software;
+        let mut active = 0;
+        while asserted != 0 {
+            let line = asserted.trailing_zeros() as usize;
+            asserted &= asserted - 1;
+            if let Some(Some(irq)) = self.outputs.get(line) {
+                active |= 1 << irq;
+            }
+        }
+        active
     }
 
     pub fn read(&self, address: u32) -> u32 {

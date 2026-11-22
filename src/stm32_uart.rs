@@ -60,7 +60,10 @@ impl Stm32Usart {
     }
 
     pub fn interrupt_pending(&self) -> bool {
-        self.status() & self.registers[0] & (RXNE | TXE | TC) != 0
+        let enabled = self.registers[0];
+        enabled & TXE != 0
+            || (enabled & TC != 0 && self.complete)
+            || (enabled & RXNE != 0 && !self.receive.is_empty())
     }
 
     pub fn read(&mut self, address: u32, width: usize) -> u32 {
