@@ -12,6 +12,7 @@ pub struct Boot {
     pub image: Option<String>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    started: bool,
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
@@ -97,7 +98,13 @@ fn execute(
     if text.is_empty() || text.starts_with('#') || text == "using sysbus" {
         return Ok(());
     }
-    let words: Vec<_> = text.split_whitespace().collect();
+    let words = command_words(text)?;
+    if words.is_empty() {
+        return Ok(());
+    }
+    if boot.started {
+        return Err("commands after start are unsupported in a boot script".into());
+    }
     let resolve = |value| match value {
         "$" => Err("missing variable name".to_string()),
         value => match value.strip_prefix('$') {
@@ -121,20 +128,20 @@ fn execute(
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @platform-path")?;
-            boot.platform = Some(local_path(file, script, root));
+            boot.platform = Some(local_path(&path_value(file), script, root));
         }
         ["sysbus", "LoadELF", value] if boot.platform.is_some() && boot.image.is_none() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
-            boot.image = Some(file.to_string());
+            boot.image = Some(path_value(file));
         }
         ["sysbus", "LoadBinary", value, address] if boot.platform.is_some() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
             boot.binaries
-                .push((file.to_string(), crate::parse_address(resolve(address)?)?));
+                .push((path_value(file), crate::parse_address(resolve(address)?)?));
         }
         [cpu, "PC", value] if boot.platform.is_some() => {
             boot.boot_pcs.push((
@@ -148,12 +155,63 @@ fn execute(
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
+        ["start"]
+            if boot.platform.is_some() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
+        {
+            boot.started = true;
+        }
         ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
             // UART output is already connected to stdout.
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn path_value(value: &str) -> String {
+    value.replace(r"\ ", " ")
+}
+
+fn command_words(text: &str) -> Result<Vec<&str>, String> {
+    let mut words = Vec::new();
+    let mut start = None;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if std::mem::take(&mut escaped) {
+            continue;
+        }
+        if character == '\\'
+            && (quote.is_some()
+                || start.is_some_and(|start| text[start..].starts_with('@'))
+                    && text[index + 1..].starts_with(' '))
+        {
+            escaped = true;
+            continue;
+        }
+        if quote.is_none() && character == '#' && start.is_none() {
+            return Ok(words);
+        }
+        if quote.is_none() && character.is_whitespace() {
+            if let Some(start) = start.take() {
+                words.push(&text[start..index]);
+            }
+            continue;
+        }
+        start.get_or_insert(index);
+        if quote == Some(character) {
+            quote = None;
+        } else if quote.is_none() && matches!(character, '"' | '\'') {
+            quote = Some(character);
+        }
+    }
+    if quote.is_some() {
+        return Err("unterminated quoted argument".into());
+    }
+    if let Some(start) = start {
+        words.push(&text[start..]);
+    }
+    Ok(words)
 }
 
 pub fn asset_path(
@@ -220,22 +278,23 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let script = directory.join("boot.resc");
         let content = concat!(
-            "$name?=\"Test\"\n",
-            "$bin?=@firmware.elf\n",
-            "mach create $name\n",
-            "machine LoadPlatformDescription @board.repl\n",
+            "$name?=\"Test Machine\"\n",
+            "$bin?=@firmware\\ file.elf\n",
+            "mach create \"Test Machine\"\n",
+            "machine LoadPlatformDescription @board\\ file.repl\n",
             "macro reset\n",
             "\"\"\"\n",
-            "  sysbus LoadELF $bin\n",
+            "  sysbus LoadELF $bin # boot image\n",
             "  sysbus.cpu MTVEC 0x80000020\n",
             "\"\"\"\n",
             "runMacro $reset\n",
             "cpu SetMachineIrqMask 0xffffffff\n",
+            "start\n",
         );
         fs::write(&script, content).unwrap();
         let boot = load(&script, &directory).unwrap();
-        assert_eq!(boot.platform, Some(directory.join("board.repl")));
-        assert_eq!(boot.image.as_deref(), Some("firmware.elf"));
+        assert_eq!(boot.platform, Some(directory.join("board file.repl")));
+        assert_eq!(boot.image.as_deref(), Some("firmware file.elf"));
         assert_eq!(boot.mtvec, Some(0x8000_0020));
         assert_eq!(boot.mask, Some(u32::MAX));
         fs::write(&script, content.replace("MTVEC", "unknown")).unwrap();
