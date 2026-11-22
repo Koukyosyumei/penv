@@ -29,9 +29,11 @@ mod uart;
 use std::{
     env,
     fs::{self, File},
-    io::{self, LineWriter, Write},
+    io::{self, LineWriter, Read, Write},
     path::PathBuf,
     process::ExitCode,
+    sync::mpsc,
+    thread,
     time::Instant,
 };
 
@@ -56,6 +58,7 @@ Options:
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
   --uart-input-at N Delay UART input until execution step N
+  --litex-uart-stdio  Bridge stdin to LiteX UART at 115200 baud and flush UART output
   --litex-uart-legacy-console  Use legacy LiteX UART console event handling
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
@@ -93,6 +96,7 @@ fn run() -> Result<ExitCode, String> {
     }
 
     let mut raw = false;
+    let mut litex_uart_stdio = false;
     let mut enable_litex_uart_legacy_console = false;
     let mut stats = false;
     let mut positional = false;
@@ -121,6 +125,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some("--") => positional = true,
             Some("--raw") => raw = true,
+            Some("--litex-uart-stdio") => litex_uart_stdio = true,
             Some("--litex-uart-legacy-console") => enable_litex_uart_legacy_console = true,
             Some("--stats") => stats = true,
             Some(
@@ -402,7 +407,36 @@ fn run() -> Result<ExitCode, String> {
     }
     machine.validate_entry()?;
 
-    let mut output = LineWriter::new(io::stdout().lock());
+    if litex_uart_stdio {
+        let (sender, receiver) = mpsc::sync_channel(4);
+        machine.bus.attach_litex_uart_input(receiver)?;
+        thread::Builder::new()
+            .name("litex-uart-stdin".into())
+            .spawn(move || {
+                let mut stdin = io::stdin().lock();
+                let mut buffer = [0; 256];
+                loop {
+                    match stdin.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(count) => {
+                            if sender.send(Ok(buffer[..count].to_vec())).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) => {
+                            let _ = sender.send(Err(error));
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| format!("UART stdin: {error}"))?;
+    }
+    let mut output = UartOutput {
+        writer: LineWriter::new(io::stdout().lock()),
+        immediate: litex_uart_stdio,
+    };
     let start = Instant::now();
     let result = machine.run(max_steps, &mut output);
     let elapsed = start.elapsed();
@@ -433,6 +467,25 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::from(2));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+struct UartOutput<W: Write> {
+    writer: LineWriter<W>,
+    immediate: bool,
+}
+
+impl<W: Write> Write for UartOutput<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.writer.write(bytes)?;
+        if self.immediate {
+            self.writer.flush()?;
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
 }
 
 fn parse_address(value: &str) -> Result<u32, String> {

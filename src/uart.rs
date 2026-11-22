@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     io::{self, Write},
+    sync::mpsc::{Receiver, TryRecvError},
 };
 
 pub struct MuraxUart {
@@ -83,6 +84,12 @@ struct LiteXTransmit {
     step: u64,
 }
 
+struct LiteXLiveInput {
+    receiver: Receiver<io::Result<Vec<u8>>>,
+    bytes: std::vec::IntoIter<u8>,
+    next_step: u64,
+}
+
 pub struct LiteXUart {
     pub bases: Vec<u32>,
     pub vex_irq: Option<(usize, u8)>,
@@ -91,6 +98,7 @@ pub struct LiteXUart {
     enabled: u32,
     irq: bool,
     legacy_console_events: bool,
+    live_input: Option<LiteXLiveInput>,
     transmit: Option<LiteXTransmit>,
 }
 
@@ -106,6 +114,7 @@ impl LiteXUart {
             enabled: 0,
             irq: false,
             legacy_console_events: false,
+            live_input: None,
             transmit: None,
         }
     }
@@ -126,7 +135,48 @@ impl LiteXUart {
         self
     }
 
+    pub fn attach_live_input(&mut self, receiver: Receiver<io::Result<Vec<u8>>>) {
+        self.live_input = Some(LiteXLiveInput {
+            receiver,
+            bytes: Vec::new().into_iter(),
+            next_step: 0,
+        });
+    }
+
+    fn tick_live_input(&mut self, step: u64) -> io::Result<()> {
+        // LiteX reports 115200 baud. A byte occupies ten bits on the wire.
+        const BYTE_STEPS: u64 = (100_000_000u64 * 10).div_ceil(115_200);
+        const IDLE_POLL_STEPS: u64 = 1024;
+        let Some(input) = self.live_input.as_mut() else {
+            return Ok(());
+        };
+        if step < input.next_step {
+            return Ok(());
+        }
+        if input.bytes.len() == 0 {
+            match input.receiver.try_recv() {
+                Ok(bytes) => input.bytes = bytes?.into_iter(),
+                Err(TryRecvError::Empty) => {
+                    input.next_step = step.saturating_add(IDLE_POLL_STEPS);
+                    return Ok(());
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.live_input = None;
+                    return Ok(());
+                }
+            }
+        }
+        if let Some(byte) = input.bytes.next() {
+            input.next_step = step.saturating_add(BYTE_STEPS);
+            self.receive.push_back(byte);
+            self.pending |= 2;
+            self.update_irq();
+        }
+        Ok(())
+    }
+
     pub fn tick(&mut self, step: u64, output: &mut impl Write) -> io::Result<()> {
+        self.tick_live_input(step)?;
         let Some(tx) = self.transmit.as_mut() else {
             return Ok(());
         };

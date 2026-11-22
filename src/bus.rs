@@ -812,6 +812,18 @@ impl Bus {
         Ok(())
     }
 
+    pub fn attach_litex_uart_input(
+        &mut self,
+        receiver: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    ) -> Result<(), String> {
+        let uart = self
+            .litex_uart
+            .as_mut()
+            .ok_or("--litex-uart-stdio requires a LiteX UART")?;
+        uart.attach_live_input(receiver);
+        Ok(())
+    }
+
     pub fn enable_litex_uart_legacy_console(&mut self) -> Result<(), String> {
         let uart = self
             .litex_uart
