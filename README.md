@@ -218,6 +218,24 @@ PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
 
 現在の待機対象は CLI の UART 標準出力で、端末ごとの選択、待機開始前の履歴、正規表現、Robot の UART 入力・LED テスターは残課題です。
 
+#### USART への RESC 入力で Console Echo を再現
+
+上流の `Should Run Zephyr Console Echo Sample` を、上流 REPL と公開 ELF を使う `tests/fixtures/stm32f072-echo.resc` に転記しました。変更前のログで最初に失敗した操作は 5 行目の `sysbus.usart1 WriteLine "Echo working?"` でした。
+
+`WriteLine` は REPL 名で STM32 USART を選択し、Renode の既定と同じ CR を付けて受信 FIFO に入力します。この回帰では入力案内を待ってから送信し、受信割り込みを処理したファームウェアが返す `Echo working?` を待ちます。CLI で入力ステップを指定せずにシナリオを再現できます。
+
+```sh
+assets=$(mktemp -d)
+echo_url=$(sed -n 's/^sysbus LoadELF @//p' tests/fixtures/stm32f072-echo.resc)
+curl -fL "$echo_url" -o "$assets/${echo_url##*/}"
+PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
+  cargo test --release upstream_stm32f072_console_echo_accepts_resc_uart_input -- --ignored
+```
+
+公開 ELF で案内の次の行が `Echo working?` になり、終了コード 0 を返すことを確認しました。公開 ADC ELF の既存回帰と Hello World HEX の RESC 起動も再確認しました。通常の `cargo test` は 48 件成功しました。これには名前で選んだ USART だけに本文と CR が届くテストと、フラッシュのロック、半ワード書き込み、オプション再ロードでの保持、ページ消去の確認が含まれます。
+
+`WriteLine` は STM32 USART と二重引用符で囲んだリテラルをサポートします。Renode の明示的な行終端引数と、期待出力を UART ごとに選ぶ機能は残課題です。
+
 ## 現在の実装範囲
 
 RV32I 基本整数命令、M 拡張、Zifencei を実装しています。REPL で `rv32ima` または `rv32ima_zicsr_zifencei` を指定すると、共有 RAM 上の A 拡張命令を使用できます。`rv32imc` と `rv32imac` では RV32C の整数圧縮命令に対応します。`cycle`、`instret`、`time` と各上位 32 ビットを読み取れます。CLINT がある場合の `time` は `mtime` に従います。Zicsr の命令と、マシンモードの CSR の一部、および `ECALL`・`EBREAK` からの `MRET` を実装しています。`CPU.RiscV32` ではユーザーモードへの移行とマシンモードへのトラップ、16 エントリーの PMP に対応しています。スーパーバイザーモードでは同期例外の委譲と `SRET`、32 ビット物理アドレス範囲の Sv32 ページ変換に対応しています。変換はハートごとに 64 エントリーをキャッシュし、SFENCE.VMA でそのハートのキャッシュを無効化します。マシンモードから設定したスーパーバイザー割り込みを委譲できます。3 コンテキスト以上の PLIC、その他の ISA 拡張、REPL のその他の構文とデバイス、起動コマンド以外の RESC 構文、ネットワーク、複数ノードは未対応です。標準構成の UART は単一の送信レジスターを提供します。

@@ -896,6 +896,18 @@ impl Bus {
         }
     }
 
+    pub fn write_stm32_uart_line(&mut self, target: &str, text: &str) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        let uart = self
+            .stm32_uarts
+            .iter_mut()
+            .find(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 USART {target:?}"))?;
+        // Renode writes the low byte of each UTF-16 code unit, then CR.
+        uart.queue_input(text.encode_utf16().map(|unit| unit as u8).chain([b'\r']));
+        Ok(())
+    }
+
     pub fn tick_plic(&mut self) -> u32 {
         if let Some(uart) = self.ns16550.as_ref()
             && let Some(plic) = self.plic.as_mut()
@@ -1394,5 +1406,62 @@ impl Bus {
             Err(error) => return Err(error),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_a_line_to_the_named_stm32_usart() {
+        let mut bus = Bus::default();
+        let usart1 = 0x4001_3800;
+        let usart2 = 0x4000_4400;
+        bus.map_stm32_usart(Stm32Usart::new("usart1".into(), usart1, None, false))
+            .unwrap();
+        bus.map_stm32_usart(Stm32Usart::new("usart2".into(), usart2, None, false))
+            .unwrap();
+        for base in [usart1, usart2] {
+            bus.write(base, 4, 0b101, &mut std::io::sink()).unwrap();
+        }
+        bus.write_stm32_uart_line("sysbus.usart2", "A").unwrap();
+        assert_eq!(bus.read::<4>(usart1 + 0x1c).unwrap() & (1 << 5), 0);
+        assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'A'));
+        assert_eq!(bus.read::<4>(usart2 + 0x24).unwrap(), u32::from(b'\r'));
+        assert!(bus.write_stm32_uart_line("sysbus.usart3", "A").is_err());
+    }
+
+    #[test]
+    fn stm32f072_flash_preserves_programmed_data_on_reload_and_erases_a_page() {
+        let mut bus = Bus::default();
+        let flash = 0x0800_0000;
+        let controller = Stm32F0Flash::BASE;
+        bus.map_ram(flash, 0x20000).unwrap();
+        bus.set_stm32f0_tags(vec![controller..=0x4002_23ff]);
+        bus.map_stm32f072_flash().unwrap();
+        let write = |bus: &mut Bus, offset, value| {
+            bus.write(controller + offset, 4, value, &mut std::io::sink())
+                .unwrap();
+        };
+        let unlock = |bus: &mut Bus| {
+            write(bus, 4, 0x4567_0123);
+            write(bus, 4, 0xcdef_89ab);
+        };
+
+        bus.write(flash, 2, 0, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<2>(flash).unwrap(), 0xffff);
+        unlock(&mut bus);
+        write(&mut bus, 0x10, 1);
+        bus.write(flash, 2, 0xabcd, &mut std::io::sink()).unwrap();
+        write(&mut bus, 0x10, 1 << 13);
+        assert!(bus.reset_cortex_m_if_requested());
+        assert_eq!(bus.read::<2>(flash).unwrap(), 0xabcd);
+        assert_ne!(bus.read::<4>(controller + 0x10).unwrap() & (1 << 7), 0);
+
+        unlock(&mut bus);
+        write(&mut bus, 0x14, flash);
+        write(&mut bus, 0x10, (1 << 1) | (1 << 6));
+        assert_eq!(bus.read::<2>(flash).unwrap(), 0xffff);
     }
 }

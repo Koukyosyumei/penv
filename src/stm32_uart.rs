@@ -17,6 +17,7 @@ pub enum Stm32Irq {
 }
 
 pub struct Stm32Usart {
+    pub name: String,
     pub base: u32,
     pub irq: Option<Stm32Irq>,
     pub dma_rx: u8,
@@ -30,8 +31,9 @@ pub struct Stm32Usart {
 impl Stm32Usart {
     pub const SIZE: u32 = 0x400;
 
-    pub fn new(base: u32, irq: Option<Stm32Irq>, low_power: bool) -> Self {
+    pub fn new(name: String, base: u32, irq: Option<Stm32Irq>, low_power: bool) -> Self {
         Self {
+            name,
             base,
             irq,
             dma_rx: 0,
@@ -53,7 +55,7 @@ impl Stm32Usart {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn queue_input(&mut self, bytes: Vec<u8>) {
+    pub fn queue_input(&mut self, bytes: impl IntoIterator<Item = u8>) {
         if self.registers[0] & (UE | RE) == UE | RE {
             self.receive.extend(bytes);
         }
@@ -145,7 +147,7 @@ mod tests {
 
     #[test]
     fn receive_irq_and_transmit_follow_control_and_status_registers() {
-        let mut uart = Stm32Usart::new(0, Some(Stm32Irq::Nvic(3)), false);
+        let mut uart = Stm32Usart::new("uart".into(), 0, Some(Stm32Irq::Nvic(3)), false);
         let mut output = Vec::new();
         uart.queue_input(b"X".to_vec());
         uart.write(0, 1, UE | RE | TE | RXNE, &mut output).unwrap();

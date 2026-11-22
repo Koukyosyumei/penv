@@ -1195,7 +1195,12 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(uart.error("unsupported USART IRQ wiring"));
                 }
             }
-            let mut device = Stm32Usart::new(uart.address()?, irq, low_power.unwrap_or(false));
+            let mut device = Stm32Usart::new(
+                uart.name.clone(),
+                uart.address()?,
+                irq,
+                low_power.unwrap_or(false),
+            );
             device.dma_rx = dma_rx;
             device.dma_tx = dma_tx;
             machine

@@ -38,6 +38,7 @@ enum Action {
     Button(String, bool),
     Adc(String, usize, f64),
     WaitForUart(String),
+    WriteUartLine(String, String),
 }
 
 struct UartLine<'a, W> {
@@ -127,6 +128,10 @@ pub fn run(
                         }
                     })
             }
+            Action::WriteUartLine(target, text) => machine
+                .bus
+                .write_stm32_uart_line(target, text)
+                .map(|()| None),
         };
         if let Some(stop) =
             result.map_err(|e| format!("{}:{}: {e}", script.display(), command.line))?
@@ -245,12 +250,18 @@ fn execute(
     let action = match words.as_slice() {
         ["waitForUart", ..] => {
             let pattern = text["waitForUart".len()..].trim();
-            let pattern = pattern
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .filter(|value| !value.is_empty() && !value.contains('"'))
+            let pattern = quoted_text(pattern)
+                .filter(|value| !value.is_empty())
                 .ok_or("expected waitForUart \"literal text\"")?;
             Some(Action::WaitForUart(pattern.to_owned()))
+        }
+        [target, "WriteLine", ..] => {
+            let line = text[target.len()..].trim_start()["WriteLine".len()..].trim();
+            let line = quoted_text(line).ok_or("expected USART WriteLine \"literal text\"")?;
+            Some(Action::WriteUartLine(
+                resolve(target)?.to_owned(),
+                line.to_owned(),
+            ))
         }
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
@@ -346,6 +357,13 @@ fn execute(
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn quoted_text(value: &str) -> Option<&str> {
+    value
+        .strip_prefix('"')?
+        .strip_suffix('"')
+        .filter(|text| !text.contains('"'))
 }
 
 fn duration_steps(value: &str) -> Result<u64, String> {

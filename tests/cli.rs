@@ -1,25 +1,31 @@
-use std::{fs, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Output},
+};
+
+fn run_upstream_stm32f072_script(fixture: &str, limit: &str) -> Output {
+    let root = std::env::var_os("PENV_RENODE_ROOT").expect("set PENV_RENODE_ROOT");
+    let assets = std::env::var_os("PENV_RENODE_ASSETS").expect("set PENV_RENODE_ASSETS");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(fixture);
+    Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--script"])
+        .arg(script)
+        .arg("--platform-root")
+        .arg(root)
+        .arg("--asset-dir")
+        .arg(assets)
+        .args(["--max-steps", limit])
+        .output()
+        .unwrap()
+}
 
 #[test]
 #[ignore = "requires the upstream Renode tree and the public STM32F072 ADC ELF"]
 fn upstream_stm32f072_adc_waits_for_uart_between_voltage_changes() {
-    let root = std::env::var_os("PENV_RENODE_ROOT").expect("set PENV_RENODE_ROOT");
-    let assets = std::env::var_os("PENV_RENODE_ASSETS").expect("set PENV_RENODE_ASSETS");
-    let run = |limit| {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
-            .args(["run", "--script"])
-            .arg(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/stm32f072-adc.resc"
-            ))
-            .arg("--platform-root")
-            .arg(&root)
-            .arg("--asset-dir")
-            .arg(&assets)
-            .args(["--max-steps", limit])
-            .output()
-            .unwrap()
-    };
+    let run = |limit| run_upstream_stm32f072_script("stm32f072-adc.resc", limit);
 
     let completed = run("120000000");
     assert!(completed.status.success(), "{completed:?}");
@@ -39,6 +45,21 @@ fn upstream_stm32f072_adc_waits_for_uart_between_voltage_changes() {
         ),
         "{error}"
     );
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and the public STM32F072 Console Echo ELF"]
+fn upstream_stm32f072_console_echo_accepts_resc_uart_input() {
+    let completed = run_upstream_stm32f072_script("stm32f072-echo.resc", "3000000");
+    assert!(completed.status.success(), "{completed:?}");
+    let uart = String::from_utf8(completed.stdout).unwrap();
+    let mut lines = uart.lines();
+    assert!(
+        lines.any(|line| line == "Start typing characters to see them echoed back"),
+        "{uart}"
+    );
+    assert_eq!(lines.next(), Some("Echo working?"), "{uart}");
+    assert_eq!(lines.next(), None, "{uart}");
 }
 
 #[test]
