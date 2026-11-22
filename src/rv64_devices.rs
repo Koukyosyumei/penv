@@ -3,12 +3,15 @@ use std::{
     io::{self, Write},
 };
 
-use crate::{machine::MAX_HARTS, ns16550::Ns16550, rv64_starfive::ResetGenerator};
+use crate::{
+    machine::MAX_HARTS, ns16550::Ns16550, rv64_ethernet::Ethernet, rv64_starfive::ResetGenerator,
+};
 
 #[derive(Default)]
 pub struct Devices {
     pub plic: Option<Plic>,
     pub uarts: Vec<Uart>,
+    pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
     pub fallback_ranges: Vec<FallbackRange>,
     lines: [u64; MAX_HARTS],
@@ -81,6 +84,11 @@ impl Devices {
         {
             return Some(device.read(address));
         }
+        if width == 4
+            && let Some(device) = self.ethernet.iter().find(|device| device.contains(address))
+        {
+            return Some(device.read(address));
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -98,6 +106,15 @@ impl Devices {
         if width == 4
             && let Some(device) = self
                 .reset_generators
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
+            return Some(Ok(()));
+        }
+        if width == 4
+            && let Some(device) = self
+                .ethernet
                 .iter_mut()
                 .find(|device| device.contains(address))
         {

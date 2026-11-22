@@ -5,6 +5,7 @@ use crate::{
     platform::Entry,
     rv64::{Isa, Rv64},
     rv64_devices::{FallbackRange, Plic, Uart},
+    rv64_ethernet::{Ethernet, Phy},
     rv64_priv::Pmp,
     rv64_starfive::ResetGenerator,
 };
@@ -221,7 +222,94 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
         }
     }
 
+    map_ethernet(&mut machine, &entries)?;
     Ok(machine)
+}
+
+fn map_ethernet(machine: &mut Machine, entries: &[Entry]) -> Result<(), String> {
+    let mut macs = HashMap::new();
+    for entry in entries {
+        if entry.model != "Network.SynopsysEthernetMAC"
+            || property(entry, "version") != Some("SynopsysEthernetVersion.BeagleV")
+            || entry.registration.as_deref() == Some("none")
+        {
+            continue;
+        }
+        let base = entry.address()?;
+        if base & 3 != 0 {
+            return Err(entry.error("unaligned Ethernet address"));
+        }
+        check_mapping(machine, entry, base, Ethernet::SIZE)?;
+        macs.insert(entry.name.as_str(), machine.bus.rv64_devices.ethernet.len());
+        machine.bus.rv64_devices.ethernet.push(Ethernet::new(base));
+    }
+
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == "Network.EthernetPhysicalLayer")
+    {
+        let Some(registration) = &entry.registration else {
+            continue;
+        };
+        let registration = registration
+            .strip_prefix('{')
+            .and_then(|value| value.strip_suffix('}'))
+            .unwrap_or(registration);
+        for target in registration
+            .split(';')
+            .map(str::trim)
+            .filter(|target| !target.is_empty())
+        {
+            let Some((name, address)) = target.split_once(char::is_whitespace) else {
+                continue;
+            };
+            let Some(&mac) = macs.get(name) else { continue };
+            let address = number(entry, address)?;
+            if address >= 32
+                || !machine.bus.rv64_devices.ethernet[mac]
+                    .attach(address as usize, ethernet_phy(entry)?)
+            {
+                return Err(entry.error("invalid or duplicate MDIO PHY address"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ethernet_phy(entry: &Entry) -> Result<Phy, String> {
+    let mut phy = Phy::default();
+    let names = [
+        "BasicControl",
+        "BasicStatus",
+        "Id1",
+        "Id2",
+        "AutoNegotiationAdvertisement",
+        "AutoNegotiationLinkPartnerBasePageAbility",
+        "AutoNegotiationExpansion",
+        "AutoNegotiationNextPageTransmit",
+        "AutoNegotiationLinkPartnerReceivedNextPage",
+        "MasterSlaveControl",
+        "MasterSlaveStatus",
+        "PowerSourcingEquipmentControl",
+        "PowerSourcingEquipmentStatus",
+        "MDIOManageableDeviceAccessControl",
+        "MDIOManageableDeviceAcceddAddressData",
+        "ExtendedStatus",
+    ];
+    for (index, slot) in phy.registers.iter_mut().enumerate() {
+        let vendor;
+        let name: &str = if let Some(name) = names.get(index) {
+            name
+        } else {
+            vendor = format!("VendorSpecific{}", index - names.len());
+            &vendor
+        };
+        if let Some(value) = property(entry, name) {
+            *slot = u16::try_from(number(entry, value)?)
+                .map_err(|_| entry.error("PHY register value exceeds 16 bits"))?;
+        }
+    }
+    Ok(phy)
 }
 
 fn fallback_range(entry: &Entry, command: &str) -> Result<Option<FallbackRange>, String> {
@@ -337,6 +425,10 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
     let overlaps = overlaps
         || devices.reset_generators.iter().any(|device| {
             start < u64::from(device.base) + device.size() && u64::from(device.base) < end
+        });
+    let overlaps = overlaps
+        || devices.ethernet.iter().any(|device| {
+            start < u64::from(device.base) + Ethernet::SIZE && u64::from(device.base) < end
         });
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
