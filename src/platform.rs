@@ -222,7 +222,8 @@ fn parse(
         if (crate::network_platform::has_regions(model)
             || stm32h7_adc_platform::has_regions(model)
             || model == stm32h7_gpio_platform::GPIO
-            || model == stm32h7_rtc_platform::RTC)
+            || model == stm32h7_rtc_platform::RTC
+            || model == crate::stm32h7_spi::SPI)
             && let Some(registration) = &registration
             && registration.starts_with('{')
         {
@@ -358,7 +359,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             _ if crate::network_platform::is_network(entry)
                 || stm32h7_adc_platform::is_device(&entry.model)
                 || stm32h7_gpio_platform::is_device(&entry.model)
-                || entry.model == stm32h7_rtc_platform::RTC => {}
+                || entry.model == stm32h7_rtc_platform::RTC
+                || entry.model == crate::stm32h7_spi::SPI => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
     }
@@ -619,6 +621,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         stm32h7_adc_platform::is_device(&entry.model)
             || stm32h7_gpio_platform::is_device(&entry.model)
             || entry.model == stm32h7_rtc_platform::RTC
+            || entry.model == crate::stm32h7_spi::SPI
     }) {
         return Err(entry.error("STM32H7 peripherals require a Cortex-M CPU"));
     }

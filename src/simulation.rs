@@ -267,3 +267,136 @@ impl Simulation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        bus::{Bus, RAM_BASE},
+        ethernet::{Controller, Mapping, Region},
+        litex_ethernet::{LiteXEthernet, SLOT_SIZE},
+        stm32h7_ethernet::{MAC_SIZE, Stm32h7Ethernet},
+    };
+
+    #[test]
+    fn switches_frames_between_stm32h7_dma_and_litex_slots_in_both_directions() {
+        const MAC: u32 = 0x4002_8000;
+        const DMA: u32 = MAC + 0x1000;
+        const CSR: u32 = 0x6000_9800;
+        const SLOTS: u32 = 0x3000_0000;
+        const TX_DESC: u32 = RAM_BASE;
+        const RX_DESC: u32 = RAM_BASE + 0x10;
+        const TX_BUFFER: u32 = RAM_BASE + 0x100;
+        const RX_BUFFER: u32 = RAM_BASE + 0x200;
+        const OWN: u32 = 1 << 31;
+        const FIRST_LAST: u32 = (1 << 29) | (1 << 28);
+
+        let mut simulation = Simulation::default();
+        let mut litex = LiteXEthernet::new("mac".into(), true, 1, 1);
+        litex.mappings = vec![
+            Mapping {
+                base: CSR,
+                size: 0x100,
+                region: Region::Registers,
+            },
+            Mapping {
+                base: SLOTS,
+                size: 2 * SLOT_SIZE as u32,
+                region: Region::Buffer,
+            },
+        ];
+        let h7 = Stm32h7Ethernet::new(
+            "mac".into(),
+            vec![
+                Mapping {
+                    base: MAC,
+                    size: MAC_SIZE,
+                    region: Region::Registers,
+                },
+                Mapping {
+                    base: DMA,
+                    size: 0x400,
+                    region: Region::Dma,
+                },
+            ],
+            None,
+        );
+        simulation.create_switch("lan".into()).unwrap();
+        for (index, device) in [Controller::Stm32h7(h7), Controller::LiteX(litex)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut machine = Machine::new(0x1000).unwrap();
+            machine.bus.map_ethernet(device).unwrap();
+            simulation.nodes.push(Node {
+                name: index.to_string(),
+                machine,
+                switch_by_nic: vec![None],
+                stop: None,
+                retired: 0,
+            });
+            simulation
+                .connect(Connection::Connect, index, "mac", "lan")
+                .unwrap();
+        }
+
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut io::sink()).unwrap();
+        };
+        let mut frame = [0u8; 60];
+        frame[..14].copy_from_slice(&[2, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 1, 0x88, 0xb5]);
+        frame[14..].fill(0x41);
+        let bus = &mut simulation.nodes[0].machine.bus;
+        bus.memory(TX_BUFFER, frame.len())
+            .unwrap()
+            .copy_from_slice(&frame);
+        for (address, value) in [
+            (TX_DESC, TX_BUFFER),
+            (TX_DESC + 8, frame.len() as u32 | OWN),
+            (TX_DESC + 12, OWN | FIRST_LAST),
+            (RX_DESC, RX_BUFFER),
+            (RX_DESC + 12, OWN | (1 << 30) | (1 << 24)),
+            (MAC, 3),
+            (DMA + 0x114, TX_DESC),
+            (DMA + 0x11c, RX_DESC),
+            (DMA + 0x108, (128 << 1) | 1),
+            (DMA + 0x128, RX_DESC),
+            (DMA + 0x104, 1),
+            (DMA + 0x120, TX_DESC),
+        ] {
+            write(bus, address, value);
+        }
+        assert_eq!(bus.read::<4>(TX_DESC + 12).unwrap(), FIRST_LAST);
+        simulation.forward(0);
+
+        let bus = &mut simulation.nodes[1].machine.bus;
+        assert_eq!(bus.read::<4>(CSR + 4).unwrap(), 64);
+        assert_eq!(bus.read::<4>(CSR + 0x10).unwrap(), 1);
+        for (offset, byte) in frame.iter().copied().enumerate() {
+            assert_eq!(
+                bus.read::<1>(SLOTS + offset as u32).unwrap(),
+                u32::from(byte)
+            );
+        }
+        write(bus, CSR + 0x10, 1);
+
+        frame.swap(5, 11);
+        frame[14..].fill(0x42);
+        for (offset, byte) in frame.iter().copied().enumerate() {
+            bus.write(
+                SLOTS + SLOT_SIZE as u32 + offset as u32,
+                1,
+                u32::from(byte),
+                &mut io::sink(),
+            )
+            .unwrap();
+        }
+        write(bus, CSR + 0x28, frame.len() as u32);
+        write(bus, CSR + 0x18, 1);
+        simulation.forward(1);
+
+        let bus = &mut simulation.nodes[0].machine.bus;
+        assert_eq!(bus.read::<4>(RX_DESC + 12).unwrap(), FIRST_LAST | 64);
+        assert_eq!(bus.memory(RX_BUFFER, frame.len()).unwrap(), frame);
+    }
+}

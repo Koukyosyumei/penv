@@ -275,7 +275,11 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
         entry.model == crate::stm32h7_rtc_platform::RTC
             && rcc_alias(entry, "RegistrationPeripheralAlias.RTC") == Some(&rcc.name)
     });
-    if ethernet.is_none() && !dma_or_adc && !gpio && !rtc {
+    let spi = entries.iter().any(|entry| {
+        entry.model == crate::stm32h7_spi::SPI
+            && rcc_alias(entry, "RegistrationPeripheralAlias.SPI4") == Some(&rcc.name)
+    });
+    if ethernet.is_none() && !dma_or_adc && !gpio && !rtc && !spi {
         return Err(rcc.error("STM32H7 RCC requires a supported peripheral binding"));
     }
     if peripherals.next().is_some() {

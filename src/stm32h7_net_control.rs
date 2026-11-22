@@ -7,6 +7,7 @@ const ADC12: u32 = 1 << 5;
 const ADC3: u32 = 1 << 24;
 const BDMA: u32 = 1 << 21;
 const GPIO_PORTS: u32 = 0x7ff;
+const SPI4: u32 = 1 << 13;
 const SYSCFG_CLOCK: u32 = 1 << 1;
 const INTERFACE_MASK: u32 = 7 << 21;
 
@@ -19,6 +20,8 @@ pub struct NetworkControl {
     ahb1_sleep_clock: u32,
     ahb4_reset: u32,
     ahb4_clock: u32,
+    apb2_clock: u32,
+    apb2_reset: u32,
     apb4_clock: u32,
     backup_control: u32,
     lsi_enabled: bool,
@@ -44,6 +47,8 @@ impl NetworkControl {
             ahb1_sleep_clock: ETH_CLOCKS,
             ahb4_reset: 0,
             ahb4_clock: 0,
+            apb2_clock: 0,
+            apb2_reset: 0,
             apb4_clock: 0,
             backup_control: 0,
             lsi_enabled: false,
@@ -92,6 +97,14 @@ impl NetworkControl {
         self.ahb1_reset & mask != 0
     }
 
+    pub fn spi4_enabled(&self) -> bool {
+        self.apb2_clock & !self.apb2_reset & SPI4 != 0
+    }
+
+    pub fn spi4_in_reset(&self) -> bool {
+        self.apb2_reset & SPI4 != 0
+    }
+
     pub fn rtc_enabled(&self) -> bool {
         self.backup_control & (3 << 15) == 1 << 15
     }
@@ -135,8 +148,10 @@ impl NetworkControl {
             0x74 => u32::from(self.lsi_enabled) * 3,
             0x80 => self.ahb1_reset,
             0x88 => self.ahb4_reset,
+            0x98 => self.apb2_reset,
             0xd8 => self.ahb1_clock,
             0xe0 => self.ahb4_clock,
+            0xf0 => self.apb2_clock,
             0xf4 => self.apb4_clock,
             0x100 => self.ahb1_sleep_clock,
             _ => return None,
@@ -178,12 +193,20 @@ impl NetworkControl {
                 self.ahb4_reset = value & (ADC3 | BDMA | GPIO_PORTS);
                 Change::None
             }
+            0x98 => {
+                self.apb2_reset = value & SPI4;
+                Change::None
+            }
             0xd8 => {
                 self.ahb1_clock = value;
                 Change::Clock(value & ETH_MAC != 0 && self.ahb1_reset & ETH_MAC == 0)
             }
             0xe0 => {
                 self.ahb4_clock = value;
+                Change::None
+            }
+            0xf0 => {
+                self.apb2_clock = value;
                 Change::None
             }
             0xf4 => {

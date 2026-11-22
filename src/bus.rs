@@ -16,13 +16,14 @@ use crate::{
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
     stm32h7_adc::Adc,
-    stm32h7_adc_dma::{AdcDma, DmaMux},
+    stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
     stm32h7_gpio::Stm32Gpio,
     stm32h7_net_control::{Change, NetworkControl},
     stm32h7_rtc::Stm32Rtc,
+    stm32h7_spi::Spi,
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
 };
@@ -93,6 +94,7 @@ pub struct Bus {
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
     h7_rtc: Vec<Stm32Rtc>,
+    h7_spi: Vec<Spi>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -334,6 +336,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_spi(&mut self, spi: Spi) -> Result<(), String> {
+        self.check_peripheral_range(spi.base, Spi::SIZE)?;
+        self.h7_spi.push(spi);
+        Ok(())
+    }
+
     fn check_peripheral_range(&self, base: u32, size: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(size);
@@ -375,19 +383,15 @@ impl Bus {
                 .find(|mux| mux.base == request.endpoint)
             {
                 for target in mux.targets(request.id) {
-                    if let Some(controller) = self
-                        .h7_adc_dma
-                        .iter_mut()
-                        .find(|dma| dma.base == target.base)
-                        && dma_clocked(control, controller)
-                    {
-                        transferred |= controller.request(target.stream, source, value, &mut dma);
-                    } else if let Some(controller) =
-                        self.h7_bdma.iter_mut().find(|dma| dma.base == target.base)
-                        && bdma_clocked(control, controller)
-                    {
-                        transferred |= controller.request(target.stream, source, value, &mut dma);
-                    }
+                    transferred |= request_h7_stream(
+                        target,
+                        source,
+                        value,
+                        control,
+                        &mut self.h7_adc_dma,
+                        &mut self.h7_bdma,
+                        &mut dma,
+                    );
                 }
             } else if let Some(controller) = self
                 .h7_bdma
@@ -449,6 +453,7 @@ impl Bus {
                 .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
                 .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE)))
+                .chain(self.h7_spi.iter().map(|spi| (spi.base, Spi::SIZE)))
                 .any(|(base, size)| {
                     let base = u64::from(base);
                     start < base + u64::from(size) && base < end
@@ -613,6 +618,12 @@ impl Bus {
                         .iter()
                         .filter(|device| rtc_clocked(control, device))
                         .flat_map(Stm32Rtc::interrupts),
+                )
+                .chain(
+                    self.h7_spi
+                        .iter()
+                        .filter(|spi| spi_clocked(control, spi))
+                        .filter_map(Spi::interrupt),
                 )
             {
                 match route {
@@ -1043,6 +1054,16 @@ impl Bus {
                 0
             });
         }
+        if matches!(N, 1 | 2 | 4)
+            && address as usize & (N - 1) == 0
+            && let Some(spi) = self.h7_spi.iter_mut().find(|spi| spi.contains(address))
+        {
+            return Ok(if spi_clocked(self.h7_network_control.as_ref(), spi) {
+                spi.read(address) & (u32::MAX >> (32 - 8 * N))
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1194,6 +1215,11 @@ impl Bus {
                     rtc.reset();
                 }
             }
+            if control.spi4_in_reset() {
+                for spi in self.h7_spi.iter_mut().filter(|spi| spi.rcc_bound) {
+                    spi.reset();
+                }
+            }
             if let Some(nic) = control.nic
                 && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
             {
@@ -1311,10 +1337,65 @@ impl Bus {
             }
             return Ok(());
         }
+        if let Some(spi) = self.h7_spi.iter_mut().find(|spi| spi.contains(address)) {
+            let control = self.h7_network_control.as_ref();
+            if spi_clocked(control, spi) {
+                let frames = spi.write(address, value & (u32::MAX >> (32 - 8 * width)));
+                if let Some(request) = spi.dma
+                    && let Some(mux) = self
+                        .h7_dma_mux
+                        .iter()
+                        .find(|mux| mux.base == request.endpoint)
+                {
+                    let source = spi.base + Spi::RXDR;
+                    for _ in 0..frames {
+                        for target in mux.targets(request.id) {
+                            if request_h7_stream(
+                                target,
+                                source,
+                                0,
+                                control,
+                                &mut self.h7_adc_dma,
+                                &mut self.h7_bdma,
+                                &mut dma,
+                            ) {
+                                spi.consume_rx();
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }
+}
+
+fn request_h7_stream(
+    target: StreamTarget,
+    source: u32,
+    value: u32,
+    control: Option<&NetworkControl>,
+    streams: &mut [AdcDma],
+    basic: &mut [Bdma],
+    memory: &mut EthernetDma<'_>,
+) -> bool {
+    if let Some(controller) = streams
+        .iter_mut()
+        .find(|dma| dma.base == target.base && dma_clocked(control, dma))
+    {
+        return controller.request(target.stream, source, value, memory);
+    }
+    basic
+        .iter_mut()
+        .find(|dma| dma.base == target.base && bdma_clocked(control, dma))
+        .is_some_and(|dma| dma.request(target.stream, source, value, memory))
+}
+
+fn spi_clocked(control: Option<&NetworkControl>, spi: &Spi) -> bool {
+    !spi.rcc_bound || control.is_some_and(NetworkControl::spi4_enabled)
 }
 
 fn adc_clocked(control: Option<&NetworkControl>, adc: &Adc) -> bool {

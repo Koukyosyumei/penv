@@ -3,9 +3,10 @@ use crate::{
     nvic::IRQ_LINES,
     platform::{Entry, irq_index, irq_list, number},
     stm32_uart::Stm32Irq,
-    stm32h7_adc::{Adc, AdcClock, AdcRequest, CHANNELS},
-    stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
+    stm32h7_adc::{Adc, AdcClock, CHANNELS},
+    stm32h7_adc_dma::{AdcDma, DmaMux, DmaRequest, StreamTarget},
     stm32h7_bdma::Bdma,
+    stm32h7_spi::{SPI, Spi},
 };
 
 const ADC: &str = "Analog.STM32H7_ADC";
@@ -38,6 +39,7 @@ pub fn configure(
             .map_h7_dma_mux(mux.0)
             .map_err(|e| entry.error(&e))?;
     }
+    let mux_count = endpoints.len();
     for entry in entries.iter().filter(|entry| entry.model == DMA) {
         let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
         let mask = match alias {
@@ -86,6 +88,19 @@ pub fn configure(
             .map_err(|e| entry.error(&e))?;
     }
 
+    for entry in entries.iter().filter(|entry| entry.model == SPI) {
+        let spi = parse_spi(
+            entry,
+            entries,
+            &endpoints[..mux_count],
+            nvic,
+            exti,
+            exti_lines,
+        )
+        .map_err(|e| entry.error(&e))?;
+        machine.bus.map_h7_spi(spi).map_err(|e| entry.error(&e))?;
+    }
+
     let mut adcs = Vec::new();
     for entry in entries.iter().filter(|entry| entry.model == ADC) {
         let adc = parse_adc(entry, entries, &endpoints, nvic, exti, exti_lines)
@@ -114,6 +129,45 @@ pub fn configure(
         machine.bus.map_h7_adc(adc)?;
     }
     Ok(())
+}
+
+fn parse_spi(
+    entry: &Entry,
+    entries: &[Entry],
+    endpoints: &[(&str, u32, u32)],
+    nvic: Option<&Entry>,
+    exti: Option<&Entry>,
+    exti_lines: u32,
+) -> Result<Spi, String> {
+    let (base, alias) = registration(entry, entries)?;
+    if !matches!(alias, None | Some("SPI4")) {
+        return Err("invalid STM32H7 SPI RCC alias".into());
+    }
+    let mut spi = Spi::new(base, alias.is_some());
+    for (_, text) in &entry.body {
+        let (output, target, input) = wire(text)?;
+        match output {
+            "DMARecieve" if spi.dma.is_none() => {
+                let &(_, endpoint, count) = endpoints
+                    .iter()
+                    .find(|&&(name, _, _)| name == target)
+                    .ok_or("expected SPI receive DMA connected to a DMAMUX")?;
+                let id = irq_index(input, count)?;
+                spi.dma = Some(DmaRequest { endpoint, id });
+            }
+            "" | "IRQ" if spi.irq.is_none() => {
+                spi.irq = Some(if nvic.is_some_and(|nvic| nvic.name == target) {
+                    Stm32Irq::Nvic(irq_index(input, IRQ_LINES as u32)?)
+                } else if exti.is_some_and(|exti| exti.name == target) {
+                    Stm32Irq::Exti(irq_index(input, exti_lines)?)
+                } else {
+                    return Err("expected SPI IRQ connected to NVIC or EXTI".into());
+                });
+            }
+            _ => return Err("unsupported or duplicate SPI output".into()),
+        }
+    }
+    Ok(spi)
 }
 
 fn parse_adc(
@@ -181,7 +235,7 @@ fn parse_adc(
             if !(1..=count).contains(&request) {
                 return Err(format!("ADC DMA request must be in 1–{count}"));
             }
-            Some(AdcRequest {
+            Some(DmaRequest {
                 endpoint,
                 id: request as u8,
             })
@@ -297,7 +351,7 @@ fn registration<'a>(entry: &'a Entry, entries: &[Entry]) -> Result<(u32, Option<
                         .ok_or("expected RCC registration alias")?,
                 );
             }
-            _ => return Err("invalid ADC or DMA registration".into()),
+            _ => return Err("invalid peripheral bus or RCC registration".into()),
         }
     }
     Ok((base.ok_or("missing sysbus address")?, alias))

@@ -1,4 +1,4 @@
-use crate::{machine::VIRTUAL_STEPS_PER_SECOND, stm32_uart::Stm32Irq};
+use crate::{machine::VIRTUAL_STEPS_PER_SECOND, stm32_uart::Stm32Irq, stm32h7_adc_dma::DmaRequest};
 
 pub const CHANNELS: usize = 19;
 const READY: u32 = 1;
@@ -24,17 +24,11 @@ pub enum AdcClock {
     Adc3,
 }
 
-#[derive(Clone, Copy)]
-pub struct AdcRequest {
-    pub endpoint: u32,
-    pub id: u8,
-}
-
 pub struct Adc {
     pub base: u32,
     pub irq: Option<Stm32Irq>,
     pub clock: Option<AdcClock>,
-    pub dma: Option<AdcRequest>,
+    pub dma: Option<DmaRequest>,
     reference: u32,
     frequency: u32,
     inputs: [u32; CHANNELS],
@@ -108,7 +102,7 @@ impl Adc {
         }
     }
 
-    pub fn take_request(&mut self) -> Option<(AdcRequest, u32)> {
+    pub fn take_request(&mut self) -> Option<(DmaRequest, u32)> {
         if std::mem::take(&mut self.dma_pending) {
             self.dma.map(|request| (request, self.registers[16]))
         } else {

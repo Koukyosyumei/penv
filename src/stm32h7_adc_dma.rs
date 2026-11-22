@@ -10,6 +10,12 @@ const HALF: u32 = 1 << 4;
 const TRANSFER_ERROR: u32 = 1 << 3;
 
 #[derive(Clone, Copy)]
+pub struct DmaRequest {
+    pub endpoint: u32,
+    pub id: u8,
+}
+
+#[derive(Clone, Copy)]
 pub struct StreamTarget {
     pub base: u32,
     pub stream: usize,

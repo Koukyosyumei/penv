@@ -107,3 +107,66 @@ STM32H7 参照ボードの PWR と FMC が使う定数応答の `Python.PythonPe
 STM32H7 の ADC は通常・注入シーケンス、周期トリガー、アナログウォッチドッグ、`Analog.Potentiometer` 入力に対応します。ADC の DMA 要求は DMAMUX を経由して STM32 DMA ストリームへ配送し、サンプルを RAM に転送します。
 
 STM32H7 の `DMA.STM32LDMA` は 8 本の BDMA チャネルを提供します。RCC の AHB4 クロック・リセットと NVIC/EXTI への割り込みを配線でき、メモリー間のコピーと ADC サンプルの要求駆動転送に対応します。
+
+## STM32H7 SPI4 と Zephyr 起動検証
+
+`SPI.STM32H7_SPI` はマスター動作、8/16/32 ビットの MMIO、転送完了・サスペンド、IRQ、受信 DMA に対応します。参照ボードの SPI4 は RCC の APB2 クロックとリセットに従い、`DMARecieve -> dmamux1@83` を通じて受信データを DMA に渡します。接続デバイスがない SPI バスの応答はゼロです。外部 SPI デバイス、スレーブ動作、I2S、送信 DMA 要求の生成は未対応です。 [Renode の SPI モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b6a841a013db85/src/Emulator/Peripherals/Peripherals/SPI/STM32H7_SPI.cs)
+
+上流ツリー `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` で検証しました。以下の GCC 指定は、検証環境に `cc` がなかったためです。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+cargo build --release
+
+assets=$(mktemp -d)
+renode=../renode
+h7="$renode/scripts/single-node/stm32h7_renode_reference_board.resc"
+smp="$renode/scripts/single-node/litex_vexriscv_smp.resc"
+for url in $(rg --no-filename -o 'https://[^[:space:]]+' "$h7" "$smp"); do
+    curl -fL "$url" -o "$assets/${url##*/}"
+done
+(cd "$assets" && sha1sum zephyr_rrp-demo.elf-*)
+# 期待する SHA-1 は c5f12b2aac7af72f7430894558749a984eb7d94e
+
+target/release/penv run --script "$h7" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 1000000 --stats
+target/release/penv run --script "$smp" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 400000000 --stats
+```
+
+- `cargo test` はユニットテスト 36 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
+- STM32H7 の上流単一ノード RESC は、変更前の `aa62fb3` では `stm32h7.repl:193` の `SPI.STM32H7_SPI` で停止しました。変更後は SPI4 の宣言を越え、`stm32h7.repl:199` の `I2C.STM32F7_I2C` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
+- LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
+
+変更前の停止を同じ RESC で再現するには、基準コミットを一時ディレクトリに展開して実行します。
+
+```sh
+baseline=$(mktemp -d)
+git archive aa62fb3 | tar -x -C "$baseline"
+CARGO_TARGET_DIR="$baseline/target" cargo build --release --manifest-path "$baseline/Cargo.toml"
+"$baseline/target/release/penv" run --script "$h7" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 1000000 --stats
+```
+
+STM32H7 の ELF と SPI4 配線まで読み込ませて CPU 側の停止箇所を調べるには、同じ公開 ELF と RESC のリセットマクロを使い、プラットフォームだけを最小構成に置き換えます。以下の `cortex-m0` 指定は現行インタープリタで実行箇所を確認するための診断設定です。
+
+```sh
+cat > "$assets/boot-probe.repl" <<'REPL'
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+
+usart2: UART.STM32F7_USART @ sysbus 0x40004400
+
+REPL
+awk -v RS='' -v ORS='\n\n' \
+    '$1 ~ /^(nvic|dwt|flashBank1|dtcm|axiSram|sram3|rcc|spi4|dma1|dma2|dmamux1):$/' \
+    "$renode/platforms/cpus/stm32h7.repl" >> "$assets/boot-probe.repl"
+sed 's|@platforms/boards/stm32h7_renode_reference_board.repl|@boot-probe.repl|' \
+    "$h7" > "$assets/boot-probe.resc"
+target/release/penv run --script "$assets/boot-probe.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 1000000 --stats
+```
+
+この診断では、公開 ELF のリセット後に `pc=0x080036b6: unsupported Thumb instruction 0xe8e3` を確認しました。STM32H7 で Zephyr の UART 起動表示に到達するには、I2C 以降のボード定義への対応と、Cortex-M7 の起動に必要な Thumb-2 命令・システムレジスターの実装が残っています。
