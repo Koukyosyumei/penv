@@ -110,13 +110,29 @@ def main():
     parser.add_argument("--timeout", type=int, default=1200, help="host seconds per run")
     parser.add_argument("--ports", type=int, nargs=2, metavar=("PORT_A", "PORT_B"),
                         help="also verify Ethernet between two guests on these localhost ports")
+    parser.add_argument("--switch-port", type=int,
+                        help="connect the two guest ports to a local penv Ethernet switch")
     args = parser.parse_args()
+    if args.switch_port is not None and not args.ports:
+        parser.error("--switch-port requires --ports")
     args.logs.mkdir(parents=True, exist_ok=True)
     guests = []
+    switch = None
     try:
         if args.ports:
             first, second = args.ports
+            if args.switch_port is not None:
+                switch = subprocess.Popen(
+                    [args.penv, "switch", str(args.switch_port), str(first), str(second)],
+                    stdout=subprocess.PIPE,
+                )
+                ready = switch.stdout.readline()
+                if not ready.startswith(b"Listening on "):
+                    raise RuntimeError("local Ethernet switch did not start")
+                print(ready.decode().strip(), flush=True)
             for name, local, peer in (("starlight-a", first, second), ("starlight-b", second, first)):
+                if args.switch_port is not None:
+                    peer = args.switch_port
                 guests.append(Guest(args, name, ("--ethernet-loopback", f"{local}:{peer}")))
             with ThreadPoolExecutor(max_workers=2) as pool:
                 list(pool.map(Guest.login, guests))
@@ -134,6 +150,11 @@ def main():
     finally:
         for guest in guests:
             guest.close()
+        if switch is not None:
+            if switch.poll() is None:
+                switch.terminate()
+            switch.wait()
+            switch.stdout.close()
 
 
 if __name__ == "__main__":

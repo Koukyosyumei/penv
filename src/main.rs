@@ -2,6 +2,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod ethernet_switch;
 mod image;
 mod image64;
 mod machine;
@@ -42,6 +43,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
@@ -91,8 +93,34 @@ fn run() -> Result<ExitCode, String> {
             println!("penv {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Some("switch")) => {
+            let ports = args
+                .map(|arg| {
+                    arg.to_str()
+                        .and_then(|port| port.parse::<u16>().ok())
+                        .filter(|&port| port != 0)
+                        .ok_or("switch ports must be nonzero UDP port numbers")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let [local, _, _, ..] = ports.as_slice() else {
+                return Err(
+                    "expected switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]".into(),
+                );
+            };
+            if ports
+                .iter()
+                .enumerate()
+                .any(|(index, port)| ports[..index].contains(port))
+            {
+                return Err("switch ports must be distinct".into());
+            }
+            let guests = &ports[1..];
+            ethernet_switch::run(*local, guests)
+                .map_err(|error| format!("Ethernet switch: {error}"))?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run'; see --help".into()),
+        _ => return Err("expected 'run' or 'switch'; see --help".into()),
     }
 
     let mut raw = false;
