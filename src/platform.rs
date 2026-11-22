@@ -270,6 +270,43 @@ fn parse(
     Ok(())
 }
 
+fn apply_litex_irq_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
+    let mut declarations = HashMap::<String, usize>::new();
+    let mut merged: Vec<Entry> = Vec::with_capacity(entries.len());
+    for entry in std::mem::take(entries) {
+        if entry.model.is_empty()
+            && entry.name != "sysbus"
+            && entry.registration.is_none()
+            && let Some(&index) = declarations.get(&entry.name)
+            && matches!(
+                merged[index].model.as_str(),
+                "UART.LiteX_UART"
+                    | "Timers.LiteX_Timer"
+                    | "Timers.LiteX_Timer_CSR32"
+                    | "Network.LiteX_Ethernet"
+            )
+        {
+            let [(_, wire)] = entry.body.as_slice() else {
+                return Err(entry.error("expected one LiteX IRQ override"));
+            };
+            let is_irq = |text: &str| {
+                text.split_once("->")
+                    .is_some_and(|(pin, _)| matches!(pin.trim(), "" | "IRQ"))
+            };
+            if !is_irq(wire) {
+                return Err(entry.error("expected LiteX IRQ override"));
+            }
+            merged[index].body.retain(|(_, text)| !is_irq(text));
+            merged[index].body.extend(entry.body);
+        } else {
+            declarations.insert(entry.name.clone(), merged.len());
+            merged.push(entry);
+        }
+    }
+    *entries = merged;
+    Ok(())
+}
+
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
@@ -278,6 +315,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut HashSet::new(),
         &mut entries,
     )?;
+    apply_litex_irq_overrides(&mut entries)?;
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
@@ -286,6 +324,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut exti = None;
     let mut combiners = Vec::new();
     let mut ram = false;
+    let mut memory_bases = HashMap::new();
+    let mut flash_controller = None;
+    let mut flash_chip = None;
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
     let mut plic = None;
@@ -315,13 +356,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .into_iter()
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
+                let addresses = entry.addresses()?;
                 machine
                     .bus
                     .map_ram_views(
-                        &entry.addresses()?,
+                        &addresses,
                         number(size).map_err(|e| entry.error(&e))? as usize,
                     )
                     .map_err(|e| entry.error(&e))?;
+                if entry.model == "Memory.MappedMemory" {
+                    memory_bases.insert(entry.name.as_str(), addresses[0]);
+                }
                 ram = true;
             }
             "GPIOPort.Murax_GPIO" => {
@@ -330,6 +375,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .bus
                     .map_murax_gpio(entry.address()?)
                     .map_err(|e| entry.error(&e))?;
+            }
+            "SPI.LiteX_SPI_Flash" => {
+                keys(entry, &[])?;
+                if flash_controller.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX SPI flash controller is supported"));
+                }
+            }
+            "SPI.Micron_MT25Q" => {
+                if flash_chip.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX SPI flash chip is supported"));
+                }
             }
             "SPI.LiteX_SPI" => {
                 keys(entry, &[])?;
@@ -425,6 +481,24 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
+    }
+    if let Some(chip) = flash_chip {
+        let controller = flash_controller
+            .filter(|entry| chip.registration.as_deref() == Some(&entry.name))
+            .ok_or_else(|| chip.error("expected a LiteX SPI flash controller attachment"))?;
+        let (_, memory) = keys(chip, &["underlyingMemory"])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| chip.error("expected underlyingMemory"))?;
+        let backing = *memory_bases
+            .get(memory)
+            .ok_or_else(|| chip.error("unknown flash backing memory"))?;
+        machine
+            .bus
+            .map_litex_flash(controller.addresses()?, backing)
+            .map_err(|e| controller.error(&e))?;
+    } else if let Some(controller) = flash_controller {
+        return Err(controller.error("expected an attached Micron MT25Q flash chip"));
     }
     if cpus.is_empty() || !ram {
         return Err(format!(

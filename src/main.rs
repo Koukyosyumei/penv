@@ -5,6 +5,7 @@ mod csr;
 mod image;
 mod litex;
 mod litex_eth;
+mod litex_flash;
 mod machine;
 mod monitor;
 mod murax;

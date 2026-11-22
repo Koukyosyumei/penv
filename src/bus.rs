@@ -58,10 +58,11 @@ impl fmt::Display for BusError {
     }
 }
 
-struct Region {
+pub(crate) struct Region {
     base: u32,
     aliases: Vec<u32>,
     bytes: Vec<u8>,
+    flash_pages: Option<Vec<bool>>,
 }
 
 struct LiteXTimer {
@@ -85,6 +86,7 @@ pub struct Bus {
     litex_soc: Option<litex::SocController>,
     litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
     litex_eth: Option<Ethernet>,
+    litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     plic: Option<Plic>,
@@ -115,7 +117,58 @@ impl Region {
             base,
             aliases: Vec::new(),
             bytes,
+            flash_pages: None,
         })
+    }
+
+    fn bytes_mut(&mut self, offset: usize, width: usize) -> &mut [u8] {
+        if let Some(pages) = self.flash_pages.as_mut()
+            && width != 0
+        {
+            for (page, initialized) in pages
+                .iter_mut()
+                .enumerate()
+                .take((offset + width - 1) / 4096 + 1)
+                .skip(offset / 4096)
+            {
+                if !*initialized {
+                    self.bytes[page * 4096..(page + 1) * 4096].fill(0xff);
+                    *initialized = true;
+                }
+            }
+        }
+        &mut self.bytes[offset..offset + width]
+    }
+
+    pub(crate) fn flash_size(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) fn flash_read(&self, offset: usize) -> u8 {
+        if self
+            .flash_pages
+            .as_ref()
+            .is_some_and(|pages| !pages[offset / 4096])
+        {
+            0xff
+        } else {
+            self.bytes[offset]
+        }
+    }
+
+    pub(crate) fn flash_program(&mut self, offset: usize, byte: u8) {
+        if offset < self.bytes.len() {
+            self.bytes_mut(offset, 1)[0] &= byte;
+        }
+    }
+
+    pub(crate) fn flash_erase(&mut self, offset: usize, size: usize) {
+        let end = (offset + size).min(self.bytes.len());
+        if offset < end
+            && let Some(pages) = self.flash_pages.as_mut()
+        {
+            pages[offset / 4096..end / 4096].fill(false);
+        }
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<usize> {
@@ -212,6 +265,11 @@ impl Bus {
                 eth.registrations.iter().any(|registration| {
                     overlaps_range(start, end, registration.base, registration.size)
                 })
+            })
+            || self.litex_flash.as_ref().is_some_and(|(bases, _, _)| {
+                bases
+                    .iter()
+                    .any(|&base| overlaps_range(start, end, base, crate::litex_flash::Flash::SIZE))
             })
             || self.litex_io.iter().any(|(bases, device)| {
                 bases
@@ -491,6 +549,25 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_litex_flash(&mut self, bases: Vec<u32>, backing: u32) -> Result<(), String> {
+        self.check_litex_ranges(&bases, crate::litex_flash::Flash::SIZE)?;
+        let index = self
+            .regions
+            .iter()
+            .position(|region| region.base == backing)
+            .ok_or("flash backing must be mapped memory")?;
+        let region = &mut self.regions[index];
+        let size = region.bytes.len();
+        if !size.is_power_of_two() || !(65536..=268435456).contains(&size) {
+            return Err(
+                "Micron flash requires power-of-two backing between 64 KiB and 256 MiB".into(),
+            );
+        }
+        region.flash_pages = Some(vec![false; size / 4096]);
+        self.litex_flash = Some((bases, index, crate::litex_flash::Flash::default()));
+        Ok(())
+    }
+
     pub fn map_litex_io(&mut self, bases: Vec<u32>, device: litex::IoDevice) -> Result<(), String> {
         self.check_litex_ranges(&bases, device.size())?;
         self.litex_io.push((bases, device));
@@ -633,7 +710,7 @@ impl Bus {
                         }
                     }
                 }
-                return Ok(&mut region.bytes[offset..offset + width]);
+                return Ok(region.bytes_mut(offset, width));
             }
         }
         Err(BusError::Unmapped(address, width))
@@ -791,6 +868,13 @@ impl Bus {
         {
             return Ok(eth.read(region, offset, N));
         }
+        if address as usize & (N - 1) == 0
+            && let Some((bases, _, flash)) = self.litex_flash.as_ref()
+            && let Some(offset) = litex_offset(bases, crate::litex_flash::Flash::SIZE, address)
+        {
+            let value = flash.read(offset & !3) >> ((offset & 3) * 8);
+            return Ok(value & (u32::MAX >> ((4 - N) * 8)));
+        }
         if address as usize & (N - 1) == 0 && self.zero_mmio(address, N) {
             return Ok(0);
         }
@@ -804,7 +888,13 @@ impl Bus {
         for region in &self.regions {
             if let Some(offset) = region.offset(address, N) {
                 let mut bytes = [0; 4];
-                bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
+                if region.flash_pages.is_some() {
+                    for (index, byte) in bytes[..N].iter_mut().enumerate() {
+                        *byte = region.flash_read(offset + index);
+                    }
+                } else {
+                    bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
+                }
                 return Ok(u32::from_le_bytes(bytes));
             }
         }
@@ -947,6 +1037,14 @@ impl Bus {
             && let Some((region, offset)) = eth.locate(address, width)
         {
             eth.write(region, offset, width, value);
+            return Ok(());
+        }
+        if let Some((bases, backing, flash)) = self.litex_flash.as_mut()
+            && let Some(offset) = litex_offset(bases, crate::litex_flash::Flash::SIZE, address)
+        {
+            if offset & 3 == 0 {
+                flash.write(offset, value, &mut self.regions[*backing]);
+            }
             return Ok(());
         }
         if self.zero_mmio(address, width) {
