@@ -8,7 +8,11 @@ use crate::{
     clint::Clint,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
+    nvic::{Nvic, VTOR},
     plic::Plic,
+    stm32_exti::Exti,
+    stm32_uart::{Stm32Irq, Stm32Usart},
+    systick::SysTick,
     uart::{LiteXUart, MuraxUart},
 };
 
@@ -65,7 +69,11 @@ pub struct Bus {
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
+    stm32_uarts: Vec<Stm32Usart>,
+    exti: Option<Exti>,
     plic: Option<Plic>,
+    pub systick: Option<SysTick>,
+    pub nvic: Option<Nvic>,
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
@@ -119,8 +127,11 @@ impl Bus {
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        self.uart_tx
-            .is_some_and(|address| (start..end).contains(&u64::from(address)))
+        (self.nvic.is_some() && Nvic::overlaps(start, end))
+            || (self.systick.is_some() && SysTick::overlaps(start, end))
+            || self
+                .uart_tx
+                .is_some_and(|address| (start..end).contains(&u64::from(address)))
             || self.uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + MuraxUart::SIZE && other < end
@@ -128,6 +139,14 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.exti.as_ref().is_some_and(|exti| {
+                let other = u64::from(exti.base);
+                start < other + u64::from(Exti::SIZE) && other < end
+            })
+            || self.stm32_uarts.iter().any(|uart| {
+                let other = u64::from(uart.base);
+                start < other + u64::from(Stm32Usart::SIZE) && other < end
             })
             || self.ns16550.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
@@ -211,6 +230,74 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_nvic(&mut self, priority_mask: u8, uart_irq: Option<u8>) -> Result<(), String> {
+        if Nvic::RANGES
+            .into_iter()
+            .any(|(start, end)| self.overlaps(u64::from(start), u64::from(end)))
+        {
+            return Err("Cortex-M NVIC registers overlap an existing mapping".into());
+        }
+        self.nvic = Some(Nvic::new(priority_mask, uart_irq));
+        Ok(())
+    }
+
+    pub fn sample_nvic(&mut self, active: u64) {
+        if let Some(nvic) = self.nvic.as_mut() {
+            nvic.set_uart_level(
+                self.litex_uart
+                    .as_ref()
+                    .is_some_and(LiteXUart::interrupt_pending),
+                active,
+            );
+            let mut exti_inputs = 0;
+            for uart in &self.stm32_uarts {
+                if uart.interrupt_pending() {
+                    match uart.irq {
+                        Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
+                        Some(Stm32Irq::Exti(line)) => exti_inputs |= 1 << line,
+                        None => {}
+                    }
+                }
+            }
+            if let Some(exti) = self.exti.as_mut() {
+                let mut mask = exti.sample(exti_inputs);
+                while mask != 0 {
+                    let line = mask.trailing_zeros() as u8;
+                    mask &= mask - 1;
+                    nvic.set_line(line, true, active);
+                }
+            }
+        }
+    }
+
+    pub fn map_exti(
+        &mut self,
+        base: u32,
+        outputs: Vec<Option<u8>>,
+        first_direct: u32,
+    ) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(Exti::SIZE);
+        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32 EXTI range at {base:#010x}"
+            ));
+        }
+        self.exti = Some(Exti::new(base, outputs, first_direct));
+        Ok(())
+    }
+
+    pub fn map_systick(&mut self) -> Result<(), String> {
+        if SysTick::RANGES
+            .into_iter()
+            .any(|(start, end)| self.overlaps(u64::from(start), u64::from(end)))
+        {
+            return Err("Cortex-M SysTick registers overlap an existing mapping".into());
+        }
+        self.systick = Some(SysTick::default());
+        Ok(())
+    }
+
     pub fn map_litex_uart(&mut self, base: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(LiteXUart::SIZE);
@@ -223,8 +310,28 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_stm32_usart(
+        &mut self,
+        base: u32,
+        irq: Option<Stm32Irq>,
+        low_power: bool,
+    ) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(Stm32Usart::SIZE);
+        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32 USART range at {base:#010x}"
+            ));
+        }
+        self.stm32_uarts.push(Stm32Usart::new(base, irq, low_power));
+        Ok(())
+    }
+
     pub fn has_uart_input(&self) -> bool {
-        self.uart.is_some() || self.ns16550.is_some() || self.litex_uart.is_some()
+        self.uart.is_some()
+            || self.ns16550.is_some()
+            || self.litex_uart.is_some()
+            || !self.stm32_uarts.is_empty()
     }
 
     pub fn queue_uart_input(&mut self, bytes: Vec<u8>) {
@@ -233,6 +340,8 @@ impl Bus {
         } else if let Some(uart) = self.ns16550.as_mut() {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.litex_uart.as_mut() {
+            uart.queue_input(bytes);
+        } else if let Some(uart) = self.stm32_uarts.first_mut() {
             uart.queue_input(bytes);
         }
     }
@@ -380,6 +489,32 @@ impl Bus {
         {
             return Ok(uart.read(offset));
         }
+        if N == 4
+            && let Some(timer) = self.systick.as_mut()
+            && let Some(value) = timer.read(address)
+        {
+            return Ok(value);
+        }
+        if address as usize & (N - 1) == 0
+            && let Some(value) = self.nvic.as_ref().and_then(|nvic| nvic.read(address, N))
+        {
+            return Ok(value);
+        }
+        if address as usize & (N - 1) == 0
+            && let Some(uart) = self
+                .stm32_uarts
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            return Ok(uart.read(address, N));
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(exti) = self.exti.as_ref()
+            && exti.contains(address)
+        {
+            return Ok(exti.read(address));
+        }
         self.read_ram::<N>(address)
     }
 
@@ -455,6 +590,45 @@ impl Bus {
             && let Some(offset) = device.offset(address, width)
         {
             return device.write(offset, value, uart).map_err(BusError::Output);
+        }
+        if width == 4
+            && let Some(timer) = self.systick.as_mut()
+            && timer.write(address, value)
+        {
+            return Ok(());
+        }
+        if address == VTOR && width == 4 {
+            let base = value & !0x7f;
+            let mapped = self.read_ram::<4>(base).is_ok();
+            if let Some(nvic) = self.nvic.as_mut() {
+                if mapped {
+                    nvic.set_vector_base(base);
+                }
+                return Ok(());
+            }
+        }
+        if self
+            .nvic
+            .as_mut()
+            .is_some_and(|nvic| nvic.write(address, width, value))
+        {
+            return Ok(());
+        }
+        if let Some(device) = self
+            .stm32_uarts
+            .iter_mut()
+            .find(|device| device.contains(address))
+        {
+            return device
+                .write(address, width, value, uart)
+                .map_err(BusError::Output);
+        }
+        if width == 4
+            && let Some(exti) = self.exti.as_mut()
+            && exti.contains(address)
+        {
+            exti.write(address, value);
+            return Ok(());
         }
         self.memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);

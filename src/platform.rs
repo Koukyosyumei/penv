@@ -1,17 +1,22 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
 
-use crate::machine::{MAX_HARTS, Machine};
+use crate::{
+    machine::{MAX_HARTS, Machine},
+    stm32_uart::Stm32Irq,
+};
+
+type Properties = Vec<(usize, String)>;
 
 #[derive(Debug)]
 struct Entry {
     name: String,
     model: String,
     registration: Option<String>,
-    body: Vec<(usize, String)>,
+    body: Properties,
     source: PathBuf,
     line: usize,
 }
@@ -57,18 +62,62 @@ fn number(value: &str) -> Result<u32, String> {
 }
 
 fn without_comment(line: &str) -> &str {
+    unquoted_delimiters(line, &['/'])
+        .find(|(index, _)| line[*index..].starts_with("//"))
+        .map_or(line, |(index, _)| &line[..index])
+}
+
+fn unquoted_delimiters<'a>(
+    text: &'a str,
+    delimiters: &'static [char],
+) -> impl Iterator<Item = (usize, char)> + 'a {
     let mut quoted = false;
     let mut escaped = false;
-    for (index, character) in line.char_indices() {
+    text.char_indices().filter(move |&(_, character)| {
         match character {
             _ if escaped => escaped = false,
             '\\' if quoted => escaped = true,
             '"' => quoted = !quoted,
-            '/' if !quoted && line[index..].starts_with("//") => return &line[..index],
+            _ if !quoted && delimiters.contains(&character) => return true,
             _ => {}
         }
+        false
+    })
+}
+
+fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &'static str> {
+    let mut braces = unquoted_delimiters(declaration, &['{', '}']);
+    let Some((begin, '{')) = braces.next() else {
+        return if unquoted_delimiters(declaration, &['}']).next().is_some() {
+            Err("unexpected closing brace")
+        } else {
+            Ok((declaration, Vec::new()))
+        };
+    };
+    // A brace immediately after @ begins a registration expression.
+    if declaration[..begin].trim_end().ends_with('@') {
+        return Ok((declaration, Vec::new()));
     }
-    line
+    let Some((end, '}')) = braces.next() else {
+        return Err("expected a closing brace for inline properties");
+    };
+    if braces.next().is_some() || !declaration[end + 1..].trim().is_empty() {
+        return Err("unexpected text after inline properties");
+    }
+    let text = &declaration[begin + 1..end];
+    let mut body = Vec::new();
+    let mut start = 0;
+    for end in unquoted_delimiters(text, &[';'])
+        .map(|(index, _)| index)
+        .chain([text.len()])
+    {
+        let item = text[start..end].trim();
+        if !item.is_empty() {
+            body.push((lineno, item.into()));
+        }
+        start = end + 1;
+    }
+    Ok((&declaration[..begin], body))
 }
 
 fn parse(
@@ -128,6 +177,7 @@ fn parse(
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
+        let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().into())),
             None => (declaration.trim(), None),
@@ -136,7 +186,7 @@ fn parse(
             name: name.into(),
             model: model.into(),
             registration,
-            body: Vec::new(),
+            body,
             source: path.into(),
             line: lineno,
         });
@@ -158,8 +208,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
     let mut clint = None;
+    let mut nvic = None;
+    let mut exti = None;
+    let mut combiners = Vec::new();
     let mut ram = false;
     let mut uart = None;
+    let mut stm32_uarts = Vec::new();
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
@@ -204,9 +258,21 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
+            "UART.STM32F7_USART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
+                }
+            }
+            "IRQControllers.STM32F4_EXTI" => {
+                if exti.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32 EXTI is supported"));
+                }
+            }
+            "Miscellaneous.CombinedInput" => combiners.push(entry),
+            "IRQControllers.NVIC" => {
+                if nvic.replace(entry).is_some() {
+                    return Err(entry.error("only one NVIC is supported"));
                 }
             }
             "IRQControllers.CoreLevelInterruptor" => {
@@ -230,30 +296,240 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             );
         }
         let mut cpu_type = None;
-        let mut vectors = 0;
-        for (key, value) in keys(entry, &["cpuType", "vectorTableOffset"])? {
+        let mut vectors = None;
+        for (key, value) in keys(
+            entry,
+            &[
+                "cpuType",
+                "vectorTableOffset",
+                "InitVectorTableOffset",
+                "nvic",
+            ],
+        )? {
             match key {
                 "cpuType" => cpu_type = Some(value),
-                "vectorTableOffset" => vectors = number(value).map_err(|e| entry.error(&e))?,
+                "nvic" if nvic.is_some_and(|controller| controller.name == value) => {}
+                "nvic" => return Err(entry.error("unknown NVIC reference")),
+                "vectorTableOffset" | "InitVectorTableOffset" if vectors.is_none() => {
+                    vectors = Some(number(value).map_err(|e| entry.error(&e))?);
+                }
+                "vectorTableOffset" | "InitVectorTableOffset" => {
+                    return Err(entry.error("duplicate vector table offset"));
+                }
                 _ => unreachable!(),
             }
         }
-        if cpu_type != Some(r#""cortex-m0""#) {
-            return Err(entry.error("expected Cortex-M0 cpuType"));
+        if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) {
+            return Err(entry.error("expected Cortex-M0 or Cortex-M0+ cpuType"));
         }
+        machine.bus.map_systick().map_err(|e| entry.error(&e))?;
+        let mut priority = None;
+        let mut frequency = None;
+        if let Some(controller) = nvic {
+            if controller.address()? != crate::nvic::BASE {
+                return Err(controller.error("NVIC must be mapped at 0xe000e000"));
+            }
+            let expected = format!("->{}@0", entry.name);
+            let mut connected = false;
+            for (_, text) in &controller.body {
+                let wire: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+                if !connected && wire.strip_prefix("IRQ").unwrap_or(&wire) == expected {
+                    connected = true;
+                } else if let Some((key, value)) = text.split_once(':') {
+                    let value = number(value.trim()).map_err(|e| controller.error(&e))?;
+                    match key.trim() {
+                        "priorityMask" if priority.is_none() && value <= 255 => {
+                            priority = Some(value as u8)
+                        }
+                        "systickFrequency" if frequency.is_none() && value > 0 => {
+                            frequency = Some(value)
+                        }
+                        _ => return Err(controller.error("unsupported or duplicate NVIC property")),
+                    }
+                } else {
+                    return Err(controller.error("unsupported NVIC wiring"));
+                }
+            }
+        }
+        let mut uart_irq = None;
         if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
             }
-            keys(uart, &[])?;
+            if let [(_, wire)] = uart.body.as_slice()
+                && let Some(controller) = nvic
+                && let Some((pin, destination)) = wire.split_once("->")
+                && matches!(pin.trim(), "IRQ" | "")
+                && let Some((name, irq)) = destination.split_once('@')
+                && name.trim() == controller.name
+            {
+                let irq = number(irq.trim()).map_err(|e| uart.error(&e))?;
+                if irq >= 32 {
+                    return Err(uart.error("NVIC IRQ must be in 0–31"));
+                }
+                uart_irq = Some(irq as u8);
+            } else if !uart.body.is_empty() {
+                return Err(uart.error("expected UART IRQ wired to NVIC"));
+            }
             machine
                 .bus
                 .map_litex_uart(uart.address()?)
                 .map_err(|e| uart.error(&e))?;
         }
+        let mut combined_routes = HashMap::new();
+        for combiner in combiners {
+            let mut count = None;
+            let mut output = None;
+            for (_, text) in &combiner.body {
+                if let Some(value) = text.strip_prefix("numberOfInputs:")
+                    && count.is_none()
+                {
+                    count = Some(number(value.trim()).map_err(|e| combiner.error(&e))?);
+                } else if let Some(wire) = text.strip_prefix("->")
+                    && let Some((target, index)) = wire.split_once('@')
+                    && nvic.is_some_and(|controller| controller.name == target.trim())
+                    && output.is_none()
+                {
+                    output = Some(irq_index(index, 32).map_err(|e| combiner.error(&e))?);
+                } else {
+                    return Err(combiner.error("unsupported combined input property or wiring"));
+                }
+            }
+            match (count, output) {
+                (Some(count), Some(output)) if count > 0 => {
+                    combined_routes.insert(combiner.name.as_str(), (count, output));
+                }
+                _ => return Err(combiner.error("expected input count and an NVIC output")),
+            }
+        }
+        let exti_lines = if let Some(controller) = exti {
+            let mut count = None;
+            let mut direct = None;
+            for (_, text) in &controller.body {
+                if text.contains("->") {
+                    continue;
+                }
+                let (key, value) = text
+                    .split_once(':')
+                    .ok_or_else(|| controller.error("invalid EXTI property"))?;
+                let target = match key.trim() {
+                    "numberOfOutputLines" if count.is_none() => &mut count,
+                    "firstDirectLine" if direct.is_none() => &mut direct,
+                    _ => return Err(controller.error("unsupported or duplicate EXTI property")),
+                };
+                *target = Some(number(value.trim()).map_err(|e| controller.error(&e))?);
+            }
+            let count = count.unwrap_or(14);
+            let direct = direct.unwrap_or(23);
+            if !(1..=32).contains(&count) || direct > 32 {
+                return Err(controller.error("EXTI supports 1–32 output lines"));
+            }
+            let mut outputs = vec![None; count as usize];
+            for (_, text) in &controller.body {
+                let Some((from, to)) = text.split_once("->") else {
+                    continue;
+                };
+                let (target, pins) = to
+                    .split_once('@')
+                    .ok_or_else(|| controller.error("invalid EXTI output"))?;
+                let direct_nvic = nvic.is_some_and(|nvic| nvic.name == target.trim());
+                let combined = combined_routes.get(target.trim());
+                let pin_count = if direct_nvic {
+                    32
+                } else if let Some((count, _)) = combined {
+                    *count
+                } else {
+                    return Err(controller.error("unknown EXTI output target"));
+                };
+                let from = irq_list(from, count).map_err(|e| controller.error(&e))?;
+                let to = irq_list(pins, pin_count).map_err(|e| controller.error(&e))?;
+                if from.len() != to.len() {
+                    return Err(controller.error("mismatched EXTI wiring widths"));
+                }
+                for (line, pin) in from.into_iter().zip(to) {
+                    let output = if direct_nvic {
+                        pin
+                    } else {
+                        combined.unwrap().1
+                    };
+                    if outputs[usize::from(line)].replace(output).is_some() {
+                        return Err(controller.error("duplicate EXTI output"));
+                    }
+                }
+            }
+            machine
+                .bus
+                .map_exti(controller.address()?, outputs, direct)
+                .map_err(|e| controller.error(&e))?;
+            count
+        } else {
+            0
+        };
+        for uart in stm32_uarts {
+            let mut irq = None;
+            let mut low_power = None;
+            let mut frequency = None;
+            for (_, text) in &uart.body {
+                if let Some((pin, destination)) = text.split_once("->")
+                    && matches!(pin.trim(), "IRQ" | "")
+                    && let Some((name, line)) = destination.split_once('@')
+                    && irq.is_none()
+                {
+                    let name = name.trim();
+                    let route = if nvic.is_some_and(|controller| controller.name == name) {
+                        Stm32Irq::Nvic(irq_index(line, 32).map_err(|e| uart.error(&e))?)
+                    } else if exti.is_some_and(|controller| controller.name == name) {
+                        Stm32Irq::Exti(irq_index(line, exti_lines).map_err(|e| uart.error(&e))?)
+                    } else if let Some(&(pins, output)) = combined_routes.get(name) {
+                        irq_index(line, pins).map_err(|e| uart.error(&e))?;
+                        Stm32Irq::Nvic(output)
+                    } else {
+                        return Err(uart.error("unsupported USART IRQ target"));
+                    };
+                    irq = Some(route);
+                } else if let Some((key, value)) = text.split_once(':') {
+                    let value = value.trim();
+                    match key.trim() {
+                        "lowPowerMode" if low_power.is_none() => {
+                            low_power = Some(
+                                value
+                                    .parse::<bool>()
+                                    .map_err(|_| uart.error("invalid lowPowerMode"))?,
+                            );
+                        }
+                        "frequency" if frequency.is_none() => {
+                            frequency = Some(number(value).map_err(|e| uart.error(&e))?);
+                            if frequency == Some(0) {
+                                return Err(uart.error("USART frequency must be positive"));
+                            }
+                        }
+                        _ => return Err(uart.error("unsupported or duplicate USART property")),
+                    }
+                } else {
+                    return Err(uart.error("unsupported USART IRQ wiring"));
+                }
+            }
+            machine
+                .bus
+                .map_stm32_usart(uart.address()?, irq, low_power.unwrap_or(false))
+                .map_err(|e| uart.error(&e))?;
+        }
+        machine
+            .bus
+            .map_nvic(priority.unwrap_or(0xc0), uart_irq)
+            .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors);
         return Ok(machine);
+    }
+    if let Some(nvic) = nvic {
+        return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(uart) = stm32_uarts.first() {
+        return Err(uart.error("STM32 USART requires a Cortex-M platform"));
+    }
+    if let Some(controller) = exti.or(combiners.first().copied()) {
+        return Err(controller.error("STM32 interrupt routing requires a Cortex-M platform"));
     }
     let mut configs = Vec::new();
     for entry in cpus {
@@ -488,6 +764,38 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| entry.error(&e))?;
     }
     Ok(machine)
+}
+
+fn irq_index(value: &str, count: u32) -> Result<u8, String> {
+    let index = number(value.trim())?;
+    if index >= count || index > u32::from(u8::MAX) {
+        return Err(format!("IRQ index {index} is out of range"));
+    }
+    Ok(index as u8)
+}
+
+fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
+    let value = value.trim();
+    let Some(list) = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    else {
+        return irq_index(value, count).map(|index| vec![index]);
+    };
+    let mut indices = Vec::new();
+    for item in list.split(',') {
+        if let Some((start, end)) = item.split_once('-') {
+            let start = irq_index(start, count)?;
+            let end = irq_index(end, count)?;
+            if start > end {
+                return Err("descending IRQ range".into());
+            }
+            indices.extend(start..=end);
+        } else {
+            indices.push(irq_index(item, count)?);
+        }
+    }
+    Ok(indices)
 }
 
 fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {

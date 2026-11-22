@@ -328,3 +328,57 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     assert!(!invalid.status.success());
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("must select Thumb state"));
 }
+
+#[test]
+fn cortex_m_repl_routes_uart_input_through_nvic() {
+    let directory = std::env::temp_dir().join(format!("penv-nvic-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("board.repl");
+    let firmware = directory.join("firmware.bin");
+    let input = directory.join("input");
+    fs::write(&input, b"I").unwrap();
+    fs::write(
+        &board,
+        r#"nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0; priorityMask: 0xc0 }
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m0+"; nvic: nvic }
+flash: Memory.MappedMemory @ sysbus 0 { size: 0x1000 }
+sram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+uart: UART.LiteX_UART @ sysbus 0x40000000
+    IRQ -> nvic@3
+"#,
+    )
+    .unwrap();
+    let mut image = [0u8; 0xaa];
+    for (offset, value) in [
+        (0, 0x2000_1000u32),
+        (4, 0x81),
+        (76, 0xa1),
+        (0x90, 0xe000_e100),
+        (0x94, 0x4000_0000),
+    ] {
+        image[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    image[0x80..0x8e].copy_from_slice(&[
+        0x03, 0x48, 0x08, 0x21, 0x01, 0x60, // Enable NVIC line 3.
+        0x03, 0x48, 0x02, 0x21, 0x41, 0x61, // Enable UART RX events.
+        0x00, 0xbe, // Stop after IRQ return.
+    ]);
+    image[0xa0..0xaa].copy_from_slice(&[
+        0x01, 0x68, 0x01, 0x60, // Receive and echo a byte.
+        0x02, 0x21, 0x01, 0x61, // Acknowledge RX event.
+        0x70, 0x47, // Exception return.
+    ]);
+    fs::write(&firmware, image).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--max-steps", "32", "--platform"])
+        .arg(&board)
+        .arg("--uart-input")
+        .arg(&input)
+        .arg(&firmware)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, b"I");
+}

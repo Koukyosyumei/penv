@@ -6,6 +6,12 @@ use std::{
 
 use crate::machine::Machine;
 
+struct ArmSegment {
+    file: Range<u64>,
+    virtual_address: u32,
+    physical_address: u32,
+}
+
 pub fn load_binary(machine: &mut Machine, mut file: File, address: u32) -> Result<(), String> {
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     if length == 0 {
@@ -61,7 +67,7 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
         4
     };
     let mut entry_is_executable = false;
-    let mut has_loadable_data = false;
+    let mut arm_segments = Vec::new();
     let mut initialized_ranges: Vec<Range<u64>> = Vec::new();
     for index in 0..count {
         let mut segment = [0; 32];
@@ -94,7 +100,13 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
         if load_size == 0 {
             continue;
         }
-        has_loadable_data |= file_size != 0;
+        if cortex_m && file_size != 0 {
+            arm_segments.push(ArmSegment {
+                file: offset..offset + u64::from(file_size),
+                virtual_address,
+                physical_address: address,
+            });
+        }
 
         let destination = machine
             .bus
@@ -126,17 +138,63 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
         }
     }
     if cortex_m {
-        return if has_loadable_data {
-            Ok(())
-        } else {
-            Err("ELF has no file-backed loadable data".into())
-        };
+        let image_base = arm_segments
+            .iter()
+            .map(|segment| segment.physical_address)
+            .min()
+            .ok_or("ELF has no file-backed loadable data")?;
+        let vectors =
+            arm_vector_base(&mut file, &header, length, &arm_segments)?.unwrap_or(image_base);
+        machine.infer_cortex_m_vectors(vectors);
+        return Ok(());
     }
     if !entry_is_executable {
         return Err("ELF entry is outside executable file-backed segments".into());
     }
     machine.set_entry(entry);
     Ok(())
+}
+
+fn arm_vector_base(
+    file: &mut File,
+    header: &[u8; 52],
+    length: u64,
+    segments: &[ArmSegment],
+) -> Result<Option<u32>, String> {
+    let table = u64::from(word(header, 32));
+    let count = u64::from(half(header, 48));
+    if count == 0 {
+        return Ok(None);
+    }
+    if table < 52 || half(header, 46) != 40 || table + count * 40 > length {
+        return Err("invalid ARM ELF section header table".into());
+    }
+    let mut earliest = None;
+    for index in 0..count {
+        let mut section = [0; 40];
+        read_at(file, table + index * 40, &mut section)?;
+        if matches!(word(&section, 4), 0 | 8) || word(&section, 8) & 2 == 0 {
+            continue;
+        }
+        let size = u64::from(word(&section, 20));
+        if size == 0 {
+            continue;
+        }
+        let offset = u64::from(word(&section, 16));
+        let address = u64::from(word(&section, 12));
+        for segment in segments {
+            if offset < segment.file.start || offset + size > segment.file.end {
+                continue;
+            }
+            let delta = offset - segment.file.start;
+            if address == u64::from(segment.virtual_address) + delta
+                && let Ok(physical) = u32::try_from(u64::from(segment.physical_address) + delta)
+            {
+                earliest = Some(earliest.map_or(physical, |base: u32| base.min(physical)));
+            }
+        }
+    }
+    Ok(earliest)
 }
 
 fn half(bytes: &[u8], offset: usize) -> u16 {

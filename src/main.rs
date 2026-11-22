@@ -7,10 +7,14 @@ mod machine;
 mod monitor;
 mod murax;
 mod ns16550;
+mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod stm32_exti;
+mod stm32_uart;
 mod sv32;
+mod systick;
 mod thumb;
 mod uart;
 

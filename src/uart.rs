@@ -91,6 +91,10 @@ impl LiteXUart {
         }
     }
 
+    pub fn interrupt_pending(&self) -> bool {
+        self.enabled & self.pending != 0
+    }
+
     pub fn read(&mut self, offset: u32) -> u32 {
         match offset {
             0 => u32::from(self.receive.pop_front().unwrap_or(0)),

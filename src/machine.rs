@@ -195,7 +195,13 @@ impl Machine {
         self.primary
             .thumb
             .as_ref()
-            .map_or(RAM_BASE, |thumb| thumb.vectors)
+            .map_or(RAM_BASE, Thumb::vector_base)
+    }
+
+    pub fn infer_cortex_m_vectors(&mut self, address: u32) {
+        if let Some(thumb) = self.primary.thumb.as_mut() {
+            thumb.infer_vector_base(address);
+        }
     }
 
     pub fn is_cortex_m(&self) -> bool {
@@ -206,6 +212,9 @@ impl Machine {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(thumb) = &hart.thumb {
                 let (sp, pc) = thumb.reset(&self.bus)?;
+                if let Some(nvic) = self.bus.nvic.as_mut() {
+                    nvic.set_vector_base(thumb.vector_base());
+                }
                 hart.registers[13] = sp;
                 hart.pc = pc;
                 continue;
@@ -261,7 +270,7 @@ impl Machine {
 }
 
 impl Hart {
-    pub fn configure_cortex_m(&mut self, vectors: u32) {
+    pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
         self.thumb = Some(Thumb::new(vectors));
     }
 
@@ -380,6 +389,12 @@ impl Hart {
         output: &mut impl Write,
     ) -> Result<Step, String> {
         if let Some(thumb) = self.thumb.as_mut() {
+            if thumb
+                .service_interrupts(&mut self.pc, &mut self.registers, bus)
+                .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?
+            {
+                return Ok(Step::Trap);
+            }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
                 .map(|retired| {
