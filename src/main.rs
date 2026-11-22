@@ -3,6 +3,7 @@ mod clint;
 mod compressed;
 mod csr;
 mod image;
+mod image64;
 mod machine;
 mod monitor;
 mod murax;
@@ -11,6 +12,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod rv64;
 mod stm32_exti;
 mod stm32_uart;
 mod sv32;
@@ -37,7 +39,8 @@ Usage: penv run [OPTIONS] IMAGE
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
-  --raw              Load a flat binary (default: ELF32)
+  --raw              Load a flat binary (default: ELF)
+  --rv64             Run a raw image on an RV64IM CPU
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
@@ -48,7 +51,7 @@ Options:
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
-  --harts N          Start N RV32 harts at the image entry (1–8)
+  --harts N          Start N RISC-V harts at the image entry (1–8)
   --max-steps N      Stop after N execution steps (default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -82,6 +85,7 @@ fn run() -> Result<ExitCode, String> {
     }
 
     let mut raw = false;
+    let mut rv64 = false;
     let mut stats = false;
     let mut positional = false;
     let mut ram_mib = None;
@@ -107,6 +111,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some("--") => positional = true,
             Some("--raw") => raw = true,
+            Some("--rv64") => rv64 = true,
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
@@ -182,7 +187,11 @@ fn run() -> Result<ExitCode, String> {
                 let (base, size) = value
                     .split_once(':')
                     .ok_or("--map-ram requires BASE:SIZE")?;
-                extra_ram.push((parse_address(base)?, parse_address(size)? as usize));
+                extra_ram.push((
+                    parse_address64(base)?,
+                    usize::try_from(parse_address64(size)?)
+                        .map_err(|_| "RAM size exceeds host limits")?,
+                ));
             }
             Some(option @ ("--ram-mib" | "--max-steps" | "--harts")) => {
                 let value = args
@@ -254,6 +263,9 @@ fn run() -> Result<ExitCode, String> {
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
     }
+    if rv64 && (!raw || platform_path.is_some()) {
+        return Err("--rv64 requires --raw without --platform".into());
+    }
     let mut machine = match platform_path {
         Some(platform_path) => {
             if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
@@ -271,8 +283,11 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if rv64 {
+        machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));
+    }
     for (base, size) in extra_ram {
-        machine.bus.map_ram(base, size)?;
+        machine.bus.map_ram64(base, size)?;
     }
     if let Some(base) = clint {
         machine.bus.map_clint(base, harts.unwrap_or(1))?;
@@ -304,7 +319,7 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(count) = harts {
         if count != 1 && machine.is_cortex_m() {
-            return Err("--harts requires an RV32 machine".into());
+            return Err("--harts requires a RISC-V machine".into());
         }
         if machine.hart_count() != 1 {
             return Err("--harts cannot override multiple CPU declarations".into());
@@ -326,13 +341,13 @@ fn run() -> Result<ExitCode, String> {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",
             elapsed.as_secs_f64() * 1000.0,
-            machine.primary.pc
+            machine.primary.program_counter()
         );
     }
     if stop == Stop::Limit {
         eprintln!(
             "penv: instruction limit reached at pc={:#010x}",
-            machine.primary.pc
+            machine.primary.program_counter()
         );
         return Ok(ExitCode::from(2));
     }
@@ -345,4 +360,12 @@ fn parse_address(value: &str) -> Result<u32, String> {
         None => value.parse(),
     };
     parsed.map_err(|_| format!("invalid 32-bit number: {value}"))
+}
+
+fn parse_address64(value: &str) -> Result<u64, String> {
+    let parsed = match value.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => value.parse(),
+    };
+    parsed.map_err(|_| format!("invalid 64-bit number: {value}"))
 }

@@ -57,7 +57,7 @@ impl fmt::Display for BusError {
 }
 
 struct Region {
-    base: u32,
+    base: u64,
     bytes: Vec<u8>,
 }
 
@@ -80,9 +80,8 @@ pub struct Bus {
 }
 
 impl Region {
-    fn new(base: u32, size: usize) -> Result<Self, String> {
-        let end = u64::from(base).saturating_add(size as u64);
-        if size == 0 || end > 1 << 32 {
+    fn new(base: u64, size: usize) -> Result<Self, String> {
+        if size == 0 || base.checked_add(size as u64).is_none() {
             return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
         }
         let layout = Layout::array::<u8>(size).map_err(|error| error.to_string())?;
@@ -98,8 +97,8 @@ impl Region {
         Ok(Self { base, bytes })
     }
 
-    fn offset(&self, address: u32, width: usize) -> Option<usize> {
-        let offset = address.checked_sub(self.base)? as usize;
+    fn offset(&self, address: u64, width: usize) -> Option<usize> {
+        let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
         (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
     }
 }
@@ -115,9 +114,15 @@ impl Bus {
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
-        let start = u64::from(base);
-        let end = start.saturating_add(size as u64);
-        if self.overlaps(start, end) {
+        if u64::from(base).saturating_add(size as u64) > 1 << 32 {
+            return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
+        }
+        self.map_ram64(u64::from(base), size)
+    }
+
+    pub fn map_ram64(&mut self, base: u64, size: usize) -> Result<(), String> {
+        let end = base.checked_add(size as u64).ok_or("RAM range overflow")?;
+        if self.overlaps(base, end) {
             return Err(format!(
                 "overlapping RAM range at {base:#010x} ({size} bytes)"
             ));
@@ -172,7 +177,7 @@ impl Bus {
                 })
             })
             || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
+                let other = region.base;
                 start < other + region.bytes.len() as u64 && other < end
             })
     }
@@ -385,22 +390,34 @@ impl Bus {
     }
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
+        self.memory64(u64::from(address), width)
+            .ok_or(BusError::Unmapped(address, width))
+    }
+
+    pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {
         for region in &mut self.regions {
             if let Some(offset) = region.offset(address, width) {
                 if width != 0 {
                     for reservation in &mut self.reservations {
                         if reservation.is_some_and(|reserved| {
-                            u64::from(address) < u64::from(reserved) + 4
-                                && u64::from(reserved) < u64::from(address) + width as u64
+                            address < u64::from(reserved) + 4
+                                && u64::from(reserved) < address + width as u64
                         }) {
                             *reservation = None;
                         }
                     }
                 }
-                return Ok(&mut region.bytes[offset..offset + width]);
+                return Some(&mut region.bytes[offset..offset + width]);
             }
         }
-        Err(BusError::Unmapped(address, width))
+        None
+    }
+
+    pub fn ram64(&self, address: u64, width: usize) -> Option<&[u8]> {
+        self.regions.iter().find_map(|region| {
+            let offset = region.offset(address, width)?;
+            Some(&region.bytes[offset..offset + width])
+        })
     }
 
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
@@ -523,7 +540,7 @@ impl Bus {
             return Err(BusError::Misaligned(address, N));
         }
         for region in &self.regions {
-            if let Some(offset) = region.offset(address, N) {
+            if let Some(offset) = region.offset(u64::from(address), N) {
                 let mut bytes = [0; 4];
                 bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
                 return Ok(u32::from_le_bytes(bytes));

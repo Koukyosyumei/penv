@@ -34,6 +34,12 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
     let mut header = [0; 52];
     file.read_exact(&mut header)
         .map_err(|e| format!("ELF header: {e}"))?;
+    if header[..7] == *b"\x7fELF\x02\x01\x01" {
+        return crate::image64::load(machine, file, length);
+    }
+    if machine.primary.rv64.is_some() {
+        return Err("RV64 requires a little-endian RISC-V ELF64 executable".into());
+    }
     if header[..7] != *b"\x7fELF\x01\x01\x01"
         || half(&header, 16) != 2
         || word(&header, 20) != 1

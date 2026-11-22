@@ -3,6 +3,7 @@ use std::{collections::VecDeque, io::Write};
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
+    rv64::Rv64,
     sv32::TranslationCache,
     thumb::Thumb,
 };
@@ -24,6 +25,7 @@ pub struct Hart {
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    pub rv64: Option<Box<Rv64>>,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -35,7 +37,7 @@ pub enum Stop {
     Limit,
 }
 
-enum Step {
+pub(crate) enum Step {
     Retired,
     Trap,
     Stop(Stop),
@@ -142,6 +144,7 @@ impl Machine {
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                rv64: None,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -181,13 +184,25 @@ impl Machine {
             .chain(&mut self.secondary)
             .find(|hart| hart.name.as_deref() == Some(name))
             .ok_or_else(|| format!("unknown CPU {name:?}"))?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.pc = u64::from(entry);
+        }
         hart.pc = entry;
         Ok(())
     }
 
     pub fn set_entry(&mut self, entry: u32) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.pc = u64::from(entry);
+            }
             hart.pc = entry;
+        }
+    }
+
+    pub fn set_rv64_entry(&mut self, entry: u64) {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            hart.rv64.as_mut().expect("RV64 machine").pc = entry;
         }
     }
 
@@ -210,6 +225,10 @@ impl Machine {
 
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &hart.rv64 {
+                cpu.validate(&self.bus)?;
+                continue;
+            }
             if let Some(thumb) = &hart.thumb {
                 let (sp, pc) = thumb.reset(&self.bus)?;
                 if let Some(nvic) = self.bus.nvic.as_mut() {
@@ -339,6 +358,10 @@ impl Hart {
             .map_err(|error| Fault::Bus(Access::Load, error))
     }
 
+    pub fn program_counter(&self) -> u64 {
+        self.rv64.as_ref().map_or(u64::from(self.pc), |cpu| cpu.pc)
+    }
+
     pub fn set_mtvec(&mut self, value: u32) {
         self.csr.set_vector(value);
     }
@@ -388,6 +411,9 @@ impl Hart {
         elapsed_steps: u64,
         output: &mut impl Write,
     ) -> Result<Step, String> {
+        if let Some(cpu) = &mut self.rv64 {
+            return cpu.step(bus, output);
+        }
         if let Some(thumb) = self.thumb.as_mut() {
             if thumb
                 .service_interrupts(&mut self.pc, &mut self.registers, bus)
