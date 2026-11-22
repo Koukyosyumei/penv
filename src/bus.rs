@@ -13,6 +13,7 @@ use crate::{
     plic::Plic,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
+    stm32h7_net_control::{Change, NetworkControl},
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
 };
@@ -66,6 +67,7 @@ struct Region {
 pub struct Bus {
     regions: Vec<Region>,
     pub ethernet: Vec<Controller>,
+    h7_network_control: Option<NetworkControl>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -207,8 +209,33 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_network_control(&mut self, control: NetworkControl) -> Result<(), String> {
+        if control.rcc_base & 3 != 0
+            || control.syscfg_base.is_some_and(|base| base & 3 != 0)
+            || control
+                .ranges()
+                .any(|(start, end)| end > 1 << 32 || self.overlaps(start, end))
+            || control
+                .ranges()
+                .zip(control.ranges().skip(1))
+                .any(|((start, end), (next, next_end))| start < next_end && next < end)
+        {
+            return Err("invalid or overlapping STM32H7 Ethernet control registers".into());
+        }
+        let Controller::Stm32h7(device) = &mut self.ethernet[control.nic] else {
+            return Err("STM32H7 clock control requires an Ethernet QoS controller".into());
+        };
+        device.set_clock(false);
+        self.h7_network_control = Some(control);
+        Ok(())
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        (self.nvic.is_some() && Nvic::overlaps(start, end))
+        self.h7_network_control.as_ref().is_some_and(|control| {
+            control
+                .ranges()
+                .any(|(base, limit)| start < limit && base < end)
+        }) || (self.nvic.is_some() && Nvic::overlaps(start, end))
             || (self.systick.is_some() && SysTick::overlaps(start, end))
             || self
                 .uart_tx
@@ -612,6 +639,14 @@ impl Bus {
         {
             return Ok(value);
         }
+        if N == 4
+            && let Some(value) = self
+                .h7_network_control
+                .as_ref()
+                .and_then(|control| control.read(address))
+        {
+            return Ok(value);
+        }
         self.read_ram::<N>(address)
     }
 
@@ -725,6 +760,24 @@ impl Bus {
             && exti.contains(address)
         {
             exti.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(control) = &mut self.h7_network_control
+            && let Some(change) = control.write(address, value)
+        {
+            let Controller::Stm32h7(device) = &mut self.ethernet[control.nic] else {
+                unreachable!("network clock control is bound to STM32H7 Ethernet");
+            };
+            match change {
+                Change::None => {}
+                Change::Clock(enabled) => device.set_clock(enabled),
+                Change::Reset => {
+                    device.set_clock(false);
+                    device.reset();
+                }
+                Change::Interface(interface) => device.set_phy_interface(interface),
+            }
             return Ok(());
         }
         let mut dma = EthernetDma {

@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use crate::{
     bus::EthernetDma,
     ethernet::{Mapping, Region, append_fcs, has_valid_fcs, insert_ipv4_checksums},
+    mii_phy::MiiPhy,
 };
 
 pub const MAC_SIZE: u32 = 0xc00;
@@ -28,12 +29,14 @@ struct Ring {
     tail: u32,
     length: u32,
     buffer: u32,
+    armed: bool,
 }
 
 impl Ring {
     fn set_base(&mut self, address: u32) {
         self.base = address & !3;
         self.current = self.base;
+        self.armed = false;
     }
 
     fn advance(&mut self, stride: u32) {
@@ -85,8 +88,10 @@ struct Received {
 pub struct Stm32h7Ethernet {
     pub name: String,
     pub mappings: Vec<Mapping>,
-    pub phys: Vec<(u8, [u16; 32])>,
+    pub phys: Vec<MiiPhy>,
     irq: Option<u8>,
+    clock_enabled: bool,
+    phy_interface: u32,
     registers: Box<Registers>,
     pending: PendingTx,
     outgoing: VecDeque<Vec<u8>>,
@@ -101,12 +106,30 @@ impl Stm32h7Ethernet {
             mappings,
             phys: Vec::new(),
             irq,
+            clock_enabled: true,
+            phy_interface: 0,
             registers: Box::default(),
             pending: PendingTx::default(),
             outgoing: VecDeque::new(),
             incoming: VecDeque::new(),
             rx_offset: 0,
         }
+    }
+
+    pub fn set_clock(&mut self, enabled: bool) {
+        self.clock_enabled = enabled;
+    }
+
+    pub fn set_phy_interface(&mut self, interface: u32) {
+        self.phy_interface = interface;
+    }
+
+    pub fn reset(&mut self) {
+        *self.registers = Registers::default();
+        self.pending = PendingTx::default();
+        self.outgoing.clear();
+        self.incoming.clear();
+        self.rx_offset = 0;
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<(Region, usize)> {
@@ -120,7 +143,8 @@ impl Stm32h7Ethernet {
     }
 
     pub fn interrupt(&self) -> Option<u8> {
-        self.irq.filter(|_| self.irq_pending())
+        self.irq
+            .filter(|_| self.clock_enabled && self.irq_pending())
     }
 
     fn irq_pending(&self) -> bool {
@@ -133,9 +157,15 @@ impl Stm32h7Ethernet {
 
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         let (region, offset) = self.offset(address, width)?;
+        if !self.clock_enabled {
+            return Some(0);
+        }
         let r = &self.registers;
         Some(match (region, offset) {
             (Region::Registers, 0x110) => 0x3142,
+            (Region::Registers, 0x11c) => 0x0240 | (self.phy_interface << 28),
+            (Region::Registers, 0x120) => 0x0000_0104,
+            (Region::Registers, 0x124 | 0x128) => 0,
             (Region::Registers, _) => bank_read(&r.mac, offset),
             (Region::Mtl, _) => bank_read(&r.mtl, offset),
             (Region::Dma, 0x008) => u32::from(self.irq_pending()),
@@ -164,6 +194,9 @@ impl Stm32h7Ethernet {
         let Some((region, offset)) = self.offset(address, width) else {
             return false;
         };
+        if !self.clock_enabled {
+            return true;
+        }
         let r = &mut self.registers;
         match (region, offset) {
             (Region::Registers, 0x000) => {
@@ -171,18 +204,13 @@ impl Stm32h7Ethernet {
                 self.transmit(dma);
                 self.move_received(dma);
             }
-            (Region::Registers, 0x110) => {}
+            (Region::Registers, 0x110 | 0x11c | 0x120 | 0x124 | 0x128) => {}
             (Region::Registers, 0x200) => self.mdio(value),
             (Region::Registers, 0x300) => r.mac[offset / 4] = 0x8000_0000 | (value & 0xffff),
             (Region::Registers, _) => bank_write(&mut r.mac, offset, value),
+            (Region::Mtl, 0x100) => r.mtl[offset / 4] = value & !1,
             (Region::Mtl, _) => bank_write(&mut r.mtl, offset, value),
-            (Region::Dma, 0x000) if value & 1 != 0 => {
-                **r = Registers::default();
-                self.pending = PendingTx::default();
-                self.outgoing.clear();
-                self.incoming.clear();
-                self.rx_offset = 0;
-            }
+            (Region::Dma, 0x000) if value & 1 != 0 => self.reset(),
             (Region::Dma, 0x104) => {
                 r.dma[offset / 4] = value;
                 self.transmit(dma);
@@ -198,10 +226,16 @@ impl Stm32h7Ethernet {
             }
             (Region::Dma, 0x120) => {
                 r.tx.tail = value & !3;
+                // HAL wraps the producer to the ring base when it publishes a full ring.
+                r.tx.armed = r.tx.current != r.tx.tail
+                    || dma
+                        .read_descriptor(r.tx.current)
+                        .is_some_and(|[_, _, _, flags]| flags & OWN != 0);
                 self.transmit(dma);
             }
             (Region::Dma, 0x128) => {
                 r.rx.tail = value & !3;
+                r.rx.armed = true;
                 self.move_received(dma);
             }
             (Region::Dma, 0x12c) => r.tx.length = value & 0x3ff,
@@ -226,15 +260,18 @@ impl Stm32h7Ethernet {
         }
         let address = ((value >> 21) & 31) as u8;
         let index = ((value >> 16) & 31) as usize;
-        let phy = self.phys.iter_mut().find(|(id, _)| *id == address);
+        let phy = self.phys.iter_mut().find(|phy| phy.address == address);
         match (value >> 2) & 3 {
             1 => {
-                if let Some((_, words)) = phy {
-                    let data = r.mac[0x204 / 4] as u16;
-                    words[index] = if index == 0 { data & 0x7dff } else { data };
+                if let Some(phy) = phy {
+                    phy.write(index, r.mac[0x204 / 4] as u16);
                 }
             }
-            3 => r.mac[0x204 / 4] = u32::from(phy.map_or(u16::MAX, |(_, words)| words[index])),
+            3 => {
+                let data = phy.map_or(u16::MAX, |phy| phy.read(index));
+                let register = &mut r.mac[0x204 / 4];
+                *register = (*register & 0xffff_0000) | u32::from(data);
+            }
             _ => {}
         }
     }
@@ -260,11 +297,11 @@ impl Stm32h7Ethernet {
         if r.mac[0] & 2 == 0 || r.dma[0x104 / 4] & 1 == 0 {
             return;
         }
-        for _ in 0..RING_BUDGET {
-            let address = r.tx.current;
-            if address == r.tx.tail {
+        for _ in 0..=r.tx.length {
+            if !r.tx.armed {
                 break;
             }
+            let address = r.tx.current;
             let Some([first, second, control, flags]) = dma.read_descriptor(address) else {
                 r.status |= BUS_ERROR;
                 break;
@@ -304,6 +341,7 @@ impl Stm32h7Ethernet {
                 break;
             }
             r.tx.advance(stride);
+            r.tx.armed = r.tx.current != r.tx.tail;
             if flags & (LAST | CONTEXT) == LAST {
                 if let Some(first_flags) = self.pending.flags.take()
                     && self.pending.data.len() >= 14
@@ -333,11 +371,17 @@ impl Stm32h7Ethernet {
     }
 
     pub fn receive(&mut self, frame: &[u8], dma: &mut EthernetDma<'_>) {
-        if self.registers.mac[0] & 1 == 0 || self.incoming.len() == FIFO_DEPTH {
+        if !self.clock_enabled
+            || self.registers.mac[0] & 1 == 0
+            || self.incoming.len() == FIFO_DEPTH
+        {
             return;
         }
         let mut length = frame.len();
-        if self.registers.mac[0] & (1 << 21) != 0 && length >= 18 {
+        if self.registers.mac[0] & (1 << 21) != 0
+            && length >= 18
+            && u16::from_be_bytes([frame[12], frame[13]]) >= 1536
+        {
             length -= 4;
         }
         self.incoming.push_back(Received {
@@ -361,7 +405,7 @@ impl Stm32h7Ethernet {
                 break;
             };
             let address = r.rx.current;
-            if address == r.rx.tail {
+            if !r.rx.armed {
                 r.status |= RX_UNAVAILABLE;
                 break;
             }
@@ -383,6 +427,7 @@ impl Stm32h7Ethernet {
                     r.status |= BUS_ERROR;
                     break;
                 }
+                r.rx.armed = address != r.rx.tail;
                 r.rx.advance(stride);
                 continue;
             };
@@ -404,6 +449,7 @@ impl Stm32h7Ethernet {
                 r.status |= BUS_ERROR;
                 break;
             }
+            r.rx.armed = address != r.rx.tail;
             r.rx.advance(stride);
             if complete {
                 self.incoming.pop_front();

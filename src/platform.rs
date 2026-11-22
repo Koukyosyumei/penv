@@ -306,7 +306,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one CLINT is currently supported"));
                 }
             }
-            model if crate::network_platform::is_network(model) => {}
+            _ if crate::network_platform::is_network(entry) => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
     }

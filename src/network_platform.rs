@@ -2,16 +2,20 @@ use crate::{
     ethernet::{Controller, Mapping, Region},
     litex_ethernet::{LiteXEthernet, Phy},
     machine::Machine,
+    mii_phy::MiiPhy,
     platform::{Entry, number},
     stm32_ethernet::Stm32Ethernet,
     stm32h7_ethernet::{MAC_SIZE, Stm32h7Ethernet},
+    stm32h7_net_control::NetworkControl,
 };
 
 const STM32F_MAC: &str = "Network.SynopsysEthernetMAC";
+const STM32H7_RCC: &str = "Miscellaneous.STM32H7_RCC";
+const STM32_SYSCFG: &str = "Miscellaneous.STM32_SYSCFG";
 const STM32H7_MAC: &str = "Network.SynopsysDWCEthernetQualityOfService";
 
 pub fn has_regions(model: &str) -> bool {
-    is_litex(model) || model == STM32H7_MAC
+    is_litex(model) || matches!(model, STM32H7_MAC | STM32_SYSCFG)
 }
 
 fn is_litex(model: &str) -> bool {
@@ -21,8 +25,25 @@ fn is_litex(model: &str) -> bool {
     )
 }
 
-pub fn is_network(model: &str) -> bool {
-    has_regions(model) || matches!(model, "Network.EthernetPhysicalLayer" | STM32F_MAC)
+pub fn is_network(entry: &Entry) -> bool {
+    match entry.model.as_str() {
+        STM32_SYSCFG => rcc_alias(entry, "RegistrationPeripheralAlias.SYSCFG").is_some(),
+        STM32H7_RCC | STM32F_MAC | "Network.EthernetPhysicalLayer" => true,
+        model => is_litex(model) || model == STM32H7_MAC,
+    }
+}
+
+fn rcc_alias<'a>(entry: &'a Entry, alias: &str) -> Option<&'a str> {
+    let list = entry
+        .registration
+        .as_deref()?
+        .strip_prefix('{')?
+        .strip_suffix('}')?;
+    list.split(';').find_map(|registration| {
+        let mut words = registration.split_whitespace();
+        let name = words.next()?;
+        (words.next() == Some(alias) && words.next().is_none()).then_some(name)
+    })
 }
 
 pub fn configure(
@@ -203,17 +224,93 @@ pub fn configure(
                 device.phys.push((phy.address, phy.registers));
             }
             Controller::Stm32h7(device)
-                if !device
-                    .phys
-                    .iter()
-                    .any(|(address, _)| *address == phy.address) =>
+                if !device.phys.iter().any(|other| other.address == phy.address) =>
             {
-                device.phys.push((phy.address, phy.registers));
+                device.phys.push(MiiPhy::new(phy.address, phy.registers));
             }
             _ => return Err(entry.error("duplicate or unsupported additional Ethernet PHY")),
         }
     }
+    configure_board_control(entries, machine)?;
+
     Ok(())
+}
+
+fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(), String> {
+    let rccs: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.model == STM32H7_RCC)
+        .collect();
+    let Some(&rcc) = rccs.first() else {
+        return Ok(());
+    };
+    if rccs.len() != 1 {
+        return Err(rcc.error("only one STM32H7 Ethernet clock controller is supported"));
+    }
+    let mut peripherals = entries.iter().filter(|entry| {
+        entry.model == STM32H7_MAC
+            && rcc_alias(entry, "RegistrationPeripheralAlias.ETH1MAC") == Some(&rcc.name)
+    });
+    let ethernet = peripherals
+        .next()
+        .ok_or_else(|| rcc.error("STM32H7 RCC requires an ETH1MAC binding"))?;
+    if peripherals.next().is_some() {
+        return Err(rcc.error("multiple ETH1MAC clock bindings"));
+    }
+    for (_, property) in &rcc.body {
+        let Some((key, value)) = property.split_once(':') else {
+            return Err(rcc.error("expected STM32H7 RCC property"));
+        };
+        match key.trim() {
+            "nvic" | "dwt" if !value.trim().is_empty() => {}
+            "hseFrequency" if number(value.trim()).is_ok_and(|value| value != 0) => {}
+            _ => return Err(rcc.error("unsupported STM32H7 RCC property")),
+        }
+    }
+    let rcc_base = rcc
+        .sysbus()?
+        .ok_or_else(|| rcc.error("missing STM32H7 RCC address"))?;
+    let mut syscfgs = entries.iter().filter(|entry| {
+        entry.model == STM32_SYSCFG
+            && rcc_alias(entry, "RegistrationPeripheralAlias.SYSCFG") == Some(&rcc.name)
+    });
+    let syscfg_base = if let Some(syscfg) = syscfgs.next() {
+        if syscfgs.next().is_some() {
+            return Err(syscfg.error("multiple Ethernet SYSCFG bindings"));
+        }
+        let registrations = syscfg.registration.as_deref().unwrap();
+        let mut bases = registrations[1..registrations.len() - 1]
+            .split(';')
+            .filter_map(|registration| {
+                let mut words = registration.split_whitespace();
+                (words.next() == Some("sysbus")).then(|| {
+                    words
+                        .next()
+                        .ok_or_else(|| "missing SYSCFG address".to_owned())
+                })
+            });
+        let base = bases
+            .next()
+            .ok_or_else(|| syscfg.error("missing SYSCFG sysbus registration"))?
+            .and_then(number)
+            .map_err(|error| syscfg.error(&error))?;
+        if bases.next().is_some() {
+            return Err(syscfg.error("expected one SYSCFG sysbus registration"));
+        }
+        Some(base)
+    } else {
+        None
+    };
+    let nic = machine
+        .bus
+        .ethernet
+        .iter()
+        .position(|device| device.name() == ethernet.name)
+        .ok_or_else(|| ethernet.error("missing STM32H7 Ethernet controller"))?;
+    machine
+        .bus
+        .map_h7_network_control(NetworkControl::new(rcc_base, syscfg_base, nic))
+        .map_err(|error| rcc.error(&error))
 }
 
 fn mappings(entry: &Entry) -> Result<Vec<Mapping>, String> {

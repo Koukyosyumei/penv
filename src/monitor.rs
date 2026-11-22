@@ -223,12 +223,20 @@ pub fn execute(
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
-        ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
+        ["showAnalyzer", name] if boot.platform.is_some() && serial_analyzer(name) => {
             // UART output is already connected to stdout.
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn serial_analyzer(name: &str) -> bool {
+    let name = name.strip_prefix("sysbus.").unwrap_or(name);
+    ["uart", "usart", "lpuart"].into_iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.bytes().all(|byte| byte.is_ascii_digit()))
+    })
 }
 
 fn firmware_reference(value: &str, script: &Path) -> String {
