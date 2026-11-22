@@ -46,6 +46,7 @@ Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
 
 Options:
+  --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
@@ -122,6 +123,7 @@ fn run() -> Result<ExitCode, String> {
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
+    let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
     let mut path = None;
     while let Some(arg) = args.next() {
@@ -207,6 +209,19 @@ fn run() -> Result<ExitCode, String> {
                 let action = litex_panel::ButtonAction::parse(action)
                     .ok_or("--litex-button-event action must be Press, Release, or Toggle")?;
                 button_events.push((step, name.to_string(), action));
+            }
+            Some("--framebuffer-event") => {
+                const FORMAT: &str = "--framebuffer-event requires STEP:PATH";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let (step, path) = value
+                    .split_once(':')
+                    .filter(|(_, path)| !path.is_empty())
+                    .ok_or(FORMAT)?;
+                let step = step.parse::<u64>().map_err(|_| FORMAT)?;
+                framebuffer_events.push((step, PathBuf::from(path)));
             }
             Some("--uart-event") => {
                 let value = args
@@ -484,6 +499,9 @@ fn run() -> Result<ExitCode, String> {
     for (step, name, value) in phy_events {
         machine.schedule_phy_vendor_specific1(step, name, value)?;
     }
+    for (step, path) in framebuffer_events {
+        machine.schedule_framebuffer_capture(step, path)?;
+    }
     machine.validate_entry()?;
     for action in &post_run {
         if let monitor::PostRun::DisposePcm(name) = action
@@ -555,7 +573,7 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
-    machine.verify_led_assertions_completed()?;
+    machine.verify_required_events_completed()?;
     let completed_run_for = stop == Stop::Limit && run_steps == Some(limit);
     if completed_run_for {
         for action in post_run {
@@ -581,14 +599,7 @@ fn run() -> Result<ExitCode, String> {
             .map_err(|error| format!("{}: {error}", device.name))?;
     }
     if let Some(path) = framebuffer_out {
-        let video = machine.bus.litex_video.as_ref().unwrap();
-        if video.active.is_none() {
-            return Err("LiteX framebuffer DMA is disabled".into());
-        }
-        let file = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        video
-            .render(&machine.bus, io::BufWriter::new(file))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        machine.bus.capture_litex_framebuffer(&path)?;
     }
     if stats {
         eprintln!(

@@ -1,7 +1,9 @@
 use std::{
     alloc::{Layout, alloc_zeroed},
     fmt,
+    fs::File,
     io::{self, Write},
+    path::Path,
 };
 
 use crate::{
@@ -618,6 +620,17 @@ impl Bus {
         ethernet.name = Some(name);
         self.litex_eth = Some(ethernet);
         Ok(())
+    }
+
+    pub fn capture_litex_framebuffer(&self, path: &Path) -> Result<(), String> {
+        let video = self.litex_video.as_ref().ok_or("no LiteX framebuffer")?;
+        if video.active.is_none() {
+            return Err("LiteX framebuffer DMA is disabled".into());
+        }
+        let file = File::create(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        video
+            .render(self, io::BufWriter::new(file))
+            .map_err(|error| format!("{}: {error}", path.display()))
     }
 
     pub fn litex_phy_mut(&mut self, name: &str) -> Result<&mut Phy, String> {

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, io::Write};
+use std::{collections::VecDeque, io::Write, path::PathBuf};
 
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
@@ -24,6 +24,7 @@ enum Input {
     Button(String, ButtonAction),
     PhyVendorSpecific1 { name: String, value: u16 },
     LedAssertion { name: String, expected: bool },
+    FramebufferCapture(PathBuf),
 }
 
 #[derive(Clone)]
@@ -278,13 +279,24 @@ impl Machine {
         Ok(())
     }
 
-    pub fn verify_led_assertions_completed(&self) -> Result<(), String> {
+    pub fn schedule_framebuffer_capture(&mut self, step: u64, path: PathBuf) -> Result<(), String> {
+        if self.bus.litex_video.is_none() {
+            return Err("--framebuffer-event requires a LiteX framebuffer".into());
+        }
+        self.schedule_input(step, Input::FramebufferCapture(path));
+        Ok(())
+    }
+
+    pub fn verify_required_events_completed(&self) -> Result<(), String> {
         for (step, input) in &self.inputs {
-            if let Input::LedAssertion { name, .. } = input {
-                return Err(format!(
-                    "execution ended before LED assertion for {name:?} at step {step}"
-                ));
-            }
+            let event = match input {
+                Input::LedAssertion { name, .. } => format!("LED assertion for {name:?}"),
+                Input::FramebufferCapture(path) => {
+                    format!("framebuffer capture to {}", path.display())
+                }
+                _ => continue,
+            };
+            return Err(format!("execution ended before {event} at step {step}"));
         }
         Ok(())
     }
@@ -321,6 +333,14 @@ impl Machine {
                     Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
                     Input::PhyVendorSpecific1 { name, value } => {
                         self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+                    }
+                    Input::FramebufferCapture(path) => {
+                        self.bus.capture_litex_framebuffer(&path).map_err(|error| {
+                            format!(
+                                "framebuffer capture at step {}: {error}",
+                                self.elapsed_steps
+                            )
+                        })?;
                     }
                     Input::LedAssertion { name, expected } => {
                         let actual = self.bus.litex_led_state(&name)?;
@@ -1470,7 +1490,7 @@ mod tests {
 
         let mut output = std::io::sink();
         machine.run(1, &mut output).unwrap();
-        let missing = machine.verify_led_assertions_completed().unwrap_err();
+        let missing = machine.verify_required_events_completed().unwrap_err();
         assert!(missing.contains("at step 2"));
         machine.bus.write(SHADOW, 4, 1 << 2, &mut output).unwrap();
         machine.run(1, &mut output).unwrap();

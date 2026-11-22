@@ -66,7 +66,7 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 LiteX のスイッチとボタンは `--litex-button-event STEP:NAME:ACTION` で実行中に操作できます。例えば `--litex-button-event 71000000:cas.switch0:Toggle` はステップ 71,000,000 で Arty のスイッチ 0 を反転します。`Press`、`Release`、`Toggle` を指定でき、同じステップのボタン操作は指定順に適用されます。指定した操作はそのステップのゲスト命令より先に反映されます。
 
-Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン・PHY ステータス、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
+Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン・PHY ステータス、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Nexys Video の SD 起動・フレームバッファ、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
 
 ```sh
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
@@ -122,6 +122,22 @@ target/release/penv run --script ../renode/scripts/single-node/arty_litex_vexris
 ```
 
 実ファームウェアの起動ログに `MDIO mode: 10Mbps / link: down`、コマンド応答に `MDIO mode: 100Mbps / link: up` がこの順で出力されます。ステップ上限で終了コード 2 になります。他の PHY プロパティの実行中設定と Renode の Robot Framework テスター API 互換性は残課題です。性能計測と最適化は後工程で行います。
+
+### Nexys Video のフレームバッファ検証
+
+上流の `litex_nexys_video_vexriscv_linux.resc` と `Nexys_Video_LiteX_VexRiscv.robot` を使用しました。変更前の `ae51015` は SD カードから起動して最終 PPM を出力できましたが、`--framebuffer-event 675000000:/tmp/logo.ppm` は `unknown option` でした。同じ起動の途中でロゴ画面と MOTD 画面を保存できるようにしました。
+
+`--framebuffer-event STEP:PATH` は繰り返し指定でき、各ステップのゲスト命令より前に現在の LiteX フレームバッファを P6 RGB PPM へ保存します。DMA が無効な場合や、実行が指定ステップに届かなかった場合は終了コード 1 と診断を返します。
+
+```sh
+cargo test
+cargo build --release
+bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
+```
+
+回帰スクリプトは上流の BIOS ELF と SD イメージのサイズと SHA-1 を確認します。BIOS の自動起動を `Q` で中断し、`sdcardboot` を実行します。ステップ 675,000,000 でロゴを保存し、Buildroot にログインしてから `cat /etc/motd > /dev/tty0` を実行し、ステップ 720,000,000 で MOTD 画面を保存します。上流の参照 PNG を RGB に変換し、`penguin_logo.png` は左上 75×80 の ROI、`penguin_with_litex_logo.png` は 800×600 全体を SHA-256 で照合します。ロゴ撮影時はコンソールのカーソルが ROI 外の 16 ピクセルに影響するため、ロゴの照合範囲は上流テストと同じ ROI にしました。結果は `nexys-video.frames.log` と `nexys-video.uart.log` に出力されます。
+
+画面が一致するまで待つ Renode の `WaitForFrame` と `WaitForFrameROI` の API 互換性は残課題です。今回の回帰では指定ステップの PPM を保存して照合します。
 
 ## Cortex-M0 / Cortex-M0+
 

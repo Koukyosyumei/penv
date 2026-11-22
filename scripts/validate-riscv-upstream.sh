@@ -13,6 +13,7 @@ artifacts=$3
 assets=$artifacts/assets
 mkdir -p "$assets"
 
+nexys_video=$renode_root/scripts/single-node/litex_nexys_video_vexriscv_linux.resc
 arty=$renode_root/scripts/single-node/arty_litex_vexriscv.resc
 murax=$renode_root/scripts/single-node/murax.resc
 minerva=$renode_root/scripts/single-node/litex_minerva.resc
@@ -33,7 +34,7 @@ prepare_assets() {
             variables[assignment[1]] = assignment[2]
         }
         ($1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary" || $2 == "LoadFdt")) ||
-        $2 == "LoadPCM" {
+        ($1 == "machine" && $2 == "SdCardFromFile") || $2 == "LoadPCM" {
             path = $3 in variables ? variables[$3] : $3
             if (path ~ /^@https:\/\//)
                 print substr(path, 2)
@@ -184,4 +185,43 @@ cmp "$assets/${pcm##*/}" "$artifacts/echo.raw"
 sha256sum "$assets/${pcm##*/}" "$artifacts/echo.raw" > "$artifacts/litex-i2s.sha256"
 prepare_assets "$minerva"
 python3 "$(dirname -- "$0")/validate-minerva-serial.py" "$penv" "$renode_root" "$artifacts"
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, and I2S PCM verified. Logs are in %s\n' "$artifacts"
+prepare_assets "$nexys_video"
+printf Q > "$artifacts/nexys-video-abort.input"
+printf 'sdcardboot\r' > "$artifacts/nexys-video-sd.input"
+printf 'root\r' > "$artifacts/nexys-video-login.input"
+printf 'export PS1="$ "\r' > "$artifacts/nexys-video-prompt.input"
+printf 'cat /etc/motd > /dev/tty0\r' > "$artifacts/nexys-video-motd.input"
+run_to_step_limit nexys-video "$nexys_video" --max-steps 730000000 \
+    --uart-event "35000000:$artifacts/nexys-video-abort.input" \
+    --uart-event "40000000:$artifacts/nexys-video-sd.input" \
+    --framebuffer-event "675000000:$artifacts/nexys-video-logo.ppm" \
+    --uart-event "680000000:$artifacts/nexys-video-login.input" \
+    --uart-event "690000000:$artifacts/nexys-video-prompt.input" \
+    --uart-event "700000000:$artifacts/nexys-video-motd.input" \
+    --framebuffer-event "720000000:$artifacts/nexys-video-motd.ppm"
+for marker in 'Booting from SDCard in SD-Mode' "root login on 'console'"; do
+    rg -aqF "$marker" "$artifacts/nexys-video.uart.log"
+done
+# Compare the MOTD frame and the 75x80 top-left logo ROI to the reference PNGs' RGB.
+{
+    printf '%s  %s\n' \
+        c56966989d1d18b035b7a8f4f7442d94ff60ddc2beb822a405a877c4de06c7ff "$artifacts/nexys-video-motd.ppm" \
+        | sha256sum --check
+    python3 - "$artifacts/nexys-video-logo.ppm" <<'PYTHON'
+from hashlib import sha256
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+header = b"P6\n800 600\n255\n"
+data = path.read_bytes()
+if not data.startswith(header) or len(data) != len(header) + 800 * 600 * 3:
+    sys.exit(f"{path}: expected an 800x600 RGB PPM")
+pixels = memoryview(data)[len(header):]
+roi = b"".join(pixels[row * 2400:row * 2400 + 225] for row in range(80))
+if sha256(roi).hexdigest() != "e64eaa319a979cfb4bae39ee9e0c1ea2a04c688211a4ebe9527510bb4968ddfa":
+    sys.exit(f"{path}: logo ROI differs from upstream")
+print(f"{path} (75x80 logo ROI): OK")
+PYTHON
+} > "$artifacts/nexys-video.frames.log"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, and Nexys Video framebuffer verified. Logs are in %s\n' "$artifacts"
