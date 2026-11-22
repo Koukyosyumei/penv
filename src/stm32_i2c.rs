@@ -107,6 +107,14 @@ impl Stm32I2c {
         Ok(())
     }
 
+    pub fn reset(&mut self) {
+        self.registers = [0; 11];
+        self.status = 0;
+        self.addressed = None;
+        self.remaining = 0;
+        self.reading = false;
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

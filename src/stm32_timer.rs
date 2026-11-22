@@ -17,6 +17,7 @@ pub struct TimerPin {
 pub struct Stm32Timer {
     pub base: u32,
     frequency: u32,
+    initial_limit: u32,
     counter_mask: u32,
     routes: [u32; 8],
     pub dma_routes: [u8; 8],
@@ -62,11 +63,20 @@ impl Stm32Timer {
             phase: 0,
             prescaler: 0,
             counter: 0,
+            initial_limit,
             arr: initial_limit,
             active_arr: initial_limit,
             repetition: 0,
             registers: [0; 18],
         }
+    }
+
+    pub fn reset(&mut self) {
+        let outputs = std::mem::take(&mut self.gpio_outputs);
+        let dma = self.dma_routes;
+        *self = Self::new(self.base, self.frequency, self.initial_limit, self.routes);
+        self.gpio_outputs = outputs;
+        self.dma_routes = dma;
     }
 
     pub fn contains(&self, address: u32) -> bool {

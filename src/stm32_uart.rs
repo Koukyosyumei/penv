@@ -43,6 +43,12 @@ impl Stm32Usart {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.receive.clear();
+        self.registers.fill(0);
+        self.complete = true;
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

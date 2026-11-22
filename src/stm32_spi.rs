@@ -52,6 +52,14 @@ impl Stm32F0Spi {
         }
     }
 
+    pub fn reset(&mut self) {
+        let target = self.shift_register.take();
+        let (irq, dma_rx, dma_tx) = (self.irq, self.dma_rx, self.dma_tx);
+        *self = Self::new(self.base, self.capacity);
+        self.shift_register = target;
+        (self.irq, self.dma_rx, self.dma_tx) = (irq, dma_rx, dma_tx);
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

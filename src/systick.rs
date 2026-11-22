@@ -29,6 +29,13 @@ impl SysTick {
             .any(|(low, high)| start < u64::from(high) && end > u64::from(low))
     }
 
+    pub fn reset(&mut self) {
+        *self = Self {
+            frequency: self.frequency,
+            ..Self::default()
+        };
+    }
+
     pub fn set_frequency(&mut self, frequency: u32) {
         self.frequency = Some(frequency);
         self.phase = 0;

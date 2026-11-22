@@ -61,6 +61,14 @@ impl Stm32F0Adc {
         }
     }
 
+    pub fn reset(&mut self) {
+        let inputs = self.inputs;
+        let request = self.dma_request;
+        *self = Self::new(self.base, self.irq, self.reference, self.trigger_frequency);
+        self.inputs = inputs;
+        self.dma_request = request;
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

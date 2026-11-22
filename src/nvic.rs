@@ -1,5 +1,6 @@
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
+const AIRCR: u32 = BASE + 0xd0c;
 const SCR: u32 = BASE + 0xd10;
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
@@ -14,6 +15,7 @@ pub struct Nvic {
     vector_base: Option<u32>,
     enabled: u32,
     sleep_control: u32,
+    reset_requested: bool,
     pending: u32,
     priority: [u8; 32],
     system_priority: [u8; 8],
@@ -27,6 +29,7 @@ impl Nvic {
             vector_base: None,
             enabled: 0,
             sleep_control: 0,
+            reset_requested: false,
             pending: 0,
             priority: [0; 32],
             system_priority: [0; 8],
@@ -35,9 +38,10 @@ impl Nvic {
         }
     }
 
-    pub const RANGES: [(u32, u32); 4] = [
+    pub const RANGES: [(u32, u32); 5] = [
         (ENABLE, PRIORITY_END + 1),
         (VTOR, VTOR + 4),
+        (AIRCR, AIRCR + 4),
         (SCR, SCR + 4),
         (SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1),
     ];
@@ -66,6 +70,14 @@ impl Nvic {
         if high && active & (1 << (16 + line)) == 0 {
             self.pending |= 1 << line;
         }
+    }
+
+    pub fn take_reset_request(&mut self) -> bool {
+        std::mem::take(&mut self.reset_requested)
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::new(self.priority_mask, self.uart_irq);
     }
 
     pub fn sleep_on_exit(&self) -> bool {
@@ -120,6 +132,7 @@ impl Nvic {
 
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         Some(match (address, width) {
+            (AIRCR, 4) => 0xfa05_0000,
             (SCR, 4) => self.sleep_control,
             (VTOR, 4) => self.vector_base.unwrap_or(0),
             (ENABLE | DISABLE, 4) => self.enabled,
@@ -142,6 +155,9 @@ impl Nvic {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
         match (address, width) {
+            (AIRCR, 4) => {
+                self.reset_requested |= value >> 16 == 0x05fa && value & (1 << 2) != 0;
+            }
             (SCR, 4) => self.sleep_control = value & 0x16,
             (ENABLE, 4) => self.enabled |= value,
             (DISABLE, 4) => self.enabled &= !value,

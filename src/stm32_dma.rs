@@ -59,6 +59,25 @@ impl Stm32Dma {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.selection = 0;
+        self.active = 0;
+        self.pending_requests = 0;
+        for channel in &mut self.channels {
+            *channel = Channel {
+                irq: channel.irq,
+                config: 0,
+                count: 0,
+                original: 0,
+                peripheral: 0,
+                memory: 0,
+                current_peripheral: 0,
+                current_memory: 0,
+                flags: 0,
+            };
+        }
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

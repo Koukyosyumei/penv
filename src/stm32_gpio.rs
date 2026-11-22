@@ -6,6 +6,7 @@ pub struct Stm32Gpio {
     af_driver: [u16; 16],
     af_levels: [u16; 16],
     af_inverted: [u16; 16],
+    reset_values: [u32; 3],
     mode: u32,
     output_type: u32,
     speed: u32,
@@ -36,6 +37,7 @@ impl Stm32Gpio {
             af_driver: [0; 16],
             af_levels: [0; 16],
             af_inverted: [0; 16],
+            reset_values: [mode, speed, pull],
             mode,
             output_type: 0,
             speed,
@@ -45,6 +47,16 @@ impl Stm32Gpio {
             alternate_count,
             lock: Lock::Idle,
         }
+    }
+
+    pub fn reset(&mut self) {
+        [self.mode, self.speed, self.pull] = self.reset_values;
+        self.output_type = 0;
+        self.output = 0;
+        self.alternate.fill(0);
+        self.af_driver.fill(0);
+        self.af_levels.fill(0);
+        self.lock = Lock::Idle;
     }
 
     pub fn contains(&self, address: u32) -> bool {

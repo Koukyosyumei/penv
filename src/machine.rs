@@ -212,13 +212,8 @@ impl Machine {
 
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
-            if let Some(thumb) = &hart.thumb {
-                let (sp, pc) = thumb.reset(&self.bus)?;
-                if let Some(nvic) = self.bus.nvic.as_mut() {
-                    nvic.set_vector_base(thumb.vector_base());
-                }
-                hart.registers[13] = sp;
-                hart.pc = pc;
+            if hart.thumb.is_some() {
+                hart.reset_cortex_m(&mut self.bus)?;
                 continue;
             }
             hart.fetch(&mut self.bus)
@@ -292,6 +287,20 @@ impl Machine {
 }
 
 impl Hart {
+    fn reset_cortex_m(&mut self, bus: &mut Bus) -> Result<(), String> {
+        let thumb = self.thumb.as_mut().unwrap();
+        let (sp, pc) = thumb.reset(bus)?;
+        let vectors = thumb.vector_base();
+        *thumb = Thumb::new(Some(vectors));
+        if let Some(nvic) = bus.nvic.as_mut() {
+            nvic.set_vector_base(vectors);
+        }
+        self.registers.fill(0);
+        self.registers[13] = sp;
+        self.pc = pc;
+        Ok(())
+    }
+
     pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
         self.thumb = Some(Thumb::new(vectors));
     }
@@ -410,6 +419,9 @@ impl Hart {
         elapsed_steps: u64,
         output: &mut impl Write,
     ) -> Result<Step, String> {
+        if self.thumb.is_some() && bus.reset_cortex_m_if_requested() {
+            self.reset_cortex_m(bus)?;
+        }
         if let Some(thumb) = self.thumb.as_mut() {
             bus.advance_stm32_dma(output)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;

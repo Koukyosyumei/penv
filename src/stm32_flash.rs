@@ -26,6 +26,7 @@ pub struct Stm32F0Flash {
     address: u32,
     first_key: bool,
     first_option_key: bool,
+    reload_requested: bool,
     option_bytes: [u16; 8],
     options_loaded: [u8; 8],
 }
@@ -48,6 +49,7 @@ impl Stm32F0Flash {
             address: 0,
             first_key: false,
             first_option_key: false,
+            reload_requested: false,
             option_bytes: [
                 0x55aa, 0x00ff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
             ],
@@ -115,7 +117,7 @@ impl Stm32F0Flash {
                     self.control &= !OPTION_WRITE_ENABLE;
                     self.first_option_key = false;
                 } else if value & OPTION_RELOAD != 0 {
-                    self.reload_options();
+                    self.reload_requested = true;
                 } else if value & START != 0 {
                     if self.control & OPTION_ERASE != 0 {
                         if option_enable != 0 {
@@ -204,6 +206,23 @@ impl Stm32F0Flash {
         let value = value as u8;
         *option = u16::from_le_bytes([value, !value]);
         self.finish(true);
+    }
+
+    pub fn take_reload_request(&mut self) -> bool {
+        std::mem::take(&mut self.reload_requested)
+    }
+
+    pub fn reset(&mut self, option_reload: bool) {
+        self.access = 0;
+        self.control = LOCK;
+        self.status = 0;
+        self.address = 0;
+        self.first_key = false;
+        self.first_option_key = false;
+        self.reload_requested = false;
+        if option_reload {
+            self.reload_options();
+        }
     }
 
     fn reload_options(&mut self) {

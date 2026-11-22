@@ -23,6 +23,10 @@ impl Stm32F0Crc {
         }
     }
 
+    pub fn reset(&mut self) {
+        *self = Self::new(self.base, self.configurable_poly);
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

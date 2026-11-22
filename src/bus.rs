@@ -360,6 +360,65 @@ impl Bus {
         }
     }
 
+    pub fn reset_cortex_m_if_requested(&mut self) -> bool {
+        let system = self.nvic.as_mut().is_some_and(Nvic::take_reset_request);
+        let reload = self
+            .stm32_flash
+            .as_mut()
+            .is_some_and(Stm32F0Flash::take_reload_request);
+        if !system && !reload {
+            return false;
+        }
+        if let Some(nvic) = self.nvic.as_mut() {
+            nvic.reset();
+        }
+        if let Some(systick) = self.systick.as_mut() {
+            systick.reset();
+        }
+        if let Some(uart) = self.litex_uart.as_mut() {
+            *uart = LiteXUart::new(uart.base);
+        }
+        if let Some(flash) = self.stm32_flash.as_mut() {
+            flash.reset(reload);
+        }
+        if let Some(rcc) = self.stm32_rcc.as_mut() {
+            rcc.reset(reload);
+        }
+        if let Some(adc) = self.stm32_adc.as_mut() {
+            adc.reset();
+        }
+        if let Some(dma) = self.stm32_dma.as_mut() {
+            dma.reset();
+        }
+        if let Some(crc) = self.stm32_crc.as_mut() {
+            crc.reset();
+        }
+        for uart in &mut self.stm32_uarts {
+            uart.reset();
+        }
+        for port in &mut self.stm32_gpios {
+            port.reset();
+        }
+        for timer in &mut self.stm32_timers {
+            timer.reset();
+        }
+        for spi in &mut self.stm32_spis {
+            spi.reset();
+        }
+        for i2c in &mut self.stm32_i2cs {
+            i2c.reset();
+        }
+        for can in &mut self.stm32_cans {
+            can.reset();
+        }
+        // SRAM, flash contents, external devices and the RTC backup domain stay powered.
+        self.refresh_gpio_wiring();
+        if let Some(exti) = self.exti.as_mut() {
+            exti.reset(self.gpio_exti_levels);
+        }
+        true
+    }
+
     pub fn sample_nvic(&mut self, active: u64) {
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         if let Some(nvic) = self.nvic.as_mut() {

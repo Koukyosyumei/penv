@@ -1,3 +1,5 @@
+const RESET_FLAGS: u32 = 0xfe80_0000;
+
 pub struct Stm32F0Rcc {
     pub base: u32,
     registers: [u32; 14],
@@ -32,6 +34,12 @@ impl Stm32F0Rcc {
         Self { base, registers }
     }
 
+    pub fn reset(&mut self, option_reload: bool) {
+        let flags = self.registers[9] & RESET_FLAGS;
+        *self = Self::new(self.base);
+        self.registers[9] = flags | if option_reload { 1 << 25 } else { 1 << 28 };
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }
@@ -50,7 +58,16 @@ impl Stm32F0Rcc {
     pub fn write(&mut self, address: u32, value: u32) {
         let index = ((address - self.base) / 4) as usize;
         if let Some(register) = self.registers.get_mut(index) {
-            *register = value & Self::WRITE_MASKS[index];
+            if index == 9 {
+                let flags = if value & (1 << 24) == 0 {
+                    *register & RESET_FLAGS
+                } else {
+                    0
+                };
+                *register = flags | (value & 3);
+            } else {
+                *register = value & Self::WRITE_MASKS[index];
+            }
         }
     }
 }
