@@ -11,6 +11,7 @@ pub struct Devices {
     pub uarts: Vec<Uart>,
     pub fallback_ranges: Vec<FallbackRange>,
     lines: [u64; MAX_HARTS],
+    input_uart: usize,
 }
 
 pub struct FallbackRange {
@@ -30,11 +31,25 @@ impl Devices {
         Some(range.value & (u64::MAX >> (64 - width * 8)))
     }
 
+    pub fn select_uart(&mut self, name: &str) -> Result<(), String> {
+        self.input_uart = self
+            .uarts
+            .iter()
+            .position(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown RV64 UART {name:?}"))?;
+        Ok(())
+    }
+
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
-        if let Some(uart) = self.uarts.first_mut() {
+        if let Some(uart) = self.uarts.get_mut(self.input_uart) {
             match &mut uart.kind {
                 UartKind::Ns16550(uart) => uart.queue_input(bytes),
-                UartKind::SiFive { receive, .. } => receive.extend(bytes),
+                UartKind::SiFive {
+                    receive,
+                    rx_control,
+                    ..
+                } if *rx_control & 1 != 0 => receive.extend(bytes),
+                UartKind::SiFive { .. } => {}
             }
         }
     }
@@ -91,6 +106,7 @@ enum UartKind {
 }
 
 pub struct Uart {
+    name: String,
     pub base: u32,
     source: usize,
     cpu_lines: Vec<(usize, u32)>,
@@ -99,6 +115,7 @@ pub struct Uart {
 
 impl Uart {
     pub fn new(
+        name: String,
         base: u32,
         source: usize,
         cpu_lines: Vec<(usize, u32)>,
@@ -111,12 +128,13 @@ impl Uart {
                 tx_control: 0,
                 rx_control: 0,
                 enable: 0,
-                divisor: 0,
+                divisor: 0xffff,
             }
         } else {
             UartKind::Ns16550(Ns16550::new(base, source as u32, wide))
         };
         Self {
+            name,
             base,
             source,
             cpu_lines,
@@ -127,7 +145,7 @@ impl Uart {
     pub fn size(&self) -> u64 {
         match &self.kind {
             UartKind::Ns16550(uart) => uart.size(),
-            UartKind::SiFive { .. } => 28,
+            UartKind::SiFive { .. } => 0x100,
         }
     }
 
@@ -182,6 +200,7 @@ impl Uart {
                 Some(uart.write(uart.register(address, width)?, value, output))
             }
             UartKind::SiFive {
+                receive,
                 tx_control,
                 rx_control,
                 enable,
@@ -191,7 +210,12 @@ impl Uart {
                 match address - self.base {
                     0 if *tx_control & 1 != 0 => return Some(output.write_all(&[value as u8])),
                     8 => *tx_control = value & 0x70003,
-                    12 => *rx_control = value & 0x70001,
+                    12 => {
+                        *rx_control = value & 0x70001;
+                        if *rx_control & 1 == 0 {
+                            receive.clear();
+                        }
+                    }
                     16 => *enable = value & 3,
                     24 => *divisor = value & 0xffff,
                     _ => {}

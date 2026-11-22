@@ -192,7 +192,14 @@ pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
                 }
             }
         }
-        let uart = Uart::new(base, source as usize, cpu_lines, sifive, wide);
+        let uart = Uart::new(
+            entry.name.clone(),
+            base,
+            source as usize,
+            cpu_lines,
+            sifive,
+            wide,
+        );
         check_mapping(&machine, entry, base, uart.size())?;
         machine.bus.rv64_devices.uarts.push(uart);
     }

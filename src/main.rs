@@ -54,6 +54,7 @@ Options:
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --uart-device NAME  Select the RV64 platform UART that receives input
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
@@ -107,6 +108,7 @@ fn run() -> Result<ExitCode, String> {
     let mut asset_dir = None;
     let mut platform_root = None;
     let mut uart_input = None;
+    let mut uart_device = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
     let mut path = None;
@@ -152,6 +154,16 @@ fn run() -> Result<ExitCode, String> {
                     .parse::<u64>()
                     .map_err(|_| "--uart-event requires a nonnegative step number")?;
                 uart_events.push((step, PathBuf::from(path)));
+            }
+            Some("--uart-device") => {
+                let name = args
+                    .next()
+                    .and_then(|name| name.into_string().ok())
+                    .filter(|name| !name.is_empty())
+                    .ok_or("--uart-device requires NAME")?;
+                if uart_device.replace(name).is_some() {
+                    return Err("--uart-device may only be specified once".into());
+                }
             }
             Some("--uart-input-at") => {
                 let value = args
@@ -309,6 +321,9 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(base) = clint {
         machine.bus.map_clint(base, harts.unwrap_or(1))?;
+    }
+    if let Some(name) = uart_device {
+        machine.bus.rv64_devices.select_uart(&name)?;
     }
     if uart_input_at.is_some() && uart_input.is_none() {
         return Err("--uart-input-at requires --uart-input".into());
