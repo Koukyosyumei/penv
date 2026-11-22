@@ -15,6 +15,7 @@ use crate::{
     stm32_dma::Stm32Dma,
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
+    stm32_i2c::Stm32I2c,
     stm32_rcc::Stm32F0Rcc,
     stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
@@ -85,6 +86,7 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     stm32_timers: Vec<Stm32Timer>,
     stm32_spis: Vec<Stm32F0Spi>,
+    stm32_i2cs: Vec<Stm32I2c>,
     stm32_crc: Option<Stm32F0Crc>,
     stm32_adc: Option<Stm32F0Adc>,
     stm32_dma: Option<Stm32Dma>,
@@ -159,6 +161,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.stm32_i2cs.iter().any(|i2c| {
+                let other = u64::from(i2c.base);
+                start < other + u64::from(Stm32I2c::SIZE) && other < end
             })
             || self.stm32_spis.iter().any(|spi| {
                 let other = u64::from(spi.base);
@@ -308,6 +314,9 @@ impl Bus {
         for spi in &self.stm32_spis {
             requests |= spi.pending_dma();
         }
+        for i2c in &self.stm32_i2cs {
+            requests |= i2c.pending_dma();
+        }
         let Some(transfer) = dma.next_transfer(requests) else {
             return Ok(());
         };
@@ -375,6 +384,13 @@ impl Bus {
                 && let Some(line) = adc.irq
             {
                 irqs |= 1 << line;
+            }
+            for i2c in &self.stm32_i2cs {
+                if i2c.interrupt_pending()
+                    && let Some(line) = i2c.irq
+                {
+                    irqs |= 1 << line;
+                }
             }
             for spi in &self.stm32_spis {
                 if spi.interrupt_pending()
@@ -444,6 +460,19 @@ impl Bus {
                 .iter()
                 .any(|range| range.contains(&address) && range.contains(&end))
         })
+    }
+
+    pub fn map_stm32_i2c(&mut self, i2c: Stm32I2c) -> Result<(), String> {
+        let start = u64::from(i2c.base);
+        let end = start + u64::from(Stm32I2c::SIZE);
+        if i2c.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32 I²C range at {:#010x}",
+                i2c.base
+            ));
+        }
+        self.stm32_i2cs.push(i2c);
+        Ok(())
     }
 
     pub fn map_stm32f0_spi(&mut self, spi: Stm32F0Spi) -> Result<(), String> {
@@ -787,6 +816,12 @@ impl Bus {
         {
             return Ok(rcc.read(address));
         }
+        if address & 3 == 0
+            && let Some(i2c) = self.stm32_i2cs.iter_mut().find(|i2c| i2c.contains(address))
+        {
+            let mask = u32::MAX >> (32 - N * 8);
+            return Ok(i2c.read(address) & mask);
+        }
         if address as usize & (N - 1) == 0
             && let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address))
         {
@@ -970,6 +1005,13 @@ impl Bus {
             && rcc.contains(address)
         {
             rcc.write(address, value);
+            return Ok(());
+        }
+        if address & 3 == 0
+            && let Some(i2c) = self.stm32_i2cs.iter_mut().find(|i2c| i2c.contains(address))
+        {
+            let mask = u32::MAX >> (32 - width * 8);
+            i2c.write(address, value & mask);
             return Ok(());
         }
         if let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address)) {

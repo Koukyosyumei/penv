@@ -16,6 +16,7 @@ mod stm32_crc;
 mod stm32_dma;
 mod stm32_exti;
 mod stm32_gpio;
+mod stm32_i2c;
 mod stm32_rcc;
 mod stm32_rtc;
 mod stm32_spi;

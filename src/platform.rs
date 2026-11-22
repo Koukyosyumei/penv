@@ -11,6 +11,7 @@ use crate::{
     stm32_adc::Stm32F0Adc,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
+    stm32_i2c::{Eeprom, Stm32I2c},
     stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
@@ -229,6 +230,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut stm32_uarts = Vec::new();
     let mut stm32_timers = Vec::new();
     let mut stm32_spis = Vec::new();
+    let mut stm32_i2cs = Vec::new();
+    let mut i2c_eeproms = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_rtc = None;
     let mut stm32_dma = None;
@@ -363,6 +366,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
+            "I2C.STM32F7_I2C" => stm32_i2cs.push(entry),
+            "Memory.GenericI2cEeprom" => i2c_eeproms.push(entry),
             "Timers.STM32F4_RTC" => {
                 if stm32_rtc.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 RTC is supported"));
@@ -759,6 +764,67 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .map_stm32f0_adc(device)
                 .map_err(|e| adc.error(&e))?;
         }
+        let mut eeproms = HashMap::<_, Vec<_>>::new();
+        for eeprom in i2c_eeproms {
+            let (target, address) = eeprom
+                .registration
+                .as_deref()
+                .and_then(|s| s.split_once(char::is_whitespace))
+                .ok_or_else(|| {
+                    eeprom.error("expected EEPROM registered on an I²C controller with an address")
+                })?;
+            if !stm32_i2cs.iter().any(|i2c| i2c.name == target) {
+                return Err(eeprom.error("unknown EEPROM I²C controller"));
+            }
+            let address = number(address.trim()).map_err(|e| eeprom.error(&e))?;
+            eeproms.entry(target).or_default().push((eeprom, address));
+        }
+        for i2c in stm32_i2cs {
+            let mut device = Stm32I2c::new(i2c.address()?);
+            for (_, text) in &i2c.body {
+                let (source, destinations) = text
+                    .split_once("->")
+                    .ok_or_else(|| i2c.error("expected STM32 I²C wiring"))?;
+                for destination in destinations.split('|') {
+                    let (target, pin) = destination
+                        .split_once('@')
+                        .ok_or_else(|| i2c.error("invalid STM32 I²C output destination"))?;
+                    let target = target.trim();
+                    match source.trim() {
+                        "DmaReceive" | "DmaSend"
+                            if stm32_dma.is_some_and(|dma| dma.name == target) =>
+                        {
+                            let mask = dma_input(pin, dma_channels).map_err(|e| i2c.error(&e))?;
+                            if source.trim() == "DmaReceive" {
+                                device.dma_rx |= mask;
+                            } else {
+                                device.dma_tx |= mask;
+                            }
+                        }
+                        "" | "EventInterrupt" | "EventIRQ" if device.irq.is_none() => {
+                            device.irq = Some(if nvic.is_some_and(|nvic| nvic.name == target) {
+                                irq_index(pin, 32).map_err(|e| i2c.error(&e))?
+                            } else if let Some(&(count, output)) = combined_routes.get(target) {
+                                irq_index(pin, count).map_err(|e| i2c.error(&e))?;
+                                output
+                            } else {
+                                return Err(i2c.error("unsupported STM32 I²C interrupt target"));
+                            });
+                        }
+                        _ => return Err(i2c.error("unsupported or duplicate STM32 I²C wiring")),
+                    }
+                }
+            }
+            for (entry, address) in eeproms.remove(i2c.name.as_str()).unwrap_or_default() {
+                device
+                    .attach(address, i2c_eeprom(entry)?)
+                    .map_err(|e| entry.error(&e))?;
+            }
+            machine
+                .bus
+                .map_stm32_i2c(device)
+                .map_err(|e| i2c.error(&e))?;
+        }
         for spi in stm32_spis {
             let mut series = None;
             let mut capacity = None;
@@ -990,6 +1056,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     }
     if let Some(adc) = stm32_adc {
         return Err(adc.error("STM32F0 ADC requires a Cortex-M platform"));
+    }
+    if let Some(i2c) = stm32_i2cs.first().or(i2c_eeproms.first()) {
+        return Err(i2c.error("STM32 I²C requires a Cortex-M platform"));
     }
     if let Some(spi) = stm32_spis.first() {
         return Err(spi.error("STM32F0 SPI requires a Cortex-M platform"));
@@ -1236,6 +1305,35 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .map_err(|e| entry.error(&e))?;
     }
     Ok(machine)
+}
+
+fn i2c_eeprom(entry: &Entry) -> Result<Eeprom, String> {
+    let mut size = 0;
+    let mut address_bits = 8;
+    let mut writable = true;
+    let mut page_size = 64;
+    for (key, value) in keys(entry, &["size", "addressBitSize", "writable", "pageSize"])? {
+        if key == "writable" {
+            writable = value
+                .parse()
+                .map_err(|_| entry.error("invalid EEPROM writable value"))?;
+            continue;
+        }
+        let value = number(value).map_err(|e| entry.error(&e))? as usize;
+        match key {
+            "size" => size = value,
+            "addressBitSize" => address_bits = value,
+            _ => page_size = value,
+        }
+    }
+    if !(1..=65536).contains(&size)
+        || !matches!(address_bits, 8 | 16)
+        || !page_size.is_power_of_two()
+        || page_size > 65536
+    {
+        return Err(entry.error("invalid I²C EEPROM size, addressBitSize or pageSize"));
+    }
+    Ok(Eeprom::new(size, address_bits, writable, page_size))
 }
 
 fn stm32_timer_output(source: &str) -> Result<u32, &'static str> {
