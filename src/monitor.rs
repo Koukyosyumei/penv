@@ -1,12 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
 };
 
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(Asset, u32)>,
+    pub network: Network,
     pub video_analyzers: Vec<String>,
     pub sd_card: Option<(String, Asset, u64)>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
@@ -25,6 +27,67 @@ pub struct Boot {
 pub struct Asset {
     value: String,
     script: PathBuf,
+}
+
+#[derive(Default)]
+pub struct Network {
+    switch: Option<String>,
+    server: Option<(String, Ipv4Addr)>,
+    links: Vec<String>,
+    port: Option<u16>,
+    file: Option<(Asset, String)>,
+}
+
+pub struct TftpBoot {
+    pub ethernet: String,
+    pub ip: Ipv4Addr,
+    pub port: u16,
+    pub file: Asset,
+    pub filename: String,
+}
+
+impl Network {
+    pub fn into_tftp(self) -> Result<Option<TftpBoot>, String> {
+        if self.switch.is_none() && self.server.is_none() {
+            return Ok(None);
+        }
+        let Some((server, ip)) = self.server else {
+            return Err("expected a local network server".into());
+        };
+        if !self.links.contains(&server) {
+            return Err("expected the local network server to be connected to the switch".into());
+        }
+        let port = self
+            .port
+            .ok_or("expected StartTFTP for the local network server")?;
+        let (file, filename) = self.file.ok_or("expected a file served over local TFTP")?;
+        let mut peers = self.links.into_iter().filter(|name| *name != server);
+        let ethernet = peers
+            .next()
+            .ok_or("expected an Ethernet connection to the local switch")?;
+        if peers.next().is_some() {
+            return Err("only one Ethernet connection to the local switch is supported".into());
+        }
+        Ok(Some(TftpBoot {
+            ethernet,
+            ip,
+            port,
+            file,
+            filename,
+        }))
+    }
+
+    fn is_server(&self, name: &str) -> bool {
+        self.server
+            .as_ref()
+            .is_some_and(|(server, _)| server == name)
+    }
+}
+
+fn unquote(text: &str) -> &str {
+    text.strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .unwrap_or(text)
 }
 
 struct Macro {
@@ -250,6 +313,52 @@ fn execute(
             }
             .map_err(|_| "invalid SD card capacity")?;
             boot.sd_card = Some((controller.to_string(), Asset::new(image, script), capacity));
+        }
+        ["emulation", "CreateSwitch", name] if *machine && boot.network.switch.is_none() => {
+            boot.network.switch = Some(unquote(resolve(name)?).into());
+        }
+        ["emulation", "CreateNetworkServer", name, ip]
+            if *machine && boot.network.server.is_none() =>
+        {
+            let name = unquote(resolve(name)?).to_string();
+            let ip = unquote(resolve(ip)?)
+                .parse::<Ipv4Addr>()
+                .map_err(|_| "expected IPv4 network server address")?;
+            boot.network.server = Some((name, ip));
+        }
+        ["connector", "Connect", device, switch] if *machine => {
+            let switch = unquote(resolve(switch)?);
+            let device = unquote(resolve(device)?);
+            if boot.network.switch.as_deref() != Some(switch)
+                || boot.network.links.iter().any(|name| name == device)
+            {
+                return Err("invalid or duplicate local switch connection".into());
+            }
+            boot.network.links.push(device.into());
+        }
+        [name, "StartTFTP", port]
+            if boot.network.is_server(name) && boot.network.port.is_none() =>
+        {
+            boot.network.port = Some(
+                resolve(port)?
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|&port| port != 0)
+                    .ok_or("invalid TFTP port")?,
+            );
+        }
+        [module, "ServeFile", file, name]
+            if module
+                .strip_suffix(".tftp")
+                .is_some_and(|name| boot.network.is_server(name))
+                && boot.network.port.is_some()
+                && boot.network.file.is_none() =>
+        {
+            let file = resolve(file)?
+                .strip_prefix('@')
+                .ok_or("expected @TFTP-file-path")?;
+            let name = unquote(resolve(name)?);
+            boot.network.file = Some((Asset::new(file, script), name.into()));
         }
         ["sysbus", "SilenceRange", start, size] if boot.platform.is_some() => {
             let start = start

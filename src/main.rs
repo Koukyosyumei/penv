@@ -9,6 +9,7 @@ mod litex_flash;
 mod litex_i2c;
 mod litex_panel;
 mod litex_sd;
+mod litex_tftp;
 mod litex_video;
 mod machine;
 mod monitor;
@@ -233,6 +234,7 @@ fn run() -> Result<ExitCode, String> {
     let mut vex_supervisor_irq_mask = None;
     let mut buttons = Vec::new();
     let mut sd_card = None;
+    let mut tftp = None;
     let mut video_analyzers = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
@@ -245,6 +247,14 @@ fn run() -> Result<ExitCode, String> {
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
         let boot = monitor::load(&script, root)?;
+        if let Some(server) = boot.network.into_tftp()? {
+            let file = server.file.resolve(root, asset_dir.as_deref())?;
+            let data = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            tftp = Some((
+                server.ethernet,
+                litex_tftp::Server::new(server.ip, server.port, server.filename, data),
+            ));
+        }
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         mtvec = mtvec.or(boot.mtvec);
@@ -291,6 +301,9 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if let Some((name, server)) = tftp {
+        machine.bus.attach_litex_tftp(&name, server)?;
+    }
     for analyzer in video_analyzers {
         if machine
             .bus

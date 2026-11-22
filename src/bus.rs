@@ -571,6 +571,7 @@ impl Bus {
 
     pub fn map_litex_eth(
         &mut self,
+        name: String,
         registrations: Vec<Registration>,
         irq: Option<(usize, u8)>,
         phy: Option<Phy>,
@@ -590,7 +591,24 @@ impl Bus {
                 ));
             }
         }
-        self.litex_eth = Some(Ethernet::new(registrations, irq, phy).with_wide_csr(wide_csr));
+        let mut ethernet = Ethernet::new(registrations, irq, phy).with_wide_csr(wide_csr);
+        ethernet.name = Some(name);
+        self.litex_eth = Some(ethernet);
+        Ok(())
+    }
+
+    pub fn attach_litex_tftp(
+        &mut self,
+        name: &str,
+        server: crate::litex_tftp::Server,
+    ) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        let ethernet = self
+            .litex_eth
+            .as_mut()
+            .filter(|ethernet| ethernet.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown LiteX Ethernet controller {name:?}"))?;
+        ethernet.tftp = Some(server);
         Ok(())
     }
 
@@ -1003,7 +1021,7 @@ impl Bus {
             return Ok(value);
         }
         if address as usize & (N - 1) == 0
-            && let Some(eth) = self.litex_eth.as_ref()
+            && let Some(eth) = self.litex_eth.as_mut()
             && let Some((region, offset)) = eth.locate(address, N)
         {
             return Ok(eth.read(region, offset, N));

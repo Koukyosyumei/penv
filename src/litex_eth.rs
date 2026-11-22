@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 const SLOT_SIZE: usize = 0x800;
 const SLOTS: usize = 2;
 const MIN_FRAME_SIZE: usize = 18;
@@ -99,6 +101,8 @@ impl Mdio {
 
 pub struct Ethernet {
     pub registrations: Vec<Registration>,
+    pub name: Option<String>,
+    pub tftp: Option<crate::litex_tftp::Server>,
     pub vex_irq: Option<(usize, u8)>,
     buffer: Box<[u8]>,
     tx_lengths: [u32; SLOTS],
@@ -107,6 +111,9 @@ pub struct Ethernet {
     tx_pending: bool,
     tx_enabled: bool,
     rx_enabled: bool,
+    rx_lengths: [usize; SLOTS],
+    rx_order: VecDeque<usize>,
+    rx_latched: Option<usize>,
     phy: Option<Phy>,
     mdio: Mdio,
 }
@@ -121,6 +128,8 @@ impl Ethernet {
     ) -> Self {
         Self {
             registrations,
+            name: None,
+            tftp: None,
             vex_irq,
             buffer: vec![0; 2 * SLOTS * SLOT_SIZE].into_boxed_slice(),
             tx_lengths: [0; SLOTS],
@@ -129,6 +138,9 @@ impl Ethernet {
             tx_pending: false,
             tx_enabled: false,
             rx_enabled: false,
+            rx_lengths: [0; SLOTS],
+            rx_order: VecDeque::new(),
+            rx_latched: None,
             phy,
             mdio: Mdio::default(),
         }
@@ -144,6 +156,9 @@ impl Ethernet {
             return offset & !3;
         }
         match offset & !3 {
+            0x00 => 0x00,
+            0x04 => 0x04,
+            0x10 => 0x28,
             0x14 => 0x2c,
             0x18 => 0x30,
             0x1c => 0x34,
@@ -156,7 +171,7 @@ impl Ethernet {
     }
 
     pub fn interrupt_pending(&self) -> bool {
-        self.tx_pending && self.tx_enabled
+        self.tx_pending && self.tx_enabled || self.rx_enabled && !self.rx_order.is_empty()
     }
 
     pub fn locate(&self, address: u32, width: usize) -> Option<(Region, u32)> {
@@ -167,10 +182,21 @@ impl Ethernet {
         })
     }
 
-    pub fn read(&self, region: Region, offset: u32, width: usize) -> u32 {
+    pub fn read(&mut self, region: Region, offset: u32, width: usize) -> u32 {
         match region {
             Region::Mac => {
+                let length = self
+                    .rx_order
+                    .front()
+                    .map_or(0, |&slot| self.rx_lengths[slot]) as u32;
                 let value = match self.mac_register(offset) {
+                    0 => {
+                        self.rx_latched = self.rx_order.front().copied();
+                        self.rx_latched.unwrap_or(0) as u32
+                    }
+                    4 if self.wide_csr => length,
+                    4..=0x10 => (length >> ((0x10 - (offset & !3)) * 2)) & 0xff,
+                    0x28 => u32::from(!self.rx_order.is_empty()),
                     0x2c => u32::from(self.rx_enabled),
                     0x34 => 1,
                     0x3c => self.tx_slot as u32,
@@ -212,12 +238,17 @@ impl Ethernet {
                 }
                 let enable = value & 1 != 0;
                 match register {
-                    0x2c => self.rx_enabled = enable,
-                    0x30 => {
-                        // An offline MAC completes valid transmit requests with no receiver.
-                        let length = self.tx_lengths[self.tx_slot] as usize;
-                        self.tx_pending |= (MIN_FRAME_SIZE..=SLOT_SIZE).contains(&length);
+                    0x28 if enable => {
+                        if let Some(slot) = self.rx_latched.take() {
+                            self.rx_lengths[slot] = 0;
+                            self.rx_order.retain(|&pending| pending != slot);
+                        } else {
+                            self.rx_lengths.fill(0);
+                            self.rx_order.clear();
+                        }
                     }
+                    0x2c => self.rx_enabled = enable,
+                    0x30 => self.transmit(),
                     0x3c => {
                         let slot = (value & lane_mask(width)) as usize;
                         self.tx_slot = if slot < SLOTS { slot } else { 0 };
@@ -250,6 +281,35 @@ impl Ethernet {
             }
             _ => {}
         }
+    }
+
+    fn transmit(&mut self) {
+        let length = self.tx_lengths[self.tx_slot] as usize;
+        if !(MIN_FRAME_SIZE..=SLOT_SIZE).contains(&length) {
+            return;
+        }
+        self.tx_pending = true;
+        let start = (SLOTS + self.tx_slot) * SLOT_SIZE;
+        if let Some(frame) = self
+            .tftp
+            .as_mut()
+            .and_then(|server| server.reply(&self.buffer[start..start + length]))
+        {
+            self.receive(&frame);
+        }
+    }
+
+    fn receive(&mut self, frame: &[u8]) {
+        if frame.is_empty() || frame.len() > SLOT_SIZE {
+            return;
+        }
+        let Some(slot) = self.rx_lengths.iter().position(|&length| length == 0) else {
+            return;
+        };
+        let start = slot * SLOT_SIZE;
+        self.buffer[start..start + frame.len()].copy_from_slice(frame);
+        self.rx_lengths[slot] = frame.len();
+        self.rx_order.push_back(slot);
     }
 }
 

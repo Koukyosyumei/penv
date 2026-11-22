@@ -1328,6 +1328,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         machine
             .bus
             .map_litex_eth(
+                entry.name.clone(),
                 registrations,
                 irq,
                 phy,
