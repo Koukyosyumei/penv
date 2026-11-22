@@ -1,4 +1,8 @@
-use std::{fs, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    process::{Command, Stdio},
+};
 
 #[test]
 fn runs_raw_and_elf_and_reports_faults() {
@@ -187,10 +191,51 @@ uart: UART.Murax_UART @ sysbus 0xf0010000
         .arg(&raw)
         .output()
         .unwrap();
+
+    let interactive_program = [
+        0xf001_02b7u32, // lui t0, 0xf0010
+        0x03e0_0313,    // addi t1, zero, '>'
+        0x0062_a023,    // sw t1, 0(t0)
+        0x0042_a303,    // lw t1, 4(t0)
+        0x2003_7313,    // andi t1, t1, 0x200
+        0xfe03_0ce3,    // beq t1, zero, -8
+        0x0002_a303,    // lw t1, 0(t0)
+        0x0062_a023,    // sw t1, 0(t0)
+        0x0010_0073,    // ebreak
+    ];
+    fs::write(
+        &raw,
+        interactive_program
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--uart-stdin", "--platform"])
+        .arg(&board)
+        .arg(&raw)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut prompt = [0];
+    child
+        .stdout
+        .as_mut()
+        .unwrap()
+        .read_exact(&mut prompt)
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"R").unwrap();
+    let interactive = child.wait_with_output().unwrap();
     fs::remove_dir_all(directory).unwrap();
 
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, b"Q");
+    assert!(interactive.status.success(), "{interactive:?}");
+    assert_eq!(prompt, [b'>']);
+    assert_eq!(interactive.stdout, b"R");
 }
 
 #[test]

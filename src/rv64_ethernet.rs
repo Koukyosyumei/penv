@@ -284,3 +284,101 @@ impl Bus {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rv64_devices::Plic;
+
+    const MAC: u32 = 0x1002_0000;
+    const PLIC: u32 = 0x0c00_0000;
+    const IRQ: u32 = 6;
+    const RING: u32 = 0x8000_0000;
+
+    fn write(bus: &mut Bus, offset: u32, value: u32) {
+        assert!(bus.write_rv64_ethernet(MAC + offset, 4, value));
+    }
+
+    fn read(bus: &mut Bus, offset: u32) -> u32 {
+        bus.rv64_devices.read(MAC + offset, 4).unwrap()
+    }
+
+    #[test]
+    fn transmit_poll_returns_descriptors_and_raises_plic_interrupt() {
+        let mut bus = Bus::new(4096).unwrap();
+        bus.rv64_devices
+            .ethernet
+            .push(Ethernet::new(MAC, IRQ as usize));
+        bus.rv64_devices.plic = Some(Plic::new(PLIC, 31, vec![Some((0, 9))], true));
+        for (offset, value) in [(IRQ * 4, 1), (0x2000, 1 << IRQ)] {
+            bus.rv64_devices
+                .write(PLIC + offset, 4, value, &mut Vec::new())
+                .unwrap()
+                .unwrap();
+        }
+        write(&mut bus, DMA_TX_LIST, RING);
+        write(&mut bus, DMA_INTERRUPT_ENABLE, NORMAL_SUMMARY | TX_COMPLETE);
+        write(&mut bus, MAC_CONFIG, MAC_TX_ENABLE);
+        write(&mut bus, DMA_OPERATION, DMA_START_TX);
+        assert_eq!(read(&mut bus, DMA_STATUS), (6 << 20) | TX_UNAVAILABLE);
+
+        let second = RING + 32;
+        let buffer = RING + 128;
+        let first = [DESCRIPTOR_OWN, CHAINED | 64, buffer, second];
+        let last = [
+            DESCRIPTOR_OWN,
+            END_OF_RING | LAST_SEGMENT | INTERRUPT_ON_COMPLETION | 64,
+            buffer,
+            0,
+        ];
+        for (address, descriptor) in [(RING, first), (second, last)] {
+            let bytes = bus.memory64(u64::from(address), 16).unwrap();
+            for (word, slot) in descriptor.into_iter().zip(bytes.chunks_exact_mut(4)) {
+                slot.copy_from_slice(&word.to_le_bytes());
+            }
+        }
+        write(&mut bus, DMA_TX_POLL, 0);
+        for address in [RING, second] {
+            assert_eq!(bus.ram64(u64::from(address), 4).unwrap(), [0; 4]);
+        }
+        assert_eq!(read(&mut bus, DMA_CURRENT_TX), RING);
+        let status = read(&mut bus, DMA_STATUS);
+        assert_eq!(
+            status,
+            (6 << 20) | TX_UNAVAILABLE | TX_COMPLETE | NORMAL_SUMMARY
+        );
+        let claim = PLIC + 0x20_0004;
+        assert_eq!(bus.rv64_devices.tick(0), 1 << 9);
+        assert_eq!(bus.rv64_devices.read(claim, 4), Some(IRQ));
+        write(&mut bus, DMA_STATUS, status);
+        bus.rv64_devices
+            .write(claim, 4, IRQ, &mut Vec::new())
+            .unwrap()
+            .unwrap();
+        assert_eq!(read(&mut bus, DMA_STATUS), 6 << 20);
+        assert_eq!(bus.rv64_devices.tick(0), 0);
+    }
+
+    #[test]
+    fn unmapped_descriptor_stops_dma_and_reset_clears_error() {
+        let mut bus = Bus::new(4096).unwrap();
+        bus.rv64_devices.ethernet.push(Ethernet::new(MAC, 0));
+        write(&mut bus, DMA_TX_LIST, RING + 4096);
+        write(
+            &mut bus,
+            DMA_INTERRUPT_ENABLE,
+            ABNORMAL_SUMMARY | FATAL_BUS_ERROR,
+        );
+        write(&mut bus, MAC_CONFIG, MAC_TX_ENABLE);
+        write(&mut bus, DMA_OPERATION, DMA_START_TX);
+        assert_eq!(read(&mut bus, DMA_OPERATION) & DMA_START_TX, 0);
+        assert_eq!(
+            read(&mut bus, DMA_STATUS),
+            FATAL_BUS_ERROR | ABNORMAL_SUMMARY
+        );
+        write(&mut bus, DMA_BUS_MODE, 1);
+        assert_eq!(read(&mut bus, DMA_STATUS), 0);
+        assert_eq!(read(&mut bus, DMA_INTERRUPT_ENABLE), 0);
+        assert_eq!(read(&mut bus, DMA_CURRENT_TX), 0);
+    }
+}

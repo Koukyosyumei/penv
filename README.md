@@ -73,7 +73,35 @@ target/release/penv run --platform ../renode/platforms/cpus/sifive-fu740.repl \
   --platform-root ../renode --stats firmware64.elf
 ```
 
-`CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。CLINT の REPL に `frequency` がある場合、各ハートが既定の 100 MIPS で進む仮想時間に合わせて `mtime` を更新します。複数の UART がある場合は `--uart-device NAME` で入力先を選択できます。REPL の `Tag` と `SilenceRange` で指定した範囲では既定値を返します。BeagleV StarLight では U-Boot 用のリセットレジスター、Ethernet MAC の制御レジスターと MDIO PHY の読み出しに対応します。Ethernet のパケット転送は未実装です。その他の未実装アドレスへのアクセスはゲストの例外になります。
+`CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。CLINT の REPL に `frequency` がある場合、各ハートが既定の 100 MIPS で進む仮想時間に合わせて `mtime` を更新します。複数の UART がある場合は `--uart-device NAME` で入力先を選択できます。REPL の `Tag` と `SilenceRange` で指定した範囲では既定値を返します。その他の未実装アドレスへのアクセスはゲストの例外になります。
+
+### BeagleV StarLight
+
+Renode の `scripts/single-node/beaglev_starlight.resc` と同じ OpenSBI、U-Boot、Linux 5.10.6、Buildroot を起動します。ファイル名に含まれる SHA-1 を照合してから実行します。RESC 内のシンボル指定はデバッガー用メタデータとして扱い、ゲスト RAM には ELF と FIT をロードします。
+
+```sh
+set -e
+cargo test
+cargo build --release
+resc=../renode/scripts/single-node/beaglev_starlight.resc
+assets=$(mktemp -d)
+rg -o 'https://[^[:space:]]+' "$resc" | while IFS= read -r url; do
+  name=${url##*/}
+  curl -fLsS --retry 2 "$url" -o "$assets/$name"
+  printf '%s  %s\n' "${name##*-}" "$assets/$name" | sha1sum -c -
+done
+target/release/penv run --script "$resc" --platform-root ../renode \
+  --asset-dir "$assets" --uart-device uart3 --uart-stdin \
+  --max-steps 14000000000 --stats
+```
+
+`buildroot login:` に `root`、`Password:` に上流デモのパスワード `starfive` を入力します。シェルで `id -u` と `uname -m` を実行すると、それぞれ `0` と `riscv64` を確認できます。`--uart-stdin` は標準入力のバイトを実行中の UART に送り、改行のないプロンプトも出力します。
+
+`90fb0b3` の BeagleV Ethernet は U-Boot 用の MAC・MDIO と TX DMA の完了をモデル化します。回帰テストはチェーンとリング折り返し、記述子の所有権返却、PLIC の claim・完了、DMA バスエラー後のリセットを検証します。ゲストは `eth0` を開いて DHCP Discover を送信します。65 億ステップの試行では DHCP 再試行中に上限へ達しました。上記の上限で、Discover 3 回と `udhcpc: no lease, failing` の後に `buildroot login:`、パスワード認証、`id -u` の `0` と `uname -m` の `riscv64` を確認しました。ゲストの DHCP サーバー起動は `FAIL` を報告しました。
+
+Ethernet の RX DMA、外部接続、MAC 送信無効時に TX DMA が先に記述子を取り込む動作は残課題です。上流 Robot の 2 台間 ping と外部 PMP のケースは今回の検証範囲外です。性能最適化と比較計測は互換性実装が揃った後に行います。
+
+共通 CLI の回帰確認では、上記の Murax デモが UART に `Ant` を出力し、LiteX VexRiscv SMP デモがログイン後の `cat /proc/cpuinfo` で 4 ハートを出力しました。どちらも指定ステップ上限で終了します。
 
 ## Cortex-M0 / Cortex-M0+
 

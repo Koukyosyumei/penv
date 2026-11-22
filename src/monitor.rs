@@ -136,6 +136,19 @@ fn execute(
             boot.binaries
                 .push((file.to_string(), crate::parse_address(resolve(address)?)?));
         }
+        ["sysbus", "LoadSymbolsFrom", value] if boot.platform.is_some() => {
+            // Symbol files are debugger metadata and are not loaded into guest RAM.
+            resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @symbol-path")?;
+        }
+        ["emulation", "SetSeed", value] => {
+            // None of the supported devices consume Renode's random seed.
+            crate::parse_address(resolve(value)?)?;
+        }
+        ["emulation", "SetGlobalSerialExecution", "True"] => {
+            // The interpreter already executes harts serially.
+        }
         [cpu, "PC", value] if boot.platform.is_some() => {
             boot.boot_pcs.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
@@ -148,8 +161,11 @@ fn execute(
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
-        ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
+        ["showAnalyzer", _] if boot.platform.is_some() => {
             // UART output is already connected to stdout.
+        }
+        ["echo", ..] => {
+            // Monitor output is separate from guest UART output.
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
@@ -212,6 +228,30 @@ mod tests {
             asset_path(&boot.binaries[0].0, path, root, Some(Path::new("assets"))).unwrap(),
             Path::new("assets/firmware.bin")
         );
+    }
+
+    #[test]
+    fn starlight_monitor_commands_leave_only_guest_assets_to_load() {
+        let path = Path::new("beaglev_starlight.resc");
+        let root = Path::new("renode");
+        let mut boot = Boot::default();
+        let mut machine = false;
+        let vars = HashMap::from([("symbols", "@https://example.org/vmlinux")]);
+        for command in [
+            "emulation SetSeed 0x1",
+            "mach create BeagleV",
+            "machine LoadPlatformDescription @platforms/boards/beaglev_starlight.repl",
+            "emulation SetGlobalSerialExecution True",
+            "showAnalyzer uart3",
+            "sysbus LoadELF @fw_payload.elf",
+            "sysbus LoadSymbolsFrom $symbols",
+            "sysbus LoadBinary @image.fit 0xa0000000",
+            "echo \"Script loaded.\"",
+        ] {
+            execute(command, &vars, &mut machine, &mut boot, path, root).unwrap();
+        }
+        assert_eq!(boot.image.as_deref(), Some("fw_payload.elf"));
+        assert_eq!(boot.binaries, [("image.fit".into(), 0xa000_0000)]);
     }
 
     #[test]

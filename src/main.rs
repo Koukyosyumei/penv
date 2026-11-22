@@ -30,7 +30,7 @@ mod uart;
 use std::{
     env,
     fs::{self, File},
-    io::{self, LineWriter, Write},
+    io::{self, LineWriter, Read, Write},
     path::PathBuf,
     process::ExitCode,
     time::Instant,
@@ -56,6 +56,7 @@ Options:
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --uart-stdin       Forward stdin to the platform UART while running
   --uart-device NAME  Select the RV64 platform UART that receives input
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
@@ -110,6 +111,7 @@ fn run() -> Result<ExitCode, String> {
     let mut asset_dir = None;
     let mut platform_root = None;
     let mut uart_input = None;
+    let mut uart_stdin = false;
     let mut uart_device = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
@@ -124,6 +126,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--raw") => raw = true,
             Some("--rv64") => rv64 = true,
             Some("--stats") => stats = true,
+            Some("--uart-stdin") => uart_stdin = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
                 | "--asset-dir"),
@@ -371,10 +374,17 @@ fn run() -> Result<ExitCode, String> {
         machine.set_named_entry(&cpu, address)?;
     }
     machine.validate_entry()?;
+    if uart_stdin && !machine.bus.has_uart_input() {
+        return Err("--uart-stdin requires a platform UART with input support".into());
+    }
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
-    let result = machine.run(max_steps, &mut output);
+    let result = if uart_stdin {
+        run_with_uart_stdin(&mut machine, max_steps, &mut output)
+    } else {
+        machine.run(max_steps, &mut output)
+    };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
@@ -393,6 +403,54 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::from(2));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_with_uart_stdin(
+    machine: &mut Machine,
+    mut remaining: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    std::thread::Builder::new()
+        .name("uart-stdin".into())
+        .spawn(move || {
+            let mut input = io::stdin().lock();
+            let mut buffer = [0; 4096];
+            loop {
+                let bytes = match input.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => Ok(buffer[..count].to_vec()),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                };
+                if sender.send(bytes).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| format!("UART stdin: {error}"))?;
+
+    let mut retired = 0;
+    while remaining != 0 {
+        for bytes in receiver.try_iter().take(8) {
+            machine
+                .bus
+                .queue_uart_input(bytes.map_err(|error| format!("UART stdin: {error}"))?);
+        }
+        let batch = remaining.min(65_536);
+        let (stop, count) = machine.run(batch, output)?;
+        retired += count;
+        if stop != Stop::Limit {
+            return Ok((stop, retired));
+        }
+        // Login and shell prompts are often written without a newline.
+        output.flush().map_err(|error| format!("UART: {error}"))?;
+        remaining -= batch;
+    }
+    Ok((Stop::Limit, retired))
 }
 
 fn parse_address(value: &str) -> Result<u32, String> {
