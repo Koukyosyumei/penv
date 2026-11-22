@@ -16,6 +16,7 @@ use crate::{
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
     stm32_rcc::Stm32F0Rcc,
+    stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
@@ -82,6 +83,7 @@ pub struct Bus {
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
     stm32_timers: Vec<Stm32Timer>,
+    stm32_spis: Vec<Stm32F0Spi>,
     stm32_crc: Option<Stm32F0Crc>,
     stm32_adc: Option<Stm32F0Adc>,
     stm32_dma: Option<Stm32Dma>,
@@ -155,6 +157,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.stm32_spis.iter().any(|spi| {
+                let other = u64::from(spi.base);
+                start < other + u64::from(Stm32F0Spi::SIZE) && other < end
             })
             || self.stm32_timers.iter().any(|timer| {
                 let other = u64::from(timer.base);
@@ -293,6 +299,9 @@ impl Bus {
         for uart in &self.stm32_uarts {
             requests |= uart.pending_dma();
         }
+        for spi in &self.stm32_spis {
+            requests |= spi.pending_dma();
+        }
         let Some(transfer) = dma.next_transfer(requests) else {
             return Ok(());
         };
@@ -348,6 +357,13 @@ impl Bus {
                 && let Some(line) = adc.irq
             {
                 irqs |= 1 << line;
+            }
+            for spi in &self.stm32_spis {
+                if spi.interrupt_pending()
+                    && let Some(line) = spi.irq
+                {
+                    irqs |= 1 << line;
+                }
             }
             if let Some(dma) = self.stm32_dma.as_mut() {
                 dma.queue_requests(dma_requests);
@@ -410,6 +426,19 @@ impl Bus {
                 .iter()
                 .any(|range| range.contains(&address) && range.contains(&end))
         })
+    }
+
+    pub fn map_stm32f0_spi(&mut self, spi: Stm32F0Spi) -> Result<(), String> {
+        let start = u64::from(spi.base);
+        let end = start + u64::from(Stm32F0Spi::SIZE);
+        if spi.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32F0 SPI range at {:#010x}",
+                spi.base
+            ));
+        }
+        self.stm32_spis.push(spi);
+        Ok(())
     }
 
     pub fn map_stm32_timer(&mut self, timer: Stm32Timer) -> Result<(), String> {
@@ -716,6 +745,12 @@ impl Bus {
         {
             return Ok(rcc.read(address));
         }
+        if address as usize & (N - 1) == 0
+            && let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address))
+        {
+            let mask = u32::MAX >> (32 - N * 8);
+            return Ok(spi.read(address, N) & mask);
+        }
         if matches!(N, 2 | 4)
             && address as usize & (N - 1) == 0
             && let Some(timer) = self
@@ -886,6 +921,11 @@ impl Bus {
             && rcc.contains(address)
         {
             rcc.write(address, value);
+            return Ok(());
+        }
+        if let Some(spi) = self.stm32_spis.iter_mut().find(|spi| spi.contains(address)) {
+            let mask = u32::MAX >> (32 - width * 8);
+            spi.write(address, width, value & mask);
             return Ok(());
         }
         if matches!(width, 2 | 4)

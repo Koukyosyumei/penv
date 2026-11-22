@@ -15,7 +15,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
             matches!(
                 entry.model.as_str(),
                 "I2C.STM32F7_I2C"
-                    | "SPI.STM32SPI"
                     | "CAN.STMCAN"
                     | "Timers.STM32F4_RTC"
                     | "Miscellaneous.LED"

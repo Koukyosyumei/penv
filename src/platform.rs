@@ -11,6 +11,7 @@ use crate::{
     stm32_adc::Stm32F0Adc,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
+    stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
 };
@@ -226,6 +227,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
     let mut stm32_timers = Vec::new();
+    let mut stm32_spis = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_dma = None;
     let mut plic = None;
@@ -358,6 +360,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "SPI.STM32SPI" => stm32_spis.push(entry),
             "DMA.STM32G0DMA" => {
                 if stm32_dma.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 DMA controller is supported"));
@@ -688,6 +691,68 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .map_stm32f0_adc(device)
                 .map_err(|e| adc.error(&e))?;
         }
+        for spi in stm32_spis {
+            let mut series = None;
+            let mut capacity = None;
+            let mut irq = None;
+            let mut dma_rx = 0;
+            let mut dma_tx = 0;
+            for (_, text) in &spi.body {
+                if let Some((key, value)) = text.split_once(':') {
+                    match key.trim() {
+                        "series" if series.is_none() => series = Some(value.trim()),
+                        "bufferCapacity" if capacity.is_none() => {
+                            capacity = Some(number(value.trim()).map_err(|e| spi.error(&e))?);
+                        }
+                        _ => return Err(spi.error("unsupported or duplicate SPI property")),
+                    }
+                    continue;
+                }
+                let (source, destinations) = text
+                    .split_once("->")
+                    .ok_or_else(|| spi.error("expected SPI property or wiring"))?;
+                for destination in destinations.split('|') {
+                    let (target, pin) = destination
+                        .split_once('@')
+                        .ok_or_else(|| spi.error("invalid SPI output destination"))?;
+                    let target = target.trim();
+                    match source.trim() {
+                        "DMAReceive" | "DMASend"
+                            if stm32_dma.is_some_and(|dma| dma.name == target) =>
+                        {
+                            let mask = dma_input(pin, dma_channels).map_err(|e| spi.error(&e))?;
+                            if source.trim() == "DMAReceive" {
+                                dma_rx |= mask;
+                            } else {
+                                dma_tx |= mask;
+                            }
+                        }
+                        "IRQ" | "" if irq.is_none() => {
+                            irq = Some(if nvic.is_some_and(|nvic| nvic.name == target) {
+                                irq_index(pin, 32).map_err(|e| spi.error(&e))?
+                            } else if let Some(&(count, output)) = combined_routes.get(target) {
+                                irq_index(pin, count).map_err(|e| spi.error(&e))?;
+                                output
+                            } else {
+                                return Err(spi.error("unsupported SPI interrupt target"));
+                            });
+                        }
+                        _ => return Err(spi.error("unsupported or duplicate SPI wiring")),
+                    }
+                }
+            }
+            if series != Some("STM32Series.F0") || capacity == Some(0) {
+                return Err(spi.error("expected STM32Series.F0 SPI with positive bufferCapacity"));
+            }
+            let mut device = Stm32F0Spi::new(spi.address()?, capacity.unwrap_or(4));
+            device.irq = irq;
+            device.dma_rx = dma_rx;
+            device.dma_tx = dma_tx;
+            machine
+                .bus
+                .map_stm32f0_spi(device)
+                .map_err(|e| spi.error(&e))?;
+        }
         for timer in stm32_timers {
             let mut frequency = None;
             let mut limit = None;
@@ -854,6 +919,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     }
     if let Some(adc) = stm32_adc {
         return Err(adc.error("STM32F0 ADC requires a Cortex-M platform"));
+    }
+    if let Some(spi) = stm32_spis.first() {
+        return Err(spi.error("STM32F0 SPI requires a Cortex-M platform"));
     }
     if let Some(timer) = stm32_timers.first() {
         return Err(timer.error("STM32 timer requires a Cortex-M platform"));
