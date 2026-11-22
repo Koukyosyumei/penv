@@ -79,6 +79,7 @@ pub struct Bus {
     regions: Vec<Region>,
     silencers: Vec<(u32, u32)>,
     tags: Vec<(u32, u32)>,
+    renode_unmapped_data: bool,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -195,6 +196,10 @@ impl Bus {
         };
         bus.map_ram(RAM_BASE, size)?;
         Ok(bus)
+    }
+
+    pub fn use_renode_unmapped_data(&mut self) {
+        self.renode_unmapped_data = true;
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -1054,7 +1059,9 @@ impl Bus {
         {
             return Ok(value);
         }
-        if address as usize & (N - 1) == 0 && self.zero_mmio(address, N) {
+        if matches!(ram_error, BusError::Unmapped(..))
+            && (self.renode_unmapped_data || self.zero_mmio(address, N))
+        {
             return Ok(0);
         }
         Err(ram_error)
@@ -1249,7 +1256,7 @@ impl Bus {
         {
             return Ok(());
         }
-        if self.zero_mmio(address, width) {
+        if self.renode_unmapped_data || self.zero_mmio(address, width) {
             return Ok(());
         }
         Err(ram_error)

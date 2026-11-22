@@ -301,6 +301,9 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if script_elf_addresses.is_some() && !machine.is_cortex_m() {
+        machine.bus.use_renode_unmapped_data();
+    }
     if let Some((name, server)) = tftp {
         machine.bus.attach_litex_tftp(&name, server)?;
     }
