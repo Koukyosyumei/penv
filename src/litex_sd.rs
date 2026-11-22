@@ -49,6 +49,31 @@ impl Dma {
         }
     }
 
+    fn read_wide(&self, offset: u32) -> u32 {
+        match offset {
+            0 | 4 => {
+                let index = offset as usize;
+                u32::from_be_bytes(self.address[index..index + 4].try_into().unwrap())
+            }
+            8 => u32::from_be_bytes(self.length),
+            0xc => u32::from(self.enabled),
+            0x10 => 1,
+            _ => 0,
+        }
+    }
+
+    fn write_wide(&mut self, offset: u32, value: u32) {
+        match offset {
+            0 | 4 => {
+                let index = offset as usize;
+                self.address[index..index + 4].copy_from_slice(&value.to_be_bytes());
+            }
+            8 => self.length = value.to_be_bytes(),
+            0xc => self.enabled = value & 1 != 0,
+            _ => {}
+        }
+    }
+
     fn buffer<'a>(&self, bus: &'a mut Bus) -> Result<&'a mut [u8], ()> {
         let address = u64::from_be_bytes(self.address) as u32;
         let length = u32::from_be_bytes(self.length) as usize;
@@ -270,6 +295,8 @@ pub struct Controller {
     pub name: String,
     pub registrations: Vec<Registration>,
     pub card: Option<Card>,
+    wide_csr: bool,
+    clock_divider: u32,
     reader: Dma,
     writer: Dma,
     argument: [u8; 4],
@@ -285,11 +312,13 @@ pub struct Controller {
 impl Controller {
     pub const PHY_SIZE: u32 = 0x200;
 
-    pub fn new(name: String, registrations: Vec<Registration>) -> Self {
+    pub fn new(name: String, registrations: Vec<Registration>, wide_csr: bool) -> Self {
         Self {
             name,
             registrations,
             card: None,
+            wide_csr,
+            clock_divider: 0,
             reader: Dma::default(),
             writer: Dma::default(),
             argument: [0; 4],
@@ -312,7 +341,11 @@ impl Controller {
 
     pub fn read(&self, region: Region, offset: u32) -> u32 {
         match region {
+            Region::Phy if self.wide_csr && offset == 4 => self.clock_divider,
             Region::Phy => u32::from(offset == 0 && self.card.is_none()),
+            Region::Reader if self.wide_csr => self.reader.read_wide(offset),
+            Region::Writer if self.wide_csr => self.writer.read_wide(offset),
+            Region::Core if self.wide_csr => self.read_wide(offset),
             Region::Reader => self.reader.read(offset),
             Region::Writer => self.writer.read(offset),
             Region::Core => match offset {
@@ -329,9 +362,43 @@ impl Controller {
         }
     }
 
+    fn read_wide(&self, offset: u32) -> u32 {
+        match offset {
+            0 => u32::from_be_bytes(self.argument),
+            4 => (u32::from(self.command) << 8) | u32::from(self.flags),
+            0xc..=0x18 => {
+                let index = (offset - 0xc) as usize;
+                u32::from_be_bytes(self.response[index..index + 4].try_into().unwrap())
+            }
+            0x1c => self.command_event,
+            0x20 => self.data_event,
+            0x24 => u32::from(u16::from_be_bytes(self.block_size)),
+            0x28 => u32::from_be_bytes(self.block_count),
+            _ => 0,
+        }
+    }
+
+    fn write_wide(&mut self, offset: u32, value: u32, bus: &mut Bus) {
+        match offset {
+            0 => self.argument = value.to_be_bytes(),
+            4 => {
+                self.command = (value >> 8) as u8 & 0x3f;
+                self.flags = value as u8 & 0x63;
+            }
+            8 if value & 1 != 0 => self.issue(bus),
+            0x24 => self.block_size = (value as u16 & 0x3ff).to_be_bytes(),
+            0x28 => self.block_count = value.to_be_bytes(),
+            _ => {}
+        }
+    }
+
     pub fn write(&mut self, region: Region, offset: u32, value: u32, bus: &mut Bus) {
         match region {
+            Region::Phy if self.wide_csr && offset == 4 => self.clock_divider = value,
             Region::Phy => {}
+            Region::Reader if self.wide_csr => self.reader.write_wide(offset, value),
+            Region::Writer if self.wide_csr => self.writer.write_wide(offset, value),
+            Region::Core if self.wide_csr => self.write_wide(offset, value, bus),
             Region::Reader => self.reader.write(offset, value),
             Region::Writer => self.writer.write(offset, value),
             Region::Core => match offset {
@@ -356,7 +423,8 @@ impl Controller {
         else {
             return;
         };
-        if kind != self.flags & 7 {
+        let expected = self.flags & 7;
+        if kind != expected && !(self.wide_csr && kind == 1 && expected == 3) {
             return;
         }
         self.command_event = 1;

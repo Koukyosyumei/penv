@@ -456,7 +456,11 @@ impl Hart {
         if self.csr.hart_id == 0 {
             lines |=
                 u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));
-            pending |= plic;
+            if self.csr.vex && self.csr.local_irq_mask.is_some() {
+                lines |= u64::from(plic);
+            } else {
+                pending |= plic;
+            }
         }
         pending |= self.csr.sample_local_irq(lines);
         if (pending != 0

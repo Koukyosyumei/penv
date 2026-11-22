@@ -9,6 +9,7 @@ mod litex_flash;
 mod litex_i2c;
 mod litex_panel;
 mod litex_sd;
+mod litex_video;
 mod machine;
 mod monitor;
 mod murax;
@@ -41,6 +42,7 @@ Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
 
 Options:
+  --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
   --raw              Load a flat binary (default: ELF32)
@@ -104,6 +106,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
+    let mut framebuffer_out = None;
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -127,6 +130,7 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--platform-root" => &mut platform_root,
+                    "--framebuffer-out" => &mut framebuffer_out,
                     _ => &mut uart_input,
                 };
                 if target.replace(path).is_some() {
@@ -229,6 +233,7 @@ fn run() -> Result<ExitCode, String> {
     let mut vex_supervisor_irq_mask = None;
     let mut buttons = Vec::new();
     let mut sd_card = None;
+    let mut video_analyzers = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -264,6 +269,7 @@ fn run() -> Result<ExitCode, String> {
         boot_pcs = boot.boot_pcs;
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
+        video_analyzers = boot.video_analyzers;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -285,6 +291,19 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    for analyzer in video_analyzers {
+        if machine
+            .bus
+            .litex_video
+            .as_ref()
+            .is_none_or(|video| video.name != analyzer)
+        {
+            return Err(format!("unknown analyzer peripheral {analyzer:?}"));
+        }
+    }
+    if framebuffer_out.is_some() && machine.bus.litex_video.is_none() {
+        return Err("--framebuffer-out requires a LiteX framebuffer".into());
+    }
     if let Some((controller, path, capacity)) = sd_card {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let card =
@@ -355,6 +374,16 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    if let Some(path) = framebuffer_out {
+        let video = machine.bus.litex_video.as_ref().unwrap();
+        if video.active.is_none() {
+            return Err("LiteX framebuffer DMA is disabled".into());
+        }
+        let file = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        video
+            .render(&machine.bus, io::BufWriter::new(file))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     if stats {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",

@@ -7,6 +7,7 @@ use std::{
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(Asset, u32)>,
+    pub video_analyzers: Vec<String>,
     pub sd_card: Option<(String, Asset, u64)>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -291,6 +292,14 @@ fn execute(
         }
         ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
             // UART output is already connected to stdout.
+        }
+        ["showAnalyzer", analyzer] if boot.platform.is_some() => {
+            boot.video_analyzers.push(
+                analyzer
+                    .strip_prefix("sysbus.")
+                    .unwrap_or(analyzer)
+                    .to_string(),
+            );
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }

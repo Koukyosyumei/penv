@@ -10,6 +10,7 @@ use crate::{
     litex_eth::{Ethernet, Phy, Registration},
     litex_panel::{ButtonAction, Panel},
     litex_sd::{Card, Controller as SdController},
+    litex_video::Framebuffer,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -91,6 +92,7 @@ pub struct Bus {
     litex_eth: Option<Ethernet>,
     litex_panel: Option<Panel>,
     litex_sd: Option<SdController>,
+    pub litex_video: Option<Framebuffer>,
     litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
@@ -287,6 +289,10 @@ impl Bus {
                     overlaps_range(start, end, registration.base, registration.size)
                 })
             })
+            || self.litex_video.as_ref().is_some_and(|video| {
+                overlaps_range(start, end, video.dma, Framebuffer::DMA_SIZE)
+                    || overlaps_range(start, end, video.vtg, Framebuffer::VTG_SIZE)
+            })
             || self.litex_io.iter().any(|(bases, device)| {
                 bases
                     .iter()
@@ -295,7 +301,7 @@ impl Bus {
             || self
                 .litex_soc
                 .as_ref()
-                .is_some_and(|soc| overlaps_range(start, end, soc.base, litex::SocController::SIZE))
+                .is_some_and(|soc| overlaps_range(start, end, soc.base, soc.size()))
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
                 start < other + u64::from(Exti::SIZE) && other < end
@@ -363,7 +369,13 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_plic(&mut self, base: u32, sources: u32, outputs: &[u32]) -> Result<(), String> {
+    pub fn map_plic(
+        &mut self,
+        base: u32,
+        sources: u32,
+        outputs: &[u32],
+        priorities: bool,
+    ) -> Result<(), String> {
         if !(1..=63).contains(&sources) {
             return Err("PLIC requires 1–63 interrupt sources".into());
         }
@@ -372,7 +384,7 @@ impl Bus {
         if base & 3 != 0 || end > 1 << 32 || self.plic.is_some() || self.overlaps(start, end) {
             return Err(format!("invalid or overlapping PLIC range at {base:#010x}"));
         }
-        self.plic = Some(Plic::new(base, sources, outputs));
+        self.plic = Some(Plic::new(base, sources, outputs).with_priorities(priorities));
         Ok(())
     }
 
@@ -665,9 +677,26 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_litex_soc(&mut self, base: u32) -> Result<(), String> {
-        self.check_litex_ranges(&[base], litex::SocController::SIZE)?;
-        self.litex_soc = Some(litex::SocController::new(base));
+    pub fn map_litex_soc(&mut self, base: u32, wide_csr: bool) -> Result<(), String> {
+        let soc = litex::SocController::new(base, wide_csr);
+        self.check_litex_ranges(&[base], soc.size())?;
+        self.litex_soc = Some(soc);
+        Ok(())
+    }
+
+    pub fn map_litex_video(&mut self, framebuffer: Framebuffer) -> Result<(), String> {
+        self.check_litex_ranges(&[framebuffer.dma], Framebuffer::DMA_SIZE)?;
+        self.check_litex_ranges(&[framebuffer.vtg], Framebuffer::VTG_SIZE)?;
+        let dma = u64::from(framebuffer.dma);
+        if overlaps_range(
+            dma,
+            dma + u64::from(Framebuffer::DMA_SIZE),
+            framebuffer.vtg,
+            Framebuffer::VTG_SIZE,
+        ) {
+            return Err("overlapping LiteX framebuffer regions".into());
+        }
+        self.litex_video = Some(framebuffer);
         Ok(())
     }
 
@@ -1000,6 +1029,13 @@ impl Bus {
         {
             return Ok(sd.read(region, offset));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(video) = self.litex_video.as_ref()
+            && let Some(value) = video.read(address)
+        {
+            return Ok(value);
+        }
         if address as usize & (N - 1) == 0 && self.zero_mmio(address, N) {
             return Ok(0);
         }
@@ -1185,6 +1221,14 @@ impl Bus {
             let mut sd = self.litex_sd.take().unwrap();
             sd.write(region, offset, value, self);
             self.litex_sd = Some(sd);
+            return Ok(());
+        }
+        if width == 4
+            && self
+                .litex_video
+                .as_mut()
+                .is_some_and(|video| video.write(address, value))
+        {
             return Ok(());
         }
         if self.zero_mmio(address, width) {

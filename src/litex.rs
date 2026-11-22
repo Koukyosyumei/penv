@@ -214,34 +214,41 @@ impl CpuTimer {
 pub struct SocController {
     pub base: u32,
     scratch: [u8; 4],
+    wide_csr: bool,
 }
 
 impl SocController {
-    pub const SIZE: u32 = 0x100;
-
-    pub fn new(base: u32) -> Self {
+    pub fn new(base: u32, wide_csr: bool) -> Self {
         Self {
             base,
-            scratch: [0x12, 0x34, 0x56, 0x78],
+            scratch: 0x1234_5678u32.to_be_bytes(),
+            wide_csr,
         }
     }
 
+    pub fn size(&self) -> u32 {
+        if self.wide_csr { 0xc } else { 0x100 }
+    }
+
     pub fn contains(&self, address: u32) -> bool {
-        address.wrapping_sub(self.base) < Self::SIZE
+        address.wrapping_sub(self.base) < self.size()
     }
 
     pub fn read(&self, address: u32) -> u32 {
         let offset = address - self.base;
-        match offset {
-            4..=0x10 => u32::from(self.scratch[(offset / 4 - 1) as usize]),
+        match (self.wide_csr, offset) {
+            (true, 4) => u32::from_be_bytes(self.scratch),
+            (false, 4..=0x10) => u32::from(self.scratch[(offset / 4 - 1) as usize]),
             _ => 0,
         }
     }
 
     pub fn write(&mut self, address: u32, value: u32) {
         let offset = address - self.base;
-        if (4..=0x10).contains(&offset) {
-            self.scratch[(offset / 4 - 1) as usize] = value as u8;
+        match (self.wide_csr, offset) {
+            (true, 4) => self.scratch = value.to_be_bytes(),
+            (false, 4..=0x10) => self.scratch[(offset / 4 - 1) as usize] = value as u8,
+            _ => {}
         }
     }
 }

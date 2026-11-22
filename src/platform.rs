@@ -11,6 +11,7 @@ use crate::{
     litex_i2c::{I2c, Sensor},
     litex_panel::{Button, Panel},
     litex_sd::{self, Controller as SdController},
+    litex_video::Framebuffer,
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
     uart::LiteXTxTiming,
@@ -101,6 +102,12 @@ impl Entry {
     }
 
     fn address(&self) -> Result<u32, String> {
+        if let Some(registrations) = self.registration_list() {
+            let [registration] = registrations.as_slice() else {
+                return Err(self.error("expected one sysbus address"));
+            };
+            return self.registration_address(registration);
+        }
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
     }
@@ -349,6 +356,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut litex_i2c = None;
     let mut sensor = None;
     let mut litex_sd = None;
+    let mut litex_video = None;
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus)?;
@@ -378,7 +386,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     )
                     .map_err(|e| entry.error(&e))?;
                 if entry.model == "Memory.MappedMemory" {
-                    memory_bases.insert(entry.name.as_str(), addresses[0]);
+                    memory_bases.insert(
+                        entry.name.as_str(),
+                        (addresses[0], number(size).map_err(|e| entry.error(&e))?),
+                    );
                 }
                 ram = true;
             }
@@ -452,7 +463,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX timer is supported"));
                 }
             }
-            "SD.LiteSDCard" => {
+            "Video.LiteX_Framebuffer_CSR32" => {
+                if litex_video.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX framebuffer is supported"));
+                }
+            }
+            "SD.LiteSDCard" | "SD.LiteSDCard_CSR32" => {
                 keys(entry, &[])?;
                 if litex_sd.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX SD controller is supported"));
@@ -468,7 +484,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX Ethernet PHY is supported"));
                 }
             }
-            "Miscellaneous.LiteX_SoC_Controller" => {
+            "Miscellaneous.LiteX_SoC_Controller" | "Miscellaneous.LiteX_SoC_Controller_CSR32" => {
                 if litex_soc.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX SoC controller is supported"));
                 }
@@ -539,6 +555,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     } else if let Some(sensor) = sensor {
         return Err(sensor.error("expected a LiteX I2C controller attachment"));
     }
+    if let Some(entry) = litex_video {
+        map_litex_video(entry, &memory_bases, &mut machine.bus)?;
+    }
     if let Some(entry) = litex_sd {
         let registrations = entry
             .registration_list()
@@ -558,7 +577,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         machine
             .bus
-            .map_litex_sd(SdController::new(entry.name.clone(), registrations))
+            .map_litex_sd(SdController::new(
+                entry.name.clone(),
+                registrations,
+                entry.model == "SD.LiteSDCard_CSR32",
+            ))
             .map_err(|e| entry.error(&e))?;
     }
     if let Some(chip) = flash_chip {
@@ -569,7 +592,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .into_iter()
             .next()
             .ok_or_else(|| chip.error("expected underlyingMemory"))?;
-        let backing = *memory_bases
+        let (backing, _) = *memory_bases
             .get(memory)
             .ok_or_else(|| chip.error("unknown flash backing memory"))?;
         machine
@@ -1030,6 +1053,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             let mut outputs = [0; 2];
             let mut sources = None;
             let mut contexts = None;
+            let mut priorities = None;
             for (_, line) in &entry.body {
                 if let Some((context, target)) = line.split_once("->") {
                     let (name, lines) = target
@@ -1059,6 +1083,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         "numberOfContexts" if contexts.is_none() => {
                             contexts = Some(number(value.trim()).map_err(|e| entry.error(&e))?)
                         }
+                        "prioritiesEnabled" if priorities.is_none() => {
+                            priorities = Some(
+                                value
+                                    .trim()
+                                    .parse::<bool>()
+                                    .map_err(|_| entry.error("invalid prioritiesEnabled"))?,
+                            );
+                        }
                         _ => return Err(entry.error("unsupported PLIC property")),
                     }
                 } else {
@@ -1072,7 +1104,6 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             if outputs[..count].iter().all(|&line| line == 0)
                 || outputs[count..].iter().any(|&line| line != 0)
                 || !matches!(cpu.model.as_str(), "CPU.RiscV32" | "CPU.VexRiscv")
-                || uses_vex_irq(cpu)
             {
                 return Err(
                     entry.error("expected PLIC context outputs wired to standard RISC-V IRQs")
@@ -1081,7 +1112,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             let sources = sources.ok_or_else(|| entry.error("missing PLIC numberOfSources"))?;
             machine
                 .bus
-                .map_plic(entry.address()?, sources, &outputs[..count])
+                .map_plic(
+                    entry.address()?,
+                    sources,
+                    &outputs[..count],
+                    priorities.unwrap_or(true),
+                )
                 .map_err(|e| entry.error(&e))?;
             Ok((entry, sources))
         })
@@ -1215,7 +1251,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         keys(entry, &[])?;
         machine
             .bus
-            .map_litex_soc(entry.address()?)
+            .map_litex_soc(
+                entry.address()?,
+                entry.model == "Miscellaneous.LiteX_SoC_Controller_CSR32",
+            )
             .map_err(|e| entry.error(&e))?;
     }
     let phy = litex_phy
@@ -1562,6 +1601,68 @@ fn ethernet_registration(entry: &Entry, registration: &str) -> Result<Registrati
         _ => return Err(entry.error("unsupported Ethernet region")),
     };
     Ok(Registration { base, size, region })
+}
+
+fn map_litex_video(
+    entry: &Entry,
+    memories: &HashMap<&str, (u32, u32)>,
+    bus: &mut Bus,
+) -> Result<(), String> {
+    let mut dma = None;
+    let mut vtg = None;
+    for registration in entry
+        .registration_list()
+        .ok_or_else(|| entry.error("expected framebuffer regions"))?
+    {
+        let (address, size, region) = multi_registration(entry, registration)?
+            .ok_or_else(|| entry.error("expected named framebuffer region"))?;
+        match region {
+            "dma" if size == Framebuffer::DMA_SIZE && dma.is_none() => dma = Some(address),
+            "vtg" if size == Framebuffer::VTG_SIZE && vtg.is_none() => vtg = Some(address),
+            _ => return Err(entry.error("invalid or duplicate framebuffer region")),
+        }
+    }
+    let mut memory = None;
+    let mut properties = [0; 3];
+    let mut swap_red_blue = false;
+    for (key, value) in keys(entry, &["memory", "offset", "hres", "vres", "format"])? {
+        match key {
+            "memory" => memory = memories.get(value).copied(),
+            "format" => {
+                swap_red_blue = match value {
+                    "PixelFormat.XBGR8888" => false,
+                    "PixelFormat.XRGB8888" => true,
+                    _ => return Err(entry.error("unsupported LiteX framebuffer format")),
+                }
+            }
+            "offset" | "hres" | "vres" => {
+                let index = match key {
+                    "offset" => 0,
+                    "hres" => 1,
+                    _ => 2,
+                };
+                properties[index] = number(value).map_err(|e| entry.error(&e))?;
+            }
+            _ => unreachable!(),
+        }
+    }
+    let (memory, memory_size) = memory.ok_or_else(|| entry.error("unknown framebuffer memory"))?;
+    let [offset, width, height] = properties;
+    let width = u16::try_from(width).map_err(|_| entry.error("invalid hres"))?;
+    let height = u16::try_from(height).map_err(|_| entry.error("invalid vres"))?;
+    bus.map_litex_video(Framebuffer {
+        name: entry.name.clone(),
+        dma: dma.ok_or_else(|| entry.error("missing framebuffer DMA range"))?,
+        vtg: vtg.ok_or_else(|| entry.error("missing framebuffer VTG range"))?,
+        memory,
+        memory_size,
+        offset,
+        width,
+        height,
+        swap_red_blue,
+        active: None,
+    })
+    .map_err(|e| entry.error(&e))
 }
 
 fn sd_registration(entry: &Entry, registration: &str) -> Result<litex_sd::Registration, String> {
