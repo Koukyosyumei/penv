@@ -193,7 +193,7 @@ fn parse(
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
         };
-        if crate::network_platform::is_mac(model)
+        if crate::network_platform::has_regions(model)
             && let Some(registration) = &registration
             && registration.starts_with('{')
         {

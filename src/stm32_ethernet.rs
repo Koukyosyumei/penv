@@ -85,10 +85,7 @@ struct Descriptor {
 
 impl Descriptor {
     fn read(dma: &EthernetDma<'_>, address: u32) -> Option<Self> {
-        let bytes = dma.read(address, 16)?;
-        let (words, _) = bytes.as_chunks::<4>();
-        let [status, control, first, second] =
-            <[_; 4]>::try_from(words).ok()?.map(u32::from_le_bytes);
+        let [status, control, first, second] = dma.read_descriptor(address)?;
         Some(Self {
             status,
             control,

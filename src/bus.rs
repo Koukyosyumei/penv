@@ -107,6 +107,17 @@ impl<'a> EthernetDma<'a> {
         }
     }
 
+    pub fn read_descriptor(&self, address: u32) -> Option<[u32; 4]> {
+        let bytes = self.read(address, 16)?;
+        let (words, _) = bytes.as_chunks::<4>();
+        Some(<[_; 4]>::try_from(words).ok()?.map(u32::from_le_bytes))
+    }
+
+    pub fn write_descriptor(&mut self, address: u32, words: [u32; 4]) -> bool {
+        let words = words.map(u32::to_le_bytes);
+        self.write(address, words.as_flattened())
+    }
+
     fn memory(self, address: u32, width: usize) -> Result<&'a mut [u8], BusError> {
         for region in self.regions {
             if let Some(offset) = region.offset(address, width) {

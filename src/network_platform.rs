@@ -4,9 +4,17 @@ use crate::{
     machine::Machine,
     platform::{Entry, number},
     stm32_ethernet::Stm32Ethernet,
+    stm32h7_ethernet::{MAC_SIZE, Stm32h7Ethernet},
 };
 
-pub fn is_mac(model: &str) -> bool {
+const STM32F_MAC: &str = "Network.SynopsysEthernetMAC";
+const STM32H7_MAC: &str = "Network.SynopsysDWCEthernetQualityOfService";
+
+pub fn has_regions(model: &str) -> bool {
+    is_litex(model) || model == STM32H7_MAC
+}
+
+fn is_litex(model: &str) -> bool {
     matches!(
         model,
         "Network.LiteX_Ethernet" | "Network.LiteX_Ethernet_CSR32"
@@ -14,11 +22,7 @@ pub fn is_mac(model: &str) -> bool {
 }
 
 pub fn is_network(model: &str) -> bool {
-    is_mac(model)
-        || matches!(
-            model,
-            "Network.EthernetPhysicalLayer" | "Network.SynopsysEthernetMAC"
-        )
+    has_regions(model) || matches!(model, "Network.EthernetPhysicalLayer" | STM32F_MAC)
 }
 
 pub fn configure(
@@ -27,7 +31,7 @@ pub fn configure(
     vex_cpu: Option<&str>,
     nvic: Option<&str>,
 ) -> Result<(), String> {
-    for entry in entries.iter().filter(|entry| is_mac(&entry.model)) {
+    for entry in entries.iter().filter(|entry| is_litex(&entry.model)) {
         let mut rx = None;
         let mut tx = None;
         let mut irq = None;
@@ -80,10 +84,29 @@ pub fn configure(
     }
     for entry in entries
         .iter()
-        .filter(|entry| entry.model == "Network.SynopsysEthernetMAC")
+        .filter(|entry| matches!(entry.model.as_str(), STM32F_MAC | STM32H7_MAC))
     {
+        let qos = entry.model == STM32H7_MAC;
         let mut irq = None;
+        let mut frequency = None;
+        let mut width = None;
         for (_, text) in &entry.body {
+            if qos && let Some((key, value)) = text.split_once(':') {
+                match key.trim() {
+                    "systemClockFrequency" if frequency.is_none() => {
+                        let value = number(value.trim()).map_err(|e| entry.error(&e))?;
+                        if value == 0 {
+                            return Err(entry.error("Ethernet clock frequency must be positive"));
+                        }
+                        frequency = Some(value);
+                    }
+                    "dmaBusWidth" if width.is_none() && value.trim() == "BusWidth.Bits32" => {
+                        width = Some(32);
+                    }
+                    _ => return Err(entry.error("unsupported or duplicate Ethernet QoS property")),
+                }
+                continue;
+            }
             let (pin, target) = text
                 .split_once("->")
                 .ok_or_else(|| entry.error("expected STM32 Ethernet IRQ connection"))?;
@@ -100,16 +123,18 @@ pub fn configure(
             }
             irq = Some(line as u8);
         }
-        let base = entry
-            .sysbus()?
-            .ok_or_else(|| entry.error("missing STM32 Ethernet address"))?;
+        let device = if qos {
+            let mappings = mappings(entry).map_err(|e| entry.error(&e))?;
+            Controller::Stm32h7(Stm32h7Ethernet::new(entry.name.clone(), mappings, irq))
+        } else {
+            let base = entry
+                .sysbus()?
+                .ok_or_else(|| entry.error("missing STM32 Ethernet address"))?;
+            Controller::Stm32(Stm32Ethernet::new(entry.name.clone(), base, irq))
+        };
         machine
             .bus
-            .map_ethernet(Controller::Stm32(Stm32Ethernet::new(
-                entry.name.clone(),
-                base,
-                irq,
-            )))
+            .map_ethernet(device)
             .map_err(|e| entry.error(&e))?;
     }
     for entry in entries
@@ -177,6 +202,14 @@ pub fn configure(
             {
                 device.phys.push((phy.address, phy.registers));
             }
+            Controller::Stm32h7(device)
+                if !device
+                    .phys
+                    .iter()
+                    .any(|(address, _)| *address == phy.address) =>
+            {
+                device.phys.push((phy.address, phy.registers));
+            }
             _ => return Err(entry.error("duplicate or unsupported additional Ethernet PHY")),
         }
     }
@@ -184,6 +217,8 @@ pub fn configure(
 }
 
 fn mappings(entry: &Entry) -> Result<Vec<Mapping>, String> {
+    let qos = entry.model == STM32H7_MAC;
+    let csr_size = if qos { MAC_SIZE } else { 0x100 };
     let text = entry
         .registration
         .as_deref()
@@ -192,15 +227,35 @@ fn mappings(entry: &Entry) -> Result<Vec<Mapping>, String> {
         .strip_prefix('{')
         .and_then(|text| text.strip_suffix('}'))
     else {
-        return Ok(vec![Mapping {
-            base: entry.sysbus()?.ok_or("missing Ethernet address")?,
-            size: 0x100,
+        let base = entry.sysbus()?.ok_or("missing Ethernet address")?;
+        let mut result = vec![Mapping {
+            base,
+            size: csr_size,
             region: Region::Registers,
-        }]);
+        }];
+        if qos {
+            for (offset, region) in [(0xc00, Region::Mtl), (0x1000, Region::Dma)] {
+                result.push(Mapping {
+                    base: base
+                        .checked_add(offset)
+                        .ok_or("Ethernet region address overflow")?,
+                    size: 0x200,
+                    region,
+                });
+            }
+        }
+        return Ok(result);
     };
     let mut result = Vec::new();
     let mut rest = list.trim();
     while !rest.is_empty() {
+        let (registration, next) = rest.split_once(';').unwrap_or((rest, ""));
+        if qos
+            && registration.split_whitespace().nth(1) == Some("RegistrationPeripheralAlias.ETH1MAC")
+        {
+            rest = next.trim_start();
+            continue;
+        }
         let registration = rest
             .strip_prefix("sysbus")
             .filter(|text| text.starts_with(char::is_whitespace))
@@ -212,13 +267,13 @@ fn mappings(entry: &Entry) -> Result<Vec<Mapping>, String> {
             .and_then(|text| text.strip_prefix('{'))
         {
             let (properties, next) = body.split_once('}').ok_or("unterminated Ethernet region")?;
-            result.push(region(properties)?);
+            result.push(region(properties, qos)?);
             rest = next.trim_start();
         } else {
             let (base, next) = registration.split_once(';').unwrap_or((registration, ""));
             result.push(Mapping {
                 base: number(base.trim())?,
-                size: 0x100,
+                size: csr_size,
                 region: Region::Registers,
             });
             rest = if next.is_empty() {
@@ -243,7 +298,7 @@ fn mappings(entry: &Entry) -> Result<Vec<Mapping>, String> {
     Ok(result)
 }
 
-fn region(properties: &str) -> Result<Mapping, String> {
+fn region(properties: &str, qos: bool) -> Result<Mapping, String> {
     let mut address = None;
     let mut size = None;
     let mut region = None;
@@ -261,8 +316,10 @@ fn region(properties: &str) -> Result<Mapping, String> {
             "size" if size.is_none() => size = Some(number(value)?),
             "region" if region.is_none() => {
                 region = Some(match value {
-                    "\"buffer\"" => Region::Buffer,
-                    "\"phy\"" => Region::Phy,
+                    "\"buffer\"" if !qos => Region::Buffer,
+                    "\"phy\"" if !qos => Region::Phy,
+                    "\"mtl\"" if qos => Region::Mtl,
+                    "\"dma\"" if qos => Region::Dma,
                     _ => return Err(format!("unknown Ethernet connection region {value}")),
                 });
             }

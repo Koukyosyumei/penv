@@ -1,10 +1,15 @@
-use crate::{bus::EthernetDma, litex_ethernet::LiteXEthernet, stm32_ethernet::Stm32Ethernet};
+use crate::{
+    bus::EthernetDma, litex_ethernet::LiteXEthernet, stm32_ethernet::Stm32Ethernet,
+    stm32h7_ethernet::Stm32h7Ethernet,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Region {
     Registers,
     Buffer,
     Phy,
+    Dma,
+    Mtl,
 }
 
 pub struct Mapping {
@@ -16,6 +21,7 @@ pub struct Mapping {
 pub enum Controller {
     LiteX(LiteXEthernet),
     Stm32(Stm32Ethernet),
+    Stm32h7(Stm32h7Ethernet),
 }
 
 impl Controller {
@@ -23,6 +29,7 @@ impl Controller {
         match self {
             Self::LiteX(device) => &device.name,
             Self::Stm32(device) => &device.name,
+            Self::Stm32h7(device) => &device.name,
         }
     }
 
@@ -30,19 +37,21 @@ impl Controller {
         match self {
             Self::LiteX(device) => &device.mappings,
             Self::Stm32(device) => std::slice::from_ref(&device.mapping),
+            Self::Stm32h7(device) => &device.mappings,
         }
     }
 
     pub fn vex_irq(&self) -> u32 {
         match self {
             Self::LiteX(device) => device.interrupt(),
-            Self::Stm32(_) => 0,
+            Self::Stm32(_) | Self::Stm32h7(_) => 0,
         }
     }
 
     pub fn nvic_irq(&self) -> Option<u8> {
         match self {
             Self::Stm32(device) => device.interrupt(),
+            Self::Stm32h7(device) => device.interrupt(),
             Self::LiteX(_) => None,
         }
     }
@@ -51,6 +60,7 @@ impl Controller {
         match self {
             Self::LiteX(device) => device.read(address, width),
             Self::Stm32(device) => device.read(address, width),
+            Self::Stm32h7(device) => device.read(address, width),
         }
     }
 
@@ -64,6 +74,7 @@ impl Controller {
         match self {
             Self::LiteX(device) => device.write(address, width, value),
             Self::Stm32(device) => device.write(address, width, value, dma),
+            Self::Stm32h7(device) => device.write(address, width, value, dma),
         }
     }
 
@@ -71,6 +82,7 @@ impl Controller {
         match self {
             Self::LiteX(device) => device.take_frame(),
             Self::Stm32(device) => device.take_frame(),
+            Self::Stm32h7(device) => device.take_frame(),
         }
     }
 
@@ -78,11 +90,23 @@ impl Controller {
         match self {
             Self::LiteX(device) => device.receive(frame),
             Self::Stm32(device) => device.receive(frame, dma),
+            Self::Stm32h7(device) => device.receive(frame, dma),
         }
     }
 }
 
 pub fn append_fcs(frame: &mut Vec<u8>) {
+    frame.extend_from_slice(&fcs(frame).to_le_bytes());
+}
+
+pub fn has_valid_fcs(frame: &[u8]) -> bool {
+    frame.len() >= 18 && {
+        let (data, trailer) = frame.split_at(frame.len() - 4);
+        trailer == fcs(data).to_le_bytes()
+    }
+}
+
+fn fcs(frame: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for &byte in frame.iter() {
         crc ^= u32::from(byte);
@@ -90,7 +114,7 @@ pub fn append_fcs(frame: &mut Vec<u8>) {
             crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
         }
     }
-    frame.extend_from_slice(&(!crc).to_le_bytes());
+    !crc
 }
 
 pub fn insert_ipv4_checksums(frame: &mut [u8], mode: u32) {

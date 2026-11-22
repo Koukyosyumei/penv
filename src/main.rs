@@ -20,6 +20,7 @@ mod simulation;
 mod stm32_ethernet;
 mod stm32_exti;
 mod stm32_uart;
+mod stm32h7_ethernet;
 mod sv32;
 mod systick;
 mod thumb;

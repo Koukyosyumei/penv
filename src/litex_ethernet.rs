@@ -99,6 +99,7 @@ impl LiteXEthernet {
             }
             Region::Registers => self.read_csr(offset & !3) >> (8 * (offset & 3)),
             Region::Phy => u32::from(offset == 8 && self.phy.as_ref().is_none_or(|phy| phy.input)),
+            Region::Dma | Region::Mtl => return None,
         })
     }
 
