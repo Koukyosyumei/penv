@@ -25,6 +25,7 @@ use crate::{
     stm32h7_flash::FlashController,
     stm32h7_gpio::Stm32Gpio,
     stm32h7_i2c::I2c,
+    stm32h7_ltdc::Ltdc,
     stm32h7_net_control::{Change, NetworkControl},
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
@@ -109,6 +110,7 @@ pub struct Bus {
     h7_crc: Vec<Stm32Crc>,
     h7_fdcan: Vec<Fdcan>,
     h7_dma2d: Vec<Dma2d>,
+    h7_ltdc: Option<Ltdc>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -350,6 +352,28 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_ltdc(&mut self, device: Ltdc) -> Result<(), String> {
+        if self.h7_ltdc.is_some() {
+            return Err("only one LTDC is supported".into());
+        }
+        self.check_peripheral_range(device.base, Ltdc::SIZE)?;
+        self.h7_ltdc = Some(device);
+        Ok(())
+    }
+
+    pub fn capture_ltdc(&self, path: &std::path::Path) -> Result<(), String> {
+        let device = self.h7_ltdc.as_ref().ok_or("no LTDC framebuffer")?;
+        if !ltdc_clocked(self.h7_network_control.as_ref(), device) {
+            return Err("LTDC clock is disabled or LTDC is in reset".into());
+        }
+        device.capture(path, |address, width| {
+            self.regions.iter().find_map(|region| {
+                let offset = region.offset(address, width)?;
+                Some(&region.bytes[offset..offset + width])
+            })
+        })
+    }
+
     pub fn map_h7_dma2d(&mut self, device: Dma2d) -> Result<(), String> {
         self.check_peripheral_range(device.base, Dma2d::SIZE)?;
         self.h7_dma2d.push(device);
@@ -525,6 +549,7 @@ impl Bus {
                 )
                 .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
                 .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
+                .chain(self.h7_ltdc.iter().map(|device| (device.base, Ltdc::SIZE)))
                 .chain(
                     self.h7_dma2d
                         .iter()
@@ -725,6 +750,12 @@ impl Bus {
                 .filter(|rng| rng_clocked(control, rng))
                 .filter_map(Rng::interrupt)
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
+                .chain(
+                    self.h7_ltdc
+                        .iter()
+                        .filter(|device| ltdc_clocked(control, device))
+                        .filter_map(Ltdc::interrupt),
+                )
                 .chain(
                     self.h7_dma2d
                         .iter()
@@ -1264,6 +1295,19 @@ impl Bus {
                 0
             });
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self
+                .h7_ltdc
+                .as_ref()
+                .filter(|device| device.contains(address))
+        {
+            return Ok(if ltdc_clocked(self.h7_network_control.as_ref(), device) {
+                device.read(address)
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1436,6 +1480,11 @@ impl Bus {
                 for crc in self.h7_crc.iter_mut().filter(|crc| crc.rcc_bound) {
                     crc.reset();
                 }
+            }
+            if control.ltdc_in_reset()
+                && let Some(device) = self.h7_ltdc.as_mut().filter(|device| device.rcc_bound)
+            {
+                device.reset();
             }
             if control.dma2d_in_reset() {
                 for device in self.h7_dma2d.iter_mut().filter(|device| device.rcc_bound) {
@@ -1663,10 +1712,25 @@ impl Bus {
             }
             return Ok(());
         }
+        if width == 4
+            && let Some(device) = self
+                .h7_ltdc
+                .as_mut()
+                .filter(|device| device.contains(address))
+        {
+            if ltdc_clocked(self.h7_network_control.as_ref(), device) {
+                device.write(address, value);
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }
+}
+
+fn ltdc_clocked(control: Option<&NetworkControl>, device: &Ltdc) -> bool {
+    !device.rcc_bound || control.is_some_and(NetworkControl::ltdc_enabled)
 }
 
 fn dma2d_clocked(control: Option<&NetworkControl>, device: &Dma2d) -> bool {

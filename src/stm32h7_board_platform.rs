@@ -7,6 +7,7 @@ use crate::{
     stm32h7_dma2d::Dma2d,
     stm32h7_fdcan::Fdcan,
     stm32h7_i2c::{I2C, I2c},
+    stm32h7_ltdc::Ltdc,
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
     stm32h7_timer::Timer,
@@ -16,7 +17,12 @@ use crate::{
 pub fn has_regions(model: &str) -> bool {
     matches!(
         model,
-        I2C | Rng::MODEL | Qspi::MODEL | Timer::MODEL | Stm32Crc::MODEL | Dma2d::MODEL
+        I2C | Rng::MODEL
+            | Qspi::MODEL
+            | Timer::MODEL
+            | Stm32Crc::MODEL
+            | Dma2d::MODEL
+            | Ltdc::MODEL
     )
 }
 
@@ -28,6 +34,7 @@ pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
     let accepted: &[&str] = match entry.model.as_str() {
         I2C => &["I2C1", "I2C2", "I2C3", "I2C4"],
         Dma2d::MODEL => &["DMA2D"],
+        Ltdc::MODEL => &["LTDC"],
         Rng::MODEL => &["RNG"],
         Qspi::MODEL => &["QSPI"],
         Timer::MODEL => &[
@@ -49,26 +56,37 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
-    for entry in entries.iter().filter(|entry| entry.model == Dma2d::MODEL) {
+    for entry in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), Dma2d::MODEL | Ltdc::MODEL))
+    {
+        let dma2d = entry.model == Dma2d::MODEL;
+        let expected_alias = if dma2d { "DMA2D" } else { "LTDC" };
         let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
-        if !matches!(alias, None | Some("DMA2D")) {
-            return Err(entry.error("invalid STM32 DMA2D RCC alias"));
+        if alias.is_some_and(|alias| alias != expected_alias) {
+            return Err(entry.error("invalid STM32 graphics RCC alias"));
         }
         let irq = match entry.body.as_slice() {
             [] => None,
             [(_, text)] => {
                 let (pin, target, line) = wire(text).map_err(|e| entry.error(e))?;
                 if !matches!(pin, "" | "IRQ") || !nvic.is_some_and(|nvic| nvic.name == target) {
-                    return Err(entry.error("expected DMA2D IRQ connected to NVIC"));
+                    return Err(entry.error("expected graphics IRQ connected to NVIC"));
                 }
                 Some(irq_index(line, IRQ_LINES as u32).map_err(|e| entry.error(&e))?)
             }
-            _ => return Err(entry.error("expected at most one DMA2D IRQ")),
+            _ => return Err(entry.error("expected at most one graphics IRQ")),
         };
-        machine
-            .bus
-            .map_h7_dma2d(Dma2d::new(base, alias.is_some(), irq))
-            .map_err(|e| entry.error(&e))?;
+        if dma2d {
+            machine
+                .bus
+                .map_h7_dma2d(Dma2d::new(base, alias.is_some(), irq))
+        } else {
+            machine
+                .bus
+                .map_h7_ltdc(Ltdc::new(base, alias.is_some(), irq))
+        }
+        .map_err(|e| entry.error(&e))?;
     }
 
     let mut buses = Vec::new();

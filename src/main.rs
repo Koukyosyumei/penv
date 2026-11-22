@@ -37,6 +37,7 @@ mod stm32h7_flash;
 mod stm32h7_gpio;
 mod stm32h7_gpio_platform;
 mod stm32h7_i2c;
+mod stm32h7_ltdc;
 mod stm32h7_net_control;
 mod stm32h7_qspi;
 mod stm32h7_rng;
@@ -83,6 +84,7 @@ Options:
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
   --max-steps N      Stop after N execution steps or simulation rounds (default: 10000000)
+  --framebuffer-out PATH  Export LTDC layer 1 as PPM after a single-machine run
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
@@ -131,6 +133,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
+    let mut framebuffer_out = None;
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -143,7 +146,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir"),
+                | "--asset-dir" | "--framebuffer-out"),
             ) => {
                 let path = args
                     .next()
@@ -153,6 +156,7 @@ fn run() -> Result<ExitCode, String> {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
+                    "--framebuffer-out" => &mut framebuffer_out,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
                 };
@@ -274,6 +278,7 @@ fn run() -> Result<ExitCode, String> {
                 || uart_input.is_some()
                 || uart_input_at.is_some()
                 || !uart_events.is_empty()
+                || framebuffer_out.is_some()
             {
                 return Err(
                     "single-machine overrides cannot be combined with a simulation script".into(),
@@ -383,6 +388,9 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    if let Some(path) = framebuffer_out {
+        machine.bus.capture_ltdc(&path)?;
+    }
     if stats {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",

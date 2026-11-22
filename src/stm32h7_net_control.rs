@@ -8,6 +8,7 @@ const ADC3: u32 = 1 << 24;
 const CRC: u32 = 1 << 19;
 const BDMA: u32 = 1 << 21;
 const GPIO_PORTS: u32 = 0x7ff;
+const LTDC: u32 = 1 << 3;
 const DMA2D: u32 = 1 << 4;
 const SPI4: u32 = 1 << 13;
 const SYSCFG_CLOCK: u32 = 1 << 1;
@@ -28,6 +29,7 @@ pub struct NetworkControl {
     apb1l_reset: u32,
     ahb2_reset: u32,
     ahb3_reset: u32,
+    apb3_reset: u32,
     apb2_clock: u32,
     apb2_reset: u32,
     apb4_clock: u32,
@@ -66,6 +68,7 @@ impl NetworkControl {
             apb1l_reset: 0,
             ahb2_reset: 0,
             ahb3_reset: 0,
+            apb3_reset: 0,
             apb2_clock: 0,
             apb2_reset: 0,
             apb4_clock: 0,
@@ -123,6 +126,14 @@ impl NetworkControl {
 
     pub fn crc_in_reset(&self) -> bool {
         self.ahb4_reset & CRC != 0
+    }
+
+    pub fn ltdc_enabled(&self) -> bool {
+        self.clocks[0xe4 / 4] & LTDC != 0 && !self.ltdc_in_reset()
+    }
+
+    pub fn ltdc_in_reset(&self) -> bool {
+        self.apb3_reset & LTDC != 0
     }
 
     pub fn dma2d_enabled(&self) -> bool {
@@ -267,6 +278,7 @@ impl NetworkControl {
             0x80 => self.ahb1_reset,
             0x84 => self.ahb2_reset,
             0x88 => self.ahb4_reset,
+            0x8c => self.apb3_reset,
             0x90 => self.apb1l_reset,
             0x98 => self.apb2_reset,
             0x9c => self.apb4_reset,
@@ -351,6 +363,10 @@ impl NetworkControl {
             }
             0x88 => {
                 self.ahb4_reset = value & (ADC3 | CRC | BDMA | GPIO_PORTS);
+                Change::None
+            }
+            0x8c => {
+                self.apb3_reset = value & LTDC;
                 Change::None
             }
             0x90 => {
