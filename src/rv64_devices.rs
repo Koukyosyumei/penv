@@ -143,10 +143,7 @@ impl Uart {
     }
 
     pub fn size(&self) -> u64 {
-        match &self.kind {
-            UartKind::Ns16550(uart) => uart.size(),
-            UartKind::SiFive { .. } => 0x100,
-        }
+        0x100
     }
 
     fn contains(&self, address: u32) -> bool {
@@ -168,7 +165,7 @@ impl Uart {
 
     fn read(&mut self, address: u32, width: usize) -> Option<u32> {
         match &mut self.kind {
-            UartKind::Ns16550(uart) => Some(uart.read(uart.register(address, width)?)),
+            UartKind::Ns16550(uart) => Some(uart.read(ns16550_register(uart, address, width)?)),
             UartKind::SiFive {
                 receive,
                 tx_control,
@@ -197,7 +194,7 @@ impl Uart {
     ) -> Option<io::Result<()>> {
         match &mut self.kind {
             UartKind::Ns16550(uart) => {
-                Some(uart.write(uart.register(address, width)?, value, output))
+                Some(uart.write(ns16550_register(uart, address, width)?, value, output))
             }
             UartKind::SiFive {
                 receive,
@@ -225,6 +222,19 @@ impl Uart {
             _ => None,
         }
     }
+}
+
+fn ns16550_register(uart: &Ns16550, address: u32, width: usize) -> Option<u32> {
+    if !matches!(width, 1 | 2 | 4) {
+        return None;
+    }
+    let offset = address - uart.base;
+    // Wide Renode UARTs accept both byte and word access to each spaced register.
+    Some(if uart.wide && offset & 3 == 0 {
+        offset >> 2
+    } else {
+        offset
+    })
 }
 
 fn sifive_pending(receive: usize, tx_control: u32, rx_control: u32) -> u32 {
