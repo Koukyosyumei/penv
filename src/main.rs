@@ -25,6 +25,7 @@ mod stm32_exti;
 mod stm32_uart;
 mod stm32h7_ethernet;
 mod stm32h7_exti;
+mod stm32h7_flash;
 mod stm32h7_net_control;
 mod sv32;
 mod systick;

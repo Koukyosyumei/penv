@@ -10,6 +10,7 @@ use crate::{
     nvic::IRQ_LINES,
     stm32_uart::Stm32Irq,
     stm32h7_exti::H7Exti,
+    stm32h7_flash::FlashController,
 };
 
 type Properties = Vec<(usize, String)>;
@@ -260,6 +261,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut dwt = None;
     let mut nvic = None;
     let mut exti = None;
+    let mut flash_controller = None;
     let mut combiners = Vec::new();
     let mut ram = false;
     let mut uart = None;
@@ -328,6 +330,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.CombinedInput" => combiners.push(entry),
+            "MTD.STM32H7_FlashController" => {
+                if flash_controller.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32H7 flash controller is supported"));
+                }
+            }
             "Miscellaneous.DWT" => {
                 if dwt.replace(entry).is_some() {
                     return Err(entry.error("only one DWT is supported"));
@@ -428,6 +435,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(controller.error("unsupported NVIC wiring"));
                 }
             }
+        }
+        if let Some(flash) = flash_controller {
+            configure_h7_flash(flash, &entries, nvic, &mut machine)?;
         }
         let mut uart_irq = None;
         if let Some(uart) = uart {
@@ -593,6 +603,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             nvic.map(|entry| entry.name.as_str()),
         )?;
         return Ok(machine);
+    }
+    if let Some(flash) = flash_controller {
+        return Err(flash.error("STM32H7 flash controller requires a Cortex-M CPU"));
     }
     if let Some(dwt) = dwt {
         return Err(dwt.error("DWT requires a Cortex-M CPU"));
@@ -841,6 +854,60 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_h7_flash(
+    flash: &Entry,
+    entries: &[Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let mut banks = [None, None];
+    let mut irq = None;
+    for (_, text) in &flash.body {
+        if let Some((pin, target)) = text.split_once("->")
+            && pin.trim().is_empty()
+            && let Some((name, line)) = target.split_once('@')
+            && nvic.is_some_and(|nvic| nvic.name == name.trim())
+            && irq.is_none()
+        {
+            irq = Some(irq_index(line, IRQ_LINES as u32).map_err(|error| flash.error(&error))?);
+            continue;
+        }
+        let (key, name) = text
+            .split_once(':')
+            .ok_or_else(|| flash.error("invalid flash controller property or IRQ"))?;
+        let bank = match key.trim() {
+            "flash1" if banks[0].is_none() => &mut banks[0],
+            "flash2" if banks[1].is_none() => &mut banks[1],
+            _ => return Err(flash.error("unsupported or duplicate flash bank")),
+        };
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == name.trim() && entry.model == "Memory.MappedMemory")
+            .ok_or_else(|| flash.error("flash bank must reference mapped memory"))?;
+        let start = entry.address()?;
+        let (_, size) = keys(entry, &["size"])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| entry.error("missing memory size"))?;
+        let size = number(size).map_err(|error| entry.error(&error))?;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| entry.error("flash bank range overflow"))?;
+        *bank = Some(start..end);
+    }
+    let [Some(first), Some(second)] = banks else {
+        return Err(flash.error("expected two flash banks"));
+    };
+    if first == second {
+        return Err(flash.error("flash banks must reference distinct memory regions"));
+    }
+    let irq = irq.ok_or_else(|| flash.error("expected flash interrupt connected to NVIC"))?;
+    machine
+        .bus
+        .map_h7_flash(FlashController::new(flash.address()?, irq, [first, second]))
+        .map_err(|error| flash.error(&error))
 }
 
 fn exti_outputs(

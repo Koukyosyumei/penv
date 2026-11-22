@@ -16,6 +16,7 @@ use crate::{
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
     stm32h7_exti::H7Exti,
+    stm32h7_flash::FlashController,
     stm32h7_net_control::{Change, NetworkControl},
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
@@ -80,6 +81,7 @@ pub struct Bus {
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
+    h7_flash: Option<FlashController>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -264,6 +266,20 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_flash(&mut self, device: FlashController) -> Result<(), String> {
+        let start = u64::from(device.base);
+        let end = start + u64::from(FlashController::SIZE);
+        if self.h7_flash.is_some()
+            || device.base & 3 != 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err("invalid or overlapping STM32H7 flash controller mapping".into());
+        }
+        self.h7_flash = Some(device);
+        Ok(())
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
         self.h7_network_control.as_ref().is_some_and(|control| {
             control
@@ -287,6 +303,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.h7_flash.as_ref().is_some_and(|device| {
+                let base = u64::from(device.base);
+                start < base + u64::from(FlashController::SIZE) && base < end
             })
             || self.h7_exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
@@ -413,6 +433,9 @@ impl Bus {
                     .is_some_and(LiteXUart::interrupt_pending),
                 active,
             );
+            if let Some(line) = self.h7_flash.as_ref().and_then(FlashController::interrupt) {
+                nvic.set_line(line, true, active);
+            }
             for line in self.ethernet.iter().filter_map(Controller::nvic_irq) {
                 nvic.set_line(line, true, active);
             }
@@ -582,6 +605,18 @@ impl Bus {
         .memory(address, width)
     }
 
+    pub fn guest_memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
+        let memory = EthernetDma {
+            regions: &mut self.regions,
+            reservations: &mut self.reservations,
+        }
+        .memory(address, width)?;
+        if let Some(device) = &mut self.h7_flash {
+            device.note_program(address, width);
+        }
+        Ok(memory)
+    }
+
     pub fn receive_ethernet(&mut self, nic: usize, frame: &[u8]) {
         let mut dma = EthernetDma {
             regions: &mut self.regions,
@@ -738,6 +773,13 @@ impl Bus {
             && let Some(value) = self.dwt.as_ref().and_then(|device| device.read(address))
         {
             return Ok(value);
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self.h7_flash.as_ref()
+            && device.contains(address)
+        {
+            return Ok(device.read(address));
         }
         self.read_ram::<N>(address)
     }
@@ -906,7 +948,17 @@ impl Bus {
             peripheral.write(offset);
             return Ok(());
         }
-        self.memory(address, width)?
+        if width == 4
+            && let Some(device) = self.h7_flash.as_mut()
+            && device.contains(address)
+        {
+            for range in device.write(address, value).into_iter().flatten() {
+                self.memory(range.start, (range.end - range.start) as usize)?
+                    .fill(0xff);
+            }
+            return Ok(());
+        }
+        self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }

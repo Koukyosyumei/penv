@@ -248,7 +248,9 @@ impl Thumb {
         let stack = (sp & !7).wrapping_sub(32);
         let xpsr = self.apsr() | (1 << 24) | ((sp & 4) << 7) | u32::from(self.active_exception);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        let memory = bus.memory(stack, 32).map_err(|error| error.to_string())?;
+        let memory = bus
+            .guest_memory(stack, 32)
+            .map_err(|error| error.to_string())?;
         for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
             *word = value.to_le_bytes();
         }
@@ -578,7 +580,7 @@ impl Thumb {
                 } else {
                     let new_sp = sp.wrapping_sub(bytes);
                     let stack = bus
-                        .memory(new_sp, bytes as usize)
+                        .guest_memory(new_sp, bytes as usize)
                         .map_err(|error| error.to_string())?;
                     for word in stack.as_chunks_mut::<4>().0 {
                         let register = mask.trailing_zeros() as usize;
@@ -636,7 +638,7 @@ impl Thumb {
                         return Err(unsupported());
                     }
                     let memory = bus
-                        .memory(address, count as usize * 4)
+                        .guest_memory(address, count as usize * 4)
                         .map_err(|error| error.to_string())?;
                     for (word, register) in memory.as_chunks_mut::<4>().0.iter_mut().zip(selected) {
                         *word = r[register].to_le_bytes();
