@@ -64,6 +64,14 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 同じステップに複数のイベントを指定した場合は、CLI に指定した順に受信 FIFO へ追加します。
 
+Murax の UART エコーと LiteX SMP Linux の起動・ログイン・4 ハートの表示をまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。
+
+```sh
+bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
+```
+
+検証結果には上流のコミット ID、UART 出力、標準エラー出力、各実行の終了コードが含まれます。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。
