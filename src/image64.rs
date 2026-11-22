@@ -57,18 +57,12 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         return Err("invalid ELF64 program header table".into());
     }
 
-    let mut executable = false;
+    let minimum = minimum_width(machine, compressed) as u64;
+    let entry_location = machine.bus.ram_location64(entry, minimum as usize);
+    let mut linked_entry = None;
+    let mut physical_entry = None;
+    let mut ambiguous_entry = false;
     let mut segments = Vec::new();
-    let minimum = if machine
-        .primary
-        .rv64
-        .as_ref()
-        .map_or(compressed, |cpu| cpu.isa().compressed)
-    {
-        2
-    } else {
-        4
-    };
     if !entry.is_multiple_of(minimum) {
         return Err(format!("misaligned ELF64 entry {entry:#018x}"));
     }
@@ -81,6 +75,7 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
             _ => continue,
         }
         let offset = double(&segment, 8);
+        let virtual_address = double(&segment, 16);
         let address = double(&segment, 24);
         let file_size = double(&segment, 32);
         let memory_size = double(&segment, 40);
@@ -103,14 +98,36 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
             backing,
             start,
         });
-        executable |= word(&segment, 4) & 1 != 0
-            && entry
-                .checked_sub(address)
-                .is_some_and(|offset| file_range(offset, minimum, file_size));
+        if word(&segment, 4) & 1 == 0 {
+            continue;
+        }
+        let contains_entry = |base| {
+            entry
+                .checked_sub(base)
+                .filter(|&delta| file_range(delta, minimum, file_size))
+        };
+        if contains_entry(address).is_some() {
+            linked_entry = Some(entry);
+        }
+        if let Some(delta) = contains_entry(virtual_address) {
+            if entry_location == Some((backing, start + delta as usize)) {
+                linked_entry = Some(entry);
+            }
+            let candidate = address + delta;
+            if physical_entry.is_some_and(|old| old != candidate) {
+                ambiguous_entry = true;
+            }
+            physical_entry = Some(candidate);
+        }
     }
-    if !executable {
-        return Err("ELF64 entry is outside executable file-backed segments".into());
-    }
+    let entry = match (linked_entry, physical_entry) {
+        (Some(entry), _) => entry,
+        (None, Some(entry)) if !ambiguous_entry && entry.is_multiple_of(minimum) => entry,
+        (None, Some(_)) => {
+            return Err("ELF64 entry does not resolve to a unique aligned physical address".into());
+        }
+        (None, None) => return Err("ELF64 entry is outside executable file-backed segments".into()),
+    };
 
     let mut initialized: Vec<(usize, Range<usize>)> = Vec::new();
     for segment in segments {
@@ -144,6 +161,19 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
     }
     machine.set_rv64_entry(entry);
     Ok(())
+}
+
+fn minimum_width(machine: &Machine, compressed: bool) -> usize {
+    if machine
+        .primary
+        .rv64
+        .as_ref()
+        .map_or(compressed, |cpu| cpu.isa().compressed)
+    {
+        2
+    } else {
+        4
+    }
 }
 
 struct Segment {

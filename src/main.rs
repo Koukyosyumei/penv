@@ -48,6 +48,7 @@ Options:
   --rv64             Run a raw image on an RV64IM CPU
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
+  --load-binary BASE:PATH  Load a flat companion image into RAM (repeatable)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
@@ -97,6 +98,7 @@ fn run() -> Result<ExitCode, String> {
     let mut harts = None;
     let mut max_steps = 10_000_000;
     let mut extra_ram = Vec::new();
+    let mut companion_images = Vec::new();
     let mut clint = None;
     let mut mtvec = None;
     let mut vex_irq_mask = None;
@@ -184,6 +186,17 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
+            Some("--load-binary") => {
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--load-binary requires BASE:PATH")?;
+                let (base, path) = value
+                    .split_once(':')
+                    .filter(|(_, path)| !path.is_empty())
+                    .ok_or("--load-binary requires BASE:PATH")?;
+                companion_images.push((PathBuf::from(path), parse_address64(base)?));
+            }
             Some("--map-ram") => {
                 let value = args
                     .next()
@@ -261,7 +274,7 @@ fn run() -> Result<ExitCode, String> {
         }
         for (value, address) in boot.binaries {
             let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
-            binaries.push((path, address));
+            binaries.push((path, u64::from(address)));
         }
         boot_pcs = boot.boot_pcs;
     }
@@ -323,7 +336,7 @@ fn run() -> Result<ExitCode, String> {
                 .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
         }
     }
-    for (path, address) in binaries {
+    for (path, address) in binaries.into_iter().chain(companion_images) {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         image::load_binary(&mut machine, file, address)
             .map_err(|e| format!("{}: {e}", path.display()))?;

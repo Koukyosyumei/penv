@@ -66,7 +66,7 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 ## RV64
 
-リトルエンディアンの静的な RISC-V ELF64 は、クラスから RV64 を自動選択します。セグメントは物理アドレスにロードされます。実行開始時にページ変換が無効なため、エントリーポイントはロードされた実行可能セグメント内の物理アドレスを指す必要があります。raw の RV64IM イメージには `--raw --rv64` を指定します。`--map-ram` には 4 GiB 以上のアドレスも指定できます。
+リトルエンディアンの静的な RISC-V ELF64 は、クラスから RV64 を自動選択します。セグメントは物理アドレスにロードされます。起動時はページ変換が無効です。実行可能セグメントの仮想エントリーポイントは、同じ RAM を指す別名で起動するか、対応する物理アドレスに変換されます。raw の RV64IM イメージには `--raw --rv64` を指定します。`--map-ram` と `--load-binary BASE:PATH` には 4 GiB 以上のアドレスも指定できます。後者は DTB、カーネル、initramfs などをファームウェアと一緒にロードします。
 
 ```sh
 target/release/penv run --platform ../renode/platforms/cpus/sifive-fu740.repl \
