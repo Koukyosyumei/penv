@@ -308,17 +308,18 @@ fn run() -> Result<ExitCode, String> {
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
     let mut vector_tables = Vec::new();
+    let mut runtime = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
-    if let Some(script) = script {
+    if let Some(script) = script.as_deref() {
         if platform_path.is_some() || raw || hex {
             return Err("--script cannot be combined with --platform, --raw, or --hex".into());
         }
         let root = platform_root
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
-        let boot = monitor::load(&script, root)?;
+        let boot = monitor::load(script, root)?;
         platform_path = boot.platform;
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);
@@ -327,7 +328,7 @@ fn run() -> Result<ExitCode, String> {
             if path.is_none() {
                 path = Some(monitor::asset_path(
                     &image,
-                    &script,
+                    script,
                     root,
                     asset_dir.as_deref(),
                 )?);
@@ -338,11 +339,12 @@ fn run() -> Result<ExitCode, String> {
             );
         }
         for (value, address) in boot.binaries {
-            let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
+            let path = monitor::asset_path(&value, script, root, asset_dir.as_deref())?;
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;
         vector_tables = boot.vector_tables;
+        runtime = boot.runtime;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -432,7 +434,11 @@ fn run() -> Result<ExitCode, String> {
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
-    let result = machine.run(max_steps, &mut output);
+    let result = if let Some(script) = script.as_deref() {
+        monitor::run(&mut machine, script, &runtime, max_steps, &mut output)
+    } else {
+        machine.run(max_steps, &mut output)
+    };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;

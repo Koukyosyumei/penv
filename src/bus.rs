@@ -98,6 +98,7 @@ pub struct Bus {
     stm32_crc: Option<Stm32F0Crc>,
     stm32_cans: Vec<Stm32Can>,
     stm32_adc: Option<Stm32F0Adc>,
+    stm32_adc_name: Option<String>,
     stm32_dma: Option<Stm32Dma>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
@@ -659,6 +660,20 @@ impl Bus {
             .position(|button| button.name == name)
     }
 
+    pub fn set_named_button(&mut self, target: &str, pressed: bool) -> Result<(), String> {
+        let target = target.strip_prefix("sysbus.").unwrap_or(target);
+        let index = match target.split_once('.') {
+            Some((parent, name)) => self
+                .gpio_buttons
+                .iter()
+                .position(|button| button.parent.as_deref() == Some(parent) && button.name == name),
+            None => self.board_button(target),
+        }
+        .ok_or_else(|| format!("unknown STM32 board button {target:?}"))?;
+        self.set_button(index, pressed);
+        Ok(())
+    }
+
     pub fn set_button(&mut self, index: usize, pressed: bool) {
         let button = &self.gpio_buttons[index];
         if let Some(port) = self
@@ -739,7 +754,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_stm32f0_adc(&mut self, adc: Stm32F0Adc) -> Result<(), String> {
+    pub fn map_stm32f0_adc(&mut self, name: String, adc: Stm32F0Adc) -> Result<(), String> {
         let start = u64::from(adc.base);
         let end = start + u64::from(Stm32F0Adc::SIZE);
         if self.stm32_adc.is_some()
@@ -753,7 +768,20 @@ impl Bus {
             ));
         }
         self.stm32_adc = Some(adc);
+        self.stm32_adc_name = Some(name);
         Ok(())
+    }
+
+    pub fn set_named_adc_input(
+        &mut self,
+        name: &str,
+        channel: usize,
+        volts: f64,
+    ) -> Result<(), String> {
+        if self.stm32_adc_name.as_deref() != Some(name) {
+            return Err(format!("unknown STM32 ADC {name:?}"));
+        }
+        self.set_stm32f0_adc_input(channel, volts)
     }
 
     pub fn validate_stm32f0_adc_input(&self, channel: usize, volts: f64) -> Result<(), String> {

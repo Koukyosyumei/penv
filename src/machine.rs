@@ -35,6 +35,7 @@ pub enum Stop {
     Ecall,
     Ebreak,
     Limit,
+    ScriptComplete,
 }
 
 enum Step {

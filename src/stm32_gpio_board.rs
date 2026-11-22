@@ -29,15 +29,17 @@ impl GpioLed {
 
 pub struct GpioButton {
     pub name: String,
+    pub parent: Option<String>,
     pub port: u32,
     pub pin: u8,
     pub invert: bool,
 }
 
 impl GpioButton {
-    pub fn new(name: String, port: u32, pin: u8, invert: bool) -> Self {
+    pub fn new(name: String, parent: Option<String>, port: u32, pin: u8, invert: bool) -> Self {
         Self {
             name,
+            parent,
             port,
             pin,
             invert,

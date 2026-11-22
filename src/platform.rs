@@ -687,6 +687,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 target.ok_or_else(|| button.error("expected button wired to a GPIO input"))?;
             machine.bus.add_gpio_button(GpioButton::new(
                 button.name.clone(),
+                button
+                    .registration
+                    .as_deref()
+                    .and_then(|registration| registration.split_whitespace().next())
+                    .map(str::to_owned),
                 port,
                 pin,
                 invert.unwrap_or(false),
@@ -863,7 +868,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             machine
                 .bus
-                .map_stm32f0_adc(device)
+                .map_stm32f0_adc(adc.name.clone(), device)
                 .map_err(|e| adc.error(&e))?;
         }
         for can in stm32_cans {

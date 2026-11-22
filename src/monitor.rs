@@ -1,7 +1,13 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Write,
     path::{Path, PathBuf},
+};
+
+use crate::{
+    bus::CORTEX_M_STEP_HZ,
+    machine::{Machine, Stop},
 };
 
 #[derive(PartialEq, Eq, Debug)]
@@ -19,6 +25,57 @@ pub struct Boot {
     pub vector_tables: Vec<(String, u32)>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    pub runtime: Vec<RuntimeCommand>,
+}
+
+pub struct RuntimeCommand {
+    line: usize,
+    action: Action,
+}
+
+enum Action {
+    RunFor(u64),
+    Button(String, bool),
+    Adc(String, usize, f64),
+}
+
+pub fn run(
+    machine: &mut Machine,
+    script: &Path,
+    commands: &[RuntimeCommand],
+    mut budget: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    if commands.is_empty() {
+        return machine.run(budget, output);
+    }
+    let mut retired = 0;
+    for command in commands {
+        let result = match &command.action {
+            Action::RunFor(steps) if machine.is_cortex_m() => {
+                let chunk = (*steps).min(budget);
+                machine.run(chunk, output).map(|(stop, count)| {
+                    retired += count;
+                    budget -= chunk;
+                    (stop != Stop::Limit || chunk < *steps).then_some(stop)
+                })
+            }
+            Action::RunFor(_) => Err("RunFor requires a Cortex-M platform".into()),
+            Action::Button(name, pressed) => {
+                machine.bus.set_named_button(name, *pressed).map(|()| None)
+            }
+            Action::Adc(name, channel, volts) => machine
+                .bus
+                .set_named_adc_input(name, *channel, *volts)
+                .map(|()| None),
+        };
+        if let Some(stop) =
+            result.map_err(|e| format!("{}:{}: {e}", script.display(), command.line))?
+        {
+            return Ok((stop, retired));
+        }
+    }
+    Ok((Stop::ScriptComplete, retired))
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
@@ -77,12 +134,22 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
                     &mut boot,
                     path,
                     root,
+                    index + 1,
                 )
                 .map_err(|e| format!("{}:{}: {e}", path.display(), index + 1))?;
             }
             continue;
         }
-        execute(text, &variables, &mut machine, &mut boot, path, root).map_err(|e| error(&e))?;
+        execute(
+            text,
+            &variables,
+            &mut machine,
+            &mut boot,
+            path,
+            root,
+            line + 1,
+        )
+        .map_err(|e| error(&e))?;
     }
     if !machine || boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
         return Err(format!(
@@ -100,6 +167,7 @@ fn execute(
     boot: &mut Boot,
     script: &Path,
     root: &Path,
+    line: usize,
 ) -> Result<(), String> {
     if text.is_empty() || text.starts_with('#') || text == "using sysbus" {
         return Ok(());
@@ -115,6 +183,42 @@ fn execute(
             None => Ok(value),
         },
     };
+    let action = match words.as_slice() {
+        ["emulation", "RunFor", duration] => {
+            Some(Action::RunFor(duration_steps(resolve(duration)?)?))
+        }
+        [device, state @ ("Press" | "Release")] => Some(Action::Button(
+            resolve(device)?.to_owned(),
+            *state == "Press",
+        )),
+        [channel, "Volts", voltage] => {
+            let target = resolve(channel)?;
+            let target = target.strip_prefix("sysbus.").unwrap_or(target);
+            let (name, channel) = target
+                .split_once(".adc-channel")
+                .ok_or("expected ADC channel path")?;
+            Some(Action::Adc(
+                name.to_owned(),
+                channel.parse().map_err(|_| "invalid ADC channel number")?,
+                resolve(voltage)?
+                    .parse()
+                    .map_err(|_| "invalid ADC voltage")?,
+            ))
+        }
+        _ => None,
+    };
+    if let Some(action) = action {
+        if boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
+            return Err("runtime commands require a loaded platform and firmware".into());
+        }
+        boot.runtime.push(RuntimeCommand { line, action });
+        return Ok(());
+    }
+    if !boot.runtime.is_empty() {
+        return Err(format!(
+            "unsupported monitor command after runtime commands: {text:?}"
+        ));
+    }
     match words.as_slice() {
         ["mach" | "machine", "create", name @ ..] if name.len() <= 1 => {
             if let Some(name) = name.first() {
@@ -176,6 +280,33 @@ fn execute(
     Ok(())
 }
 
+fn duration_steps(value: &str) -> Result<u64, String> {
+    let seconds = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(value);
+    let seconds = seconds.strip_suffix('s').unwrap_or(seconds);
+    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    let invalid =
+        || format!("expected nonnegative decimal seconds at 10 ns resolution, got {value:?}");
+    let whole: u64 = whole.parse().map_err(|_| invalid())?;
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.len() > 8 || !fraction.bytes().all(|digit| digit.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let ticks = fraction.parse::<u64>().unwrap_or(0)
+        * (CORTEX_M_STEP_HZ / 10_u64.pow(fraction.len() as u32));
+    whole
+        .checked_mul(CORTEX_M_STEP_HZ)
+        .and_then(|whole| whole.checked_add(ticks))
+        .ok_or_else(invalid)
+}
+
 pub fn asset_path(
     value: &str,
     script: &Path,
@@ -216,12 +347,24 @@ mod tests {
         let path = Path::new("test.resc");
         let root = Path::new(".");
         let vars = HashMap::new();
-        for command in [
+        for (line, command) in [
             "machine LoadPlatformDescription @board.repl",
             "sysbus LoadBinary @https://example.org/firmware.bin 0x40000000",
             "sysbus.cpu_1 PC 0x40000004",
-        ] {
-            execute(command, &vars, &mut created, &mut boot, path, root).unwrap();
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            execute(
+                command,
+                &vars,
+                &mut created,
+                &mut boot,
+                path,
+                root,
+                line + 1,
+            )
+            .unwrap();
         }
         assert_eq!(
             boot.binaries,

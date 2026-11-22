@@ -141,7 +141,66 @@ demo crc-test 150000000
 
 Hello World の UART 出力、Console Echo の `Echo working?`、Blinky の LED 点灯と消灯の繰り返し、Button の `Button pressed at` と LED 遷移、ADC の `745` と `1489`、CRC の `test result: ok. 840 passed; 0 failed` を確認しました。各実行はステップ上限で終了コード 2 を返しました。
 
-残課題は、Robot の端末・LED テスターや実行中のデバイス操作の取り込みです。今回の確認では CLI の UART 入力、ボタン操作、ADC イベントと LED ログを使用しました。RESC で指定する HEX または ELF は 1 イメージで、URL の実ファイルは事前に取得します。
+RESC で指定する HEX または ELF は 1 イメージで、URL の実ファイルは事前に取得します。
+
+#### RESC での Button と ADC の回帰確認
+
+上流の Button と ADC シナリオを RESC に転記すると、変更前の実行ログでは `emulation RunFor`、`sysbus.gpioPortA.button Press`、`sysbus.adc.adc-channel1 Volts 0.6` がそれぞれ `unsupported monitor command` になりました。
+
+起動設定の後に `emulation RunFor "0.3s"`、ボタンの `Press` / `Release`、ADC の `Volts` を順番に実行できます。Cortex-M の `RunFor` は小数秒を 10 ns 単位の実行ステップに換算し、区間をまたいで CPU と周辺機器の状態を保持します。全区間で `--max-steps` を共有し、途中で上限に達すると終了コード 2、全操作を処理すると 0 を返します。
+
+上の手順で取得したファームウェアを使います。
+
+```sh
+resc_boot() {
+  printf 'mach create\nmachine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl\nsysbus LoadELF @%s\n' "$1"
+}
+resc_boot "$assets"/*button.elf-* >"$assets/button.resc"
+cat >>"$assets/button.resc" <<'EOF'
+emulation RunFor "0.001s"
+sysbus.gpioPortA.button Press
+emulation RunFor "0.3s"
+sysbus.gpioPortA.button Release
+emulation RunFor "0.001s"
+sysbus.gpioPortA.button Press
+emulation RunFor "1s"
+sysbus.gpioPortA.button Release
+emulation RunFor "1s"
+sysbus.gpioPortA.button Press
+emulation RunFor "1s"
+sysbus.gpioPortA.button Release
+emulation RunFor "0.001s"
+EOF
+
+resc_boot "$assets"/*adc.elf-* >"$assets/adc.resc"
+cat >>"$assets/adc.resc" <<'EOF'
+emulation RunFor "0.01s"
+sysbus.adc.adc-channel1 Volts 0.6
+emulation RunFor "1.05s"
+sysbus.adc.adc-channel1 Volts 1.2
+emulation RunFor "1.05s"
+EOF
+
+target/release/penv run --script "$assets/button.resc" --platform-root ../renode \
+  --max-steps 331000000 --led-events >"$assets/button.out" 2>"$assets/button.err" &&
+  grep -q '^Button pressed at ' "$assets/button.out" &&
+  awk '/^LED led / { states = states " " $3 }
+       END { exit (states != " on off on off on off on") }' "$assets/button.err"
+
+target/release/penv run --script "$assets/adc.resc" --platform-root ../renode \
+  --max-steps 211000000 >"$assets/adc.out" &&
+  tr -d '\r' <"$assets/adc.out" |
+  awk '/Booting Zephyr/ { boot = 1 }
+       boot && /^ADC reading: 745$/ { first = 1 }
+       first && /^ADC reading: 1489$/ { second = 1 }
+       END { exit !second }'
+```
+
+両 RESC が終了コード 0 を返しました。Button は UART に押下時刻を出力し、1 秒の保持区間を挟んで期待どおりに LED が遷移しました。ADC は起動直後の `0` に続いて `745`、`1489` を出力しました。`cargo test` では複数区間の継続実行、ステップ上限とデバイス名エラーの行番号を含む全 45 件が成功しました。
+
+Console Echo でも `resc_boot "$assets"/*echo.elf-*` に `emulation RunFor "0.01s"` と `emulation RunFor "0.02s"` を追加し、上で作成した入力ファイルを `--uart-input "$assets/echo.input" --uart-input-at 1000000` で渡しました。UART の入力案内に続いて `Echo working?` が出力され、終了コードは 0 でした。
+
+残課題は Robot の端末・LED テスターと、UART の期待行を受信した時点で次の操作に進む実行制御です。ここでは固定の実行区間を使い、終了後にログで期待値と順序を確認します。`RunFor` の期間指定は 10 ns 単位で表せる小数秒に対応します。
 
 ## 現在の実装範囲
 

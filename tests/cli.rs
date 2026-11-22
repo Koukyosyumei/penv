@@ -1,7 +1,7 @@
 use std::{fs, process::Command};
 
 #[test]
-fn boots_resc_hex_with_explicit_vector_table() {
+fn boots_resc_hex_and_runs_bounded_cortex_m_intervals() {
     let directory = std::env::temp_dir().join(format!("penv-resc-hex-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     let script = directory.join("boot.resc");
@@ -43,9 +43,40 @@ flash: Memory.MappedMemory @ sysbus 0x08000000
         .output()
         .unwrap();
     let override_image = command().arg(&firmware).output().unwrap();
-    fs::remove_dir_all(directory).unwrap();
     assert!(asset.status.success(), "{asset:?}");
     assert!(override_image.status.success(), "{override_image:?}");
+
+    // Replace BKPT with a self-branch to exercise the complete scripted budget.
+    fs::write(
+        &firmware,
+        ":020000040800F2\n:0A0080000010002089000008FEE7D0\n:00000001FF\n",
+    )
+    .unwrap();
+    let boot = fs::read_to_string(&script).unwrap();
+    let phased = format!("{boot}emulation RunFor \"0.00000002s\"\nemulation RunFor '0.00000003'\n");
+    fs::write(&script, &phased).unwrap();
+    let timed = |max: &str| {
+        command()
+            .args(["--stats", "--max-steps", max])
+            .arg(&firmware)
+            .output()
+            .unwrap()
+    };
+    let completed = timed("5");
+    let limited = timed("4");
+    fs::write(&script, format!("{phased}sysbus.gpioPortA.button Press\n")).unwrap();
+    let unknown_button = timed("5");
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(completed.status.success(), "{completed:?}");
+    assert!(String::from_utf8_lossy(&completed.stderr).contains("ScriptComplete, 5 instructions"));
+    assert_eq!(limited.status.code(), Some(2), "{limited:?}");
+    assert!(String::from_utf8_lossy(&limited.stderr).contains("Limit, 4 instructions"));
+    assert_eq!(unknown_button.status.code(), Some(1), "{unknown_button:?}");
+    assert!(
+        String::from_utf8_lossy(&unknown_button.stderr)
+            .contains("boot.resc:7: unknown STM32 board button")
+    );
 }
 
 #[test]
