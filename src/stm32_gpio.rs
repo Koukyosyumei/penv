@@ -3,6 +3,9 @@ pub struct Stm32Gpio {
     pub size: u32,
     pub exti_routes: [u32; 16],
     external: u16,
+    af_driver: [u16; 16],
+    af_levels: [u16; 16],
+    af_inverted: [u16; 16],
     mode: u32,
     output_type: u32,
     speed: u32,
@@ -30,6 +33,9 @@ impl Stm32Gpio {
             size,
             exti_routes: [0; 16],
             external: 0,
+            af_driver: [0; 16],
+            af_levels: [0; 16],
+            af_inverted: [0; 16],
             mode,
             output_type: 0,
             speed,
@@ -55,12 +61,38 @@ impl Stm32Gpio {
         for pin in 0..16 {
             let mask = 1 << pin;
             match (self.mode >> (pin * 2)) & 3 {
-                0 | 2 => pins |= self.external & mask,
+                0 => pins |= self.external & mask,
+                2 => {
+                    let function = ((self.alternate[pin / 8] >> ((pin % 8) * 4)) & 15) as usize;
+                    let levels = if self.af_driver[function] & mask != 0 {
+                        self.af_levels[function] ^ self.af_inverted[function]
+                    } else {
+                        self.external
+                    };
+                    pins |= levels & mask;
+                }
                 1 => pins |= self.output as u16 & mask,
                 _ => {}
             }
         }
         pins
+    }
+
+    pub fn alternate_count(&self) -> u32 {
+        self.alternate_count
+    }
+
+    pub fn invert_alternate(&mut self, pin: u8, function: u8) {
+        self.af_inverted[usize::from(function)] |= 1 << pin;
+    }
+
+    pub fn set_alternate_output(&mut self, pin: u8, function: u8, level: Option<bool>) {
+        let bit = 1 << pin;
+        let function = usize::from(function);
+        let driven = &mut self.af_driver[function];
+        *driven = (*driven & !bit) | (u16::from(level.is_some()) << pin);
+        let active = &mut self.af_levels[function];
+        *active = (*active & !bit) | (u16::from(level.unwrap_or(false)) << pin);
     }
 
     pub fn exti_levels(&self) -> u32 {

@@ -16,7 +16,7 @@ use crate::{
     stm32_i2c::{Eeprom, Stm32I2c},
     stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
-    stm32_timer::Stm32Timer,
+    stm32_timer::{Stm32Timer, TimerPin},
     stm32_uart::{Stm32Irq, Stm32Usart},
 };
 
@@ -565,6 +565,19 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                         for (&pin, line) in outputs.iter().zip(inputs) {
                             port.exti_routes[usize::from(pin)] |= 1 << line;
                         }
+                    } else if let Some(timer) =
+                        stm32_timers.iter().find(|timer| timer.name == target)
+                    {
+                        let pins = irq_list(inputs, 4).map_err(|e| entry.error(&e))?;
+                        if pins.len() != outputs.len() {
+                            return Err(entry.error("mismatched GPIO and timer wiring widths"));
+                        }
+                        let base = timer.address()?;
+                        for (&pin, channel) in outputs.iter().zip(pins) {
+                            machine
+                                .bus
+                                .route_gpio_timer_input(port.base, pin, base, channel);
+                        }
                     } else if gpio_leds.iter().any(|led| led.name == target) {
                         if inputs.trim() != "0"
                             || outputs.len() != 1
@@ -577,7 +590,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     }
                 }
             }
-            gpio_ports.insert(entry.name.as_str(), port.base);
+            gpio_ports.insert(entry.name.as_str(), (port.base, port.alternate_count()));
             machine
                 .bus
                 .map_stm32_gpio(port)
@@ -604,7 +617,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     && let Some((port, pin)) = destination.split_once('@')
                     && target.is_none()
                 {
-                    let base = gpio_ports
+                    let (base, _) = gpio_ports
                         .get(port.trim())
                         .ok_or_else(|| button.error("unknown button GPIO port"))?;
                     let pin = irq_index(pin, 16).map_err(|e| button.error(&e))?;
@@ -969,12 +982,31 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             let mut limit = None;
             let mut routes = [0; 8];
             let mut dma_routes = [0; 8];
+            let mut gpio_outputs = Vec::new();
             for (_, text) in &timer.body {
                 if let Some((source, destinations)) = text.split_once("->") {
                     for destination in destinations.split('|') {
                         let (target, pin) = destination
                             .split_once('@')
                             .ok_or_else(|| timer.error("invalid STM32 timer wiring"))?;
+                        if let Some((port, gpio_pin)) = target.trim().split_once('#') {
+                            let &(port, functions) = gpio_ports
+                                .get(port)
+                                .ok_or_else(|| timer.error("unknown timer GPIO output port"))?;
+                            let gpio_pin = irq_index(gpio_pin, 16).map_err(|e| timer.error(&e))?;
+                            let function =
+                                irq_index(pin, functions).map_err(|e| timer.error(&e))?;
+                            let channel = irq_index(source, 4).map_err(|e| timer.error(&e))?;
+                            gpio_outputs.push((
+                                channel,
+                                TimerPin {
+                                    port,
+                                    pin: gpio_pin,
+                                    function,
+                                },
+                            ));
+                            continue;
+                        }
                         if stm32_dma.is_some_and(|dma| dma.name == target.trim()) {
                             let source = source.trim();
                             let sources = if let Some(list) =
@@ -1039,6 +1071,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 routes,
             );
             device.dma_routes = dma_routes;
+            device.gpio_outputs = gpio_outputs;
             machine
                 .bus
                 .map_stm32_timer(device)
@@ -1429,6 +1462,7 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
     let (base, size) = sysbus_range(entry, 0x400)?;
     let mut reset = [0; 3];
     let mut alternate_count = 16;
+    let mut inverted_pins = None;
     let mut seen = HashSet::new();
     for (_, text) in &entry.body {
         if text.contains("->") {
@@ -1441,6 +1475,10 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
         if !seen.insert(key) {
             return Err(entry.error("duplicate STM32 GPIO property"));
         }
+        if key == "invertedAFPins" {
+            inverted_pins = Some(value.trim());
+            continue;
+        }
         let value = number(value.trim()).map_err(|e| entry.error(&e))?;
         match key {
             "numberOfAFs" if (1..=16).contains(&value) => alternate_count = value,
@@ -1451,7 +1489,36 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
             _ => return Err(entry.error("unsupported STM32 GPIO property")),
         }
     }
-    Ok(Stm32Gpio::new(base, size, reset, alternate_count))
+    let mut port = Stm32Gpio::new(base, size, reset, alternate_count);
+    if let Some(pins) = inverted_pins {
+        let mut remaining = pins
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .ok_or_else(|| entry.error("invalid invertedAFPins list"))?
+            .trim();
+        while !remaining.is_empty() {
+            let (item, tail) = remaining
+                .strip_prefix('[')
+                .and_then(|s| s.split_once(']'))
+                .ok_or_else(|| entry.error("invalid invertedAFPins entry"))?;
+            let (pin, functions) = item
+                .split_once(',')
+                .ok_or_else(|| entry.error("expected pin and functions in invertedAFPins"))?;
+            let pin = irq_index(pin, 16).map_err(|e| entry.error(&e))?;
+            for function in functions.split(',') {
+                let function = irq_index(function, alternate_count).map_err(|e| entry.error(&e))?;
+                port.invert_alternate(pin, function);
+            }
+            remaining = tail.trim_start();
+            if !remaining.is_empty() {
+                remaining = remaining
+                    .strip_prefix(',')
+                    .ok_or_else(|| entry.error("expected comma in invertedAFPins"))?
+                    .trim_start();
+            }
+        }
+    }
+    Ok(port)
 }
 
 fn i2c_eeprom(entry: &Entry) -> Result<Eeprom, String> {

@@ -9,49 +9,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
     {
         return Err("--stm32f0-console requires a platform with an STM32F0 RCC".into());
     }
-    let timer_names: Vec<_> = entries
-        .iter()
-        .filter(|entry| entry.model == "Timers.STM32_Timer")
-        .map(|entry| entry.name.clone())
-        .collect();
     let mut tags = Vec::new();
-    let mut gpio_wiring = false;
-    for entry in &mut *entries {
-        match entry.model.as_str() {
-            "GPIOPort.STM32_GPIOPort" => {
-                entry
-                    .body
-                    .retain(|(_, text)| !text.starts_with("invertedAFPins:"));
-            }
-            "Timers.STM32_Timer" => {
-                entry.body.retain_mut(|(_, text)| {
-                    let Some((source, targets)) = text.split_once("->") else {
-                        return true;
-                    };
-                    let remaining: Vec<_> = targets
-                        .split('|')
-                        .map(str::trim)
-                        .filter(|target| {
-                            let Some((name, _)) = target.split_once('@') else {
-                                return true;
-                            };
-                            if name.contains('#') {
-                                gpio_wiring = true;
-                                return false;
-                            }
-                            true
-                        })
-                        .collect();
-                    if remaining.is_empty() {
-                        return false;
-                    }
-                    *text = format!("{} -> {}", source.trim(), remaining.join(" | "));
-                    true
-                });
-            }
-            _ => {}
-        }
-    }
     let mut definitions = HashMap::new();
     let mut loaded: Vec<Entry> = Vec::with_capacity(entries.len());
     for entry in entries.drain(..) {
@@ -63,41 +21,10 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
         {
             let previous: &mut Entry = &mut loaded[index];
             match previous.model.as_str() {
-                "GPIOPort.STM32_GPIOPort" => {
-                    for (line, text) in entry.body {
-                        let Some((source, destinations)) = text.split_once("->") else {
-                            return Err(previous.error("unsupported GPIO declaration override"));
-                        };
-                        let destinations: Vec<_> = destinations
-                            .split('|')
-                            .map(str::trim)
-                            .filter(|destination| {
-                                if destination.split_once('@').is_some_and(|(name, _)| {
-                                    timer_names.iter().any(|timer| timer == name.trim())
-                                }) {
-                                    gpio_wiring = true;
-                                    false
-                                } else {
-                                    true
-                                }
-                            })
-                            .collect();
-                        if !destinations.is_empty() {
-                            previous.body.push((
-                                line,
-                                format!("{} -> {}", source.trim(), destinations.join(" | ")),
-                            ));
-                        }
-                    }
-                }
-                "Timers.STM32_Timer"
-                    if entry.body.iter().all(|(_, text)| {
-                        text.split_once("->").is_some_and(|(_, locations)| {
-                            locations.split('|').all(|location| location.contains('#'))
-                        })
-                    }) =>
+                "GPIOPort.STM32_GPIOPort" | "Timers.STM32_Timer"
+                    if entry.body.iter().all(|(_, text)| text.contains("->")) =>
                 {
-                    gpio_wiring |= !entry.body.is_empty();
+                    previous.body.extend(entry.body);
                 }
                 "CRC.STM32_CRC" => {
                     for (_, value) in super::keys(&entry, &["configurablePoly"])? {
@@ -121,9 +48,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
         }
     }
     *entries = loaded;
-    if gpio_wiring {
-        eprintln!("penv: STM32F0 console mode omits timer GPIO alternate-function wiring");
-    }
     Ok(tags)
 }
 

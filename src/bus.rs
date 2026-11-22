@@ -89,6 +89,7 @@ pub struct Bus {
     gpio_exti_levels: u32,
     gpio_leds: Vec<GpioLed>,
     gpio_buttons: Vec<GpioButton>,
+    gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
     stm32_timers: Vec<Stm32Timer>,
     stm32_spis: Vec<Stm32F0Spi>,
@@ -352,6 +353,7 @@ impl Bus {
     }
 
     pub fn sample_nvic(&mut self, active: u64) {
+        let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
                 self.litex_uart
@@ -385,11 +387,7 @@ impl Bus {
                 .exti
                 .as_mut()
                 .map_or(0, |exti| exti.sample(exti_inputs));
-            let mut dma_requests = 0;
-            for timer in &mut self.stm32_timers {
-                irqs |= timer.tick();
-                dma_requests |= timer.take_dma_requests();
-            }
+            irqs |= timer_irqs;
             if let Some(adc) = self.stm32_adc.as_mut()
                 && adc.tick()
                 && let Some(line) = adc.irq
@@ -414,7 +412,7 @@ impl Bus {
                 }
             }
             if let Some(dma) = self.stm32_dma.as_mut() {
-                dma.queue_requests(dma_requests);
+                dma.queue_requests(timer_dma);
                 irqs |= dma.interrupts();
             }
             while irqs != 0 {
@@ -422,6 +420,36 @@ impl Bus {
                 irqs &= irqs - 1;
             }
         }
+    }
+
+    fn tick_stm32_timers(&mut self) -> (u32, u8) {
+        let mut irqs = 0;
+        let mut dma_requests = 0;
+        let mut gpio_changed = false;
+        for timer in &mut self.stm32_timers {
+            irqs |= timer.tick();
+            let changed = timer.take_output_changes();
+            if changed != 0 {
+                for (signal, pin) in &timer.gpio_outputs {
+                    if changed & (1 << signal) != 0
+                        && let Some(port) = self
+                            .stm32_gpios
+                            .iter_mut()
+                            .find(|port| port.base == pin.port)
+                    {
+                        port.set_alternate_output(pin.pin, pin.function, timer.pin_output(*signal));
+                        gpio_changed = true;
+                    }
+                }
+            }
+        }
+        if gpio_changed {
+            self.refresh_gpio_wiring();
+        }
+        for timer in &mut self.stm32_timers {
+            dma_requests |= timer.take_dma_requests();
+        }
+        (irqs, dma_requests)
     }
 
     pub fn map_exti(
@@ -533,6 +561,10 @@ impl Bus {
         Ok(())
     }
 
+    pub fn route_gpio_timer_input(&mut self, port: u32, pin: u8, timer: u32, channel: u8) {
+        self.gpio_timer_inputs.push((port, pin, timer, channel));
+    }
+
     pub fn add_gpio_led(&mut self, led: GpioLed) {
         self.gpio_leds.push(led);
         self.refresh_gpio_wiring();
@@ -570,6 +602,27 @@ impl Bus {
             .stm32_gpios
             .iter()
             .fold(0, |levels, port| levels | port.exti_levels());
+        if !self.gpio_timer_inputs.is_empty() {
+            for timer in &mut self.stm32_timers {
+                timer.capture_next = 0;
+            }
+            for &(port, pin, timer, channel) in &self.gpio_timer_inputs {
+                if self
+                    .stm32_gpios
+                    .iter()
+                    .any(|gpio| gpio.base == port && gpio.pins() & (1 << pin) != 0)
+                    && let Some(timer) = self
+                        .stm32_timers
+                        .iter_mut()
+                        .find(|device| device.base == timer)
+                {
+                    timer.capture_next |= 1 << channel;
+                }
+            }
+            for timer in &mut self.stm32_timers {
+                timer.apply_capture_inputs();
+            }
+        }
         for led in &mut self.gpio_leds {
             if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == led.port)
                 && let Some(on) = led.sample(port.pins())

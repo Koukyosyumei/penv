@@ -8,6 +8,12 @@ const DOWN: u32 = 1 << 4;
 const CENTER: u32 = 3 << 5;
 const ARR_PRELOAD: u32 = 1 << 7;
 
+pub struct TimerPin {
+    pub port: u32,
+    pub pin: u8,
+    pub function: u8,
+}
+
 pub struct Stm32Timer {
     pub base: u32,
     frequency: u32,
@@ -15,6 +21,13 @@ pub struct Stm32Timer {
     routes: [u32; 8],
     pub dma_routes: [u8; 8],
     dma_requests: u8,
+    pub gpio_outputs: Vec<(u8, TimerPin)>,
+    output_reference: u8,
+    output_enable: u8,
+    output_levels: u8,
+    output_changes: u8,
+    capture_levels: u8,
+    pub capture_next: u8,
     phase: u64,
     prescaler: u32,
     counter: u32,
@@ -39,6 +52,13 @@ impl Stm32Timer {
             routes,
             dma_routes: [0; 8],
             dma_requests: 0,
+            gpio_outputs: Vec::new(),
+            output_reference: 0,
+            output_enable: 0,
+            output_levels: 0,
+            output_changes: 0,
+            capture_levels: 0,
+            capture_next: 0,
             phase: 0,
             prescaler: 0,
             counter: 0,
@@ -116,6 +136,12 @@ impl Stm32Timer {
             0x30 => self.registers[index] = value & 0xff,
             0x34..=0x40 => self.registers[index] = value & self.counter_mask,
             _ => {}
+        }
+        if matches!(
+            offset,
+            0x00 | 0x14 | 0x18 | 0x1c | 0x20 | 0x24 | 0x2c | 0x34..=0x40
+        ) {
+            self.update_outputs(0);
         }
     }
 
@@ -207,13 +233,95 @@ impl Stm32Timer {
             self.counter += 1;
         }
 
-        if !matches!(((control & CENTER) >> 5, down), (1, false) | (2, true)) {
-            for channel in 0..4 {
-                let mode = self.registers[6 + channel / 2] >> ((channel % 2) * 8);
-                if mode & 3 == 0 && self.counter == self.registers[13 + channel] {
-                    self.raise_events(1 << (channel + 1));
-                }
+        let mut matches = 0;
+        for channel in 0..4 {
+            if self.channel_mode(channel) & 3 == 0 && self.counter == self.registers[13 + channel] {
+                matches |= 1 << channel;
             }
+        }
+        if matches != 0 && !matches!(((control & CENTER) >> 5, down), (1, false) | (2, true)) {
+            self.raise_events(u32::from(matches) << 1);
+        }
+        self.update_outputs(matches);
+    }
+
+    fn channel_mode(&self, channel: usize) -> u32 {
+        (self.registers[6 + channel / 2] >> ((channel % 2) * 8)) & 0xff
+    }
+
+    fn update_outputs(&mut self, matches: u8) {
+        let mut enabled = 0;
+        let mut levels = 0;
+        for channel in 0..4 {
+            let mode = self.channel_mode(channel);
+            let flags = (self.registers[8] >> (channel * 4)) & 0xf;
+            if mode & 3 != 0 || flags & 1 == 0 {
+                continue;
+            }
+            let bit = 1 << channel;
+            let old = self.output_reference & bit != 0;
+            let matched = matches & bit != 0;
+            let compare = self.registers[13 + channel];
+            let pwm = if self.registers[0] & DOWN == 0 {
+                self.counter < compare
+            } else {
+                self.counter <= compare
+            };
+            let high = match (mode >> 4) & 7 {
+                1 if matched => true,
+                2 if matched => false,
+                3 if matched => !old,
+                4 => false,
+                5 => true,
+                6 => pwm,
+                7 => !pwm,
+                _ => old,
+            };
+            self.output_reference = (self.output_reference & !bit) | (u8::from(high) << channel);
+            enabled |= bit;
+            levels |= u8::from(high ^ (flags & 2 != 0)) << channel;
+        }
+        self.output_changes |= (self.output_enable ^ enabled) | (self.output_levels ^ levels);
+        self.output_enable = enabled;
+        self.output_levels = levels;
+    }
+
+    pub fn take_output_changes(&mut self) -> u8 {
+        std::mem::take(&mut self.output_changes)
+    }
+
+    pub fn pin_output(&self, channel: u8) -> Option<bool> {
+        let bit = 1 << channel;
+        (self.output_enable & bit != 0).then_some(self.output_levels & bit != 0)
+    }
+
+    pub fn apply_capture_inputs(&mut self) {
+        let changed = self.capture_levels ^ self.capture_next;
+        self.capture_levels = self.capture_next;
+        if changed == 0 {
+            return;
+        }
+        for channel in 0..4 {
+            let input = match self.channel_mode(channel) & 3 {
+                1 => channel,
+                2 => channel ^ 1,
+                _ => continue,
+            };
+            let bit = 1 << input;
+            let flags = (self.registers[8] >> (channel * 4)) & 0xf;
+            if flags & 1 == 0 || changed & bit == 0 {
+                continue;
+            }
+            let high = self.capture_levels & bit != 0;
+            if flags & 8 == 0 && high == (flags & 2 != 0) {
+                continue;
+            }
+            let signal = 1 << (channel + 1);
+            if self.registers[4] & signal != 0 {
+                self.registers[4] |= 1 << (channel + 9);
+            }
+            self.registers[13 + channel] = self.counter;
+            self.raise_events(signal);
         }
     }
 }
