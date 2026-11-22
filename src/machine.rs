@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub const MAX_HARTS: usize = 8;
+pub const VIRTUAL_STEPS_PER_SECOND: u32 = 1_000_000;
 
 pub struct Machine {
     pub bus: Bus,
@@ -280,6 +281,9 @@ impl Machine {
                 &mut self.secondary[index - 1]
             };
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            if let Some(dwt) = &mut self.bus.dwt {
+                dwt.tick();
+            }
             while self
                 .uart_input
                 .front()

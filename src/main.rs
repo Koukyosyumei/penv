@@ -3,6 +3,7 @@ mod clint;
 mod compressed;
 mod constant_mmio;
 mod csr;
+mod dwt;
 mod ethernet;
 mod ethernet_switch;
 mod image;

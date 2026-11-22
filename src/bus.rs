@@ -7,6 +7,7 @@ use std::{
 use crate::{
     clint::Clint,
     constant_mmio::ConstantMmio,
+    dwt::Dwt,
     ethernet::Controller,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
@@ -79,6 +80,7 @@ pub struct Bus {
     exti: Option<Exti>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
+    pub dwt: Option<Dwt>,
     pub nvic: Option<Nvic>,
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
@@ -244,12 +246,34 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_dwt(&mut self, base: u32, frequency: u32) -> Result<(), String> {
+        let device = Dwt::new(base, frequency);
+        let [(start, end), (control, control_end)] = device.ranges();
+        if base & 3 != 0
+            || end > 1 << 32
+            || (start < control_end && control < end)
+            || self.dwt.is_some()
+            || self.overlaps(start, end)
+            || self.overlaps(control, control_end)
+        {
+            return Err("invalid or overlapping DWT mapping".into());
+        }
+        self.dwt = Some(device);
+        Ok(())
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
         self.h7_network_control.as_ref().is_some_and(|control| {
             control
                 .ranges()
                 .any(|(base, limit)| start < limit && base < end)
         }) || (self.nvic.is_some() && Nvic::overlaps(start, end))
+            || self.dwt.as_ref().is_some_and(|device| {
+                device
+                    .ranges()
+                    .into_iter()
+                    .any(|(base, limit)| start < limit && base < end)
+            })
             || (self.systick.is_some() && SysTick::overlaps(start, end))
             || self
                 .uart_tx
@@ -674,6 +698,11 @@ impl Bus {
         {
             return Ok(value);
         }
+        if N == 4
+            && let Some(value) = self.dwt.as_ref().and_then(|device| device.read(address))
+        {
+            return Ok(value);
+        }
         self.read_ram::<N>(address)
     }
 
@@ -815,6 +844,14 @@ impl Bus {
             .ethernet
             .iter_mut()
             .any(|device| device.write(address, width, value, &mut dma))
+        {
+            return Ok(());
+        }
+        if width == 4
+            && self
+                .dwt
+                .as_mut()
+                .is_some_and(|device| device.write(address, value))
         {
             return Ok(());
         }

@@ -177,7 +177,7 @@ fn rounds(duration: &str) -> Result<u64, String> {
     {
         return Err(format!("expected a duration in seconds, got {duration:?}"));
     }
-    let denominator = 1_000_000;
+    let denominator = u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND);
     let micros = fraction
         .bytes()
         .take(6)

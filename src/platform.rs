@@ -255,6 +255,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
     let mut clint = None;
+    let mut dwt = None;
     let mut nvic = None;
     let mut exti = None;
     let mut combiners = Vec::new();
@@ -325,6 +326,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.CombinedInput" => combiners.push(entry),
+            "Miscellaneous.DWT" => {
+                if dwt.replace(entry).is_some() {
+                    return Err(entry.error("only one DWT is supported"));
+                }
+            }
             "IRQControllers.NVIC" => {
                 if nvic.replace(entry).is_some() {
                     return Err(entry.error("only one NVIC is supported"));
@@ -377,6 +383,20 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) {
             return Err(entry.error("expected Cortex-M0 or Cortex-M0+ cpuType"));
+        }
+        if let Some(dwt) = dwt {
+            let (_, frequency) = keys(dwt, &["frequency"])?
+                .into_iter()
+                .next()
+                .ok_or_else(|| dwt.error("missing DWT frequency"))?;
+            let frequency = number(frequency).map_err(|error| dwt.error(&error))?;
+            if frequency == 0 {
+                return Err(dwt.error("DWT frequency must be positive"));
+            }
+            machine
+                .bus
+                .map_dwt(dwt.address()?, frequency)
+                .map_err(|error| dwt.error(&error))?;
         }
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
         let mut priority = None;
@@ -583,6 +603,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             nvic.map(|entry| entry.name.as_str()),
         )?;
         return Ok(machine);
+    }
+    if let Some(dwt) = dwt {
+        return Err(dwt.error("DWT requires a Cortex-M CPU"));
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
