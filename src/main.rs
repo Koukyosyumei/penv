@@ -48,6 +48,7 @@ Usage: penv run [OPTIONS] IMAGE
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
   --wait-for-frame STEP:PATH  Stop when the LiteX framebuffer matches a P6 RGB PPM
+  --wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH  Wait for identical RGB pixels in a region
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
@@ -226,8 +227,42 @@ fn run() -> Result<ExitCode, String> {
                 let event = (step, PathBuf::from(path));
                 if option == "--framebuffer-event" {
                     framebuffer_events.push(event);
-                } else if frame_wait.replace(event).is_some() {
-                    return Err("--wait-for-frame may only be specified once".into());
+                } else if frame_wait.replace((event.0, event.1, None)).is_some() {
+                    return Err("only one framebuffer wait may be specified".into());
+                }
+            }
+            Some("--wait-for-frame-roi") => {
+                const FORMAT: &str = "--wait-for-frame-roi requires STEP:X:Y:WIDTH:HEIGHT:PATH";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let mut fields = value.splitn(6, ':');
+                let step = fields
+                    .next()
+                    .and_then(|field| field.parse::<u64>().ok())
+                    .ok_or(FORMAT)?;
+                let mut number = || {
+                    fields
+                        .next()
+                        .and_then(|field| field.parse::<u16>().ok())
+                        .ok_or(FORMAT)
+                };
+                let region = litex_video::FrameRegion {
+                    x: number()?,
+                    y: number()?,
+                    width: number()?,
+                    height: number()?,
+                };
+                let path = fields
+                    .next()
+                    .filter(|path| !path.is_empty())
+                    .ok_or(FORMAT)?;
+                if frame_wait
+                    .replace((step, PathBuf::from(path), Some(region)))
+                    .is_some()
+                {
+                    return Err("only one framebuffer wait may be specified".into());
                 }
             }
             Some("--uart-event") => {
@@ -509,9 +544,13 @@ fn run() -> Result<ExitCode, String> {
     for (step, path) in framebuffer_events {
         machine.schedule_framebuffer_capture(step, path)?;
     }
-    if let Some((step, path)) = frame_wait {
+    if let Some((step, path, region)) = frame_wait {
         let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         let reference = litex_video::ReferenceFrame::parse(data)
+            .and_then(|frame| match region {
+                Some(region) => frame.with_region(region),
+                None => Ok(frame),
+            })
             .map_err(|error| format!("{}: {error}", path.display()))?;
         machine.schedule_frame_wait(step, reference)?;
     }

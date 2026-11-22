@@ -2,9 +2,27 @@ use std::io::Write;
 
 use crate::bus::Bus;
 
+#[derive(Clone, Copy)]
+pub struct FrameRegion {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl FrameRegion {
+    fn fits(self, width: u16, height: u16) -> bool {
+        self.width != 0
+            && self.height != 0
+            && u32::from(self.x) + u32::from(self.width) <= u32::from(width)
+            && u32::from(self.y) + u32::from(self.height) <= u32::from(height)
+    }
+}
+
 pub struct ReferenceFrame {
     data: Vec<u8>,
     pixels_start: usize,
+    region: Option<FrameRegion>,
     width: u16,
     height: u16,
 }
@@ -41,9 +59,18 @@ impl ReferenceFrame {
         Ok(Self {
             data,
             pixels_start,
+            region: None,
             width,
             height,
         })
+    }
+
+    pub fn with_region(mut self, region: FrameRegion) -> Result<Self, String> {
+        if !region.fits(self.width, self.height) {
+            return Err("frame region must be nonempty and fit inside the reference image".into());
+        }
+        self.region = Some(region);
+        Ok(self)
     }
 }
 
@@ -133,15 +160,30 @@ impl Framebuffer {
         if self.active.is_none() {
             return Ok(false);
         }
-        let (mut address, width, height) = self.layout()?;
-        if (width, height) != (reference.width, reference.height) {
-            return Ok(false);
-        }
-        for expected in reference.data[reference.pixels_start..].as_chunks::<3>().0 {
-            if self.rgb(bus, address)? != *expected {
-                return Ok(false);
+        let (base, width, height) = self.layout()?;
+        let region = match reference.region {
+            Some(region) if region.fits(width, height) => region,
+            None if (width, height) == (reference.width, reference.height) => FrameRegion {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
+            _ => return Ok(false),
+        };
+        let reference_stride = usize::from(reference.width) * 3;
+        let row_bytes = usize::from(region.width) * 3;
+        for row in u32::from(region.y)..u32::from(region.y) + u32::from(region.height) {
+            let mut address = base + (row * u32::from(width) + u32::from(region.x)) * 4;
+            let start = reference.pixels_start
+                + row as usize * reference_stride
+                + usize::from(region.x) * 3;
+            for expected in reference.data[start..start + row_bytes].as_chunks::<3>().0 {
+                if self.rgb(bus, address)? != *expected {
+                    return Ok(false);
+                }
+                address = address.wrapping_add(4);
             }
-            address = address.wrapping_add(4);
         }
         Ok(true)
     }
@@ -193,5 +235,52 @@ mod tests {
         assert!(!video.matches(&bus, &reference).unwrap());
         video.active = Some((0, 2, 1));
         assert!(!video.matches(&bus, &reference).unwrap());
+    }
+
+    #[test]
+    fn compares_only_the_region_at_the_same_coordinates_in_both_images() {
+        let mut bus = Bus::default();
+        bus.map_ram(0x1000, 48).unwrap();
+        let mut video = Framebuffer {
+            name: "video".into(),
+            dma: 0x2000,
+            vtg: 0x3000,
+            memory: 0x1000,
+            memory_size: 48,
+            offset: 0,
+            width: 4,
+            height: 3,
+            swap_red_blue: false,
+            active: Some((0, 4, 3)),
+        };
+        let region = FrameRegion {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+        };
+        let mut ppm = b"P6\n3 3\n255\n".to_vec();
+        ppm.extend_from_slice(&[9; 27]);
+        let reference = ReferenceFrame::parse(ppm).unwrap();
+        assert!(!video.matches(&bus, &reference).unwrap());
+        let reference = reference.with_region(region).unwrap();
+        for address in [0x1014, 0x1018, 0x1024, 0x1028] {
+            bus.memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&[9, 9, 9, 0]);
+        }
+        assert!(video.matches(&bus, &reference).unwrap());
+        bus.memory(0x1028, 1).unwrap()[0] = 8;
+        assert!(!video.matches(&bus, &reference).unwrap());
+        video.active = Some((0, 2, 3));
+        assert!(!video.matches(&bus, &reference).unwrap());
+        assert!(
+            reference
+                .with_region(FrameRegion {
+                    x: u16::MAX,
+                    ..region
+                })
+                .is_err()
+        );
     }
 }

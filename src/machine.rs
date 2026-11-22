@@ -296,7 +296,7 @@ impl Machine {
         reference: ReferenceFrame,
     ) -> Result<(), String> {
         if self.bus.litex_video.is_none() {
-            return Err("--wait-for-frame requires a LiteX framebuffer".into());
+            return Err("framebuffer wait requires a LiteX framebuffer".into());
         }
         self.schedule_input(step, Input::FrameWait(Box::new(reference)));
         Ok(())

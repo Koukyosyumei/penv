@@ -159,7 +159,44 @@ penv=target/release/penv
 cmp "$artifacts/nexys-video-motd.ppm" "$artifacts/matched.ppm"
 ```
 
-上流の `penguin_with_litex_logo.png` から独立に変換した参照で、開始ステップでは不一致、708,000,000 ステップで一致を確認しました。一致時に保存した RGB PPM は参照とバイト単位で一致しました。上限を 2,000,000 ステップとして BIOS 起動直後から待った場合は、未一致の診断と終了コード 1 を確認しました。ROI の動的待機、PNG の直接読み込み、Robot Framework からの呼び出しは残課題です。
+上流の `penguin_with_litex_logo.png` から独立に変換した参照で、開始ステップでは不一致、708,000,000 ステップで一致を確認しました。一致時に保存した RGB PPM は参照とバイト単位で一致しました。上限を 2,000,000 ステップとして BIOS 起動直後から待った場合は、未一致の診断と終了コード 1 を確認しました。PNG の直接読み込みと Robot Framework からの呼び出しは残課題です。
+
+### Nexys Video の領域一致待機
+
+`--wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH` は、参照 PPM とゲストのフレーム内の同じ矩形だけを比較します。座標の原点は左上です。矩形は空でなく、参照画像に収まる必要があります。ゲスト側で矩形が収まるフレームが表示されるまで待機できます。ポーリング間隔と終了コードは全画面待機と共通です。
+
+変更前の `e85f1d9` では `--wait-for-frame-roi` は `unknown option` でした。回帰スクリプトで照合済みのロゴ PPM を使い、上流 `WaitForFrameROI` と同じ左上 75×80 の確認と、領域内の 1 チャンネルを変えた不一致を再現できます。
+
+```sh
+artifacts=/tmp/penv-upstream
+python3 - "$artifacts/nexys-video-logo.ppm" "$artifacts/roi-changed.ppm" <<'PYTHON'
+from pathlib import Path
+import sys
+
+header = b"P6\n800 600\n255\n"
+data = bytearray(Path(sys.argv[1]).read_bytes())
+assert data.startswith(header)
+data[len(header)] ^= 255
+Path(sys.argv[2]).write_bytes(data)
+PYTHON
+
+wait_roi() {
+  target/release/penv run --script ../renode/scripts/single-node/litex_nexys_video_vexriscv_linux.resc \
+    --platform-root ../renode --asset-dir "$artifacts/assets" --max-steps 730000000 \
+    --uart-event "35000000:$artifacts/nexys-video-abort.input" \
+    --uart-event "40000000:$artifacts/nexys-video-sd.input" \
+    --uart-event "680000000:$artifacts/nexys-video-login.input" \
+    --uart-event "690000000:$artifacts/nexys-video-prompt.input" \
+    --uart-event "700000000:$artifacts/nexys-video-motd.input" \
+    --wait-for-frame-roi "710000000:0:0:75:80:$1"
+}
+wait_roi "$artifacts/nexys-video-logo.ppm"
+status=0
+wait_roi "$artifacts/roi-changed.ppm" || status=$?
+test "$status" -eq 1
+```
+
+実ファームウェアでは、上流の `penguin_logo.png` から変換した参照とステップ 710,000,000 で領域が一致しました。領域外には MOTD 描画による差がありました。領域内の 1 チャンネルを反転した参照は、上限 730,000,000 まで一致せず終了コード 1 でした。全画面待機もステップ 708,000,000 で一致しました。PNG の直接読み込みと Robot Framework の API 互換性は残課題です。
 
 ## Cortex-M0 / Cortex-M0+
 
