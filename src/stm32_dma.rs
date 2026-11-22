@@ -9,6 +9,8 @@ pub struct Stm32Dma {
     pub base: u32,
     channels: Vec<Channel>,
     selection: u32,
+    active: u8,
+    pending_requests: u8,
 }
 
 struct Channel {
@@ -38,6 +40,8 @@ impl Stm32Dma {
         Self {
             base,
             selection: 0,
+            active: 0,
+            pending_requests: 0,
             channels: irqs
                 .into_iter()
                 .map(|irq| Channel {
@@ -110,7 +114,13 @@ impl Stm32Dma {
                 // Addresses and the reload count are writable while the channel is disabled.
                 if channel.config & ENABLE == 0 {
                     match register {
-                        0 => channel.config = value & 0x7fff,
+                        0 => {
+                            channel.config = value & 0x7fff;
+                            if value & ENABLE != 0 {
+                                channel.current_peripheral = channel.peripheral;
+                                channel.current_memory = channel.memory;
+                            }
+                        }
                         4 => {
                             channel.count = value as u16;
                             channel.original = channel.count;
@@ -128,6 +138,7 @@ impl Stm32Dma {
                 } else if register == 0 {
                     channel.config = (channel.config & !0xf) | (value & 0xf);
                 }
+                self.update_active(index);
             }
         }
     }
@@ -137,7 +148,27 @@ impl Stm32Dma {
         ((offset / 0x14) as usize, offset % 0x14)
     }
 
+    fn update_active(&mut self, index: usize) {
+        let bit = 1 << index;
+        let channel = &self.channels[index];
+        if channel.config & ENABLE != 0 && channel.count != 0 {
+            self.active |= bit;
+        } else {
+            self.active &= !bit;
+            self.pending_requests &= !bit;
+        }
+    }
+
+    pub fn has_enabled_channels(&self) -> bool {
+        self.active != 0
+    }
+
+    pub fn queue_requests(&mut self, requests: u8) {
+        self.pending_requests |= requests & self.active;
+    }
+
     pub fn next_transfer(&self, requests: u8) -> Option<Transfer> {
+        let requests = requests | self.pending_requests;
         let (index, channel) = self
             .channels
             .iter()
@@ -181,10 +212,12 @@ impl Stm32Dma {
     }
 
     pub fn complete(&mut self, transfer: Transfer, success: bool) {
+        self.pending_requests &= !(1 << transfer.channel);
         let channel = &mut self.channels[transfer.channel];
         if !success {
             channel.flags |= 8;
             channel.config &= !ENABLE;
+            self.update_active(transfer.channel);
             return;
         }
         let (peripheral_width, memory_width) = if channel.config & DIRECTION != 0 {
@@ -212,6 +245,7 @@ impl Stm32Dma {
                 channel.current_peripheral = channel.peripheral;
             }
         }
+        self.update_active(transfer.channel);
     }
 
     pub fn interrupts(&self) -> u32 {

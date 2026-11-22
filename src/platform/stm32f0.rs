@@ -24,11 +24,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
         })
         .map(|entry| (entry.name.clone(), entry.model.clone()))
         .collect();
-    let dma_names: Vec<_> = entries
-        .iter()
-        .filter(|e| e.model == "DMA.STM32G0DMA")
-        .map(|entry| entry.name.clone())
-        .collect();
     let mut skipped = Vec::new();
     let mut tags = Vec::new();
     let mut gpio_wiring = false;
@@ -65,7 +60,7 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                                 gpio_wiring = true;
                                 return false;
                             }
-                            !dma_names.iter().any(|dma| dma == name.trim())
+                            true
                         })
                         .collect();
                     if remaining.is_empty() {

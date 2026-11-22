@@ -13,6 +13,8 @@ pub struct Stm32Timer {
     frequency: u32,
     counter_mask: u32,
     routes: [u32; 8],
+    pub dma_routes: [u8; 8],
+    dma_requests: u8,
     phase: u64,
     prescaler: u32,
     counter: u32,
@@ -35,6 +37,8 @@ impl Stm32Timer {
                 0xffff
             },
             routes,
+            dma_routes: [0; 8],
+            dma_requests: 0,
             phase: 0,
             prescaler: 0,
             counter: 0,
@@ -79,10 +83,10 @@ impl Stm32Timer {
                 }
             }
             0x04 | 0x08 | 0x18 | 0x1c | 0x20 | 0x44 => self.registers[index] = value & 0xffff,
-            0x0c => self.registers[index] = value & 0x5fff,
+            0x0c => self.registers[index] = value & 0x7fff,
             0x10 => self.registers[index] &= value,
             0x14 => {
-                self.registers[4] |= value & 0xfe;
+                self.raise_events(value & 0xfe);
                 if value & 1 != 0 && self.registers[0] & UPDATE_DISABLE == 0 {
                     self.active_arr = self.arr;
                     self.counter = if self.registers[0] & DOWN == 0 {
@@ -94,7 +98,7 @@ impl Stm32Timer {
                     self.prescaler = 0;
                     self.repetition = self.registers[12];
                     if self.registers[0] & UPDATE_OVERFLOW_ONLY == 0 {
-                        self.registers[4] |= 1;
+                        self.raise_events(1);
                     }
                 }
             }
@@ -152,6 +156,19 @@ impl Stm32Timer {
         irqs
     }
 
+    pub fn take_dma_requests(&mut self) -> u8 {
+        std::mem::take(&mut self.dma_requests)
+    }
+
+    fn raise_events(&mut self, events: u32) {
+        self.registers[4] |= events;
+        let mut enabled = events & (self.registers[3] >> 8) & 0x7f;
+        while enabled != 0 {
+            self.dma_requests |= self.dma_routes[enabled.trailing_zeros() as usize];
+            enabled &= enabled - 1;
+        }
+    }
+
     fn count(&mut self) {
         let control = self.registers[0];
         let down = control & DOWN != 0;
@@ -175,7 +192,7 @@ impl Stm32Timer {
                     if down && !center {
                         self.counter = self.active_arr;
                     }
-                    self.registers[4] |= 1;
+                    self.raise_events(1);
                     if control & ONE_PULSE != 0 {
                         self.registers[0] &= !ENABLE;
                         self.phase = 0;
@@ -194,7 +211,7 @@ impl Stm32Timer {
             for channel in 0..4 {
                 let mode = self.registers[6 + channel / 2] >> ((channel % 2) * 8);
                 if mode & 3 == 0 && self.counter == self.registers[13 + channel] {
-                    self.registers[4] |= 1 << (channel + 1);
+                    self.raise_events(1 << (channel + 1));
                 }
             }
         }

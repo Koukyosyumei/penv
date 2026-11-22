@@ -692,21 +692,42 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             let mut frequency = None;
             let mut limit = None;
             let mut routes = [0; 8];
+            let mut dma_routes = [0; 8];
             for (_, text) in &timer.body {
                 if let Some((source, destinations)) = text.split_once("->") {
-                    let flags = match source.trim() {
-                        "" | "IRQ" => 0xff,
-                        "UpdateInterrupt" => 1,
-                        "CaptureCompareInterrupt" => 0x1e,
-                        "CommutationInterrupt" => 0x20,
-                        "TriggerInterrupt" => 0x40,
-                        "BreakInterrupt" => 0x80,
-                        _ => return Err(timer.error("unsupported STM32 timer output")),
-                    };
                     for destination in destinations.split('|') {
                         let (target, pin) = destination
                             .split_once('@')
                             .ok_or_else(|| timer.error("invalid STM32 timer wiring"))?;
+                        if stm32_dma.is_some_and(|dma| dma.name == target.trim()) {
+                            let source = source.trim();
+                            let sources = if let Some(list) =
+                                source.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+                            {
+                                list.split(',').map(str::trim).collect::<Vec<_>>()
+                            } else {
+                                vec![source]
+                            };
+                            let pins =
+                                irq_list(pin, dma_channels + 1).map_err(|e| timer.error(&e))?;
+                            if pins.len() != sources.len() || pins.contains(&0) {
+                                return Err(
+                                    timer.error("invalid STM32 timer DMA wiring width or channel")
+                                );
+                            }
+                            for (source, pin) in sources.into_iter().zip(pins) {
+                                let flags =
+                                    stm32_timer_output(source).map_err(|e| timer.error(e))?;
+                                for (index, route) in dma_routes.iter_mut().enumerate() {
+                                    if flags & (1 << index) != 0 {
+                                        *route |= 1 << (pin - 1);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        let flags =
+                            stm32_timer_output(source.trim()).map_err(|e| timer.error(e))?;
                         let irq = if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
                             irq_index(pin, 32).map_err(|e| timer.error(&e))?
                         } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
@@ -735,14 +756,16 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(timer.error("expected STM32 timer property or interrupt wiring"));
                 }
             }
+            let mut device = Stm32Timer::new(
+                timer.address()?,
+                frequency.ok_or_else(|| timer.error("missing STM32 timer frequency"))?,
+                limit.ok_or_else(|| timer.error("missing STM32 timer initialLimit"))?,
+                routes,
+            );
+            device.dma_routes = dma_routes;
             machine
                 .bus
-                .map_stm32_timer(Stm32Timer::new(
-                    timer.address()?,
-                    frequency.ok_or_else(|| timer.error("missing STM32 timer frequency"))?,
-                    limit.ok_or_else(|| timer.error("missing STM32 timer initialLimit"))?,
-                    routes,
-                ))
+                .map_stm32_timer(device)
                 .map_err(|e| timer.error(&e))?;
         }
         for uart in stm32_uarts {
@@ -1074,6 +1097,22 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .map_err(|e| entry.error(&e))?;
     }
     Ok(machine)
+}
+
+fn stm32_timer_output(source: &str) -> Result<u32, &'static str> {
+    Ok(match source {
+        "" | "IRQ" => 0xff,
+        "UpdateInterrupt" => 1,
+        "0" => 1 << 1,
+        "1" => 1 << 2,
+        "2" => 1 << 3,
+        "3" => 1 << 4,
+        "CaptureCompareInterrupt" => 0x1e,
+        "CommutationInterrupt" => 0x20,
+        "TriggerInterrupt" => 0x40,
+        "BreakInterrupt" => 0x80,
+        _ => return Err("unsupported STM32 timer output"),
+    })
 }
 
 fn dma_input(line: &str, count: u32) -> Result<u8, String> {

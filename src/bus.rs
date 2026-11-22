@@ -282,7 +282,11 @@ impl Bus {
     }
 
     pub fn advance_stm32_dma(&mut self, output: &mut impl Write) -> Result<(), BusError> {
-        let Some(dma) = &self.stm32_dma else {
+        let Some(dma) = self
+            .stm32_dma
+            .as_ref()
+            .filter(|dma| dma.has_enabled_channels())
+        else {
             return Ok(());
         };
         let mut requests = self.stm32_adc.as_ref().map_or(0, Stm32F0Adc::pending_dma);
@@ -334,8 +338,10 @@ impl Bus {
                 .exti
                 .as_mut()
                 .map_or(0, |exti| exti.sample(exti_inputs));
+            let mut dma_requests = 0;
             for timer in &mut self.stm32_timers {
                 irqs |= timer.tick();
+                dma_requests |= timer.take_dma_requests();
             }
             if let Some(adc) = self.stm32_adc.as_mut()
                 && adc.tick()
@@ -343,7 +349,8 @@ impl Bus {
             {
                 irqs |= 1 << line;
             }
-            if let Some(dma) = &self.stm32_dma {
+            if let Some(dma) = self.stm32_dma.as_mut() {
+                dma.queue_requests(dma_requests);
                 irqs |= dma.interrupts();
             }
             while irqs != 0 {
