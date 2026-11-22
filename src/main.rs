@@ -6,6 +6,7 @@ mod image;
 mod machine;
 mod monitor;
 mod murax;
+mod nrf52840;
 mod ns16550;
 mod nvic;
 mod platform;
@@ -310,6 +311,7 @@ fn run() -> Result<ExitCode, String> {
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
+    let mut named_analyzers = Vec::new();
     if let Some(script) = script {
         if platform_path.is_some() || raw || hex {
             return Err("--script cannot be combined with --platform, --raw, or --hex".into());
@@ -339,6 +341,7 @@ fn run() -> Result<ExitCode, String> {
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;
+        named_analyzers = boot.named_analyzers;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -363,6 +366,11 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    for name in named_analyzers {
+        if !machine.bus.has_nrf_uart(&name) {
+            return Err(format!("unsupported UART analyzer target {name:?}"));
+        }
+    }
     machine.bus.report_led_events(led_events);
     for (step, name, pressed) in button_events {
         machine.schedule_button(step, &name, pressed)?;

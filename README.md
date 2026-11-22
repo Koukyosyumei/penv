@@ -90,6 +90,38 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ボタンは `--button-event 100000:button:press --button-event 200000:button:release` のように操作でき、`--led-events` は LED の状態変化を標準エラー出力に表示します。 上流の Zephyr Button サンプルでボタン割り込みと LED の変化を確認しています。上流の ADC サンプルでは、`--adc-input 1:0.6 --adc-event 1000000:1:1.2 --max-steps 120000000` を指定すると、同じ実行で 745 と 1489 が順に出力されます。
 
+### nRF52840 の段階検証
+
+nRF52840 用に Cortex-M4 のリセットと Thumb-2 の一部、BASEPRI、NVIC の第 2 IRQ バンク、共有 SRAM エイリアスを実装しています。周辺機器は CLOCK、RTC0–2、UART0–1 の EasyDMA モードに対応します。RTC は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。UART TX は即時に転送します。CLI 入力は REPL で最初に宣言した UART に届き、受信が開始されているときに SRAM へ転送します。UART の PPI/SHORTS、フロー制御、ボーレートに基づく転送時間は未実装です。RTC のイベントを PPI タスクに配送する経路も未実装です。
+
+上流スクリプトが指定する公開 ELF を取得して再現できます。参照した Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、CLOCK・RTC・UART モデルを確認した Renode Infrastructure は `09ac7c563095c5410258ecc1b1a6b841a013db85` です。
+
+```sh
+cargo test
+cargo build --release
+assets=$(mktemp -d)
+resc=../renode/scripts/single-node/nrf52840.resc
+url=$(sed -n 's/^\$bin?=@//p' "$resc")
+elf="$assets/${url##*/}"
+curl -fL "$url" -o "$elf"
+printf '%s  %s\n' c00fbffd6b65c6238877c4fe52e8228c2a38bf1f "$elf" | sha1sum -c -
+
+target/release/penv run --script "$resc" --platform-root ../renode \
+  --asset-dir "$assets" --max-steps 100000
+```
+
+修正前は RESC 11 行目の `showAnalyzer uart0` で停止しました。現在はその指定を解析し、次の段階で REPL 16 行目の RTC 宣言も受理します。未変更のスクリプトは REPL 28 行目の `wdt: unsupported platform model "Timers.NRF52840_Watchdog"` で終了コード 1 を返します。Watchdog に続き PPI、TWI、SPI、GPIO/GPIOTE、汎用タイマー、I²S、PDM、RADIO、RNG、ECB、EGU のモデルが残っています。
+
+次の検証では、実装済みの宣言を明示的に選んだ一時 REPL で同じ ELF を起動します。`sysbus` の FICR/UICR タグは初期化コードの読み出しに使います。上流 SVD の指定は診断用メタデータとして受理します。
+
+```sh
+awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|flash|ram|clock|sysbus):$/) } keep' \
+  ../renode/platforms/cpus/nrf52840.repl > "$assets/boot.repl"
+target/release/penv run --platform "$assets/boot.repl" --max-steps 100000 "$elf"
+```
+
+この構成では `z_platform_init` 冒頭の `B.W`（PC `0x0000b77a`）を通過し、`SystemInit`、メモリ初期化、IRQ 優先度設定を経て `z_cstart` に到達します。最初に失敗するアクセスは PC `0x00007e34` からの SCB CCR（`0xe000ed14`）の読み出しです。続く初期化には SCB のフォルト制御や追加の Thumb-2 命令も必要です。Zephyr のバナー、シェルプロンプト、コマンド応答は未確認です。
+
 ## 現在の実装範囲
 
 RV32I 基本整数命令、M 拡張、Zifencei を実装しています。REPL で `rv32ima` または `rv32ima_zicsr_zifencei` を指定すると、共有 RAM 上の A 拡張命令を使用できます。`rv32imc` と `rv32imac` では RV32C の整数圧縮命令に対応します。`cycle`、`instret`、`time` と各上位 32 ビットを読み取れます。CLINT がある場合の `time` は `mtime` に従います。Zicsr の命令と、マシンモードの CSR の一部、および `ECALL`・`EBREAK` からの `MRET` を実装しています。`CPU.RiscV32` ではユーザーモードへの移行とマシンモードへのトラップ、16 エントリーの PMP に対応しています。スーパーバイザーモードでは同期例外の委譲と `SRET`、32 ビット物理アドレス範囲の Sv32 ページ変換に対応しています。変換はハートごとに 64 エントリーをキャッシュし、SFENCE.VMA でそのハートのキャッシュを無効化します。マシンモードから設定したスーパーバイザー割り込みを委譲できます。3 コンテキスト以上の PLIC、その他の ISA 拡張、REPL のその他の構文とデバイス、起動コマンド以外の RESC 構文、ネットワーク、複数ノードは未対応です。標準構成の UART は単一の送信レジスターを提供します。

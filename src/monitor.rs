@@ -12,6 +12,7 @@ pub struct Boot {
     pub image: Option<String>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    pub named_analyzers: Vec<String>,
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
@@ -150,6 +151,13 @@ fn execute(
         }
         ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
             // UART output is already connected to stdout.
+        }
+        [
+            "showAnalyzer",
+            name @ ("uart0" | "uart1" | "sysbus.uart0" | "sysbus.uart1"),
+        ] if boot.platform.is_some() => {
+            boot.named_analyzers
+                .push(name.strip_prefix("sysbus.").unwrap_or(name).into());
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }

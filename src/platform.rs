@@ -1,3 +1,4 @@
+mod nrf52840;
 mod stm32f0;
 
 use std::{
@@ -74,7 +75,7 @@ fn number(value: &str) -> Result<u32, String> {
 
 fn without_comment(line: &str) -> &str {
     unquoted_delimiters(line, &['/'])
-        .find(|(index, _)| line[*index..].starts_with("//"))
+        .find(|(index, _)| line[*index..].starts_with("//") && !line[..*index].ends_with(':'))
         .map_or(line, |(index, _)| &line[..index])
 }
 
@@ -223,6 +224,15 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     } else if stm32f0_console {
         return Err("--stm32f0-console requires a platform with an STM32F0 RCC".into());
     }
+    let cortex_m4 = entries.iter().any(|entry| {
+        entry.model == "CPU.CortexM"
+            && entry.body.iter().any(|(_, text)| {
+                text.split_once(':').is_some_and(|(key, value)| {
+                    key.trim() == "cpuType" && value.trim() == r#""cortex-m4""#
+                })
+            })
+    });
+    let mut nrf_peripherals = Vec::new();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
     let mut clint = None;
@@ -251,6 +261,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
         match entry.model.as_str() {
+            "" if cortex_m4 && entry.name == "sysbus" => {
+                nrf52840::map_tags(entry, &mut machine.bus)?
+            }
             "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
@@ -262,13 +275,20 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .into_iter()
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
-                machine
-                    .bus
-                    .map_ram(
-                        entry.address()?,
-                        number(size).map_err(|e| entry.error(&e))? as usize,
-                    )
-                    .map_err(|e| entry.error(&e))?;
+                let size = number(size).map_err(|e| entry.error(&e))? as usize;
+                if cortex_m4
+                    && entry
+                        .registration
+                        .as_ref()
+                        .is_some_and(|text| text.starts_with('{'))
+                {
+                    nrf52840::map_aliases(entry, &mut machine.bus, size)?;
+                } else {
+                    machine
+                        .bus
+                        .map_ram(entry.address()?, size)
+                        .map_err(|e| entry.error(&e))?;
+                }
                 ram = true;
             }
             "GPIOPort.Murax_GPIO" => {
@@ -340,6 +360,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("only one STM32F0 ADC is supported"));
                 }
             }
+            "UART.NRF52840_UART" | "Miscellaneous.NRF_CLOCK" | "Timers.NRF52840_RTC"
+                if cortex_m4 =>
+            {
+                nrf_peripherals.push(entry)
+            }
             "UART.STM32F7_USART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
@@ -401,13 +426,23 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 _ => unreachable!(),
             }
         }
-        if !matches!(cpu_type, Some(r#""cortex-m0""# | r#""cortex-m0+""#)) {
-            return Err(entry.error("expected Cortex-M0 or Cortex-M0+ cpuType"));
+        if !matches!(
+            cpu_type,
+            Some(r#""cortex-m0""# | r#""cortex-m0+""# | r#""cortex-m4""#)
+        ) {
+            return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M4 cpuType"));
         }
-        machine
-            .bus
-            .map_stm32f072_flash()
-            .map_err(|e| entry.error(&e))?;
+        if !cortex_m4 {
+            machine
+                .bus
+                .map_stm32f072_flash()
+                .map_err(|e| entry.error(&e))?;
+        }
+        for peripheral in nrf_peripherals {
+            let controller =
+                nvic.ok_or_else(|| peripheral.error("nRF52840 peripherals require NVIC"))?;
+            nrf52840::map_peripheral(peripheral, controller, &mut machine.bus)?;
+        }
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
         let mut priority = None;
         let mut frequency = None;
@@ -1200,10 +1235,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         }
         machine
             .bus
-            .map_nvic(priority.unwrap_or(0xc0), uart_irq)
+            .map_nvic(
+                priority.unwrap_or(if cortex_m4 { 0xe0 } else { 0xc0 }),
+                uart_irq,
+                cortex_m4,
+            )
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
-        machine.primary.configure_cortex_m(vectors);
+        machine.primary.configure_cortex_m(vectors, cortex_m4);
         return Ok(machine);
     }
     if let Some(nvic) = nvic {

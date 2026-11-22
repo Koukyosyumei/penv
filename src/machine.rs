@@ -282,7 +282,9 @@ impl Machine {
                 .is_some_and(|(step, _)| *step <= self.elapsed_steps)
             {
                 let (_, bytes) = self.uart_input.pop_front().unwrap();
-                self.bus.queue_uart_input(bytes);
+                self.bus
+                    .queue_uart_input(bytes)
+                    .map_err(|e| e.to_string())?;
             }
             while self
                 .button_events
@@ -315,7 +317,9 @@ impl Hart {
         let thumb = self.thumb.as_mut().unwrap();
         let (sp, pc) = thumb.reset(bus)?;
         let vectors = thumb.vector_base();
+        let thumb2 = thumb.thumb2;
         *thumb = Thumb::new(Some(vectors));
+        thumb.thumb2 = thumb2;
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
         }
@@ -325,8 +329,10 @@ impl Hart {
         Ok(())
     }
 
-    pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
-        self.thumb = Some(Thumb::new(vectors));
+    pub fn configure_cortex_m(&mut self, vectors: Option<u32>, thumb2: bool) {
+        let mut thumb = Thumb::new(vectors);
+        thumb.thumb2 = thumb2;
+        self.thumb = Some(thumb);
     }
 
     pub fn set_integer_extensions(&mut self, multiply: bool, atomic: bool, compressed: bool) {

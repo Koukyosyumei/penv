@@ -7,6 +7,7 @@ use std::{
 use crate::{
     clint::Clint,
     murax::{Gpio, Timer},
+    nrf52840::Peripheral as NrfPeripheral,
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
     plic::Plic,
@@ -74,11 +75,14 @@ impl fmt::Display for BusError {
 struct Region {
     base: u32,
     bytes: Vec<u8>,
+    aliases: Vec<u32>,
 }
 
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    nrf_peripherals: Vec<NrfPeripheral>,
+    nrf_tags: Vec<(u32, u32, u32)>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -127,12 +131,20 @@ impl Region {
         // SAFETY: Global allocation with u8 alignment and size bytes, all initialized.
         // Vec takes ownership and deallocates with the same layout.
         let bytes = unsafe { Vec::from_raw_parts(allocation, size, size) };
-        Ok(Self { base, bytes })
+        Ok(Self {
+            base,
+            bytes,
+            aliases: Vec::new(),
+        })
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<usize> {
-        let offset = address.checked_sub(self.base)? as usize;
-        (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        std::iter::once(self.base)
+            .chain(self.aliases.iter().copied())
+            .find_map(|base| {
+                let offset = address.checked_sub(base)? as usize;
+                (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+            })
     }
 }
 
@@ -158,8 +170,67 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_ram_alias(&mut self, base: u32, alias: u32, size: usize) -> Result<(), String> {
+        let start = u64::from(alias);
+        let end = start.saturating_add(size as u64);
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping RAM alias at {alias:#010x}"));
+        }
+        let region = self
+            .regions
+            .iter_mut()
+            .find(|region| region.base == base && region.bytes.len() == size)
+            .ok_or("RAM alias has no matching source mapping")?;
+        region.aliases.push(alias);
+        Ok(())
+    }
+
+    pub fn add_nrf_tag(&mut self, start: u32, end: u32, value: u32) {
+        self.nrf_tags.push((start, end, value));
+    }
+
+    fn nrf_tag(&self, address: u32, width: usize) -> Option<u32> {
+        let last = address.checked_add(width as u32 - 1)?;
+        self.nrf_tags
+            .iter()
+            .rev()
+            .find_map(|&(start, end, value)| (start <= address && last <= end).then_some(value))
+    }
+
+    pub fn map_nrf_peripheral(&mut self, device: NrfPeripheral) -> Result<(), String> {
+        let start = u64::from(device.base);
+        let end = start + u64::from(NrfPeripheral::SIZE);
+        if device.base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err("invalid or overlapping nRF52840 peripheral mapping".into());
+        }
+        self.nrf_peripherals.push(device);
+        Ok(())
+    }
+
+    pub fn has_nrf_uart(&self, name: &str) -> bool {
+        self.nrf_peripherals
+            .iter()
+            .any(|device| device.is_uart() && device.name == name)
+    }
+
+    pub(crate) fn memory_slice(&self, address: u32, length: usize) -> Result<&[u8], BusError> {
+        self.regions
+            .iter()
+            .find_map(|region| {
+                let offset = region.offset(address, length)?;
+                Some(&region.bytes[offset..offset + length])
+            })
+            .ok_or(BusError::Unmapped(address, length))
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        (self.nvic.is_some() && Nvic::overlaps(start, end))
+        self.nrf_peripherals.iter().any(|device| {
+            let other = u64::from(device.base);
+            start < other + u64::from(NrfPeripheral::SIZE) && other < end
+        }) || self
+            .nvic
+            .as_ref()
+            .is_some_and(|nvic| nvic.overlaps(start, end))
             || (self.systick.is_some() && SysTick::overlaps(start, end))
             || self
                 .uart_tx
@@ -250,8 +321,12 @@ impl Bus {
                 })
             })
             || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
-                start < other + region.bytes.len() as u64 && other < end
+                std::iter::once(region.base)
+                    .chain(region.aliases.iter().copied())
+                    .any(|base| {
+                        let other = u64::from(base);
+                        start < other + region.bytes.len() as u64 && other < end
+                    })
             })
     }
 
@@ -308,14 +383,18 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_nvic(&mut self, priority_mask: u8, uart_irq: Option<u8>) -> Result<(), String> {
-        if Nvic::RANGES
-            .into_iter()
+    pub fn map_nvic(
+        &mut self,
+        priority_mask: u8,
+        uart_irq: Option<u8>,
+        cortex_m4: bool,
+    ) -> Result<(), String> {
+        if Nvic::ranges(cortex_m4)
             .any(|(start, end)| self.overlaps(u64::from(start), u64::from(end)))
         {
             return Err("Cortex-M NVIC registers overlap an existing mapping".into());
         }
-        self.nvic = Some(Nvic::new(priority_mask, uart_irq));
+        self.nvic = Some(Nvic::new(priority_mask, uart_irq, cortex_m4));
         Ok(())
     }
 
@@ -369,6 +448,9 @@ impl Bus {
         if !system && !reload {
             return false;
         }
+        for device in &mut self.nrf_peripherals {
+            device.reset();
+        }
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.reset();
         }
@@ -419,7 +501,7 @@ impl Bus {
         true
     }
 
-    pub fn sample_nvic(&mut self, active: u64) {
+    pub fn sample_nvic(&mut self, active: u128) {
         let (timer_irqs, timer_dma) = self.tick_stm32_timers();
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
@@ -428,6 +510,10 @@ impl Bus {
                     .is_some_and(LiteXUart::interrupt_pending),
                 active,
             );
+            for device in &mut self.nrf_peripherals {
+                device.tick();
+                nvic.set_line(device.irq, device.pending(), active);
+            }
             let mut exti_inputs = self.gpio_exti_levels;
             for uart in &self.stm32_uarts {
                 if uart.interrupt_pending() {
@@ -854,9 +940,10 @@ impl Bus {
             || self.ns16550.is_some()
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
+            || self.nrf_peripherals.iter().any(NrfPeripheral::is_uart)
     }
 
-    pub fn queue_uart_input(&mut self, bytes: Vec<u8>) {
+    pub fn queue_uart_input(&mut self, bytes: Vec<u8>) -> Result<(), BusError> {
         if let Some(uart) = self.uart.as_mut() {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.ns16550.as_mut() {
@@ -865,7 +952,14 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.stm32_uarts.first_mut() {
             uart.queue_input(bytes);
+        } else if let Some(index) = self.nrf_peripherals.iter().position(NrfPeripheral::is_uart) {
+            let mut device = self.nrf_peripherals.remove(index);
+            device.queue_input(bytes);
+            let result = device.receive(self);
+            self.nrf_peripherals.insert(index, device);
+            result?;
         }
+        Ok(())
     }
 
     pub fn tick_plic(&mut self) -> u32 {
@@ -910,6 +1004,7 @@ impl Bus {
         for region in &mut self.regions {
             if let Some(offset) = region.offset(address, width) {
                 if width != 0 {
+                    let address = region.base + offset as u32;
                     for reservation in &mut self.reservations {
                         if reservation.is_some_and(|reserved| {
                             u64::from(address) < u64::from(reserved) + 4
@@ -925,9 +1020,17 @@ impl Bus {
         Err(BusError::Unmapped(address, width))
     }
 
+    fn canonical_ram_address(&self, address: u32, width: usize) -> Option<u32> {
+        self.regions.iter().find_map(|region| {
+            region
+                .offset(address, width)
+                .map(|offset| region.base + offset as u32)
+        })
+    }
+
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
         let value = self.read_ram::<4>(address)?;
-        self.reservations[hart] = Some(address);
+        self.reservations[hart] = self.canonical_ram_address(address, 4);
         Ok(value)
     }
 
@@ -937,7 +1040,10 @@ impl Bus {
         address: u32,
         value: u32,
     ) -> Result<u32, BusError> {
-        let reserved = self.reservations[hart].take() == Some(address);
+        let canonical = self.canonical_ram_address(address, 4);
+        let reserved = self.reservations[hart]
+            .take()
+            .is_some_and(|reserved| Some(reserved) == canonical);
         if reserved {
             self.atomic_word(address)?
                 .copy_from_slice(&value.to_le_bytes());
@@ -967,6 +1073,15 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self
+                .nrf_peripherals
+                .iter()
+                .find(|device| device.contains(address))
+        {
+            return device.read(address).ok_or(BusError::Unmapped(address, N));
+        }
         if N == 4
             && address & 3 == 0
             && let Some(uart) = self.uart.as_mut()
@@ -1131,6 +1246,10 @@ impl Bus {
         }
         match self.read_ram::<N>(address) {
             Err(BusError::Unmapped(..)) if self.stm32f0_tagged(address, N) => Ok(0),
+            Err(error @ BusError::Unmapped(..)) => self
+                .nrf_tag(address, N)
+                .ok_or(error)
+                .map(|value| value & (u32::MAX >> (32 - N * 8))),
             result => result,
         }
     }
@@ -1161,6 +1280,17 @@ impl Bus {
         }
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));
+        }
+        if width == 4
+            && let Some(index) = self
+                .nrf_peripherals
+                .iter()
+                .position(|device| device.contains(address))
+        {
+            let mut device = self.nrf_peripherals.remove(index);
+            let result = device.write(address, value, self, uart);
+            self.nrf_peripherals.insert(index, device);
+            return result;
         }
         if width == 4
             && let Some(device) = self.uart.as_mut()
@@ -1359,7 +1489,7 @@ impl Bus {
         match self.memory(address, width) {
             Ok(bytes) => bytes.copy_from_slice(&value.to_le_bytes()[..width]),
             Err(error @ BusError::Unmapped(..)) => {
-                if !self.stm32f0_tagged(address, width) {
+                if !self.stm32f0_tagged(address, width) && self.nrf_tag(address, width).is_none() {
                     return Err(error);
                 }
             }
