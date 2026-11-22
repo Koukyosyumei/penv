@@ -6,6 +6,7 @@ mod image;
 mod litex;
 mod litex_eth;
 mod litex_flash;
+mod litex_i2c;
 mod litex_panel;
 mod machine;
 mod monitor;

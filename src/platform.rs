@@ -6,8 +6,9 @@ use std::{
 
 use crate::{
     bus::Bus,
-    litex::{Gpio, IoDevice, Spi},
+    litex::{Gpio, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
+    litex_i2c::{I2c, Sensor},
     litex_panel::{Button, Panel},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
@@ -341,6 +342,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut litex_phy = None;
     let mut litex_panel = None;
     let mut panel_parts = Vec::new();
+    let mut litex_spis = Vec::new();
+    let mut spi_loopbacks = Vec::new();
+    let mut litex_i2c = None;
+    let mut sensor = None;
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus)?;
@@ -392,18 +397,32 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX SPI flash chip is supported"));
                 }
             }
-            "SPI.LiteX_SPI" => {
+            "SPI.LiteX_SPI" => litex_spis.push(entry),
+            "SPI.SPILoopback" => {
                 keys(entry, &[])?;
-                machine
-                    .bus
-                    .map_litex_io(entry.addresses()?, IoDevice::Spi(Spi::default()))
-                    .map_err(|e| entry.error(&e))?;
+                spi_loopbacks.push(entry);
             }
-            "Miscellaneous.LiteX_MMCM_CSR32" => {
+            "I2C.LiteX_I2C" => {
                 keys(entry, &[])?;
+                if litex_i2c.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX I2C controller is supported"));
+                }
+            }
+            "Sensors.SI70xx" => {
+                if sensor.replace(entry).is_some() {
+                    return Err(entry.error("only one SI70xx sensor is supported"));
+                }
+            }
+            "Miscellaneous.LiteX_MMCM" | "Miscellaneous.LiteX_MMCM_CSR32" => {
+                keys(entry, &[])?;
+                let mmcm = if entry.model == "Miscellaneous.LiteX_MMCM" {
+                    Mmcm::narrow()
+                } else {
+                    Mmcm::default()
+                };
                 machine
                     .bus
-                    .map_litex_io(entry.addresses()?, IoDevice::Mmcm(Box::default()))
+                    .map_litex_io(entry.addresses()?, IoDevice::Mmcm(Box::new(mmcm)))
                     .map_err(|e| entry.error(&e))?;
             }
             "GPIOPort.LiteX_ControlAndStatus" => {
@@ -494,6 +513,42 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
+    }
+    for spi in litex_spis {
+        keys(spi, &[])?;
+        let mut loopback = false;
+        spi_loopbacks.retain(|entry| {
+            if entry.registration.as_deref() == Some(spi.name.as_str()) && !loopback {
+                loopback = true;
+                false
+            } else {
+                true
+            }
+        });
+        machine
+            .bus
+            .map_litex_io(
+                spi.addresses()?,
+                IoDevice::Spi(Spi::default().with_loopback_slave(loopback)),
+            )
+            .map_err(|e| spi.error(&e))?;
+    }
+    if let Some(entry) = spi_loopbacks.first() {
+        return Err(entry.error("expected attachment to a LiteX SPI controller"));
+    }
+    if let Some(controller) = litex_i2c {
+        let sensor = sensor
+            .map(|sensor| parse_si70xx(sensor, controller))
+            .transpose()?;
+        machine
+            .bus
+            .map_litex_io(
+                controller.addresses()?,
+                IoDevice::I2c(Box::new(I2c::new(sensor))),
+            )
+            .map_err(|e| controller.error(&e))?;
+    } else if let Some(sensor) = sensor {
+        return Err(sensor.error("expected a LiteX I2C controller attachment"));
     }
     if let Some(chip) = flash_chip {
         let controller = flash_controller
@@ -1217,6 +1272,64 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         return Err(entry.error("expected a LiteX control and status attachment"));
     }
     Ok(machine)
+}
+
+fn parse_si70xx(entry: &Entry, controller: &Entry) -> Result<Sensor, String> {
+    let mut registration = entry
+        .registration
+        .as_deref()
+        .unwrap_or("")
+        .split_whitespace();
+    let (Some(parent), Some(address), None) = (
+        registration.next(),
+        registration.next(),
+        registration.next(),
+    ) else {
+        return Err(entry.error("expected an I2C controller and address"));
+    };
+    if parent != controller.name {
+        return Err(entry.error("unknown LiteX I2C controller"));
+    }
+    let address =
+        irq_index(address, 128).map_err(|_| entry.error("expected a 7-bit I2C address"))?;
+    let mut model = None;
+    let mut temperature = 0;
+    let mut humidity = 0;
+    for (key, value) in keys(entry, &["model", "Temperature", "Humidity"])? {
+        match (key, value) {
+            ("model", "Model.SI7021") => model = Some(0x15),
+            ("model", "Model.SI7006") => model = Some(0x06),
+            ("Temperature", value) => {
+                temperature = sensor_quantity(entry, key, value, -40.0, 85.0)?
+            }
+            ("Humidity", value) => {
+                humidity = sensor_quantity(entry, key, value, 0.0, 100.0)? as u32
+            }
+            _ => return Err(entry.error("unsupported SI70xx model")),
+        }
+    }
+    let model = model.ok_or_else(|| entry.error("expected SI70xx model"))?;
+    Ok(Sensor {
+        address,
+        model,
+        temperature,
+        humidity,
+    })
+}
+
+fn sensor_quantity(
+    entry: &Entry,
+    key: &str,
+    value: &str,
+    min: f64,
+    max: f64,
+) -> Result<i32, String> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| (min..=max).contains(value))
+        .map(|value| (value * 100.0).round() as i32)
+        .ok_or_else(|| entry.error(&format!("invalid {key} value")))
 }
 
 fn map_litex_panel(

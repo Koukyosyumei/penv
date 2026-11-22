@@ -254,9 +254,15 @@ pub struct Spi {
     miso: u8,
     chip_select: bool,
     loopback: bool,
+    loopback_slave: bool,
 }
 
 impl Spi {
+    pub fn with_loopback_slave(mut self, connected: bool) -> Self {
+        self.loopback_slave = connected;
+        self
+    }
+
     pub fn read(&self, offset: u32) -> u32 {
         match offset {
             0x00 => u32::from(self.bits_per_word),
@@ -276,7 +282,13 @@ impl Spi {
             0x04 => {
                 self.start = value & 1 != 0;
                 if self.start {
-                    self.miso = if self.loopback { self.mosi } else { 0xff };
+                    self.miso = if self.loopback
+                        || self.loopback_slave && self.chip_select && self.bits_per_word == 8
+                    {
+                        self.mosi
+                    } else {
+                        0xff
+                    };
                 }
             }
             0x0c => self.mosi = value as u8,
@@ -311,6 +323,7 @@ impl Gpio {
 }
 
 pub struct Mmcm {
+    narrow: bool,
     registers: [u16; 0x50],
     address: u8,
     data_write: u16,
@@ -321,6 +334,7 @@ pub struct Mmcm {
 impl Default for Mmcm {
     fn default() -> Self {
         Self {
+            narrow: false,
             registers: [0; 0x50],
             address: 0,
             data_write: 0,
@@ -331,12 +345,21 @@ impl Default for Mmcm {
 }
 
 impl Mmcm {
+    pub fn narrow() -> Self {
+        Self {
+            narrow: true,
+            ..Self::default()
+        }
+    }
+
     fn read(&self, offset: u32) -> u32 {
         let value = match offset & !3 {
             0x04 => 1,
             0x10 => u32::from(self.ready),
             0x14 => u32::from(self.address),
-            0x1c => u32::from(self.data_read),
+            0x20 if self.narrow => u32::from(self.data_read & 0xff),
+            0x24 if self.narrow => u32::from(self.data_read >> 8),
+            0x1c if !self.narrow => u32::from(self.data_read),
             _ => 0,
         };
         value >> ((offset & 3) * 8)
@@ -366,7 +389,13 @@ impl Mmcm {
             }
             0x10 if lane == 0 => self.ready = trigger,
             0x14 if lane == 0 => self.address = value as u8,
-            0x18 if lane < 16 => {
+            0x18 if self.narrow && lane == 0 => {
+                self.data_write = (self.data_write & 0xff00) | u16::from(value as u8)
+            }
+            0x1c if self.narrow && lane == 0 => {
+                self.data_write = (self.data_write & 0xff) | (u16::from(value as u8) << 8)
+            }
+            0x18 if !self.narrow && lane < 16 => {
                 let mask = if width == 1 { 0xff << lane } else { 0xffff };
                 self.data_write = (self.data_write & !mask) | ((value << lane) as u16 & mask);
             }
@@ -379,6 +408,7 @@ pub enum IoDevice {
     Spi(Spi),
     Gpio(Gpio),
     Mmcm(Box<Mmcm>),
+    I2c(Box<crate::litex_i2c::I2c>),
 }
 
 impl IoDevice {
@@ -386,6 +416,7 @@ impl IoDevice {
         match self {
             Self::Spi(_) => 0x50,
             Self::Mmcm(_) => 0x100,
+            Self::I2c(_) => 0x10,
             Self::Gpio(Gpio::InOut(_)) => 8,
             Self::Gpio(_) => 4,
         }
@@ -406,6 +437,7 @@ impl IoDevice {
             Self::Spi(spi) => spi.read(offset),
             Self::Gpio(gpio) => gpio.read(offset),
             Self::Mmcm(mmcm) => mmcm.read(offset),
+            Self::I2c(i2c) => i2c.read(offset),
         };
         value & (u32::MAX >> ((4 - width) * 8))
     }
@@ -415,6 +447,7 @@ impl IoDevice {
             Self::Spi(spi) => spi.write(offset, value),
             Self::Gpio(gpio) => gpio.write(offset, value),
             Self::Mmcm(mmcm) => mmcm.write(offset, width, value),
+            Self::I2c(i2c) => i2c.write(offset, value),
         }
     }
 }
