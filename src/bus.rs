@@ -688,6 +688,13 @@ impl Bus {
         Ok(())
     }
 
+    pub fn litex_led_state(&self, name: &str) -> Result<bool, String> {
+        self.litex_panel
+            .as_ref()
+            .and_then(|panel| panel.led_state(name))
+            .ok_or_else(|| format!("unknown wired LiteX panel LED {name:?}"))
+    }
+
     pub fn has_litex_button(&self, name: &str) -> bool {
         let name = name.rsplit('.').next().unwrap_or(name);
         self.litex_panel

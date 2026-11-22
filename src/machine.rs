@@ -22,6 +22,7 @@ pub struct Machine {
 enum Input {
     Uart(Vec<u8>),
     Button(String, ButtonAction),
+    LedAssertion { name: String, expected: bool },
 }
 
 #[derive(Clone)]
@@ -254,6 +255,28 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_led_assertion(
+        &mut self,
+        step: u64,
+        name: String,
+        expected: bool,
+    ) -> Result<(), String> {
+        self.bus.litex_led_state(&name)?;
+        self.schedule_input(step, Input::LedAssertion { name, expected });
+        Ok(())
+    }
+
+    pub fn verify_led_assertions_completed(&self) -> Result<(), String> {
+        for (step, input) in &self.inputs {
+            if let Input::LedAssertion { name, .. } = input {
+                return Err(format!(
+                    "execution ended before LED assertion for {name:?} at step {step}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn schedule_input(&mut self, step: u64, input: Input) {
         let index = self
             .inputs
@@ -284,6 +307,18 @@ impl Machine {
                 match self.inputs.pop_front().unwrap().1 {
                     Input::Uart(bytes) => self.bus.queue_uart_input(bytes),
                     Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
+                    Input::LedAssertion { name, expected } => {
+                        let actual = self.bus.litex_led_state(&name)?;
+                        if actual != expected {
+                            let state = |on| if on { "on" } else { "off" };
+                            return Err(format!(
+                                "LED {name:?} at step {}: expected {}, got {}",
+                                self.elapsed_steps,
+                                state(expected),
+                                state(actual)
+                            ));
+                        }
+                    }
                 }
             }
             self.bus
@@ -1383,6 +1418,52 @@ mod tests {
     }
 
     #[test]
+    fn led_assertions_require_the_named_state_at_the_scheduled_step() {
+        use crate::litex_panel::Panel;
+
+        const PANEL: u32 = 0xf000_6800;
+        const SHADOW: u32 = 0x6000_6800;
+        let mut machine = Machine::new(8).unwrap();
+        machine
+            .bus
+            .map_litex_panel(Panel::new(
+                vec![PANEL, SHADOW],
+                None,
+                Vec::new(),
+                vec![("cas.led0".into(), 2)],
+            ))
+            .unwrap();
+        machine
+            .bus
+            .memory(RAM_BASE, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+        assert!(
+            machine
+                .schedule_led_assertion(1, "other.led0".into(), false)
+                .is_err()
+        );
+        machine
+            .schedule_led_assertion(1, "cas.led0".into(), false)
+            .unwrap();
+        machine
+            .schedule_led_assertion(2, "sysbus.cas.led0".into(), true)
+            .unwrap();
+        machine
+            .schedule_led_assertion(3, "cas.led0".into(), false)
+            .unwrap();
+
+        let mut output = std::io::sink();
+        machine.run(1, &mut output).unwrap();
+        let missing = machine.verify_led_assertions_completed().unwrap_err();
+        assert!(missing.contains("at step 2"));
+        machine.bus.write(SHADOW, 4, 1 << 2, &mut output).unwrap();
+        machine.run(1, &mut output).unwrap();
+        let mismatch = machine.run(1, &mut output).unwrap_err();
+        assert!(mismatch.contains("at step 3: expected off, got on"));
+    }
+
+    #[test]
     fn button_events_apply_at_the_scheduled_step_in_submission_order() {
         use crate::litex_panel::{Button, Panel};
 
@@ -1394,6 +1475,7 @@ mod tests {
                 vec![PANEL],
                 None,
                 vec![Button::new("button0".into(), 64, false)],
+                Vec::new(),
             ))
             .unwrap();
         machine

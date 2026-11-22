@@ -66,7 +66,7 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 LiteX のスイッチとボタンは `--litex-button-event STEP:NAME:ACTION` で実行中に操作できます。例えば `--litex-button-event 71000000:cas.switch0:Toggle` はステップ 71,000,000 で Arty のスイッチ 0 を反転します。`Press`、`Release`、`Toggle` を指定でき、同じステップのボタン操作は指定順に適用されます。指定した操作はそのステップのゲスト命令より先に反映されます。
 
-Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty のスイッチとボタン、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
+Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
 
 ```sh
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
@@ -80,14 +80,31 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-
 
 | 検証 | 結果 |
 | --- | --- |
-| `cargo test` | ユニット 44 件、CLI 7 件が成功 |
+| `cargo test` | ユニット 45 件、CLI 7 件が成功 |
+| Arty の `debug cas leds` | 上流の LED テストと同じマスク `0 → 1 → 3 → 7 → 15 → 0` で 4 灯を毎回検証 |
 | Arty の `debug cas switches` | 初期値 `0`、反転後 `1` |
 | Arty の `debug cas buttons read` | 押下後 `1 1`、解放後 `0 1`、ラッチクリア後 `0 0` |
 | LiteX RV32 Linux | 単一ハートで `/init` に到達。SMP で Buildroot にログインし、`/proc/cpuinfo` に 4 ハートを確認 |
 | Minerva UART | 上流 BIOS の SFL で RV32 検証ペイロードを `0x40000000` に転送し、ジャンプ後にペイロードが UART へ `~` を出力 |
 | Zephyr I²S | 入出力 793,344 バイトが `cmp` で一致。SHA-256 は `e8dca0ec23b1113e7d47e2fcd16ef64de6d8eec9cdd868dc86527d53d4bba116` |
 
-Minerva の検証では、BIOS が参照するタイマーアドレスを `--litex-timer-alias 0xe0002000` で追加し、`--litex-uart-legacy-console` と `--litex-uart-stdio` で SFL の応答を送受信します。Arty の LED Tester と実行中の PHY 設定変更は残課題です。性能計測と最適化は機能実装が揃った段階で行います。
+Minerva の検証では、BIOS が参照するタイマーアドレスを `--litex-timer-alias 0xe0002000` で追加し、`--litex-uart-legacy-console` と `--litex-uart-stdio` で SFL の応答を送受信します。
+
+### Arty の LED 状態検証
+
+`--litex-led-assert STEP:NAME:on|off` を繰り返して、REPL で配線された LED の状態を指定ステップのゲスト命令より前に検証します。名前は `sysbus.cas.led0` または `cas.led0` のように指定します。状態が異なる場合や実行が検証ステップに届かない場合は、終了コード 1 と診断を返します。
+
+変更前の `abc723e` はこのオプションを `unknown option` として拒否しました。上記の検証スクリプトは上流 Arty の RESC と実 ELF を使い、`debug cas leds` を UART から送り、4 灯の初期状態と各操作後の状態を計 24 件検証します。次のコマンドでは LED 0 を点灯させ、意図的に消灯を期待して失敗を確認できます。
+
+```sh
+artifacts=/tmp/penv-upstream
+target/release/penv run --script ../renode/scripts/single-node/arty_litex_vexriscv.resc \
+  --platform-root ../renode --asset-dir "$artifacts/assets" --max-steps 73000000 \
+  --uart-event "70000000:$artifacts/arty-leds-1.input" \
+  --litex-led-assert 72000000:sysbus.cas.led0:off
+```
+
+Arty の実行中の PHY 設定変更と、Renode の Robot Framework テスター API の互換性は残課題です。性能計測と最適化は機能実装が揃った段階で行います。
 
 ## Cortex-M0 / Cortex-M0+
 

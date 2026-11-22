@@ -108,7 +108,23 @@ prepare_assets "$arty"
 printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
 printf 'debug cas buttons read\r' > "$artifacts/arty-buttons.input"
 printf 'debug cas buttons clear\r' > "$artifacts/arty-clear.input"
-run_to_step_limit litex-arty "$arty" --max-steps 84000000 \
+arty_led_events=()
+step=84000000
+for mask in 0 1 3 7 15 0; do
+    if (( step > 84000000 )); then
+        printf 'debug cas leds %s\r' "$mask" > "$artifacts/arty-leds-$mask.input"
+        arty_led_events+=(--uart-event "$((step - 1000000)):$artifacts/arty-leds-$mask.input")
+    fi
+    for pin in 0 1 2 3; do
+        state=off
+        if (( mask & (1 << pin) )); then
+            state=on
+        fi
+        arty_led_events+=(--litex-led-assert "$step:sysbus.cas.led$pin:$state")
+    done
+    step=$((step + 2000000))
+done
+run_to_step_limit litex-arty "$arty" --max-steps "$step" \
     --uart-event "70000000:$artifacts/arty-switches.input" \
     --litex-button-event 71000000:cas.switch0:Toggle \
     --uart-event "72000000:$artifacts/arty-switches.input" \
@@ -117,7 +133,8 @@ run_to_step_limit litex-arty "$arty" --max-steps 84000000 \
     --litex-button-event 75000000:cas.button0:Release \
     --uart-event "76000000:$artifacts/arty-buttons.input" \
     --uart-event "78000000:$artifacts/arty-clear.input" \
-    --uart-event "80000000:$artifacts/arty-buttons.input"
+    --uart-event "80000000:$artifacts/arty-buttons.input" \
+    "${arty_led_events[@]}"
 rg -aq '^H2U ' "$artifacts/litex-arty.uart.log"
 diff -u <(printf '0\n1\n1 1\n0 1\n0 0\n') <(
     tr -d '\r' < "$artifacts/litex-arty.uart.log" |
@@ -159,4 +176,4 @@ cmp "$assets/${pcm##*/}" "$artifacts/echo.raw"
 sha256sum "$assets/${pcm##*/}" "$artifacts/echo.raw" > "$artifacts/litex-i2s.sha256"
 prepare_assets "$minerva"
 python3 "$(dirname -- "$0")/validate-minerva-serial.py" "$penv" "$renode_root" "$artifacts"
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty switches and buttons, LiteX single-hart and SMP Linux, and I2S PCM verified. Logs are in %s\n' "$artifacts"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty LEDs, switches and buttons, LiteX single-hart and SMP Linux, and I2S PCM verified. Logs are in %s\n' "$artifacts"

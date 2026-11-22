@@ -56,6 +56,7 @@ Options:
   --litex-timer-alias BASE  Map the existing LiteX timer at an additional address
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
+  --litex-led-assert STEP:NAME:STATE  Assert a wired panel LED is on or off (repeatable)
   --litex-button-event STEP:NAME:ACTION  Press, Release, or Toggle at a step
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
@@ -116,6 +117,7 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_root = None;
     let mut uart_input = None;
     let mut uart_input_at = None;
+    let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
     let mut framebuffer_out = None;
@@ -150,6 +152,25 @@ fn run() -> Result<ExitCode, String> {
                 if target.replace(path).is_some() {
                     return Err(format!("{option} may only be specified once"));
                 }
+            }
+            Some("--litex-led-assert") => {
+                const FORMAT: &str = "--litex-led-assert requires STEP:NAME:on|off";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let (step, led) = value.split_once(':').ok_or(FORMAT)?;
+                let (name, state) = led
+                    .split_once(':')
+                    .filter(|(name, _)| !name.is_empty())
+                    .ok_or(FORMAT)?;
+                let step = step.parse::<u64>().map_err(|_| FORMAT)?;
+                let expected = match state {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(FORMAT.into()),
+                };
+                led_assertions.push((step, name.to_string(), expected));
             }
             Some("--litex-button-event") => {
                 const FORMAT: &str = "--litex-button-event requires STEP:NAME:ACTION";
@@ -439,6 +460,9 @@ fn run() -> Result<ExitCode, String> {
     for (step, name, action) in button_events {
         machine.schedule_button(step, name, action)?;
     }
+    for (step, name, expected) in led_assertions {
+        machine.schedule_led_assertion(step, name, expected)?;
+    }
     machine.validate_entry()?;
     for action in &post_run {
         if let monitor::PostRun::DisposePcm(name) = action
@@ -510,6 +534,7 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    machine.verify_led_assertions_completed()?;
     let completed_run_for = stop == Stop::Limit && run_steps == Some(limit);
     if completed_run_for {
         for action in post_run {

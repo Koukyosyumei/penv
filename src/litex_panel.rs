@@ -47,6 +47,7 @@ pub struct Panel {
     pub bases: Vec<u32>,
     pub irq: Option<(usize, u8)>,
     buttons: Vec<Button>,
+    led_pins: Vec<(String, u8)>,
     leds: u32,
     switches: u32,
     pressed: u32,
@@ -57,11 +58,17 @@ pub struct Panel {
 impl Panel {
     pub const SIZE: u32 = 0x14;
 
-    pub fn new(bases: Vec<u32>, irq: Option<(usize, u8)>, buttons: Vec<Button>) -> Self {
+    pub fn new(
+        bases: Vec<u32>,
+        irq: Option<(usize, u8)>,
+        buttons: Vec<Button>,
+        led_pins: Vec<(String, u8)>,
+    ) -> Self {
         let mut panel = Self {
             bases,
             irq,
             buttons,
+            led_pins,
             leds: 0,
             switches: 0,
             pressed: 0,
@@ -72,6 +79,14 @@ impl Panel {
             panel.set_button(index, ButtonAction::Release);
         }
         panel
+    }
+
+    pub fn led_state(&self, name: &str) -> Option<bool> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        self.led_pins
+            .iter()
+            .find(|(path, _)| path == name)
+            .map(|(_, pin)| self.leds & (1 << pin) != 0)
     }
 
     pub fn interrupt_pending(&self) -> bool {

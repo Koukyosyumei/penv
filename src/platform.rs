@@ -1608,7 +1608,12 @@ fn map_litex_panel(
             return Err(panel.error("duplicate LiteX panel IRQ wiring"));
         }
     }
-    bus.map_litex_panel(Panel::new(panel.addresses()?, irq, buttons))
+    let led_pins = leds
+        .into_iter()
+        .filter(|(_, pin)| led_outputs.contains(&u32::from(*pin)))
+        .map(|(name, pin)| (format!("{}.{name}", panel.name), pin))
+        .collect();
+    bus.map_litex_panel(Panel::new(panel.addresses()?, irq, buttons, led_pins))
         .map_err(|e| panel.error(&e))
 }
 
