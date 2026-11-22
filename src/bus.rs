@@ -15,6 +15,8 @@ use crate::{
     plic::Plic,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
+    stm32h7_adc::Adc,
+    stm32h7_adc_dma::{AdcDma, DmaMux},
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
     stm32h7_net_control::{Change, NetworkControl},
@@ -81,6 +83,9 @@ pub struct Bus {
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
+    h7_adc: Vec<Adc>,
+    h7_adc_dma: Vec<AdcDma>,
+    h7_dma_mux: Vec<DmaMux>,
     h7_flash: Option<FlashController>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -280,6 +285,68 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_adc(&mut self, device: Adc) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Adc::SIZE)?;
+        self.h7_adc.push(device);
+        Ok(())
+    }
+
+    pub fn map_h7_adc_dma(&mut self, device: AdcDma) -> Result<(), String> {
+        self.check_peripheral_range(device.base, AdcDma::SIZE)?;
+        self.h7_adc_dma.push(device);
+        Ok(())
+    }
+
+    pub fn map_h7_dma_mux(&mut self, device: DmaMux) -> Result<(), String> {
+        self.check_peripheral_range(device.base, DmaMux::SIZE)?;
+        self.h7_dma_mux.push(device);
+        Ok(())
+    }
+
+    fn check_peripheral_range(&self, base: u32, size: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(size);
+        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping peripheral at {base:#010x}"));
+        }
+        Ok(())
+    }
+
+    pub fn tick_h7_adc(&mut self) {
+        let control = self.h7_network_control.as_ref();
+        for adc in &mut self.h7_adc {
+            if !adc_clocked(control, adc) {
+                continue;
+            }
+            adc.tick();
+            let Some((request, value)) = adc.take_request() else {
+                continue;
+            };
+            let Some(mux) = self.h7_dma_mux.iter().find(|mux| mux.base == request.mux) else {
+                continue;
+            };
+            let mut transferred = false;
+            for target in mux.targets(request.id) {
+                if let Some(controller) = self
+                    .h7_adc_dma
+                    .iter_mut()
+                    .find(|dma| dma.base == target.base)
+                    && dma_clocked(control, controller)
+                {
+                    let mut dma = EthernetDma {
+                        regions: &mut self.regions,
+                        reservations: &mut self.reservations,
+                    };
+                    transferred |=
+                        controller.request(target.stream, adc.base + Adc::DATA, value, &mut dma);
+                }
+            }
+            if transferred {
+                adc.data_read();
+            }
+        }
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
         self.h7_network_control.as_ref().is_some_and(|control| {
             control
@@ -308,6 +375,24 @@ impl Bus {
                 let base = u64::from(device.base);
                 start < base + u64::from(FlashController::SIZE) && base < end
             })
+            || self
+                .h7_adc
+                .iter()
+                .map(|device| (device.base, Adc::SIZE))
+                .chain(
+                    self.h7_adc_dma
+                        .iter()
+                        .map(|device| (device.base, AdcDma::SIZE)),
+                )
+                .chain(
+                    self.h7_dma_mux
+                        .iter()
+                        .map(|device| (device.base, DmaMux::SIZE)),
+                )
+                .any(|(base, size)| {
+                    let base = u64::from(base);
+                    start < base + u64::from(size) && base < end
+                })
             || self.h7_exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
                 start < other + u64::from(H7Exti::SIZE) && other < end
@@ -450,6 +535,26 @@ impl Bus {
                         None => {}
                     }
                 }
+            }
+            let control = self.h7_network_control.as_ref();
+            for route in self
+                .h7_adc
+                .iter()
+                .filter(|device| adc_clocked(control, device))
+                .filter_map(Adc::interrupt)
+            {
+                match route {
+                    Stm32Irq::Nvic(line) => nvic.set_line(line, true, active),
+                    Stm32Irq::Exti(line) => exti_inputs[usize::from(line / 32)] |= 1 << (line % 32),
+                }
+            }
+            for line in self
+                .h7_adc_dma
+                .iter()
+                .filter(|device| dma_clocked(control, device))
+                .flat_map(AdcDma::interrupts)
+            {
+                nvic.set_line(line, true, active);
             }
             if let Some(exti) = self.h7_exti.as_mut() {
                 for line in exti.sample(exti_inputs) {
@@ -781,6 +886,38 @@ impl Bus {
         {
             return Ok(device.read(address));
         }
+        if N == 4 && address & 3 == 0 {
+            let control = self.h7_network_control.as_ref();
+            if let Some(device) = self
+                .h7_adc
+                .iter_mut()
+                .find(|device| device.contains(address))
+            {
+                return Ok(if adc_clocked(control, device) {
+                    device.read(address)
+                } else {
+                    0
+                });
+            }
+            if let Some(device) = self
+                .h7_adc_dma
+                .iter()
+                .find(|device| device.contains(address))
+            {
+                return Ok(if dma_clocked(control, device) {
+                    device.read(address)
+                } else {
+                    0
+                });
+            }
+            if let Some(device) = self
+                .h7_dma_mux
+                .iter()
+                .find(|device| device.contains(address))
+            {
+                return Ok(device.read(address));
+            }
+        }
         self.read_ram::<N>(address)
     }
 
@@ -907,6 +1044,16 @@ impl Bus {
             && let Some(control) = &mut self.h7_network_control
             && let Some(change) = control.write(address, value)
         {
+            for adc in &mut self.h7_adc {
+                if adc.clock.is_some_and(|clock| control.adc_in_reset(clock)) {
+                    adc.reset();
+                }
+            }
+            for dma in &mut self.h7_adc_dma {
+                if control.dma_in_reset(dma.clock_mask) {
+                    dma.reset();
+                }
+            }
             let Controller::Stm32h7(device) = &mut self.ethernet[control.nic] else {
                 unreachable!("network clock control is bound to STM32H7 Ethernet");
             };
@@ -958,8 +1105,49 @@ impl Bus {
             }
             return Ok(());
         }
+        if width == 4 {
+            let control = self.h7_network_control.as_ref();
+            if let Some(device) = self
+                .h7_adc
+                .iter_mut()
+                .find(|device| device.contains(address))
+            {
+                if adc_clocked(control, device) {
+                    device.write(address, value);
+                }
+                return Ok(());
+            }
+            if let Some(device) = self
+                .h7_adc_dma
+                .iter_mut()
+                .find(|device| device.contains(address))
+            {
+                if dma_clocked(control, device) {
+                    device.write(address, value);
+                }
+                return Ok(());
+            }
+            if let Some(device) = self
+                .h7_dma_mux
+                .iter_mut()
+                .find(|device| device.contains(address))
+            {
+                device.write(address, value);
+                return Ok(());
+            }
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }
+}
+
+fn adc_clocked(control: Option<&NetworkControl>, adc: &Adc) -> bool {
+    control
+        .zip(adc.clock)
+        .is_none_or(|(control, clock)| control.adc_enabled(clock))
+}
+
+fn dma_clocked(control: Option<&NetworkControl>, dma: &AdcDma) -> bool {
+    control.is_none_or(|control| control.dma_enabled(dma.clock_mask))
 }
