@@ -6,6 +6,7 @@ mod image;
 mod litex;
 mod litex_eth;
 mod litex_flash;
+mod litex_panel;
 mod machine;
 mod monitor;
 mod murax;
@@ -223,6 +224,7 @@ fn run() -> Result<ExitCode, String> {
     let mut boot_pcs = Vec::new();
     let mut script_elf_addresses = None;
     let mut silence_ranges = Vec::new();
+    let mut buttons = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -252,6 +254,7 @@ fn run() -> Result<ExitCode, String> {
         }
         boot_pcs = boot.boot_pcs;
         silence_ranges = boot.silence_ranges;
+        buttons = boot.buttons;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -322,6 +325,9 @@ fn run() -> Result<ExitCode, String> {
     }
     for (cpu, address) in boot_pcs {
         machine.set_named_entry(&cpu, address)?;
+    }
+    for (name, action) in buttons {
+        machine.bus.set_litex_button(&name, action)?;
     }
     machine.validate_entry()?;
 

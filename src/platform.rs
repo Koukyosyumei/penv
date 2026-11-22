@@ -8,6 +8,7 @@ use crate::{
     bus::Bus,
     litex::{Gpio, IoDevice, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
+    litex_panel::{Button, Panel},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
 };
@@ -284,6 +285,7 @@ fn apply_litex_irq_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
                     | "Timers.LiteX_Timer"
                     | "Timers.LiteX_Timer_CSR32"
                     | "Network.LiteX_Ethernet"
+                    | "Network.LiteX_Ethernet_CSR32"
             )
         {
             let [(_, wire)] = entry.body.as_slice() else {
@@ -336,6 +338,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut litex_soc = None;
     let mut litex_eth = None;
     let mut litex_phy = None;
+    let mut litex_panel = None;
+    let mut panel_parts = Vec::new();
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus)?;
@@ -401,6 +405,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .map_litex_io(entry.addresses()?, IoDevice::Mmcm(Box::default()))
                     .map_err(|e| entry.error(&e))?;
             }
+            "GPIOPort.LiteX_ControlAndStatus" => {
+                if litex_panel.replace(entry).is_some() {
+                    return Err(
+                        entry.error("only one LiteX control and status peripheral is supported")
+                    );
+                }
+            }
+            "Miscellaneous.LED" | "Miscellaneous.Button" => panel_parts.push(entry),
             "GPIOPort.LiteX_GPIO" => {
                 let mut gpio = None;
                 for (key, value) in keys(entry, &["type", "enableIrq"])? {
@@ -437,7 +449,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX timer is supported"));
                 }
             }
-            "Network.LiteX_Ethernet" => {
+            "Network.LiteX_Ethernet" | "Network.LiteX_Ethernet_CSR32" => {
                 if litex_eth.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX Ethernet controller is supported"));
                 }
@@ -516,6 +528,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || litex_soc.is_some()
             || litex_eth.is_some()
             || litex_phy.is_some()
+            || litex_panel.is_some()
+            || !panel_parts.is_empty()
         {
             return Err(
                 entry.error("expected a single Cortex-M CPU without RISC-V interrupt controllers")
@@ -1135,10 +1149,112 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         machine
             .bus
-            .map_litex_eth(registrations, irq, phy)
+            .map_litex_eth(
+                registrations,
+                irq,
+                phy,
+                entry.model == "Network.LiteX_Ethernet_CSR32",
+            )
             .map_err(|e| entry.error(&e))?;
     }
+    if let Some(panel) = litex_panel {
+        map_litex_panel(panel, &panel_parts, &configs, &mut machine.bus)?;
+    } else if let Some(entry) = panel_parts.first() {
+        return Err(entry.error("expected a LiteX control and status attachment"));
+    }
     Ok(machine)
+}
+
+fn map_litex_panel(
+    panel: &Entry,
+    parts: &[&Entry],
+    configs: &[RiscvConfig<'_>],
+    bus: &mut Bus,
+) -> Result<(), String> {
+    let mut leds = HashMap::new();
+    let mut buttons = Vec::new();
+    let mut used_pins = HashSet::new();
+    for part in parts {
+        let mut registration = part
+            .registration
+            .as_deref()
+            .unwrap_or("")
+            .split_whitespace();
+        let (Some(parent), Some(pin), None) = (
+            registration.next(),
+            registration.next(),
+            registration.next(),
+        ) else {
+            return Err(part.error("expected a LiteX panel name and GPIO pin"));
+        };
+        let pin = irq_index(pin, 96).map_err(|e| part.error(&e))?;
+        if parent != panel.name || !used_pins.insert(pin) {
+            return Err(part.error("invalid or duplicate LiteX panel attachment"));
+        }
+        if part.model == "Miscellaneous.LED" {
+            keys(part, &[])?;
+            if pin >= 32 {
+                return Err(part.error("LED requires an output pin in 0–31"));
+            }
+            leds.insert(part.name.as_str(), pin);
+        } else {
+            if pin < 32 {
+                return Err(part.error("button requires an input pin in 32–95"));
+            }
+            let mut connected = false;
+            let mut inverted = None;
+            for (_, line) in &part.body {
+                let expected = format!("->{}@{pin}", panel.name);
+                let compact: String = line
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect();
+                if !connected && compact.strip_prefix("IRQ").unwrap_or(&compact) == expected {
+                    connected = true;
+                } else if let Some(("invert", value)) = line
+                    .split_once(':')
+                    .map(|(key, value)| (key.trim(), value.trim()))
+                    && inverted.is_none()
+                {
+                    inverted = Some(
+                        value
+                            .parse::<bool>()
+                            .map_err(|_| part.error("expected a boolean invert property"))?,
+                    );
+                } else {
+                    return Err(part.error("invalid button wiring or property"));
+                }
+            }
+            if !connected {
+                return Err(part.error("missing LiteX panel button wiring"));
+            }
+            buttons.push(Button::new(
+                part.name.clone(),
+                pin,
+                inverted.unwrap_or(false),
+            ));
+        }
+    }
+    let mut irq = None;
+    let mut led_outputs = HashSet::new();
+    for (_, wire) in &panel.body {
+        if let Some((output, target)) = wire.split_once("->")
+            && let Ok(pin) = number(output.trim())
+            && let Some((name, "0")) = target.trim().split_once('@')
+        {
+            if leds.get(name.trim()).map(|&pin| u32::from(pin)) != Some(pin)
+                || !led_outputs.insert(pin)
+            {
+                return Err(panel.error("invalid or duplicate LiteX panel LED wiring"));
+            }
+        } else if irq.is_none() {
+            irq = Some(vex_irq(panel, wire, configs)?);
+        } else {
+            return Err(panel.error("duplicate LiteX panel IRQ wiring"));
+        }
+    }
+    bus.map_litex_panel(Panel::new(panel.addresses()?, irq, buttons))
+        .map_err(|e| panel.error(&e))
 }
 
 fn ethernet_registration(entry: &Entry, registration: &str) -> Result<Registration, String> {

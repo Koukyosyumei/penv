@@ -7,6 +7,7 @@ use std::{
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(Asset, u32)>,
+    pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
@@ -249,6 +250,15 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
+        }
+        [button, action @ ("Press" | "Release" | "Toggle")] if boot.platform.is_some() => {
+            use crate::litex_panel::ButtonAction;
+            let action = match *action {
+                "Press" => ButtonAction::Press,
+                "Release" => ButtonAction::Release,
+                _ => ButtonAction::Toggle,
+            };
+            boot.buttons.push((button.to_string(), action));
         }
         ["start"]
             if boot.platform.is_some() && (boot.image.is_some() || !boot.binaries.is_empty()) =>

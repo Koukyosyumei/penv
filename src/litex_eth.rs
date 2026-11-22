@@ -101,7 +101,8 @@ pub struct Ethernet {
     pub registrations: Vec<Registration>,
     pub vex_irq: Option<(usize, u8)>,
     buffer: Box<[u8]>,
-    tx_lengths: [u16; SLOTS],
+    tx_lengths: [u32; SLOTS],
+    wide_csr: bool,
     tx_slot: usize,
     tx_pending: bool,
     tx_enabled: bool,
@@ -123,12 +124,34 @@ impl Ethernet {
             vex_irq,
             buffer: vec![0; 2 * SLOTS * SLOT_SIZE].into_boxed_slice(),
             tx_lengths: [0; SLOTS],
+            wide_csr: false,
             tx_slot: 0,
             tx_pending: false,
             tx_enabled: false,
             rx_enabled: false,
             phy,
             mdio: Mdio::default(),
+        }
+    }
+
+    pub fn with_wide_csr(mut self, wide_csr: bool) -> Self {
+        self.wide_csr = wide_csr;
+        self
+    }
+
+    fn mac_register(&self, offset: u32) -> u32 {
+        if !self.wide_csr {
+            return offset & !3;
+        }
+        match offset & !3 {
+            0x14 => 0x2c,
+            0x18 => 0x30,
+            0x1c => 0x34,
+            0x24 => 0x3c,
+            0x28 => 0x40,
+            0x30 => 0x4c,
+            0x34 => 0x50,
+            _ => u32::MAX,
         }
     }
 
@@ -147,12 +170,13 @@ impl Ethernet {
     pub fn read(&self, region: Region, offset: u32, width: usize) -> u32 {
         match region {
             Region::Mac => {
-                let value = match offset & !3 {
+                let value = match self.mac_register(offset) {
                     0x2c => u32::from(self.rx_enabled),
                     0x34 => 1,
                     0x3c => self.tx_slot as u32,
-                    0x40 => u32::from(self.tx_lengths[self.tx_slot] >> 8),
-                    0x44 => u32::from(self.tx_lengths[self.tx_slot] & 0xff),
+                    0x40 if self.wide_csr => self.tx_lengths[self.tx_slot],
+                    0x40 => self.tx_lengths[self.tx_slot] >> 8,
+                    0x44 => self.tx_lengths[self.tx_slot] & 0xff,
                     0x4c => u32::from(self.tx_pending),
                     0x50 => u32::from(self.tx_enabled),
                     _ => 0,
@@ -174,13 +198,24 @@ impl Ethernet {
 
     pub fn write(&mut self, region: Region, offset: u32, width: usize, value: u32) {
         match region {
-            Region::Mac if offset & 3 == 0 => {
+            Region::Mac => {
+                let register = self.mac_register(offset);
+                if register == 0x40 && self.wide_csr {
+                    let shift = (offset & 3) * 8;
+                    let mask = lane_mask(width) << shift;
+                    let length = &mut self.tx_lengths[self.tx_slot];
+                    *length = (*length & !mask) | ((value << shift) & mask);
+                    return;
+                }
+                if offset & 3 != 0 {
+                    return;
+                }
                 let enable = value & 1 != 0;
-                match offset {
+                match register {
                     0x2c => self.rx_enabled = enable,
                     0x30 => {
                         // An offline MAC completes valid transmit requests with no receiver.
-                        let length = usize::from(self.tx_lengths[self.tx_slot]);
+                        let length = self.tx_lengths[self.tx_slot] as usize;
                         self.tx_pending |= (MIN_FRAME_SIZE..=SLOT_SIZE).contains(&length);
                     }
                     0x3c => {
@@ -189,11 +224,11 @@ impl Ethernet {
                     }
                     0x40 => {
                         let length = &mut self.tx_lengths[self.tx_slot];
-                        *length = (*length & 0xff) | (u16::from(value as u8) << 8);
+                        *length = (*length & 0xff) | (u32::from(value as u8) << 8);
                     }
                     0x44 => {
                         let length = &mut self.tx_lengths[self.tx_slot];
-                        *length = (*length & 0xff00) | u16::from(value as u8);
+                        *length = (*length & 0xff00) | u32::from(value as u8);
                     }
                     0x4c if enable => self.tx_pending = false,
                     0x50 => self.tx_enabled = enable,

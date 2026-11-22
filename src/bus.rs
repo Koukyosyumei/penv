@@ -8,6 +8,7 @@ use crate::{
     clint::Clint,
     litex,
     litex_eth::{Ethernet, Phy, Registration},
+    litex_panel::{ButtonAction, Panel},
     murax::{Gpio, Timer},
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
@@ -86,6 +87,7 @@ pub struct Bus {
     litex_soc: Option<litex::SocController>,
     litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
     litex_eth: Option<Ethernet>,
+    litex_panel: Option<Panel>,
     litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
@@ -270,6 +272,12 @@ impl Bus {
                 bases
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, crate::litex_flash::Flash::SIZE))
+            })
+            || self.litex_panel.as_ref().is_some_and(|panel| {
+                panel
+                    .bases
+                    .iter()
+                    .any(|&base| overlaps_range(start, end, base, Panel::SIZE))
             })
             || self.litex_io.iter().any(|(bases, device)| {
                 bases
@@ -530,6 +538,7 @@ impl Bus {
         registrations: Vec<Registration>,
         irq: Option<(usize, u8)>,
         phy: Option<Phy>,
+        wide_csr: bool,
     ) -> Result<(), String> {
         for (index, registration) in registrations.iter().enumerate() {
             let start = u64::from(registration.base);
@@ -545,7 +554,7 @@ impl Bus {
                 ));
             }
         }
-        self.litex_eth = Some(Ethernet::new(registrations, irq, phy));
+        self.litex_eth = Some(Ethernet::new(registrations, irq, phy).with_wide_csr(wide_csr));
         Ok(())
     }
 
@@ -566,6 +575,19 @@ impl Bus {
         region.flash_pages = Some(vec![false; size / 4096]);
         self.litex_flash = Some((bases, index, crate::litex_flash::Flash::default()));
         Ok(())
+    }
+
+    pub fn map_litex_panel(&mut self, panel: Panel) -> Result<(), String> {
+        self.check_litex_ranges(&panel.bases, Panel::SIZE)?;
+        self.litex_panel = Some(panel);
+        Ok(())
+    }
+
+    pub fn set_litex_button(&mut self, name: &str, action: ButtonAction) -> Result<(), String> {
+        self.litex_panel
+            .as_mut()
+            .ok_or("expected a LiteX control and status peripheral")?
+            .button_action(name, action)
     }
 
     pub fn map_litex_io(&mut self, bases: Vec<u32>, device: litex::IoDevice) -> Result<(), String> {
@@ -605,6 +627,13 @@ impl Bus {
         {
             lines |= 1 << line;
         }
+        if let Some(panel) = self.litex_panel.as_ref()
+            && let Some((target, line)) = panel.irq
+            && target == hart
+            && panel.interrupt_pending()
+        {
+            lines |= 1 << line;
+        }
         lines
     }
 
@@ -620,6 +649,10 @@ impl Bus {
                 .litex_eth
                 .as_ref()
                 .is_some_and(|eth| eth.vex_irq.is_some())
+            || self
+                .litex_panel
+                .as_ref()
+                .is_some_and(|panel| panel.irq.is_some())
     }
 
     pub fn map_stm32_usart(
@@ -875,6 +908,13 @@ impl Bus {
             let value = flash.read(offset & !3) >> ((offset & 3) * 8);
             return Ok(value & (u32::MAX >> ((4 - N) * 8)));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(panel) = self.litex_panel.as_ref()
+            && let Some(offset) = litex_offset(&panel.bases, Panel::SIZE, address)
+        {
+            return Ok(panel.read(offset));
+        }
         if address as usize & (N - 1) == 0 && self.zero_mmio(address, N) {
             return Ok(0);
         }
@@ -1045,6 +1085,13 @@ impl Bus {
             if offset & 3 == 0 {
                 flash.write(offset, value, &mut self.regions[*backing]);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(panel) = self.litex_panel.as_mut()
+            && let Some(offset) = litex_offset(&panel.bases, Panel::SIZE, address)
+        {
+            panel.write(offset, value);
             return Ok(());
         }
         if self.zero_mmio(address, width) {
