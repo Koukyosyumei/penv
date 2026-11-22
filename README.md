@@ -1,6 +1,6 @@
 # penv
 
-`penv` は、Renode のファームウェア実行機能を Rust で段階的に実装する CLI エミュレーターです。現在はベアメタル RV32IM を実行できます。外部クレートは不要です。
+`penv` は、Renode のファームウェア実行機能を Rust で段階的に実装する CLI エミュレーターです。現在はベアメタル RV32IM を実行できます。フレーム待機用の PNG 読み込みには Rust の `png` クレートを使用します。
 
 ## ビルドと実行
 
@@ -139,7 +139,7 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-
 
 ### Nexys Video のフレーム一致待機
 
-`--wait-for-frame STEP:PATH` は指定ステップから 1,000,000 ステップごとに有効なフレームの寸法と全 RGB ピクセルを比較します。一致したステップのゲスト命令を実行する前に停止し、終了コード 0 を返します。実行上限やゲストの終了までに一致を観測できなければ終了コード 1 です。参照形式は `--framebuffer-out` が出力する P6 RGB PPM（マジック、幅と高さ、最大値 255 がそれぞれ独立した行）です。
+`--wait-for-frame STEP:PATH` は指定ステップから 1,000,000 ステップごとに有効なフレームの寸法と全 RGB ピクセルを比較します。一致したステップのゲスト命令を実行する前に停止し、終了コード 0 を返します。実行上限やゲストの終了までに一致を観測できなければ終了コード 1 です。参照形式は PNG または `--framebuffer-out` が出力する P6 RGB PPM（マジック、幅と高さ、最大値 255 がそれぞれ独立した行）です。
 
 変更前の `49e1a6e` ではこのオプションが `unknown option` でした。上記の回帰コマンドを実行した後、上流 PNG 由来の SHA-256 と照合済みの PPM を参照にして次の手順で再現できます。
 
@@ -159,11 +159,11 @@ penv=target/release/penv
 cmp "$artifacts/nexys-video-motd.ppm" "$artifacts/matched.ppm"
 ```
 
-上流の `penguin_with_litex_logo.png` から独立に変換した参照で、開始ステップでは不一致、708,000,000 ステップで一致を確認しました。一致時に保存した RGB PPM は参照とバイト単位で一致しました。上限を 2,000,000 ステップとして BIOS 起動直後から待った場合は、未一致の診断と終了コード 1 を確認しました。PNG の直接読み込みと Robot Framework からの呼び出しは残課題です。
+上流の `penguin_with_litex_logo.png` から独立に変換した参照で、開始ステップでは不一致、708,000,000 ステップで一致を確認しました。一致時に保存した RGB PPM は参照とバイト単位で一致しました。上限を 2,000,000 ステップとして BIOS 起動直後から待った場合は、未一致の診断と終了コード 1 を確認しました。Robot Framework からの呼び出しは残課題です。
 
 ### Nexys Video の領域一致待機
 
-`--wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH` は、参照 PPM とゲストのフレーム内の同じ矩形だけを比較します。座標の原点は左上です。矩形は空でなく、参照画像に収まる必要があります。ゲスト側で矩形が収まるフレームが表示されるまで待機できます。ポーリング間隔と終了コードは全画面待機と共通です。
+`--wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH` は、参照画像とゲストのフレーム内の同じ矩形だけを比較します。座標の原点は左上です。矩形は空でなく、参照画像に収まる必要があります。ゲスト側で矩形が収まるフレームが表示されるまで待機できます。ポーリング間隔と終了コードは全画面待機と共通です。
 
 変更前の `e85f1d9` では `--wait-for-frame-roi` は `unknown option` でした。回帰スクリプトで照合済みのロゴ PPM を使い、上流 `WaitForFrameROI` と同じ左上 75×80 の確認と、領域内の 1 チャンネルを変えた不一致を再現できます。
 
@@ -196,7 +196,39 @@ wait_roi "$artifacts/roi-changed.ppm" || status=$?
 test "$status" -eq 1
 ```
 
-実ファームウェアでは、上流の `penguin_logo.png` から変換した参照とステップ 710,000,000 で領域が一致しました。領域外には MOTD 描画による差がありました。領域内の 1 チャンネルを反転した参照は、上限 730,000,000 まで一致せず終了コード 1 でした。全画面待機もステップ 708,000,000 で一致しました。PNG の直接読み込みと Robot Framework の API 互換性は残課題です。
+実ファームウェアでは、上流の `penguin_logo.png` から変換した参照とステップ 710,000,000 で領域が一致しました。領域外には MOTD 描画による差がありました。領域内の 1 チャンネルを反転した参照は、上限 730,000,000 まで一致せず終了コード 1 でした。全画面待機もステップ 708,000,000 で一致しました。Robot Framework の API 互換性は残課題です。
+
+### Nexys Video の PNG 参照
+
+変更前の `1d15a71` では、参照 PNG を渡すと P6 PPM を要求して終了しました。現在はファイルのシグネチャで PNG を識別し、`--wait-for-frame` と `--wait-for-frame-roi` の両方で直接使えます。静止 PNG のサンプルを 8 ビット RGB に正規化します。比較には RGB 値を使い、アルファ値や色管理メタデータは適用しません。展開バッファと RGB データはそれぞれ最大 64 MiB です。
+
+上記の回帰スクリプトで BIOS、SD イメージ、UART 入力を準備した後、上流 Robot シナリオの参照 PNG を取得してそのまま渡します。
+
+```sh
+artifacts=/tmp/penv-upstream
+robot=../renode/tests/platforms/LiteX/Nexys_Video_LiteX_VexRiscv.robot
+while IFS= read -r url; do
+  name=${url##*/}
+  curl --fail --location --silent --show-error "$url" -o "$artifacts/assets/$name" || exit 1
+  printf '%s  %s\n' "${name##*-}" "$artifacts/assets/$name" | sha1sum --check || exit 1
+done < <(rg -o 'https://[^[:space:]]+' "$robot")
+
+run_nexys() {
+  target/release/penv run --script ../renode/scripts/single-node/litex_nexys_video_vexriscv_linux.resc \
+    --platform-root ../renode --asset-dir "$artifacts/assets" --max-steps 730000000 \
+    --uart-event "35000000:$artifacts/nexys-video-abort.input" \
+    --uart-event "40000000:$artifacts/nexys-video-sd.input" \
+    --uart-event "680000000:$artifacts/nexys-video-login.input" \
+    --uart-event "690000000:$artifacts/nexys-video-prompt.input" \
+    --uart-event "700000000:$artifacts/nexys-video-motd.input" "$@"
+}
+full="$artifacts/assets/penguin_with_litex_logo.png-s_13404-8664342616adc3edda335db849dd1f5cd1805596"
+roi="$artifacts/assets/penguin_logo.png-s_14782-2e0fc81dbcd56b3ed9c86790fe8d390a935395c5"
+run_nexys --wait-for-frame "700000000:$full"
+run_nexys --wait-for-frame-roi "710000000:0:0:75:80:$roi"
+```
+
+上流ファームウェアで、全画面はステップ 708,000,000、左上 75×80 の領域はステップ 710,000,000 で一致し、両方とも終了コード 0 でした。参照 URL の CLI からの取得と Robot Framework のテスター API 互換性は残課題です。
 
 ## Cortex-M0 / Cortex-M0+
 

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Cursor, Write};
 
 use crate::bus::Bus;
 
@@ -29,6 +29,13 @@ pub struct ReferenceFrame {
 
 impl ReferenceFrame {
     pub fn parse(data: Vec<u8>) -> Result<Self, String> {
+        if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return Self::parse_png(&data);
+        }
+        Self::parse_ppm(data)
+    }
+
+    fn parse_ppm(data: Vec<u8>) -> Result<Self, String> {
         let mut lines = data.splitn(4, |byte| *byte == b'\n');
         let format = "expected P6 RGB PPM with separate magic, dimensions and maxval lines";
         if lines.next() != Some(b"P6") {
@@ -59,6 +66,62 @@ impl ReferenceFrame {
         Ok(Self {
             data,
             pixels_start,
+            region: None,
+            width,
+            height,
+        })
+    }
+
+    fn parse_png(data: &[u8]) -> Result<Self, String> {
+        let png_error = |error: png::DecodingError| format!("invalid reference PNG: {error}");
+        let mut decoder = png::Decoder::new(Cursor::new(data));
+        decoder.set_transformations(png::Transformations::normalize_to_color8());
+        let mut reader = decoder.read_info().map_err(png_error)?;
+        let info = reader.info();
+        if info.animation_control.is_some() {
+            return Err("reference PNG must be a static image".into());
+        }
+        let dimensions_error = "reference PNG dimensions exceed 65535 pixels per axis";
+        let width = u16::try_from(info.width).map_err(|_| dimensions_error)?;
+        let height = u16::try_from(info.height).map_err(|_| dimensions_error)?;
+
+        const MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
+        let size = reader
+            .output_buffer_size()
+            .filter(|&size| size <= MAX_DECODED_BYTES)
+            .ok_or("reference PNG exceeds the 64 MiB decoded image limit")?;
+        let pixel_count = usize::from(width) * usize::from(height);
+        let rgb_size = pixel_count
+            .checked_mul(3)
+            .filter(|&size| size <= MAX_DECODED_BYTES)
+            .ok_or("reference PNG exceeds the 64 MiB decoded image limit")?;
+        let mut decoded = vec![0; size];
+        let frame = reader.next_frame(&mut decoded).map_err(png_error)?;
+        reader.finish().map_err(png_error)?;
+        decoded.truncate(frame.buffer_size());
+
+        let data = if frame.color_type == png::ColorType::Rgb {
+            decoded
+        } else {
+            let mut rgb = Vec::with_capacity(rgb_size);
+            match frame.color_type {
+                png::ColorType::Rgba => {
+                    for pixel in decoded.chunks_exact(4) {
+                        rgb.extend_from_slice(&pixel[..3]);
+                    }
+                }
+                png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha => {
+                    for pixel in decoded.chunks_exact(frame.color_type.samples()) {
+                        rgb.extend_from_slice(&[pixel[0]; 3]);
+                    }
+                }
+                _ => return Err("unsupported reference PNG color type".into()),
+            }
+            rgb
+        };
+        Ok(Self {
+            data,
+            pixels_start: 0,
             region: None,
             width,
             height,
@@ -206,6 +269,27 @@ impl Framebuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalizes_png_color_and_rejects_a_truncated_image() {
+        for (color, samples, expected) in [
+            (png::ColorType::Rgb, &[3, 2, 1][..], [3, 2, 1]),
+            (png::ColorType::Rgba, &[3, 2, 1, 0][..], [3, 2, 1]),
+            (png::ColorType::GrayscaleAlpha, &[9, 0][..], [9; 3]),
+        ] {
+            let mut bytes = Vec::new();
+            let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+            encoder.set_color(color);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(samples).unwrap();
+            writer.finish().unwrap();
+            let frame = ReferenceFrame::parse(bytes.clone()).unwrap();
+            assert_eq!((frame.width, frame.height), (1, 1));
+            assert_eq!(frame.data, expected);
+            bytes.truncate(bytes.len() - 12); // Remove the required IEND chunk.
+            assert!(ReferenceFrame::parse(bytes).is_err());
+        }
+    }
 
     #[test]
     fn matches_active_frame_dimensions_and_rgb_pixels() {

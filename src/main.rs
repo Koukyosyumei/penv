@@ -47,7 +47,7 @@ Usage: penv run [OPTIONS] IMAGE
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
-  --wait-for-frame STEP:PATH  Stop when the LiteX framebuffer matches a P6 RGB PPM
+  --wait-for-frame STEP:PATH  Stop when the LiteX framebuffer matches a PNG or P6 RGB PPM
   --wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH  Wait for identical RGB pixels in a region
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
