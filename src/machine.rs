@@ -36,6 +36,7 @@ pub enum Stop {
     Ebreak,
     Limit,
     ScriptComplete,
+    OutputMatch,
 }
 
 enum Step {
@@ -279,6 +280,19 @@ impl Machine {
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
+        self.run_until(limit, output, |_| false)
+    }
+
+    pub fn elapsed_steps(&self) -> u64 {
+        self.elapsed_steps
+    }
+
+    pub fn run_until<W: Write>(
+        &mut self,
+        limit: u64,
+        output: &mut W,
+        matched: impl Fn(&W) -> bool,
+    ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
             let index = self.next_hart;
@@ -321,6 +335,9 @@ impl Machine {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
+            }
+            if matched(output) {
+                return Ok((Stop::OutputMatch, retired));
             }
         }
         Ok((Stop::Limit, retired))

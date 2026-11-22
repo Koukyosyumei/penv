@@ -200,7 +200,23 @@ target/release/penv run --script "$assets/adc.resc" --platform-root ../renode \
 
 Console Echo でも `resc_boot "$assets"/*echo.elf-*` に `emulation RunFor "0.01s"` と `emulation RunFor "0.02s"` を追加し、上で作成した入力ファイルを `--uart-input "$assets/echo.input" --uart-input-at 1000000` で渡しました。UART の入力案内に続いて `Echo working?` が出力され、終了コードは 0 でした。
 
-残課題は Robot の端末・LED テスターと、UART の期待行を受信した時点で次の操作に進む実行制御です。ここでは固定の実行区間を使い、終了後にログで期待値と順序を確認します。`RunFor` の期間指定は 10 ns 単位で表せる小数秒に対応します。
+`RunFor` の期間指定は 10 ns 単位で表せる小数秒に対応します。
+
+#### UART 出力を待って ADC を操作する回帰
+
+上流の `Should Read ADC` は、起動メッセージと最初の測定値を受け取ってから電圧を変更します。変更前は、これを転記した `tests/fixtures/stm32f072-adc.resc` の 4 行目で UART の待機操作が未対応でした。penv の RESC 拡張 `waitForUart "期待文字列"` で、待機開始後に受信した LF または CRLF 終端の行をリテラル部分一致で検査します。一致行の終端でゲストの実行を区切り、次の操作へ進みます。待機も `--max-steps` を共有します。上限到達やゲスト停止までに一致しなければ、RESC の行番号と期待文字列を出力して終了コード 1 を返します。
+
+```sh
+assets=$(mktemp -d)
+adc_url=$(sed -n 's/^sysbus LoadELF @//p' tests/fixtures/stm32f072-adc.resc)
+curl -fL "$adc_url" -o "$assets/${adc_url##*/}"
+PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
+  cargo test --release upstream_stm32f072_adc_waits_for_uart_between_voltage_changes -- --ignored
+```
+
+公開 ELF で `Booting Zephyr`、`ADC reading: 745`、`ADC reading: 1489` の順序と、最後の一致行での停止を確認しました。ステップ上限を 1 にした実行では、最初の待機で失敗することも確認しています。通常の `cargo test` は外部ファイルなしで実行でき、公開 ELF の回帰は上のコマンドで実行します。
+
+現在の待機対象は CLI の UART 標準出力で、端末ごとの選択、待機開始前の履歴、正規表現、Robot の UART 入力・LED テスターは残課題です。
 
 ## 現在の実装範囲
 

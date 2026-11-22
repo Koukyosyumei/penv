@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -37,6 +37,42 @@ enum Action {
     RunFor(u64),
     Button(String, bool),
     Adc(String, usize, f64),
+    WaitForUart(String),
+}
+
+struct UartLine<'a, W> {
+    output: &'a mut W,
+    pattern: &'a [u8],
+    tail: VecDeque<u8>,
+    contains: bool,
+    matched: bool,
+}
+
+impl<W: Write> Write for UartLine<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.output.write(bytes)?;
+        for &byte in &bytes[..written] {
+            if self.matched {
+                break;
+            }
+            if byte == b'\n' {
+                self.matched = self.contains;
+                self.tail.clear();
+                self.contains = false;
+            } else if !self.contains {
+                if self.tail.len() == self.pattern.len() {
+                    self.tail.pop_front();
+                }
+                self.tail.push_back(byte);
+                self.contains = self.tail.iter().copied().eq(self.pattern.iter().copied());
+            }
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
 }
 
 pub fn run(
@@ -68,6 +104,29 @@ pub fn run(
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
                 .map(|()| None),
+            Action::WaitForUart(pattern) => {
+                let mut matcher = UartLine {
+                    output,
+                    pattern: pattern.as_bytes(),
+                    tail: VecDeque::new(),
+                    contains: false,
+                    matched: false,
+                };
+                let start = machine.elapsed_steps();
+                machine
+                    .run_until(budget, &mut matcher, |uart| uart.matched)
+                    .and_then(|(stop, count)| {
+                        retired += count;
+                        budget -= machine.elapsed_steps().wrapping_sub(start);
+                        if stop == Stop::OutputMatch {
+                            Ok(None)
+                        } else {
+                            Err(format!(
+                                "UART line containing {pattern:?} was not received ({stop:?})"
+                            ))
+                        }
+                    })
+            }
         };
         if let Some(stop) =
             result.map_err(|e| format!("{}:{}: {e}", script.display(), command.line))?
@@ -184,6 +243,15 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
+        ["waitForUart", ..] => {
+            let pattern = text["waitForUart".len()..].trim();
+            let pattern = pattern
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .filter(|value| !value.is_empty() && !value.contains('"'))
+                .ok_or("expected waitForUart \"literal text\"")?;
+            Some(Action::WaitForUart(pattern.to_owned()))
+        }
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
         }
@@ -339,6 +407,26 @@ pub fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uart_match_requires_a_completed_line_and_never_spans_lines() {
+        let mut output = Vec::new();
+        let mut uart = UartLine {
+            output: &mut output,
+            pattern: b"ADC reading: 745",
+            tail: VecDeque::new(),
+            contains: false,
+            matched: false,
+        };
+        uart.write_all(b"ADC reading: \n745\r\n").unwrap();
+        assert!(!uart.matched);
+        uart.write_all(b"ADC reading: 7").unwrap();
+        uart.write_all(b"45\r").unwrap();
+        assert!(!uart.matched);
+        uart.write_all(b"\n").unwrap();
+        assert!(uart.matched);
+        assert_eq!(output, b"ADC reading: \n745\r\nADC reading: 745\r\n");
+    }
 
     #[test]
     fn parses_binary_addresses_and_named_cpu_entries() {

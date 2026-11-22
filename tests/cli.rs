@@ -1,6 +1,47 @@
 use std::{fs, process::Command};
 
 #[test]
+#[ignore = "requires the upstream Renode tree and the public STM32F072 ADC ELF"]
+fn upstream_stm32f072_adc_waits_for_uart_between_voltage_changes() {
+    let root = std::env::var_os("PENV_RENODE_ROOT").expect("set PENV_RENODE_ROOT");
+    let assets = std::env::var_os("PENV_RENODE_ASSETS").expect("set PENV_RENODE_ASSETS");
+    let run = |limit| {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--script"])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/stm32f072-adc.resc"
+            ))
+            .arg("--platform-root")
+            .arg(&root)
+            .arg("--asset-dir")
+            .arg(&assets)
+            .args(["--max-steps", limit])
+            .output()
+            .unwrap()
+    };
+
+    let completed = run("120000000");
+    assert!(completed.status.success(), "{completed:?}");
+    let uart = String::from_utf8(completed.stdout).unwrap();
+    let mut lines = uart.lines();
+    assert!(lines.any(|line| line.contains("Booting Zephyr")), "{uart}");
+    assert!(lines.any(|line| line == "ADC reading: 745"), "{uart}");
+    assert_eq!(lines.next(), Some("ADC reading: 1489"), "{uart}");
+    assert_eq!(lines.next(), None, "guest advanced past the final match");
+
+    let timeout = run("1");
+    assert_eq!(timeout.status.code(), Some(1), "{timeout:?}");
+    let error = String::from_utf8(timeout.stderr).unwrap();
+    assert!(
+        error.contains(
+            "stm32f072-adc.resc:4: UART line containing \"Booting Zephyr\" was not received (Limit)"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
 fn boots_resc_hex_and_runs_bounded_cortex_m_intervals() {
     let directory = std::env::temp_dir().join(format!("penv-resc-hex-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

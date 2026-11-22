@@ -1,0 +1,8 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/stm32f072b--zephyr-adc.elf-s_567632-591075b4dc78decfb7ccab1d7a2477a78edc710e
+waitForUart "Booting Zephyr"
+sysbus.adc.adc-channel1 Volts 0.6
+waitForUart "ADC reading: 745"
+sysbus.adc.adc-channel1 Volts 1.2
+waitForUart "ADC reading: 1489"
