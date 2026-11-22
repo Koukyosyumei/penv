@@ -7,7 +7,9 @@ use std::{
 use crate::{
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
+    nvic::IRQ_LINES,
     stm32_uart::Stm32Irq,
+    stm32h7_exti::H7Exti,
 };
 
 type Properties = Vec<(usize, String)>;
@@ -320,7 +322,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one UART is currently supported"));
                 }
             }
-            "IRQControllers.STM32F4_EXTI" => {
+            "IRQControllers.STM32F4_EXTI" | "IRQControllers.STM32H7_EXTI" => {
                 if exti.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 EXTI is supported"));
                 }
@@ -440,8 +442,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 && name.trim() == controller.name
             {
                 let irq = number(irq.trim()).map_err(|e| uart.error(&e))?;
-                if irq >= 32 {
-                    return Err(uart.error("NVIC IRQ must be in 0–31"));
+                if irq >= IRQ_LINES as u32 {
+                    return Err(uart.error("NVIC IRQ must be in 0–239"));
                 }
                 uart_irq = Some(irq as u8);
             } else if !uart.body.is_empty() {
@@ -466,7 +468,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     && nvic.is_some_and(|controller| controller.name == target.trim())
                     && output.is_none()
                 {
-                    output = Some(irq_index(index, 32).map_err(|e| combiner.error(&e))?);
+                    output =
+                        Some(irq_index(index, IRQ_LINES as u32).map_err(|e| combiner.error(&e))?);
                 } else {
                     return Err(combiner.error("unsupported combined input property or wiring"));
                 }
@@ -479,65 +482,50 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
         }
         let exti_lines = if let Some(controller) = exti {
-            let mut count = None;
-            let mut direct = None;
-            for (_, text) in &controller.body {
-                if text.contains("->") {
-                    continue;
+            if controller.model == "IRQControllers.STM32H7_EXTI" {
+                if controller.body.iter().any(|(_, text)| !text.contains("->")) {
+                    return Err(controller.error("unsupported STM32H7 EXTI property"));
                 }
-                let (key, value) = text
-                    .split_once(':')
-                    .ok_or_else(|| controller.error("invalid EXTI property"))?;
-                let target = match key.trim() {
-                    "numberOfOutputLines" if count.is_none() => &mut count,
-                    "firstDirectLine" if direct.is_none() => &mut direct,
-                    _ => return Err(controller.error("unsupported or duplicate EXTI property")),
-                };
-                *target = Some(number(value.trim()).map_err(|e| controller.error(&e))?);
-            }
-            let count = count.unwrap_or(14);
-            let direct = direct.unwrap_or(23);
-            if !(1..=32).contains(&count) || direct > 32 {
-                return Err(controller.error("EXTI supports 1–32 output lines"));
-            }
-            let mut outputs = vec![None; count as usize];
-            for (_, text) in &controller.body {
-                let Some((from, to)) = text.split_once("->") else {
-                    continue;
-                };
-                let (target, pins) = to
-                    .split_once('@')
-                    .ok_or_else(|| controller.error("invalid EXTI output"))?;
-                let direct_nvic = nvic.is_some_and(|nvic| nvic.name == target.trim());
-                let combined = combined_routes.get(target.trim());
-                let pin_count = if direct_nvic {
-                    32
-                } else if let Some((count, _)) = combined {
-                    *count
-                } else {
-                    return Err(controller.error("unknown EXTI output target"));
-                };
-                let from = irq_list(from, count).map_err(|e| controller.error(&e))?;
-                let to = irq_list(pins, pin_count).map_err(|e| controller.error(&e))?;
-                if from.len() != to.len() {
-                    return Err(controller.error("mismatched EXTI wiring widths"));
-                }
-                for (line, pin) in from.into_iter().zip(to) {
-                    let output = if direct_nvic {
-                        pin
-                    } else {
-                        combined.unwrap().1
-                    };
-                    if outputs[usize::from(line)].replace(output).is_some() {
-                        return Err(controller.error("duplicate EXTI output"));
+                let mut outputs = [None; H7Exti::LINES];
+                exti_outputs(controller, nvic, &combined_routes, &mut outputs)?;
+                machine
+                    .bus
+                    .map_h7_exti(controller.address()?, outputs)
+                    .map_err(|e| controller.error(&e))?;
+                H7Exti::LINES as u32
+            } else {
+                let mut count = None;
+                let mut direct = None;
+                for (_, text) in &controller.body {
+                    if text.contains("->") {
+                        continue;
                     }
+                    let (key, value) = text
+                        .split_once(':')
+                        .ok_or_else(|| controller.error("invalid EXTI property"))?;
+                    let target = match key.trim() {
+                        "numberOfOutputLines" if count.is_none() => &mut count,
+                        "firstDirectLine" if direct.is_none() => &mut direct,
+                        _ => return Err(controller.error("unsupported or duplicate EXTI property")),
+                    };
+                    *target = Some(number(value.trim()).map_err(|e| controller.error(&e))?);
                 }
+                let count = count.unwrap_or(14);
+                let direct = direct.unwrap_or(23);
+                if !(1..=32).contains(&count) || direct > 32 {
+                    return Err(controller.error("EXTI supports 1–32 output lines"));
+                }
+                let mut outputs = vec![None; count as usize];
+                exti_outputs(controller, nvic, &combined_routes, &mut outputs)?;
+                if outputs.iter().flatten().any(|&line| line >= 32) {
+                    return Err(controller.error("STM32F4 EXTI outputs require NVIC lines 0–31"));
+                }
+                machine
+                    .bus
+                    .map_exti(controller.address()?, outputs, direct)
+                    .map_err(|e| controller.error(&e))?;
+                count
             }
-            machine
-                .bus
-                .map_exti(controller.address()?, outputs, direct)
-                .map_err(|e| controller.error(&e))?;
-            count
         } else {
             0
         };
@@ -553,7 +541,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 {
                     let name = name.trim();
                     let route = if nvic.is_some_and(|controller| controller.name == name) {
-                        Stm32Irq::Nvic(irq_index(line, 32).map_err(|e| uart.error(&e))?)
+                        Stm32Irq::Nvic(
+                            irq_index(line, IRQ_LINES as u32).map_err(|e| uart.error(&e))?,
+                        )
                     } else if exti.is_some_and(|controller| controller.name == name) {
                         Stm32Irq::Exti(irq_index(line, exti_lines).map_err(|e| uart.error(&e))?)
                     } else if let Some(&(pins, output)) = combined_routes.get(name) {
@@ -851,6 +841,43 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn exti_outputs(
+    controller: &Entry,
+    nvic: Option<&Entry>,
+    combined_routes: &HashMap<&str, (u32, u8)>,
+    outputs: &mut [Option<u8>],
+) -> Result<(), String> {
+    for (_, text) in &controller.body {
+        let Some((from, to)) = text.split_once("->") else {
+            continue;
+        };
+        let (target, pins) = to
+            .split_once('@')
+            .ok_or_else(|| controller.error("invalid EXTI output"))?;
+        let direct_nvic = nvic.is_some_and(|nvic| nvic.name == target.trim());
+        let combined = combined_routes.get(target.trim());
+        let pin_count = if direct_nvic {
+            IRQ_LINES as u32
+        } else if let Some((count, _)) = combined {
+            *count
+        } else {
+            return Err(controller.error("unknown EXTI output target"));
+        };
+        let from = irq_list(from, outputs.len() as u32).map_err(|e| controller.error(&e))?;
+        let to = irq_list(pins, pin_count).map_err(|e| controller.error(&e))?;
+        if from.len() != to.len() {
+            return Err(controller.error("mismatched EXTI wiring widths"));
+        }
+        for (line, pin) in from.into_iter().zip(to) {
+            let output = combined.map_or(pin, |&(_, output)| output);
+            if outputs[usize::from(line)].replace(output).is_some() {
+                return Err(controller.error("duplicate EXTI output"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn irq_index(value: &str, count: u32) -> Result<u8, String> {

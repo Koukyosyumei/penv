@@ -2,6 +2,7 @@ use std::io::Write;
 
 use crate::{
     bus::Bus,
+    nvic::ActiveExceptions,
     systick::{PENDSV, SYSTICK},
 };
 
@@ -13,7 +14,7 @@ pub struct Thumb {
     carry: bool,
     overflow: bool,
     active_exception: u8,
-    active_exceptions: u128,
+    active_exceptions: ActiveExceptions,
     interrupts_masked: bool,
     thread_uses_psp: bool,
     msp: u32,
@@ -263,7 +264,7 @@ impl Thumb {
                 0xffff_fff1
             };
         }
-        self.active_exceptions |= 1 << exception;
+        self.active_exceptions.insert(exception);
         self.active_exception = exception;
         Ok(handler & !1)
     }
@@ -280,11 +281,13 @@ impl Thumb {
             }
             let [r0, r1, r2, r3, r12, lr, pc, xpsr] = frame;
             let previous = xpsr & 0x1ff;
-            let remaining = self.active_exceptions & !(1 << self.active_exception);
+            let mut remaining = self.active_exceptions;
+            remaining.remove(self.active_exception);
             let valid_mode = if target != 0xffff_fff1 {
-                previous == 0 && remaining == 0
+                previous == 0 && remaining.is_empty()
             } else {
-                previous != 0 && previous < 80 && remaining & (1 << previous) != 0
+                previous != 0
+                    && u8::try_from(previous).is_ok_and(|exception| remaining.contains(exception))
             };
             if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
                 return Err("invalid Cortex-M exception return frame".into());
@@ -318,7 +321,7 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<bool, String> {
-        bus.sample_nvic(self.active_exceptions);
+        bus.sample_nvic(&self.active_exceptions);
         if let Some(timer) = bus.systick.as_mut() {
             timer.tick();
         }
@@ -334,14 +337,14 @@ impl Thumb {
         let mut selected = bus
             .nvic
             .as_ref()
-            .and_then(|nvic| nvic.next_irq(self.active_exceptions))
+            .and_then(|nvic| nvic.next_irq(&self.active_exceptions))
             .map(|(line, priority)| (16 + line, priority));
         for exception in [PENDSV, SYSTICK] {
             if bus
                 .systick
                 .as_ref()
                 .is_some_and(|timer| timer.pending(exception))
-                && self.active_exceptions & (1 << exception) == 0
+                && !self.active_exceptions.contains(exception)
             {
                 let candidate = (exception, priority(exception));
                 if selected.is_none_or(|(number, priority)| {

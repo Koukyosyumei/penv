@@ -11,10 +11,11 @@ use crate::{
     ethernet::Controller,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
-    nvic::{Nvic, VTOR},
+    nvic::{ActiveExceptions, Nvic, VTOR},
     plic::Plic,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
+    stm32h7_exti::H7Exti,
     stm32h7_net_control::{Change, NetworkControl},
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
@@ -78,6 +79,7 @@ pub struct Bus {
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
+    h7_exti: Option<H7Exti>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
@@ -286,6 +288,10 @@ impl Bus {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
             })
+            || self.h7_exti.as_ref().is_some_and(|exti| {
+                let other = u64::from(exti.base);
+                start < other + u64::from(H7Exti::SIZE) && other < end
+            })
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
                 start < other + u64::from(Exti::SIZE) && other < end
@@ -399,7 +405,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn sample_nvic(&mut self, active: u128) {
+    pub fn sample_nvic(&mut self, active: &ActiveExceptions) {
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.set_uart_level(
                 self.litex_uart
@@ -410,18 +416,25 @@ impl Bus {
             for line in self.ethernet.iter().filter_map(Controller::nvic_irq) {
                 nvic.set_line(line, true, active);
             }
-            let mut exti_inputs = 0;
+            let mut exti_inputs = [0; 3];
             for uart in &self.stm32_uarts {
                 if uart.interrupt_pending() {
                     match uart.irq {
                         Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
-                        Some(Stm32Irq::Exti(line)) => exti_inputs |= 1 << line,
+                        Some(Stm32Irq::Exti(line)) => {
+                            exti_inputs[usize::from(line / 32)] |= 1 << (line % 32)
+                        }
                         None => {}
                     }
                 }
             }
+            if let Some(exti) = self.h7_exti.as_mut() {
+                for line in exti.sample(exti_inputs) {
+                    nvic.set_line(line, true, active);
+                }
+            }
             if let Some(exti) = self.exti.as_mut() {
-                let mut mask = exti.sample(exti_inputs);
+                let mut mask = exti.sample(exti_inputs[0]);
                 while mask != 0 {
                     let line = mask.trailing_zeros() as u8;
                     mask &= mask - 1;
@@ -429,6 +442,22 @@ impl Bus {
                 }
             }
         }
+    }
+
+    pub fn map_h7_exti(
+        &mut self,
+        base: u32,
+        outputs: [Option<u8>; H7Exti::LINES],
+    ) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(H7Exti::SIZE);
+        if base & 3 != 0 || end > 1 << 32 || self.h7_exti.is_some() || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32H7 EXTI range at {base:#010x}"
+            ));
+        }
+        self.h7_exti = Some(H7Exti::new(base, outputs));
+        Ok(())
     }
 
     pub fn map_exti(
@@ -668,6 +697,13 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(exti) = self.h7_exti.as_ref()
+            && exti.contains(address)
+        {
+            return Ok(exti.read(address));
+        }
+        if N == 4
+            && address & 3 == 0
             && let Some(exti) = self.exti.as_ref()
             && exti.contains(address)
         {
@@ -810,6 +846,13 @@ impl Bus {
             return device
                 .write(address, width, value, uart)
                 .map_err(BusError::Output);
+        }
+        if width == 4
+            && let Some(exti) = self.h7_exti.as_mut()
+            && exti.contains(address)
+        {
+            exti.write(address, value);
+            return Ok(());
         }
         if width == 4
             && let Some(exti) = self.exti.as_mut()

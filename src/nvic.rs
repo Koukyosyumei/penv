@@ -1,23 +1,42 @@
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
+pub const IRQ_LINES: usize = 240;
+const BANKS: usize = IRQ_LINES.div_ceil(32);
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
-const ENABLE_HIGH: u32 = ENABLE + 4;
-const DISABLE_HIGH: u32 = DISABLE + 4;
-const SET_PENDING_HIGH: u32 = SET_PENDING + 4;
-const CLEAR_PENDING_HIGH: u32 = CLEAR_PENDING + 4;
 const PRIORITY: u32 = BASE + 0x400;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd1c;
 const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 7;
-const PRIORITY_END: u32 = PRIORITY + 63;
+const PRIORITY_END: u32 = PRIORITY + IRQ_LINES as u32 - 1;
+
+#[derive(Clone, Copy, Default)]
+pub struct ActiveExceptions([u32; 8]);
+
+impl ActiveExceptions {
+    pub fn contains(&self, exception: u8) -> bool {
+        self.0[usize::from(exception / 32)] & (1 << (exception % 32)) != 0
+    }
+
+    pub fn insert(&mut self, exception: u8) {
+        self.0[usize::from(exception / 32)] |= 1 << (exception % 32);
+    }
+
+    pub fn remove(&mut self, exception: u8) {
+        self.0[usize::from(exception / 32)] &= !(1 << (exception % 32));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|&bank| bank == 0)
+    }
+}
 
 pub struct Nvic {
     vector_base: Option<u32>,
-    enabled: u64,
-    pending: u64,
-    priority: [u8; 64],
+    enabled: [u32; BANKS],
+    pending: [u32; BANKS],
+    priority: [u8; IRQ_LINES],
     system_priority: [u8; 8],
     priority_mask: u8,
     pub uart_irq: Option<u8>,
@@ -27,9 +46,9 @@ impl Nvic {
     pub fn new(priority_mask: u8, uart_irq: Option<u8>) -> Self {
         Self {
             vector_base: None,
-            enabled: 0,
-            pending: 0,
-            priority: [0; 64],
+            enabled: [0; BANKS],
+            pending: [0; BANKS],
+            priority: [0; IRQ_LINES],
             system_priority: [0; 8],
             priority_mask,
             uart_irq,
@@ -56,15 +75,15 @@ impl Nvic {
         self.vector_base = Some(address);
     }
 
-    pub fn set_uart_level(&mut self, high: bool, active: u128) {
+    pub fn set_uart_level(&mut self, high: bool, active: &ActiveExceptions) {
         if let Some(line) = self.uart_irq {
             self.set_line(line, high, active);
         }
     }
 
-    pub fn set_line(&mut self, line: u8, high: bool, active: u128) {
-        if high && active & (1 << (16 + line)) == 0 {
-            self.pending |= 1 << line;
+    pub fn set_line(&mut self, line: u8, high: bool, active: &ActiveExceptions) {
+        if high && usize::from(line) < IRQ_LINES && !active.contains(16 + line) {
+            self.pending[usize::from(line / 32)] |= 1 << (line % 32);
         }
     }
 
@@ -73,23 +92,39 @@ impl Nvic {
             11 => self.system_priority[3],
             14 => self.system_priority[6],
             15 => self.system_priority[7],
-            16..=79 => self.priority[usize::from(exception - 16)],
+            16..=255 => self.priority[usize::from(exception - 16)],
             _ => 0,
         }
     }
 
-    pub fn next_irq(&self, active: u128) -> Option<(u8, u8)> {
-        let mut candidates = self.enabled & self.pending & !((active >> 16) as u64);
+    pub fn next_irq(&self, active: &ActiveExceptions) -> Option<(u8, u8)> {
         let mut selected = None;
-        while candidates != 0 {
-            let line = candidates.trailing_zeros() as u8;
-            candidates &= candidates - 1;
-            let priority = self.priority[usize::from(line)];
-            if selected.is_none_or(|(_, best)| priority < best) {
-                selected = Some((line, priority));
+        for bank in 0..BANKS {
+            let mut candidates = self.enabled[bank] & self.pending[bank];
+            while candidates != 0 {
+                let line = ((bank * 32) as u32 + candidates.trailing_zeros()) as u8;
+                candidates &= candidates - 1;
+                let priority = self.priority[usize::from(line)];
+                if !active.contains(16 + line) && selected.is_none_or(|(_, best)| priority < best) {
+                    selected = Some((line, priority));
+                }
             }
         }
         selected
+    }
+
+    pub fn acknowledge(&mut self, line: u8) {
+        self.pending[usize::from(line / 32)] &= !(1 << (line % 32));
+    }
+
+    fn bank(address: u32) -> Option<(u32, usize)> {
+        let base = address & !0x7f;
+        let register = address.wrapping_sub(base);
+        let bank = (register / 4) as usize;
+        (matches!(base, ENABLE | DISABLE | SET_PENDING | CLEAR_PENDING)
+            && register & 3 == 0
+            && bank < BANKS)
+            .then_some((base, bank))
     }
 
     fn priority_registers(address: u32) -> Option<(bool, usize)> {
@@ -102,64 +137,70 @@ impl Nvic {
         }
     }
 
-    pub fn acknowledge(&mut self, line: u8) {
-        self.pending &= !(1 << line);
-    }
-
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
-        Some(match (address, width) {
-            (VTOR, 4) => self.vector_base.unwrap_or(0),
-            (ENABLE | DISABLE, 4) => self.enabled as u32,
-            (ENABLE_HIGH | DISABLE_HIGH, 4) => (self.enabled >> 32) as u32,
-            (SET_PENDING | CLEAR_PENDING, 4) => self.pending as u32,
-            (SET_PENDING_HIGH | CLEAR_PENDING_HIGH, 4) => (self.pending >> 32) as u32,
-            (_, 1 | 4) => {
-                let (system, offset) = Self::priority_registers(address)?;
-                let priority = if system {
-                    &self.system_priority[..]
-                } else {
-                    &self.priority[..]
-                };
-                let bytes = priority.get(offset..offset + width)?;
-                let mut word = [0; 4];
-                word[..width].copy_from_slice(bytes);
-                u32::from_le_bytes(word)
+        if width == 4 {
+            if address == VTOR {
+                return Some(self.vector_base.unwrap_or(0));
             }
-            _ => return None,
-        })
+            if let Some((base, bank)) = Self::bank(address) {
+                return Some(if matches!(base, ENABLE | DISABLE) {
+                    self.enabled[bank]
+                } else {
+                    self.pending[bank]
+                });
+            }
+        }
+        if !matches!(width, 1 | 4) {
+            return None;
+        }
+        let (system, offset) = Self::priority_registers(address)?;
+        let priority = if system {
+            &self.system_priority[..]
+        } else {
+            &self.priority[..]
+        };
+        let bytes = priority.get(offset..offset + width)?;
+        let mut word = [0; 4];
+        word[..width].copy_from_slice(bytes);
+        Some(u32::from_le_bytes(word))
     }
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
-        match (address, width) {
-            (ENABLE, 4) => self.enabled |= u64::from(value),
-            (ENABLE_HIGH, 4) => self.enabled |= u64::from(value) << 32,
-            (DISABLE, 4) => self.enabled &= !u64::from(value),
-            (DISABLE_HIGH, 4) => self.enabled &= !(u64::from(value) << 32),
-            (SET_PENDING, 4) => self.pending |= u64::from(value),
-            (SET_PENDING_HIGH, 4) => self.pending |= u64::from(value) << 32,
-            (CLEAR_PENDING, 4) => self.pending &= !u64::from(value),
-            (CLEAR_PENDING_HIGH, 4) => self.pending &= !(u64::from(value) << 32),
-            (_, 1 | 4) => {
-                let Some((system, offset)) = Self::priority_registers(address) else {
-                    return false;
-                };
-                let registers = if system {
-                    &mut self.system_priority[..]
-                } else {
-                    &mut self.priority[..]
-                };
-                let Some(bytes) = registers.get_mut(offset..offset + width) else {
-                    return false;
-                };
-                for (index, (priority, value)) in
-                    bytes.iter_mut().zip(value.to_le_bytes()).enumerate()
-                {
-                    if !system || matches!(offset + index, 3 | 6 | 7) {
-                        *priority = value & self.priority_mask;
-                    }
-                }
+        if width == 4
+            && let Some((base, bank)) = Self::bank(address)
+        {
+            let value = if bank + 1 == BANKS {
+                value & 0xffff
+            } else {
+                value
+            };
+            match base {
+                ENABLE => self.enabled[bank] |= value,
+                DISABLE => self.enabled[bank] &= !value,
+                SET_PENDING => self.pending[bank] |= value,
+                CLEAR_PENDING => self.pending[bank] &= !value,
+                _ => unreachable!(),
             }
-            _ => return false,
+            return true;
+        }
+        if !matches!(width, 1 | 4) {
+            return false;
+        }
+        let Some((system, offset)) = Self::priority_registers(address) else {
+            return false;
+        };
+        let registers = if system {
+            &mut self.system_priority[..]
+        } else {
+            &mut self.priority[..]
+        };
+        let Some(bytes) = registers.get_mut(offset..offset + width) else {
+            return false;
+        };
+        for (index, (priority, value)) in bytes.iter_mut().zip(value.to_le_bytes()).enumerate() {
+            if !system || matches!(offset + index, 3 | 6 | 7) {
+                *priority = value & self.priority_mask;
+            }
         }
         true
     }
