@@ -119,7 +119,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir"),
+                | "--asset-dir" | "--framebuffer-out"),
             ) => {
                 let path = args
                     .next()
