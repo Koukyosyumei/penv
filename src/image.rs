@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     ops::Range,
 };
 
@@ -23,6 +23,103 @@ pub fn load_binary(machine: &mut Machine, mut file: File, address: u32) -> Resul
         .memory(address, size)
         .map_err(|error| error.to_string())?;
     file.read_exact(memory).map_err(|error| error.to_string())
+}
+
+pub fn load_hex(machine: &mut Machine, file: File) -> Result<(), String> {
+    if !machine.is_cortex_m() {
+        return Err("Intel HEX boot requires a Cortex-M platform".into());
+    }
+    // Each record encodes up to 255 data bytes, five metadata bytes, and CRLF.
+    const MAX_LINE: usize = 1 + 2 * (5 + 255) + 2;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::with_capacity(MAX_LINE);
+    let mut record = [0; 260];
+    let mut address_base = 0;
+    let mut image_base = None;
+    let mut eof = false;
+    let mut line_number = 0;
+    loop {
+        line.clear();
+        let length = (&mut reader)
+            .take(MAX_LINE as u64 + 1)
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
+        if length == 0 {
+            break;
+        }
+        line_number += 1;
+        let error = |reason: &str| format!("Intel HEX line {line_number}: {reason}");
+        if length > MAX_LINE {
+            return Err(error("record is too long"));
+        }
+        let mut text = line.as_slice();
+        while let Some((last, rest)) = text.split_last() {
+            if !last.is_ascii_whitespace() {
+                break;
+            }
+            text = rest;
+        }
+        if text.is_empty() {
+            continue;
+        }
+        if eof {
+            return Err(error("record after end-of-file"));
+        }
+        let digits = text
+            .strip_prefix(b":")
+            .ok_or_else(|| error("missing record prefix"))?;
+        if digits.len() < 10 || digits.len() > 2 * record.len() || !digits.len().is_multiple_of(2) {
+            return Err(error("invalid record length"));
+        }
+        let bytes = &mut record[..digits.len() / 2];
+        for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
+            let high = char::from(pair[0])
+                .to_digit(16)
+                .ok_or_else(|| error("invalid hex digit"))?;
+            let low = char::from(pair[1])
+                .to_digit(16)
+                .ok_or_else(|| error("invalid hex digit"))?;
+            *byte = ((high << 4) | low) as u8;
+        }
+        let count = usize::from(bytes[0]);
+        if bytes.len() != count + 5 {
+            return Err(error("byte count does not match record length"));
+        }
+        if bytes.iter().copied().fold(0u8, u8::wrapping_add) != 0 {
+            return Err(error("checksum mismatch"));
+        }
+        let offset = u16::from_be_bytes([bytes[1], bytes[2]]);
+        let data = &bytes[4..4 + count];
+        match (bytes[3], offset, data) {
+            (0, _, []) => {}
+            (0, _, data) => {
+                let address = address_base + u32::from(offset);
+                address
+                    .checked_add((count - 1) as u32)
+                    .ok_or_else(|| error("data address exceeds 32 bits"))?;
+                machine
+                    .bus
+                    .memory(address, count)
+                    .map_err(|e| error(&e.to_string()))?
+                    .copy_from_slice(data);
+                image_base = Some(image_base.map_or(address, |base: u32| base.min(address)));
+            }
+            (1, 0, []) => eof = true,
+            (2, 0, [high, low]) => address_base = u32::from(u16::from_be_bytes([*high, *low])) << 4,
+            (4, 0, [high, low]) => {
+                address_base = u32::from(u16::from_be_bytes([*high, *low])) << 16
+            }
+            // Cortex-M starts at the reset vector even when the HEX file supplies an entry.
+            (3 | 5, 0, [_, _, _, _]) => {}
+            (0..=5, _, _) => return Err(error("invalid address or size for record type")),
+            _ => return Err(error("unsupported record type")),
+        }
+    }
+    if !eof {
+        return Err("Intel HEX image is missing an end-of-file record".into());
+    }
+    machine.infer_cortex_m_vectors(image_base.ok_or("Intel HEX image has no data")?);
+    Ok(())
 }
 
 pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), String> {

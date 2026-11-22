@@ -50,6 +50,7 @@ Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
   --raw              Load a flat binary (default: ELF32)
+  --hex              Load an Intel HEX image on a Cortex-M platform
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
@@ -99,6 +100,7 @@ fn run() -> Result<ExitCode, String> {
     }
 
     let mut raw = false;
+    let mut hex = false;
     let mut stats = false;
     let mut positional = false;
     let mut ram_mib = None;
@@ -129,6 +131,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some("--") => positional = true,
             Some("--raw") => raw = true,
+            Some("--hex") => hex = true,
             Some("--stm32f0-console") => stm32f0_console = true,
             Some("--stats") => stats = true,
             Some(
@@ -299,14 +302,17 @@ fn run() -> Result<ExitCode, String> {
         }
     }
 
+    if raw && hex {
+        return Err("--raw and --hex are mutually exclusive".into());
+    }
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
     if let Some(script) = script {
-        if platform_path.is_some() || raw {
-            return Err("--script cannot be combined with --platform or --raw".into());
+        if platform_path.is_some() || raw || hex {
+            return Err("--script cannot be combined with --platform, --raw, or --hex".into());
         }
         let root = platform_root
             .as_deref()
@@ -391,7 +397,12 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(path) = path {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
+        let loaded = if hex {
+            image::load_hex(&mut machine, file)
+        } else {
+            image::load(&mut machine, file, raw)
+        };
+        loaded.map_err(|e| format!("{}: {e}", path.display()))?;
     }
     for (path, address) in binaries {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
