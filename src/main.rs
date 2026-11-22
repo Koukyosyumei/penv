@@ -55,6 +55,7 @@ Options:
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
   --uart-input-at N Delay UART input until execution step N
+  --litex-uart-legacy-console  Use legacy LiteX UART console event handling
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
@@ -91,6 +92,7 @@ fn run() -> Result<ExitCode, String> {
     }
 
     let mut raw = false;
+    let mut enable_litex_uart_legacy_console = false;
     let mut stats = false;
     let mut positional = false;
     let mut ram_mib = None;
@@ -117,6 +119,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some("--") => positional = true,
             Some("--raw") => raw = true,
+            Some("--litex-uart-legacy-console") => enable_litex_uart_legacy_console = true,
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
@@ -301,6 +304,9 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if enable_litex_uart_legacy_console {
+        machine.bus.enable_litex_uart_legacy_console()?;
+    }
     if script_elf_addresses.is_some() && !machine.is_cortex_m() {
         machine.bus.use_renode_unmapped_data();
     }

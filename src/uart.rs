@@ -90,6 +90,7 @@ pub struct LiteXUart {
     pending: u32,
     enabled: u32,
     irq: bool,
+    legacy_console_events: bool,
     transmit: Option<LiteXTransmit>,
 }
 
@@ -104,8 +105,13 @@ impl LiteXUart {
             pending: 1,
             enabled: 0,
             irq: false,
+            legacy_console_events: false,
             transmit: None,
         }
+    }
+
+    pub fn legacy_console_events(&mut self) {
+        self.legacy_console_events = true;
     }
 
     pub fn with_timing(mut self, timing: Option<LiteXTxTiming>) -> Self {
@@ -176,6 +182,8 @@ impl LiteXUart {
                     .is_some_and(|tx| tx.fifo.len() >= tx.timing.capacity),
             ),
             8 => u32::from(self.receive.is_empty()),
+            // Legacy interrupt handlers may poll this until the IRQ deasserts.
+            0x10 if self.legacy_console_events => self.pending & self.enabled,
             0x10 => self.pending,
             0x14 => self.enabled,
             _ => 0,
@@ -205,6 +213,11 @@ impl LiteXUart {
             }
             0x10 => {
                 self.pending &= !value;
+                // The legacy ISR acknowledges RX after reading a single byte.
+                // Keep the remaining queued bytes visible to that handler.
+                if self.legacy_console_events && !self.receive.is_empty() {
+                    self.pending |= 2;
+                }
                 self.update_irq();
             }
             0x14 => {

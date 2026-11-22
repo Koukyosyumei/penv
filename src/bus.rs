@@ -802,6 +802,15 @@ impl Bus {
         Ok(())
     }
 
+    pub fn enable_litex_uart_legacy_console(&mut self) -> Result<(), String> {
+        let uart = self
+            .litex_uart
+            .as_mut()
+            .ok_or("--litex-uart-legacy-console requires a LiteX UART")?;
+        uart.legacy_console_events();
+        Ok(())
+    }
+
     pub fn has_uart_input(&self) -> bool {
         self.uart.is_some()
             || self.ns16550.is_some()
