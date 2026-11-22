@@ -414,11 +414,18 @@ impl Hart {
             .clint
             .as_mut()
             .map_or(0, |clint| clint.tick(self.csr.hart_id));
-        let count_retired = self.csr.tick_counters(
-            bus.clint
-                .as_ref()
-                .map_or(elapsed_steps, |clint| clint.time()),
-        );
+        let mut pending = clint;
+        let mut time = bus
+            .clint
+            .as_ref()
+            .map_or(elapsed_steps, |clint| clint.time());
+        if let Some(timer) = bus.litex_cpu_timer.as_mut() {
+            if timer.tick() {
+                pending |= crate::clint::TIMER;
+            }
+            time = timer.time;
+        }
+        let count_retired = self.csr.tick_counters(time);
         let uart = bus
             .uart
             .as_ref()
@@ -426,7 +433,6 @@ impl Hart {
         let timer = bus.timer.as_mut().is_some_and(|(_, timer)| timer.tick());
         let plic = bus.tick_plic();
         let mut lines = bus.tick_litex(self.csr.hart_id);
-        let mut pending = clint;
         if self.csr.hart_id == 0 {
             lines |= (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER);
             pending |= plic;
@@ -438,6 +444,7 @@ impl Hart {
             pending |= lines;
         }
         if (bus.clint.is_some()
+            || bus.litex_cpu_timer.is_some()
             || bus.uart.is_some()
             || bus.timer.is_some()
             || bus.has_litex_irq()

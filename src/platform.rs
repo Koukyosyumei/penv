@@ -291,6 +291,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut plic = None;
     let mut timer = None;
     let mut litex_timer = None;
+    let mut litex_cpu_timer = None;
     let mut litex_soc = None;
     let mut litex_eth = None;
     let mut litex_phy = None;
@@ -370,6 +371,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one Murax timer is currently supported"));
                 }
             }
+            "Timers.LiteX_CPUTimer" => {
+                if litex_cpu_timer.replace(entry).is_some() {
+                    return Err(entry.error("only one LiteX CPU timer is supported"));
+                }
+            }
             "Timers.LiteX_Timer" | "Timers.LiteX_Timer_CSR32" => {
                 if litex_timer.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX timer is supported"));
@@ -432,6 +438,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || plic.is_some()
             || timer.is_some()
             || litex_timer.is_some()
+            || litex_cpu_timer.is_some()
             || litex_soc.is_some()
             || litex_eth.is_some()
             || litex_phy.is_some()
@@ -721,7 +728,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_11")
                 | ("timeProvider", "empty")
                     if ibex => {}
-                ("timeProvider", name) if clint.is_some_and(|clint| clint.name == name) => {}
+                ("timeProvider", name)
+                    if clint
+                        .or(litex_cpu_timer)
+                        .is_some_and(|timer| timer.name == name) => {}
                 ("pmpEntryCount", "0") => pmp = false,
                 ("pmpEntryCount", "16") => pmp = true,
                 _ => return Err(entry.error(&format!("unsupported CPU property {key} = {value}"))),
@@ -817,6 +827,39 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         machine
             .bus
             .map_clint(entry.address()?, targets)
+            .map_err(|e| entry.error(&e))?;
+    }
+    if let Some(entry) = litex_cpu_timer {
+        if configs.len() != 1 || clint.is_some() || cpu.model != "CPU.VexRiscv" {
+            return Err(entry.error("LiteX CPU timer requires a single VexRiscv CPU without CLINT"));
+        }
+        let expected = format!("->{}@100", cpu.name);
+        let mut connected = false;
+        let mut frequency = None;
+        for (_, text) in &entry.body {
+            if let Some(value) = text.strip_prefix("frequency:")
+                && frequency.is_none()
+            {
+                frequency = Some(number(value.trim()).map_err(|e| entry.error(&e))?);
+            } else {
+                let wire: String = text
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .collect();
+                if connected || wire.strip_prefix("IRQ").unwrap_or(&wire) != expected {
+                    return Err(entry.error(&format!("expected LiteX CPU timer wiring {expected}")));
+                }
+                connected = true;
+            }
+        }
+        let frequency = frequency
+            .filter(|&frequency| frequency != 0 && connected)
+            .ok_or_else(|| {
+                entry.error("expected positive LiteX CPU timer frequency and IRQ wiring")
+            })?;
+        machine
+            .bus
+            .map_litex_cpu_timer(entry.address()?, frequency)
             .map_err(|e| entry.error(&e))?;
     }
     let plic_config = plic

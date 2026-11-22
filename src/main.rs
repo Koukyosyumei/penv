@@ -220,6 +220,7 @@ fn run() -> Result<ExitCode, String> {
 
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
+    let mut silence_ranges = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -247,6 +248,7 @@ fn run() -> Result<ExitCode, String> {
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;
+        silence_ranges = boot.silence_ranges;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -268,6 +270,9 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    for (base, size) in silence_ranges {
+        machine.bus.map_silencer(base, size)?;
+    }
     for (base, size) in extra_ram {
         machine.bus.map_ram(base, size)?;
     }
@@ -302,6 +307,9 @@ fn run() -> Result<ExitCode, String> {
     if let Some(count) = harts {
         if count != 1 && machine.is_cortex_m() {
             return Err("--harts requires an RV32 machine".into());
+        }
+        if count != 1 && machine.bus.litex_cpu_timer.is_some() {
+            return Err("--harts cannot override a single-hart LiteX CPU timer".into());
         }
         if machine.hart_count() != 1 {
             return Err("--harts cannot override multiple CPU declarations".into());

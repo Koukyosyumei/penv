@@ -15,6 +15,7 @@ mkdir -p "$assets"
 
 murax=$renode_root/scripts/single-node/murax.resc
 litex=$renode_root/scripts/single-node/litex_vexriscv_smp.resc
+linux_single=$renode_root/scripts/single-node/litex_vexriscv_linux.resc
 ibex=$renode_root/scripts/single-node/litex_ibex.resc
 zephyr=$renode_root/scripts/single-node/litex_vexriscv_zephyr.resc
 git -C "$renode_root" rev-parse HEAD > "$artifacts/renode-revision"
@@ -28,7 +29,7 @@ prepare_assets() {
             sub(/\?$/, "", assignment[1])
             variables[assignment[1]] = assignment[2]
         }
-        $1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary") {
+        $1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary" || $2 == "LoadFdt") {
             path = $3 in variables ? variables[$3] : $3
             if (path ~ /^@https:\/\//)
                 print substr(path, 2)
@@ -99,6 +100,12 @@ run_to_step_limit litex-zephyr "$zephyr" --uart-event "4000000:$artifacts/zephyr
 rg -aqF 'uart:~$' "$artifacts/litex-zephyr.uart.log"
 rg -aqF 'Zephyr version' "$artifacts/litex-zephyr.uart.log"
 
+prepare_assets "$linux_single"
+run_to_step_limit litex-linux "$linux_single" --max-steps 140000000
+for marker in 'Linux version 5.0.14' 'sched_clock: 64 bits at 75MHz' 'Run /init as init process'; do
+    rg -aqF "$marker" "$artifacts/litex-linux.uart.log"
+done
+
 prepare_assets "$litex"
 printf 'root\r' > "$artifacts/litex-login.input"
 printf 'cat /proc/cpuinfo\r' > "$artifacts/litex-cpuinfo.input"
@@ -112,4 +119,4 @@ rg -aq 'Platform Max HARTs\s+: 4' "$artifacts/litex-smp.uart.log"
 for hart in 0 1 2 3; do
     rg -aq "^processor[[:blank:]]*: $hart\r*$" "$artifacts/litex-smp.uart.log"
 done
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, and LiteX SMP Linux verified. Logs are in %s\n' "$artifacts"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, and LiteX single-hart and SMP Linux verified. Logs are in %s\n' "$artifacts"

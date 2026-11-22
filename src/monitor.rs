@@ -7,6 +7,7 @@ use std::{
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(Asset, u32)>,
+    pub silence_ranges: Vec<(u32, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
     pub image: Option<Asset>,
@@ -109,6 +110,10 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
         }
         let words = command_words(text).map_err(|e| error(&e))?;
         match words.as_slice() {
+            ["set", name, value] if !state.boot.started => {
+                let name = name.strip_prefix('$').unwrap_or(name);
+                state.variables.insert(name.into(), (*value).into());
+            }
             ["include" | "i", value] => {
                 if state.boot.started {
                     return Err(error(
@@ -206,7 +211,7 @@ fn execute(
                 .ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
         }
-        ["sysbus", "LoadBinary", value, address] if boot.platform.is_some() => {
+        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.platform.is_some() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
@@ -214,6 +219,16 @@ fn execute(
                 Asset::new(file, script),
                 crate::parse_address(resolve(address)?)?,
             ));
+        }
+        ["sysbus", "SilenceRange", start, size] if boot.platform.is_some() => {
+            let start = start
+                .strip_prefix('<')
+                .ok_or("expected SilenceRange <start size>")?;
+            let size = size
+                .strip_suffix('>')
+                .ok_or("expected SilenceRange <start size>")?;
+            boot.silence_ranges
+                .push((crate::parse_address(start)?, crate::parse_address(size)?));
         }
         [cpu, "PC", value] if boot.platform.is_some() => {
             boot.boot_pcs.push((

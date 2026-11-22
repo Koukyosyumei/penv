@@ -81,6 +81,7 @@ pub struct Bus {
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     litex_timer: Option<LiteXTimer>,
+    pub litex_cpu_timer: Option<litex::CpuTimer>,
     litex_soc: Option<litex::SocController>,
     litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
     litex_eth: Option<Ethernet>,
@@ -203,6 +204,10 @@ impl Bus {
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, device.timer.size()))
             })
+            || self
+                .litex_cpu_timer
+                .as_ref()
+                .is_some_and(|timer| overlaps_range(start, end, timer.base, litex::CpuTimer::SIZE))
             || self.litex_eth.as_ref().is_some_and(|eth| {
                 eth.registrations.iter().any(|registration| {
                     overlaps_range(start, end, registration.base, registration.size)
@@ -424,6 +429,12 @@ impl Bus {
             timer,
             vex_irq,
         });
+        Ok(())
+    }
+
+    pub fn map_litex_cpu_timer(&mut self, base: u32, frequency: u32) -> Result<(), String> {
+        self.check_litex_ranges(&[base], litex::CpuTimer::SIZE)?;
+        self.litex_cpu_timer = Some(litex::CpuTimer::new(base, frequency));
         Ok(())
     }
 
@@ -728,6 +739,13 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(timer) = self.litex_cpu_timer.as_ref()
+            && timer.contains(address)
+        {
+            return Ok(timer.read(address));
+        }
+        if N == 4
+            && address & 3 == 0
             && let Some(soc) = self.litex_soc.as_ref()
             && soc.contains(address)
         {
@@ -864,6 +882,13 @@ impl Bus {
             && let Some(offset) = litex_offset(&device.bases, device.timer.size(), address)
         {
             device.timer.write(offset, width, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(timer) = self.litex_cpu_timer.as_mut()
+            && timer.contains(address)
+        {
+            timer.write(address, value);
             return Ok(());
         }
         if width == 4

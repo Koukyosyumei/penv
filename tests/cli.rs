@@ -451,7 +451,7 @@ fn loads_resc_wrappers_with_shared_variables_and_relative_assets() {
     let wrapper = directory.join("wrapper.resc");
     fs::write(
         &wrapper,
-        "$bin=@local\\ board.bin\ni @nested/board.resc\nrunMacro $reset\nstart\n",
+        "set bin @local\\ board.bin\ni @nested/board.resc\nrunMacro $reset\nstart\n",
     )
     .unwrap();
     fs::write(

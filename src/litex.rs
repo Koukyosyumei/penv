@@ -1,5 +1,11 @@
 const CPU_HZ: u64 = 100_000_000;
 
+fn clock_ticks(frequency: u32, fraction: &mut u64) -> u64 {
+    let scaled = *fraction + u64::from(frequency);
+    *fraction = scaled % CPU_HZ;
+    scaled / CPU_HZ
+}
+
 pub struct Timer {
     wide_csr: bool,
     frequency: u32,
@@ -38,9 +44,7 @@ impl Timer {
     }
 
     pub fn tick(&mut self) {
-        let scaled = self.fraction + u64::from(self.frequency);
-        let ticks = scaled / CPU_HZ;
-        self.fraction = scaled % CPU_HZ;
+        let ticks = clock_ticks(self.frequency, &mut self.fraction);
         self.uptime = self.uptime.wrapping_add(ticks);
         if !self.enabled || ticks == 0 {
             return;
@@ -128,6 +132,80 @@ impl Timer {
             0x18 if value & 1 != 0 => self.pending = false,
             0x1c => self.event_enabled = value & 1 != 0,
             0x20 if value & 1 != 0 => self.uptime_latched = self.uptime,
+            _ => {}
+        }
+    }
+}
+
+pub struct CpuTimer {
+    pub base: u32,
+    frequency: u32,
+    fraction: u64,
+    pub time: u64,
+    latched: u64,
+    compare: u64,
+    compare_registers: [u32; 8],
+    latch_enable: bool,
+    pending: bool,
+}
+
+impl CpuTimer {
+    pub const SIZE: u32 = 0x100;
+
+    pub fn new(base: u32, frequency: u32) -> Self {
+        Self {
+            base,
+            frequency,
+            fraction: 0,
+            time: 0,
+            latched: 0,
+            compare: u64::MAX,
+            compare_registers: [0; 8],
+            latch_enable: false,
+            pending: false,
+        }
+    }
+
+    pub fn tick(&mut self) -> bool {
+        let ticks = clock_ticks(self.frequency, &mut self.fraction);
+        let past_compare = self.time >= self.compare;
+        self.time = self.time.wrapping_add(ticks);
+        self.pending |= !past_compare && self.time >= self.compare;
+        self.pending
+    }
+
+    pub fn contains(&self, address: u32) -> bool {
+        address.wrapping_sub(self.base) < Self::SIZE
+    }
+
+    pub fn read(&self, address: u32) -> u32 {
+        let offset = address - self.base;
+        match offset {
+            0 => u32::from(self.latch_enable),
+            4..=0x20 => ((self.latched >> ((0x20 - offset) * 2)) & 0xff) as u32,
+            0x24..=0x40 => self.compare_registers[((offset - 0x24) / 4) as usize],
+            _ => 0,
+        }
+    }
+
+    pub fn write(&mut self, address: u32, value: u32) {
+        let offset = address - self.base;
+        match offset {
+            0 => {
+                self.latch_enable = value & 1 != 0;
+                if self.latch_enable {
+                    self.latched = self.time;
+                }
+            }
+            0x24..=0x40 => {
+                self.compare_registers[((offset - 0x24) / 4) as usize] = value;
+                let shift = (0x40 - offset) * 2;
+                self.compare =
+                    (self.compare & !(0xff << shift)) | (u64::from(value & 0xff) << shift);
+                if self.time < self.compare {
+                    self.pending = false;
+                }
+            }
             _ => {}
         }
     }
@@ -344,6 +422,28 @@ impl IoDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_timer_latches_time_and_rearms_machine_irq() {
+        let base = 0xf000_0800;
+        let mut timer = CpuTimer::new(base, 75_000_000);
+        for offset in (0x24..0x40).step_by(4) {
+            timer.write(base + offset, 0);
+        }
+        timer.write(base + 0x40, 3);
+        for _ in 0..3 {
+            assert!(!timer.tick());
+        }
+        assert_eq!(timer.time, 2);
+        timer.write(base, 1);
+        assert_eq!(timer.read(base + 0x20), 2);
+        assert!(timer.tick());
+        assert_eq!(timer.read(base + 0x20), 2);
+        timer.write(base + 0x40, 5);
+        assert!(!timer.tick());
+        assert!(!timer.tick());
+        assert!(timer.tick());
+    }
 
     #[test]
     fn mmcm_reset_keeps_internal_registers() {
