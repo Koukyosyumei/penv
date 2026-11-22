@@ -16,6 +16,7 @@ use crate::{
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
+    stm32f4_flash::F4Flash,
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -97,6 +98,7 @@ pub struct Bus {
     h7_bdma: Vec<Bdma>,
     h7_adc_dma: Vec<AdcDma>,
     h7_dma_mux: Vec<DmaMux>,
+    f4_flash: Option<F4Flash>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
     h7_rtc: Vec<Stm32Rtc>,
@@ -294,6 +296,20 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_f4_flash(&mut self, device: F4Flash) -> Result<(), String> {
+        let [(base, size), (option_base, option_size)] = device.mappings();
+        self.check_peripheral_range(base, size)?;
+        self.check_peripheral_range(option_base, option_size)?;
+        if self.f4_flash.is_some()
+            || (u64::from(base) < u64::from(option_base) + u64::from(option_size)
+                && u64::from(option_base) < u64::from(base) + u64::from(size))
+        {
+            return Err("duplicate or overlapping STM32F4 flash mapping".into());
+        }
+        self.f4_flash = Some(device);
+        Ok(())
+    }
+
     pub fn map_h7_flash(&mut self, device: FlashController) -> Result<(), String> {
         let start = u64::from(device.base);
         let end = start + u64::from(FlashController::SIZE);
@@ -484,6 +500,12 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.f4_flash.as_ref().is_some_and(|device| {
+                device.mappings().into_iter().any(|(base, size)| {
+                    let base = u64::from(base);
+                    start < base + u64::from(size) && base < end
+                })
             })
             || self.h7_flash.as_ref().is_some_and(|device| {
                 let base = u64::from(device.base);
@@ -1094,6 +1116,14 @@ impl Bus {
         {
             return Ok(value);
         }
+        if address as usize & (N - 1) == 0
+            && let Some(value) = self
+                .f4_flash
+                .as_ref()
+                .and_then(|device| device.read(address, N))
+        {
+            return Ok(value);
+        }
         if N == 4
             && address & 3 == 0
             && let Some(device) = self.h7_flash.as_ref()
@@ -1463,6 +1493,15 @@ impl Bus {
                 .map(|offset| (peripheral, offset))
         }) {
             peripheral.write(offset);
+            return Ok(());
+        }
+        if let Some(device) = self.f4_flash.as_mut()
+            && device.contains(address)
+        {
+            if let Some(range) = device.write(address, width, value) {
+                self.memory(range.start, (range.end - range.start) as usize)?
+                    .fill(0xff);
+            }
             return Ok(());
         }
         if width == 4

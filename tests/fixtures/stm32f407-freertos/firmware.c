@@ -3,6 +3,10 @@
 #include "task.h"
 
 #define REG(address) (*(volatile uint32_t *)(address))
+#define FLASH_ACR REG(0x40023c00)
+#define FLASH_CR  REG(0x40023c10)
+#define FLASH_RDP (*(volatile uint8_t *)0x1fffc001)
+#define FLASH_NWRP REG(0x1fffc008)
 #define UART4_SR  REG(0x40004c00)
 #define UART4_DR  REG(0x40004c04)
 #define UART4_BRR REG(0x40004c08)
@@ -176,6 +180,11 @@ void firmware_main(void)
     static StaticTask_t event_tcb;
 
     uart_init();
+    FLASH_ACR = 1;
+    configASSERT((FLASH_ACR & 0xf) == 1);
+    FLASH_ACR = 0;  /* Restore zero wait states for HSI 16 MHz. */
+    configASSERT((FLASH_CR & (1U << 31)) != 0);
+    configASSERT(FLASH_RDP == 0xaa && (FLASH_NWRP & 0xfff) == 0xfff);
     uart_text("STM32F407 FreeRTOS " tskKERNEL_VERSION_NUMBER "\n");
     configASSERT(xTaskCreateStatic(task, "A", configMINIMAL_STACK_SIZE, &workers[0],
                                    2, stacks[0], &tasks[0]) != NULL);

@@ -9,6 +9,7 @@ use crate::{
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
     stm32_uart::{Stm32Irq, UsartLayout},
+    stm32f4_flash::F4Flash,
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -242,6 +243,7 @@ fn parse(
             None => (declaration.trim(), None),
         };
         if (crate::network_platform::has_regions(model)
+            || model == F4Flash::MODEL
             || stm32h7_adc_platform::has_regions(model)
             || model == stm32h7_gpio_platform::GPIO
             || model == stm32h7_rtc_platform::RTC
@@ -262,7 +264,9 @@ fn parse(
         });
     }
     if registration_depth != 0 {
-        return Err(current.unwrap().error("unterminated Ethernet registration"));
+        return Err(current
+            .unwrap()
+            .error("unterminated peripheral registration"));
     }
     entries.extend(current);
     visiting.remove(&canonical);
@@ -377,9 +381,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.CombinedInput" => combiners.push(entry),
-            "MTD.STM32H7_FlashController" => {
+            F4Flash::MODEL | "MTD.STM32H7_FlashController" => {
                 if flash_controller.replace(entry).is_some() {
-                    return Err(entry.error("only one STM32H7 flash controller is supported"));
+                    return Err(entry.error("only one STM32 flash controller is supported"));
                 }
             }
             "Miscellaneous.DWT" => {
@@ -516,7 +520,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .set_frequency(frequency);
         }
         if let Some(flash) = flash_controller {
-            configure_h7_flash(flash, &entries, nvic, &mut machine)?;
+            if flash.model == F4Flash::MODEL {
+                configure_f4_flash(flash, &entries, &mut machine)?;
+            } else {
+                configure_h7_flash(flash, &entries, nvic, &mut machine)?;
+            }
         }
         let mut uart_irq = None;
         if let Some(uart) = uart {
@@ -714,7 +722,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         return Err(entry.error("STM32H7 peripherals require a Cortex-M CPU"));
     }
     if let Some(flash) = flash_controller {
-        return Err(flash.error("STM32H7 flash controller requires a Cortex-M CPU"));
+        return Err(flash.error("STM32 flash controller requires a Cortex-M CPU"));
     }
     if let Some(dwt) = dwt {
         return Err(dwt.error("DWT requires a Cortex-M CPU"));
@@ -963,6 +971,68 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_f4_flash(
+    controller: &Entry,
+    entries: &[Entry],
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let properties = keys(controller, &["flash"])?;
+    let [(_, name)] = properties.as_slice() else {
+        return Err(controller.error("expected a flash memory reference"));
+    };
+    let flash = entries
+        .iter()
+        .find(|entry| entry.name == *name && entry.model == "Memory.MappedMemory")
+        .ok_or_else(|| controller.error("flash must reference mapped memory"))?;
+    let start = flash.address()?;
+    let end = start
+        .checked_add(F4Flash::BANK_SIZE)
+        .ok_or_else(|| flash.error("flash bank range overflow"))?;
+    machine
+        .bus
+        .memory(start, F4Flash::BANK_SIZE as usize)
+        .map_err(|error| flash.error(&error.to_string()))?;
+
+    let parse = || -> Option<(u32, u32, u32)> {
+        let registration = controller
+            .registration
+            .as_deref()?
+            .strip_prefix('{')?
+            .strip_suffix('}')?
+            .trim();
+        let (registers, options) = registration.split_once(';')?;
+        let base = number(registers.strip_prefix("sysbus ")?.trim()).ok()?;
+        let options = options
+            .trim()
+            .strip_prefix("sysbus new Bus.BusMultiRegistration")?
+            .trim()
+            .strip_prefix('{')?
+            .strip_suffix('}')?;
+        let mut option_base = None;
+        let mut size = None;
+        let mut region = false;
+        for field in options.split(';') {
+            let (key, value) = field.trim().split_once(':')?;
+            let value = value.trim();
+            match key {
+                "address" if option_base.is_none() => option_base = Some(number(value).ok()?),
+                "size" if size.is_none() => size = Some(number(value).ok()?),
+                "region" if !region && value == r#""optionBytes""# => region = true,
+                _ => return None,
+            }
+        }
+        let size = size.filter(|size| *size >= 12 && size % 4 == 0)?;
+        region.then_some((base, option_base?, size))
+    };
+    let (base, option_base, size) = parse().ok_or_else(|| {
+        controller.error("expected register and optionBytes sysbus registrations")
+    })?;
+    machine
+        .bus
+        .map_f4_flash(F4Flash::new(base, option_base, size, start..end))
+        .map_err(|error| controller.error(&error))
 }
 
 fn configure_h7_flash(

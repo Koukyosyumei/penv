@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use crate::stm32_flash::KeyLock;
+
 const SECTOR_SIZE: u32 = 0x20000;
 const EOP: u32 = 1 << 16;
 const PROGRAM_SEQUENCE: u32 = 1 << 18;
@@ -9,37 +11,6 @@ const INTERRUPTS: u32 = EOP | PROGRAM_SEQUENCE | INCONSISTENCY | OPERATION_ERROR
 const LOCK: u32 = 1;
 const PROGRAM: u32 = 1 << 1;
 const CONTROL_MASK: u32 = 0x1fef_873f;
-
-struct KeyLock {
-    keys: [u32; 2],
-    locked: bool,
-    first_key: bool,
-}
-
-impl KeyLock {
-    fn new(keys: [u32; 2]) -> Self {
-        Self {
-            keys,
-            locked: true,
-            first_key: false,
-        }
-    }
-
-    fn consume(&mut self, value: u32) {
-        if !self.locked {
-            return;
-        }
-        if self.first_key && value == self.keys[1] {
-            self.locked = false;
-        }
-        self.first_key = value == self.keys[0];
-    }
-
-    fn lock(&mut self) {
-        self.locked = true;
-        self.first_key = false;
-    }
-}
 
 struct Bank {
     range: Range<u32>,

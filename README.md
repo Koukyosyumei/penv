@@ -185,7 +185,7 @@ Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の�
 入出力と割り込み配送を共用します。
 
 上流の `stm32f4_discovery.resc` は Contiki 用で、`PerformanceInMips` の解釈で停止します。
-ボード定義だけを読み込む場合は `MTD.STM32F4_FlashController` が最初の未対応モデルです。
+ボード定義だけを読み込む場合の阻害点は下記の「未変更の上流 REPL」で再現できます。
 FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
 TIM2（`0x40000000`、IRQ 28）、GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
 128 KiB メイン SRAM、SysTick はリセット時の HSI 16 MHz を使用します。
@@ -247,13 +247,42 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 43 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 44 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `96a5edb6aac856c0ed5109be2e3df0aef51d61008b78652a5cf4d188e8a82896` です。
+  SHA-256 は `c957d0196a1b54c1c7e5ca103a3e0a3364e7b7d9a5934cbf514c9bebe5dd2608` です。
+
+### 未変更の上流 REPL
+
+`../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` で確認しました。
+`5fa3471` では `stm32f4.repl:10` の `MTD.STM32F4_FlashController` が最初の阻害点でした。
+現在は FLASH レジスターと `optionBytes` の二つのバス登録を受理し、`flash: flash` を
+消去対象のメモリーに結び付けます。モデルは ACR、キーによるロック解除、オプションバイト、
+F407 の先頭 1 MiB の同期消去を扱います。FreeRTOS ELF は同じフラッシュ宣言を含む
+検証用 REPL で、ACR の待ち状態の書き戻し、CR のリセット時ロック、RDP/nWRP の読み出しを
+検査してからスケジューラーを開始します。セクター消去の境界とロックは Rust のテストで確認します。
+[Renode の F4 フラッシュモデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/MTD/STM32F4_FlashController.cs)
+[STM32F407 リファレンスマニュアル RM0090](https://www.st.com/resource/en/reference_manual/rm0090-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+
+上記のスモークテストで生成した ELF を、未変更の上流ボード定義で指定します。
+
+```sh
+work=target/stm32f407-freertos
+cat > "$work/upstream.repro.resc" <<'EOF'
+mach create "F407_reference"
+machine LoadPlatformDescription @platforms/boards/stm32f4_discovery-kit.repl
+sysbus LoadELF @freertos.elf
+EOF
+target/release/penv run --script "$work/upstream.repro.resc" \
+    --platform-root ../renode --max-steps 36000
+```
+
+現在は `stm32f4.repl:31: can1: unsupported platform model "CAN.STMCAN"` で終了コード 1
+になります。上流 REPL での ELF 起動はこのモデル以降の対応が必要です。
 
 残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
-浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。検証用 REPL ではフラッシュをメモリーとして扱い、RCC の有効化
-書き込みは定数応答モデルで受けます。PLL、クロックゲート、フラッシュ消去・書き込み、
+浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの
+プログラム動作、消去の所要時間と IRQ、RDP の強制、キャッシュ動作は未実装です。
+検証用 REPL では RCC の有効化書き込みを定数応答モデルで受けます。PLL、クロックゲート、
 UART のビット時間や GPIO 信号線の動作は検証範囲外です。
