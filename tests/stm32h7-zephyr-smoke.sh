@@ -54,17 +54,21 @@ awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$wo
 sed 's|@platforms/boards/stm32h7_renode_reference_board.repl|@boot.repl|' \
     "$upstream" > "$work/boot.resc"
 printf 'help\r' > "$work/help.txt"
+printf 'kernel version\r' > "$work/kernel-version.txt"
 
 cargo build --release
 status=0
 target/release/penv run --script "$work/boot.resc" \
-    --platform-root "$renode" --asset-dir "$assets" --max-steps 1600000 \
-    --uart-event "850000:$work/help.txt" --stats > "$work/uart.log" 2> "$work/penv.log" || status=$?
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 2000000 \
+    --uart-event "850000:$work/help.txt" \
+    --uart-event "1300000:$work/kernel-version.txt" \
+    --stats > "$work/uart.log" 2> "$work/penv.log" || status=$?
 printf 'STM32H7 UART and simulator logs: %s\n' "$work"
 if [[ "$status" != 2 ]] ||
     ! rg -aqF 'Booting STM32H7 Renode Platform Demo' "$work/uart.log" ||
     ! rg -aqF 'demo:~$' "$work/uart.log" ||
-    ! rg -aqF 'Available commands:' "$work/uart.log"; then
+    ! rg -aqF 'Available commands:' "$work/uart.log" ||
+    ! rg -aqF 'Zephyr version 4.4.99' "$work/uart.log"; then
     cat "$work/penv.log" >&2
     cat "$work/uart.log" >&2
     exit 1

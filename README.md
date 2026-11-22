@@ -139,6 +139,12 @@ target/release/penv run --script "$smp" \
 - STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。現行コードは両方の宣言を通過し、`stm32h7.repl:219` の `DMA.STM32DMA2D` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
+双方向 Ethernet の回帰テストは個別に実行できます。STM32H7 の DMA 記述子から LiteX の受信スロットへフレームを送り、逆方向では LiteX の送信スロットから STM32H7 の受信バッファーへ返した内容を照合します。
+
+```sh
+cargo test simulation::tests::switches_frames_between_stm32h7_dma_and_litex_slots_in_both_directions -- --exact
+```
+
 変更前の停止を同じ RESC で再現するには、基準コミットを一時ディレクトリに展開して実行します。
 
 ```sh
@@ -157,12 +163,14 @@ CARGO_TARGET_DIR="$baseline/target" cargo build --release --manifest-path "$base
 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc tests/stm32h7-zephyr-smoke.sh
 ```
 
-スクリプトは USART2 の出力と Penv のログを一時ディレクトリに保存し、公開 ELF の起動バナー、シェルプロンプト、UART から入力した `help` への応答を検証します。期待するログは以下のとおりです。
+スクリプトは USART2 の出力と Penv のログを一時ディレクトリに保存します。公開 ELF の起動バナーとシェルプロンプトに加え、実行ステップ 850,000 で入力した `help` への応答、1,300,000 で入力した `kernel version` への応答を検証します。実行は 2,000,000 ステップの上限で終了します。
 
 ```text
 *** Booting STM32H7 Renode Platform Demo 6607bdd711f4 ***
 demo:~$ help
 Available commands:
+demo:~$ kernel version
+Zephyr version 4.4.99
 ```
 
 変更前の診断実行で停止した `pc=0x080036b6` は、ITCM を初期化する `strd r0, r1, [r3], #8`（先頭半語 `0xe8e3`）でした。Thumb-2 のデコーダーはローカル nRF52840 担当の `fe1911b` を再利用し、Cortex-M7 の実行ログで必要になった命令を追加しました。CRC の演算モデルはローカル STM32F0 の実装を再利用しています。起動時のバスアクセスに合わせて、RCC、SysTick、RNG、TIM3、CRC、QuadSPI の初期化・識別・SFDP と受信送信割り込み、FDCAN の設定レジスターを配線しました。
