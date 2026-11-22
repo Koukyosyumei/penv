@@ -11,6 +11,7 @@ use crate::{
     stm32_can::StmCan,
     stm32_uart::{Stm32Irq, UsartLayout},
     stm32f4_flash::F4Flash,
+    stm32f4_power::F4Power,
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -384,6 +385,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.CombinedInput" => combiners.push(entry),
+            F4Power::MODEL => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_f4_power(entry.address()?)
+                    .map_err(|error| entry.error(&error))?;
+            }
             F4Flash::MODEL | "MTD.STM32H7_FlashController" => {
                 if flash_controller.replace(entry).is_some() {
                     return Err(entry.error("only one STM32 flash controller is supported"));

@@ -7,6 +7,8 @@
 #define FLASH_CR  REG(0x40023c10)
 #define FLASH_RDP (*(volatile uint8_t *)0x1fffc001)
 #define FLASH_NWRP REG(0x1fffc008)
+#define PWR_CR    REG(0x40007000)
+#define PWR_CSR   REG(0x40007004)
 #define UART4_SR  REG(0x40004c00)
 #define UART4_DR  REG(0x40004c04)
 #define UART4_BRR REG(0x40004c08)
@@ -43,7 +45,7 @@ static void enable_irq(unsigned irq)
 static void uart_init(void)
 {
     REG(0x40023830) = 1U << 2;   /* RCC AHB1ENR: GPIOC */
-    REG(0x40023840) = (3U << 25) | (1U << 19) | 1U;  /* CAN1/2, UART4, TIM2 */
+    REG(0x40023840) = (1U << 28) | (3U << 25) | (1U << 19) | 1U;  /* PWR, CAN1/2, UART4, TIM2 */
     (void)REG(0x40023840);
     REG(0x40020824) = 0x8800;    /* GPIOC AFRH: PC10/PC11 AF8 */
     REG(0x40020800) = 0xa00000;  /* GPIOC MODER: PC10/PC11 alternate function */
@@ -129,6 +131,24 @@ static void event_task(void *arg)
     }
 }
 
+static void power_test(void)
+{
+    enum { DBP = 1U << 8, VOS = 1U << 14, VOSRDY = 1U << 14,
+           BRE = 1U << 9, BRR = 1U << 3 };
+
+    configASSERT((PWR_CR & (VOS | DBP)) == VOS);
+    PWR_CSR = BRE;
+    configASSERT((PWR_CSR & (BRE | BRR)) == 0);
+    PWR_CR = VOS | DBP;
+    configASSERT((PWR_CR & DBP) != 0);
+    PWR_CSR = BRE;
+    while ((PWR_CSR & (VOSRDY | BRR)) != (VOSRDY | BRR)) {
+    }
+    PWR_CSR = 0;
+    PWR_CR = VOS;
+    configASSERT((PWR_CSR & BRE) == 0 && (PWR_CR & DBP) == 0);
+}
+
 struct worker {
     char name;
     TickType_t first;
@@ -188,6 +208,8 @@ void firmware_main(void)
     configASSERT((FLASH_CR & (1U << 31)) != 0);
     configASSERT(FLASH_RDP == 0xaa && (FLASH_NWRP & 0xfff) == 0xfff);
     uart_text("STM32F407 FreeRTOS " tskKERNEL_VERSION_NUMBER "\n");
+    power_test();
+    uart_text("PWR ready OK\n");
     firmware_can_test();
     uart_text("CAN loopback OK\n");
     configASSERT(xTaskCreateStatic(task, "A", configMINIMAL_STACK_SIZE, &workers[0],

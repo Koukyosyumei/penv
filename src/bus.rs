@@ -18,6 +18,7 @@ use crate::{
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
     stm32f4_flash::F4Flash,
+    stm32f4_power::F4Power,
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -100,6 +101,7 @@ pub struct Bus {
     h7_adc_dma: Vec<AdcDma>,
     h7_dma_mux: Vec<DmaMux>,
     f4_flash: Option<F4Flash>,
+    f4_power: Option<F4Power>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
     h7_rtc: Vec<Stm32Rtc>,
@@ -295,6 +297,15 @@ impl Bus {
             return Err("invalid or overlapping DWT mapping".into());
         }
         self.dwt = Some(device);
+        Ok(())
+    }
+
+    pub fn map_f4_power(&mut self, base: u32) -> Result<(), String> {
+        self.check_peripheral_range(base, F4Power::SIZE)?;
+        if self.f4_power.is_some() {
+            return Err("only one STM32F4 power controller is supported".into());
+        }
+        self.f4_power = Some(F4Power::new(base));
         Ok(())
     }
 
@@ -539,6 +550,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.f4_power.as_ref().is_some_and(|device| {
+                let base = u64::from(device.base);
+                start < base + u64::from(F4Power::SIZE) && base < end
             })
             || self.f4_flash.as_ref().is_some_and(|device| {
                 device.mappings().into_iter().any(|(base, size)| {
@@ -1158,6 +1173,12 @@ impl Bus {
             return Ok(value);
         }
         if address as usize & (N - 1) == 0
+            && let Some(device) = self.f4_power.as_ref()
+            && device.contains(address)
+        {
+            return Ok(device.read(address, N));
+        }
+        if address as usize & (N - 1) == 0
             && let Some(value) = self
                 .f4_flash
                 .as_ref()
@@ -1546,6 +1567,12 @@ impl Bus {
                 .map(|offset| (peripheral, offset))
         }) {
             peripheral.write(offset);
+            return Ok(());
+        }
+        if let Some(device) = self.f4_power.as_mut()
+            && device.contains(address)
+        {
+            device.write(address, width, value);
             return Ok(());
         }
         if let Some(device) = self.f4_flash.as_mut()
