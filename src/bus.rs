@@ -688,6 +688,16 @@ impl Bus {
         Ok(())
     }
 
+    pub fn has_litex_button(&self, name: &str) -> bool {
+        let name = name.rsplit('.').next().unwrap_or(name);
+        self.litex_panel
+            .as_ref()
+            .is_some_and(|panel| panel.has_button(name))
+            || self.litex_io.iter().any(|(_, device)| {
+                matches!(device, litex::IoDevice::Gpio(gpio) if gpio.has_button(name))
+            })
+    }
+
     pub fn set_litex_button(&mut self, name: &str, action: ButtonAction) -> Result<(), String> {
         let name = name.rsplit('.').next().unwrap_or(name);
         if let Some(panel) = self

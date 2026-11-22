@@ -3,6 +3,7 @@ use std::{collections::VecDeque, io::Write};
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
+    litex_panel::ButtonAction,
     sv32::TranslationCache,
     thumb::Thumb,
 };
@@ -15,7 +16,12 @@ pub struct Machine {
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
-    uart_input: VecDeque<(u64, Vec<u8>)>,
+    inputs: VecDeque<(u64, Input)>,
+}
+
+enum Input {
+    Uart(Vec<u8>),
+    Button(String, ButtonAction),
 }
 
 #[derive(Clone)]
@@ -150,7 +156,7 @@ impl Machine {
             secondary: Vec::new(),
             next_hart: 0,
             elapsed_steps: 0,
-            uart_input: VecDeque::new(),
+            inputs: VecDeque::new(),
         }
     }
 
@@ -231,11 +237,28 @@ impl Machine {
         if !self.bus.has_uart_input() {
             return Err("UART input requires a platform UART".into());
         }
-        let index = self
-            .uart_input
-            .partition_point(|(scheduled, _)| *scheduled <= step);
-        self.uart_input.insert(index, (step, bytes));
+        self.schedule_input(step, Input::Uart(bytes));
         Ok(())
+    }
+
+    pub fn schedule_button(
+        &mut self,
+        step: u64,
+        name: String,
+        action: ButtonAction,
+    ) -> Result<(), String> {
+        if !self.bus.has_litex_button(&name) {
+            return Err(format!("unknown LiteX button {name:?}"));
+        }
+        self.schedule_input(step, Input::Button(name, action));
+        Ok(())
+    }
+
+    fn schedule_input(&mut self, step: u64, input: Input) {
+        let index = self
+            .inputs
+            .partition_point(|(scheduled, _)| *scheduled <= step);
+        self.inputs.insert(index, (step, input));
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
@@ -254,12 +277,14 @@ impl Machine {
             };
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
             while self
-                .uart_input
+                .inputs
                 .front()
                 .is_some_and(|(step, _)| *step <= self.elapsed_steps)
             {
-                let (_, bytes) = self.uart_input.pop_front().unwrap();
-                self.bus.queue_uart_input(bytes);
+                match self.inputs.pop_front().unwrap().1 {
+                    Input::Uart(bytes) => self.bus.queue_uart_input(bytes),
+                    Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
+                }
             }
             self.bus
                 .tick_litex_uart(self.elapsed_steps, output)
@@ -1355,6 +1380,45 @@ mod tests {
             assert_eq!(machine.bus.read::<1>(UART).unwrap(), u32::from(*byte));
         }
         assert_eq!(machine.bus.read::<4>(UART + 8).unwrap(), 1);
+    }
+
+    #[test]
+    fn button_events_apply_at_the_scheduled_step_in_submission_order() {
+        use crate::litex_panel::{Button, Panel};
+
+        const PANEL: u32 = 0xf000_6800;
+        let mut machine = Machine::new(8).unwrap();
+        machine
+            .bus
+            .map_litex_panel(Panel::new(
+                vec![PANEL],
+                None,
+                vec![Button::new("button0".into(), 64, false)],
+            ))
+            .unwrap();
+        machine
+            .bus
+            .memory(RAM_BASE, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+
+        assert!(
+            machine
+                .schedule_button(9, "missing".into(), ButtonAction::Press)
+                .is_err()
+        );
+        for action in [ButtonAction::Press, ButtonAction::Release] {
+            machine
+                .schedule_button(3, "cas.button0".into(), action)
+                .unwrap();
+        }
+
+        let mut output = std::io::sink();
+        machine.run(2, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(PANEL + 0xc).unwrap(), 0);
+        machine.run(1, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(PANEL + 8).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(PANEL + 0xc).unwrap(), 1);
     }
 
     #[test]

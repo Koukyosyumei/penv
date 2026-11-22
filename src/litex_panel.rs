@@ -1,7 +1,19 @@
+#[derive(Clone, Copy)]
 pub enum ButtonAction {
     Press,
     Release,
     Toggle,
+}
+
+impl ButtonAction {
+    pub fn parse(action: &str) -> Option<Self> {
+        match action {
+            "Press" => Some(Self::Press),
+            "Release" => Some(Self::Release),
+            "Toggle" => Some(Self::Toggle),
+            _ => None,
+        }
+    }
 }
 
 pub struct Button {

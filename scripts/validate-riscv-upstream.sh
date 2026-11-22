@@ -13,11 +13,14 @@ artifacts=$3
 assets=$artifacts/assets
 mkdir -p "$assets"
 
+arty=$renode_root/scripts/single-node/arty_litex_vexriscv.resc
 murax=$renode_root/scripts/single-node/murax.resc
+minerva=$renode_root/scripts/single-node/litex_minerva.resc
 litex=$renode_root/scripts/single-node/litex_vexriscv_smp.resc
 linux_single=$renode_root/scripts/single-node/litex_vexriscv_linux.resc
 ibex=$renode_root/scripts/single-node/litex_ibex.resc
 zephyr=$renode_root/scripts/single-node/litex_vexriscv_zephyr.resc
+i2s=scripts/complex/litex_i2s/litex_vexriscv_i2s.resc
 git -C "$renode_root" rev-parse HEAD > "$artifacts/renode-revision"
 
 prepare_assets() {
@@ -29,7 +32,8 @@ prepare_assets() {
             sub(/\?$/, "", assignment[1])
             variables[assignment[1]] = assignment[2]
         }
-        $1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary" || $2 == "LoadFdt") {
+        ($1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary" || $2 == "LoadFdt")) ||
+        $2 == "LoadPCM" {
             path = $3 in variables ? variables[$3] : $3
             if (path ~ /^@https:\/\//)
                 print substr(path, 2)
@@ -100,6 +104,26 @@ run_to_step_limit litex-zephyr "$zephyr" --uart-event "4000000:$artifacts/zephyr
 rg -aqF 'uart:~$' "$artifacts/litex-zephyr.uart.log"
 rg -aqF 'Zephyr version' "$artifacts/litex-zephyr.uart.log"
 
+prepare_assets "$arty"
+printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
+printf 'debug cas buttons read\r' > "$artifacts/arty-buttons.input"
+printf 'debug cas buttons clear\r' > "$artifacts/arty-clear.input"
+run_to_step_limit litex-arty "$arty" --max-steps 84000000 \
+    --uart-event "70000000:$artifacts/arty-switches.input" \
+    --litex-button-event 71000000:cas.switch0:Toggle \
+    --uart-event "72000000:$artifacts/arty-switches.input" \
+    --litex-button-event 73000000:cas.button0:Press \
+    --uart-event "74000000:$artifacts/arty-buttons.input" \
+    --litex-button-event 75000000:cas.button0:Release \
+    --uart-event "76000000:$artifacts/arty-buttons.input" \
+    --uart-event "78000000:$artifacts/arty-clear.input" \
+    --uart-event "80000000:$artifacts/arty-buttons.input"
+rg -aq '^H2U ' "$artifacts/litex-arty.uart.log"
+diff -u <(printf '0\n1\n1 1\n0 1\n0 0\n') <(
+    tr -d '\r' < "$artifacts/litex-arty.uart.log" |
+        awk '/>debug cas (switches|buttons read)$/ { if (getline) print }'
+)
+
 prepare_assets "$linux_single"
 run_to_step_limit litex-linux "$linux_single" --max-steps 140000000
 for marker in 'Linux version 5.0.14' 'sched_clock: 64 bits at 75MHz' 'Run /init as init process'; do
@@ -119,4 +143,20 @@ rg -aq 'Platform Max HARTs\s+: 4' "$artifacts/litex-smp.uart.log"
 for hart in 0 1 2 3; do
     rg -aq "^processor[[:blank:]]*: $hart\r*$" "$artifacts/litex-smp.uart.log"
 done
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, and LiteX single-hart and SMP Linux verified. Logs are in %s\n' "$artifacts"
+prepare_assets "$renode_root/$i2s"
+pcm=$(awk -F= '/^\$input_file\?=@https:/ { print $2 }' "$renode_root/$i2s")
+printf '$output_file=@%s/echo.raw\ninclude @%s\n' "$(realpath "$artifacts")" "$i2s" \
+    > "$artifacts/i2s.resc"
+status=0
+"$penv" run --script "$artifacts/i2s.resc" --platform-root "$renode_root" --asset-dir "$assets" \
+    --stats > "$artifacts/litex-i2s.uart.log" 2> "$artifacts/litex-i2s.stderr.log" || status=$?
+printf '%s\n' "$status" > "$artifacts/litex-i2s.exit"
+if (( status != 0 )); then
+    cat "$artifacts/litex-i2s.stderr.log" >&2
+    exit 1
+fi
+cmp "$assets/${pcm##*/}" "$artifacts/echo.raw"
+sha256sum "$assets/${pcm##*/}" "$artifacts/echo.raw" > "$artifacts/litex-i2s.sha256"
+prepare_assets "$minerva"
+python3 "$(dirname -- "$0")/validate-minerva-serial.py" "$penv" "$renode_root" "$artifacts"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty switches and buttons, LiteX single-hart and SMP Linux, and I2S PCM verified. Logs are in %s\n' "$artifacts"

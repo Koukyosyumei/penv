@@ -436,12 +436,7 @@ fn execute(
             boot.supervisor_mask = Some(crate::parse_address(resolve(value)?)?);
         }
         [button, action @ ("Press" | "Release" | "Toggle")] if boot.platform.is_some() => {
-            use crate::litex_panel::ButtonAction;
-            let action = match *action {
-                "Press" => ButtonAction::Press,
-                "Release" => ButtonAction::Release,
-                _ => ButtonAction::Toggle,
-            };
+            let action = crate::litex_panel::ButtonAction::parse(action).unwrap();
             boot.buttons.push((button.to_string(), action));
         }
         ["start"]
