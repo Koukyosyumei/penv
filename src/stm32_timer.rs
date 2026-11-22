@@ -1,5 +1,5 @@
-// The CPU advances peripherals on a 100 MHz instruction-step time base.
-const STEP_HZ: u64 = 100_000_000;
+use crate::bus::STM32_STEP_HZ;
+
 const ENABLE: u32 = 1;
 const UPDATE_DISABLE: u32 = 1 << 1;
 const UPDATE_OVERFLOW_ONLY: u32 = 1 << 2;
@@ -130,8 +130,11 @@ impl Stm32Timer {
     pub fn tick(&mut self) -> u32 {
         if self.registers[0] & ENABLE != 0 && self.active_arr != 0 {
             self.phase += u64::from(self.frequency);
-            while self.phase >= STEP_HZ && self.registers[0] & ENABLE != 0 && self.active_arr != 0 {
-                self.phase -= STEP_HZ;
+            while self.phase >= STM32_STEP_HZ
+                && self.registers[0] & ENABLE != 0
+                && self.active_arr != 0
+            {
+                self.phase -= STM32_STEP_HZ;
                 if self.prescaler >= self.registers[10] {
                     self.prescaler = 0;
                     self.count();

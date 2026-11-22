@@ -19,7 +19,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                     | "CAN.STMCAN"
                     | "Timers.STM32F4_RTC"
                     | "DMA.STM32G0DMA"
-                    | "Analog.STM32F0_ADC"
                     | "Miscellaneous.LED"
                     | "Miscellaneous.Button"
             )
@@ -45,6 +44,20 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                     }
                     !text.starts_with("invertedAFPins:")
                 });
+            }
+            "Analog.STM32F0_ADC" => {
+                let omitted_dma = entry.body.iter().any(|(_, text)| {
+                    text.strip_prefix("dmaPeripheral:").is_some_and(|name| {
+                        omitted
+                            .get(name.trim())
+                            .is_some_and(|model| model == "DMA.STM32G0DMA")
+                    })
+                });
+                if omitted_dma {
+                    entry.body.retain(|(_, text)| {
+                        !text.starts_with("dmaPeripheral:") && !text.starts_with("dmaChannel:")
+                    });
+                }
             }
             "UART.STM32F7_USART" | "Timers.STM32_Timer" => {
                 entry.body.retain_mut(|(_, text)| {

@@ -11,6 +11,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod stm32_adc;
 mod stm32_crc;
 mod stm32_exti;
 mod stm32_gpio;
@@ -46,6 +47,7 @@ Options:
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
+  --adc-input CHANNEL:VOLTS  Set an STM32 ADC channel voltage (repeatable)
   --stm32f0-console  Load STM32F0 REPLs with console-focused peripheral support
   --platform-root DIR  Root for working-directory-relative REPL includes
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
@@ -101,6 +103,7 @@ fn run() -> Result<ExitCode, String> {
     let mut asset_dir = None;
     let mut platform_root = None;
     let mut stm32f0_console = false;
+    let mut adc_inputs = Vec::new();
     let mut uart_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
@@ -133,6 +136,19 @@ fn run() -> Result<ExitCode, String> {
                 if target.replace(path).is_some() {
                     return Err(format!("{option} may only be specified once"));
                 }
+            }
+            Some("--adc-input") => {
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--adc-input requires CHANNEL:VOLTS")?;
+                let (channel, volts) = value
+                    .split_once(':')
+                    .ok_or("--adc-input requires CHANNEL:VOLTS")?;
+                adc_inputs.push((
+                    channel.parse().map_err(|_| "invalid --adc-input channel")?,
+                    volts.parse().map_err(|_| "invalid --adc-input voltage")?,
+                ));
             }
             Some("--uart-event") => {
                 let value = args
@@ -281,6 +297,9 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    for (channel, volts) in adc_inputs {
+        machine.bus.set_stm32f0_adc_input(channel, volts)?;
+    }
     for (base, size) in extra_ram {
         machine.bus.map_ram(base, size)?;
     }

@@ -10,6 +10,7 @@ use crate::{
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
     plic::Plic,
+    stm32_adc::Stm32F0Adc,
     stm32_crc::Stm32F0Crc,
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
@@ -19,6 +20,9 @@ use crate::{
     systick::SysTick,
     uart::{LiteXUart, MuraxUart},
 };
+
+// STM32 peripheral time advances by 10 ns per Cortex-M execution step.
+pub(crate) const STM32_STEP_HZ: u64 = 100_000_000;
 
 pub const RAM_BASE: u32 = 0x8000_0000;
 pub const UART_TX: u32 = 0x1000_0000;
@@ -78,6 +82,7 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     stm32_timers: Vec<Stm32Timer>,
     stm32_crc: Option<Stm32F0Crc>,
+    stm32_adc: Option<Stm32F0Adc>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
     plic: Option<Plic>,
@@ -156,6 +161,10 @@ impl Bus {
             || self.stm32_gpios.iter().any(|gpio| {
                 let other = u64::from(gpio.base);
                 start < other + u64::from(gpio.size) && other < end
+            })
+            || self.stm32_adc.as_ref().is_some_and(|adc| {
+                let other = u64::from(adc.base);
+                start < other + u64::from(Stm32F0Adc::SIZE) && other < end
             })
             || self.stm32_crc.as_ref().is_some_and(|crc| {
                 let other = u64::from(crc.base);
@@ -291,6 +300,12 @@ impl Bus {
             for timer in &mut self.stm32_timers {
                 irqs |= timer.tick();
             }
+            if let Some(adc) = self.stm32_adc.as_mut()
+                && adc.tick()
+                && let Some(line) = adc.irq
+            {
+                irqs |= 1 << line;
+            }
             while irqs != 0 {
                 nvic.set_line(irqs.trailing_zeros() as u8, true, active);
                 irqs &= irqs - 1;
@@ -379,6 +394,30 @@ impl Bus {
         }
         self.stm32_gpios.push(gpio);
         Ok(())
+    }
+
+    pub fn map_stm32f0_adc(&mut self, adc: Stm32F0Adc) -> Result<(), String> {
+        let start = u64::from(adc.base);
+        let end = start + u64::from(Stm32F0Adc::SIZE);
+        if self.stm32_adc.is_some()
+            || adc.base & 3 != 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping STM32F0 ADC range at {:#010x}",
+                adc.base
+            ));
+        }
+        self.stm32_adc = Some(adc);
+        Ok(())
+    }
+
+    pub fn set_stm32f0_adc_input(&mut self, channel: usize, volts: f64) -> Result<(), String> {
+        self.stm32_adc
+            .as_mut()
+            .ok_or("--adc-input requires an STM32F0 ADC")?
+            .set_input(channel, volts)
     }
 
     pub fn map_stm32f0_crc(&mut self, base: u32, configurable_poly: bool) -> Result<(), String> {
@@ -644,6 +683,13 @@ impl Bus {
                 gpio.read(address)
             });
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(adc) = self.stm32_adc.as_mut()
+            && adc.contains(address)
+        {
+            return Ok(adc.read(address));
+        }
         if address as usize & (N - 1) == 0
             && let Some(crc) = &self.stm32_crc
             && crc.contains(address)
@@ -799,6 +845,13 @@ impl Bus {
             } else {
                 gpio.write(address, value);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(adc) = self.stm32_adc.as_mut()
+            && adc.contains(address)
+        {
+            adc.write(address, value);
             return Ok(());
         }
         if let Some(crc) = self.stm32_crc.as_mut()
