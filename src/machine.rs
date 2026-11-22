@@ -5,6 +5,7 @@ use crate::{
     csr::{Csr, EXTERNAL},
     sv32::TranslationCache,
     thumb::Thumb,
+    zephyr_boot::BusyWait,
 };
 
 pub const MAX_HARTS: usize = 8;
@@ -24,6 +25,7 @@ pub struct Hart {
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    busy_wait: Option<BusyWait>,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -142,6 +144,7 @@ impl Machine {
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                busy_wait: None,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -177,12 +180,38 @@ impl Machine {
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
-        let hart = std::iter::once(&mut self.primary)
+        self.named_hart(name)?.pc = entry;
+        Ok(())
+    }
+
+    pub fn set_boot_vectors(&mut self, name: &str, address: u32) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        let thumb = hart
+            .thumb
+            .as_mut()
+            .ok_or("VectorTableOffset requires Cortex-M")?;
+        thumb.set_vector_base(address);
+        Ok(())
+    }
+
+    pub fn set_zephyr_wait_hooks(
+        &mut self,
+        name: &str,
+        entries: impl Iterator<Item = u32>,
+    ) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_none() {
+            return Err("Zephyr busy-wait hooks currently require Cortex-M".into());
+        }
+        hart.busy_wait = BusyWait::new(entries);
+        Ok(())
+    }
+
+    fn named_hart(&mut self, name: &str) -> Result<&mut Hart, String> {
+        std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
             .find(|hart| hart.name.as_deref() == Some(name))
-            .ok_or_else(|| format!("unknown CPU {name:?}"))?;
-        hart.pc = entry;
-        Ok(())
+            .ok_or_else(|| format!("unknown CPU {name:?}"))
     }
 
     pub fn set_entry(&mut self, entry: u32) {
@@ -389,11 +418,33 @@ impl Hart {
         output: &mut impl Write,
     ) -> Result<Step, String> {
         if let Some(thumb) = self.thumb.as_mut() {
+            if self.busy_wait.as_mut().is_some_and(BusyWait::waiting) {
+                if let Some(timer) = &mut bus.systick {
+                    timer.tick();
+                }
+                return Ok(Step::Trap);
+            }
             if thumb
                 .service_interrupts(&mut self.pc, &mut self.registers, bus)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?
             {
                 return Ok(Step::Trap);
+            }
+            if let Some(wait) = &mut self.busy_wait
+                && wait.contains(self.pc)
+            {
+                let return_address = self.registers[14];
+                if return_address & 1 == 0 {
+                    return Err(format!(
+                        "invalid Zephyr busy-wait return address {return_address:#010x}"
+                    ));
+                }
+                self.pc = return_address & !1;
+                let delay = self.registers[0];
+                if delay != 0 {
+                    wait.skip(delay);
+                    return Ok(Step::Trap);
+                }
             }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)

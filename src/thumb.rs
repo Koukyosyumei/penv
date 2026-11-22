@@ -32,6 +32,10 @@ impl Thumb {
         self.vectors.unwrap_or(0)
     }
 
+    pub fn set_vector_base(&mut self, base: u32) {
+        self.vectors = Some(base);
+    }
+
     pub fn infer_vector_base(&mut self, base: u32) {
         self.vectors.get_or_insert(base);
     }

@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     clint::Clint,
+    constant_mmio::ConstantMmio,
     ethernet::Controller,
     murax::{Gpio, Timer},
     ns16550::Ns16550,
@@ -66,6 +67,7 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
@@ -230,6 +232,18 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_constant_mmio(&mut self, peripheral: ConstantMmio) -> Result<(), String> {
+        let start = u64::from(peripheral.base);
+        let end = start + u64::from(peripheral.size);
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping peripheral at {start:#010x}"
+            ));
+        }
+        self.constant_mmio.push(peripheral);
+        Ok(())
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
         self.h7_network_control.as_ref().is_some_and(|control| {
             control
@@ -287,6 +301,10 @@ impl Bus {
                     let base = u64::from(mapping.base);
                     start < base + u64::from(mapping.size) && base < end
                 })
+            || self.constant_mmio.iter().any(|peripheral| {
+                let base = u64::from(peripheral.base);
+                start < base + u64::from(peripheral.size) && base < end
+            })
             || self.regions.iter().any(|region| {
                 let other = u64::from(region.base);
                 start < other + region.bytes.len() as u64 && other < end
@@ -647,6 +665,15 @@ impl Bus {
         {
             return Ok(value);
         }
+        if address as usize & (N - 1) == 0
+            && let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
+                peripheral
+                    .offset(address, N)
+                    .map(|offset| peripheral.read(offset, N))
+            })
+        {
+            return Ok(value);
+        }
         self.read_ram::<N>(address)
     }
 
@@ -789,6 +816,14 @@ impl Bus {
             .iter_mut()
             .any(|device| device.write(address, width, value, &mut dma))
         {
+            return Ok(());
+        }
+        if let Some((peripheral, offset)) = self.constant_mmio.iter().find_map(|peripheral| {
+            peripheral
+                .offset(address, width)
+                .map(|offset| (peripheral, offset))
+        }) {
+            peripheral.write(offset);
             return Ok(());
         }
         self.memory(address, width)?

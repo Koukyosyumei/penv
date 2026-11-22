@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::zephyr_boot::{BootOptions, VectorAddress};
+
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(String, u32)>,
@@ -12,6 +14,7 @@ pub struct Boot {
     pub image: Option<String>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    pub zephyr: BootOptions,
 }
 
 pub type Variables = HashMap<String, String>;
@@ -211,6 +214,46 @@ pub fn execute(
                 crate::parse_address(resolve(address)?)?,
             ));
         }
+        [cpu, "EnableZephyrMode", symbols @ ..] if boot.platform.is_some() => {
+            let symbols = symbols
+                .iter()
+                .map(|value| resolve(*value).map(|value| value.trim_matches('"').to_owned()))
+                .collect::<Result<Vec<_>, _>>()?;
+            boot.zephyr.busy_wait = Some((cpu_name(cpu).to_owned(), symbols));
+        }
+        [cpu, "DisableZephyrMode"]
+            if boot.platform.is_some()
+                && boot
+                    .zephyr
+                    .busy_wait
+                    .as_ref()
+                    .is_none_or(|(name, _)| name == cpu_name(cpu)) =>
+        {
+            boot.zephyr.busy_wait = None;
+        }
+        [cpu, "VectorTableOffset", value] if boot.platform.is_some() => {
+            let address = crate::parse_address(resolve(value)?)?;
+            boot.zephyr.vectors = Some((cpu_name(cpu).to_owned(), VectorAddress::Address(address)));
+        }
+        [
+            cpu,
+            "VectorTableOffset",
+            "`sysbus",
+            "GetSymbolAddress",
+            symbol,
+        ] if boot.platform.is_some() => {
+            let symbol = symbol
+                .strip_suffix('`')
+                .ok_or("missing closing backtick on symbol lookup")?;
+            let symbol = resolve(symbol)?.trim_matches('"');
+            if symbol.is_empty() {
+                return Err("missing vector table symbol".into());
+            }
+            boot.zephyr.vectors = Some((
+                cpu_name(cpu).to_owned(),
+                VectorAddress::Symbol(symbol.into()),
+            ));
+        }
         [cpu, "PC", value] if boot.platform.is_some() => {
             boot.boot_pcs.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
@@ -229,6 +272,10 @@ pub fn execute(
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn cpu_name(name: &str) -> &str {
+    name.strip_prefix("sysbus.").unwrap_or(name)
 }
 
 fn serial_analyzer(name: &str) -> bool {

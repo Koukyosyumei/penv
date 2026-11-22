@@ -12,7 +12,7 @@ use crate::{
     machine::{Machine, Stop},
     monitor,
     network_monitor::{NodeBoot, Plan},
-    platform,
+    platform, zephyr_boot,
 };
 
 pub enum Run {
@@ -137,10 +137,12 @@ impl Node {
         if let Some(value) = boot.mask {
             machine.primary.set_vex_irq_mask(value)?;
         }
+        let mut image_path = None;
         if let Some(value) = boot.image {
             let (file, path) = open(&value)?;
             image::load(&mut machine, file, false)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
+            image_path = Some(path);
         }
         for (value, address) in boot.binaries {
             let (file, path) = open(&value)?;
@@ -150,6 +152,7 @@ impl Node {
         for (cpu, address) in boot.boot_pcs {
             machine.set_named_entry(&cpu, address)?;
         }
+        zephyr_boot::configure(&mut machine, &boot.zephyr, image_path.as_deref())?;
         machine
             .validate_entry()
             .map_err(|e| format!("{name}: {e}"))?;

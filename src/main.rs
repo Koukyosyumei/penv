@@ -1,6 +1,7 @@
 mod bus;
 mod clint;
 mod compressed;
+mod constant_mmio;
 mod csr;
 mod ethernet;
 mod ethernet_switch;
@@ -27,6 +28,7 @@ mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod zephyr_boot;
 
 use std::{
     env,
@@ -228,6 +230,7 @@ fn run() -> Result<ExitCode, String> {
 
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
+    let mut zephyr = zephyr_boot::BootOptions::default();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -285,6 +288,7 @@ fn run() -> Result<ExitCode, String> {
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;
+        zephyr = boot.zephyr;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -328,8 +332,8 @@ fn run() -> Result<ExitCode, String> {
     if let Some(value) = vex_irq_mask {
         machine.primary.set_vex_irq_mask(value)?;
     }
-    if let Some(path) = path {
-        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if let Some(path) = &path {
+        let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     for (path, address) in binaries {
@@ -349,6 +353,7 @@ fn run() -> Result<ExitCode, String> {
     for (cpu, address) in boot_pcs {
         machine.set_named_entry(&cpu, address)?;
     }
+    zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
     machine.validate_entry()?;
 
     let mut output = LineWriter::new(io::stdout().lock());

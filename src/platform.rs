@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
 };
@@ -138,7 +139,8 @@ fn parse(
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
-    for (index, raw) in content.lines().enumerate() {
+    let mut lines = content.lines().enumerate();
+    while let Some((index, raw)) = lines.next() {
         let line = without_comment(raw);
         let text = line.trim();
         let lineno = index + 1;
@@ -154,6 +156,25 @@ fn parse(
             if registration_depth < 0 {
                 return Err(error("unexpected closing registration brace"));
             }
+            continue;
+        }
+        if text == "script: '''"
+            && let Some(entry) = current
+                .as_mut()
+                .filter(|entry| entry.model == "Python.PythonPeripheral")
+        {
+            let mut property = String::from("script:");
+            loop {
+                let (_, raw) = lines
+                    .next()
+                    .ok_or_else(|| error("unterminated Python peripheral script"))?;
+                if raw.trim() == "'''" {
+                    break;
+                }
+                property.push('\n');
+                property.push_str(raw);
+            }
+            entry.body.push((lineno, property));
             continue;
         }
         if line.starts_with(char::is_whitespace) {
@@ -252,6 +273,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
                 cpus.push(entry);
+            }
+            "Python.PythonPeripheral" => {
+                let peripheral =
+                    ConstantMmio::from_platform(entry).map_err(|error| entry.error(&error))?;
+                machine
+                    .bus
+                    .map_constant_mmio(peripheral)
+                    .map_err(|error| entry.error(&error))?;
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?
