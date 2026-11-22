@@ -80,6 +80,7 @@ pub struct Bus {
     litex_uart: Option<LiteXUart>,
     litex_timer: Option<LiteXTimer>,
     litex_soc: Option<litex::SocController>,
+    litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     plic: Option<Plic>,
@@ -198,6 +199,11 @@ impl Bus {
                     .bases
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, device.timer.size()))
+            })
+            || self.litex_io.iter().any(|(bases, device)| {
+                bases
+                    .iter()
+                    .any(|&base| overlaps_range(start, end, base, device.size()))
             })
             || self
                 .litex_soc
@@ -429,6 +435,12 @@ impl Bus {
         self.silencers.iter().any(|&(base, size)| {
             address >= base && u64::from(address - base) + width as u64 <= u64::from(size)
         })
+    }
+
+    pub fn map_litex_io(&mut self, bases: Vec<u32>, device: litex::IoDevice) -> Result<(), String> {
+        self.check_litex_ranges(&bases, device.size())?;
+        self.litex_io.push((bases, device));
+        Ok(())
     }
 
     pub fn map_litex_soc(&mut self, base: u32) -> Result<(), String> {
@@ -688,6 +700,15 @@ impl Bus {
         {
             return Ok(exti.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(value) = self.litex_io.iter().find_map(|(bases, device)| {
+                let offset = litex_offset(bases, device.size(), address)?;
+                Some(device.read(offset))
+            })
+        {
+            return Ok(value);
+        }
         if address as usize & (N - 1) == 0 && self.silenced(address, N) {
             return Ok(0);
         }
@@ -820,6 +841,14 @@ impl Bus {
             exti.write(address, value);
             return Ok(());
         }
+        if width == 4 {
+            for (bases, device) in &mut self.litex_io {
+                if let Some(offset) = litex_offset(bases, device.size(), address) {
+                    device.write(offset, value);
+                    return Ok(());
+                }
+            }
+        }
         if self.silenced(address, width) {
             return Ok(());
         }
@@ -844,6 +873,38 @@ fn litex_offset(bases: &[u32], size: u32, address: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn litex_spi_loopback_and_gpio_use_shared_registers() {
+        let mut bus = Bus::default();
+        let spi = 0x6000_2000;
+        let spi_shadow = 0xe000_2000;
+        let gpio = 0x6000_5800;
+        let gpio_shadow = 0xe000_5800;
+        bus.map_litex_io(
+            vec![spi, spi_shadow],
+            litex::IoDevice::Spi(litex::Spi::default()),
+        )
+        .unwrap();
+        bus.map_litex_io(
+            vec![gpio, gpio_shadow],
+            litex::IoDevice::Gpio(litex::Gpio::InOut(0)),
+        )
+        .unwrap();
+
+        bus.write(spi_shadow + 4, 4, 1, &mut io::sink()).unwrap();
+        assert_eq!(bus.read::<4>(spi + 0x10).unwrap(), 0xff);
+        bus.write(spi + 0x18, 4, 1, &mut io::sink()).unwrap();
+        bus.write(spi + 0x0c, 4, 0x134, &mut io::sink()).unwrap();
+        bus.write(spi_shadow + 4, 4, 1, &mut io::sink()).unwrap();
+        assert_eq!(bus.read::<4>(spi + 8).unwrap(), 1);
+        assert_eq!(bus.read::<4>(spi_shadow + 0x10).unwrap(), 0x34);
+
+        bus.write(gpio, 4, u32::MAX, &mut io::sink()).unwrap();
+        bus.write(gpio + 4, 4, 0x55aa, &mut io::sink()).unwrap();
+        assert_eq!(bus.read::<4>(gpio_shadow).unwrap(), 0);
+        assert_eq!(bus.read::<4>(gpio_shadow + 4).unwrap(), 0x55aa);
+    }
 
     #[test]
     fn ram_views_share_contents_and_reservations() {

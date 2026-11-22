@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     bus::Bus,
+    litex::{Gpio, IoDevice, Spi},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
 };
@@ -301,6 +302,34 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 machine
                     .bus
                     .map_murax_gpio(entry.address()?)
+                    .map_err(|e| entry.error(&e))?;
+            }
+            "SPI.LiteX_SPI" => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_litex_io(entry.addresses()?, IoDevice::Spi(Spi::default()))
+                    .map_err(|e| entry.error(&e))?;
+            }
+            "GPIOPort.LiteX_GPIO" => {
+                let mut gpio = None;
+                for (key, value) in keys(entry, &["type", "enableIrq"])? {
+                    match (key, value) {
+                        ("type", "Type.In") => gpio = Some(Gpio::In),
+                        ("type", "Type.Out") => gpio = Some(Gpio::Out(0)),
+                        ("type", "Type.InOut") => gpio = Some(Gpio::InOut(0)),
+                        ("enableIrq", "false") => {}
+                        _ => {
+                            return Err(entry.error(&format!(
+                                "unsupported LiteX GPIO property {key} = {value}"
+                            )));
+                        }
+                    }
+                }
+                let gpio = gpio.ok_or_else(|| entry.error("missing LiteX GPIO type"))?;
+                machine
+                    .bus
+                    .map_litex_io(entry.addresses()?, IoDevice::Gpio(gpio))
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.Murax_Timer" => {

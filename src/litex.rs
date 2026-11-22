@@ -168,6 +168,99 @@ impl SocController {
     }
 }
 
+#[derive(Default)]
+pub struct Spi {
+    bits_per_word: u8,
+    start: bool,
+    mosi: u8,
+    miso: u8,
+    chip_select: bool,
+    loopback: bool,
+}
+
+impl Spi {
+    pub fn read(&self, offset: u32) -> u32 {
+        match offset {
+            0x00 => u32::from(self.bits_per_word),
+            0x04 => u32::from(self.start),
+            0x08 => 1,
+            0x0c => u32::from(self.mosi),
+            0x10 => u32::from(self.miso),
+            0x14 => u32::from(self.chip_select),
+            0x18 => u32::from(self.loopback),
+            _ => 0,
+        }
+    }
+
+    pub fn write(&mut self, offset: u32, value: u32) {
+        match offset {
+            0x00 => self.bits_per_word = value as u8,
+            0x04 => {
+                self.start = value & 1 != 0;
+                if self.start {
+                    self.miso = if self.loopback { self.mosi } else { 0xff };
+                }
+            }
+            0x0c => self.mosi = value as u8,
+            0x10 => self.miso = value as u8,
+            0x14 => self.chip_select = value & 1 != 0,
+            0x18 => self.loopback = value & 1 != 0,
+            _ => {}
+        }
+    }
+}
+
+pub enum Gpio {
+    In,
+    Out(u32),
+    InOut(u32),
+}
+
+impl Gpio {
+    pub fn read(&self, offset: u32) -> u32 {
+        match (self, offset) {
+            (Self::Out(value), 0) | (Self::InOut(value), 4) => *value,
+            _ => 0,
+        }
+    }
+
+    pub fn write(&mut self, offset: u32, value: u32) {
+        match (self, offset) {
+            (Self::Out(output), 0) | (Self::InOut(output), 4) => *output = value,
+            _ => {}
+        }
+    }
+}
+
+pub enum IoDevice {
+    Spi(Spi),
+    Gpio(Gpio),
+}
+
+impl IoDevice {
+    pub fn size(&self) -> u32 {
+        match self {
+            Self::Spi(_) => 0x50,
+            Self::Gpio(Gpio::InOut(_)) => 8,
+            Self::Gpio(_) => 4,
+        }
+    }
+
+    pub fn read(&self, offset: u32) -> u32 {
+        match self {
+            Self::Spi(spi) => spi.read(offset),
+            Self::Gpio(gpio) => gpio.read(offset),
+        }
+    }
+
+    pub fn write(&mut self, offset: u32, value: u32) {
+        match self {
+            Self::Spi(spi) => spi.write(offset, value),
+            Self::Gpio(gpio) => gpio.write(offset, value),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
