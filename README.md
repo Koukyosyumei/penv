@@ -187,12 +187,17 @@ Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の�
 上流の `stm32f4_discovery.resc` は Contiki 用で、`PerformanceInMips` の解釈で停止します。
 ボード定義だけを読み込む場合は `MTD.STM32F4_FlashController` が最初の未対応モデルです。
 FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
-GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
+TIM2（`0x40000000`、IRQ 28）、GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
 128 KiB メイン SRAM、SysTick はリセット時の HSI 16 MHz を使用します。
 ファームウェアは PC10/PC11 の AF8 を設定し、UART4 から 115200 baud 設定で送信します。
 [`stm32f4_discovery.resc`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/stm32f4_discovery.resc)
 [`stm32f4.repl`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/stm32f4.repl)
 [STM32F407VG データシート](https://www.st.com/resource/en/datasheet/stm32f407vg.pdf)
+
+最初の TIM2 割り込みでは、FreeRTOS の `xQueueSendFromISR` が IRQ 優先度を
+検証するために SCB_AIRCR（`0xe000ed0c`）を読み、未マップアクセスで停止しました。
+NVIC モデルはリセット値 `0xfa050000` を返し、`PRIGROUP=0` を公開します。
+[STM32 Cortex-M4 プログラミングマニュアル PM0214、4.4.5](https://www.st.com/resource/en/programming_manual/pm0214-stm32-cortexm4-mcus-and-mpus-programming-manual-stmicroelectronics.pdf)
 
 ### ビルドと実行
 
@@ -209,8 +214,10 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
 cargo test
 tests/stm32f407-freertos-smoke.sh target/stm32f407-freertos
 
-# 生成済み ELF を直接実行
-target/release/penv run --script target/stm32f407-freertos/boot.resc --max-steps 20000
+# 生成済み ELF を同じ入力で直接実行
+work=target/stm32f407-freertos
+target/release/penv run --script "$work/boot.resc" --max-steps 36000 \
+    --uart-event "24000:$work/uart-x.txt" --uart-event "30000:$work/uart-yz.txt"
 ```
 
 期待する UART4 出力は以下のとおりです。スモークテストは標準出力を全行照合し、
@@ -220,23 +227,33 @@ target/release/penv run --script target/stm32f407-freertos/boot.resc --max-steps
 STM32F407 FreeRTOS V11.1.0
 task A tick=01
 task B tick=03
+TIM2 queue=1
 task A tick=05
 task B tick=07
+TIM2 queue=2
 task A tick=09
 task B tick=11
+TIM2 queue=3
+UART4 echo=X
+UART4 echo=Y
+UART4 echo=Z
 ```
 
 - 両タスクは初回出力前と各出力後に `vTaskDelay` でブロックします。SysTick で
   tick が進み、解除されたタスクへ PendSV が切り替えます。各タスクは出力前に tick 値を
-  検査し、A/B それぞれ 3 回の実行を確認できます。SysTick 周波数を 1 Hz に落とした
-  一時 REPL では、同じ 20,000 命令枠で起動バナーだけが出力されました。
+  検査し、A/B それぞれ 3 回の実行を確認できます。
+- TIM2 は 4 ms 周期の更新割り込みを 3 回発行します。TIM2 と UART4 RXNE の ISR は
+  `xQueueSendFromISR` で同じ静的キューに通知し、受信タスクが `xQueueReceive` で
+  取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
+  応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
+  それぞれに対応する出力だけが消えました。
 - `cargo test` はユニットテスト 43 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `23afecca45003077fe382e8cdeca9397d0babd49b078f7c8114a3a4d58d2b4ad` です。
+  SHA-256 は `96a5edb6aac856c0ed5109be2e3df0aef51d61008b78652a5cf4d188e8a82896` です。
 
-残課題は FPU 命令と ARM_CM4F の浮動小数点コンテキスト、上流ボード全体の読み込み、
-実機での確認です。検証用 REPL ではフラッシュをメモリーとして扱い、RCC の有効化
+残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
+浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。検証用 REPL ではフラッシュをメモリーとして扱い、RCC の有効化
 書き込みは定数応答モデルで受けます。PLL、クロックゲート、フラッシュ消去・書き込み、
 UART のビット時間や GPIO 信号線の動作は検証範囲外です。

@@ -1,7 +1,13 @@
 STM32F407 FreeRTOS V11.1.0
 task A tick=01
 task B tick=03
+TIM2 queue=1
 task A tick=05
 task B tick=07
+TIM2 queue=2
 task A tick=09
 task B tick=11
+TIM2 queue=3
+UART4 echo=X
+UART4 echo=Y
+UART4 echo=Z

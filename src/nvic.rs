@@ -1,5 +1,6 @@
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
+const AIRCR: u32 = BASE + 0xd0c;
 pub const IRQ_LINES: usize = 240;
 const BANKS: usize = IRQ_LINES.div_ceil(32);
 const ENABLE: u32 = BASE + 0x100;
@@ -119,7 +120,7 @@ impl Nvic {
 
     pub const RANGES: [(u32, u32); 8] = [
         (ENABLE, PRIORITY_END + 1),
-        (VTOR, VTOR + 4),
+        (VTOR, AIRCR + 4),
         (CPACR, CPACR + 4),
         (BASE + 0xd24, BASE + 0xd30),
         (BASE + 0xd90, BASE + 0xdbc),
@@ -255,6 +256,10 @@ impl Nvic {
             }
             if address == CPACR {
                 return Some(self.cpacr);
+            }
+            if address == AIRCR {
+                // VECTKEYSTAT and fixed reset PRIGROUP.
+                return Some(0xfa05_0000);
             }
             if address == VTOR {
                 return Some(self.vector_base.unwrap_or(0));
