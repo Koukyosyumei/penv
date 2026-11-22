@@ -164,8 +164,25 @@ impl Ethernet {
     }
 
     fn write(&mut self, address: u32, value: u32, bus: &mut Bus) {
-        let registers = &mut self.registers;
         let offset = address - self.base;
+        if offset == DMA_BUS_MODE && value & 1 != 0 {
+            self.registers = Registers::default();
+            self.tx_frame.clear();
+            self.tx_dropping = false;
+            // The MAC's receive FIFO is reset along with its descriptor state.
+            // Discard queued link frames while the receiver is disabled.
+            if let Some(link) = &self.link {
+                let mut frame = [0; MAX_FRAME + 1];
+                // Bound the drain even if a peer continues to transmit.
+                for _ in 0..4096 {
+                    if link.recv(&mut frame).is_err() {
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+        let registers = &mut self.registers;
         match offset {
             MAC_CONFIG => registers.config = value & 0x02cf_7efc,
             FRAME_FILTER => registers.filter = value & 0x8000_07ff,
@@ -184,11 +201,6 @@ impl Ethernet {
             MII_DATA => registers.mii_data = value as u16,
             ADDRESS_HIGH => registers.mac_high = 0x8000_0000 | (value & 0xffff),
             ADDRESS_LOW => registers.mac_low = value,
-            DMA_BUS_MODE if value & 1 != 0 => {
-                *registers = Registers::default();
-                self.tx_frame.clear();
-                self.tx_dropping = false;
-            }
             DMA_BUS_MODE => registers.bus_mode = value & 0x07ff_fffe,
             DMA_RX_LIST => {
                 registers.receive_list = value & !3;
@@ -777,5 +789,47 @@ mod tests {
         assert_eq!(read(&mut bus, DMA_STATUS), 0);
         assert_eq!(read(&mut bus, DMA_INTERRUPT_ENABLE), 0);
         assert_eq!(read(&mut bus, DMA_CURRENT_TX), 0);
+    }
+
+    #[test]
+    fn dma_reset_discards_queued_frames_and_receives_on_the_new_ring() {
+        let link = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        link.connect(peer.local_addr().unwrap()).unwrap();
+        peer.connect(link.local_addr().unwrap()).unwrap();
+        link.set_nonblocking(true).unwrap();
+        let mut bus = Bus::new(4096).unwrap();
+        let mut mac = Ethernet::new(MAC, 0);
+        mac.link = Some(link);
+        bus.rv64_devices.ethernet.push(mac);
+        let mut frame = [0x64; 60];
+        frame[..6].fill(0xff);
+        for _ in 0..40 {
+            peer.send(&frame).unwrap();
+        }
+        write(&mut bus, DMA_BUS_MODE, 1);
+        assert_eq!(read(&mut bus, DMA_BUS_MODE) & 1, 0);
+        put_descriptor(
+            &mut bus,
+            RING,
+            [DESCRIPTOR_OWN, END_OF_RING | 64, RING + 128, 0],
+        );
+        write(&mut bus, DMA_RX_LIST, RING);
+        write(&mut bus, MAC_CONFIG, MAC_RX_ENABLE);
+        write(&mut bus, DMA_OPERATION, DMA_START_RX);
+        assert_eq!(descriptor(&bus, RING.into()).unwrap()[0], DESCRIPTOR_OWN);
+        assert_eq!(read(&mut bus, DMA_STATUS), 3 << 17);
+
+        frame[14] = 0x77;
+        peer.send(&frame).unwrap();
+        bus.poll_rv64_ethernet();
+        assert_eq!(
+            descriptor(&bus, RING.into()).unwrap()[0],
+            RX_FIRST | RX_LAST | (64 << 16)
+        );
+        assert_eq!(
+            bus.ram64(u64::from(RING + 128), frame.len()).unwrap(),
+            frame
+        );
     }
 }

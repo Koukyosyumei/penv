@@ -121,6 +121,21 @@ Linux の通信試験では、PLIC の出力が下がってもゲストが super
 
 共通 CLI の回帰確認では、上記の Murax デモが UART に `Ant` を出力し、LiteX VexRiscv SMP デモがログイン後の `cat /proc/cpuinfo` で 4 ハートを出力しました。どちらも指定ステップ上限で終了します。
 
+#### Ethernet とマシンの復帰
+
+```sh
+python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
+  --switch-port 30456 --recovery --logs target/starlight-recovery
+```
+
+最初の ping に続いて、ゲスト A の `eth0` を down/up し、Linux の stmmac ドライバーに DMA を再初期化させます。DMA リセットは記述子・割り込みの状態とキューに残った受信フレームをクリアします。ドライバーを開き直した後、同じ UART シェルでコマンドを実行し、両方向の ping を確認します。[Linux 5.10 stmmac の DMA 初期化](https://github.com/torvalds/linux/blob/v5.10/drivers/net/ethernet/stmicro/stmmac/stmmac_main.c)
+
+次に Linux の `reboot` が `Restarting system` を出力したところで、検証スクリプトがホスト側のマシンリセットを要求します。`--uart-stdin --uart-stdin-reset` では標準入力の `1d 72`（Ctrl-]、`r`）がリセット、`1d 1d` が UART へのリテラル `1d` です。リセット時は同じプロセス内で CPU、RAM、デバイスを作り直し、RESC のファームウェアと FIT を再ロードします。UART ストリームとスイッチを維持し、Ethernet は同じローカルポートに再接続します。`--max-steps` は全ブートの合計です。
+
+公開 FIT のデバイスツリーには `gpio-restart` ノードがあります。同梱カーネルの埋め込み設定では `CONFIG_POWER_RESET_GPIO_RESTART` が無効で、`reboot` 単独の試行は `machine_restart`（PC `0xffffffe000201b94`）に留まりました。ボードの再起動にはホスト側のリセットが必要です。実機の GPIO やウォッチドッグによるリセット、RAM を保持するウォームリセットは対象外です。[Linux 5.10 RISC-V の再起動処理](https://github.com/torvalds/linux/blob/v5.10/arch/riscv/kernel/reset.c)
+
+公開イメージで、DMA 再初期化後の UART コマンドと 56 バイトの両方向 ping を確認しました。マシンリセット後は A が OpenSBI から再起動して UART に再ログインし、`id -u` と `uname -m` が再び `0` と `riscv64` を返しました。A のネットワークを設定し直した後も、56 バイトと 3200 バイトの両方向 ping は各 10/10 応答でした。A の `eth0` IRQ は 0 から 104、起動を継続した B は 3 から 240 に増えました。`cargo test` は全 46 件通過しました。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。

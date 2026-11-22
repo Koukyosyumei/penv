@@ -59,6 +59,7 @@ Options:
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
   --uart-stdin       Forward stdin to the platform UART while running
+  --uart-stdin-reset  Enable Ctrl-] r to reload the machine on the UART session
   --uart-device NAME  Select the RV64 platform UART that receives input
   --uart-input-at N Delay UART input until execution step N
   --ethernet-loopback LOCAL:PEER  Link BeagleV MACs over localhost UDP ports
@@ -141,6 +142,7 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_root = None;
     let mut uart_input = None;
     let mut uart_stdin = false;
+    let mut uart_stdin_reset = false;
     let mut ethernet_loopback = None;
     let mut uart_device = None;
     let mut uart_input_at = None;
@@ -157,6 +159,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--rv64") => rv64 = true,
             Some("--stats") => stats = true,
             Some("--uart-stdin") => uart_stdin = true,
+            Some("--uart-stdin-reset") => uart_stdin_reset = true,
             Some("--ethernet-loopback") => {
                 let value = args.next().and_then(|value| value.into_string().ok());
                 let ports = value
@@ -345,34 +348,8 @@ fn run() -> Result<ExitCode, String> {
     if rv64 && (!raw || platform_path.is_some()) {
         return Err("--rv64 requires --raw without --platform".into());
     }
-    let mut machine = match platform_path {
-        Some(platform_path) => {
-            if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
-                return Err(
-                    "--platform defines RAM and CLINT and cannot be combined with manual mappings"
-                        .into(),
-                );
-            }
-            platform::load(&platform_path, platform_root.as_deref())?
-        }
-        None => {
-            if platform_root.is_some() {
-                return Err("--platform-root requires --platform".into());
-            }
-            Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
-        }
-    };
-    if rv64 {
-        machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));
-    }
-    for (base, size) in extra_ram {
-        machine.bus.map_ram64(base, size)?;
-    }
-    if let Some(base) = clint {
-        machine.bus.map_clint(base, harts.unwrap_or(1))?;
-    }
-    if let Some(name) = uart_device {
-        machine.bus.rv64_devices.select_uart(&name)?;
+    if uart_stdin_reset && !uart_stdin {
+        return Err("--uart-stdin-reset requires --uart-stdin".into());
     }
     if uart_input_at.is_some() && uart_input.is_none() {
         return Err("--uart-input-at requires --uart-input".into());
@@ -380,55 +357,93 @@ fn run() -> Result<ExitCode, String> {
     if let Some(path) = uart_input {
         uart_events.insert(0, (uart_input_at.unwrap_or(0), path));
     }
-    for (step, path) in uart_events {
-        let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        machine.schedule_uart_input(step, bytes)?;
-    }
-    if let Some(value) = vex_irq_mask {
-        machine.primary.set_vex_irq_mask(value)?;
-    }
-    if let Some(path) = path {
-        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    if let Some(value) = mtvec {
-        if let Some(cpu) = &mut machine.primary.rv64 {
-            cpu.privilege.set_vector(value);
-        } else {
-            machine
-                .primary
-                .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
+    let boot_machine = || -> Result<Machine, String> {
+        let mut machine = match platform_path.as_deref() {
+            Some(platform_path) => {
+                if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
+                    return Err(
+                    "--platform defines RAM and CLINT and cannot be combined with manual mappings"
+                        .into(),
+                );
+                }
+                platform::load(platform_path, platform_root.as_deref())?
+            }
+            None => {
+                if platform_root.is_some() {
+                    return Err("--platform-root requires --platform".into());
+                }
+                Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
+            }
+        };
+        if rv64 {
+            machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));
         }
-    }
-    for (path, address) in binaries.into_iter().chain(companion_images) {
-        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        image::load_binary(&mut machine, file, address)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    if let Some(count) = harts {
-        if count != 1 && machine.is_cortex_m() {
-            return Err("--harts requires a RISC-V machine".into());
+        for &(base, size) in &extra_ram {
+            machine.bus.map_ram64(base, size)?;
         }
-        if machine.hart_count() != 1 {
-            return Err("--harts cannot override multiple CPU declarations".into());
+        if let Some(base) = clint {
+            machine.bus.map_clint(base, harts.unwrap_or(1))?;
         }
-        machine.configure_harts(count);
-    }
-    for (cpu, address) in boot_pcs {
-        machine.set_named_entry(&cpu, address)?;
-    }
-    machine.validate_entry()?;
-    if let Some((local, peer)) = ethernet_loopback {
-        machine.bus.connect_rv64_ethernet(local, peer)?;
-    }
-    if uart_stdin && !machine.bus.has_uart_input() {
-        return Err("--uart-stdin requires a platform UART with input support".into());
-    }
+        if let Some(name) = uart_device.as_deref() {
+            machine.bus.rv64_devices.select_uart(name)?;
+        }
+        for (step, path) in &uart_events {
+            let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            machine.schedule_uart_input(*step, bytes)?;
+        }
+        if let Some(value) = vex_irq_mask {
+            machine.primary.set_vex_irq_mask(value)?;
+        }
+        if let Some(path) = path.as_deref() {
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        if let Some(value) = mtvec {
+            if let Some(cpu) = &mut machine.primary.rv64 {
+                cpu.privilege.set_vector(value);
+            } else {
+                machine
+                    .primary
+                    .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
+            }
+        }
+        for (path, address) in binaries.iter().chain(&companion_images) {
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load_binary(&mut machine, file, *address)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        if let Some(count) = harts {
+            if count != 1 && machine.is_cortex_m() {
+                return Err("--harts requires a RISC-V machine".into());
+            }
+            if machine.hart_count() != 1 {
+                return Err("--harts cannot override multiple CPU declarations".into());
+            }
+            machine.configure_harts(count);
+        }
+        for (cpu, address) in &boot_pcs {
+            machine.set_named_entry(cpu, *address)?;
+        }
+        machine.validate_entry()?;
+        if let Some((local, peer)) = ethernet_loopback {
+            machine.bus.connect_rv64_ethernet(local, peer)?;
+        }
+        if uart_stdin && !machine.bus.has_uart_input() {
+            return Err("--uart-stdin requires a platform UART with input support".into());
+        }
+        Ok(machine)
+    };
+    let mut machine = boot_machine()?;
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
     let result = if uart_stdin {
-        run_with_uart_stdin(&mut machine, max_steps, &mut output)
+        run_with_uart_stdin(
+            &mut machine,
+            max_steps,
+            &mut output,
+            uart_stdin_reset.then_some(&boot_machine),
+        )
     } else {
         machine.run(max_steps, &mut output)
     };
@@ -456,6 +471,7 @@ fn run_with_uart_stdin(
     machine: &mut Machine,
     mut remaining: u64,
     output: &mut impl Write,
+    reboot: Option<&dyn Fn() -> Result<Machine, String>>,
 ) -> Result<(Stop, u64), String> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(8);
     std::thread::Builder::new()
@@ -481,11 +497,30 @@ fn run_with_uart_stdin(
         .map_err(|error| format!("UART stdin: {error}"))?;
 
     let mut retired = 0;
+    let mut escaped = false;
     while remaining != 0 {
         for bytes in receiver.try_iter().take(8) {
-            machine
-                .bus
-                .queue_uart_input(bytes.map_err(|error| format!("UART stdin: {error}"))?);
+            let bytes = bytes.map_err(|error| format!("UART stdin: {error}"))?;
+            if let Some(reboot) = reboot {
+                let mut uart = Vec::with_capacity(bytes.len());
+                for byte in bytes {
+                    match (std::mem::take(&mut escaped), byte) {
+                        (false, 0x1d) => escaped = true,
+                        (true, b'r') => {
+                            uart.clear();
+                            output.flush().map_err(|error| format!("UART: {error}"))?;
+                            // Release the old RAM and socket before reloading firmware and rebinding.
+                            drop(std::mem::replace(machine, Machine::without_default_ram()));
+                            *machine = reboot()?;
+                        }
+                        (true, 0x1d) | (false, _) => uart.push(byte),
+                        (true, _) => uart.extend([0x1d, byte]),
+                    }
+                }
+                machine.bus.queue_uart_input(uart);
+            } else {
+                machine.bus.queue_uart_input(bytes);
+            }
         }
         let batch = remaining.min(65_536);
         let (stop, count) = machine.run(batch, output)?;

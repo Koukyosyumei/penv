@@ -18,7 +18,8 @@ class Guest:
             args.penv, "run", "--script", args.renode / "scripts/single-node/beaglev_starlight.resc",
             "--platform-root", args.renode, "--asset-dir", args.assets,
             "--uart-device", "uart3", "--uart-stdin", "--max-steps",
-            "24000000000" if link else "14000000000", *link,
+            "40000000000" if args.recovery else ("24000000000" if link else "14000000000"),
+            *link, *(["--uart-stdin-reset"] if args.recovery else []),
         ], stdin=subprocess.PIPE, stdout=self.log, stderr=self.errors, bufsize=0)
         self.name = name
         self.deadline = time.monotonic() + args.timeout
@@ -86,6 +87,22 @@ class Guest:
             raise RuntimeError(f"{self.name}: missing eth0 IRQ counters; see {self.log.name}")
         return int(match[1]) + int(match[2])
 
+    def recover_ethernet(self, ip):
+        self.checked_command("ifconfig eth0 down")
+        self.checked_command(f"ifconfig eth0 {ip} up")
+        output = self.checked_command("id -u; uname -m")
+        if not re.search(rb"(?:^|\n)0\r*\nriscv64\r*\n?", output):
+            raise RuntimeError(f"{self.name}: UART did not recover after Ethernet reopen")
+        print(f"{self.name}: UART shell survived Ethernet reopen", flush=True)
+
+    def restart(self):
+        self.send(b"reboot")
+        self.expect(rb"reboot: Restarting system")
+        # The demo Linux image has no JH7100 restart handler. Apply the
+        # machine reset that Renode's reset macro would perform.
+        self.process.stdin.write(b"\x1dr")
+        self.login()
+
     def verify_interrupts(self):
         after = self.interrupts()
         if after <= self.irq_baseline:
@@ -112,7 +129,11 @@ def main():
                         help="also verify Ethernet between two guests on these localhost ports")
     parser.add_argument("--switch-port", type=int,
                         help="connect the two guest ports to a local penv Ethernet switch")
+    parser.add_argument("--recovery", action="store_true",
+                        help="verify Ethernet reopen and reload one machine after Linux reboot")
     args = parser.parse_args()
+    if args.recovery and args.switch_port is None:
+        parser.error("--recovery requires --switch-port and --ports")
     if args.switch_port is not None and not args.ports:
         parser.error("--switch-port requires --ports")
     args.logs.mkdir(parents=True, exist_ok=True)
@@ -144,6 +165,17 @@ def main():
                 second.ping("192.168.0.5", size)
             for guest in guests:
                 guest.verify_interrupts()
+            if args.recovery:
+                first.recover_ethernet("192.168.0.5")
+                first.ping("192.168.0.6", 56)
+                second.ping("192.168.0.5", 56)
+                first.restart()
+                first.configure("66:34:B0:6C:DE:A0", "192.168.0.5")
+                for size in (56, 3200):
+                    first.ping("192.168.0.6", size)
+                    second.ping("192.168.0.5", size)
+                first.verify_interrupts()
+                second.verify_interrupts()
         else:
             guests.append(Guest(args, "starlight"))
             guests[0].login()

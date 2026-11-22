@@ -211,31 +211,40 @@ uart: UART.Murax_UART @ sysbus 0xf0010000
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_penv"))
-        .args(["run", "--raw", "--uart-stdin", "--platform"])
-        .arg(&board)
-        .arg(&raw)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut prompt = [0];
-    child
-        .stdout
-        .as_mut()
-        .unwrap()
-        .read_exact(&mut prompt)
-        .unwrap();
-    child.stdin.take().unwrap().write_all(b"R").unwrap();
-    let interactive = child.wait_with_output().unwrap();
-    fs::remove_dir_all(directory).unwrap();
-
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, b"Q");
-    assert!(interactive.status.success(), "{interactive:?}");
-    assert_eq!(prompt, [b'>']);
-    assert_eq!(interactive.stdout, b"R");
+    for reset in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        command.args(["run", "--raw", "--uart-stdin"]);
+        if reset {
+            command.arg("--uart-stdin-reset");
+        }
+        let mut child = command
+            .arg("--platform")
+            .arg(&board)
+            .arg(&raw)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.as_mut().unwrap();
+        let mut prompt = [0];
+        stdout.read_exact(&mut prompt).unwrap();
+        assert_eq!(prompt, [b'>']);
+        if reset {
+            stdin.write_all(b"\x1dr").unwrap();
+            stdout.read_exact(&mut prompt).unwrap();
+            assert_eq!(prompt, [b'>']);
+        }
+        stdin.write_all(b"R").unwrap();
+        drop(stdin);
+        let interactive = child.wait_with_output().unwrap();
+        assert!(interactive.status.success(), "{interactive:?}");
+        assert_eq!(interactive.stdout, b"R");
+    }
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
