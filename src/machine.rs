@@ -259,6 +259,9 @@ impl Machine {
                 let (_, bytes) = self.uart_input.pop_front().unwrap();
                 self.bus.queue_uart_input(bytes);
             }
+            self.bus
+                .tick_litex_uart(self.elapsed_steps, output)
+                .map_err(|error| format!("UART: {error}"))?;
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}

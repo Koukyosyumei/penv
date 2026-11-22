@@ -60,12 +60,37 @@ impl MuraxUart {
     }
 }
 
+pub struct LiteXTxTiming {
+    pub capacity: usize,
+    pub flush_steps: u64,
+    pub timeout_steps: u64,
+}
+
+impl Default for LiteXTxTiming {
+    fn default() -> Self {
+        Self {
+            capacity: 8,
+            flush_steps: 10,
+            timeout_steps: 20_000_000,
+        }
+    }
+}
+
+struct LiteXTransmit {
+    timing: LiteXTxTiming,
+    fifo: Vec<u8>,
+    deadline: u64,
+    step: u64,
+}
+
 pub struct LiteXUart {
     pub bases: Vec<u32>,
     pub vex_irq: Option<(usize, u8)>,
     receive: VecDeque<u8>,
     pending: u32,
     enabled: u32,
+    irq: bool,
+    transmit: Option<LiteXTransmit>,
 }
 
 impl LiteXUart {
@@ -78,7 +103,40 @@ impl LiteXUart {
             receive: VecDeque::new(),
             pending: 1,
             enabled: 0,
+            irq: false,
+            transmit: None,
         }
+    }
+
+    pub fn with_timing(mut self, timing: Option<LiteXTxTiming>) -> Self {
+        if let Some(timing) = timing.filter(|timing| timing.capacity > 0) {
+            self.transmit = Some(LiteXTransmit {
+                timing,
+                fifo: Vec::new(),
+                deadline: u64::MAX,
+                step: 0,
+            });
+        }
+        self
+    }
+
+    pub fn tick(&mut self, step: u64, output: &mut impl Write) -> io::Result<()> {
+        let Some(tx) = self.transmit.as_mut() else {
+            return Ok(());
+        };
+        tx.step = step;
+        if step >= tx.deadline && !tx.fifo.is_empty() {
+            output.write_all(&tx.fifo)?;
+            tx.fifo.clear();
+            tx.deadline = u64::MAX;
+            self.pending |= 1;
+            self.update_irq();
+        }
+        Ok(())
+    }
+
+    fn update_irq(&mut self) {
+        self.irq = self.enabled & self.pending != 0;
     }
 
     pub fn offset(&self, address: u32, width: usize) -> Option<u32> {
@@ -95,16 +153,28 @@ impl LiteXUart {
         if !bytes.is_empty() {
             self.receive.extend(bytes);
             self.pending |= 2;
+            self.update_irq();
         }
     }
 
     pub fn interrupt_pending(&self) -> bool {
-        self.enabled & self.pending != 0
+        self.irq
     }
 
     pub fn read(&mut self, offset: u32) -> u32 {
         match offset {
-            0 => u32::from(self.receive.pop_front().unwrap_or(0)),
+            0 => {
+                let byte = self.receive.pop_front().unwrap_or(0);
+                if self.receive.is_empty() {
+                    self.update_irq();
+                }
+                u32::from(byte)
+            }
+            4 => u32::from(
+                self.transmit
+                    .as_ref()
+                    .is_some_and(|tx| tx.fifo.len() >= tx.timing.capacity),
+            ),
             8 => u32::from(self.receive.is_empty()),
             0x10 => self.pending,
             0x14 => self.enabled,
@@ -114,12 +184,33 @@ impl LiteXUart {
 
     pub fn write(&mut self, offset: u32, value: u32, output: &mut impl Write) -> io::Result<()> {
         match offset {
+            0 if self.transmit.is_some() => {
+                let tx = self.transmit.as_mut().unwrap();
+                if tx.fifo.len() < tx.timing.capacity {
+                    tx.fifo.push(value as u8);
+                    let full = tx.fifo.len() >= tx.timing.capacity;
+                    self.pending = (self.pending & !1) | u32::from(!full);
+                    let delay = if full {
+                        tx.timing.flush_steps
+                    } else {
+                        tx.timing.timeout_steps
+                    };
+                    tx.deadline = tx.step.saturating_add(delay);
+                }
+            }
             0 => {
                 output.write_all(&[value as u8])?;
                 self.pending |= 1;
+                self.update_irq();
             }
-            0x10 => self.pending &= !value,
-            0x14 => self.enabled = value & 3,
+            0x10 => {
+                self.pending &= !value;
+                self.update_irq();
+            }
+            0x14 => {
+                self.enabled = value & 3;
+                self.update_irq();
+            }
             _ => {}
         }
         Ok(())

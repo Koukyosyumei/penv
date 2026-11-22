@@ -400,6 +400,7 @@ fn litex_uart_and_timer_share_shadow_registers_and_drive_vex_interrupts() {
 ram: Memory.MappedMemory @ sysbus 0x80000000
     size: 0x1000
 uart: UART.LiteX_UART @ { sysbus 0x60001800; sysbus 0xe0001800 }
+    txFifoCapacity: 0
     -> cpu@2
 timer0: Timers.LiteX_Timer_CSR32 @ { sysbus 0x60002800; sysbus 0xe0002800 }
     frequency: 100000000

@@ -11,6 +11,7 @@ use crate::{
     litex_panel::{Button, Panel},
     machine::{MAX_HARTS, Machine},
     stm32_uart::Stm32Irq,
+    uart::LiteXTxTiming,
 };
 
 type Properties = Vec<(usize, String)>;
@@ -1012,14 +1013,52 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_err(|e| entry.error(&e))?;
         } else if entry.model == "UART.LiteX_UART" {
             let mut irq = None;
-            if let [(_, wire)] = entry.body.as_slice() {
-                irq = Some(vex_irq(entry, wire, &configs)?);
-            } else {
-                keys(entry, &[])?;
+            let mut capacity = None;
+            let mut flush = None;
+            let mut timeout = None;
+            for (_, text) in &entry.body {
+                if text.contains("->") && irq.is_none() {
+                    irq = Some(vex_irq(entry, text, &configs)?);
+                    continue;
+                }
+                let property = text
+                    .split_once(':')
+                    .map(|(key, value)| (key.trim(), value.trim()));
+                let (slot, value) = match property {
+                    Some(("txFifoCapacity", value)) if capacity.is_none() => (&mut capacity, value),
+                    Some(("flushDelayNs", value)) if flush.is_none() => (&mut flush, value),
+                    Some(("timeoutNs", value)) if timeout.is_none() => (&mut timeout, value),
+                    _ => return Err(entry.error("unsupported or duplicate LiteX UART property")),
+                };
+                *slot = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| entry.error("invalid LiteX UART value"))?,
+                );
             }
+            let mut timing = LiteXTxTiming::default();
+            if let Some(capacity) = capacity {
+                timing.capacity = usize::try_from(capacity)
+                    .map_err(|_| entry.error("LiteX UART FIFO capacity exceeds host limit"))?;
+            }
+            if matches!(flush, Some(0))
+                || matches!(timeout, Some(0))
+                || timing.capacity == 0 && (flush.is_some() || timeout.is_some())
+            {
+                return Err(entry.error("LiteX UART delays require a FIFO and positive durations"));
+            }
+            if let Some(nanoseconds) = flush {
+                timing.flush_steps = nanoseconds.div_ceil(10);
+            }
+            if let Some(nanoseconds) = timeout {
+                timing.timeout_steps = nanoseconds.div_ceil(10);
+            }
+            let timing =
+                (irq.is_some() || capacity.is_some() || flush.is_some() || timeout.is_some())
+                    .then_some(timing);
             machine
                 .bus
-                .map_litex_uart(entry.addresses()?, irq)
+                .map_litex_uart_with_timing(entry.addresses()?, irq, timing)
                 .map_err(|e| entry.error(&e))?;
         } else {
             let (plic, sources) =

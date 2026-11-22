@@ -16,7 +16,7 @@ use crate::{
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
-    uart::{LiteXUart, MuraxUart},
+    uart::{LiteXTxTiming, LiteXUart, MuraxUart},
 };
 
 pub const RAM_BASE: u32 = 0x8000_0000;
@@ -478,8 +478,24 @@ impl Bus {
         bases: Vec<u32>,
         vex_irq: Option<(usize, u8)>,
     ) -> Result<(), String> {
+        self.map_litex_uart_with_timing(bases, vex_irq, None)
+    }
+
+    pub fn map_litex_uart_with_timing(
+        &mut self,
+        bases: Vec<u32>,
+        vex_irq: Option<(usize, u8)>,
+        timing: Option<LiteXTxTiming>,
+    ) -> Result<(), String> {
         self.check_litex_ranges(&bases, LiteXUart::SIZE)?;
-        self.litex_uart = Some(LiteXUart::new(bases, vex_irq));
+        self.litex_uart = Some(LiteXUart::new(bases, vex_irq).with_timing(timing));
+        Ok(())
+    }
+
+    pub fn tick_litex_uart(&mut self, step: u64, output: &mut impl Write) -> io::Result<()> {
+        if let Some(uart) = self.litex_uart.as_mut() {
+            uart.tick(step, output)?;
+        }
         Ok(())
     }
 
