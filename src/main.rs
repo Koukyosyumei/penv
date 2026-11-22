@@ -7,6 +7,7 @@ mod litex;
 mod litex_eth;
 mod litex_flash;
 mod litex_i2c;
+mod litex_i2s;
 mod litex_panel;
 mod litex_sd;
 mod litex_tftp;
@@ -102,7 +103,7 @@ fn run() -> Result<ExitCode, String> {
     let mut positional = false;
     let mut ram_mib = None;
     let mut harts = None;
-    let mut max_steps = 10_000_000;
+    let mut max_steps = None;
     let mut extra_ram = Vec::new();
     let mut clint = None;
     let mut litex_timer_aliases = Vec::new();
@@ -233,7 +234,7 @@ fn run() -> Result<ExitCode, String> {
                     }
                     harts = Some(value as usize);
                 } else {
-                    max_steps = value;
+                    max_steps = Some(value);
                 }
             }
             Some(option) if option.starts_with('-') => {
@@ -253,6 +254,10 @@ fn run() -> Result<ExitCode, String> {
     let mut sd_card = None;
     let mut tftp = None;
     let mut video_analyzers = Vec::new();
+    let mut pcm_inputs = Vec::new();
+    let mut pcm_outputs = Vec::new();
+    let mut run_steps = None;
+    let mut post_run_echoes = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -293,6 +298,12 @@ fn run() -> Result<ExitCode, String> {
             let path = image.resolve(root, asset_dir.as_deref())?;
             sd_card = Some((controller, path, capacity));
         }
+        for (device, input) in boot.pcm_inputs {
+            pcm_inputs.push((device, input.resolve(root, asset_dir.as_deref())?));
+        }
+        pcm_outputs = boot.pcm_outputs;
+        run_steps = boot.run_steps;
+        post_run_echoes = boot.post_run_echoes;
         boot_pcs = boot.boot_pcs;
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
@@ -406,6 +417,24 @@ fn run() -> Result<ExitCode, String> {
         machine.bus.set_litex_button(&name, action)?;
     }
     machine.validate_entry()?;
+    for (name, path) in pcm_inputs {
+        let device = machine
+            .bus
+            .litex_i2s
+            .iter_mut()
+            .find(|device| device.name == name && !device.transmit)
+            .ok_or_else(|| format!("unknown LiteX I2S receiver {name:?}"))?;
+        device.load_pcm(fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?)?;
+    }
+    for (name, path) in pcm_outputs {
+        let device = machine
+            .bus
+            .litex_i2s
+            .iter_mut()
+            .find(|device| device.name == name && device.transmit)
+            .ok_or_else(|| format!("unknown LiteX I2S transmitter {name:?}"))?;
+        device.set_output(File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?);
+    }
 
     if litex_uart_stdio {
         let (sender, receiver) = mpsc::sync_channel(4);
@@ -438,10 +467,19 @@ fn run() -> Result<ExitCode, String> {
         immediate: litex_uart_stdio,
     };
     let start = Instant::now();
-    let result = machine.run(max_steps, &mut output);
+    let limit = match (max_steps, run_steps) {
+        (Some(cli), Some(script)) => cli.min(script),
+        (cli, script) => cli.or(script).unwrap_or(10_000_000),
+    };
+    let result = machine.run(limit, &mut output);
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    for device in &mut machine.bus.litex_i2s {
+        device
+            .flush()
+            .map_err(|error| format!("{}: {error}", device.name))?;
+    }
     if let Some(path) = framebuffer_out {
         let video = machine.bus.litex_video.as_ref().unwrap();
         if video.active.is_none() {
@@ -458,6 +496,12 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.pc
         );
+    }
+    if stop == Stop::Limit && run_steps == Some(limit) {
+        for message in post_run_echoes {
+            eprintln!("{message}");
+        }
+        return Ok(ExitCode::SUCCESS);
     }
     if stop == Stop::Limit {
         eprintln!(

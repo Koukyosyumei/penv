@@ -84,7 +84,7 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) => return None,
+                BusError::Output(_) | BusError::AudioOutput(_) => return None,
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),
@@ -494,7 +494,7 @@ impl Hart {
             .is_some_and(|uart| uart.interrupt_pending());
         let timer = bus.timer.as_mut().is_some_and(|(_, timer)| timer.tick());
         let plic = bus.tick_plic();
-        let mut lines = bus.tick_litex(self.csr.hart_id);
+        let mut lines = bus.tick_litex(self.csr.hart_id, elapsed_steps);
         if self.csr.hart_id == 0 {
             lines |=
                 u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));

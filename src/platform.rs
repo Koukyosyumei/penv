@@ -9,6 +9,7 @@ use crate::{
     litex::{Gpio, GpioMode, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     litex_i2c::{I2c, Sensor},
+    litex_i2s::I2s,
     litex_panel::{Button, Panel},
     litex_sd::{self, Controller as SdController},
     litex_video::Framebuffer,
@@ -357,6 +358,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut sensor = None;
     let mut litex_sd = None;
     let mut litex_video = None;
+    let mut litex_i2s = Vec::new();
     for entry in &entries {
         if entry.name == "sysbus" && entry.model.is_empty() && entry.registration.is_none() {
             map_sysbus_ranges(entry, &mut machine.bus)?;
@@ -463,6 +465,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one LiteX timer is supported"));
                 }
             }
+            "Sound.LiteX_I2S_Master" | "Sound.LiteX_I2S_Slave" => litex_i2s.push(entry),
             "Video.LiteX_Framebuffer_CSR32" => {
                 if litex_video.replace(entry).is_some() {
                     return Err(entry.error("only one LiteX framebuffer is supported"));
@@ -1140,6 +1143,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             Ok((entry, sources))
         })
         .transpose()?;
+    for entry in litex_i2s {
+        map_litex_i2s(entry, &configs, &mut machine.bus)?;
+    }
     if let Some(entry) = uart {
         if entry.model == "UART.Murax_UART" {
             let connected = direct_irq(entry, &cpu.name, 11)?;
@@ -1620,6 +1626,68 @@ fn ethernet_registration(entry: &Entry, registration: &str) -> Result<Registrati
         _ => return Err(entry.error("unsupported Ethernet region")),
     };
     Ok(Registration { base, size, region })
+}
+
+fn map_litex_i2s(entry: &Entry, configs: &[RiscvConfig<'_>], bus: &mut Bus) -> Result<(), String> {
+    let mut csr = None;
+    let mut buffer = None;
+    for registration in entry
+        .registration_list()
+        .ok_or_else(|| entry.error("expected LiteX I2S regions"))?
+    {
+        match multi_registration(entry, registration)? {
+            Some((address, size, "buffer")) if size != 0 && buffer.is_none() => {
+                buffer = Some((address, size));
+            }
+            None if csr.is_none() => {
+                let address = registration
+                    .strip_prefix("sysbus ")
+                    .ok_or_else(|| entry.error("expected I2S CSR on sysbus"))?;
+                csr = Some(number(address.trim()).map_err(|e| entry.error(&e))?);
+            }
+            _ => return Err(entry.error("invalid or duplicate I2S registration")),
+        }
+    }
+    let mut irq = None;
+    let mut rate = None;
+    let mut width = None;
+    let mut channels = None;
+    for (_, text) in &entry.body {
+        if text.contains("->") && irq.is_none() {
+            irq = Some(vex_irq(entry, text, configs)?);
+            continue;
+        }
+        let (key, value) = text
+            .split_once(':')
+            .map(|(key, value)| (key.trim(), value.trim()))
+            .ok_or_else(|| entry.error("expected I2S property or IRQ"))?;
+        let target = match key {
+            "format" if value == "DataFormat.Standard" => continue,
+            "samplingRateHz" if rate.is_none() => &mut rate,
+            "sampleWidthBits" if width.is_none() => &mut width,
+            "numberOfChannels" if channels.is_none() => &mut channels,
+            _ => return Err(entry.error("unsupported or duplicate I2S property")),
+        };
+        *target = Some(number(value).map_err(|e| entry.error(&e))?);
+    }
+    let mut device = I2s::new(
+        entry.name.clone(),
+        csr.ok_or_else(|| entry.error("missing I2S CSR region"))?,
+        buffer.ok_or_else(|| entry.error("missing I2S buffer region"))?,
+        irq.ok_or_else(|| entry.error("missing I2S IRQ"))?,
+        entry.model == "Sound.LiteX_I2S_Master",
+    );
+    device.rate = rate
+        .filter(|rate| (1_000..=192_000).contains(rate))
+        .ok_or_else(|| entry.error("invalid I2S sample rate"))?;
+    device.sample_bytes = width
+        .filter(|width| matches!(width, 8 | 16 | 24 | 32))
+        .ok_or_else(|| entry.error("invalid I2S sample width"))? as usize
+        / 8;
+    device.channels = channels
+        .filter(|channels| (1..=2).contains(channels))
+        .ok_or_else(|| entry.error("invalid I2S channel count"))?;
+    bus.map_litex_i2s(device).map_err(|e| entry.error(&e))
 }
 
 fn map_litex_video(

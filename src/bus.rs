@@ -8,6 +8,7 @@ use crate::{
     clint::Clint,
     litex,
     litex_eth::{Ethernet, Phy, Registration},
+    litex_i2s::I2s,
     litex_panel::{ButtonAction, Panel},
     litex_sd::{Card, Controller as SdController},
     litex_video::Framebuffer,
@@ -31,6 +32,7 @@ pub enum BusError {
     Page(u32),
     Misaligned(u32, usize),
     Output(io::Error),
+    AudioOutput(io::Error),
 }
 
 impl BusError {
@@ -57,6 +59,7 @@ impl fmt::Display for BusError {
                 write!(f, "misaligned {width}-byte access at {address:#010x}")
             }
             Self::Output(error) => write!(f, "UART: {error}"),
+            Self::AudioOutput(error) => write!(f, "LiteX I2S: {error}"),
         }
     }
 }
@@ -92,6 +95,7 @@ pub struct Bus {
     litex_gpio_irqs: Vec<(usize, usize, u8)>,
     litex_eth: Option<Ethernet>,
     litex_panel: Option<Panel>,
+    pub litex_i2s: Vec<I2s>,
     litex_sd: Option<SdController>,
     pub litex_video: Option<Framebuffer>,
     litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
@@ -288,6 +292,10 @@ impl Bus {
                     .bases
                     .iter()
                     .any(|&base| overlaps_range(start, end, base, Panel::SIZE))
+            })
+            || self.litex_i2s.iter().any(|i2s| {
+                overlaps_range(start, end, i2s.csr, I2s::SIZE)
+                    || overlaps_range(start, end, i2s.buffer, i2s.buffer_size)
             })
             || self.litex_sd.as_ref().is_some_and(|sd| {
                 sd.registrations.iter().any(|registration| {
@@ -733,7 +741,22 @@ impl Bus {
         Ok(())
     }
 
-    pub fn tick_litex(&mut self, hart: usize) -> u64 {
+    pub fn map_litex_i2s(&mut self, device: I2s) -> Result<(), String> {
+        self.check_litex_ranges(&[device.csr], I2s::SIZE)?;
+        self.check_litex_ranges(&[device.buffer], device.buffer_size)?;
+        if overlaps_range(
+            u64::from(device.csr),
+            u64::from(device.csr) + u64::from(I2s::SIZE),
+            device.buffer,
+            device.buffer_size,
+        ) {
+            return Err("overlapping LiteX I2S regions".into());
+        }
+        self.litex_i2s.push(device);
+        Ok(())
+    }
+
+    pub fn tick_litex(&mut self, hart: usize, step: u64) -> u64 {
         let mut lines = 0;
         if let Some(device) = self.litex_timer.as_mut() {
             device.timer.tick();
@@ -765,6 +788,12 @@ impl Bus {
         {
             lines |= 1 << line;
         }
+        for i2s in &mut self.litex_i2s {
+            i2s.tick(step);
+            if i2s.irq.0 == hart && i2s.interrupt_pending() {
+                lines |= 1 << i2s.irq.1;
+            }
+        }
         for &(index, target, line) in &self.litex_gpio_irqs {
             if target == hart
                 && let litex::IoDevice::Gpio(gpio) = &self.litex_io[index].1
@@ -793,6 +822,7 @@ impl Bus {
                 .as_ref()
                 .is_some_and(|panel| panel.irq.is_some())
             || !self.litex_gpio_irqs.is_empty()
+            || !self.litex_i2s.is_empty()
     }
 
     pub fn map_stm32_usart(
@@ -1090,6 +1120,18 @@ impl Bus {
         {
             return Ok(value);
         }
+        if (N == 1 || (N == 4 && address & 3 == 0))
+            && let Some(value) = self
+                .litex_i2s
+                .iter_mut()
+                .find_map(|i2s| i2s.read(address & !3))
+        {
+            return Ok(if N == 1 {
+                (value >> ((address & 3) * 8)) & 0xff
+            } else {
+                value
+            });
+        }
         if matches!(ram_error, BusError::Unmapped(..))
             && (self.renode_unmapped_data || self.zero_mmio(address, N))
         {
@@ -1286,6 +1328,21 @@ impl Bus {
                 .is_some_and(|video| video.write(address, value))
         {
             return Ok(());
+        }
+        if matches!(width, 1 | 4) {
+            for i2s in &mut self.litex_i2s {
+                let value = if width == 1 {
+                    (value & 0xff) << ((address & 3) * 8)
+                } else {
+                    value
+                };
+                if i2s
+                    .write(address & !3, value)
+                    .map_err(BusError::AudioOutput)?
+                {
+                    return Ok(());
+                }
+            }
         }
         if self.renode_unmapped_data || self.zero_mmio(address, width) {
             return Ok(());

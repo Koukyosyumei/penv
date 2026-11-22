@@ -10,6 +10,10 @@ pub struct Boot {
     pub binaries: Vec<(Asset, u32)>,
     pub network: Network,
     pub video_analyzers: Vec<String>,
+    pub pcm_inputs: Vec<(String, Asset)>,
+    pub pcm_outputs: Vec<(String, PathBuf)>,
+    pub run_steps: Option<u64>,
+    pub post_run_echoes: Vec<String>,
     pub sd_card: Option<(String, Asset, u64)>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -254,6 +258,14 @@ fn execute(
     if matches!(words, [] | ["using", "sysbus"]) {
         return Ok(());
     }
+    if boot.run_steps.is_some()
+        && let ["echo", value] = words
+    {
+        let value = unquote(resolve(variables, value)?);
+        boot.post_run_echoes
+            .push(path_value(value.strip_prefix('@').unwrap_or(value)));
+        return Ok(());
+    }
     if boot.started {
         return Err("commands after start are unsupported in a boot script".into());
     }
@@ -313,6 +325,30 @@ fn execute(
             }
             .map_err(|_| "invalid SD card capacity")?;
             boot.sd_card = Some((controller.to_string(), Asset::new(image, script), capacity));
+        }
+        [device, "LoadPCM" | "Output", value] if boot.platform.is_some() => {
+            let device = device.strip_prefix("sysbus.").unwrap_or(device).to_string();
+            let path = resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @PCM-path")?;
+            if words[1] == "LoadPCM" {
+                boot.pcm_inputs.push((device, Asset::new(path, script)));
+            } else {
+                boot.pcm_outputs.push((device, root.join(path_value(path))));
+            }
+        }
+        ["emulation", "RunFor", duration]
+            if boot.platform.is_some() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
+        {
+            let seconds: f64 = unquote(resolve(duration)?)
+                .parse()
+                .map_err(|_| "expected RunFor duration in seconds")?;
+            let steps = (seconds * 100_000_000.0).round();
+            if !steps.is_finite() || steps < 1.0 || steps >= u64::MAX as f64 {
+                return Err("invalid RunFor duration".into());
+            }
+            boot.run_steps = Some(steps as u64);
+            boot.started = true;
         }
         ["emulation", "CreateSwitch", name] if *machine && boot.network.switch.is_none() => {
             boot.network.switch = Some(unquote(resolve(name)?).into());
