@@ -66,7 +66,7 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 LiteX のスイッチとボタンは `--litex-button-event STEP:NAME:ACTION` で実行中に操作できます。例えば `--litex-button-event 71000000:cas.switch0:Toggle` はステップ 71,000,000 で Arty のスイッチ 0 を反転します。`Press`、`Release`、`Toggle` を指定でき、同じステップのボタン操作は指定順に適用されます。指定した操作はそのステップのゲスト命令より先に反映されます。
 
-Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
+Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン・PHY ステータス、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
 
 ```sh
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
@@ -84,6 +84,7 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-
 | Arty の `debug cas leds` | 上流の LED テストと同じマスク `0 → 1 → 3 → 7 → 15 → 0` で 4 灯を毎回検証 |
 | Arty の `debug cas switches` | 初期値 `0`、反転後 `1` |
 | Arty の `debug cas buttons read` | 押下後 `1 1`、解放後 `0 1`、ラッチクリア後 `0 0` |
+| Arty の PHY | 起動時は `10Mbps / link: down`。実行中の変更後に `mdio_status` が `100Mbps / link: up` を返す |
 | LiteX RV32 Linux | 単一ハートで `/init` に到達。SMP で Buildroot にログインし、`/proc/cpuinfo` に 4 ハートを確認 |
 | Minerva UART | 上流 BIOS の SFL で RV32 検証ペイロードを `0x40000000` に転送し、ジャンプ後にペイロードが UART へ `~` を出力 |
 | Zephyr I²S | 入出力 793,344 バイトが `cmp` で一致。SHA-256 は `e8dca0ec23b1113e7d47e2fcd16ef64de6d8eec9cdd868dc86527d53d4bba116` |
@@ -104,7 +105,23 @@ target/release/penv run --script ../renode/scripts/single-node/arty_litex_vexris
   --litex-led-assert 72000000:sysbus.cas.led0:off
 ```
 
-Arty の実行中の PHY 設定変更と、Renode の Robot Framework テスター API の互換性は残課題です。性能計測と最適化は機能実装が揃った段階で行います。
+### Arty の PHY 設定変更
+
+`--litex-phy-event STEP:NAME:VALUE` は、REPL に宣言された PHY の `VendorSpecific1`（MDIO レジスター 17）へ 16 ビット値を書き込みます。ステップ 0 は最初のゲスト命令より前に適用されます。名前は `eth.phy` または `sysbus.eth.phy` で指定でき、値は 10 進数または `0x` 付きの 16 進数です。
+
+変更前の `abeac21` では下記のオプションが `unknown option` でした。上記の回帰スクリプトで取得した同じ上流 ELF を使って単独でも再現できます。
+
+```sh
+artifacts=/tmp/penv-upstream
+printf 'mdio_status\r' > "$artifacts/arty-mdio.input"
+target/release/penv run --script ../renode/scripts/single-node/arty_litex_vexriscv.resc \
+  --platform-root ../renode --asset-dir "$artifacts/assets" --max-steps 100000000 \
+  --litex-phy-event 0:eth.phy:0x0 \
+  --litex-phy-event 97000000:sysbus.eth.phy:0x4400 \
+  --uart-event "98000000:$artifacts/arty-mdio.input"
+```
+
+実ファームウェアの起動ログに `MDIO mode: 10Mbps / link: down`、コマンド応答に `MDIO mode: 100Mbps / link: up` がこの順で出力されます。ステップ上限で終了コード 2 になります。他の PHY プロパティの実行中設定と Renode の Robot Framework テスター API 互換性は残課題です。性能計測と最適化は後工程で行います。
 
 ## Cortex-M0 / Cortex-M0+
 

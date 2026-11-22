@@ -620,6 +620,14 @@ impl Bus {
         Ok(())
     }
 
+    pub fn litex_phy_mut(&mut self, name: &str) -> Result<&mut Phy, String> {
+        let path = name.strip_prefix("sysbus.").unwrap_or(name);
+        self.litex_eth
+            .as_mut()
+            .and_then(|ethernet| ethernet.phy_mut(path))
+            .ok_or_else(|| format!("unknown LiteX Ethernet PHY {name:?}"))
+    }
+
     pub fn attach_litex_tftp(
         &mut self,
         name: &str,

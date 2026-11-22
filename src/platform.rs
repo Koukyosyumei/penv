@@ -1298,11 +1298,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             let address =
                 irq_index(address, 32).map_err(|_| phy.error("expected PHY address in 0–31"))?;
             let mut device = Phy::new(address);
+            device.name = Some(format!("{parent}.{}", phy.name));
             for (key, value) in keys(phy, &["VendorSpecific1"])? {
-                device.registers[17] = number(value)
+                let value = number(value)
                     .ok()
                     .and_then(|value| u16::try_from(value).ok())
                     .ok_or_else(|| phy.error(&format!("invalid {key} register value")))?;
+                device.set_vendor_specific1(value);
             }
             Ok(device)
         })
@@ -1980,25 +1982,43 @@ clock0: Miscellaneous.LiteX_MMCM_CSR32 @ sysbus 0xe0004800
         let machine = load(&path, None);
         fs::remove_dir_all(directory).unwrap();
 
-        let mut bus = machine.unwrap().bus;
-        assert_eq!(bus.read::<4>(0xe000_4804).unwrap(), 1);
+        fn read_phy_status(bus: &mut Bus) -> u32 {
+            let mut sink = std::io::sink();
+            let mut tick = |bit: u32| {
+                bus.write(0xe000_7004, 4, bit << 2, &mut sink).unwrap();
+                bus.write(0xe000_7004, 4, (bit << 2) | 1, &mut sink)
+                    .unwrap();
+                bus.read::<4>(0xe000_7008).unwrap()
+            };
+            for _ in 0..32 {
+                tick(1);
+            }
+            for bit in 0..16 {
+                tick((0x2206 >> bit) & 1);
+            }
+            (0..16).fold(0, |status, _| (status << 1) | tick(0))
+        }
+
+        let mut machine = machine.unwrap();
+        machine.set_entry(0x4000_0000);
+        assert_eq!(machine.bus.read::<4>(0xe000_4804).unwrap(), 1);
+        machine
+            .bus
+            .memory(0x4000_0000, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+        assert!(
+            machine
+                .schedule_phy_vendor_specific1(1, "other.phy".into(), 0)
+                .is_err()
+        );
+        machine
+            .schedule_phy_vendor_specific1(2, "sysbus.eth.phy".into(), 0)
+            .unwrap();
         let mut sink = std::io::sink();
-        let mut tick = |bit: u32| {
-            bus.write(0xe000_7004, 4, bit << 2, &mut sink).unwrap();
-            bus.write(0xe000_7004, 4, (bit << 2) | 1, &mut sink)
-                .unwrap();
-            bus.read::<4>(0xe000_7008).unwrap()
-        };
-        for _ in 0..32 {
-            tick(1);
-        }
-        for bit in 0..16 {
-            tick((0x2206 >> bit) & 1);
-        }
-        let mut phy_status = 0;
-        for _ in 0..16 {
-            phy_status = (phy_status << 1) | tick(0);
-        }
-        assert_eq!(phy_status, 0x4400);
+        machine.run(1, &mut sink).unwrap();
+        assert_eq!(read_phy_status(&mut machine.bus), 0x4400);
+        machine.run(1, &mut sink).unwrap();
+        assert_eq!(read_phy_status(&mut machine.bus), 0);
     }
 }

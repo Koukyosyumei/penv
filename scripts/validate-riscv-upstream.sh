@@ -108,6 +108,7 @@ prepare_assets "$arty"
 printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
 printf 'debug cas buttons read\r' > "$artifacts/arty-buttons.input"
 printf 'debug cas buttons clear\r' > "$artifacts/arty-clear.input"
+printf 'mdio_status\r' > "$artifacts/arty-mdio.input"
 arty_led_events=()
 step=84000000
 for mask in 0 1 3 7 15 0; do
@@ -124,7 +125,10 @@ for mask in 0 1 3 7 15 0; do
     done
     step=$((step + 2000000))
 done
-run_to_step_limit litex-arty "$arty" --max-steps "$step" \
+run_to_step_limit litex-arty "$arty" --max-steps 100000000 \
+    --litex-phy-event 0:eth.phy:0x0 \
+    --litex-phy-event 97000000:sysbus.eth.phy:0x4400 \
+    --uart-event "98000000:$artifacts/arty-mdio.input" \
     --uart-event "70000000:$artifacts/arty-switches.input" \
     --litex-button-event 71000000:cas.switch0:Toggle \
     --uart-event "72000000:$artifacts/arty-switches.input" \
@@ -139,6 +143,10 @@ rg -aq '^H2U ' "$artifacts/litex-arty.uart.log"
 diff -u <(printf '0\n1\n1 1\n0 1\n0 0\n') <(
     tr -d '\r' < "$artifacts/litex-arty.uart.log" |
         awk '/>debug cas (switches|buttons read)$/ { if (getline) print }'
+)
+
+diff -u <(printf 'MDIO mode: 10Mbps / link: down\nMDIO mode: 100Mbps / link: up\n') <(
+    tr -d '\r' < "$artifacts/litex-arty.uart.log" | rg '^MDIO mode:'
 )
 
 prepare_assets "$linux_single"
@@ -176,4 +184,4 @@ cmp "$assets/${pcm##*/}" "$artifacts/echo.raw"
 sha256sum "$assets/${pcm##*/}" "$artifacts/echo.raw" > "$artifacts/litex-i2s.sha256"
 prepare_assets "$minerva"
 python3 "$(dirname -- "$0")/validate-minerva-serial.py" "$penv" "$renode_root" "$artifacts"
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty LEDs, switches and buttons, LiteX single-hart and SMP Linux, and I2S PCM verified. Logs are in %s\n' "$artifacts"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, and I2S PCM verified. Logs are in %s\n' "$artifacts"

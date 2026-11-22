@@ -18,6 +18,7 @@ pub struct Registration {
 }
 
 pub struct Phy {
+    pub name: Option<String>,
     pub address: u8,
     pub registers: [u16; 32],
 }
@@ -26,7 +27,15 @@ impl Phy {
     pub fn new(address: u8) -> Self {
         let mut registers = [0; 32];
         registers[1] = 0x24; // link up, autonegotiation complete
-        Self { address, registers }
+        Self {
+            name: None,
+            address,
+            registers,
+        }
+    }
+
+    pub fn set_vendor_specific1(&mut self, value: u16) {
+        self.registers[17] = value;
     }
 }
 
@@ -149,6 +158,12 @@ impl Ethernet {
     pub fn with_wide_csr(mut self, wide_csr: bool) -> Self {
         self.wide_csr = wide_csr;
         self
+    }
+
+    pub fn phy_mut(&mut self, name: &str) -> Option<&mut Phy> {
+        self.phy
+            .as_mut()
+            .filter(|phy| phy.name.as_deref() == Some(name))
     }
 
     fn mac_register(&self, offset: u32) -> u32 {

@@ -22,6 +22,7 @@ pub struct Machine {
 enum Input {
     Uart(Vec<u8>),
     Button(String, ButtonAction),
+    PhyVendorSpecific1 { name: String, value: u16 },
     LedAssertion { name: String, expected: bool },
 }
 
@@ -255,6 +256,17 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_phy_vendor_specific1(
+        &mut self,
+        step: u64,
+        name: String,
+        value: u16,
+    ) -> Result<(), String> {
+        self.bus.litex_phy_mut(&name)?;
+        self.schedule_input(step, Input::PhyVendorSpecific1 { name, value });
+        Ok(())
+    }
+
     pub fn schedule_led_assertion(
         &mut self,
         step: u64,
@@ -307,6 +319,9 @@ impl Machine {
                 match self.inputs.pop_front().unwrap().1 {
                     Input::Uart(bytes) => self.bus.queue_uart_input(bytes),
                     Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
+                    Input::PhyVendorSpecific1 { name, value } => {
+                        self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+                    }
                     Input::LedAssertion { name, expected } => {
                         let actual = self.bus.litex_led_state(&name)?;
                         if actual != expected {
