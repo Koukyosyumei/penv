@@ -14,6 +14,7 @@ pub struct Rv64 {
     registers: [u64; 32],
     isa: Isa,
     pub privilege: Privilege,
+    pub allow_unaligned: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -24,6 +25,27 @@ pub struct Isa {
 }
 
 impl Isa {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let mut extensions = value
+            .strip_prefix("rv64")
+            .ok_or_else(|| format!("invalid RV64 ISA {value:?}"))?
+            .split('_');
+        let base = extensions.next().unwrap_or("");
+        if !base.starts_with(['i', 'g'])
+            || !base
+                .chars()
+                .all(|ext| matches!(ext, 'i' | 'g' | 'm' | 'a' | 'f' | 'd' | 'c'))
+            || !extensions.all(|extension| matches!(extension, "zicsr" | "zifencei"))
+        {
+            return Err(format!("unsupported RV64 ISA {value:?}"));
+        }
+        Ok(Self {
+            multiply: base.contains(['g', 'm']),
+            atomic: base.contains(['g', 'a']),
+            compressed: base.contains('c'),
+        })
+    }
+
     pub const IM: Self = Self {
         multiply: true,
         atomic: false,
@@ -55,6 +77,7 @@ impl Rv64 {
             registers: [0; 32],
             isa,
             privilege: Privilege::default(),
+            allow_unaligned: false,
         }
     }
 
@@ -126,7 +149,8 @@ impl Rv64 {
         if hart == 0 {
             pending |= bus.tick_plic();
         }
-        let count_retired = self.privilege.tick(u64::from(pending), time);
+        let pending = u64::from(pending) | bus.rv64_devices.tick(hart);
+        let count_retired = self.privilege.tick(pending, time);
         if let Some(target) = self.privilege.interrupt(self.pc) {
             self.pc = target;
             return Ok(Step::Trap);
@@ -314,13 +338,26 @@ impl Rv64 {
 
     fn load(&self, bus: &mut Bus, address: u64, width: usize) -> Result<u64, Fault> {
         if address & (width as u64 - 1) != 0 {
-            return Err(Fault::new(4, address));
+            if !self.allow_unaligned {
+                return Err(Fault::new(4, address));
+            }
+            let mut value = 0;
+            for offset in 0..width {
+                let virtual_address = address.wrapping_add(offset as u64);
+                let physical = translate(bus, &self.privilege, virtual_address, 1, READ)?;
+                let byte = ram_read(bus, physical, 1).ok_or(Fault::new(5, virtual_address))?;
+                value |= byte << (offset * 8);
+            }
+            return Ok(value);
         }
         let physical = translate(bus, &self.privilege, address, width, READ)?;
         if let Some(value) = ram_read(bus, physical, width) {
             return Ok(value);
         }
         let physical = u32::try_from(physical).map_err(|_| Fault::new(5, address))?;
+        if let Some(value) = bus.rv64_devices.read(physical, width) {
+            return Ok(u64::from(value));
+        }
         let result = match width {
             1 => bus.read::<1>(physical).map(u64::from),
             2 => bus.read::<2>(physical).map(u64::from),
@@ -347,7 +384,21 @@ impl Rv64 {
         output: &mut impl Write,
     ) -> Result<(), Fault> {
         if address & (width as u64 - 1) != 0 {
-            return Err(Fault::new(6, address));
+            if !self.allow_unaligned {
+                return Err(Fault::new(6, address));
+            }
+            let mut destinations = [0; 8];
+            for (offset, slot) in destinations[..width].iter_mut().enumerate() {
+                let virtual_address = address.wrapping_add(offset as u64);
+                *slot = translate(bus, &self.privilege, virtual_address, 1, WRITE)?;
+                if bus.ram64(*slot, 1).is_none() {
+                    return Err(Fault::new(7, virtual_address));
+                }
+            }
+            for (physical, byte) in destinations[..width].iter().zip(value.to_le_bytes()) {
+                bus.memory64(*physical, 1).unwrap()[0] = byte;
+            }
+            return Ok(());
         }
         let physical = translate(bus, &self.privilege, address, width, WRITE)?;
         if let Some(bytes) = bus.memory64(physical, width) {
@@ -365,15 +416,21 @@ impl Rv64 {
             clint.write(physical + 4, (value >> 32) as u32);
             return Ok(());
         }
-        bus.write(physical, width, value as u32, output)
-            .map_err(|error| match error {
-                BusError::Output(error) => Fault {
-                    cause: 7,
-                    value: address,
-                    output: Some(error),
-                },
-                _ => Fault::new(7, address),
-            })
+        let result = bus
+            .rv64_devices
+            .write(physical, width, value as u32, output)
+            .map_or_else(
+                || bus.write(physical, width, value as u32, output),
+                |result| result.map_err(BusError::Output),
+            );
+        result.map_err(|error| match error {
+            BusError::Output(error) => Fault {
+                cause: 7,
+                value: address,
+                output: Some(error),
+            },
+            _ => Fault::new(7, address),
+        })
     }
     fn atomic(
         &self,
@@ -411,7 +468,7 @@ impl Rv64 {
         if operation == 2 {
             bus.reserve64(hart, physical, width);
         } else if operation == 3 {
-            if reservation != Some((physical, width)) {
+            if reservation != bus.reservation_key64(physical, width) {
                 return Ok(1);
             }
             bus.memory64(physical, width)

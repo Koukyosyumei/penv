@@ -13,6 +13,8 @@ mod platform;
 mod plic;
 mod pmp;
 mod rv64;
+mod rv64_devices;
+mod rv64_platform;
 mod rv64_priv;
 mod rv64_vm;
 mod stm32_exti;

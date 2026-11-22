@@ -12,17 +12,17 @@ use crate::{
 type Properties = Vec<(usize, String)>;
 
 #[derive(Debug)]
-struct Entry {
-    name: String,
-    model: String,
-    registration: Option<String>,
-    body: Properties,
+pub(crate) struct Entry {
+    pub(crate) name: String,
+    pub(crate) model: String,
+    pub(crate) registration: Option<String>,
+    pub(crate) body: Properties,
     source: PathBuf,
     line: usize,
 }
 
 impl Entry {
-    fn error(&self, detail: &str) -> String {
+    pub(crate) fn error(&self, detail: &str) -> String {
         format!(
             "{}:{}: {}: {detail}",
             self.source.display(),
@@ -46,7 +46,7 @@ impl Entry {
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
     }
 
-    fn address(&self) -> Result<u32, String> {
+    pub(crate) fn address(&self) -> Result<u32, String> {
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
     }
@@ -137,13 +137,37 @@ fn parse(
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut current: Option<Entry> = None;
+    let mut multiline_script = false;
+    let mut registration_depth: i32 = 0;
     for (index, raw) in content.lines().enumerate() {
+        if multiline_script {
+            if raw.contains("'''") {
+                multiline_script = false;
+            }
+            continue;
+        }
         let line = without_comment(raw);
         let text = line.trim();
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
         if text.is_empty() {
             continue;
+        }
+        if registration_depth != 0 {
+            let registration = current.as_mut().unwrap().registration.as_mut().unwrap();
+            registration.push(' ');
+            registration.push_str(text);
+            registration_depth += brace_depth(text);
+            if registration_depth < 0 {
+                return Err(error("invalid registration braces"));
+            }
+            continue;
+        }
+        if text
+            .strip_prefix("script:")
+            .is_some_and(|value| value.trim() == "'''")
+        {
+            multiline_script = true;
         }
         if line.starts_with(char::is_whitespace) {
             current
@@ -182,6 +206,10 @@ fn parse(
             Some((model, registration)) => (model.trim(), Some(registration.trim().into())),
             None => (declaration.trim(), None),
         };
+        registration_depth = registration.as_deref().map_or(0, brace_depth);
+        if registration_depth < 0 {
+            return Err(error("invalid registration braces"));
+        }
         current = Some(Entry {
             name: name.into(),
             model: model.into(),
@@ -191,9 +219,21 @@ fn parse(
             line: lineno,
         });
     }
+    if multiline_script || registration_depth != 0 {
+        return Err(format!(
+            "{}: unterminated script or registration",
+            path.display()
+        ));
+    }
     entries.extend(current);
     visiting.remove(&canonical);
     Ok(())
+}
+
+fn brace_depth(value: &str) -> i32 {
+    unquoted_delimiters(value, &['{', '}'])
+        .map(|(_, brace)| if brace == '{' { 1 } else { -1 })
+        .sum()
 }
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
@@ -204,6 +244,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut HashSet::new(),
         &mut entries,
     )?;
+    if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
+        return crate::rv64_platform::load(entries);
+    }
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();

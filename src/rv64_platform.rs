@@ -1,0 +1,390 @@
+use std::collections::HashMap;
+
+use crate::{
+    machine::{MAX_HARTS, Machine},
+    platform::Entry,
+    rv64::{Isa, Rv64},
+    rv64_devices::{Plic, Uart},
+    rv64_priv::Pmp,
+};
+
+pub fn load(entries: Vec<Entry>) -> Result<Machine, String> {
+    let entries = merge(entries)?;
+    let mut machine = Machine::without_default_ram();
+    let mut cpus = Vec::new();
+    let mut clint = None;
+    let mut plic = None;
+    let mut uarts = Vec::new();
+    let mut ram = false;
+
+    for entry in &entries {
+        match entry.model.as_str() {
+            "CPU.RiscV64" => {
+                let hart = property(entry, "hartId").map_or(Ok(0), |value| number(entry, value))?;
+                let hart = usize::try_from(hart)
+                    .map_err(|_| entry.error("hart ID exceeds host limits"))?;
+                cpus.push((hart, entry));
+            }
+            model if model.starts_with("CPU.") => {
+                return Err(entry.error("mixed CPU architectures"));
+            }
+            "Memory.MappedMemory" | "Memory.ArrayMemory"
+                if entry
+                    .registration
+                    .as_deref()
+                    .is_some_and(|value| value.starts_with("sysbus") || value.starts_with('{')) =>
+            {
+                map_memory(&mut machine, entry)?;
+                ram = true;
+            }
+            "IRQControllers.CoreLevelInterruptor" => {
+                if clint.replace(entry).is_some() {
+                    return Err(entry.error("only one CLINT is supported"));
+                }
+            }
+            "IRQControllers.PlatformLevelInterruptController" => {
+                if plic.replace(entry).is_some() {
+                    return Err(entry.error("only one PLIC is supported"));
+                }
+            }
+            "UART.NS16550" | "UART.SiFive_UART" => uarts.push(entry),
+            _ => {}
+        }
+    }
+
+    if !ram {
+        return Err("RV64 platform has no mapped RAM".into());
+    }
+    cpus.sort_unstable_by_key(|&(hart, _)| hart);
+    if cpus.is_empty()
+        || cpus.len() > MAX_HARTS
+        || cpus
+            .iter()
+            .enumerate()
+            .any(|(index, &(hart, _))| index != hart)
+    {
+        return Err(format!(
+            "RV64 platform requires contiguous hart IDs from zero (up to {MAX_HARTS})"
+        ));
+    }
+    machine.configure_harts(cpus.len());
+    for &(hart, entry) in &cpus {
+        let cpu = create_cpu(entry, clint)?;
+        let target = machine.hart_mut(hart);
+        target.name = Some(entry.name.clone());
+        target.rv64 = Some(Box::new(cpu));
+    }
+
+    if let Some(entry) = clint {
+        let targets = property(entry, "numberOfTargets")
+            .map_or(Ok(cpus.len() as u64), |value| number(entry, value))?;
+        let targets = usize::try_from(targets)
+            .map_err(|_| entry.error("CLINT target count exceeds host limits"))?;
+        if targets != cpus.len() {
+            return Err(entry.error("CLINT target count must match RV64 hart count"));
+        }
+        for (_, line) in &entry.body {
+            let Some((outputs, input)) = line.split_once("->") else {
+                continue;
+            };
+            let (name, pins) = endpoint(entry, input)?;
+            let hart = hart_by_name(&cpus, entry, name)?;
+            if list(entry, outputs)? != [hart as u64 * 2, hart as u64 * 2 + 1]
+                || list(entry, pins)? != [3, 7]
+            {
+                return Err(entry.error("unsupported CLINT wiring"));
+            }
+        }
+        machine
+            .bus
+            .map_clint(entry.address()?, targets)
+            .map_err(|error| entry.error(&error))?;
+    }
+
+    let mut sources = 0;
+    if let Some(entry) = plic {
+        let count = required_number(entry, "numberOfContexts")?;
+        if count == 0 || count > 2 * MAX_HARTS as u64 {
+            return Err(entry.error("unsupported PLIC context count"));
+        }
+        let mut routes = vec![None; count as usize];
+        for (_, line) in &entry.body {
+            let Some((outputs, input)) = line.split_once("->") else {
+                continue;
+            };
+            let (name, pins) = endpoint(entry, input)?;
+            let hart = hart_by_name(&cpus, entry, name)?;
+            let outputs = list(entry, outputs)?;
+            let pins = list(entry, pins)?;
+            if outputs.len() != pins.len() {
+                return Err(entry.error("mismatched PLIC output and CPU input counts"));
+            }
+            for (output, pin) in outputs.into_iter().zip(pins) {
+                let slot = usize::try_from(output)
+                    .ok()
+                    .and_then(|index| routes.get_mut(index))
+                    .ok_or_else(|| entry.error("invalid PLIC context index"))?;
+                if slot.is_some() || !matches!(pin, 9 | 11) {
+                    return Err(entry.error("invalid or duplicate PLIC context route"));
+                }
+                *slot = Some((hart, pin as u32));
+            }
+        }
+        let priorities = flag(entry, "prioritiesEnabled", true)?;
+        let base = entry.address()?;
+        sources = required_number(entry, "numberOfSources")?;
+        if !(1..=1023).contains(&sources) {
+            return Err(entry.error("PLIC requires 1–1023 sources"));
+        }
+        check_mapping(&machine, entry, base, Plic::SIZE)?;
+        machine.bus.rv64_devices.plic = Some(Plic::new(base, sources as usize, routes, priorities));
+    }
+
+    for entry in uarts {
+        let base = entry.address()?;
+        let sifive = entry.model == "UART.SiFive_UART";
+        let wide = flag(entry, "wideRegisters", false)?;
+        let mut source = 0;
+        let mut cpu_lines = Vec::new();
+        for (_, line) in &entry.body {
+            if let Some((output, input)) = line.split_once("->") {
+                if !matches!(output.trim(), "" | "IRQ") {
+                    return Err(entry.error("unsupported UART output"));
+                }
+                for input in input.split('|') {
+                    let (name, pin) = endpoint(entry, input)?;
+                    let pin = number(entry, pin)?;
+                    if plic.is_some_and(|plic| plic.name == name) {
+                        if !(1..=sources).contains(&pin) || source != 0 {
+                            return Err(entry.error("invalid or duplicate UART PLIC source"));
+                        }
+                        source = pin;
+                    } else {
+                        let hart = hart_by_name(&cpus, entry, name)?;
+                        if !(16..64).contains(&pin) {
+                            return Err(entry.error("unsupported direct UART interrupt"));
+                        }
+                        machine
+                            .hart_mut(hart)
+                            .rv64
+                            .as_mut()
+                            .unwrap()
+                            .privilege
+                            .add_interrupt(pin as u32);
+                        cpu_lines.push((hart, pin as u32));
+                    }
+                }
+            }
+        }
+        let uart = Uart::new(base, source as usize, cpu_lines, sifive, wide);
+        check_mapping(&machine, entry, base, uart.size())?;
+        machine.bus.rv64_devices.uarts.push(uart);
+    }
+    Ok(machine)
+}
+
+fn create_cpu(entry: &Entry, clint: Option<&Entry>) -> Result<Rv64, String> {
+    if entry.registration.as_deref() != Some("sysbus") {
+        return Err(entry.error("expected RV64 CPU registered on sysbus"));
+    }
+    let cpu_type = property(entry, "cpuType").ok_or_else(|| entry.error("missing cpuType"))?;
+    let isa = Isa::parse(cpu_type.trim_matches('"')).map_err(|error| entry.error(&error))?;
+    if let Some(time) = property(entry, "timeProvider")
+        && !clint.is_some_and(|entry| entry.name == time)
+    {
+        return Err(entry.error("unsupported RV64 time provider"));
+    }
+    if let Some(architecture) = property(entry, "privilegedArchitecture")
+        .or_else(|| property(entry, "privilegeArchitecture"))
+        && !matches!(
+            architecture,
+            "PrivilegedArchitecture.Priv1_10"
+                | "PrivilegedArchitecture.Priv1_11"
+                | "PrivilegedArchitecture.Priv1_12"
+        )
+    {
+        return Err(entry.error("unsupported RV64 privileged architecture"));
+    }
+    let mut cpu = Rv64::new(isa);
+    cpu.allow_unaligned = flag(entry, "allowUnalignedAccesses", false)?;
+    let pmp_count =
+        property(entry, "pmpEntryCount").map_or(Ok(64), |value| number(entry, value))?;
+    let pmp_bits =
+        property(entry, "pmpNumberOfAddrBits").map_or(Ok(54), |value| number(entry, value))?;
+    if pmp_count > 64 || !(1..=54).contains(&pmp_bits) {
+        return Err(entry.error("unsupported RV64 PMP configuration"));
+    }
+    if pmp_count != 0 {
+        cpu.privilege.pmp = Some(Pmp::new(pmp_count as usize, pmp_bits as u32));
+    }
+    if entry
+        .body
+        .iter()
+        .any(|(_, value)| value == "RegisterCustomCSR \"BPM\" 0x7C0 Machine")
+    {
+        cpu.privilege.bpm = Some(0);
+    }
+    Ok(cpu)
+}
+
+fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Result<(), String> {
+    let start = u64::from(base);
+    let end = start + size;
+    let devices = &machine.bus.rv64_devices;
+    let overlaps = devices.plic.as_ref().is_some_and(|plic| {
+        start < u64::from(plic.base) + Plic::SIZE && u64::from(plic.base) < end
+    }) || devices
+        .uarts
+        .iter()
+        .any(|uart| start < u64::from(uart.base) + uart.size() && u64::from(uart.base) < end);
+    if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
+        return Err(entry.error("invalid or overlapping device registration"));
+    }
+    Ok(())
+}
+
+fn merge(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
+    let mut names: HashMap<String, usize> = HashMap::new();
+    let mut merged: Vec<Entry> = Vec::new();
+    for entry in entries {
+        if let Some(&index) = names.get(&entry.name) {
+            let original = &mut merged[index];
+            if !entry.model.is_empty() && entry.model != original.model {
+                return Err(entry.error("cannot replace a peripheral model"));
+            }
+            if entry.registration.is_some() {
+                original.registration = entry.registration;
+            }
+            for (line, value) in entry.body {
+                if let Some((key, _)) = value.split_once(':') {
+                    original.body.retain(|(_, old)| {
+                        !old.split_once(':')
+                            .is_some_and(|(old, _)| old.trim() == key.trim())
+                    });
+                }
+                original.body.push((line, value));
+            }
+        } else {
+            names.insert(entry.name.clone(), merged.len());
+            merged.push(entry);
+        }
+    }
+    Ok(merged)
+}
+
+fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
+    let size = required_number(entry, "size")?;
+    let mut registrations = entry.registration.as_deref().unwrap().trim();
+    if let Some(multiple) = registrations
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        registrations = multiple.trim();
+    }
+    let mut windows = Vec::new();
+    for registration in registrations
+        .split(';')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let value = registration
+            .strip_prefix("sysbus")
+            .ok_or_else(|| entry.error("unsupported RAM registration"))?
+            .trim();
+        let (address, length) = if let Some(range) = value
+            .strip_prefix('<')
+            .and_then(|value| value.strip_suffix('>'))
+        {
+            let (base, limit) = range
+                .split_once(',')
+                .ok_or_else(|| entry.error("invalid RAM range"))?;
+            let base = number(entry, base)?;
+            let length = if let Some(length) = limit.trim().strip_prefix('+') {
+                number(entry, length)?
+            } else {
+                number(entry, limit)?
+                    .checked_sub(base)
+                    .and_then(|value| value.checked_add(1))
+                    .ok_or_else(|| entry.error("invalid RAM range"))?
+            };
+            (base, length)
+        } else {
+            (number(entry, value)?, size)
+        };
+        windows.push((address, length));
+    }
+    let Some(&(primary, _)) = windows.first() else {
+        return Err(entry.error("missing RAM registration"));
+    };
+    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
+    if windows
+        .iter()
+        .any(|&(_, length)| length == 0 || length > size)
+    {
+        return Err(entry.error("invalid RAM window size"));
+    }
+    let backing = machine
+        .bus
+        .map_ram_backing64(primary, len, windows[0].1 as usize)
+        .map_err(|error| entry.error(&error))?;
+    for &(address, length) in &windows[1..] {
+        machine
+            .bus
+            .map_alias64(backing, address, length as usize)
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
+}
+
+fn hart_by_name(cpus: &[(usize, &Entry)], entry: &Entry, name: &str) -> Result<usize, String> {
+    cpus.iter()
+        .find_map(|&(hart, cpu)| (cpu.name == name).then_some(hart))
+        .ok_or_else(|| entry.error("unknown RV64 hart in interrupt route"))
+}
+
+fn endpoint<'a>(entry: &Entry, value: &'a str) -> Result<(&'a str, &'a str), String> {
+    value
+        .split_once('@')
+        .map(|(name, pin)| (name.trim(), pin.trim()))
+        .ok_or_else(|| entry.error("invalid interrupt connection"))
+}
+
+fn list(entry: &Entry, value: &str) -> Result<Vec<u64>, String> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(value);
+    value.split(',').map(|value| number(entry, value)).collect()
+}
+
+fn property<'a>(entry: &'a Entry, name: &str) -> Option<&'a str> {
+    entry.body.iter().rev().find_map(|(_, line)| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == name).then_some(value.trim())
+    })
+}
+
+fn required_number(entry: &Entry, name: &str) -> Result<u64, String> {
+    number(
+        entry,
+        property(entry, name).ok_or_else(|| entry.error(&format!("missing {name}")))?,
+    )
+}
+
+fn flag(entry: &Entry, name: &str, default: bool) -> Result<bool, String> {
+    property(entry, name).map_or(Ok(default), |value| {
+        value
+            .parse()
+            .map_err(|_| entry.error(&format!("invalid {name} flag")))
+    })
+}
+
+fn number(entry: &Entry, value: &str) -> Result<u64, String> {
+    let digits = value.trim().replace('_', "");
+    match digits.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => digits.parse(),
+    }
+    .map_err(|_| entry.error(&format!("invalid number {value:?}")))
+}

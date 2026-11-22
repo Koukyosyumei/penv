@@ -100,6 +100,7 @@ pub struct Privilege {
     mideleg: u64,
     enable: u64,
     pending: u64,
+    platform_interrupts: u64,
     injected: u64,
     counter_enable: u64,
     supervisor_counter_enable: u64,
@@ -110,6 +111,10 @@ pub struct Privilege {
 }
 
 impl Privilege {
+    pub fn add_interrupt(&mut self, pin: u32) {
+        self.platform_interrupts |= 1 << pin;
+    }
+
     pub fn effective_mode(&self, permission: u8) -> Mode {
         if permission != EXECUTE && self.mode == Mode::Machine && self.status & MPRV != 0 {
             Mode::from_field((self.status & MPP) >> 11)
@@ -150,9 +155,14 @@ impl Privilege {
             0
         };
         let candidates = if machine == 0 { supervisor } else { machine };
-        let code = [11, 3, 7, 9, 1, 5]
-            .into_iter()
-            .find(|code| candidates & (1 << code) != 0)?;
+        let platform = candidates & self.platform_interrupts;
+        let code = if platform != 0 {
+            u64::from(platform.trailing_zeros())
+        } else {
+            [11, 3, 7, 9, 1, 5]
+                .into_iter()
+                .find(|code| candidates & (1 << code) != 0)?
+        };
         self.trap(pc, INTERRUPT | code, 0)
     }
 
@@ -252,7 +262,7 @@ impl Privilege {
             },
             0xb03..=0xb1f | 0x323..=0x33f | 0xf11..=0xf13 | 0xf15 => 0,
             0x105 | 0x140..=0x143 => self.supervisor.read(csr & 0xff, epc_mask)?,
-            0x305 | 0x340..=0x343 | 0x3a0 | 0x3a2 | 0x3b0..=0x3bf => self
+            0x305 | 0x340..=0x343 | 0x3a0..=0x3af | 0x3b0..=0x3ef => self
                 .machine
                 .read(csr & 0xff, epc_mask)
                 .or_else(|| self.pmp.as_ref()?.read(csr))?,
@@ -294,7 +304,7 @@ impl Privilege {
             }
             0x302 => self.medeleg = value & 0xb3ff,
             0x303 => self.mideleg = value & S_INTERRUPTS,
-            0x304 => self.enable = value & (M_INTERRUPTS | S_INTERRUPTS),
+            0x304 => self.enable = value & (M_INTERRUPTS | S_INTERRUPTS | self.platform_interrupts),
             0x306 => self.counter_enable = value & u64::from(u32::MAX),
             0x320 => self.inhibit = value & 5,
             0x344 => self.injected = value & S_INTERRUPTS,
@@ -302,7 +312,7 @@ impl Privilege {
             0xb00 => self.cycle = value,
             0xb02 => self.retired = value,
             0x105 | 0x140..=0x143 => return self.supervisor.write(csr & 0xff, value),
-            0x305 | 0x340..=0x343 | 0x3a0 | 0x3a2 | 0x3b0..=0x3bf => {
+            0x305 | 0x340..=0x343 | 0x3a0..=0x3af | 0x3b0..=0x3ef => {
                 return self.machine.write(csr & 0xff, value)
                     || self.pmp.as_mut().is_some_and(|pmp| pmp.write(csr, value));
             }
@@ -312,55 +322,72 @@ impl Privilege {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Pmp {
-    config: [u8; 16],
-    address: [u64; 16],
-    active: u16,
+    config: Vec<u8>,
+    address: Vec<u64>,
+    active: u64,
+    address_mask: u64,
 }
 
 impl Pmp {
+    pub fn new(entries: usize, address_bits: u32) -> Self {
+        Self {
+            config: vec![0; entries],
+            address: vec![0; entries],
+            active: 0,
+            address_mask: (1 << address_bits) - 1,
+        }
+    }
+
+    fn config_start(&self, csr: u32) -> Option<usize> {
+        let start = (csr.checked_sub(0x3a0)? as usize) * 4;
+        (csr <= 0x3ae && csr & 1 == 0 && start < self.config.len()).then_some(start)
+    }
+
     fn read(&self, csr: u32) -> Option<u64> {
-        Some(match csr {
-            0x3a0 | 0x3a2 => {
-                let start = (csr as usize - 0x3a0) * 4;
-                u64::from_le_bytes(self.config[start..start + 8].try_into().unwrap())
-            }
-            0x3b0..=0x3bf => self.address[(csr - 0x3b0) as usize],
-            _ => return None,
-        })
+        if let Some(start) = self.config_start(csr) {
+            let config = &self.config[start..(start + 8).min(self.config.len())];
+            let mut bytes = [0; 8];
+            bytes[..config.len()].copy_from_slice(config);
+            return Some(u64::from_le_bytes(bytes));
+        }
+        self.address.get(csr.checked_sub(0x3b0)? as usize).copied()
     }
 
     fn write(&mut self, csr: u32, value: u64) -> bool {
-        match csr {
-            0x3a0 | 0x3a2 => {
-                let start = (csr as usize - 0x3a0) * 4;
-                for (index, config) in (start..start + 8).zip(value.to_le_bytes()) {
-                    if self.config[index] & 0x80 != 0 {
-                        continue;
-                    }
-                    let mut config = config & 0x9f;
-                    if config & (READ | WRITE) == WRITE {
-                        config &= !WRITE;
-                    }
-                    self.config[index] = config;
-                    self.active &= !(1 << index);
-                    if config & 0x18 != 0 {
-                        self.active |= 1 << index;
-                    }
+        if let Some(start) = self.config_start(csr) {
+            for (index, config) in
+                (start..(start + 8).min(self.config.len())).zip(value.to_le_bytes())
+            {
+                if self.config[index] & 0x80 != 0 {
+                    continue;
+                }
+                let mut config = config & 0x9f;
+                if config & (READ | WRITE) == WRITE {
+                    config &= !WRITE;
+                }
+                self.config[index] = config;
+                self.active &= !(1 << index);
+                if config & 0x18 != 0 {
+                    self.active |= 1 << index;
                 }
             }
-            0x3b0..=0x3bf => {
-                let index = (csr - 0x3b0) as usize;
-                let locked_by_next = self
-                    .config
-                    .get(index + 1)
-                    .is_some_and(|config| config & 0x98 == 0x88);
-                if self.config[index] & 0x80 == 0 && !locked_by_next {
-                    self.address[index] = value & ((1 << 54) - 1);
-                }
-            }
-            _ => return false,
+            return true;
+        }
+
+        let Some(index) = csr.checked_sub(0x3b0).map(|index| index as usize) else {
+            return false;
+        };
+        let Some(address) = self.address.get_mut(index) else {
+            return false;
+        };
+        let locked_by_next = self
+            .config
+            .get(index + 1)
+            .is_some_and(|config| config & 0x98 == 0x88);
+        if self.config[index] & 0x80 == 0 && !locked_by_next {
+            *address = value & self.address_mask;
         }
         true
     }
