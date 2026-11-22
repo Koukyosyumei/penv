@@ -86,6 +86,7 @@ pub struct Bus {
     pub litex_cpu_timer: Option<litex::CpuTimer>,
     litex_soc: Option<litex::SocController>,
     litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
+    litex_gpio_irqs: Vec<(usize, usize, u8)>,
     litex_eth: Option<Ethernet>,
     litex_panel: Option<Panel>,
     litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
@@ -600,14 +601,31 @@ impl Bus {
     }
 
     pub fn set_litex_button(&mut self, name: &str, action: ButtonAction) -> Result<(), String> {
-        self.litex_panel
+        let name = name.rsplit('.').next().unwrap_or(name);
+        if let Some(panel) = self
+            .litex_panel
             .as_mut()
-            .ok_or("expected a LiteX control and status peripheral")?
-            .button_action(name, action)
+            .filter(|panel| panel.has_button(name))
+        {
+            return panel.button_action(name, action);
+        }
+        for (_, device) in &mut self.litex_io {
+            if let litex::IoDevice::Gpio(gpio) = device
+                && gpio.has_button(name)
+            {
+                return gpio.button_action(name, action);
+            }
+        }
+        Err(format!("unknown LiteX button {name:?}"))
     }
 
     pub fn map_litex_io(&mut self, bases: Vec<u32>, device: litex::IoDevice) -> Result<(), String> {
         self.check_litex_ranges(&bases, device.size())?;
+        if let litex::IoDevice::Gpio(gpio) = &device
+            && let Some((hart, line)) = gpio.irq
+        {
+            self.litex_gpio_irqs.push((self.litex_io.len(), hart, line));
+        }
         self.litex_io.push((bases, device));
         Ok(())
     }
@@ -650,6 +668,14 @@ impl Bus {
         {
             lines |= 1 << line;
         }
+        for &(index, target, line) in &self.litex_gpio_irqs {
+            if target == hart
+                && let litex::IoDevice::Gpio(gpio) = &self.litex_io[index].1
+                && gpio.interrupt_pending()
+            {
+                lines |= 1 << line;
+            }
+        }
         lines
     }
 
@@ -669,6 +695,7 @@ impl Bus {
                 .litex_panel
                 .as_ref()
                 .is_some_and(|panel| panel.irq.is_some())
+            || !self.litex_gpio_irqs.is_empty()
     }
 
     pub fn map_stm32_usart(
@@ -1147,7 +1174,12 @@ mod tests {
         .unwrap();
         bus.map_litex_io(
             vec![gpio, gpio_shadow],
-            litex::IoDevice::Gpio(litex::Gpio::InOut(0)),
+            litex::IoDevice::Gpio(litex::Gpio::new(
+                litex::GpioMode::InOut,
+                false,
+                None,
+                Vec::new(),
+            )),
         )
         .unwrap();
 

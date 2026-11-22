@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     bus::Bus,
-    litex::{Gpio, IoDevice, Mmcm, Spi},
+    litex::{Gpio, GpioMode, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     litex_i2c::{I2c, Sensor},
     litex_panel::{Button, Panel},
@@ -342,6 +342,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut litex_phy = None;
     let mut litex_panel = None;
     let mut panel_parts = Vec::new();
+    let mut litex_gpios = Vec::new();
     let mut litex_spis = Vec::new();
     let mut spi_loopbacks = Vec::new();
     let mut litex_i2c = None;
@@ -433,27 +434,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.LED" | "Miscellaneous.Button" => panel_parts.push(entry),
-            "GPIOPort.LiteX_GPIO" => {
-                let mut gpio = None;
-                for (key, value) in keys(entry, &["type", "enableIrq"])? {
-                    match (key, value) {
-                        ("type", "Type.In") => gpio = Some(Gpio::In),
-                        ("type", "Type.Out") => gpio = Some(Gpio::Out(0)),
-                        ("type", "Type.InOut") => gpio = Some(Gpio::InOut(0)),
-                        ("enableIrq", "false") => {}
-                        _ => {
-                            return Err(entry.error(&format!(
-                                "unsupported LiteX GPIO property {key} = {value}"
-                            )));
-                        }
-                    }
-                }
-                let gpio = gpio.ok_or_else(|| entry.error("missing LiteX GPIO type"))?;
-                machine
-                    .bus
-                    .map_litex_io(entry.addresses()?, IoDevice::Gpio(gpio))
-                    .map_err(|e| entry.error(&e))?;
-            }
+            "GPIOPort.LiteX_GPIO" => litex_gpios.push(entry),
             "Timers.Murax_Timer" => {
                 if timer.replace(entry).is_some() {
                     return Err(entry.error("only one Murax timer is currently supported"));
@@ -586,6 +567,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             || litex_phy.is_some()
             || litex_panel.is_some()
             || !panel_parts.is_empty()
+            || !litex_gpios.is_empty()
         {
             return Err(
                 entry.error("expected a single Cortex-M CPU without RISC-V interrupt controllers")
@@ -1266,10 +1248,16 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             )
             .map_err(|e| entry.error(&e))?;
     }
+    for gpio in litex_gpios {
+        let parts = take_gpio_parts(&mut panel_parts, &gpio.name);
+        map_litex_gpio(gpio, &parts, &configs, &mut machine.bus)?;
+    }
     if let Some(panel) = litex_panel {
-        map_litex_panel(panel, &panel_parts, &configs, &mut machine.bus)?;
-    } else if let Some(entry) = panel_parts.first() {
-        return Err(entry.error("expected a LiteX control and status attachment"));
+        let parts = take_gpio_parts(&mut panel_parts, &panel.name);
+        map_litex_panel(panel, &parts, &configs, &mut machine.bus)?;
+    }
+    if let Some(entry) = panel_parts.first() {
+        return Err(entry.error("expected a supported GPIO attachment"));
     }
     Ok(machine)
 }
@@ -1332,6 +1320,155 @@ fn sensor_quantity(
         .ok_or_else(|| entry.error(&format!("invalid {key} value")))
 }
 
+fn take_gpio_parts<'a>(parts: &mut Vec<&'a Entry>, parent: &str) -> Vec<&'a Entry> {
+    let mut attached = Vec::new();
+    parts.retain(|entry| {
+        if entry
+            .registration
+            .as_deref()
+            .and_then(|registration| registration.split_whitespace().next())
+            == Some(parent)
+        {
+            attached.push(*entry);
+            false
+        } else {
+            true
+        }
+    });
+    attached
+}
+
+fn gpio_attachment(part: &Entry, parent: &Entry, count: u32) -> Result<u8, String> {
+    let mut registration = part
+        .registration
+        .as_deref()
+        .unwrap_or("")
+        .split_whitespace();
+    let (Some(name), Some(pin), None) = (
+        registration.next(),
+        registration.next(),
+        registration.next(),
+    ) else {
+        return Err(part.error("expected a GPIO controller name and pin"));
+    };
+    if name != parent.name {
+        return Err(part.error("unknown GPIO controller"));
+    }
+    irq_index(pin, count).map_err(|e| part.error(&e))
+}
+
+fn parse_gpio_button(part: &Entry, parent: &Entry, pin: u8) -> Result<Button, String> {
+    let mut connected = false;
+    let mut inverted = None;
+    let expected = format!("->{}@{pin}", parent.name);
+    for (_, line) in &part.body {
+        let compact: String = line
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        if !connected && compact.strip_prefix("IRQ").unwrap_or(&compact) == expected {
+            connected = true;
+        } else if let Some(("invert", value)) = line
+            .split_once(':')
+            .map(|(key, value)| (key.trim(), value.trim()))
+            && inverted.is_none()
+        {
+            inverted = Some(
+                value
+                    .parse::<bool>()
+                    .map_err(|_| part.error("expected a boolean invert property"))?,
+            );
+        } else {
+            return Err(part.error("invalid button wiring or property"));
+        }
+    }
+    if !connected {
+        return Err(part.error("missing GPIO button wiring"));
+    }
+    Ok(Button::new(
+        part.name.clone(),
+        pin,
+        inverted.unwrap_or(false),
+    ))
+}
+
+fn map_litex_gpio(
+    gpio: &Entry,
+    parts: &[&Entry],
+    configs: &[RiscvConfig<'_>],
+    bus: &mut Bus,
+) -> Result<(), String> {
+    let mut mode = None;
+    let mut irq_enabled = None;
+    let mut irq = None;
+    let mut led_wires = Vec::new();
+    for (_, text) in &gpio.body {
+        if let Some((output, target)) = text.split_once("->") {
+            if let Ok(pin) = irq_index(output, 32)
+                && let Some((target, "0")) = target.trim().split_once('@')
+            {
+                led_wires.push((pin, target.trim()));
+            } else if irq.is_none() {
+                irq = Some(vex_irq(gpio, text, configs)?);
+            } else {
+                return Err(gpio.error("duplicate GPIO IRQ wiring"));
+            }
+            continue;
+        }
+        match text
+            .split_once(':')
+            .map(|(key, value)| (key.trim(), value.trim()))
+        {
+            Some(("type", value)) if mode.is_none() => {
+                mode = Some(match value {
+                    "Type.In" => GpioMode::In,
+                    "Type.Out" => GpioMode::Out,
+                    "Type.InOut" => GpioMode::InOut,
+                    _ => return Err(gpio.error("unsupported LiteX GPIO type")),
+                });
+            }
+            Some(("enableIrq", value)) if irq_enabled.is_none() => {
+                irq_enabled = Some(
+                    value
+                        .parse::<bool>()
+                        .map_err(|_| gpio.error("expected boolean enableIrq"))?,
+                );
+            }
+            _ => return Err(gpio.error("unsupported or duplicate LiteX GPIO property")),
+        }
+    }
+    let mode = mode.ok_or_else(|| gpio.error("missing LiteX GPIO type"))?;
+    let irq_enabled = irq_enabled.unwrap_or(false);
+    if irq_enabled && matches!(mode, GpioMode::Out) || irq.is_some() && !irq_enabled {
+        return Err(gpio.error("LiteX GPIO IRQ requires an input and enableIrq"));
+    }
+    let mut buttons = Vec::new();
+    let mut input_pins = HashSet::new();
+    for part in parts {
+        let pin = gpio_attachment(part, gpio, 32)?;
+        if part.model == "Miscellaneous.LED" {
+            keys(part, &[])?;
+            if matches!(mode, GpioMode::In) {
+                return Err(part.error("LED requires GPIO output"));
+            }
+            led_wires.retain(|&(output, name)| output != pin || name != part.name);
+        } else {
+            if matches!(mode, GpioMode::Out) || !input_pins.insert(pin) {
+                return Err(part.error("button requires an available GPIO input"));
+            }
+            buttons.push(parse_gpio_button(part, gpio, pin)?);
+        }
+    }
+    if !led_wires.is_empty() {
+        return Err(gpio.error("GPIO LED wiring does not match an attachment"));
+    }
+    bus.map_litex_io(
+        gpio.addresses()?,
+        IoDevice::Gpio(Gpio::new(mode, irq_enabled, irq, buttons)),
+    )
+    .map_err(|e| gpio.error(&e))
+}
+
 fn map_litex_panel(
     panel: &Entry,
     parts: &[&Entry],
@@ -1342,21 +1479,9 @@ fn map_litex_panel(
     let mut buttons = Vec::new();
     let mut used_pins = HashSet::new();
     for part in parts {
-        let mut registration = part
-            .registration
-            .as_deref()
-            .unwrap_or("")
-            .split_whitespace();
-        let (Some(parent), Some(pin), None) = (
-            registration.next(),
-            registration.next(),
-            registration.next(),
-        ) else {
-            return Err(part.error("expected a LiteX panel name and GPIO pin"));
-        };
-        let pin = irq_index(pin, 96).map_err(|e| part.error(&e))?;
-        if parent != panel.name || !used_pins.insert(pin) {
-            return Err(part.error("invalid or duplicate LiteX panel attachment"));
+        let pin = gpio_attachment(part, panel, 96)?;
+        if !used_pins.insert(pin) {
+            return Err(part.error("duplicate LiteX panel attachment"));
         }
         if part.model == "Miscellaneous.LED" {
             keys(part, &[])?;
@@ -1368,38 +1493,7 @@ fn map_litex_panel(
             if pin < 32 {
                 return Err(part.error("button requires an input pin in 32–95"));
             }
-            let mut connected = false;
-            let mut inverted = None;
-            for (_, line) in &part.body {
-                let expected = format!("->{}@{pin}", panel.name);
-                let compact: String = line
-                    .chars()
-                    .filter(|character| !character.is_whitespace())
-                    .collect();
-                if !connected && compact.strip_prefix("IRQ").unwrap_or(&compact) == expected {
-                    connected = true;
-                } else if let Some(("invert", value)) = line
-                    .split_once(':')
-                    .map(|(key, value)| (key.trim(), value.trim()))
-                    && inverted.is_none()
-                {
-                    inverted = Some(
-                        value
-                            .parse::<bool>()
-                            .map_err(|_| part.error("expected a boolean invert property"))?,
-                    );
-                } else {
-                    return Err(part.error("invalid button wiring or property"));
-                }
-            }
-            if !connected {
-                return Err(part.error("missing LiteX panel button wiring"));
-            }
-            buttons.push(Button::new(
-                part.name.clone(),
-                pin,
-                inverted.unwrap_or(false),
-            ));
+            buttons.push(parse_gpio_button(part, panel, pin)?);
         }
     }
     let mut irq = None;

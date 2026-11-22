@@ -20,6 +20,15 @@ impl Button {
             pressed: false,
         }
     }
+
+    pub fn apply(&mut self, action: ButtonAction) -> bool {
+        self.pressed = match action {
+            ButtonAction::Press => true,
+            ButtonAction::Release => false,
+            ButtonAction::Toggle => !self.pressed,
+        };
+        self.pressed ^ self.inverted
+    }
 }
 
 pub struct Panel {
@@ -48,7 +57,7 @@ impl Panel {
             enabled: 0,
         };
         for index in 0..panel.buttons.len() {
-            panel.set_button(index, false);
+            panel.set_button(index, ButtonAction::Release);
         }
         panel
     }
@@ -64,19 +73,17 @@ impl Panel {
             .iter()
             .position(|button| button.name == name)
             .ok_or_else(|| format!("unknown LiteX button {name:?}"))?;
-        let pressed = match action {
-            ButtonAction::Press => true,
-            ButtonAction::Release => false,
-            ButtonAction::Toggle => !self.buttons[index].pressed,
-        };
-        self.set_button(index, pressed);
+        self.set_button(index, action);
         Ok(())
     }
 
-    fn set_button(&mut self, index: usize, pressed: bool) {
+    pub fn has_button(&self, name: &str) -> bool {
+        self.buttons.iter().any(|button| button.name == name)
+    }
+
+    fn set_button(&mut self, index: usize, action: ButtonAction) {
         let button = &mut self.buttons[index];
-        button.pressed = pressed;
-        let level = pressed ^ button.inverted;
+        let level = button.apply(action);
         let mask = 1 << (button.pin & 31);
         if button.pin < 64 {
             self.switches = (self.switches & !mask) | (u32::from(level) * mask);

@@ -300,24 +300,128 @@ impl Spi {
     }
 }
 
-pub enum Gpio {
+pub enum GpioMode {
     In,
-    Out(u32),
-    InOut(u32),
+    Out,
+    InOut,
+}
+
+pub struct Gpio {
+    pub mode: GpioMode,
+    irq_enabled: bool,
+    pub irq: Option<(usize, u8)>,
+    buttons: Vec<crate::litex_panel::Button>,
+    input: u32,
+    output: u32,
+    interrupt_mode: u32,
+    edge: u32,
+    pending: u32,
+    enable: u32,
 }
 
 impl Gpio {
+    pub fn new(
+        mode: GpioMode,
+        irq_enabled: bool,
+        irq: Option<(usize, u8)>,
+        buttons: Vec<crate::litex_panel::Button>,
+    ) -> Self {
+        let mut gpio = Self {
+            mode,
+            irq_enabled,
+            irq,
+            buttons,
+            input: 0,
+            output: 0,
+            interrupt_mode: 0,
+            edge: 0,
+            pending: 0,
+            enable: 0,
+        };
+        for index in 0..gpio.buttons.len() {
+            gpio.apply_button(index, crate::litex_panel::ButtonAction::Release);
+        }
+        gpio
+    }
+
+    fn input_size(&self) -> u32 {
+        match self.mode {
+            GpioMode::Out => 0,
+            _ if self.irq_enabled => 0x18,
+            _ => 4,
+        }
+    }
+
+    pub fn size(&self) -> u32 {
+        self.input_size()
+            + if matches!(self.mode, GpioMode::In) {
+                0
+            } else {
+                4
+            }
+    }
+
+    pub fn button_action(
+        &mut self,
+        name: &str,
+        action: crate::litex_panel::ButtonAction,
+    ) -> Result<(), String> {
+        let index = self
+            .buttons
+            .iter()
+            .position(|button| button.name == name)
+            .ok_or_else(|| format!("unknown LiteX GPIO button {name:?}"))?;
+        self.apply_button(index, action);
+        Ok(())
+    }
+
+    pub fn has_button(&self, name: &str) -> bool {
+        self.buttons.iter().any(|button| button.name == name)
+    }
+
+    fn apply_button(&mut self, index: usize, action: crate::litex_panel::ButtonAction) {
+        let button = &mut self.buttons[index];
+        let level = button.apply(action);
+        let mask = 1 << button.pin;
+        let changed = (self.input & mask != 0) != level;
+        self.input = (self.input & !mask) | (u32::from(level) * mask);
+        if self.irq_enabled
+            && changed
+            && (self.interrupt_mode & mask != 0 || (self.edge & mask == 0) == level)
+        {
+            self.pending |= mask;
+        }
+    }
+
+    pub fn interrupt_pending(&self) -> bool {
+        self.pending & self.enable != 0
+    }
+
     pub fn read(&self, offset: u32) -> u32 {
-        match (self, offset) {
-            (Self::Out(value), 0) | (Self::InOut(value), 4) => *value,
+        if offset == self.input_size() && !matches!(self.mode, GpioMode::In) {
+            return self.output;
+        }
+        match offset {
+            0 => self.input,
+            4 => self.interrupt_mode,
+            8 => self.edge,
+            0x10 => self.pending,
+            0x14 => self.enable,
             _ => 0,
         }
     }
 
     pub fn write(&mut self, offset: u32, value: u32) {
-        match (self, offset) {
-            (Self::Out(output), 0) | (Self::InOut(output), 4) => *output = value,
-            _ => {}
+        if offset == self.input_size() && !matches!(self.mode, GpioMode::In) {
+            self.output = value;
+        } else {
+            match offset {
+                4 => self.interrupt_mode = value,
+                8 => self.edge = value,
+                0x10 => self.pending &= !value,
+                0x14 => self.enable = value,
+                _ => {}
+            }
         }
     }
 }
@@ -417,8 +521,7 @@ impl IoDevice {
             Self::Spi(_) => 0x50,
             Self::Mmcm(_) => 0x100,
             Self::I2c(_) => 0x10,
-            Self::Gpio(Gpio::InOut(_)) => 8,
-            Self::Gpio(_) => 4,
+            Self::Gpio(gpio) => gpio.size(),
         }
     }
 
