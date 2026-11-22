@@ -11,6 +11,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod stm32_crc;
 mod stm32_exti;
 mod stm32_gpio;
 mod stm32_rcc;

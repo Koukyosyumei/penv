@@ -82,7 +82,7 @@ target/release/penv run --stm32f0-console \
 
 UART に `Hello World! stm32f072b_disco` が出力されます。サンプルは `WFI` で割り込みを待ち続けるため、ステップ上限で終了コード 2 を返します。
 
-`--stm32f0-console` は RCC、GPIO レジスター、USART、EXTI、NVIC、SysTick を使用し、REPL の `Tag` で指定された未割り当て範囲では読み出しに 0 を返して書き込みを破棄します。I²C、SPI、汎用タイマー、CAN、RTC、DMA、ADC、CRC、LED、ボタン、GPIO の外部および代替機能配線はこのモードで省略します。RCC のクロック設定はレジスターに反映されます。SysTick は引き続き実行ステップで進み、実クロック周波数や SCR のスリープ設定は反映しません。
+`--stm32f0-console` は RCC、GPIO レジスター、CRC、USART、EXTI、NVIC、SysTick を使用し、REPL の `Tag` で指定された未割り当て範囲では読み出しに 0 を返して書き込みを破棄します。I²C、SPI、汎用タイマー、CAN、RTC、DMA、ADC、LED、ボタン、GPIO の外部および代替機能配線はこのモードで省略します。RCC のクロック設定はレジスターに反映されます。SysTick は引き続き実行ステップで進み、実クロック周波数や SCR のスリープ設定は反映しません。
 
 ## 現在の実装範囲
 

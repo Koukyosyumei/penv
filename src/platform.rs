@@ -314,6 +314,27 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     ))
                     .map_err(|e| entry.error(&e))?;
             }
+            "CRC.STM32_CRC" => {
+                let mut series = None;
+                let mut configurable_poly = false;
+                for (key, value) in keys(entry, &["series", "configurablePoly"])? {
+                    match key {
+                        "series" => series = Some(value),
+                        _ => {
+                            configurable_poly = value
+                                .parse()
+                                .map_err(|_| entry.error("invalid configurablePoly"))?
+                        }
+                    }
+                }
+                if series != Some("STM32Series.F0") {
+                    return Err(entry.error("expected STM32Series.F0 CRC"));
+                }
+                machine
+                    .bus
+                    .map_stm32f0_crc(entry.address()?, configurable_poly)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Miscellaneous.STM32F0_RCC" => {
                 keys(entry, &[])?;
                 machine

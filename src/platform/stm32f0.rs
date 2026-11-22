@@ -21,7 +21,6 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
                     | "Timers.STM32F4_RTC"
                     | "DMA.STM32G0DMA"
                     | "Analog.STM32F0_ADC"
-                    | "CRC.STM32_CRC"
                     | "Miscellaneous.LED"
                     | "Miscellaneous.Button"
             )
@@ -85,13 +84,29 @@ pub(super) fn prepare(entries: &mut Vec<Entry>) -> Result<Vec<RangeInclusive<u32
             && entry.registration.is_none()
             && let Some(&index) = definitions.get(&entry.name)
         {
-            let previous: &Entry = &loaded[index];
-            if previous.model != "GPIOPort.STM32_GPIOPort"
-                || entry.body.iter().any(|(_, text)| !text.contains("->"))
-            {
-                return Err(entry.error("unsupported declaration override"));
+            let previous: &mut Entry = &mut loaded[index];
+            match previous.model.as_str() {
+                "GPIOPort.STM32_GPIOPort"
+                    if entry.body.iter().all(|(_, text)| text.contains("->")) =>
+                {
+                    gpio_wiring |= !entry.body.is_empty();
+                }
+                "CRC.STM32_CRC" => {
+                    for (_, value) in super::keys(&entry, &["configurablePoly"])? {
+                        let value = value
+                            .parse::<bool>()
+                            .map_err(|_| entry.error("invalid configurablePoly"))?;
+                        previous.body.retain(|(_, text)| {
+                            text.split_once(':')
+                                .is_none_or(|(key, _)| key.trim() != "configurablePoly")
+                        });
+                        previous
+                            .body
+                            .push((entry.line, format!("configurablePoly: {value}")));
+                    }
+                }
+                _ => return Err(entry.error("unsupported declaration override")),
             }
-            gpio_wiring |= !entry.body.is_empty();
         } else {
             definitions.insert(entry.name.clone(), loaded.len());
             loaded.push(entry);

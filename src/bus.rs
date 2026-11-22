@@ -10,6 +10,7 @@ use crate::{
     ns16550::Ns16550,
     nvic::{Nvic, VTOR},
     plic::Plic,
+    stm32_crc::Stm32F0Crc,
     stm32_exti::Exti,
     stm32_gpio::Stm32Gpio,
     stm32_rcc::Stm32F0Rcc,
@@ -74,6 +75,7 @@ pub struct Bus {
     stm32_uarts: Vec<Stm32Usart>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
+    stm32_crc: Option<Stm32F0Crc>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
     plic: Option<Plic>,
@@ -148,6 +150,10 @@ impl Bus {
             || self.stm32_gpios.iter().any(|gpio| {
                 let other = u64::from(gpio.base);
                 start < other + u64::from(gpio.size) && other < end
+            })
+            || self.stm32_crc.as_ref().is_some_and(|crc| {
+                let other = u64::from(crc.base);
+                start < other + u64::from(Stm32F0Crc::SIZE) && other < end
             })
             || self.stm32_rcc.as_ref().is_some_and(|rcc| {
                 let other = u64::from(rcc.base);
@@ -350,6 +356,18 @@ impl Bus {
             ));
         }
         self.stm32_gpios.push(gpio);
+        Ok(())
+    }
+
+    pub fn map_stm32f0_crc(&mut self, base: u32, configurable_poly: bool) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(Stm32F0Crc::SIZE);
+        if self.stm32_crc.is_some() || base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping STM32F0 CRC range at {base:#010x}"
+            ));
+        }
+        self.stm32_crc = Some(Stm32F0Crc::new(base, configurable_poly));
         Ok(())
     }
 
@@ -586,6 +604,12 @@ impl Bus {
         {
             return Ok(gpio.read(address));
         }
+        if address as usize & (N - 1) == 0
+            && let Some(crc) = &self.stm32_crc
+            && crc.contains(address)
+        {
+            return Ok(crc.read(address, N));
+        }
         match self.read_ram::<N>(address) {
             Err(BusError::Unmapped(..)) if self.stm32f0_tagged(address, N) => Ok(0),
             result => result,
@@ -718,6 +742,12 @@ impl Bus {
                 .find(|gpio| gpio.contains(address))
         {
             gpio.write(address, value);
+            return Ok(());
+        }
+        if let Some(crc) = self.stm32_crc.as_mut()
+            && crc.contains(address)
+        {
+            crc.write(address, width, value);
             return Ok(());
         }
         match self.memory(address, width) {
