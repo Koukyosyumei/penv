@@ -287,12 +287,18 @@ impl Hart {
         self.csr.ibex = true;
     }
 
-    pub fn enable_vex_irq_controller(&mut self) {
-        self.csr.vex_irq_mask = Some(0);
+    pub fn enable_vex_core(&mut self, built_in_irq: bool) {
+        self.csr.vex = true;
+        self.csr.local_irq_mask = built_in_irq.then_some(0);
+    }
+
+    pub fn enable_minerva(&mut self) {
+        self.csr.minerva = true;
+        self.csr.local_irq_mask = Some(0);
     }
 
     pub fn set_vex_supervisor_irq_mask(&mut self, value: u32) -> Result<(), String> {
-        if self.csr.vex_irq_mask.is_none() {
+        if !self.csr.vex || self.csr.local_irq_mask.is_none() {
             return Err("SetSupervisorIrqMask requires a VexRiscv platform".into());
         }
         self.csr.vex_supervisor_irq_mask = value;
@@ -300,9 +306,12 @@ impl Hart {
     }
 
     pub fn set_vex_irq_mask(&mut self, value: u32) -> Result<(), String> {
+        if !self.csr.vex {
+            return Err("--vex-irq-mask requires a VexRiscv platform".into());
+        }
         let mask = self
             .csr
-            .vex_irq_mask
+            .local_irq_mask
             .as_mut()
             .ok_or("--vex-irq-mask requires a VexRiscv platform")?;
         *mask = value;
@@ -449,9 +458,9 @@ impl Hart {
                 u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));
             pending |= plic;
         }
-        pending |= self.csr.sample_vex_irq(lines);
+        pending |= self.csr.sample_local_irq(lines);
         if (pending != 0
-            || self.csr.has_vex_irq_to_clear()
+            || self.csr.has_local_irq_to_clear()
             || bus.clint.is_some()
             || bus.litex_cpu_timer.is_some()
             || bus.uart.is_some()
@@ -637,7 +646,7 @@ impl Hart {
             // Every instruction fetch reads current RAM, so FENCE.I needs no invalidation.
             0x0f if funct3 <= 1 => None,
             // Renode VexRiscv accepts the custom whole-data-cache flush.
-            0x0f if insn == 0x0000_500f && self.csr.vex_irq_mask.is_some() => None,
+            0x0f if insn == 0x0000_500f && self.csr.vex => None,
             0x73 if insn == 0x0000_0073 => {
                 return Ok(self.environment_trap(self.csr.ecall_cause(), Stop::Ecall));
             }
@@ -713,7 +722,7 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported instruction")
         );
-        machine.primary.enable_vex_irq_controller();
+        machine.primary.enable_vex_core(true);
         assert_eq!(
             machine.run(5, &mut std::io::sink()).unwrap(),
             (Stop::Ebreak, 3)

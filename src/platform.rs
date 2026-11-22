@@ -350,7 +350,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
         match entry.model.as_str() {
-            "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.IbexRiscV32" | "CPU.CortexM" => {
+            "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.IbexRiscV32" | "CPU.Minerva" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
@@ -777,11 +777,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         let ibex = entry.model == "CPU.IbexRiscV32";
         let mut isa = match entry.model.as_str() {
             "CPU.IbexRiscV32" => Some((true, false, true)),
+            "CPU.Minerva" => Some((false, false, false)),
             "CPU.VexRiscv" => Some((true, false, false)),
             _ => None,
         };
         let mut id = 0;
-        let mut pmp = entry.model != "CPU.VexRiscv";
+        let mut pmp = matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32");
         for (key, value) in keys(
             entry,
             &[
@@ -790,6 +791,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "timeProvider",
                 "privilegedArchitecture",
                 "pmpEntryCount",
+                "builtInIrqController",
             ],
         )? {
             match (key, value) {
@@ -821,6 +823,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     if clint
                         .or(litex_cpu_timer)
                         .is_some_and(|timer| timer.name == name) => {}
+                ("builtInIrqController", "true" | "false" | "True" | "False")
+                    if entry.model == "CPU.VexRiscv" => {}
                 ("pmpEntryCount", "0") => pmp = false,
                 ("pmpEntryCount", "16") => pmp = true,
                 _ => return Err(entry.error(&format!("unsupported CPU property {key} = {value}"))),
@@ -850,14 +854,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         let hart = machine.hart_mut(id);
         hart.name = Some(entry.name.clone());
         hart.set_integer_extensions(multiply, atomic, compressed);
-        if entry.model == "CPU.VexRiscv" {
-            hart.enable_vex_irq_controller();
+        match entry.model.as_str() {
+            "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
+            "CPU.IbexRiscV32" => hart.enable_ibex(),
+            "CPU.Minerva" => hart.enable_minerva(),
+            _ => {}
         }
-        hart.enable_user_mode();
-        if entry.model == "CPU.IbexRiscV32" {
-            hart.enable_ibex();
-        } else {
-            hart.enable_supervisor_mode();
+        if entry.model != "CPU.Minerva" {
+            hart.enable_user_mode();
+            if entry.model != "CPU.IbexRiscV32" {
+                hart.enable_supervisor_mode();
+            }
         }
         if pmp {
             hart.enable_pmp();
@@ -898,7 +905,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             return Err(entry.error("invalid CLINT frequency or target wiring"));
         }
         for &(id, target, _, _) in &configs[..targets] {
-            let (software, timer) = if target.model == "CPU.VexRiscv" {
+            let (software, timer) = if uses_vex_irq(target) {
                 (101, 100)
             } else {
                 (3, 7)
@@ -919,7 +926,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| entry.error(&e))?;
     }
     if let Some(entry) = litex_cpu_timer {
-        if configs.len() != 1 || clint.is_some() || cpu.model != "CPU.VexRiscv" {
+        if configs.len() != 1 || clint.is_some() || !uses_vex_irq(cpu) {
             return Err(entry.error("LiteX CPU timer requires a single VexRiscv CPU without CLINT"));
         }
         let expected = format!("->{}@100", cpu.name);
@@ -958,20 +965,25 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             let mut contexts = None;
             for (_, line) in &entry.body {
                 if let Some((context, target)) = line.split_once("->") {
-                    let context = number(context.trim()).map_err(|e| entry.error(&e))? as usize;
-                    let (name, line) = target
+                    let (name, lines) = target
                         .split_once('@')
                         .ok_or_else(|| entry.error("invalid PLIC connection"))?;
-                    let line = number(line.trim()).map_err(|e| entry.error(&e))?;
-                    if name.trim() != cpu.name
-                        || !matches!(line, 9 | 11)
-                        || context >= outputs.len()
-                        || outputs[context] != 0
-                        || outputs.contains(&(1 << line))
-                    {
-                        return Err(entry.error("invalid or duplicate PLIC connection"));
+                    let contexts =
+                        irq_list(context, outputs.len() as u32).map_err(|e| entry.error(&e))?;
+                    let lines = irq_list(lines, 32).map_err(|e| entry.error(&e))?;
+                    if name.trim() != cpu.name || contexts.len() != lines.len() {
+                        return Err(entry.error("invalid PLIC connection"));
                     }
-                    outputs[context] = 1 << line;
+                    for (context, line) in contexts.into_iter().zip(lines) {
+                        let context = usize::from(context);
+                        if !matches!(line, 9 | 11)
+                            || outputs[context] != 0
+                            || outputs.contains(&(1 << line))
+                        {
+                            return Err(entry.error("invalid or duplicate PLIC connection"));
+                        }
+                        outputs[context] = 1 << line;
+                    }
                 } else if let Some((key, value)) = line.split_once(':') {
                     match key.trim() {
                         "numberOfSources" if sources.is_none() => {
@@ -992,9 +1004,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 as usize;
             if outputs[..count].iter().all(|&line| line == 0)
                 || outputs[count..].iter().any(|&line| line != 0)
-                || cpu.model != "CPU.RiscV32"
+                || !matches!(cpu.model.as_str(), "CPU.RiscV32" | "CPU.VexRiscv")
+                || uses_vex_irq(cpu)
             {
-                return Err(entry.error("expected PLIC context outputs wired to the RiscV32 CPU"));
+                return Err(
+                    entry.error("expected PLIC context outputs wired to standard RISC-V IRQs")
+                );
             }
             let sources = sources.ok_or_else(|| entry.error("missing PLIC numberOfSources"))?;
             machine
@@ -1380,18 +1395,27 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
 
 type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool), bool);
 
+fn uses_vex_irq(entry: &Entry) -> bool {
+    entry.model == "CPU.VexRiscv"
+        && !entry.body.iter().any(|(_, text)| {
+            text.split_once(':').is_some_and(|(key, value)| {
+                key.trim() == "builtInIrqController" && value.trim().eq_ignore_ascii_case("false")
+            })
+        })
+}
+
 fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(usize, u8), String> {
     if let Some((pin, target)) = wire.split_once("->")
         && matches!(pin.trim(), "" | "IRQ")
         && let Some((cpu, line)) = target.split_once('@')
-        && let Some(&(hart, _, _, _)) = configs
-            .iter()
-            .find(|(_, target, _, _)| target.name == cpu.trim() && target.model == "CPU.VexRiscv")
+        && let Some(&(hart, target, _, _)) = configs.iter().find(|(_, target, _, _)| {
+            target.name == cpu.trim() && (uses_vex_irq(target) || target.model == "CPU.Minerva")
+        })
     {
         let line = number(line.trim()).map_err(|e| entry.error(&e))?;
         return match line {
             0..=31 => Ok((hart, line as u8)),
-            1000..=1031 => Ok((hart, (line - 1000 + 32) as u8)),
+            1000..=1031 if uses_vex_irq(target) => Ok((hart, (line - 1000 + 32) as u8)),
             _ => Err(entry.error("VexRiscv external IRQ must be in 0–31 or 1000–1031")),
         };
     }

@@ -86,11 +86,13 @@ pub struct Csr {
     interrupt_enable: u32,
     pending: u32,
     pub ibex: bool,
-    pub vex_irq_mask: Option<u32>,
-    vex_irq_pending: u32,
+    pub vex: bool,
+    pub minerva: bool,
+    pub local_irq_mask: Option<u32>,
+    local_irq_pending: u32,
     pub vex_supervisor_irq_mask: u32,
     vex_supervisor_irq_pending: u32,
-    vex_irq_levels: u64,
+    local_irq_levels: u64,
     vex_dcache_info: u32,
     vector: Option<u32>,
     scratch: u32,
@@ -115,11 +117,13 @@ impl Default for Csr {
             interrupt_enable: 0,
             pending: 0,
             ibex: false,
-            vex_irq_mask: None,
-            vex_irq_pending: 0,
+            vex: false,
+            minerva: false,
+            local_irq_mask: None,
+            local_irq_pending: 0,
             vex_supervisor_irq_mask: 0,
             vex_supervisor_irq_pending: 0,
-            vex_irq_levels: 0,
+            local_irq_levels: 0,
             vex_dcache_info: 0,
             vector: None,
             scratch: 0,
@@ -296,11 +300,13 @@ impl Csr {
             0x343 => self.trap_value,
             0x344 => self.pending_interrupts(),
             0x7c0 if self.ibex => 0,
-            0x9c0 if self.vex_irq_mask.is_some() => self.vex_supervisor_irq_mask,
-            0xbc0 => self.vex_irq_mask?,
-            0xdc0 if self.vex_irq_mask.is_some() => self.vex_supervisor_irq_pending,
-            0xcc0 if self.vex_irq_mask.is_some() => self.vex_dcache_info,
-            0xfc0 if self.vex_irq_mask.is_some() => self.vex_irq_pending,
+            0x9c0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_mask,
+            0xbc0 if self.vex => self.local_irq_mask?,
+            0x330 if self.minerva => self.local_irq_mask?,
+            0x360 if self.minerva => self.local_irq_pending,
+            0xdc0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_pending,
+            0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info,
+            0xfc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_pending,
             _ => return self.pmp.as_ref()?.read(address),
         })
     }
@@ -367,11 +373,17 @@ impl Csr {
                 self.counters.instret_written = true;
             }
             0x7c0 if self.ibex => {}
-            0x9c0 if self.vex_irq_mask.is_some() => self.vex_supervisor_irq_mask = value,
-            0xbc0 if self.vex_irq_mask.is_some() => self.vex_irq_mask = Some(value),
-            0xdc0 if self.vex_irq_mask.is_some() => self.vex_supervisor_irq_pending = value,
-            0xfc0 if self.vex_irq_mask.is_some() => self.vex_irq_pending = value,
-            0xcc0 if self.vex_irq_mask.is_some() => self.vex_dcache_info = value,
+            0x330 if self.minerva => self.local_irq_mask = Some(value),
+            0x360 if self.minerva => self.local_irq_pending = value,
+            0x9c0 if self.vex && self.local_irq_mask.is_some() => {
+                self.vex_supervisor_irq_mask = value
+            }
+            0xbc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_mask = Some(value),
+            0xdc0 if self.vex && self.local_irq_mask.is_some() => {
+                self.vex_supervisor_irq_pending = value
+            }
+            0xfc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_pending = value,
+            0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info = value,
             0x340 => self.scratch = value,
             0x341 => self.exception_pc = value & self.epc_mask(),
             0x342 => self.cause = value,
@@ -449,26 +461,26 @@ impl Csr {
                 .map_or(0, |s| s.injected_interrupts)
     }
 
-    pub fn sample_vex_irq(&mut self, levels: u64) -> u32 {
-        let Some(mask) = self.vex_irq_mask else {
+    pub fn sample_local_irq(&mut self, levels: u64) -> u32 {
+        let Some(mask) = self.local_irq_mask else {
             return levels as u32;
         };
-        let changed = levels ^ self.vex_irq_levels;
+        let changed = levels ^ self.local_irq_levels;
         if changed != 0 {
-            self.vex_irq_levels = levels;
-            self.vex_irq_pending =
-                (self.vex_irq_pending & !(changed as u32)) | (levels as u32 & changed as u32);
+            self.local_irq_levels = levels;
+            self.local_irq_pending =
+                (self.local_irq_pending & !(changed as u32)) | (levels as u32 & changed as u32);
             let changed = (changed >> 32) as u32;
             self.vex_supervisor_irq_pending =
                 (self.vex_supervisor_irq_pending & !changed) | ((levels >> 32) as u32 & changed);
         }
-        (u32::from(self.vex_irq_pending & mask != 0) * EXTERNAL)
+        (u32::from(self.local_irq_pending & mask != 0) * EXTERNAL)
             | (u32::from(self.vex_supervisor_irq_pending & self.vex_supervisor_irq_mask != 0)
                 * SEIP)
     }
 
-    pub fn has_vex_irq_to_clear(&self) -> bool {
-        self.vex_irq_mask.is_some() && self.pending & (EXTERNAL | SEIP) != 0
+    pub fn has_local_irq_to_clear(&self) -> bool {
+        self.local_irq_mask.is_some() && self.pending & (EXTERNAL | SEIP) != 0
     }
 
     pub fn has_injected_interrupts(&self) -> bool {
