@@ -239,15 +239,10 @@ fn run() -> Result<ExitCode, String> {
         if path.is_none()
             && let Some(image) = boot.image
         {
-            path = Some(monitor::asset_path(
-                &image,
-                &script,
-                root,
-                asset_dir.as_deref(),
-            )?);
+            path = Some(image.resolve(root, asset_dir.as_deref())?);
         }
         for (value, address) in boot.binaries {
-            let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
+            let path = value.resolve(root, asset_dir.as_deref())?;
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;

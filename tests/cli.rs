@@ -442,3 +442,54 @@ timer0: Timers.LiteX_Timer_CSR32 @ { sysbus 0x60002800; sysbus 0xe0002800 }
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"Q");
 }
+
+#[test]
+fn loads_resc_wrappers_with_shared_variables_and_relative_assets() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-wrapper-{}", std::process::id()));
+    let board = directory.join("nested");
+    fs::create_dir_all(&board).unwrap();
+    let wrapper = directory.join("wrapper.resc");
+    fs::write(
+        &wrapper,
+        "$bin=@local\\ board.bin\ni @nested/board.resc\nrunMacro $reset\nstart\n",
+    )
+    .unwrap();
+    fs::write(
+        board.join("board.resc"),
+        concat!(
+            "mach create \"Board wrapper\"\n",
+            "machine LoadPlatformDescription @board.repl\n",
+            "$bin?=@default.bin\n",
+            "macro reset\n",
+            "\"\"\"\n",
+            "  sysbus LoadBinary $bin 0x80000000\n",
+            "  cpu PC 0x80000000\n",
+            "\"\"\"\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        board.join("board.repl"),
+        "cpu: CPU.RiscV32 @ sysbus\n    cpuType: \"rv32i\"\nram: Memory.MappedMemory @ sysbus 0x80000000\n    size: 0x1000\n",
+    ).unwrap();
+    fs::write(board.join("local board.bin"), 0x0010_0073u32.to_le_bytes()).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--script"])
+            .arg(&wrapper)
+            .output()
+            .unwrap()
+    };
+    let boot = run();
+    fs::write(board.join("board.resc"), "include @../wrapper.resc\n").unwrap();
+    let cycle = run();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(boot.status.success(), "{boot:?}");
+    assert_eq!(cycle.status.code(), Some(1), "{cycle:?}");
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("board.resc:1:"));
+    assert!(
+        String::from_utf8_lossy(&cycle.stderr)
+            .contains("recursive or excessively deep script include")
+    );
+}
