@@ -204,7 +204,7 @@ Console Echo でも `resc_boot "$assets"/*echo.elf-*` に `emulation RunFor "0.0
 
 #### UART 出力を待って ADC を操作する回帰
 
-上流の `Should Read ADC` は、起動メッセージと最初の測定値を受け取ってから電圧を変更します。変更前は、これを転記した `tests/fixtures/stm32f072-adc.resc` の 4 行目で UART の待機操作が未対応でした。penv の RESC 拡張 `waitForUart "期待文字列"` で、待機開始後に受信した LF または CRLF 終端の行をリテラル部分一致で検査します。一致行の終端でゲストの実行を区切り、次の操作へ進みます。待機も `--max-steps` を共有します。上限到達やゲスト停止までに一致しなければ、RESC の行番号と期待文字列を出力して終了コード 1 を返します。
+上流の `Should Read ADC` は、起動メッセージと最初の測定値を受け取ってから電圧を変更します。変更前は、これを転記した `tests/fixtures/stm32f072-adc.resc` の 4 行目で UART の待機操作が未対応でした。penv の RESC 拡張 `waitForUart "期待文字列"` で、未消費の LF または CRLF 終端の行をリテラル部分一致で検査します。履歴に一致があればその場で進み、新規出力で一致した場合はその行の終端でゲストの実行を区切ります。待機も `--max-steps` を共有します。上限到達やゲスト停止までに一致しなければ、RESC の行番号と期待文字列を出力して終了コード 1 を返します。
 
 ```sh
 assets=$(mktemp -d)
@@ -261,7 +261,23 @@ tail -c 14 "$assets/echo-cr.out" | od -An -tx1
 
 通常の `cargo test` は 51 件成功しました。CR の直後に BKPT を実行する STM32 USART のテスト用 HEX で、USART 指定あり・なしの両方が CR で終了し、既定の LF 待機はゲスト停止で失敗することを確認しました。公開 Console Echo と ADC の既存回帰も成功し、最後の待機だけを CR にした Console Echo は `Echo working?` の直後の `0d` で終了しました。
 
-待機開始前の履歴、STM32 USART 以外の名前付き待機、正規表現、Robot の UART 入力・LED テスターは残課題です。
+#### UART 履歴と消費位置
+
+Renode の `Wait For Line On Uart` は、既定で未消費の完了行を先頭から探します。成功すると最初の一致行までを消費し、後続行と書きかけの行を次の待機に残します。参照した実装は `CheckFinishedLines` と `HandleSuccess` です。[Renode TerminalTester](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Main/Testing/TerminalTester.cs)
+
+penv は最初の実行区間から、スクリプトで待機対象にした USART と、UART 名を省略した場合の統合出力をそれぞれ独立に記録します。履歴の一致はステップを消費しません。一致した終端までを消費し、後続のバイトを残します。未消費の履歴は対象ごとに 64 KiB で、上限を超えた分は最も古いバイトから破棄します。
+
+Console Echo の回帰は、`RunFor` 中に出た起動行と入力案内を順に履歴から消費した後、入力への応答を待ちます。上の手順で公開 ELF を取得し、同じ `cargo test --release upstream_stm32f072 -- --ignored` で Console Echo と ADC を検証できます。ADC でも、起動行を待つ前に `RunFor` を挿入した次の変形を確認しました。変更前は、起動行が標準出力に出ていても 5 行目の待機が失敗しました。
+
+```sh
+sed '4i emulation RunFor "0.01s"' tests/fixtures/stm32f072-adc.resc >"$assets/adc-backlog.resc"
+target/release/penv run --script "$assets/adc-backlog.resc" --platform-root ../renode \
+  --asset-dir "$assets" --max-steps 220000000
+```
+
+公開 ELF の回帰 2 件が成功し、ADC の変形でも `745` と `1489` が順に出力されました。通常の `cargo test` は 53 件成功し、消費済み行の再利用を防ぐこと、残りステップ 0 での履歴照合、書きかけの行の継続、履歴の上限を確認しました。
+
+STM32 USART 以外の名前付き待機、正規表現、未完了行に対するプロンプトの照合、Robot の UART 入力・LED テスターは残課題です。
 
 ## 現在の実装範囲
 

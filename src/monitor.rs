@@ -8,7 +8,7 @@ use std::{
 use crate::{
     bus::CORTEX_M_STEP_HZ,
     machine::{Machine, Stop},
-    uart::{UartLineEnd, UartLineMatch},
+    uart::{UartHistory, UartLineEnd},
 };
 
 #[derive(PartialEq, Eq, Debug)]
@@ -42,16 +42,18 @@ enum Action {
     WriteUartLine(String, String, &'static [u8]),
 }
 
-struct UartLine<'a, W> {
+struct ScriptOutput<'a, W> {
     output: &'a mut W,
-    line: UartLineMatch,
+    history: Option<UartHistory>,
 }
 
-impl<W: Write> Write for UartLine<'_, W> {
+impl<W: Write> Write for ScriptOutput<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.output.write(bytes)?;
-        for &byte in &bytes[..written] {
-            self.line.receive(byte);
+        if let Some(history) = &mut self.history {
+            for &byte in &bytes[..written] {
+                history.receive(byte);
+            }
         }
         Ok(written)
     }
@@ -71,12 +73,25 @@ pub fn run(
     if commands.is_empty() {
         return machine.run(budget, output);
     }
+    let mut output = ScriptOutput {
+        output,
+        history: None,
+    };
+    for command in commands {
+        match &command.action {
+            Action::WaitForUart(Some(target), ..) => machine.bus.record_stm32_uart(target),
+            Action::WaitForUart(None, ..) => {
+                output.history.get_or_insert_with(UartHistory::default);
+            }
+            _ => {}
+        }
+    }
     let mut retired = 0;
     for command in commands {
         let result = match &command.action {
             Action::RunFor(steps) if machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
-                machine.run(chunk, output).map(|(stop, count)| {
+                machine.run(chunk, &mut output).map(|(stop, count)| {
                     retired += count;
                     budget -= chunk;
                     (stop != Stop::Limit || chunk < *steps).then_some(stop)
@@ -92,20 +107,28 @@ pub fn run(
                 .map(|()| None),
             Action::WaitForUart(target, pattern, end) => {
                 let start = machine.elapsed_steps();
-                wait_for_uart(machine, target.as_deref(), pattern, *end, budget, output).and_then(
-                    |(stop, count)| {
-                        retired += count;
-                        budget -= machine.elapsed_steps().wrapping_sub(start);
-                        if stop == Stop::OutputMatch {
-                            Ok(None)
-                        } else {
-                            let source = target.as_ref().map_or_else(String::new, |target| format!(" on {target}"));
-                            Err(format!(
-                                "UART line containing {pattern:?} was not received{source} ({stop:?})"
-                            ))
-                        }
-                    },
+                wait_for_uart(
+                    machine,
+                    target.as_deref(),
+                    pattern,
+                    *end,
+                    budget,
+                    &mut output,
                 )
+                .and_then(|(stop, count)| {
+                    retired += count;
+                    budget -= machine.elapsed_steps().wrapping_sub(start);
+                    if stop == Stop::OutputMatch {
+                        Ok(None)
+                    } else {
+                        let source = target
+                            .as_ref()
+                            .map_or_else(String::new, |target| format!(" on {target}"));
+                        Err(format!(
+                            "UART line containing {pattern:?} was not received{source} ({stop:?})"
+                        ))
+                    }
+                })
             }
             Action::WriteUartLine(target, text, ending) => machine
                 .bus
@@ -127,19 +150,34 @@ fn wait_for_uart(
     pattern: &str,
     end: UartLineEnd,
     budget: u64,
-    output: &mut impl Write,
+    output: &mut ScriptOutput<'_, impl Write>,
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
-        machine.bus.watch_stm32_uart(target, pattern, end)?;
-        let result = machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched());
-        machine.bus.clear_stm32_uart_watch();
+        let index = machine.bus.watch_stm32_uart(target, pattern, end)?;
+        let result = if machine.bus.stm32_uart_matched(index) {
+            Ok((Stop::OutputMatch, 0))
+        } else {
+            machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(index))
+        };
+        machine.bus.finish_stm32_uart_watch(index);
         result
     } else {
-        let mut matcher = UartLine {
-            output,
-            line: UartLineMatch::new(pattern, end),
+        let history = output
+            .history
+            .as_mut()
+            .expect("a script wait enables history before execution");
+        history.begin_wait(pattern, end);
+        let result = if history.matched() {
+            Ok((Stop::OutputMatch, 0))
+        } else {
+            machine.run_until(budget, output, |_, uart| {
+                uart.history.as_ref().is_some_and(UartHistory::matched)
+            })
         };
-        machine.run_until(budget, &mut matcher, |_, uart| uart.line.matched)
+        if let Some(history) = &mut output.history {
+            history.finish_wait();
+        }
+        result
     }
 }
 
@@ -505,17 +543,19 @@ mod tests {
     #[test]
     fn uart_match_requires_a_completed_line_and_never_spans_lines() {
         let mut output = Vec::new();
-        let mut uart = UartLine {
+        let mut history = UartHistory::default();
+        history.begin_wait("ADC reading: 745", UartLineEnd::Lf);
+        let mut uart = ScriptOutput {
             output: &mut output,
-            line: UartLineMatch::new("ADC reading: 745", UartLineEnd::Lf),
+            history: Some(history),
         };
         uart.write_all(b"ADC reading: \n745\r\n").unwrap();
-        assert!(!uart.line.matched);
+        assert!(!uart.history.as_ref().unwrap().matched());
         uart.write_all(b"ADC reading: 7").unwrap();
         uart.write_all(b"45\r").unwrap();
-        assert!(!uart.line.matched);
+        assert!(!uart.history.as_ref().unwrap().matched());
         uart.write_all(b"\n").unwrap();
-        assert!(uart.line.matched);
+        assert!(uart.history.as_ref().unwrap().matched());
         assert_eq!(output, b"ADC reading: \n745\r\nADC reading: 745\r\n");
     }
 

@@ -87,7 +87,7 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         ),
     )
     .unwrap();
-    let run = |wait| {
+    let run = |wait: &str, limit: &str| {
         fs::write(
             &script,
             format!(
@@ -96,22 +96,32 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         )
         .unwrap();
         Command::new(env!("CARGO_BIN_EXE_penv"))
-            .args(["run", "--stats", "--script"])
+            .args(["run", "--stats", "--max-steps", limit, "--script"])
             .arg(&script)
             .output()
             .unwrap()
     };
-    let selected = run("waitForUart sysbus.usart1 \"A\" CR");
-    let merged = run("waitForUart \"A\" CR");
-    let default = run("waitForUart sysbus.usart1 \"A\"");
+    let selected = run("waitForUart sysbus.usart1 \"A\" CR", "10");
+    let merged = run("waitForUart \"A\" CR", "10");
+    let default = run("waitForUart sysbus.usart1 \"A\"", "10");
+    let backlog = "emulation RunFor \"0.00000007s\"\nwaitForUart sysbus.usart1 \"A\" CR";
+    let buffered = run(backlog, "7");
+    let independent = run(&format!("{backlog}\nwaitForUart \"A\" CR"), "7");
+    let consumed = run(
+        &format!("{backlog}\nwaitForUart sysbus.usart1 \"A\" CR"),
+        "7",
+    );
     fs::remove_dir_all(directory).unwrap();
-    for result in [selected, merged] {
+    for result in [selected, merged, buffered, independent] {
         assert!(result.status.success(), "{result:?}");
         assert_eq!(result.stdout, b"A\r");
         assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete"));
     }
     assert_eq!(default.status.code(), Some(1), "{default:?}");
     assert!(String::from_utf8_lossy(&default.stderr).contains("(Ebreak)"));
+    assert_eq!(consumed.status.code(), Some(1), "{consumed:?}");
+    assert!(String::from_utf8_lossy(&consumed.stderr).contains("boot.resc:6:"));
+    assert!(String::from_utf8_lossy(&consumed.stderr).contains("(Limit)"));
 }
 
 #[test]

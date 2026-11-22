@@ -25,7 +25,7 @@ use crate::{
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
-    uart::{LiteXUart, MuraxUart, UartLineEnd, UartLineMatch},
+    uart::{LiteXUart, MuraxUart, UartHistory, UartLineEnd},
 };
 
 // Cortex-M peripheral time advances by 10 ns per execution step.
@@ -85,7 +85,7 @@ pub struct Bus {
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
-    stm32_uart_match: Option<(u32, UartLineMatch)>,
+    stm32_uart_history: Vec<Option<UartHistory>>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
@@ -921,28 +921,38 @@ impl Bus {
         Ok(())
     }
 
+    pub fn record_stm32_uart(&mut self, target: &str) {
+        if let Ok(index) = self.stm32_usart_index(target) {
+            self.stm32_uart_history
+                .resize_with(self.stm32_uarts.len(), || None);
+            self.stm32_uart_history[index].get_or_insert_with(UartHistory::default);
+        }
+    }
+
     pub fn watch_stm32_uart(
         &mut self,
         target: &str,
         pattern: &str,
         end: UartLineEnd,
-    ) -> Result<(), String> {
+    ) -> Result<usize, String> {
         let index = self.stm32_usart_index(target)?;
-        self.stm32_uart_match = Some((
-            self.stm32_uarts[index].base,
-            UartLineMatch::new(pattern, end),
-        ));
-        Ok(())
+        self.stm32_uart_history[index]
+            .as_mut()
+            .expect("a script wait enables history before execution")
+            .begin_wait(pattern, end);
+        Ok(index)
     }
 
-    pub fn stm32_uart_matched(&self) -> bool {
-        self.stm32_uart_match
+    pub fn stm32_uart_matched(&self, index: usize) -> bool {
+        self.stm32_uart_history[index]
             .as_ref()
-            .is_some_and(|(_, line)| line.matched)
+            .is_some_and(UartHistory::matched)
     }
 
-    pub fn clear_stm32_uart_watch(&mut self) {
-        self.stm32_uart_match = None;
+    pub fn finish_stm32_uart_watch(&mut self, index: usize) {
+        if let Some(history) = &mut self.stm32_uart_history[index] {
+            history.finish_wait();
+        }
     }
 
     pub fn tick_plic(&mut self) -> u32 {
@@ -1308,19 +1318,17 @@ impl Bus {
         {
             return Ok(());
         }
-        if let Some(device) = self
+        if let Some((index, device)) = self
             .stm32_uarts
             .iter_mut()
-            .find(|device| device.contains(address))
+            .enumerate()
+            .find(|(_, device)| device.contains(address))
         {
-            let source = device.base;
             return device
                 .write(address, width, value, |byte| {
                     uart.write_all(&[byte])?;
-                    if let Some((base, line)) = &mut self.stm32_uart_match
-                        && source == *base
-                    {
-                        line.receive(byte);
+                    if let Some(Some(history)) = self.stm32_uart_history.get_mut(index) {
+                        history.receive(byte);
                     }
                     Ok(())
                 })
@@ -1497,7 +1505,9 @@ mod tests {
             bus.watch_stm32_uart("sysbus.usart3", "OK", UartLineEnd::Lf)
                 .is_err()
         );
-        bus.watch_stm32_uart("sysbus.usart2", "OK", UartLineEnd::Lf)
+        bus.record_stm32_uart("sysbus.usart2");
+        let index = bus
+            .watch_stm32_uart("sysbus.usart2", "OK", UartLineEnd::Lf)
             .unwrap();
         for (base, bytes) in [
             (usart2, b"O".as_slice()),
@@ -1507,14 +1517,14 @@ mod tests {
             for &byte in bytes {
                 bus.write(base + 0x28, 1, byte.into(), &mut output).unwrap();
             }
-            assert!(!bus.stm32_uart_matched());
+            assert!(!bus.stm32_uart_matched(index));
         }
         bus.write(usart2 + 0x28, 1, b'\n'.into(), &mut output)
             .unwrap();
-        assert!(bus.stm32_uart_matched());
+        assert!(bus.stm32_uart_matched(index));
         assert_eq!(output, b"OOK\nK\r\n");
-        bus.clear_stm32_uart_watch();
-        assert!(!bus.stm32_uart_matched());
+        bus.finish_stm32_uart_watch(index);
+        assert!(!bus.stm32_uart_matched(index));
     }
 
     #[test]

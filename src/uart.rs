@@ -125,16 +125,16 @@ pub enum UartLineEnd {
     Cr,
 }
 
-pub struct UartLineMatch {
+struct UartLineMatch {
     end: u8,
     pattern: Vec<u8>,
     tail: VecDeque<u8>,
     contains: bool,
-    pub matched: bool,
+    matched: bool,
 }
 
 impl UartLineMatch {
-    pub fn new(pattern: &str, end: UartLineEnd) -> Self {
+    fn new(pattern: &str, end: UartLineEnd) -> Self {
         Self {
             end: match end {
                 UartLineEnd::Lf => b'\n',
@@ -147,7 +147,7 @@ impl UartLineMatch {
         }
     }
 
-    pub fn receive(&mut self, byte: u8) {
+    fn receive(&mut self, byte: u8) {
         if self.matched {
             return;
         }
@@ -162,5 +162,103 @@ impl UartLineMatch {
             self.tail.push_back(byte);
             self.contains = self.tail.iter().eq(self.pattern.iter());
         }
+    }
+}
+
+const UART_HISTORY_BYTES: usize = 64 * 1024;
+
+#[derive(Default)]
+pub struct UartHistory {
+    unread: VecDeque<u8>,
+    active: Option<UartLineMatch>,
+}
+
+impl UartHistory {
+    pub fn begin_wait(&mut self, pattern: &str, end: UartLineEnd) {
+        let mut matcher = UartLineMatch::new(pattern, end);
+        if let Some(index) = self.unread.iter().position(|&byte| {
+            matcher.receive(byte);
+            matcher.matched
+        }) {
+            self.unread.drain(..=index);
+        }
+        self.active = Some(matcher);
+    }
+
+    pub fn receive(&mut self, byte: u8) {
+        if let Some(matcher) = &mut self.active
+            && !matcher.matched
+        {
+            matcher.receive(byte);
+            if matcher.matched {
+                self.unread.clear();
+                return;
+            }
+        }
+        if self.unread.len() == UART_HISTORY_BYTES {
+            self.unread.pop_front();
+        }
+        self.unread.push_back(byte);
+    }
+
+    pub fn matched(&self) -> bool {
+        self.active.as_ref().is_some_and(|matcher| matcher.matched)
+    }
+
+    pub fn finish_wait(&mut self) {
+        self.active = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_consumes_through_the_first_match_and_keeps_later_bytes() {
+        let mut history = UartHistory::default();
+        for &byte in b"skip\nfirst\r\nlater\npartial" {
+            history.receive(byte);
+        }
+        history.begin_wait("absent", UartLineEnd::Lf);
+        assert!(!history.matched());
+        history.finish_wait();
+        history.begin_wait("first", UartLineEnd::Lf);
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("skip", UartLineEnd::Lf);
+        assert!(!history.matched());
+        history.finish_wait();
+        history.begin_wait("later", UartLineEnd::Lf);
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("partial line", UartLineEnd::Lf);
+        assert!(!history.matched());
+        for &byte in b" line\nnext\n" {
+            history.receive(byte);
+        }
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("next", UartLineEnd::Lf);
+        assert!(history.matched());
+    }
+
+    #[test]
+    fn history_drops_oldest_bytes_when_full() {
+        let mut history = UartHistory::default();
+        for byte in b"old\n"
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(b'x', UART_HISTORY_BYTES))
+            .chain(b"\nnew\n".iter().copied())
+        {
+            history.receive(byte);
+        }
+        assert_eq!(history.unread.len(), UART_HISTORY_BYTES);
+        history.begin_wait("old", UartLineEnd::Lf);
+        assert!(!history.matched());
+        history.finish_wait();
+        history.begin_wait("new", UartLineEnd::Lf);
+        assert!(history.matched());
     }
 }
