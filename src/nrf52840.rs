@@ -771,12 +771,12 @@ mod tests {
         for _ in 0..48_828 {
             bus.sample_nvic(0, false);
         }
-        assert!(!bus.reset_cortex_m_if_requested());
+        assert!(!bus.reset_cortex_m_if_requested(false));
         bus.sample_nvic(0, false);
-        assert!(bus.reset_cortex_m_if_requested());
+        assert!(bus.reset_cortex_m_if_requested(false));
         assert_eq!(bus.read::<4>(wdt + 0x400).unwrap(), 0);
         assert_eq!(bus.read::<1>(ram).unwrap(), 42);
-        assert!(!bus.reset_cortex_m_if_requested());
+        assert!(!bus.reset_cortex_m_if_requested(false));
     }
 
     #[test]

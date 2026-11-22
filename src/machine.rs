@@ -15,6 +15,7 @@ pub struct Machine {
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
+    reset_steps: VecDeque<u64>,
     uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
@@ -150,6 +151,7 @@ impl Machine {
             secondary: Vec::new(),
             next_hart: 0,
             elapsed_steps: 0,
+            reset_steps: VecDeque::new(),
             uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
@@ -224,6 +226,19 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_reset(&mut self, step: u64) -> Result<(), String> {
+        if !self.is_cortex_m() {
+            return Err("--reset-at requires a Cortex-M platform".into());
+        }
+        let index = self
+            .reset_steps
+            .partition_point(|&scheduled| scheduled < step);
+        if self.reset_steps.get(index) != Some(&step) {
+            self.reset_steps.insert(index, step);
+        }
+        Ok(())
+    }
+
     pub fn schedule_uart_input(&mut self, step: u64, bytes: Vec<u8>) -> Result<(), String> {
         if !self.bus.has_uart_input() {
             return Err("UART input requires a platform UART".into());
@@ -276,6 +291,21 @@ impl Machine {
                 &mut self.secondary[index - 1]
             };
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            if self
+                .reset_steps
+                .front()
+                .is_some_and(|&step| step <= self.elapsed_steps)
+            {
+                while self
+                    .reset_steps
+                    .front()
+                    .is_some_and(|&step| step <= self.elapsed_steps)
+                {
+                    self.reset_steps.pop_front();
+                }
+                self.bus.reset_cortex_m_if_requested(true);
+                hart.reset_cortex_m(&mut self.bus)?;
+            }
             while self
                 .uart_input
                 .front()
@@ -449,7 +479,7 @@ impl Hart {
         elapsed_steps: u64,
         output: &mut impl Write,
     ) -> Result<Step, String> {
-        if self.thumb.is_some() && bus.reset_cortex_m_if_requested() {
+        if self.thumb.is_some() && bus.reset_cortex_m_if_requested(false) {
             self.reset_cortex_m(bus)?;
         }
         if let Some(thumb) = self.thumb.as_mut() {

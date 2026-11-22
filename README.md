@@ -125,6 +125,14 @@ target/release/penv run --platform "$assets/boot.repl" \
 
 Shell ELF は前回停止した SCB CCR の読み出しを通過し、MPU と UARTE の初期化を経て `uart:~$` を表示します。`help` のコマンド一覧が表示され、プロンプトに戻ります。ステップ上限での終了コードは 2 です。
 
+同じ Shell のリセット回帰は、上記で取得した ELF と次のスクリプトで検証できます。
+
+```sh
+tests/nrf52840-shell.sh target/release/penv ../renode "$elf"
+```
+
+上流の UARTE テストと同じ `demo ping` を、リセット前後に UART から送信します。スクリプトは起動プロンプト、`pong`、応答後のプロンプトの順序を両方の起動で確認します。この ELF には再起動コマンドがないため、`--reset-at 300000` でリセットをかけます。`--reset-at STEP` は Cortex-M のリセットベクターから再起動し、CPU と周辺機器を既存のシステムリセット経路で初期化します。SRAM とフラッシュの内容、および今後のホスト入力イベントは保持し、同じステップの入力より先にリセットします。
+
 Renode の `tests/platforms/NRF52840.robot` が参照する Watchdog ELF も同じ REPL で実行できます。
 
 ```sh

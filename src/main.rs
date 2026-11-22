@@ -62,6 +62,7 @@ Options:
   --adc-event STEP:CHANNEL:VOLTS  Change an STM32 ADC channel voltage at a step (repeatable)
   --stm32f0-console  Require an STM32F0 REPL (legacy console option)
   --platform-root DIR  Root for working-directory-relative REPL includes
+  --reset-at STEP    Reset the Cortex-M machine before this step (repeatable)
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
   --uart-input-at N Delay UART input until execution step N
@@ -123,6 +124,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
+    let mut reset_steps = Vec::new();
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -213,6 +215,14 @@ fn run() -> Result<ExitCode, String> {
                 } else {
                     adc_inputs.push((channel, volts));
                 }
+            }
+            Some("--reset-at") => {
+                let step = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or("--reset-at requires a nonnegative step number")?;
+                reset_steps.push(step);
             }
             Some("--uart-event") => {
                 let value = args
@@ -392,6 +402,9 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(path) = uart_input {
         uart_events.insert(0, (uart_input_at.unwrap_or(0), path));
+    }
+    for step in reset_steps {
+        machine.schedule_reset(step)?;
     }
     for (step, path) in uart_events {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;

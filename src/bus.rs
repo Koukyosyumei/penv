@@ -487,13 +487,14 @@ impl Bus {
         }
     }
 
-    pub fn reset_cortex_m_if_requested(&mut self) -> bool {
+    pub fn reset_cortex_m_if_requested(&mut self, scheduled: bool) -> bool {
         let system = self.nvic.as_mut().is_some_and(Nvic::take_reset_request);
         let reload = self
             .stm32_flash
             .as_mut()
             .is_some_and(Stm32F0Flash::take_reload_request);
-        if !system
+        if !scheduled
+            && !system
             && !reload
             && !self
                 .nrf_peripherals
