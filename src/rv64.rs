@@ -1,3 +1,4 @@
+mod bitmanip;
 mod floating;
 
 use std::io::Write;
@@ -7,7 +8,7 @@ use crate::{
     machine::{Step, Stop},
     pmp::{EXECUTE, READ, WRITE},
     rv64_priv::{Mode, Privilege},
-    rv64_vm::translate,
+    rv64_vm::TranslationCache,
 };
 
 #[derive(Clone)]
@@ -17,6 +18,7 @@ pub struct Rv64 {
     floating: [u64; 32],
     isa: Isa,
     pub privilege: Privilege,
+    translations: TranslationCache,
     pub allow_unaligned: bool,
 }
 
@@ -27,6 +29,8 @@ pub struct Isa {
     pub compressed: bool,
     pub single: bool,
     pub double: bool,
+    pub cas: bool,
+    bitmanip: bitmanip::Extensions,
 }
 
 impl Isa {
@@ -40,18 +44,40 @@ impl Isa {
             || (base.contains('d') && !base.contains(['g', 'f']))
             || !base
                 .chars()
-                .all(|ext| matches!(ext, 'i' | 'g' | 'm' | 'a' | 'f' | 'd' | 'c'))
-            || !extensions.all(|extension| matches!(extension, "zicsr" | "zifencei"))
+                .all(|ext| matches!(ext, 'i' | 'g' | 'm' | 'a' | 'f' | 'd' | 'c' | 'b'))
         {
             return Err(format!("unsupported RV64 ISA {value:?}"));
         }
-        Ok(Self {
+        let mut isa = Self {
             multiply: base.contains(['g', 'm']),
             atomic: base.contains(['g', 'a']),
             compressed: base.contains('c'),
             single: base.contains(['g', 'f']),
             double: base.contains(['g', 'd']),
-        })
+            ..Self::IM
+        };
+        if base.contains('b') {
+            isa.bitmanip.enable_b();
+        }
+        for extension in extensions {
+            match extension {
+                "zicsr" | "zifencei" => {}
+                "zacas" if isa.atomic => isa.cas = true,
+                extension if isa.bitmanip.enable(extension) => {}
+                _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
+            }
+        }
+        Ok(isa)
+    }
+
+    pub fn elf(compressed: bool) -> Self {
+        Self {
+            compressed,
+            atomic: true,
+            single: true,
+            double: true,
+            ..Self::IM
+        }
     }
 
     pub const IM: Self = Self {
@@ -60,6 +86,8 @@ impl Isa {
         compressed: false,
         single: false,
         double: false,
+        cas: false,
+        bitmanip: bitmanip::Extensions::NONE,
     };
 }
 
@@ -88,6 +116,7 @@ impl Rv64 {
             floating: [0; 32],
             isa,
             privilege: Privilege::default(),
+            translations: TranslationCache::default(),
             allow_unaligned: false,
         }
     }
@@ -123,14 +152,17 @@ impl Rv64 {
     fn fetch(&self, bus: &mut Bus) -> Result<(u32, u64), Fault> {
         let pc = self.align_target(self.pc)?;
         let width = if self.isa.compressed { 2 } else { 4 };
-        let physical = translate(bus, &self.privilege, pc, width, EXECUTE)?;
+        let physical = self
+            .translations
+            .translate(bus, &self.privilege, pc, width, EXECUTE)?;
         let low = ram_read(bus, physical, width).ok_or(Fault::new(1, pc))? as u32;
         if width == 4 || low & 3 != 3 {
             return Ok((low, width as u64));
         }
         let upper = pc.wrapping_add(2);
         let physical = if pc & 0xfff == 0xffe {
-            translate(bus, &self.privilege, upper, 2, EXECUTE)?
+            self.translations
+                .translate(bus, &self.privilege, upper, 2, EXECUTE)?
         } else {
             if self
                 .privilege
@@ -212,6 +244,8 @@ impl Rv64 {
             | (u64::from(self.isa.compressed) << 2)
             | (u64::from(self.isa.double) << 3)
             | (u64::from(self.isa.single) << 5)
+            | (u64::from(self.isa.bitmanip.zba && self.isa.bitmanip.zbb && self.isa.bitmanip.zbs)
+                << 1)
     }
 
     fn csr(&mut self, instruction: Instruction, operand: u64, hart: usize) -> Option<u64> {
@@ -237,8 +271,13 @@ impl Rv64 {
             2 | 3 => None,
             _ => return None,
         };
-        if value.is_some_and(|value| !self.privilege.write(index, value, misa)) {
-            return None;
+        if let Some(value) = value {
+            if !self.privilege.write(index, value, misa) {
+                return None;
+            }
+            if matches!(index, 0x3a0..=0x3ef) {
+                self.translations.clear();
+            }
         }
         Some(old)
     }
@@ -319,11 +358,22 @@ impl Rv64 {
                 self.store(bus, address, 1 << kind, rhs, output)?;
                 None
             }
-            0x13 | 0x1b => Some(immediate_alu(fields, lhs).ok_or(illegal)?),
-            0x33 | 0x3b => Some(register_alu(fields, lhs, rhs, self.isa.multiply).ok_or(illegal)?),
+            0x13 | 0x1b => Some(
+                immediate_alu(fields, lhs)
+                    .or_else(|| bitmanip::immediate(self.isa, fields, lhs))
+                    .ok_or(illegal)?,
+            ),
+            0x33 | 0x3b => Some(
+                register_alu(fields, lhs, rhs, self.isa.multiply)
+                    .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs))
+                    .ok_or(illegal)?,
+            ),
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
                 self.floating_instruction(fields, bus, output)?
+            }
+            0x2f if self.isa.cas && instruction >> 27 == 5 => {
+                self.compare_swap(fields, bus, lhs, rhs)?
             }
             0x2f if self.isa.atomic => Some(self.atomic(fields, bus, hart, lhs, rhs)?),
             0x73 if fields.funct3() != 0 => Some(self.csr(fields, lhs, hart).ok_or(illegal)?),
@@ -336,7 +386,10 @@ impl Rv64 {
                     0x1020_0073 => next = self.privilege.sret(epc_mask).ok_or(illegal)?,
                     0x1050_0073 if self.privilege.allows_wfi() => {}
                     _ if instruction & 0xfe00_7fff == 0x1200_0073
-                        && self.privilege.allows_sfence() => {}
+                        && self.privilege.allows_sfence() =>
+                    {
+                        self.translations.clear();
+                    }
                     _ => return Err(illegal),
                 }
                 None
@@ -360,13 +413,17 @@ impl Rv64 {
             let mut value = 0;
             for offset in 0..width {
                 let virtual_address = address.wrapping_add(offset as u64);
-                let physical = translate(bus, &self.privilege, virtual_address, 1, READ)?;
+                let physical =
+                    self.translations
+                        .translate(bus, &self.privilege, virtual_address, 1, READ)?;
                 let byte = ram_read(bus, physical, 1).ok_or(Fault::new(5, virtual_address))?;
                 value |= byte << (offset * 8);
             }
             return Ok(value);
         }
-        let physical = translate(bus, &self.privilege, address, width, READ)?;
+        let physical = self
+            .translations
+            .translate(bus, &self.privilege, address, width, READ)?;
         if let Some(value) = ram_read(bus, physical, width) {
             return Ok(value);
         }
@@ -406,7 +463,9 @@ impl Rv64 {
             let mut destinations = [0; 8];
             for (offset, slot) in destinations[..width].iter_mut().enumerate() {
                 let virtual_address = address.wrapping_add(offset as u64);
-                *slot = translate(bus, &self.privilege, virtual_address, 1, WRITE)?;
+                *slot =
+                    self.translations
+                        .translate(bus, &self.privilege, virtual_address, 1, WRITE)?;
                 if bus.ram64(*slot, 1).is_none() {
                     return Err(Fault::new(7, virtual_address));
                 }
@@ -416,7 +475,9 @@ impl Rv64 {
             }
             return Ok(());
         }
-        let physical = translate(bus, &self.privilege, address, width, WRITE)?;
+        let physical = self
+            .translations
+            .translate(bus, &self.privilege, address, width, WRITE)?;
         if let Some(bytes) = bus.memory64(physical, width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
             return Ok(());
@@ -448,6 +509,61 @@ impl Rv64 {
             _ => Fault::new(7, address),
         })
     }
+    fn compare_swap(
+        &mut self,
+        inst: Instruction,
+        bus: &mut Bus,
+        address: u64,
+        replacement: u64,
+    ) -> Result<Option<u64>, Fault> {
+        let destination = inst.rd();
+        let source = inst.rs2();
+        let width = match inst.funct3() {
+            2 => 4,
+            3 => 8,
+            4 if (destination | source) & 1 == 0 => 16,
+            _ => return Err(Fault::new(2, u64::from(inst.0))),
+        };
+        if address & (width as u64 - 1) != 0 {
+            return Err(Fault::new(6, address));
+        }
+        let physical =
+            self.translations
+                .translate(bus, &self.privilege, address, width, READ | WRITE)?;
+        let fault = || Fault::new(7, address);
+        let mut value = [0; 16];
+        value[..width].copy_from_slice(bus.ram64(physical, width).ok_or_else(fault)?);
+        let old = u128::from_le_bytes(value);
+        let (expected, replacement) = if width == 16 {
+            let pair_high = |index| {
+                if index == 0 {
+                    0
+                } else {
+                    u128::from(self.registers[index + 1]) << 64
+                }
+            };
+            (
+                u128::from(self.registers[destination]) | pair_high(destination),
+                u128::from(replacement) | pair_high(source),
+            )
+        } else {
+            let mask = (1u128 << (width * 8)) - 1;
+            (
+                u128::from(self.registers[destination]) & mask,
+                u128::from(replacement) & mask,
+            )
+        };
+        if old == expected {
+            bus.memory64(physical, width)
+                .ok_or_else(fault)?
+                .copy_from_slice(&replacement.to_le_bytes()[..width]);
+        }
+        if width == 16 && destination != 0 {
+            self.registers[destination + 1] = (old >> 64) as u64;
+        }
+        Ok(Some(sign(old as u64, width.min(8) as u32 * 8)))
+    }
+
     fn atomic(
         &self,
         inst: Instruction,
@@ -478,7 +594,9 @@ impl Rv64 {
         if address & (width as u64 - 1) != 0 {
             return Err(Fault::new(if load { 4 } else { 6 }, address));
         }
-        let physical = translate(bus, &self.privilege, address, width, permission)?;
+        let physical =
+            self.translations
+                .translate(bus, &self.privilege, address, width, permission)?;
         let fault = || Fault::new(if load { 5 } else { 7 }, address);
         let previous = ram_read(bus, physical, width).ok_or_else(fault)?;
         if operation == 2 {

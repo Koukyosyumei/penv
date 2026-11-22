@@ -45,13 +45,7 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
     } else if machine.primary.name.is_some() || machine.is_cortex_m() {
         return Err("RISC-V ELF64 requires an RV64 platform".into());
     } else {
-        machine.primary.rv64 = Some(Box::new(Rv64::new(Isa {
-            compressed,
-            atomic: true,
-            single: true,
-            double: true,
-            ..Isa::IM
-        })));
+        machine.primary.rv64 = Some(Box::new(Rv64::new(Isa::elf(compressed))));
     }
 
     let entry = double(&header, 24);

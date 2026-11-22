@@ -190,6 +190,7 @@ fn create_cpu(entry: &Entry, clint: Option<&Entry>) -> Result<Rv64, String> {
     let cpu_type = property(entry, "cpuType").ok_or_else(|| entry.error("missing cpuType"))?;
     let isa = Isa::parse(cpu_type.trim_matches('"')).map_err(|error| entry.error(&error))?;
     if let Some(time) = property(entry, "timeProvider")
+        && time != "empty"
         && !clint.is_some_and(|entry| entry.name == time)
     {
         return Err(entry.error("unsupported RV64 time provider"));
