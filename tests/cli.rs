@@ -1,6 +1,54 @@
 use std::{fs, process::Command};
 
 #[test]
+fn boots_resc_hex_with_explicit_vector_table() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-hex-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let script = directory.join("boot.resc");
+    let firmware = directory.join("firmware.hex");
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    vectorTableOffset: 0x08000000
+flash: Memory.MappedMemory @ sysbus 0x08000000
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    // The vector table is at 0x08000080 and points to a BKPT.
+    fs::write(
+        &firmware,
+        ":020000040800F2\n:0A008000001000208900000800BEF7\n:00000001FF\n",
+    )
+    .unwrap();
+    fs::write(
+        &script,
+        concat!(
+            "mach create\n",
+            "machine LoadPlatformDescription @board.repl\n",
+            "sysbus LoadHEX @https://example.org/firmware.hex\n",
+            "sysbus.cpu VectorTableOffset 0x08000080\n",
+        ),
+    )
+    .unwrap();
+    let command = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        command.args(["run", "--script"]).arg(&script);
+        command
+    };
+    let asset = command()
+        .arg("--asset-dir")
+        .arg(&directory)
+        .output()
+        .unwrap();
+    let override_image = command().arg(&firmware).output().unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(asset.status.success(), "{asset:?}");
+    assert!(override_image.status.success(), "{override_image:?}");
+}
+
+#[test]
 fn runs_raw_and_elf_and_reports_faults() {
     let directory = std::env::temp_dir().join(format!("penv-cli-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

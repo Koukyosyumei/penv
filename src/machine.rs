@@ -181,11 +181,27 @@ impl Machine {
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
-        let hart = std::iter::once(&mut self.primary)
+        self.named_hart(name)?.pc = entry;
+        Ok(())
+    }
+
+    fn named_hart(&mut self, name: &str) -> Result<&mut Hart, String> {
+        std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
             .find(|hart| hart.name.as_deref() == Some(name))
-            .ok_or_else(|| format!("unknown CPU {name:?}"))?;
-        hart.pc = entry;
+            .ok_or_else(|| format!("unknown CPU {name:?}"))
+    }
+
+    pub fn set_named_vector_table(&mut self, name: &str, address: u32) -> Result<(), String> {
+        let thumb = self
+            .named_hart(name)?
+            .thumb
+            .as_mut()
+            .ok_or("VectorTableOffset requires a Cortex-M CPU")?;
+        if address & 0x7f != 0 {
+            return Err("VectorTableOffset requires a 128-byte-aligned address".into());
+        }
+        *thumb = Thumb::new(Some(address));
         Ok(())
     }
 

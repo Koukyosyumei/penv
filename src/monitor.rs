@@ -4,12 +4,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(PartialEq, Eq, Debug)]
+pub enum ImageFormat {
+    Elf,
+    Hex,
+}
+
 #[derive(Default)]
 pub struct Boot {
     pub binaries: Vec<(String, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
-    pub image: Option<String>,
+    pub image: Option<(String, ImageFormat)>,
+    pub vector_tables: Vec<(String, u32)>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
 }
@@ -123,11 +130,18 @@ fn execute(
                 .ok_or("expected @platform-path")?;
             boot.platform = Some(local_path(file, script, root));
         }
-        ["sysbus", "LoadELF", value] if boot.platform.is_some() && boot.image.is_none() => {
+        ["sysbus", command @ ("LoadELF" | "LoadHEX"), value]
+            if boot.platform.is_some() && boot.image.is_none() =>
+        {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
-            boot.image = Some(file.to_string());
+            let format = if *command == "LoadHEX" {
+                ImageFormat::Hex
+            } else {
+                ImageFormat::Elf
+            };
+            boot.image = Some((file.to_string(), format));
         }
         ["sysbus", "LoadBinary", value, address] if boot.platform.is_some() => {
             let file = resolve(value)?
@@ -138,6 +152,12 @@ fn execute(
         }
         [cpu, "PC", value] if boot.platform.is_some() => {
             boot.boot_pcs.push((
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
+                crate::parse_address(resolve(value)?)?,
+            ));
+        }
+        [cpu, "VectorTableOffset", value] if boot.platform.is_some() => {
+            boot.vector_tables.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
                 crate::parse_address(resolve(value)?)?,
             ));
@@ -235,7 +255,7 @@ mod tests {
         fs::write(&script, content).unwrap();
         let boot = load(&script, &directory).unwrap();
         assert_eq!(boot.platform, Some(directory.join("board.repl")));
-        assert_eq!(boot.image.as_deref(), Some("firmware.elf"));
+        assert_eq!(boot.image, Some(("firmware.elf".into(), ImageFormat::Elf)));
         assert_eq!(boot.mtvec, Some(0x8000_0020));
         assert_eq!(boot.mask, Some(u32::MAX));
         fs::write(&script, content.replace("MTVEC", "unknown")).unwrap();

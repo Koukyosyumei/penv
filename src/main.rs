@@ -44,7 +44,7 @@ use machine::{Machine, Stop};
 const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
-       penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv run --script PATH [OPTIONS] [LOCAL_IMAGE]
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
@@ -307,6 +307,7 @@ fn run() -> Result<ExitCode, String> {
     }
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
+    let mut vector_tables = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -321,24 +322,27 @@ fn run() -> Result<ExitCode, String> {
         platform_path = boot.platform;
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);
-        if path.is_some() && boot.image.is_none() {
-            return Err("a firmware override requires a LoadELF command in the script".into());
-        }
-        if path.is_none()
-            && let Some(image) = boot.image
-        {
-            path = Some(monitor::asset_path(
-                &image,
-                &script,
-                root,
-                asset_dir.as_deref(),
-            )?);
+        if let Some((image, format)) = boot.image {
+            hex = format == monitor::ImageFormat::Hex;
+            if path.is_none() {
+                path = Some(monitor::asset_path(
+                    &image,
+                    &script,
+                    root,
+                    asset_dir.as_deref(),
+                )?);
+            }
+        } else if path.is_some() {
+            return Err(
+                "a firmware override requires a LoadELF or LoadHEX command in the script".into(),
+            );
         }
         for (value, address) in boot.binaries {
             let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;
+        vector_tables = boot.vector_tables;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -420,6 +424,9 @@ fn run() -> Result<ExitCode, String> {
     }
     for (cpu, address) in boot_pcs {
         machine.set_named_entry(&cpu, address)?;
+    }
+    for (cpu, address) in vector_tables {
+        machine.set_named_vector_table(&cpu, address)?;
     }
     machine.validate_entry()?;
 

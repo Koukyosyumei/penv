@@ -90,6 +90,59 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ボタンは `--button-event 100000:button:press --button-event 200000:button:release` のように操作でき、`--led-events` は LED の状態変化を標準エラー出力に表示します。 上流の Zephyr Button サンプルでボタン割り込みと LED の変化を確認しています。上流の ADC サンプルでは、`--adc-input 1:0.6 --adc-event 1000000:1:1.2 --max-steps 120000000` を指定すると、同じ実行で 745 と 1489 が順に出力されます。
 
+#### 上流ファームウェアでの RESC 検証
+
+Renode `c38ac3ba` の `tests/unit-tests/hex.robot` から起動コマンドを RESC に転記しました。変更前のログでは 3 行目の `sysbus LoadHEX` が `unsupported monitor command` になり、切り分けのために `LoadELF` に置き換えて実行すると 4 行目の `sysbus.cpu VectorTableOffset` も同じエラーになりました。
+
+`LoadHEX` は既存の Intel HEX ローダーを使用します。`VectorTableOffset` には Cortex-M CPU 名と 128 バイト境界のアドレスを指定します。指定したアドレスは REPL とイメージから決まる既定値より優先され、初期 SP と PC の取得と例外ベクターの参照に使用されます。
+
+```sh
+cargo test
+cargo build --release
+assets=$(mktemp -d)
+hex_url=$(awk '/Create Machine +https:/ {print $NF}' ../renode/tests/unit-tests/hex.robot)
+curl -fL "$hex_url" -o "$assets/${hex_url##*/}"
+cat >"$assets/hello.resc" <<EOF
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadHEX @$hex_url
+sysbus.cpu VectorTableOffset 0x08000000
+EOF
+target/release/penv run --script "$assets/hello.resc" --platform-root ../renode \
+  --asset-dir "$assets" --max-steps 10000000 --stats
+```
+
+`--asset-dir "$assets"` の代わりに、末尾の引数に `"$assets/${hex_url##*/}"` を渡しても同じ HEX を起動できます。両方の RESC 実行で `--hex --platform` による直接起動と同一の UART 出力を確認しました。回帰テストでは REPL と異なるベクターテーブルを RESC で指定して、ローカルイメージの両方の指定方法で起動を確認します。単体テスト 39 件と CLI テスト 6 件が成功しました。この検証環境では `cc` がなかったため、Cargo の実行時に `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc` を設定しました。
+
+同じ上流ツリーの `tests/platforms/STM32F072b.robot` が参照する ELF も確認しました。
+
+```sh
+awk '/Create Machine +.*\.elf/ {print $NF}
+     /sysbus LoadELF @https:.*stm32f0-crc-test/ {sub(/^.*\//, ""); print $1}' \
+    ../renode/tests/platforms/STM32F072b.robot |
+while IFS= read -r name; do
+  curl -fL "https://dl.antmicro.com/projects/renode/$name" -o "$assets/$name"
+done
+
+demo() {
+  name=$1; steps=$2; shift 2
+  target/release/penv run \
+    --platform ../renode/platforms/boards/stm32f072b_discovery.repl \
+    --platform-root ../renode --max-steps "$steps" --stats "$@" "$assets"/*"$name".elf-*
+}
+printf 'Echo working?\r' >"$assets/echo.input"
+demo hello_world 1000000
+demo echo 3000000 --uart-input "$assets/echo.input" --uart-input-at 1000000
+demo blinky 550000000 --led-events
+demo button 1000000 --button-event 100000:button:press --button-event 200000:button:release --led-events
+demo adc 120000000 --adc-input 1:0.6 --adc-event 1000000:1:1.2
+demo crc-test 150000000
+```
+
+Hello World の UART 出力、Console Echo の `Echo working?`、Blinky の LED 点灯と消灯の繰り返し、Button の `Button pressed at` と LED 遷移、ADC の `745` と `1489`、CRC の `test result: ok. 840 passed; 0 failed` を確認しました。各実行はステップ上限で終了コード 2 を返しました。
+
+残課題は、Robot の端末・LED テスターや実行中のデバイス操作の取り込みです。今回の確認では CLI の UART 入力、ボタン操作、ADC イベントと LED ログを使用しました。RESC で指定する HEX または ELF は 1 イメージで、URL の実ファイルは事前に取得します。
+
 ## 現在の実装範囲
 
 RV32I 基本整数命令、M 拡張、Zifencei を実装しています。REPL で `rv32ima` または `rv32ima_zicsr_zifencei` を指定すると、共有 RAM 上の A 拡張命令を使用できます。`rv32imc` と `rv32imac` では RV32C の整数圧縮命令に対応します。`cycle`、`instret`、`time` と各上位 32 ビットを読み取れます。CLINT がある場合の `time` は `mtime` に従います。Zicsr の命令と、マシンモードの CSR の一部、および `ECALL`・`EBREAK` からの `MRET` を実装しています。`CPU.RiscV32` ではユーザーモードへの移行とマシンモードへのトラップ、16 エントリーの PMP に対応しています。スーパーバイザーモードでは同期例外の委譲と `SRET`、32 ビット物理アドレス範囲の Sv32 ページ変換に対応しています。変換はハートごとに 64 エントリーをキャッシュし、SFENCE.VMA でそのハートのキャッシュを無効化します。マシンモードから設定したスーパーバイザー割り込みを委譲できます。3 コンテキスト以上の PLIC、その他の ISA 拡張、REPL のその他の構文とデバイス、起動コマンド以外の RESC 構文、ネットワーク、複数ノードは未対応です。標準構成の UART は単一の送信レジスターを提供します。
