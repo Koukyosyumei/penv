@@ -231,6 +231,8 @@ def disposition(path, name, context):
         "Should Ping", "Should Ping With External PMP", "Should Ping Large Payload",
     }:
         return "pass", "Fixed StarLight firmware, UART input and two-guest ping assertions verified (rv64-starlight-network.md)"
+    if path.name == "BeagleV-Fire.robot" and name == "Should Boot Buildroot From SD Card":
+        return "pass", "Fixed public SD boot, ordered UART prompts, root login and uname verified (rv64-fire-upstream.md)"
     if path.name in BOARD:
         return "partial", "Existing CLI run; exact Robot semantics require audit"
     if path.name == "per-core-registration.robot":

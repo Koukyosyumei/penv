@@ -50,6 +50,23 @@ def verify(args):
                 time.sleep(0.1)
 
         try:
+            if args.upstream_case:
+                expect(rb"OpenSBI - version 1\.2[^\r\n]*[\r\n]")
+                expect(rb"U-Boot 2023\.07[^\r\n]*[\r\n]")
+                expect(rb"Model: BeagleBoard BeagleV-Fire")
+                expect(rb"buildroot login:")
+                guest.stdin.write(b"root\r")
+                expect(rb"root")
+                expect(rb"(?:^|\n)# ")
+                guest.stdin.write(b"uname -m\r")
+                expect(rb"uname -m")
+                expect(rb"\nriscv64\r*\n")
+                guest.stdin.write(b"uname -n\r")
+                expect(rb"uname -n")
+                expect(rb"\nbuildroot\r*\n")
+                print("PASS Should Boot Buildroot From SD Card", flush=True)
+                return
+
             for pattern in (
                 rb"Boot image passed CRC", rb"OpenSBI v1\.2", rb"U-Boot 2023\.07",
                 rb"Model: BeagleBoard BeagleV-Fire", rb"Found U-Boot script /boot.scr",
@@ -85,7 +102,11 @@ def main():
     parser.add_argument("--max-steps", type=int, default=6_000_000_000)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--until", choices=("linux", "login"), default="login")
+    parser.add_argument("--upstream-case", action="store_true",
+                        help="run the fixed Robot UART sequence through uname")
     args = parser.parse_args()
+    if args.upstream_case and args.until != "login":
+        parser.error("--upstream-case requires the login stage")
     verify(args)
 
 
