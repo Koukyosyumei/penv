@@ -93,7 +93,12 @@ cpu VectorTableOffset \`sysbus GetSymbolAddress "_vector_table"\`
 connector Connect sysbus.ethernet lan
 RESC
     done
-    echo start
+    cat <<'RESC'
+mach set "client"
+sysbus ReadDoubleWord 0x24000924
+emulation RunFor "10"
+sysbus ReadDoubleWord 0x24000924
+RESC
 } > "$work/echo.resc"
 mkdir "$work/uart"
 status=0
@@ -102,11 +107,12 @@ target/release/penv run --script "$work/echo.resc" --platform-root "$renode" \
     > "$work/echo.log" 2> "$work/echo-penv.log" || status=$?
 server="$work/uart/0.uart.log"
 client="$work/uart/1.uart.log"
-if [[ $status != 2 ]] ||
+if [[ $status != 0 ]] ||
+    ! awk '/client: sysbus\[0x24000924\]/ { print $NF }' "$work/echo.log" | { read -r before && read -r after && [[ $before == 0x00000000 ]] && (( after >= 4 )); } ||
     ! rg -aqF 'net_echo_client_sample: Network connected' "$client" ||
     ! rg -aqF 'Accepted connection' "$server" ||
     [[ $(rg -ac 'TCP .*Received and replied' "$server") -lt 4 ]]; then
-    cat "$work/echo-penv.log" "$server" "$client" >&2
+    cat "$work/echo-penv.log" "$work/echo.log" "$server" "$client" >&2
     exit 1
 fi
 
@@ -145,3 +151,80 @@ REPL
         exit 1
     fi
 done
+
+# Replay the upstream sample fixture after its original 3-second offset.
+mkdir "$work/timed"
+samples="$renode/tests/peripherals/iis2mdc-samples.csv"
+awk -F, 'BEGIN { OFS = "," } NR > 1 { $1 = sprintf("%.0f", $1 + 3000000000) } { print }' \
+    "$samples" > "$work/timed/samples.csv"
+awk -v csv="$work/timed/samples.csv" '
+    /^    MagneticFluxDensity[XYZ]:/ { next }
+    { print }
+    /^iis2mdc:/ {
+        print "    SampleCsv: \"" csv "\""
+        print "    -> gpioPortG@11"
+    }
+' "$work/positive/poll.repl" > "$work/timed/poll.repl"
+cp "$work/positive/poll.resc" "$work/timed/poll.resc"
+trigger_url=$(sed -n 's/^${TRIGGER_BIN}[[:space:]]*//p' "$renode/tests/peripherals/IIS2MDC.robot")
+trigger_elf="$assets/${trigger_url##*/}"
+if [[ ! -f "$trigger_elf" ]]; then
+    curl --fail --location "$trigger_url" --output "$trigger_elf.part"
+    mv "$trigger_elf.part" "$trigger_elf"
+fi
+printf '%s  %s\n' 26f5a81694b9ea2b6c35a05a6c901d30126c303d "$trigger_elf" | sha1sum --check -
+awk -F, 'NR > 1 { printf "%.6f %.6f %.6f\n", $2/100000, $3/100000, $4/100000 }' \
+    "$samples" | sed "s/-0\\.000000/0.000000/g" > "$work/timed/expected"
+for mode in poll trigger; do
+    elf="$poll_elf"
+    if [[ $mode == trigger ]]; then elf="$trigger_elf"; fi
+    status=0
+    target/release/penv run --script "$work/timed/poll.resc" \
+        --platform-root "$renode" --asset-dir "$assets" --max-steps 11000000 "$elf" \
+        > "$work/timed/$mode.uart" 2> "$work/timed/$mode.err" || status=$?
+    if [[ $mode == trigger ]]; then
+        sed -nE 's/^ *iis2mdc@1e \(x, y, z\): *\( *([^,]+), *([^,]+), *([^)]*)\).*/\1 \2 \3/p' \
+            "$work/timed/$mode.uart" > "$work/timed/$mode.actual"
+    else
+        sed -nE 's/^\( x y z \) = \( *([^ ]+) +([^ ]+) +([^ ]+) \).*/\1 \2 \3/p' \
+            "$work/timed/$mode.uart" | awk '$0 != previous && $0 != "0.000000 0.000000 0.000000" { print; previous = $0 }' \
+            > "$work/timed/$mode.actual"
+    fi
+    if [[ $status != 2 ]] || ! diff -u "$work/timed/expected" "$work/timed/$mode.actual"; then
+        cat "$work/timed/$mode.err" "$work/timed/$mode.uart" >&2
+        exit 1
+    fi
+done
+
+# Sample the TIM3_CH1 waveform at both edges over GPIOB4 AF2.
+mkdir "$work/pwm"
+cp "$base"/boot.{resc,repl} "$work/pwm"
+cat >> "$work/pwm/boot.resc" <<'RESC'
+emulation RunFor "2"
+sysbus WriteDoubleWord 0x580244e0 0x2
+sysbus WriteDoubleWord 0x58020400 0x200
+sysbus WriteDoubleWord 0x58020420 0x20000
+sysbus WriteDoubleWord 0x580244e8 2
+sysbus WriteDoubleWord 0x40000400 0
+sysbus WriteDoubleWord 0x40000428 24999
+sysbus WriteDoubleWord 0x4000042c 99
+sysbus WriteDoubleWord 0x40000434 25
+sysbus WriteDoubleWord 0x40000418 0x60
+sysbus WriteDoubleWord 0x40000420 1
+sysbus WriteDoubleWord 0x40000414 1
+sysbus WriteDoubleWord 0x40000400 1
+emulation RunFor "0.0024"
+sysbus ReadDoubleWord 0x58020410
+emulation RunFor "0.0002"
+sysbus ReadDoubleWord 0x58020410
+emulation RunFor "0.0073"
+sysbus ReadDoubleWord 0x58020410
+emulation RunFor "0.0002"
+sysbus ReadDoubleWord 0x58020410
+RESC
+target/release/penv run --script "$work/pwm/boot.resc" --platform-root "$renode" \
+    --asset-dir "$assets" --max-steps 3000000 --uart-log-dir "$work/pwm" \
+    > "$work/pwm/waveform.log" 2> "$work/pwm/penv.log"
+rg -aqF 'Booting STM32H7 Renode Platform Demo' "$work/pwm/0.uart.log"
+printf '%s\n' 0x00000010 0x00000000 0x00000000 0x00000010 |
+    diff -u - <(awk '/sysbus\[0x58020410\]/ { print $NF }' "$work/pwm/waveform.log")

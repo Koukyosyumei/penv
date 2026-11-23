@@ -5,6 +5,8 @@ pub struct Stm32Gpio {
     pub syscfg_port: Option<u8>,
     pub syscfg_inputs: [Option<u8>; 16],
     external: u16,
+    alternate_drive: u16,
+    alternate_driven: u16,
     reset_values: [u32; 3],
     mode: u32,
     output_type: u32,
@@ -35,6 +37,8 @@ impl Stm32Gpio {
             syscfg_port: None,
             syscfg_inputs: [None; 16],
             external: 0,
+            alternate_drive: 0,
+            alternate_driven: 0,
             reset_values: [mode, speed, pull],
             mode,
             output_type: 0,
@@ -64,6 +68,16 @@ impl Stm32Gpio {
         self.external = (self.external & !bit) | (u16::from(high) << pin);
     }
 
+    pub fn drive_alternate(&mut self, pin: u8, level: Option<bool>) {
+        let bit = 1 << pin;
+        self.alternate_driven &= !bit;
+        self.alternate_drive &= !bit;
+        if let Some(level) = level {
+            self.alternate_driven |= bit;
+            self.alternate_drive |= u16::from(level) << pin;
+        }
+    }
+
     pub fn alternate_function(&self, pin: u8) -> Option<usize> {
         ((self.mode >> (pin * 2)) & 3 == 2)
             .then(|| ((self.alternate[usize::from(pin / 8)] >> ((pin % 8) * 4)) & 15) as usize)
@@ -71,13 +85,16 @@ impl Stm32Gpio {
 
     pub fn pins(&self) -> u16 {
         let mut pins = 0;
-        let mut active = self.external | self.output as u16;
+        let mut active = self.external | self.output as u16 | self.alternate_drive;
         while active != 0 {
             let pin = active.trailing_zeros();
             active &= active - 1;
             let mask = 1 << pin;
             match (self.mode >> (pin * 2)) & 3 {
-                0 | 2 => pins |= self.external & mask,
+                0 => pins |= self.external & mask,
+                2 => {
+                    pins |= (self.alternate_drive | (self.external & !self.alternate_driven)) & mask
+                }
                 1 => pins |= self.output as u16 & mask,
                 _ => {}
             }

@@ -59,8 +59,7 @@ impl Timer {
             .filter(|_| self.registers[3] & self.registers[4] & 0xff != 0)
     }
 
-    /// Average high level for an enabled edge-aligned, up-counting PWM channel.
-    pub fn pwm_level(&self, channel: u8) -> Option<f64> {
+    fn pwm_config(&self, channel: u8) -> Option<(u32, bool)> {
         let channel = usize::from(channel);
         let control = self.registers[0];
         let ccer = self.registers[8] >> (channel * 4);
@@ -68,15 +67,28 @@ impl Timer {
         if control & (CEN | DIR | (3 << 5)) != CEN || ccer & 1 == 0 || mode & 3 != 0 {
             return None;
         }
-        let compare = self.registers[13 + channel];
-        let period = f64::from(self.active_arr) + 1.0;
-        let active = (f64::from(compare) / period).min(1.0);
-        let active = match (mode >> 4) & 7 {
-            6 => active,
-            7 => 1.0 - active,
+        let mode_inverted = match (mode >> 4) & 7 {
+            6 => false,
+            7 => true,
             _ => return None,
         };
-        Some(if ccer & 2 == 0 { active } else { 1.0 - active })
+        Some((
+            self.registers[13 + channel],
+            mode_inverted ^ (ccer & 2 != 0),
+        ))
+    }
+
+    /// Average high level for an enabled edge-aligned, up-counting PWM channel.
+    pub fn pwm_level(&self, channel: u8) -> Option<f64> {
+        let (compare, inverted) = self.pwm_config(channel)?;
+        let period = f64::from(self.active_arr) + 1.0;
+        let active = (f64::from(compare) / period).min(1.0);
+        Some(if inverted { 1.0 - active } else { active })
+    }
+
+    pub fn pwm_pin(&self, channel: u8) -> Option<bool> {
+        self.pwm_config(channel)
+            .map(|(compare, inverted)| (self.counter < compare) ^ inverted)
     }
 
     pub fn read(&self, address: u32) -> u32 {

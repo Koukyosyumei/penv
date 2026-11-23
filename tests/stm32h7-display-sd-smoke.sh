@@ -88,3 +88,47 @@ disk_url=$(fetch 'https://dl.antmicro.com/projects/renode/test-fs-ext2.img-s_524
 run_sample sd-mounted "$sd_url" --sd-image "$assets/${disk_url##*/}"
 rg -aqF 'Disk mounted.' "$work/sd-mounted-uart.log"
 rg -aqF '[DIR ] lost+found' "$work/sd-mounted-uart.log"
+
+# Port the two LTDC Robot scenarios to the dedicated ELF. The same timeline
+# without the press checks that the second update was caused by the GPIO edge.
+cat >> "$work/h747.repl" <<'REPL'
+
+button: Miscellaneous.Button @ gpioPortA 0
+    -> gpioPortA@0
+REPL
+cp "$work/display.resc" "$work/display-button.resc"
+cat >> "$work/display-button.resc" <<'RESC'
+ltdc FramesPerVirtualSecond 1
+emulation RunFor "8.1"
+sysbus ReadDoubleWord 0x500010b4
+gpioPortA.button Press
+emulation RunFor "0.1"
+gpioPortA.button Release
+emulation RunFor "0.1"
+sysbus WriteDoubleWord 0x5000103c 0xf
+sysbus WriteDoubleWord 0x500010b4 0
+emulation RunFor "1"
+sysbus ReadDoubleWord 0x50001038
+sysbus WriteDoubleWord 0x50001024 1
+sysbus ReadDoubleWord 0x50001038
+emulation RunFor "0.4"
+sysbus ReadDoubleWord 0x50001038
+emulation RunFor "0.4"
+sysbus ReadDoubleWord 0x50001038
+sysbus WriteDoubleWord 0x500010b4 480
+sysbus WriteDoubleWord 0x50001024 1
+sysbus WriteDoubleWord 0x5000103c 0xf
+emulation RunFor "1"
+sysbus ReadDoubleWord 0x50001038
+RESC
+sed '/^gpioPortA\.button /d' "$work/display-button.resc" > "$work/display-control.resc"
+for case in button control; do
+    mkdir "$work/$case"
+    target/release/penv run --script "$work/display-$case.resc" \
+        --platform-root "$renode" --asset-dir "$assets" --max-steps 12000000 \
+        --uart-log-dir "$work/$case" > "$work/$case/monitor.log" 2> "$work/$case/penv.log"
+done
+printf '%s\n' 0x000001e0 0x00000000 0x00000008 0x00000008 0x0000000a 0x00000000 |
+    diff -u - <(awk '/sysbus\[/ { print $NF }' "$work/button/monitor.log")
+[[ $(rg -acF 'Display updated' "$work/button/0.uart.log") == 2 ]]
+[[ $(rg -acF 'Display updated' "$work/control/0.uart.log") == 1 ]]

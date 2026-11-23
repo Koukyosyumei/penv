@@ -83,6 +83,9 @@ pub fn configure(
             }
         }
         port.set_external(pin, invert);
+        machine
+            .bus
+            .add_gpio_button(format!("{name}.{}", entry.name), port.base, pin, invert);
     }
 
     for led in entries
@@ -275,7 +278,10 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
     Ok(port)
 }
 
-fn registration(entry: &Entry, entries: &[Entry]) -> Result<(u32, u32, Option<u8>), String> {
+pub(crate) fn registration(
+    entry: &Entry,
+    entries: &[Entry],
+) -> Result<(u32, u32, Option<u8>), String> {
     let text = entry
         .registration
         .as_deref()

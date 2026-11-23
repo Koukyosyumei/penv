@@ -116,6 +116,35 @@ impl Plan {
                     resolve(*switch)?,
                 )?;
             }
+            ["sysbus", "WriteDoubleWord", address, value] => {
+                let node = self.monitor_node()?;
+                let address = crate::platform::number(resolve(*address)?)?;
+                let value = crate::platform::number(resolve(*value)?)?;
+                self.actions.push(Action::WriteWord {
+                    node,
+                    address,
+                    value,
+                });
+            }
+            ["ltdc", "FramesPerVirtualSecond", value] => {
+                let node = self.monitor_node()?;
+                let fps = crate::platform::number(resolve(*value)?)?;
+                self.actions.push(Action::DisplayRate { node, fps });
+            }
+            [button, verb @ ("Press" | "Release")] if button.contains('.') => {
+                let node = self.monitor_node()?;
+                let name = button.strip_prefix("sysbus.").unwrap_or(button).to_owned();
+                self.actions.push(Action::Button {
+                    node,
+                    name,
+                    pressed: *verb == "Press",
+                });
+            }
+            ["sysbus", "ReadDoubleWord", address] => {
+                let node = self.monitor_node()?;
+                let address = crate::platform::number(resolve(*address)?)?;
+                self.actions.push(Action::ReadWord { node, address });
+            }
             ["start" | "s"] => self.run(Run::Remaining)?,
             ["emulation", "RunFor", duration] => {
                 self.run(Run::Rounds(rounds(resolve(*duration)?)?))?
@@ -138,6 +167,14 @@ impl Plan {
             }
         }
         Ok(())
+    }
+
+    fn monitor_node(&self) -> Result<usize, String> {
+        if self.started {
+            return Err("monitor operations must precede unbounded start".into());
+        }
+        self.selected
+            .ok_or_else(|| "select a machine before accessing peripherals".into())
     }
 
     fn connection(&mut self, operation: Connection, nic: &str, switch: &str) -> Result<(), String> {

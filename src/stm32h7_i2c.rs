@@ -72,6 +72,18 @@ impl I2c {
         Ok(())
     }
 
+    pub fn sample_magnetometers(
+        &mut self,
+        step: u64,
+    ) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+        self.targets
+            .iter_mut()
+            .filter_map(move |(_, target)| match target {
+                Target::Magnetometer(sensor) => sensor.tick(step),
+                Target::Light(_) => None,
+            })
+    }
+
     pub fn reset(&mut self) {
         self.stop();
         self.registers = [0; 11];

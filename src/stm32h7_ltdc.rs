@@ -24,6 +24,7 @@ pub struct Ltdc {
     registers: [u32; 17],
     layers: [Layer; 2],
     active: Layer,
+    frame_period: u64,
 }
 
 impl Ltdc {
@@ -40,11 +41,14 @@ impl Ltdc {
             registers,
             layers: [Layer::default(); 2],
             active: Layer::default(),
+            frame_period: u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND) / 60,
         }
     }
 
     pub fn reset(&mut self) {
+        let period = self.frame_period;
         *self = Self::new(self.base, self.rcc_bound, self.irq);
+        self.frame_period = period;
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -96,18 +100,30 @@ impl Ltdc {
             }
             0x18 => {
                 self.registers[0x18 / 4] = (value & 0xf001_0001) | 0x2220;
-                self.check_scanout();
             }
             0x24 if value & 1 != 0 => {
                 self.active = self.layers[0];
                 self.registers[0x38 / 4] |= RELOAD;
-                self.check_scanout();
             }
             0x2c => self.registers[0x2c / 4] = value & 0x00ff_ffff,
             0x34 => self.registers[0x34 / 4] = value & 15,
             0x3c => self.registers[0x38 / 4] &= !(value & 15),
             0x40 => self.registers[0x40 / 4] = value & 0x7ff,
             _ => {}
+        }
+    }
+
+    pub fn set_frame_rate(&mut self, fps: u32) -> Result<(), String> {
+        if !(1..=crate::machine::VIRTUAL_STEPS_PER_SECOND).contains(&fps) {
+            return Err("invalid LTDC frame rate".into());
+        }
+        self.frame_period = u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND / fps);
+        Ok(())
+    }
+
+    pub fn tick(&mut self, step: u64) {
+        if step.is_multiple_of(self.frame_period) {
+            self.check_scanout();
         }
     }
 

@@ -317,11 +317,33 @@ pub fn configure(
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
         if entry.model == Iis2mdc::MODEL {
             let mut values = [None; 3];
+            let mut sample_csv = None;
+            let mut route = None;
             for (_, property) in &entry.body {
+                if property.starts_with("->") {
+                    let (_, name, line) = wire(property).map_err(|e| entry.error(e))?;
+                    let port = entries
+                        .iter()
+                        .find(|port| {
+                            port.name == name && port.model == crate::stm32h7_gpio_platform::GPIO
+                        })
+                        .ok_or_else(|| entry.error("expected IIS2MDC DRDY connected to GPIO"))?;
+                    let (base, _, _) = crate::stm32h7_gpio_platform::registration(port, entries)
+                        .map_err(|e| entry.error(&e))?;
+                    let pin = irq_index(line, 16).map_err(|e| entry.error(&e))?;
+                    if route.replace((base, pin)).is_some() {
+                        return Err(entry.error("duplicate IIS2MDC DRDY connection"));
+                    }
+                    continue;
+                }
                 let (key, value) = property
                     .split_once(':')
                     .ok_or_else(|| entry.error("expected IIS2MDC magnetic field property"))?;
                 let axis = match key.trim() {
+                    "SampleCsv" if sample_csv.is_none() => {
+                        sample_csv = Some(value.trim().trim_matches('"'));
+                        continue;
+                    }
                     "MagneticFluxDensityX" => 0,
                     "MagneticFluxDensityY" => 1,
                     "MagneticFluxDensityZ" => 2,
@@ -336,11 +358,15 @@ pub fn configure(
                 }
             }
             let field = values.map(|value| value.unwrap_or(0));
-            bus.attach(
-                u16::from(address),
-                Target::Magnetometer(Iis2mdc::new(field)),
-            )
-            .map_err(|e| entry.error(e))?;
+            let mut sensor = Iis2mdc::new(field);
+            if let Some(path) = sample_csv {
+                sensor.load_samples(path).map_err(|e| entry.error(&e))?;
+            }
+            if let Some((base, pin)) = route {
+                sensor.set_route(base, pin);
+            }
+            bus.attach(u16::from(address), Target::Magnetometer(sensor))
+                .map_err(|e| entry.error(e))?;
             continue;
         }
         let illuminance = match entry.body.as_slice() {

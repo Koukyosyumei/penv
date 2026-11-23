@@ -412,3 +412,16 @@ Ethernet の第 3 スクリプトは、`--uart-log-dir` でノード作成順に
 上記の 3 本の実ファームウェアスモークと `cargo test` を再実行しました。ユニット 59 件と CLI 5 件が通過しました。IIS2MDC 専用 polling ELF は、START より前に TXDR へ書いたレジスター番号を保持する修正と、Thumb-2 `ADR.W` の実装により起動しました。正ベクトル `0.150000 0.300000 0.001500` と負ベクトル `-1.234500 0.678000 0.000000` を UART から照合しています。
 
 上流ケースの合格判定には、IIS2MDC の RESD 再生と GPIO トリガー、専用 display ELF のボタン入力と走査タイミング、PWM 波形、Ethernet クライアントのペイロード照合が残っています。Ethernet サーバーの TCP 応答は複数回確認できましたが、クライアントの `Received and compared … all ok` は出力されていません。
+
+### close-h7-acceptance-gaps
+
+前節の 3 本のスモークを実行します。`stm32h7-io-smoke.sh` は対象の公開 ELF を取得し、指定された SHA-1 と照合します。各スモークが出力するディレクトリに、UART・RESC・レジスター読み出しのログが残ります。
+
+| 対象ケース | 合格条件と証拠 |
+| --- | --- |
+| Ethernet クライアントのペイロード照合 | 上流 echo client ELF の `process_tcp` が受信終端まで `memcmp` に成功すると増やす `conf + 0x24` を読み出す。10 仮想秒で `0 → 0x2c` を確認。サーバーの接続受理と 4 回以上の TCP 応答を UART でも照合する。`io-run/echo.log` と `io-run/uart/`。 |
+| IIS2MDC の時系列 polling と GPIO trigger | 上流 CSV を 3 仮想秒のオフセット付きで REPL の `SampleCsv` に渡す。両方の上流 ELF で 9 ベクトルの順序と値を照合し、trigger は GPIOG11 の DRDY で駆動する。`io-run/timed/`。 |
+| display のボタンと走査タイミング | 専用 ELF で GPIOA0 の押下・解放ありでは `Display updated` が 2 回、同一時間の対照では 1 回。1 FPS で、ゼロ行のステージ中は ISR=0、再読み込み直後と次フレーム直前は `0x8`、フレーム境界後は `0xa`、復元後は 0。`display-sd-run/button/` と `display-sd-run/control/`。 |
+| PWM 波形 | STM32H7 参照 ELF の起動後、TIM3 CH1 を 10 ms 周期・25% に設定。GPIOB4 AF2 の入力を 2.4・2.6・9.9・10.1 ms に読み、高・低・低・高を照合。`io-run/pwm/waveform.log`。 |
+
+Ethernet はハッシュ固定の ELF 内の成功カウンターを合格判定に使います。クライアント UART の比較成功行は未確認です。IIS2MDC の入力形式は元の CSV で、RESD コンテナーの読込みは残件です。LTDC はフレーム境界をモデル化しており、画素クロック単位の走査や他の FIFO アンダーラン条件は残件です。PWM 波形はエッジ整列のアップカウントと検証した配線の範囲です。未変更の上流参照 RESC 自体は引き続き TMP108 未対応で停止します。

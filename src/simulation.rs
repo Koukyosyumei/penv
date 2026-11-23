@@ -35,6 +35,24 @@ pub enum Action {
         nic: String,
         switch: String,
     },
+    Button {
+        node: usize,
+        name: String,
+        pressed: bool,
+    },
+    DisplayRate {
+        node: usize,
+        fps: u32,
+    },
+    WriteWord {
+        node: usize,
+        address: u32,
+        value: u32,
+    },
+    ReadWord {
+        node: usize,
+        address: u32,
+    },
     Run(Run),
 }
 
@@ -93,6 +111,49 @@ pub fn run(
                     switch,
                 } => {
                     simulation.connect(operation, node, &nic, &switch)?;
+                }
+                Action::Button {
+                    node,
+                    name,
+                    pressed,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .gpio_button(&name, pressed)?;
+                }
+                Action::DisplayRate { node, fps } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .ltdc_frames_per_second(fps)?;
+                }
+                Action::WriteWord {
+                    node,
+                    address,
+                    value,
+                } => {
+                    let node = &mut simulation.nodes[node];
+                    if let Some(log) = &mut node.uart_log {
+                        node.machine.bus.write(address, 4, value, log)
+                    } else {
+                        node.machine.bus.write(address, 4, value, &mut output)
+                    }
+                    .map_err(|e| format!("{}: {e}", node.name))?;
+                }
+                Action::ReadWord { node, address } => {
+                    let node = &mut simulation.nodes[node];
+                    let value = node
+                        .machine
+                        .bus
+                        .read::<4>(address)
+                        .map_err(|error| format!("{}: {error}", node.name))?;
+                    writeln!(
+                        output,
+                        "{}: sysbus[{address:#010x}] = {value:#010x}",
+                        node.name
+                    )
+                    .map_err(|error| format!("sysbus read output: {error}"))?;
                 }
                 Action::Run(run) => {
                     ran = true;

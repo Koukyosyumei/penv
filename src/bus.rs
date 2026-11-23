@@ -117,6 +117,7 @@ pub struct Bus {
     h7_dma_mux: Vec<DmaMux>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
+    gpio_buttons: Vec<(String, u32, u8, bool)>,
     gpio_leds: Vec<(String, u32, u8, bool)>,
     gpio_pwm_leds: Vec<PwmLed>,
     h7_rtc: Vec<Stm32Rtc>,
@@ -136,6 +137,7 @@ pub struct Bus {
     designware_usb: Vec<DesignWareUsb>,
     tags: Vec<(std::ops::RangeInclusive<u32>, u32)>,
     h7_ltdc: Option<Ltdc>,
+    h7_step: u64,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -359,6 +361,32 @@ impl Bus {
         self.check_peripheral_range(device.base, Bdma::SIZE)?;
         self.h7_bdma.push(device);
         Ok(())
+    }
+
+    pub fn add_gpio_button(&mut self, name: String, base: u32, pin: u8, inverted: bool) {
+        self.gpio_buttons.push((name, base, pin, inverted));
+    }
+
+    pub fn gpio_button(&mut self, name: &str, pressed: bool) -> Result<(), String> {
+        let (_, base, pin, inverted) = self
+            .gpio_buttons
+            .iter()
+            .find(|(key, ..)| key == name)
+            .ok_or_else(|| format!("unknown GPIO button {name:?}"))?;
+        let port = self
+            .h7_gpio
+            .iter_mut()
+            .find(|port| port.base == *base)
+            .ok_or_else(|| format!("unmapped GPIO button {name:?}"))?;
+        port.set_external(*pin, pressed ^ inverted);
+        Ok(())
+    }
+
+    pub fn ltdc_frames_per_second(&mut self, fps: u32) -> Result<(), String> {
+        self.h7_ltdc
+            .as_mut()
+            .ok_or("no LTDC configured")?
+            .set_frame_rate(fps)
     }
 
     pub fn add_gpio_led(&mut self, name: String, base: u32, pin: u8, inverted: bool) {
@@ -666,7 +694,21 @@ impl Bus {
     }
 
     pub fn tick_h7_peripherals(&mut self) {
+        self.h7_step = self.h7_step.wrapping_add(1);
+        let step = self.h7_step;
+        for i2c in &mut self.h7_i2c {
+            for (base, pin, level) in i2c.sample_magnetometers(step) {
+                if let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == base) {
+                    port.set_external(pin, level);
+                }
+            }
+        }
         let control = self.h7_network_control.as_ref();
+        if let Some(display) = &mut self.h7_ltdc
+            && ltdc_clocked(control, display)
+        {
+            display.tick(step);
+        }
         let mut dma = EthernetDma {
             regions: &mut self.regions,
             reservations: &mut self.reservations,
@@ -680,6 +722,22 @@ impl Bus {
             if timer_clocked(control, timer) {
                 timer.tick();
             }
+        }
+        for led in &self.gpio_pwm_leds {
+            let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == led.base) else {
+                continue;
+            };
+            let level = port
+                .alternate_function(led.pin)
+                .and_then(|af| led.routes[af])
+                .and_then(|(base, channel)| {
+                    let timer = self
+                        .h7_timers
+                        .iter()
+                        .find(|timer| timer.base == base && timer_clocked(control, timer))?;
+                    timer.pwm_pin(channel)
+                });
+            port.drive_alternate(led.pin, level);
         }
         for rtc in &mut self.h7_rtc {
             if rtc_clocked(control, rtc) {
