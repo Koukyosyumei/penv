@@ -339,6 +339,19 @@ def triage(row):
             if name.endswith('XIP'):
                 reason += 'PC=0x90000010 の観測も未検証。'
         reason += ' tests/stm32h7-mx25r-robot.sh'
+    elif suite == 'nucleo_h753zi.robot' and name in {
+        'Should Read Correct Time From the PTP Clock',
+        'Should Transmit PTP Frames',
+        'Should Transmit PTP Frames With SMMUv3 In Bypass Mode',
+    }:
+        status = 'OPEN'
+        if name == 'Should Read Correct Time From the PTP Clock':
+            status = 'PARTIAL'
+            reason = '固定 ELF・未変更 Nucleo REPL で初期化 UART・プロンプト・25.00 を照合。7.48仮想秒後も25.000000000。MAC 時計の単体検証済み、共有仮想時刻接続待ち。tests/stm32h7-ptp-clock-robot.sh'
+        else:
+            reason = '同一 ELF で初期化行と Sync 送信を示す UART を観測。送信記述子のタイムスタンプと Sync/Follow_Up のパケット観測が残る。'
+            if 'SMMUv3' in name:
+                reason += '固定 SMMUv3 バイパス構成は未実行。'
     elif suite == 'nucleo_h753zi.robot' and name == 'Should Read and Write IS25WP Flash':
         status, reason = 'PASS', '固定上流 ELF・Nucleo REPL・ISSI 追記で、既定8秒の期限と同じUART 7行を順に照合。tests/stm32h7-is25wp-robot.sh'
     elif suite == 'MCAN.robot' and name == 'Should Run Zephyr CAN Counter Sample In Loopback Mode':

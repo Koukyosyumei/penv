@@ -1902,3 +1902,16 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 239件、IS25WP の UART 7観測、Blinky・Button が通過しました。Macronix の間接転送 ELF は `Mocks.DummyI2CSlave` の登録で停止し、MemoryMapped と XIP は hard-float ELF の読み込みで停止しました。次の検証には間接転送とバス窓のデータ共有、XIP の最終 PC `0x90000010` の照合が残ります。再現用 REPL/RESC、SHA-1、ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-mx25r.Md9KKNw9` に保存しました。台帳は対象786件のうち等価合格203件、部分検証18件、未達565件です。
+
+### H753ZI Ethernet PTP
+
+固定上流 Zephyr PTP ELF の起動は、変更前に UART 無出力で停止しました。H7 MAC にタイムスタンプ初期化・更新レジスターと仮想経過時間を受ける時計を実装すると、同じ上流 REPL で Port 1 の初期化、シェルプロンプト、`ptp_clock set PTP_CLOCK 25` 後の `25.00` を確認できました。現状は共有経路から経過時間が渡らず、7.48 仮想秒後の読み出しも `25.000000000` でした。デバイス単体では同じ経過時間で `32.48` に到達します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+cargo build --release
+PENV_ASSET_DIR=/tmp/penv-h7-assets bash tests/stm32h7-ptp-clock-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 241件が通過しました。STM32H7 と LiteX の双方向フレーム交換を含みます。PTP 時計ケースは部分検証、送信2件は未達です。残件は仮想時刻接続、TX 記述子の時刻書き戻し、Sync/Follow_Up のフレームと時刻差、SMMUv3 バイパス構成です。公開 ELF のハッシュ、UART、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ptp.P7JnxuwT` に保存しました。台帳は対象786件のうち等価合格203件、部分検証19件、未達564件です。

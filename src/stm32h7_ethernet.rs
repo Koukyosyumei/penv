@@ -21,6 +21,69 @@ const NORMAL: u32 = 1 << 15;
 const RING_BUDGET: usize = 1024;
 const MAX_PACKET: usize = 2048;
 const FIFO_DEPTH: usize = 32;
+const TIMESTAMP_CONTROL: usize = 0xb00;
+const SUBSECOND_INCREMENT: usize = 0xb04;
+const SECONDS: usize = 0xb08;
+const SUBSECONDS: usize = 0xb0c;
+const SECONDS_UPDATE: usize = 0xb10;
+const SUBSECONDS_UPDATE: usize = 0xb14;
+const TS_ENABLE: u32 = 1;
+const TS_INIT: u32 = 1 << 2;
+const TS_UPDATE: u32 = 1 << 3;
+const TS_ADDEND_UPDATE: u32 = 1 << 5;
+const TS_DIGITAL_ROLLOVER: u32 = 1 << 9;
+
+#[derive(Default)]
+struct TimestampClock {
+    enabled: bool,
+    counter: u64,
+    fractional_units: u64,
+}
+
+impl TimestampClock {
+    fn rollover(control: u32) -> u64 {
+        if control & TS_DIGITAL_ROLLOVER != 0 {
+            1_000_000_000
+        } else {
+            1 << 31
+        }
+    }
+
+    fn configure(&mut self, control: u32, seconds: u32, subseconds: u32) {
+        let rollover = Self::rollover(control);
+        let period = rollover << 32;
+        let delta = (u64::from(seconds) * rollover + u64::from(subseconds & 0x7fff_ffff)) % period;
+        if control & TS_INIT != 0 {
+            self.counter = delta;
+            self.fractional_units = 0;
+            self.enabled = true;
+        } else if control & TS_UPDATE != 0 {
+            // Negative offsets already arrive encoded as the register complements.
+            let delta = if subseconds >> 31 != 0 {
+                if delta >= rollover {
+                    delta - rollover
+                } else {
+                    period - (rollover - delta)
+                }
+            } else {
+                delta
+            };
+            self.counter =
+                ((u128::from(self.counter) + u128::from(delta)) % u128::from(period)) as u64;
+        }
+        self.enabled &= control & TS_ENABLE != 0;
+    }
+
+    fn advance(&mut self, control: u32, elapsed_ns: u64) {
+        if self.enabled {
+            let rollover = u128::from(Self::rollover(control));
+            let units = u128::from(elapsed_ns) * rollover + u128::from(self.fractional_units);
+            self.fractional_units = (units % 1_000_000_000) as u64;
+            self.counter =
+                ((u128::from(self.counter) + units / 1_000_000_000) % (rollover << 32)) as u64;
+        }
+    }
+}
 
 #[derive(Default)]
 struct Ring {
@@ -66,6 +129,7 @@ impl Default for Registers {
             rx: Ring::default(),
             status: 0,
         };
+        registers.mac[TIMESTAMP_CONTROL / 4] = 0x2000;
         registers.mac[0x300 / 4] = 0x8000_ffff;
         registers.mac[0x304 / 4] = u32::MAX;
         registers.mtl[0x100 / 4] = 0x70008;
@@ -93,6 +157,7 @@ pub struct Stm32h7Ethernet {
     clock_enabled: bool,
     phy_interface: u32,
     registers: Box<Registers>,
+    timestamp: TimestampClock,
     pending: PendingTx,
     outgoing: VecDeque<Vec<u8>>,
     incoming: VecDeque<Received>,
@@ -109,6 +174,7 @@ impl Stm32h7Ethernet {
             clock_enabled: true,
             phy_interface: 0,
             registers: Box::default(),
+            timestamp: TimestampClock::default(),
             pending: PendingTx::default(),
             outgoing: VecDeque::new(),
             incoming: VecDeque::new(),
@@ -126,10 +192,19 @@ impl Stm32h7Ethernet {
 
     pub fn reset(&mut self) {
         *self.registers = Registers::default();
+        self.timestamp = TimestampClock::default();
         self.pending = PendingTx::default();
         self.outgoing.clear();
         self.incoming.clear();
         self.rx_offset = 0;
+    }
+
+    #[allow(dead_code)] // Called by the shared clock dispatch once wired.
+    pub fn advance_timestamp(&mut self, elapsed_ns: u64) {
+        if self.clock_enabled {
+            self.timestamp
+                .advance(self.registers.mac[TIMESTAMP_CONTROL / 4], elapsed_ns);
+        }
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<(Region, usize)> {
@@ -166,6 +241,15 @@ impl Stm32h7Ethernet {
             (Region::Registers, 0x11c) => 0x0240 | (self.phy_interface << 28),
             (Region::Registers, 0x120) => 0x0000_0104,
             (Region::Registers, 0x124 | 0x128) => 0,
+            (Region::Registers, SECONDS | SUBSECONDS) => {
+                let rollover = TimestampClock::rollover(r.mac[TIMESTAMP_CONTROL / 4]);
+                if offset == SECONDS {
+                    (self.timestamp.counter / rollover) as u32
+                } else {
+                    let increment = u64::from((r.mac[SUBSECOND_INCREMENT / 4] >> 16) & 0xff).max(1);
+                    ((self.timestamp.counter % rollover) / increment * increment) as u32
+                }
+            }
             (Region::Registers, _) => bank_read(&r.mac, offset),
             (Region::Mtl, _) => bank_read(&r.mtl, offset),
             (Region::Dma, 0x008) => u32::from(self.irq_pending()),
@@ -205,6 +289,15 @@ impl Stm32h7Ethernet {
                 self.move_received(dma);
             }
             (Region::Registers, 0x110 | 0x11c | 0x120 | 0x124 | 0x128) => {}
+            (Region::Registers, SECONDS | SUBSECONDS) => {}
+            (Region::Registers, TIMESTAMP_CONTROL) => {
+                self.timestamp.configure(
+                    value,
+                    r.mac[SECONDS_UPDATE / 4],
+                    r.mac[SUBSECONDS_UPDATE / 4],
+                );
+                r.mac[offset / 4] = value & !(TS_INIT | TS_UPDATE | TS_ADDEND_UPDATE);
+            }
             (Region::Registers, 0x200) => self.mdio(value),
             (Region::Registers, 0x300) => r.mac[offset / 4] = 0x8000_0000 | (value & 0xffff),
             (Region::Registers, _) => bank_write(&mut r.mac, offset, value),
@@ -475,5 +568,38 @@ fn bank_read(bank: &[u32], offset: usize) -> u32 {
 fn bank_write(bank: &mut [u32], offset: usize, value: u32) {
     if let Some(word) = bank.get_mut(offset / 4) {
         *word = value;
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn ptp_clock_elapsed_time_and_disable() {
+        let control = TS_ENABLE | TS_DIGITAL_ROLLOVER;
+        let mut clock = TimestampClock::default();
+        clock.configure(control, 25, 0);
+        clock.advance(control, 1_000_000_000);
+        assert_eq!(clock.counter, 0);
+
+        clock.configure(control | TS_INIT, 25, 0);
+        assert_eq!(clock.counter, 25_000_000_000);
+        clock.advance(control, 7_480_000_000);
+        assert_eq!(clock.counter, 32_480_000_000);
+
+        clock.configure(TS_DIGITAL_ROLLOVER, 0, 0);
+        clock.advance(control, 1_000_000_000);
+        assert_eq!(clock.counter, 32_480_000_000);
+    }
+
+    #[test]
+    fn ptp_clock_signed_update_and_binary_rollover() {
+        let mut clock = TimestampClock::default();
+        clock.configure(TS_ENABLE | TS_INIT, 1, 0);
+        clock.advance(TS_ENABLE, 250_000_000);
+        assert_eq!(clock.counter, (1 << 31) + (1 << 29));
+        clock.configure(TS_ENABLE | TS_UPDATE, 0, (1 << 31) | (3 << 29));
+        assert_eq!(clock.counter, 1 << 31);
     }
 }
