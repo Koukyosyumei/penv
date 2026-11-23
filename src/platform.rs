@@ -43,6 +43,13 @@ impl Entry {
     }
 
     fn sysbus(&self) -> Result<Option<u32>, String> {
+        self.sysbus_address()?
+            .map(number)
+            .transpose()
+            .map_err(|e| self.error(&e))
+    }
+
+    fn sysbus_address(&self) -> Result<Option<&str>, String> {
         let registration = self
             .registration
             .as_deref()
@@ -54,7 +61,7 @@ impl Entry {
             .strip_prefix("sysbus")
             .filter(|s| s.starts_with(char::is_whitespace))
             .ok_or_else(|| self.error("unsupported bus registration"))?;
-        number(address.trim()).map(Some).map_err(|e| self.error(&e))
+        Ok(Some(address.trim()))
     }
 
     fn address(&self) -> Result<u32, String> {
@@ -264,8 +271,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .ok_or_else(|| entry.error("missing memory size"))?;
                 machine
                     .bus
-                    .map_ram(
-                        entry.address()?,
+                    .map_global_ram(
+                        crate::parse_bus_address(
+                            entry
+                                .sysbus_address()?
+                                .ok_or_else(|| entry.error("expected a sysbus address"))?,
+                        )
+                        .map_err(|e| entry.error(&e))?,
                         number(size).map_err(|e| entry.error(&e))? as usize,
                     )
                     .map_err(|e| entry.error(&e))?;

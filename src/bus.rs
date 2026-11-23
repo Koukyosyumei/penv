@@ -132,7 +132,7 @@ impl TesterHistory {
 }
 
 struct Region {
-    base: u32,
+    base: u64,
     bytes: Vec<u8>,
 }
 
@@ -189,9 +189,8 @@ pub struct Bus {
 }
 
 impl Region {
-    fn new(base: u32, size: usize) -> Result<Self, String> {
-        let end = u64::from(base).saturating_add(size as u64);
-        if size == 0 || end > 1 << 32 {
+    fn new(base: u64, size: usize) -> Result<Self, String> {
+        if size == 0 {
             return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
         }
         let layout = Layout::array::<u8>(size).map_err(|error| error.to_string())?;
@@ -207,8 +206,8 @@ impl Region {
         Ok(Self { base, bytes })
     }
 
-    fn offset(&self, address: u32, width: usize) -> Option<usize> {
-        let offset = address.checked_sub(self.base)? as usize;
+    fn offset(&self, address: u64, width: usize) -> Option<usize> {
+        let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
         (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
     }
 }
@@ -224,15 +223,34 @@ impl Bus {
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
-        let start = u64::from(base);
-        let end = start.saturating_add(size as u64);
-        if self.overlaps(start, end) {
+        self.map_global_ram(u64::from(base), size)
+    }
+
+    pub fn map_global_ram(&mut self, base: u64, size: usize) -> Result<(), String> {
+        let end = base
+            .checked_add(size as u64)
+            .filter(|&end| base >= 1 << 32 || end <= 1 << 32)
+            .ok_or_else(|| format!("invalid RAM range at {base:#010x} ({size} bytes)"))?;
+        if self.overlaps(base, end) {
             return Err(format!(
                 "overlapping RAM range at {base:#010x} ({size} bytes)"
             ));
         }
         self.regions.push(Region::new(base, size)?);
         Ok(())
+    }
+
+    pub fn high_memory(&mut self, address: u64, width: usize) -> Result<&mut [u8], String> {
+        if address & (width as u64 - 1) != 0 {
+            return Err(format!("misaligned {width}-byte access at {address:#x}"));
+        }
+        self.regions
+            .iter_mut()
+            .find_map(|region| {
+                let offset = region.offset(address, width)?;
+                Some(&mut region.bytes[offset..offset + width])
+            })
+            .ok_or_else(|| format!("unmapped RAM access at {address:#x} ({width} bytes)"))
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
@@ -327,7 +345,7 @@ impl Bus {
                 })
             })
             || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
+                let other = region.base;
                 start < other + region.bytes.len() as u64 && other < end
             })
     }
@@ -1153,7 +1171,8 @@ impl Bus {
             return Ok(());
         }
         let Some(index) = self.regions.iter().position(|region| {
-            region.base == BANK.start && region.bytes.len() == (BANK.end - BANK.start) as usize
+            region.base == u64::from(BANK.start)
+                && region.bytes.len() == (BANK.end - BANK.start) as usize
         }) else {
             return Ok(());
         };
@@ -1419,7 +1438,7 @@ impl Bus {
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
         for region in &mut self.regions {
-            if let Some(offset) = region.offset(address, width) {
+            if let Some(offset) = region.offset(u64::from(address), width) {
                 if width != 0 {
                     for reservation in &mut self.reservations {
                         if reservation.is_some_and(|reserved| {
@@ -1488,7 +1507,7 @@ impl Bus {
         let mut matched = 0;
         let mut previous_end = None;
         for region in regions {
-            let base = u64::from(region.base);
+            let base = region.base;
             let low = u64::from(start).max(base);
             let high = (u64::from(end) + 1).min(base + region.bytes.len() as u64);
             if low >= high {
@@ -1781,7 +1800,7 @@ impl Bus {
             return Err(BusError::Misaligned(address, N));
         }
         for region in &self.regions {
-            if let Some(offset) = region.offset(address, N) {
+            if let Some(offset) = region.offset(u64::from(address), N) {
                 let mut bytes = [0; 4];
                 bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
                 return Ok(u32::from_le_bytes(bytes));

@@ -244,6 +244,119 @@ ram: Memory.MappedMemory @ sysbus 0
 }
 
 #[test]
+fn renode_resc_global_array_memory_above_32bit_preserves_guest_writes() {
+    let directory = std::env::temp_dir().join(format!("penv-high-ram-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+vectors: Memory.MappedMemory @ sysbus 0
+    size: 8
+ram: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x8000
+high: Memory.ArrayMemory @ sysbus 0x8_0000_0000
+    size: 0x8000
+first: Memory.ArrayMemory @ sysbus 1000
+    size: 100
+second: Memory.ArrayMemory @ sysbus 2000
+    size: 100
+third: Memory.ArrayMemory @ sysbus 3000
+    size: 100
+"#,
+    )
+    .unwrap();
+    let mut program = Vec::new();
+    for instruction in [
+        0x4803_u16, 0x4904, 0x6000, 0x3004, 0x4288, 0xd3fb, 0xe7f8, 0xbf00,
+    ] {
+        program.extend(instruction.to_le_bytes());
+    }
+    program.extend(0x40000000_u32.to_le_bytes());
+    program.extend(0x40007000_u32.to_le_bytes());
+    fs::write(directory.join("loop.bin"), program).unwrap();
+    fs::write(
+        directory.join("vectors.bin"),
+        [0, 0x80, 0, 0x40, 1, 0x70, 0, 0x40],
+    )
+    .unwrap();
+    let script = directory.join("high-ram.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @vectors.bin 0
+sysbus LoadBinary @loop.bin 0x40007000
+sysbus WriteDoubleWord 1000 0x666
+sysbus WriteDoubleWord 2000 0x667
+sysbus WriteDoubleWord 3000 0x668
+sysbus ReadDoubleWord 1000
+sysbus ReadDoubleWord 2000
+sysbus ReadDoubleWord 3000
+sysbus WriteDoubleWord 0x8_0000_0000 0x12345678
+emulation RunFor "0.001"
+sysbus ReadDoubleWord 0x40000000
+sysbus ReadDoubleWord 0x40006ffc
+sysbus ReadDoubleWord 0x8_0000_0000
+sysbus ReadWord 0x8_0000_0002
+sysbus ReadByte 0x8_0000_0003
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "100000", "--script"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"0x00000666\n0x00000667\n0x00000668\n0x40000000\n0x40006ffc\n0x12345678\n0x1234\n0x12\n"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Invalidating memory fragment"));
+    // The single-registration upstream fixture uses a 1000-byte range.
+    fs::write(
+        directory.join("single.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+vectors: Memory.MappedMemory @ sysbus 0
+    size: 8
+ram: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x8000
+first: Memory.ArrayMemory @ sysbus 1000
+    size: 1000
+"#,
+    )
+    .unwrap();
+    let single = directory.join("single.resc");
+    fs::write(
+        &single,
+        r#"mach create
+machine LoadPlatformDescription @single.repl
+sysbus LoadBinary @vectors.bin 0
+sysbus LoadBinary @loop.bin 0x40007000
+sysbus WriteDoubleWord 1000 0x666
+sysbus ReadDoubleWord 1000
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "1", "--script"])
+        .arg(single)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"0x00000666\n");
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_cortex_m_hook_logs_at_current_pc() {
     let directory = std::env::temp_dir().join(format!("penv-cpu-hook-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

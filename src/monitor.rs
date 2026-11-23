@@ -51,8 +51,8 @@ enum Action {
     CpuReset(String),
     CpuPc(String, u32),
     MachineReset(Vec<ResetHook>),
-    ReadScalar(u32, ScalarWidth),
-    WriteScalar(u32, ScalarWidth, u32),
+    ReadScalar(u64, ScalarWidth),
+    WriteScalar(u64, ScalarWidth, u32),
     Tag(u32, u32, u64, bool),
     UnhandledAccess(UnhandledAccess),
     ReadBytes(u32, usize),
@@ -89,12 +89,20 @@ enum ScalarWidth {
 }
 
 impl ScalarWidth {
-    fn read(self, machine: &mut Machine, address: u32) -> Result<u32, crate::bus::BusError> {
+    fn read(self, machine: &mut Machine, address: u64) -> Result<u32, String> {
+        let Ok(address32) = u32::try_from(address) else {
+            let width = self as usize;
+            let memory = machine.bus.high_memory(address, width)?;
+            let mut bytes = [0; 4];
+            bytes[..width].copy_from_slice(memory);
+            return Ok(u32::from_le_bytes(bytes));
+        };
         match self {
-            Self::Byte => machine.bus.read_scalar::<1>(address, true),
-            Self::Word => machine.bus.read_scalar::<2>(address, true),
-            Self::DoubleWord => machine.bus.read_scalar::<4>(address, true),
+            Self::Byte => machine.bus.read_scalar::<1>(address32, true),
+            Self::Word => machine.bus.read_scalar::<2>(address32, true),
+            Self::DoubleWord => machine.bus.read_scalar::<4>(address32, true),
         }
+        .map_err(|e| e.to_string())
     }
 }
 
@@ -241,17 +249,26 @@ pub fn run(
             }),
             Action::ReadScalar(address, width) => width
                 .read(machine, *address)
-                .map_err(|error| error.to_string())
                 .and_then(|value| {
                     let digits = *width as usize * 2;
                     writeln!(output.output, "0x{value:0digits$x}").map_err(|e| e.to_string())
                 })
                 .map(|()| None),
-            Action::WriteScalar(address, width, value) => machine
-                .bus
-                .write_scalar(*address, *width as usize, *value, &mut output, true)
-                .map_err(|error| error.to_string())
-                .map(|()| None),
+            Action::WriteScalar(address, width, value) => {
+                let width = *width as usize;
+                if let Ok(address) = u32::try_from(*address) {
+                    machine
+                        .bus
+                        .write_scalar(address, width, *value, &mut output, true)
+                        .map_err(|error| error.to_string())
+                        .map(|()| None)
+                } else {
+                    machine.bus.high_memory(*address, width).map(|memory| {
+                        memory.copy_from_slice(&value.to_le_bytes()[..width]);
+                        None
+                    })
+                }
+            }
             Action::Tag(start, size, default, throws) => machine
                 .bus
                 .tag(*start, *size, *default, *throws)
@@ -960,7 +977,7 @@ fn execute(
             method @ ("ReadByte" | "ReadWord" | "ReadDoubleWord"),
             address,
         ] => Some(Action::ReadScalar(
-            crate::parse_address(resolve(address)?)?,
+            crate::parse_bus_address(resolve(address)?)?,
             match *method {
                 "ReadByte" => ScalarWidth::Byte,
                 "ReadWord" => ScalarWidth::Word,
@@ -983,7 +1000,7 @@ fn execute(
                 return Err(format!("value {value:#x} does not fit {method}"));
             }
             Some(Action::WriteScalar(
-                crate::parse_address(resolve(address)?)?,
+                crate::parse_bus_address(resolve(address)?)?,
                 width,
                 value,
             ))

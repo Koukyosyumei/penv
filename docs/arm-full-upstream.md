@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 60 | 38 | 15 | 239 |
-| Renode Infrastructure NUnit | 134 | 54 | 4 | 76 | 9 |
-| 合計 | **247** | **114** | **42** | **91** | **248** |
+| Renode Robot | 113 | 60 | 39 | 14 | 239 |
+| Renode Infrastructure NUnit | 134 | 56 | 4 | 74 | 9 |
+| 合計 | **247** | **116** | **43** | **88** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -386,4 +386,15 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-pwm-gpio-verification
 ```sh
 cargo test --locked renode_resc_cortex_m_hook
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-pc-hook-verification
+```
+
+## 32ビット空間外のグローバルメモリ登録
+
+固定上流の `array_memory_global_above_32bit.resc` に合わせ、REPL の単一グローバルメモリ登録に 64 ビットのベースアドレスを許可した。32 ビットゲストのアクセス範囲と既存 MMIO を保持し、範囲のオーバーフロー、重複、32 ビット境界をまたぐ低位メモリ登録を拒否する。高位メモリは RESC の `sysbus ReadByte/ReadWord/ReadDoubleWord` と対応する書き込みで参照できる。バルク転送とローダーのアドレスは従来の32ビット範囲。
+
+CLI 回帰では同じ `0x8_0000_0000`、RAM 各32 KiB と仮想時間 0.001 秒を使う。Cortex-M0 向けに置き換えたループが `0x40000000`～`0x40006ffc` にアドレスを順に書き、高位の値と独立であることを確認した。上流の Cortex-R8 固有の CPU コンテキスト登録と JIT の無効化ログは再現しないため部分移植。SystemBus の単一・複数登録2件は、上流と同じ登録範囲と読み出し値を事前に設定した ArrayMemory で検証した。名前付きの複数バス領域と幅変換のケースには、登録ごとのアクセスディスパッチが引き続き必要。
+
+```sh
+cargo test --locked renode_resc_global_array_memory
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-high-ram-verification
 ```

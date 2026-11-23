@@ -292,6 +292,8 @@ def classify_nunit(name, case, attrs, parameter):
         if case == "ShouldSwitchDirectionProperly":
             return OPEN, COMMON, "Generic LimitTimer fires when descending reaches zero at second 4; STM32 TIM2 update IRQ fires on the next tick (underflow), so a generic zero-boundary timer is required"
     if name == "SystemBusTests":
+        if case in {"ShouldFindAfterRegistration", "ShouldFindAfterManyRegistrations"}:
+            return PASS, COMMON, "renode_resc_global_array_memory_above_32bit_preserves_guest_writes; same registered ranges, 32-bit reads at base and 0x666/0x667/0x668 values using prefilled ArrayMemory"
         if case in {
             "ShouldHandleWriteToMemorySegment",
             "ShouldHandlePartialWriteToMemorySegmentAtTheBeginning",
@@ -486,7 +488,7 @@ def classify_robot(name, case, body, parameter):
         if "Create Machine With Hex File" in body:
             return OUT, "per-core-registration-hex.repl: two Cortex-M4s", "Same F072 HEX asset, but loader must resolve CPU1 0x07000000 vs CPU2 0x08000000 context"
         if "array_memory_global_above_32bit.resc" in body:
-            return OPEN, V6, "Cortex-R8 source fixture; accepts global high-address memory and checks no inappropriate flush of 32-bit translations"
+            return PARTIAL, V6, "renode_resc_global_array_memory_above_32bit_preserves_guest_writes; same high address, RAM sizes, 0.001s and sequential 32-bit guest writes; Cortex-R8 context registration and JIT invalidation logging remain"
         return OUT, "per-core-registration.repl: RV64 / two CPUs and two clusters", "Assertions depend on per-core or cluster bus aliases, context-specific loads and registration/move rules"
     if name == "profiler-trace":
         if "PLAT_ARM" in body:

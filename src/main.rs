@@ -462,6 +462,15 @@ fn run() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn parse_bus_address(value: &str) -> Result<u64, String> {
+    let digits = value.replace('_', "");
+    let parsed = match digits.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => digits.parse(),
+    };
+    parsed.map_err(|_| format!("invalid bus address: {value}"))
+}
+
 fn parse_address(value: &str) -> Result<u32, String> {
     let parsed = match value.strip_prefix("0x") {
         Some(hex) => u32::from_str_radix(hex, 16),
