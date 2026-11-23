@@ -36,3 +36,9 @@ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo test --locked --test cli 
 ```
 
 CLI 20 件と公開 STM32F072 Hello World ELF の Save、Clear、Load、mach set 0 後の UART 完了行を確認した。ログと RESC は `~/.local/state/penv-dispatch/evidence/integration/shared-boot-snapshot-b023006/`。固定 Neonkey の旧 USART と REPL の PerformanceInMips、実行中の ITSTATE と周辺機器の保存は残件。
+
+## 停止中のグローバル RAM 読み書き
+
+`--write-memory ADDRESS:WIDTH:VALUE` と `--read-memory-now ADDRESS:WIDTH` は同じ Bus のグローバル RAM を引数順に操作する。幅は 1、2、4、8 バイト。負数はその幅内の二の補数、非負数は従来の RV64 構文と同じ符号なし範囲。 `--max-steps 0` と明示的な REPL で、ファームウェアなしの RAM 検証ができる。
+
+`cargo test --locked` のユニット 209 件、CLI 21 件が合格。RV64 の固定値 `-1000000000000000000`、Cortex-M の `0x500` と `0xf0000000` を手元で再現した。証跡は `~/.local/state/penv-dispatch/evidence/integration/shared-memory-setup-b69d351/`。CPU スコープ付きアクセス、GDB RSP、取引状態は後続作業。

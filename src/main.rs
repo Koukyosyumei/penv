@@ -21,6 +21,7 @@ mod litex_sd;
 mod litex_tftp;
 mod litex_video;
 mod machine;
+mod memory_setup;
 mod mii_phy;
 mod monitor;
 mod murax;
@@ -164,7 +165,9 @@ Options:
   --harts N          Start N RV32 harts at the image entry (1–8)
   --tohost ADDRESS  Stop on an odd write to the RV32 test completion word
   --tohost-act ADDRESS  Decode RV32 Sail ACT console and completion writes
-  --max-steps N      Stop after N execution steps (default: 10000000)
+  --write-memory ADDRESS:WIDTH:VALUE  Write a little-endian RAM value before execution
+  --read-memory-now ADDRESS:WIDTH    Read RAM in setup argument order
+  --max-steps N      Stop after N steps (0 with memory setup; default: 10000000)
   --sd-image PATH    Attach a read-only image to the STM32H7 SDMMC slot
   --uart-log-dir DIR Save each simulation node UART to a numbered file
   --reset-at STEP    Reset the Cortex-M machine before this step (repeatable)
@@ -278,6 +281,7 @@ fn run() -> Result<ExitCode, String> {
     let mut ble_peer = None;
     let mut sd_image = None;
     let mut uart_log_dir = None;
+    let mut memory_setup = Vec::new();
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -286,6 +290,13 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
             Some("--") => positional = true,
+            Some(option @ ("--write-memory" | "--read-memory-now")) => {
+                let argument = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(|| format!("{option} requires a memory access argument"))?;
+                memory_setup.push(memory_setup::MemorySetup::parse(option, &argument)?);
+            }
             Some("--raw") => raw = true,
             Some("--hex") => hex = true,
             Some("--stm32f0-console") => stm32f0_console = true,
@@ -622,7 +633,7 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .and_then(|v| v.into_string().ok())
                     .and_then(|v| v.parse::<u64>().ok())
-                    .filter(|&v| v > 0)
+                    .filter(|&v| v > 0 || option == "--max-steps")
                     .ok_or_else(|| format!("{option} requires a positive integer"))?;
                 if option == "--ram-mib" {
                     if value > 1024 {
@@ -702,6 +713,7 @@ fn run() -> Result<ExitCode, String> {
                         || uart_input.is_some()
                         || uart_input_at.is_some()
                         || !uart_events.is_empty()
+                        || !memory_setup.is_empty()
                         || framebuffer_out.is_some()
                         || sd_image.is_some()
                     {
@@ -797,7 +809,13 @@ fn run() -> Result<ExitCode, String> {
         video_analyzers = boot.video_analyzers;
         serial_analyzer = boot.serial_analyzer;
     }
-    if path.is_none() && binaries.is_empty() {
+    let has_firmware = path.is_some() || !binaries.is_empty();
+    let setup_only = max_steps == Some(0) && !memory_setup.is_empty();
+    if max_steps == Some(0) && !setup_only {
+        return Err("--max-steps requires a positive integer outside memory setup".into());
+    }
+    let memory_only = !has_firmware && platform_path.is_some() && setup_only;
+    if !has_firmware && !memory_only {
         return Err("missing firmware image; see run --help".into());
     }
     if rv64 && (!raw || platform_path.is_some()) {
@@ -1065,6 +1083,12 @@ fn run() -> Result<ExitCode, String> {
                 .write(address, 4, value, &mut io::sink())
                 .map_err(|error| error.to_string())?;
         }
+        for access in &memory_setup {
+            access.apply(&mut machine.bus)?;
+        }
+        if memory_only {
+            return Ok(machine);
+        }
         zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
         machine.validate_entry()?;
         if let Some((local, peer)) = ethernet_loopback {
@@ -1076,6 +1100,9 @@ fn run() -> Result<ExitCode, String> {
         Ok(machine)
     };
     let mut machine = boot_machine()?;
+    if setup_only {
+        return Ok(ExitCode::SUCCESS);
+    }
     for action in &post_run {
         if let monitor::PostRun::DisposePcm(name) = action
             && !machine

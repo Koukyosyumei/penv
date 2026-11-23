@@ -1565,3 +1565,81 @@ ram: Memory.ArrayMemory @ sysbus 0x20000000
     assert!(String::from_utf8_lossy(&truncated.stderr).contains("test.save"));
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn cli_setup_memory_preserves_signed_values_on_rv64_and_cortex_m() {
+    let directory = std::env::temp_dir().join(format!("penv-memory-setup-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let repl = directory.join("memory.repl");
+    for cpu in [
+        "cpu: CPU.RiscV64 @ sysbus\n    cpuType: \"rv64gc\"\n",
+        "cpu: CPU.CortexM @ sysbus\n    cpuType: \"cortex-m4\"\n    nvic: nvic\nnvic: IRQControllers.NVIC @ sysbus 0xe000e000\n    -> cpu@0\n",
+    ] {
+        fs::write(
+            &repl,
+            format!("{cpu}mem: Memory.MappedMemory @ sysbus 0\n    size: 0x40000\n"),
+        )
+        .unwrap();
+        let run = |options: &[&str]| {
+            Command::new(env!("CARGO_BIN_EXE_penv"))
+                .args(["run", "--max-steps", "0", "--platform"])
+                .arg(&repl)
+                .args(options)
+                .output()
+                .unwrap()
+        };
+        let result = run(&[
+            "--read-memory-now",
+            "8:8",
+            "--write-memory",
+            "8:8:-1000000000000000000",
+            "--read-memory-now",
+            "8:8",
+            "--write-memory",
+            "0x10:1:-128",
+            "--read-memory-now",
+            "0x10:1",
+            "--write-memory",
+            "0x12:2:-32768",
+            "--read-memory-now",
+            "0x12:2",
+            "--write-memory",
+            "0x14:4:-2147483648",
+            "--read-memory-now",
+            "0x14:4",
+            "--write-memory",
+            "0x10:1:255",
+            "--read-memory-now",
+            "0x10:1",
+        ]);
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            String::from_utf8(result.stderr).unwrap(),
+            concat!(
+                "penv: memory sysbus@0x0000000000000008:8 = 0x0000000000000000\n",
+                "penv: memory sysbus@0x0000000000000008:8 = 0xf21f494c589c0000\n",
+                "penv: memory sysbus@0x0000000000000010:1 = 0x0000000000000080\n",
+                "penv: memory sysbus@0x0000000000000012:2 = 0x0000000000008000\n",
+                "penv: memory sysbus@0x0000000000000014:4 = 0x0000000080000000\n",
+                "penv: memory sysbus@0x0000000000000010:1 = 0x00000000000000ff\n",
+            )
+        );
+        for value in [
+            "8:1:-129",
+            "8:1:256",
+            "8:2:-32769",
+            "8:4:-2147483649",
+            "8:8:-9223372036854775809",
+        ] {
+            let result = run(&["--write-memory", value]);
+            assert_eq!(result.status.code(), Some(1), "{result:?}");
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("exceeds the requested width")
+            );
+        }
+        let result = run(&["--read-memory-now", "0x40000:1"]);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("unmapped RAM read"));
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
