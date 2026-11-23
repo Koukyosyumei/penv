@@ -402,6 +402,8 @@ fn parse_text(
 ) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
+    let mut init = Vec::new();
+    let mut init_indent = None;
     let mut definitions = Vec::new();
     let mut seen_usings = HashSet::new();
     let mut comments = ReplComments::default();
@@ -418,6 +420,20 @@ fn parse_text(
         };
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
         if text.is_empty() {
+            continue;
+        }
+        let indentation = line.len() - line.trim_start().len();
+        if init_indent.is_some_and(|indent| indentation > indent) {
+            init.push((source, text.into()));
+            continue;
+        }
+        init_indent = None;
+        if text == "init:" && indentation != 0 {
+            if current.is_none() || !init.is_empty() {
+                return Err(error("expected a single init section in a declaration"));
+            }
+            init_indent = Some(indentation);
+            init.push((source, text.into()));
             continue;
         }
         if text == "script: '''"
@@ -447,7 +463,10 @@ fn parse_text(
                 .push((source, text.into()));
             continue;
         }
-        definitions.extend(current.take());
+        if let Some(mut entry) = current.take() {
+            entry.body.append(&mut init);
+            definitions.push(entry);
+        }
         if let Some(include) = text.strip_prefix("using ") {
             let include = include.trim();
             let filename = include
@@ -530,7 +549,10 @@ fn parse_text(
     if comments.in_block {
         return Err(format!("{}: unterminated block comment", path.display()));
     }
-    definitions.extend(current);
+    if let Some(mut entry) = current {
+        entry.body.append(&mut init);
+        definitions.push(entry);
+    }
     entries.extend(definitions);
     Ok(())
 }
@@ -2096,6 +2118,35 @@ mod inline_attribute_cases {
             &mut entries,
         )?;
         Ok(entries)
+    }
+
+    #[test]
+    fn upstream_indented_init_commands() {
+        for (source, expected) in [
+            (
+                "\nuart:\n    init:\n        DoSomething 3\n",
+                &["DoSomething 3"][..],
+            ),
+            (
+                "\nuart:\n    init:\n        Method1 a b\n        Method2 true\n        Method3",
+                &["Method1 a b", "Method2 true", "Method3"],
+            ),
+            (
+                "\nuart:\n    init:\n        CallMethod \"string ; with semicolon\"\n",
+                &["CallMethod \"string ; with semicolon\""],
+            ),
+        ] {
+            let entries = parse(source).unwrap();
+            assert_eq!(entries.len(), 1);
+            let (header, commands) = entries[0].body.split_first().unwrap();
+            assert_eq!(header.1, "init:");
+            assert!(
+                commands
+                    .iter()
+                    .map(|(_, line)| line.as_str())
+                    .eq(expected.iter().copied())
+            );
+        }
     }
 
     #[test]

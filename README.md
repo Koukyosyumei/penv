@@ -1050,3 +1050,21 @@ target/release/penv run --script "$e/range.resc" --platform-root ../renode
 ```
 
 上記ディレクトリにログと終了状態を保存しました。`cargo test` 120件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Nucleo Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格98件、部分検証10件、未達678件です。その他の登録値の型別検証、型付き参照、`local` スコープは残っています。
+
+### backlog-network-2b82dcec1e69-1
+
+字下げ構文の `init:` では、見出しより深い行をコマンドとして集め、同階層に戻った後の属性を通常どおり処理します。コマンドの順序と引用符内のセミコロンを保持します。固定上流 `ParserTests.cs` の3件を同じ入力と期待コマンド列で移植しました。STM32H743 では、`size` を `init:` の後に置いた RAM を構築し、初期化した2ワードを読み戻しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-init-indent.OQ0aCyhl
+target/release/penv run --script "$e/init.resc" --platform-root ../renode
+```
+
+ログと終了状態は上記に保存しました。`cargo test` 121件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格101件、部分検証10件、未達675件です。波括弧内の init、`init add`、汎用モニターコマンドの実行は今回の検証範囲外です。
