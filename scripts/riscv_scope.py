@@ -214,6 +214,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 basis = "fixed RV32 fixture requires unsupported V; separated C and Zcb are available"
                 if re.fullmatch(r"Should (?:Increment|Inhibit) M(?:CYCLE|INSTRET)(?: After Write Finishes)? RV32", case):
                     basis += "; original counter input and a3 assertions passed with V omitted"
+                if re.fullmatch(r"Should (?:Trap On SFENCE\.VMA In User Mode|(?:Not )?Trap On Sret When MSTATUS\.TSR Is (?:One|Zero)) RV32", case):
+                    basis += "; original instruction and privilege inputs verified by ELF with V omitted"
                 return "target", "blocked-cpu", basis
             return "target", status, "case passes bitness=32 to its CPU fixture; " + (basis or "equivalence pending")
     if filename == "riscv-mret.robot" and "LoadPlatformDescriptionFromString ${invalidate_test_plat}" in source:

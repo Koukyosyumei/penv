@@ -1626,3 +1626,17 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 ```
 
 署名用 ELF の `begin_signature` と `end_signature` は既存のシンボル表から解決できます。停止時に RAM を取り出す入口が必要なため、例として Sm 署名のアドレスと参照ファイルを ARM 担当への依頼 `riscv-act-signature-0d400e0.md` に渡しました。署名のバイト比較は返答待ちです。等価合格は累計 174 件で、今回の診断は台帳のケース別注記に記録しました。ケースログと終了状態は上記の証拠ディレクトリに保存しました。
+
+### 固定 RV32 特権遷移の SFENCE.VMA と SRET
+
+固定 `riscv-priv.robot` から RV32 の 3 ケースを実 ELF に移植しました。元の命令、特権モード、PC、MTVEC、TSR と SEPC を使用します。U モードの `sfence.vma` と TSR=1 の S モード `sret` では、固定 MTVEC のハンドラーに到達し、MCAUSE=2 と元の PC を確認します。TSR=0 では `sret` が固定 SEPC に到達して完了します。レジスター設定はゲストの初期化コードで行います。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-priv-transitions.py target/release/penv ../renode "$repro/transitions"
+python3 scripts/validate-rv32-priv-counters.py target/release/penv ../renode "$repro/counters"
+```
+
+同じ release バイナリで、V だけを外した診断構成の 3/3 件と既存カウンターの 6/6 件が通過しました。固定構成では V の未対応で対象 3 件とも CPU 作成時に停止しました。Rust テストは 88/88 件、台帳の上流等価合格は累計 174 件です。ケース別 JSONL、ELF、ソース、終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-3befb2b-jDeT9R/` に保存しました。
