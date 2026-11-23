@@ -1869,3 +1869,20 @@ done
 ```
 
 `cargo test` 236件、固定 STM32H7 REPL 7構成、Zephyr Blinky・Button、SD ファイル装着3件が通過しました。公開 CAN 2件と IS25WP は未達です。ケース別結果、UART ログ、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-2e61e3575da9-1
+
+STM32H7 QuadSPI の ISSI IS25WP で、間接読み取り、書き込み許可付きページプログラム、セクター消去を実装しました。最初の修正で実 ELF は消去確認まで進み、ページ書き込みで停止しました。レジスタートレースで HAL の同一 CCR 再書き込みが転送を中断することを確認し、転送状態を保持するよう修正しました。固定上流 `Should Read and Write IS25WP Flash` の同じ ELF、REPL 追記、8仮想秒の期限、UART 7行を使い、単一・複数セクターの消去と書き戻し照合を通過しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-is25wp-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 238件、STM32H7 REPL 7構成、Zephyr Blinky・Button、独立した SD 装着3件も通過しました。ケース別結果、初回失敗とレジスタートレース、最終 UART ログは `~/.local/state/penv-dispatch/evidence/h7-is25wp-data.B7xtH7T6` に保存しました。台帳は対象786件のうち等価合格203件、部分検証18件、未達565件です。メモリーマップ読み取りと XIP、Macronix フラッシュの上流ケースは残っています。共有ソースの変更はありません。

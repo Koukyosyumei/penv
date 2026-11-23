@@ -326,7 +326,7 @@ def triage(row):
     }:
         status, reason = 'OPEN', '担当ローカルは hard-float ELF を拒否。ARM 統合 b023006 では最小構成で両 ELF ロード可。全 H753 の TIM17 と LED テスターが共有阻害点。CRYP は整列と端数ブロックの暗号化・復号・タグを単体検証済み、HAL の CTR 切替も単体検証済み。実 ELF の LED 判定は未達'
     elif suite == 'nucleo_h753zi.robot' and name == 'Should Read and Write IS25WP Flash':
-        status, reason = 'OPEN', '固定上流 ELF と ISSI フラッシュ追記を実行し、単一・複数セクターとも消去テストの読み取りで Flash read failed! -5 を観測'
+        status, reason = 'PASS', '固定上流 ELF・Nucleo REPL・ISSI 追記で、既定8秒の期限と同じUART 7行を順に照合。tests/stm32h7-is25wp-robot.sh'
     elif suite == 'MCAN.robot' and name == 'Should Run Zephyr CAN Counter Sample In Loopback Mode':
         status, reason = 'OPEN', '固定上流 ELF と H753 REPL で初期化とフィルター登録まで到達。Counter received: 0 で8仮想秒タイムアウト。デバイス単体の送信イベントと拡張IDフィルター検証済み、共有 messageRAM 接続待ち'
     elif suite == 'SDCard.robot' and name in {
