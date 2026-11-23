@@ -55,12 +55,30 @@ pub fn configure(
         ));
     }
     for entry in entries.iter().filter(|entry| entry.model == BUTTON) {
-        let (name, pin) = entry
+        let registration = entry
             .registration
             .as_deref()
-            .and_then(|text| text.split_once(char::is_whitespace))
-            .ok_or_else(|| entry.error("expected button registered on a GPIO pin"))?;
-        let pin = irq_index(pin, 16).map_err(|e| entry.error(&e))?;
+            .ok_or_else(|| entry.error("expected button registered on a GPIO port"))?;
+        let (name, pin) = if let Some((name, pin)) = registration.split_once(char::is_whitespace) {
+            (name, irq_index(pin, 16).map_err(|e| entry.error(&e))?)
+        } else {
+            let mut wires = entry
+                .body
+                .iter()
+                .filter_map(|(_, text)| text.strip_prefix("->"));
+            let pin = wires
+                .next()
+                .and_then(|wire| wire.split_once('@'))
+                .filter(|(target, _)| target.trim() == registration)
+                .ok_or_else(|| entry.error("expected button wired to a pin on its GPIO port"))?;
+            if wires.next().is_some() {
+                return Err(entry.error("expected a single GPIO button wire"));
+            }
+            (
+                registration,
+                irq_index(pin.1, 16).map_err(|e| entry.error(&e))?,
+            )
+        };
         let (_, port) = ports
             .iter_mut()
             .find(|(parent, _)| *parent == name)

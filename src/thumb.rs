@@ -22,6 +22,7 @@ pub struct Thumb {
     zero: bool,
     carry: bool,
     overflow: bool,
+    saturation: bool,
     greater_equal: u32,
     active_exception: u8,
     active_exceptions: ActiveExceptions,
@@ -168,6 +169,7 @@ impl Thumb {
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
             | (u32::from(self.overflow) << 28)
+            | (u32::from(self.saturation) << 27)
             | (self.greater_equal << 16)
     }
 
@@ -176,6 +178,7 @@ impl Thumb {
         self.zero = value & (1 << 30) != 0;
         self.carry = value & (1 << 29) != 0;
         self.overflow = value & (1 << 28) != 0;
+        self.saturation = value & (1 << 27) != 0;
         self.greater_equal = if self.thumb2 { (value >> 16) & 15 } else { 0 };
     }
 
@@ -904,7 +907,7 @@ impl Thumb {
                             }
                             let mut mask = 0;
                             if low & 0x800 != 0 {
-                                mask |= 0xf000_0000;
+                                mask |= 0xf800_0000;
                             }
                             if low & 0x400 != 0 {
                                 mask |= 0x000f_0000;

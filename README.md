@@ -856,3 +856,25 @@ PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
 ```
 
 ログ、RESD、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ina228.lLR6tsyx` にあります。INA228 の比較結果は `ina-final/*/compare.log` に保存しました。LPS25HB と上流 REPL 7 構成の回帰も通過しました。台帳は対象 789 件のうち等価合格 39 件、部分検証 10 件、未達 740 件です。
+
+### backlog-network-fa475fcf2125-1
+
+STM32H7 RCC の発振器・PLL の書き込み制約とリセット値を修正しました。選択中のシステムクロック、動作中の PLL のクロックソース、HSE CSS の保持、PLL1 の無効な DIVP1 値を固定上流の NUnit 7 件と照合しました。公開 Zephyr ELF が使う `SMLAxy` と APSR.Q、内部クロック校正レジスターも実装しました。
+
+未変更 STM32H743 REPL と上流 ELF で、HSE 8、HSE 8 CSS、HSI 64、PLL CSI 96、PLL HSE 96、PLL HSI 96 の 6 Robot ケースが等価合格しました。CSI 4 は USART3 が無出力のまま 8 仮想秒でタイムアウトします。短い追試の命令上限時点では PC `0x0800479c` を観測しましたが、停止原因は未確定です。RCC の TIM1 リセットログ、周波数照会、ゲート状態照会を使う残り 3 Robot ケースも未達です。
+
+LTDC ではボタン登録にピン番号を省き、接続先のピンだけを書く固定 REPL の構文に対応しました。その構成の公開表示 ELF は、上流 STM32H743 REPL に未配置の DSI 領域 `0x50000430` をアクセスして停止します。シャドーレジスターの両ケースは既存の診断検証に基づく部分検証のままです。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test upstream_rcc_tests
+cargo build --release
+bash tests/stm32h7-rcc-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-ltdc-robot.GpG8dofF
+target/release/penv run --script "$e/start.resc" --platform-root ../renode \
+    --asset-dir "$PENV_ASSET_DIR" --max-steps 45000000
+```
+
+RCC スクリプトは CSI 4 の未達によりコード 1 を返します。ログと終了状態は上記の証拠ディレクトリにあり、RCC の最終実行は `rcc-rules/` です。参照 Zephyr Shell、ADC DMA、暗号サンプル、Blinky、Button、REPL ロード 7 構成は回帰を通過しました。台帳は対象 789 件のうち等価合格 52 件、部分検証 10 件、未達 727 件です。

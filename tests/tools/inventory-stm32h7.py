@@ -168,7 +168,12 @@ for file, kind in robot.items():
         elif file.endswith('STM32SDMMC.robot'):
             status, note = 'PARTIAL', '診断 REPL / 読取専用のスモークで UART 一致。元の SdCardFromFile と容量設定が未移植'
         elif file.endswith('STM32LTDC.robot'):
-            status, note = 'PARTIAL', 'ボタン対照・ゼロ行・仮想フレームは実 ELF で確認。元の構成と Robot 操作の等価性の確定待ち'
+            status, note = 'PARTIAL', '診断 REPL でボタン・ゼロ行・フレームを確認。固定 H743 REPL はボタン宣言を読み込むが公開 ELF が DSI 未割り当ての 0x50000430 で停止'
+        elif file.endswith('STM32H7_RCC.robot') and name.startswith('Should Pass Zephyr'):
+            if name.endswith('With CSI 4'):
+                note = '固定 H743 REPL と ELF で USART3 が無出力のまま8仮想秒でタイムアウト。別の実行で PC=0x0800479c を観測'
+            else:
+                status, note = 'PASS', '固定 H743 REPL と同一 ELF・USART3・8秒期限で PROJECT EXECUTION SUCCESSFUL を照合。tests/stm32h7-rcc-robot.sh'
         elif file.endswith('IIS2MDC.robot'):
             status, note = 'PASS', '固定 stm32h753 REPL・I2C1 と PG11・同一 ELF。上流 csv2resd の 9 ブロックを供給し、USART2 の9組を同順・各8秒以内に照合'
         elif file.endswith('INA228.robot'):
@@ -231,6 +236,10 @@ for file,kind in nunit.items():
         while k+1<len(lines) and not lines[k].rstrip().endswith(')'):
             k+=1
         args=line.strip()+' '+ ' '.join(l.strip() for l in lines[j:k+1])
+        if kind == 'STM32H7':
+            rows.append((repository, source, f'{i+1}-{k+1}', name.group(1), args, 'PASS',
+                         '固定上流と同じ RCC 初期化、レジスター書込み順、readback の期待値を照合。src/stm32h7_net_control.rs'))
+            continue
         if kind == 'FT5336':
             fixtures = {
                 'NormalTest': ('false,false,false', '(50,60)', 'normal_test'),

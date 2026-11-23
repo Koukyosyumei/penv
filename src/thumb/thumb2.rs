@@ -389,10 +389,23 @@ impl Thumb {
                 r[rt] = product as u32;
                 r[rd] = (product >> 32) as u32;
             }
-            0xfb10..=0xfb1e if low & 0xf0c0 == 0xf000 && rd < 15 && rm < 15 => {
-                let lhs = (r[rn] >> ((low & 0x20) >> 1)) as i16 as i32;
-                let rhs = (r[rm] >> (low & 0x10)) as i16 as i32;
-                r[rd] = (lhs * rhs) as u32;
+            0xfb10..=0xfb1e
+                if low & 0xc0 == 0
+                    && rn != 13
+                    && rt != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = (r[rn] >> if low & 0x20 == 0 { 0 } else { 16 }) as i16;
+                let b = (r[rm] >> if low & 0x10 == 0 { 0 } else { 16 }) as i16;
+                let product = i32::from(a) * i32::from(b);
+                if rt == 15 {
+                    r[rd] = product as u32;
+                } else {
+                    let (sum, overflow) = product.overflowing_add(r[rt] as i32);
+                    r[rd] = sum as u32;
+                    self.saturation |= overflow;
+                }
             }
             0xfb00..=0xfb0e
                 if low & 0xe0 == 0

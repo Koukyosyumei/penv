@@ -58,7 +58,11 @@ impl NetworkControl {
             nic,
             clocks: {
                 let mut regs = [0; 67];
-                regs[0] = 0x85;
+                regs[0] = 0x25;
+                regs[1] = 0x4000_0000;
+                regs[0x28 / 4] = 0x0202_0200;
+                regs[0x2c / 4] = 0x01ff_0000;
+                regs[0x30 / 4] = 0x0101_0280;
                 regs
             },
             syscfg_power: 0,
@@ -282,7 +286,8 @@ impl NetworkControl {
     fn clock_slot(offset: u32) -> Option<usize> {
         matches!(
             offset,
-            0x00 | 0x10
+            0x00 | 0x04
+                | 0x10
                 | 0x18
                 | 0x1c
                 | 0x20
@@ -382,19 +387,47 @@ impl NetworkControl {
         if let Some(slot) = Self::clock_slot(offset) {
             self.clocks[slot] = match offset {
                 0 => {
-                    // Oscillator and PLL startup completes within the MMIO write.
-                    const ENABLES: u32 = (1 << 0)
-                        | (1 << 7)
-                        | (1 << 12)
-                        | (1 << 16)
-                        | (1 << 24)
-                        | (1 << 26)
-                        | (1 << 28);
-                    // HSI ready is bit 2, while the remaining READY flags follow ON.
-                    let ready = ((value & (ENABLES & !1)) << 1) | ((value & 1) << 2);
-                    (value & !(((ENABLES & !1) << 1) | 4)) | ready
+                    const PLLS: u32 = (1 << 24) | (1 << 26) | (1 << 28);
+                    const OSCILLATORS: [u32; 4] = [1, 1 << 7, 1 << 16, 0];
+                    let old = self.clocks[0];
+                    let source = (self.clocks[0x10 / 4] & 3) as usize;
+                    let pll_source = (self.clocks[0x28 / 4] & 3) as usize;
+                    let required = if source == 3 {
+                        (1 << 24) | (old & OSCILLATORS[pll_source])
+                    } else {
+                        old & OSCILLATORS[source]
+                    };
+                    let mut control = (value & 0x150d_d29b) | required | (old & (1 << 19));
+                    if pll_source == 0 && (old | value) & PLLS != 0 {
+                        control = (control & !(3 << 3)) | (old & (3 << 3));
+                    }
+                    let ready = ((control & (PLLS | (1 << 7) | (1 << 12) | (1 << 16))) << 1)
+                        | ((control & 1) << 2);
+                    control | ready | (1 << 5)
                 }
-                0x10 => (value & !(7 << 3)) | ((value & 7) << 3),
+                0x04 => value & 0x7fff_ffff,
+                0x10 => {
+                    let source = value & 7;
+                    let source = if source < 4 {
+                        source
+                    } else {
+                        self.clocks[slot] & 7
+                    };
+                    (value & !0x3f) | source | (source << 3)
+                }
+                0x28 if self.clocks[0] & ((1 << 24) | (1 << 26) | (1 << 28)) != 0 => {
+                    (value & !3) | (self.clocks[slot] & 3)
+                }
+                0x30 => {
+                    let divp = (value >> 9) & 0x7f;
+                    if self.clocks[0] & (1 << 24) != 0 {
+                        self.clocks[slot]
+                    } else if divp != 0 && divp & 1 == 0 {
+                        (value & !(0x7f << 9)) | (self.clocks[slot] & (0x7f << 9))
+                    } else {
+                        value
+                    }
+                }
                 0xa0 => value & 0xf, // GCR boot requests are latched without a second CPU.
                 _ => value,
             };
@@ -471,5 +504,89 @@ impl NetworkControl {
             }
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod upstream_rcc_tests {
+    use super::*;
+
+    const BASE: u32 = 0x1000;
+    const CR: u32 = BASE;
+    const CFGR: u32 = BASE + 0x10;
+    const PLLCKSELR: u32 = BASE + 0x28;
+    const PLL1DIVR: u32 = BASE + 0x30;
+    const HSI: u32 = (1 << 0) | (1 << 2);
+    const CSI: u32 = 1 << 7;
+    const HSE: u32 = 1 << 16;
+    const PLL1: u32 = 1 << 24;
+    const DIV_READY: u32 = 1 << 5;
+
+    fn new() -> NetworkControl {
+        NetworkControl::new(BASE, None, None)
+    }
+
+    fn check_oscillator(source: u32, on: u32, expected: u32) {
+        let mut rcc = new();
+        let read = rcc.read(CR).unwrap();
+        rcc.write(CR, read | on).unwrap();
+        rcc.write(CFGR, source).unwrap();
+        rcc.write(CR, 0).unwrap();
+        assert_eq!(rcc.read(CR), Some(expected | DIV_READY));
+    }
+
+    #[test]
+    fn should_prevent_disabling_hsi() {
+        let mut rcc = new();
+        rcc.write(CR, 0).unwrap();
+        assert_eq!(rcc.read(CR), Some(HSI | DIV_READY));
+    }
+
+    #[test]
+    fn should_prevent_disabling_csi() {
+        check_oscillator(1, CSI, CSI | CSI << 1);
+    }
+
+    #[test]
+    fn should_prevent_disabling_hse() {
+        check_oscillator(2, HSE, HSE | HSE << 1);
+    }
+
+    #[test]
+    fn should_prevent_disabling_pll1() {
+        check_oscillator(3, PLL1, PLL1 | PLL1 << 1 | HSI);
+    }
+
+    #[test]
+    fn should_prevent_plls_modification_while_running() {
+        let mut rcc = new();
+        let initial = rcc.read(CR).unwrap();
+        for (pll, source) in [(PLL1, 1), (1 << 26, 2), (1 << 28, 3)] {
+            rcc.write(CR, initial | pll).unwrap();
+            let before = rcc.read(PLLCKSELR).unwrap();
+            rcc.write(PLLCKSELR, before | source).unwrap();
+            assert_eq!(rcc.read(PLLCKSELR), Some(before));
+        }
+    }
+
+    #[test]
+    fn should_keep_hsecsson_enabled() {
+        let mut rcc = new();
+        let before = rcc.read(CR).unwrap();
+        rcc.write(CR, before | 1 << 19).unwrap();
+        rcc.write(CR, before & !(1 << 19)).unwrap();
+        assert_eq!(rcc.read(CR).unwrap() & (1 << 19), 1 << 19);
+    }
+
+    #[test]
+    fn should_prevent_invalid_writes_to_divp1() {
+        let mut rcc = new();
+        let before = rcc.read(PLL1DIVR).unwrap();
+        let mask = 0x7f << 9;
+        for (written, expected) in [(3, 3), (2, 3), (0, 0)] {
+            rcc.write(PLL1DIVR, (before & !mask) | (written << 9))
+                .unwrap();
+            assert_eq!(rcc.read(PLL1DIVR).unwrap() & mask, expected << 9);
+        }
     }
 }
