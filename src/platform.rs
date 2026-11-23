@@ -1220,6 +1220,29 @@ fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
 
 const EMPTY_PERIPHERAL: &str = "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
 
+fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
+    for (_, attribute) in &entry.body {
+        if let Some((_, value)) = attribute.split_once(':')
+            && let Some(model) = value.trim().strip_prefix("new ")
+            && is_repl_identifier(model.trim())
+        {
+            return Err(entry.error(&format!("TypeNotResolved: {model:?}")));
+        }
+    }
+    if entry.body.is_empty() {
+        return Ok(());
+    }
+    // The fixed model has both (double value) and (int value, bool enabled = false).
+    if let [(_, attribute)] = entry.body.as_slice()
+        && let Some((key, value)) = attribute.split_once(':')
+        && key.trim() == "value"
+        && number_token(value).is_some_and(|value| value.parse::<i32>().is_ok())
+    {
+        return Err(entry.error("AmbiguousCtor: integer value matches two constructors"));
+    }
+    Err(entry.error("NoCtor: no supported constructor for the specified attributes"))
+}
+
 fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<Machine, String> {
     build_entries(path, entries, f4_repl_timing, false)
 }
@@ -1282,7 +1305,7 @@ fn build_entries(
                     .map_err(|error| entry.error(&error))?;
             }
             EMPTY_PERIPHERAL => {
-                keys(entry, &[])?;
+                validate_empty_peripheral_constructor(entry)?;
                 if matches!(entry.registration.as_deref(), None | Some("none")) {
                     continue;
                 }

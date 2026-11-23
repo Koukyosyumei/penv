@@ -433,3 +433,33 @@ fn renode_declaration_constructs_unregistered_empty_peripheral() {
     )
     .unwrap();
 }
+
+#[test]
+fn renode_empty_ctor_missing_inline_type() {
+    let error = check_string(
+        "\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    ctorParam: new NoSuchType",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("TypeNotResolved:"));
+}
+
+#[test]
+fn renode_empty_ctor_no_match() {
+    let error = check_string(
+        "\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    ctorParam: 3",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("NoCtor:"));
+}
+
+#[test]
+fn renode_empty_ctor_ambiguous() {
+    let error = check_string(
+        "\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    value: 3",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("AmbiguousCtor:"));
+}
