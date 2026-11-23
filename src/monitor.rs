@@ -130,6 +130,19 @@ fn execute(
         },
     };
     match words.as_slice() {
+        ["py", variable] if variable.starts_with('$') => {
+            let value = resolve(variable)?;
+            let numeric = value.parse::<i128>().is_ok()
+                || value
+                    .strip_prefix("0x")
+                    .is_some_and(|digits| u128::from_str_radix(digits, 16).is_ok());
+            if numeric {
+                return Err(format!(
+                    "There was an error when executing command '{text}': Variable type has to be a string."
+                ));
+            }
+            return Err("Python execution is unsupported".into());
+        }
         ["mach" | "machine", "create", name @ ..] if name.len() <= 1 => {
             if let Some(name) = name.first() {
                 resolve(*name)?;

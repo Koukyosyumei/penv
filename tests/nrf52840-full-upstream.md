@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 119 | 5 | 66 |
+| 監査した共有・混成 Robot | 190 | 120 | 5 | 65 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **136** | **5** | **80** |
+| 合計 | **221** | **137** | **5** | **79** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -391,3 +391,15 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-mov-sp.ZWSzyTci/` の `cargo-test.final`、`elf`、`bus-fault`、`shell` に保存した。ArrayMemory と ITSTATE の保存・復元ケースは、ゲストメモリと CPU 状態を復元する機能が未達。
+
+### Python monitor の変数型診断
+
+`python-engine.robot:97–102` の固定コマンド `$a=1` と `py $a` を、CPU のない RESC として実行した。上流と同じ変数型の診断、行番号、終了コード 1 と空の標準出力を照合した。対応範囲は Python 呼び出し前の整数入力エラー。Python 実行、フックの構文検査と PyDev の QuadWord 操作は未達。
+
+```sh
+cargo test
+tests/nrf52840-python-monitor-type-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/python-monitor-type"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/python-monitor-type.w6i2XUAR/` の `cargo-test`、`monitor`、`shell` に保存した。
