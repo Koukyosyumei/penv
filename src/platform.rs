@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::Write,
     path::{Component, Path, PathBuf},
@@ -2651,7 +2651,11 @@ fn build_entries_on_machine(
                 )
                 || matches!(
                     entry.model.as_str(),
-                    F4Spi::MODEL | F4Spi::LOOPBACK_MODEL | Ad4011::MODEL | Ad4011::SOURCE_MODEL
+                    F4Spi::MODEL
+                        | F4Spi::LOOPBACK_MODEL
+                        | Ad4011::MODEL
+                        | Ad4011::SOURCE_MODEL
+                        | Ad4011::WIRE_MODEL
                 )
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
@@ -3068,7 +3072,11 @@ fn build_entries_on_machine(
     if let Some(entry) = entries.iter().find(|entry| {
         matches!(
             entry.model.as_str(),
-            F4Spi::MODEL | F4Spi::LOOPBACK_MODEL | Ad4011::MODEL | Ad4011::SOURCE_MODEL
+            F4Spi::MODEL
+                | F4Spi::LOOPBACK_MODEL
+                | Ad4011::MODEL
+                | Ad4011::SOURCE_MODEL
+                | Ad4011::WIRE_MODEL
         )
     }) {
         return Err(entry.error("STM32F4 SPI requires a Cortex-M CPU"));
@@ -3671,6 +3679,14 @@ fn configure_f1_i2c(
     Ok(())
 }
 
+fn adc_registration(entry: &Entry) -> Result<(&str, &str), String> {
+    entry
+        .registration
+        .as_deref()
+        .and_then(|registration| registration.split_once(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected ADC source parent and channel"))
+}
+
 fn configure_f4_spi(
     entries: &[Entry],
     nvic: Option<&Entry>,
@@ -3701,29 +3717,67 @@ fn configure_f4_spi(
         }
     }
     let mut inputs = HashMap::new();
+    let mut wire_sources = HashMap::<_, BTreeMap<_, _>>::new();
     for source in entries
         .iter()
         .filter(|entry| entry.model == Ad4011::SOURCE_MODEL)
     {
-        let (parent, channel) = source
-            .registration
-            .as_deref()
-            .and_then(|registration| registration.split_once(char::is_whitespace))
-            .ok_or_else(|| source.error("expected AD4011 ADC and channel"))?;
-        if irq_index(channel, 1).is_err()
+        let (parent, channel) = adc_registration(source)?;
+        let channel = number(channel).map_err(|error| source.error(&error))?;
+        let target = entries
+            .iter()
+            .find(|entry| entry.name == parent)
+            .ok_or_else(|| source.error("missing ADC source parent"))?;
+        let mut voltage = 0;
+        let mut floating = false;
+        for (key, value) in keys(source, &["defaultValueMicroVolts", "IsFloating"])? {
+            if key == "IsFloating" {
+                floating = value
+                    .parse()
+                    .map_err(|_| source.error("expected IsFloating boolean"))?;
+            } else {
+                voltage = number(value).map_err(|error| source.error(&error))?;
+            }
+        }
+        let sample = (!floating).then_some(voltage);
+        match target.model.as_str() {
+            Ad4011::WIRE_MODEL => {
+                if wire_sources
+                    .entry(parent)
+                    .or_default()
+                    .insert(channel, sample)
+                    .is_some()
+                {
+                    return Err(source.error("duplicate analog wire input"));
+                }
+            }
+            Ad4011::MODEL if channel == 0 => {
+                if inputs.insert(parent, voltage).is_some() {
+                    return Err(source.error("duplicate AD4011 ADC channel 0"));
+                }
+            }
+            _ => return Err(source.error("expected AD4011 channel 0 or analog wire input")),
+        }
+    }
+    for wire in entries
+        .iter()
+        .filter(|entry| entry.model == Ad4011::WIRE_MODEL)
+    {
+        keys(wire, &[])?;
+        let (parent, channel) = adc_registration(wire)?;
+        if number(channel).ok() != Some(0)
             || !entries
                 .iter()
                 .any(|adc| adc.name == parent && adc.model == Ad4011::MODEL)
         {
-            return Err(source.error("expected AD4011 ADC channel 0"));
+            return Err(wire.error("expected analog wire attached to AD4011 channel 0"));
         }
-        let props = keys(source, &["defaultValueMicroVolts"])?;
-        let voltage = props
-            .first()
-            .map_or(Ok(0), |(_, value)| value.parse::<u32>())
-            .map_err(|_| source.error("invalid defaultValueMicroVolts"))?;
+        let voltage = wire_sources
+            .get(wire.name.as_str())
+            .and_then(|sources| sources.values().copied().flatten().next())
+            .unwrap_or(0);
         if inputs.insert(parent, voltage).is_some() {
-            return Err(source.error("duplicate AD4011 ADC channel 0"));
+            return Err(wire.error("duplicate AD4011 ADC channel 0"));
         }
     }
     let mut converters = HashMap::new();

@@ -33,6 +33,7 @@ pub struct Ad4011 {
 
 impl Ad4011 {
     pub const MODEL: &str = "Analog.AD4011_ADC";
+    pub const WIRE_MODEL: &str = "Analog.AnalogWire";
     pub const SOURCE_MODEL: &str = "Analog.ADCChannelSource";
 
     pub fn new(reference_uv: u32, input_uv: u32) -> Self {

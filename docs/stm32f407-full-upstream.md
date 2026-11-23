@@ -1645,3 +1645,22 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
 `target/release/penv platform check --file "$work/array-memory.repl"`
 で検査すると、CPU の `PerformanceInMips: 12` が拒否されます。
 ARM 担当にはその再現と、後続の Save/Clear/Load・UART の条件を渡しました。
+
+AD4011 の浮動入力ケースでは、STM32F4 SPI 上の ADC に AnalogWire を登録し、
+浮動中の入力を除いて最小アドレスの入力を選択します。入力がすべて浮動なら
+0 V です。固定 Robot の4状態をそれぞれ起動時に設定し、直接入力10点と合わせて
+同じ SPI ELF で実行しました。両入力が有効なケースは登録の宣言順を逆にし、
+アドレス0を優先することを確認しました。元のセッション内の `IsFloating` と
+`Transmit` は共有モニター対応待ちのため部分移植です。
+
+```sh
+work=target/stm32f407-ad4011-wire
+cargo build --release
+tests/stm32f407-ad4011.sh "$work" --all
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+ログは `$work/all.tsv`、`$work/cargo.log`、`$work/freertos.log` です。
+残る入出力 MUX は `$work/mux-Input.repl` と `$work/mux-Output.repl` を
+`penv platform check --file PATH --platform-root ../renode` で検査すると、それぞれ
+`Analog.MUX36S16_Input` と `Analog.MUX36S16_Output` の型解決で停止します。

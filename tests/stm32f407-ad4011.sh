@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise the upstream direct voltage sweep through STM32F4 SPI MMIO.
+# Exercise AD4011 Robot voltages through STM32F4 SPI MMIO.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 work=${1:-target/stm32f407-ad4011}
@@ -50,22 +50,52 @@ ASM
     -Wl,-T,"$work/adc.ld" "$work/adc.S" -o "$work/adc.elf"
 
 failed=0
-for ((input=0; input<4820000; input+=500000)); do
-    cat > "$work/adc-$input.repl" <<REPL
+direct=(0 500000 1000000 1500000 2000000 2500000 3000000 3500000 4000000 4500000)
+wire=(input1 input0 neither both)
+case ${2:-direct} in
+    direct) cases=("${direct[@]}") ;;
+    --wire) cases=("${wire[@]}") ;;
+    --all) cases=("${direct[@]}" "${wire[@]}") ;;
+    *) echo "usage: $0 [OUTPUT_DIR] [--wire|--all]" >&2; exit 1 ;;
+esac
+for name in "${cases[@]}"; do
+    input=$name
+    cat > "$work/adc-$name.repl" <<'REPL'
 using "platforms/cpus/stm32f4.repl"
 adc: Analog.AD4011_ADC @ spi1 { referenceVoltage: 4.82 }
+REPL
+    if [[ $name != [0-9]* ]]; then
+        input=0
+        floating0=false
+        floating1=false
+        case $name in
+            input1) floating0=true; input=4820000 ;;
+            input0) floating1=true ;;
+            neither) floating0=true; floating1=true ;;
+        esac
+        cat >> "$work/adc-$name.repl" <<REPL
+vin: Analog.AnalogWire @ adc 0
+input1: Analog.ADCChannelSource @ vin 1
+    defaultValueMicroVolts: 4820000
+    IsFloating: $floating1
+input0: Analog.ADCChannelSource @ vin 0
+    IsFloating: $floating0
+REPL
+    else
+        cat >> "$work/adc-$name.repl" <<REPL
 vin: Analog.ADCChannelSource @ adc 0
     defaultValueMicroVolts: $input
 REPL
-    cat > "$work/adc-$input.resc" <<RESC
+    fi
+    cat > "$work/adc-$name.resc" <<RESC
 mach create
-machine LoadPlatformDescription @adc-$input.repl
+machine LoadPlatformDescription @adc-$name.repl
 sysbus LoadELF @adc.elf
 showAnalyzer sysbus.usart2
 RESC
-    if "$penv" run --script "$work/adc-$input.resc" --platform-root "$renode" --max-steps 1000 \
-        > "$work/adc-$input.uart" 2> "$work/adc-$input.log" &&
-        python3 - "$input" "$work/adc-$input.uart" <<'PY'
+    if "$penv" run --script "$work/adc-$name.resc" --platform-root "$renode" --max-steps 1000 \
+        > "$work/adc-$name.uart" 2> "$work/adc-$name.log" &&
+        python3 - "$input" "$work/adc-$name.uart" "$name" <<'PY'
 from pathlib import Path
 import sys
 
@@ -74,12 +104,12 @@ raw = (first << 10) | (second << 2) | (third & 3)
 voltage = raw * 4.82 / (1 << 17)
 expected = int(sys.argv[1]) / 1e6
 assert abs(voltage - expected) < 0.00005, (expected, voltage)
-print(f"PASS\t{expected:.2f} V\t{voltage:.8f} V")
+print(f"PASS\t{sys.argv[3]}\t{expected:.2f} V\t{voltage:.8f} V")
 PY
     then
         :
     else
-        printf 'FAIL\t%s microvolts\n' "$input"
+        printf 'FAIL\t%s\n' "$name"
         failed=1
     fi
 done
