@@ -684,3 +684,61 @@ fn renode_using_reference_reverse() {
     )
     .unwrap();
 }
+
+fn assert_using_syntax(source: &str, expected: &[&str]) {
+    let mut comments = ReplComments::default();
+    let mut paths = Vec::new();
+    for line in source.lines() {
+        let line = comments.line(line).unwrap();
+        if !line.trim().is_empty() {
+            paths.push(parse_using_statement(line.trim()).unwrap().unwrap());
+        }
+    }
+    assert_eq!(paths, expected);
+    let files: Vec<_> = expected.iter().map(|&path| (path, "")).collect();
+    check_reference_imports(source, &files).unwrap();
+}
+
+#[test]
+fn renode_using_parser_empty() {
+    assert_using_syntax("", &[]);
+}
+
+#[test]
+fn renode_using_parser_1() {
+    assert_using_syntax(
+        "\nusing \"file.pl8\"\nusing \"other_file.pl8\"",
+        &["file.pl8", "other_file.pl8"],
+    );
+}
+
+#[test]
+fn renode_using_parser_2() {
+    assert_using_syntax(
+        "\nusing \"file.pl8\";\nusing \"other_file.pl8\"",
+        &["file.pl8", "other_file.pl8"],
+    );
+}
+
+#[test]
+fn renode_using_parser_3() {
+    assert_using_syntax("\nusing \"file.pl8\"", &["file.pl8"]);
+}
+
+#[test]
+fn renode_using_parser_4() {
+    assert_using_syntax("\nusing \"file.pl8\";", &["file.pl8"]);
+}
+
+#[test]
+fn renode_using_parser_5() {
+    assert_using_syntax(
+        "\nusing \"first.pl8\";\nusing \"second.pl8\";\nusing \"third.pl8\";",
+        &["first.pl8", "second.pl8", "third.pl8"],
+    );
+}
+
+#[test]
+fn renode_using_parser_accepts_tab_after_keyword() {
+    assert_using_syntax("using\t\"file.pl8\";", &["file.pl8"]);
+}

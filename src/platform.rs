@@ -711,16 +711,7 @@ fn parse_content(
             continue;
         }
         entries.extend(current.take());
-        if let Some(include) = text.strip_prefix("using ") {
-            if include.trim_start().starts_with("'''") {
-                return Err(error(
-                    "SyntaxError: using requires a single-line quoted path",
-                ));
-            }
-
-            let filename = quoted_string(include.trim_end().strip_suffix(';').unwrap_or(include))
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| error("expected using \"path.repl\""))?;
+        if let Some(filename) = parse_using_statement(text).map_err(error)? {
             if !imports.insert(filename.clone()) {
                 return Err(error("DuplicateUsing: Duplicate using entry."));
             }
@@ -798,6 +789,24 @@ fn parse_content(
 pub(crate) fn multiline_value(value: &str) -> Option<String> {
     let body = value.trim().strip_prefix("'''")?.strip_suffix("'''")?;
     Some(body.replace("\\'''", "'''"))
+}
+
+fn parse_using_statement(statement: &str) -> Result<Option<String>, &'static str> {
+    let Some(argument) = statement
+        .strip_prefix("using")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+    else {
+        return Ok(None);
+    };
+    let argument = argument.trim();
+    if argument.starts_with("'''") {
+        return Err("SyntaxError: using requires a single-line quoted path");
+    }
+    let argument = argument.strip_suffix(';').unwrap_or(argument);
+    quoted_string(argument)
+        .filter(|path| !path.is_empty())
+        .map(Some)
+        .ok_or("expected using \"path.repl\"")
 }
 
 fn read_multiline_property<'a>(
