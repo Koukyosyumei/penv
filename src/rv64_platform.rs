@@ -24,6 +24,12 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     let mut uarts = Vec::new();
     let mut ram = false;
 
+    let mut rv64_cpus = entries.iter().filter(|entry| entry.model == "CPU.RiscV64");
+    let single_cpu = rv64_cpus
+        .next()
+        .filter(|_| rv64_cpus.next().is_none())
+        .map(|entry| entry.name.as_str());
+
     for entry in &entries {
         if entry.registration.as_deref() == Some("none") {
             continue;
@@ -52,7 +58,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                     .as_deref()
                     .is_some_and(|value| value.starts_with("sysbus") || value.starts_with('{')) =>
             {
-                map_memory(&mut machine, entry)?;
+                map_memory(&mut machine, entry, single_cpu)?;
                 ram = true;
             }
             "IRQControllers.CoreLevelInterruptor" => {
@@ -926,7 +932,11 @@ fn merge(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     Ok(merged)
 }
 
-fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
+fn map_memory(
+    machine: &mut Machine,
+    entry: &Entry,
+    single_cpu: Option<&str>,
+) -> Result<(), String> {
     let size = required_number(entry, "size")?;
     let mut registrations = entry.registration.as_deref().unwrap().trim();
     if let Some(multiple) = registrations
@@ -936,8 +946,16 @@ fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
         registrations = multiple.trim();
     }
     let mut windows = Vec::new();
+    let mut depth = 0;
     for registration in registrations
-        .split(';')
+        .split(|ch| {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            ch == ';' && depth == 0
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
@@ -945,6 +963,46 @@ fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
             .strip_prefix("sysbus")
             .ok_or_else(|| entry.error("unsupported RAM registration"))?
             .trim();
+        if let Some(properties) = value
+            .strip_prefix("new Bus.BusRangeRegistration")
+            .and_then(|properties| properties.trim().strip_prefix('{'))
+            .and_then(|properties| properties.strip_suffix('}'))
+        {
+            let mut fields = HashMap::new();
+            for field in properties
+                .split(';')
+                .map(str::trim)
+                .filter(|field| !field.is_empty())
+            {
+                let (key, value) = field
+                    .split_once(':')
+                    .ok_or_else(|| entry.error("invalid RAM registration property"))?;
+                if !matches!(key.trim(), "address" | "size" | "offset" | "cpu")
+                    || fields.insert(key.trim(), value.trim()).is_some()
+                {
+                    return Err(entry.error("unknown or duplicate RAM registration property"));
+                }
+            }
+            let address = fields
+                .get("address")
+                .ok_or_else(|| entry.error("missing RAM registration address"))?;
+            let length = fields
+                .get("size")
+                .ok_or_else(|| entry.error("missing RAM registration size"))?;
+            let cpu = fields.get("cpu").copied();
+            if cpu.is_some() && cpu != single_cpu {
+                return Err(
+                    entry.error("CPU-scoped RAM registration requires the named single RV64 CPU")
+                );
+            }
+            windows.push((
+                number(entry, address)?,
+                number(entry, length)?,
+                number(entry, fields.get("offset").copied().unwrap_or("0"))?,
+                cpu.is_some(),
+            ));
+            continue;
+        }
         let (address, length) = if let Some(range) = value
             .strip_prefix('<')
             .and_then(|value| value.strip_suffix('>'))
@@ -965,26 +1023,31 @@ fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
         } else {
             (number(entry, value)?, size)
         };
-        windows.push((address, length));
+        windows.push((address, length, 0, false));
     }
-    let Some(&(primary, _)) = windows.first() else {
-        return Err(entry.error("missing RAM registration"));
-    };
-    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
-    if windows
+    let Some(primary) = windows
         .iter()
-        .any(|&(_, length)| length == 0 || length > size)
+        .position(|&(_, _, offset, cpu)| !cpu && offset == 0)
+    else {
+        return Err(entry.error("missing unscoped, zero-offset RAM registration"));
+    };
+    let (primary, primary_length, _, _) = windows.remove(primary);
+    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
+    if windows.iter().any(|&(_, length, offset, _)| {
+        length == 0 || offset.checked_add(length).is_none_or(|end| end > size)
+    }) || primary_length == 0
+        || primary_length > size
     {
         return Err(entry.error("invalid RAM window size"));
     }
     let backing = machine
         .bus
-        .map_ram_backing64(primary, len, windows[0].1 as usize)
+        .map_ram_backing64(primary, len, primary_length as usize)
         .map_err(|error| entry.error(&error))?;
-    for &(address, length) in &windows[1..] {
+    for (address, length, offset, cpu) in windows {
         machine
             .bus
-            .map_alias64(backing, address, length as usize)
+            .map_alias64(backing, address, length as usize, offset as usize, cpu)
             .map_err(|error| entry.error(&error))?;
     }
     Ok(())

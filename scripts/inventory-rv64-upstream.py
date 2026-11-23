@@ -223,6 +223,14 @@ def infrastructure_fixture(source, line):
 def disposition(path, name, context):
     if path.name in BOARD:
         return "partial", "Existing CLI run; exact Robot semantics require audit"
+    if path.name == "offset-bus-registrations.robot":
+        if name in {
+            "Cpu Should Read From Correct Offset From Mapped Memory",
+            "Cpu Should Read From Correct Offset From Array Memory",
+        }:
+            return "pass", "Fixed REPL, PC, initialization, load and register result verified by rv64-offset-bus.S"
+        if name.startswith("Sysbus Should "):
+            return "partial", "Rust checks bus values and context; upstream Monitor assertions are not ported"
     if path.name == "riscv-amo-instructions.robot":
         if "MMIO" in name:
             return "pending", "ArrayMemory MMIO semantics"

@@ -422,7 +422,7 @@ impl Rv64 {
                     .translations
                     .translate(bus, &self.privilege, base, BLOCK_SIZE, WRITE)
                     .map_err(|fault| Fault::new(fault.cause, lhs))?;
-                bus.memory64(address, BLOCK_SIZE)
+                bus.cpu_memory64(address, BLOCK_SIZE)
                     .ok_or(Fault::new(7, lhs))?
                     .fill(0);
                 None
@@ -573,13 +573,13 @@ impl Rv64 {
                 *slot =
                     self.translations
                         .translate(bus, &self.privilege, virtual_address, 1, WRITE)?;
-                if bus.ram64(*slot, 1).is_none() && bus.read_rv64_tohost(*slot, 1).is_none() {
+                if bus.cpu_ram64(*slot, 1).is_none() && bus.read_rv64_tohost(*slot, 1).is_none() {
                     return Err(Fault::new(7, virtual_address));
                 }
             }
             for (physical, byte) in destinations[..width].iter().zip(value.to_le_bytes()) {
                 if !bus.write_rv64_tohost(*physical, 1, u64::from(byte)) {
-                    bus.memory64(*physical, 1).unwrap()[0] = byte;
+                    bus.cpu_memory64(*physical, 1).unwrap()[0] = byte;
                 }
             }
             bus.observe_rv64_store(destinations[0], value as u8);
@@ -591,7 +591,7 @@ impl Rv64 {
         if bus.write_rv64_tohost(physical, width, value) {
             return Ok(());
         }
-        if let Some(bytes) = bus.memory64(physical, width) {
+        if let Some(bytes) = bus.cpu_memory64(physical, width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
             bus.observe_rv64_store(physical, value as u8);
             return Ok(());
@@ -707,7 +707,7 @@ impl Rv64 {
             let physical =
                 self.translations
                     .translate(bus, &self.privilege, address, width, READ | WRITE)?;
-            value[..width].copy_from_slice(bus.ram64(physical, width).ok_or_else(fault)?);
+            value[..width].copy_from_slice(bus.cpu_ram64(physical, width).ok_or_else(fault)?);
             Some(physical)
         };
         let old = u128::from_le_bytes(value);
@@ -733,13 +733,13 @@ impl Rv64 {
         if old == expected {
             let replacement = replacement.to_le_bytes();
             if let Some(physical) = physical {
-                bus.memory64(physical, width)
+                bus.cpu_memory64(physical, width)
                     .ok_or_else(fault)?
                     .copy_from_slice(&replacement[..width]);
             } else {
                 // All bytes were translated and checked before committing any writes.
                 for (&location, byte) in locations[..width].iter().zip(replacement) {
-                    bus.memory64(location, 1).unwrap()[0] = byte;
+                    bus.cpu_memory64(location, 1).unwrap()[0] = byte;
                 }
             }
         }
@@ -762,7 +762,7 @@ impl Rv64 {
                 self.translations
                     .translate(bus, &self.privilege, guest, 1, READ | WRITE)?;
             *byte = *bus
-                .ram64(*location, 1)
+                .cpu_ram64(*location, 1)
                 .and_then(|data| data.first())
                 .ok_or(Fault::new(7, guest))?;
         }
@@ -806,7 +806,7 @@ impl Rv64 {
             let previous = sign(u64::from_le_bytes(value), width as u32 * 8);
             let replacement = atomic_result(operation, previous, sign(rhs, width as u32 * 8));
             for (&location, byte) in locations[..width].iter().zip(replacement.to_le_bytes()) {
-                bus.memory64(location, 1).unwrap()[0] = byte;
+                bus.cpu_memory64(location, 1).unwrap()[0] = byte;
             }
             return Ok(previous);
         }
@@ -828,7 +828,7 @@ impl Rv64 {
             if !bus.matches_reservation64(reservation, address, physical, width) {
                 return Ok(1);
             }
-            bus.memory64(physical, width)
+            bus.cpu_memory64(physical, width)
                 .ok_or_else(fault)?
                 .copy_from_slice(&rhs.to_le_bytes()[..width]);
             return Ok(0);
@@ -836,7 +836,7 @@ impl Rv64 {
             let old = sign(previous, width as u32 * 8);
             let rhs = sign(rhs, width as u32 * 8);
             let value = atomic_result(operation, old, rhs);
-            bus.memory64(physical, width)
+            bus.cpu_memory64(physical, width)
                 .ok_or_else(fault)?
                 .copy_from_slice(&value.to_le_bytes()[..width]);
         }
@@ -861,7 +861,7 @@ fn atomic_result(operation: u32, old: u64, rhs: u64) -> u64 {
 
 pub(crate) fn ram_read(bus: &Bus, address: u64, width: usize) -> Option<u64> {
     let mut bytes = [0; 8];
-    bytes[..width].copy_from_slice(bus.ram64(address, width)?);
+    bytes[..width].copy_from_slice(bus.cpu_ram64(address, width)?);
     Some(u64::from_le_bytes(bytes))
 }
 

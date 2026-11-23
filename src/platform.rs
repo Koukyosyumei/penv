@@ -139,6 +139,7 @@ fn parse(
     let mut current: Option<Entry> = None;
     let mut multiline_script = false;
     let mut registration_depth: i32 = 0;
+    let mut property_block = false;
     for (index, raw) in content.lines().enumerate() {
         if multiline_script {
             if raw.contains("'''") {
@@ -151,6 +152,26 @@ fn parse(
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
         if text.is_empty() {
+            continue;
+        }
+        if property_block {
+            let properties = text.strip_suffix('}').unwrap_or(text);
+            property_block = properties == text;
+            if brace_depth(properties) != 0 {
+                return Err(error("invalid multi-line property block"));
+            }
+            let entry = current.as_mut().unwrap();
+            let mut start = 0;
+            for end in unquoted_delimiters(properties, &[';'])
+                .map(|(index, _)| index)
+                .chain([properties.len()])
+            {
+                let item = properties[start..end].trim();
+                if !item.is_empty() {
+                    entry.body.push((lineno, item.into()));
+                }
+                start = end + 1;
+            }
             continue;
         }
         if registration_depth != 0 {
@@ -201,7 +222,16 @@ fn parse(
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
-        let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
+        let declaration = declaration.trim_end();
+        let (declaration, body) = if let Some(prefix) = declaration.strip_suffix('{')
+            && !prefix.trim_end().ends_with('@')
+            && brace_depth(prefix) == 0
+        {
+            property_block = true;
+            (prefix, Vec::new())
+        } else {
+            inline_body(declaration, lineno).map_err(error)?
+        };
         let (model, registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().into())),
             None => (declaration.trim(), None),
@@ -219,7 +249,7 @@ fn parse(
             line: lineno,
         });
     }
-    if multiline_script || registration_depth != 0 {
+    if multiline_script || registration_depth != 0 || property_block {
         return Err(format!(
             "{}: unterminated script or registration",
             path.display()

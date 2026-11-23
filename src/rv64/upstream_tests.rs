@@ -890,3 +890,44 @@ fn renode_unmapped_data_does_not_relax_other_access_checks() {
     cpu.pc = 0x2000;
     assert_eq!(cpu.fetch(&mut bus).unwrap_err().cause, 1);
 }
+
+#[test]
+fn offset_ram_window_keeps_backing_and_cpu_context() {
+    let mut bus = Bus::new(4096).unwrap();
+    let memory = bus.map_ram_backing64(0x9000_0000, 0x5000, 0x5000).unwrap();
+    bus.map_alias64(memory, 0x9100_0000, 0x1000, 0x4000, true)
+        .unwrap();
+    let cpu = Rv64::new(Isa::parse("rv64g").unwrap());
+    for (width, test_word) in [
+        (8, 0xfeed_face_cafe_beefu64),
+        (4, 0xdead_beef),
+        (2, 0xface),
+        (1, 0xbe),
+    ] {
+        let offset = 0x9000_4000;
+        let alias = 0x9100_0000;
+        bus.memory64(offset, width)
+            .unwrap()
+            .copy_from_slice(&test_word.to_le_bytes()[..width]);
+        assert!(bus.ram64(alias, width).is_none());
+        assert_eq!(cpu.load(&mut bus, alias, width).unwrap(), test_word);
+        bus.memory64(offset, width).unwrap().fill(0);
+        cpu.store(&mut bus, alias, width, test_word, &mut Vec::new())
+            .unwrap();
+        assert_eq!(
+            bus.ram64(offset, width).unwrap(),
+            &test_word.to_le_bytes()[..width]
+        );
+    }
+    let shadowed = bus.map_ram_backing64(0x9300_0000, 0x1000, 0x1000).unwrap();
+    assert_ne!(memory, shadowed);
+    bus.map_alias64(memory, 0x9300_0000, 0x1000, 0x4000, true)
+        .unwrap();
+    assert_eq!(bus.ram64(0x9300_0000, 1), Some(&[0][..]));
+    assert_eq!(bus.cpu_ram64(0x9300_0000, 1), Some(&[0xbe][..]));
+    assert!(bus.cpu_ram64(0x9100_1000, 1).is_none());
+    assert!(
+        bus.map_alias64(memory, 0x9200_0000, 0x1001, 0x4000, false)
+            .is_err()
+    );
+}

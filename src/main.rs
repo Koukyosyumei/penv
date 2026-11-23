@@ -512,6 +512,9 @@ fn run() -> Result<ExitCode, String> {
             image::load_rv64_dtb(&mut machine, file, *address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
+        if machine.hart_count() != 1 && machine.bus.has_cpu_ram_alias() {
+            return Err("CPU-scoped RAM registration requires a single RV64 hart".into());
+        }
         if (renode_unmapped_data || renode_lrsc) && machine.primary.rv64.is_none() {
             return Err("--renode-unmapped-data and --renode-lrsc require an RV64 machine".into());
         }
