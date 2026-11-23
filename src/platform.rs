@@ -1232,11 +1232,25 @@ fn declarations(path: &Path, root: Option<&Path>) -> Result<Vec<Entry>, String> 
 }
 
 fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
+    merge_declarations_with_bus(entries, None)
+}
+
+fn merge_declarations_with_bus(
+    entries: Vec<Entry>,
+    existing: Option<&crate::bus::Bus>,
+) -> Result<Vec<Entry>, String> {
     let mut declared = HashMap::new();
     let mut declarations = Vec::new();
     let mut blocks = Vec::new();
     let mut irq_checks = Vec::new();
     for mut entry in entries {
+        if !entry.model.is_empty()
+            && existing.is_some_and(|bus| bus.has_sysbus_fixture(&entry.name))
+        {
+            return Err(
+                entry.error("VariableAlreadyDeclared: variable names an existing peripheral")
+            );
+        }
         if entry.model.is_empty()
             && entry.registration.is_none()
             && entry.alias.is_none()
@@ -1315,7 +1329,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut prerequisites = vec![Vec::new(); declarations.len()];
     for (index, entry) in declarations.iter().enumerate() {
         validate_entry_references(entry, &declared, &declarations)?;
-        validate_mock_cpu_properties(entry, &declared, &declarations)?;
+        validate_mock_cpu_properties(entry, &declared, &declarations, existing)?;
         validate_dependency_constructor(
             entry,
             &declared,
@@ -1507,7 +1521,7 @@ fn fixture_cpu_enum(value: &str) -> Option<u8> {
     }
 }
 
-fn bind_fixture_cpu_properties(entry: &Entry) -> FixtureCpuProperties {
+fn bind_fixture_cpu_properties(entry: &Entry, bus: &crate::bus::Bus) -> FixtureCpuProperties {
     let mut properties = FixtureCpuProperties::default();
     for (line, item) in &entry.body {
         let Some((key, value)) = item.split_once(':') else {
@@ -1522,7 +1536,12 @@ fn bind_fixture_cpu_properties(entry: &Entry) -> FixtureCpuProperties {
             }
             "OtherCpu" if inline_model(item) == Some(MOCK_CPU) => {
                 let nested = inline_entry(entry, *line, item, MOCK_CPU);
-                properties.other = Some(Box::new(bind_fixture_cpu_properties(&nested)));
+                properties.other = Some(Box::new(bind_fixture_cpu_properties(&nested, bus)));
+            }
+            "OtherCpu" => {
+                properties.other_registered = bus
+                    .fixture_cpu(&format!("sysbus.{}", value.trim()))
+                    .cloned();
             }
             _ => {}
         }
@@ -1540,11 +1559,22 @@ fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(),
         else {
             continue;
         };
-        let properties = bind_fixture_cpu_properties(entry);
+        let properties = bind_fixture_cpu_properties(entry, &machine.bus);
         if registration == "sysbus" {
             machine
                 .bus
                 .register_fixture_cpu("sysbus", entry.registered_name(), &entry.name, &properties)
+                .map_err(|error| entry.error(&error))?;
+            continue;
+        }
+        if let Some(slot) = registration
+            .strip_prefix("sysbus ")
+            .and_then(unsigned_number)
+            .and_then(|slot| u32::try_from(slot).ok())
+        {
+            machine
+                .bus
+                .register_fixture_cpu_at(slot, entry.registered_name(), &entry.name, &properties)
                 .map_err(|error| entry.error(&error))?;
             continue;
         }
@@ -1587,6 +1617,7 @@ fn validate_mock_cpu_properties(
     entry: &Entry,
     declared: &HashMap<String, usize>,
     declarations: &[Entry],
+    existing: Option<&crate::bus::Bus>,
 ) -> Result<(), String> {
     if entry.model != MOCK_CPU {
         return Ok(());
@@ -1607,8 +1638,12 @@ fn validate_mock_cpu_properties(
                         return Err(entry.error(&format!("TypeNotResolved: {model}")));
                     }
                     let nested = inline_entry(entry, *line, statement, model);
-                    validate_mock_cpu_properties(&nested, declared, declarations)?;
+                    validate_mock_cpu_properties(&nested, declared, declarations, existing)?;
                     model
+                } else if existing
+                    .is_some_and(|bus| bus.fixture_cpu(&format!("sysbus.{value}")).is_some())
+                {
+                    MOCK_CPU
                 } else {
                     let target = declared
                         .get(value)
@@ -1906,11 +1941,28 @@ pub fn check(path: &Path, root: Option<&Path>) -> Result<(), String> {
 }
 
 pub fn check_string(content: &str, root: Option<&Path>) -> Result<(), String> {
+    check_string_on_machine(content, root, Machine::without_default_ram()).map(drop)
+}
+
+fn check_string_on_machine(
+    content: &str,
+    root: Option<&Path>,
+    machine: Machine,
+) -> Result<Machine, String> {
     let path = Path::new("<platform string>");
     let root = root.unwrap_or(Path::new("."));
     let mut entries = Vec::new();
     parse_content(path, root, content, root, &mut HashSet::new(), &mut entries)?;
-    check_entries(path, &merge_declarations(entries)?)
+    let entries = merge_declarations_with_bus(entries, Some(&machine.bus))?;
+    build_entries_on_machine(
+        path,
+        &entries,
+        false,
+        true,
+        machine,
+        validate_builtin_script,
+        configure_bus_init,
+    )
 }
 
 fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
@@ -2192,6 +2244,26 @@ fn build_entries_with_scripts(
     entries: &[Entry],
     f4_repl_timing: bool,
     check_only: bool,
+    validate_script: impl FnMut(&Entry, ScriptPhase, &[&str]) -> Result<(), String>,
+    handle_script: impl FnMut(&Entry, ScriptPhase, &[&str], &mut Machine) -> Result<(), String>,
+) -> Result<Machine, String> {
+    build_entries_on_machine(
+        path,
+        entries,
+        f4_repl_timing,
+        check_only,
+        Machine::without_default_ram(),
+        validate_script,
+        handle_script,
+    )
+}
+
+fn build_entries_on_machine(
+    path: &Path,
+    entries: &[Entry],
+    f4_repl_timing: bool,
+    check_only: bool,
+    mut machine: Machine,
     mut validate_script: impl FnMut(&Entry, ScriptPhase, &[&str]) -> Result<(), String>,
     mut handle_script: impl FnMut(&Entry, ScriptPhase, &[&str], &mut Machine) -> Result<(), String>,
 ) -> Result<Machine, String> {
@@ -2206,7 +2278,6 @@ fn build_entries_with_scripts(
             }
         }
     }
-    let mut machine = Machine::without_default_ram();
     machine.bus.f4_repl_timing = f4_repl_timing;
     let mut cpus = Vec::new();
     let mut clint = None;

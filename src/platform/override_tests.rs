@@ -2350,3 +2350,34 @@ fn renode_sysbus_dependency_with_update_entry() {
     .unwrap();
     assert_eq!(calls, 1);
 }
+
+#[test]
+fn renode_existing_registration_rejects_declared_name() {
+    let mut machine = Machine::without_default_ram();
+    machine
+        .bus
+        .register_empty_peripheral("sysbus.peripheral".into(), vec![(0, 2)])
+        .unwrap();
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockCPU";
+    let error = check_string_on_machine(source, None, machine)
+        .err()
+        .unwrap();
+    assert!(error.contains("VariableAlreadyDeclared:"), "{error}");
+}
+
+#[test]
+fn renode_existing_registration_resolves_cpu_identity() {
+    let mut machine = Machine::without_default_ram();
+    machine
+        .bus
+        .register_fixture_cpu_at(1, "cpu", "cpu", &FixtureCpuProperties::default())
+        .unwrap();
+    let original = machine.bus.fixture_cpu("sysbus.cpu").unwrap().clone();
+    let source = "\nnewCpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 2\n    OtherCpu: cpu";
+    let machine = check_string_on_machine(source, None, machine).unwrap();
+    let added = machine.bus.fixture_cpu_properties("sysbus.newCpu").unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        added.other_registered.as_ref().unwrap(),
+        &original
+    ));
+}

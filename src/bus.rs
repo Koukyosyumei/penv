@@ -161,6 +161,7 @@ pub(crate) struct FixtureCpuProperties {
     pub enum_value: u8,
     pub placeholder: Option<String>,
     pub other: Option<Box<FixtureCpuProperties>>,
+    pub other_registered: Option<Arc<str>>,
 }
 
 #[derive(Default)]
@@ -172,6 +173,7 @@ pub struct Bus {
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
     fixture_cpus: HashMap<String, Arc<str>>,
+    fixture_cpu_slots: HashMap<u32, String>,
     fixture_cpu_properties: HashMap<Arc<str>, FixtureCpuProperties>,
     fixture_values: HashMap<String, FixtureValue>,
     pub ethernet: Vec<Controller>,
@@ -518,6 +520,27 @@ impl Bus {
             FixtureValue::Enums(values) => Some(*values),
             _ => None,
         }
+    }
+
+    pub(crate) fn register_fixture_cpu_at(
+        &mut self,
+        slot: u32,
+        name: &str,
+        variable: &str,
+        properties: &FixtureCpuProperties,
+    ) -> Result<(), String> {
+        if self.fixture_cpu_slots.contains_key(&slot) {
+            return Err("RegistrationException: CPU registration slot is occupied".into());
+        }
+        self.register_fixture_cpu("sysbus", name, variable, properties)?;
+        self.fixture_cpu_slots
+            .insert(slot, format!("sysbus.{name}"));
+        Ok(())
+    }
+
+    pub(crate) fn has_sysbus_fixture(&self, name: &str) -> bool {
+        let path = format!("sysbus.{name}");
+        self.empty_peripherals.contains_key(&path) || self.fixture_cpus.contains_key(&path)
     }
 
     pub(crate) fn register_fixture_cpu(
