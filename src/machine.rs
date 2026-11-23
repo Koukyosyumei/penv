@@ -27,6 +27,8 @@ pub struct Hart {
     translations: TranslationCache,
     thumb: Option<Thumb>,
     cpu_wait_asserted: bool,
+    pub monitor_paused: bool,
+    pub monitor_halted: bool,
     reset_held: bool,
     reset_pc_written: bool,
     pub pc: u32,
@@ -152,6 +154,8 @@ impl Machine {
                 translations: TranslationCache::default(),
                 thumb: None,
                 cpu_wait_asserted: false,
+                monitor_paused: false,
+                monitor_halted: false,
                 reset_held: false,
                 reset_pc_written: false,
                 pc: RAM_BASE,
@@ -259,6 +263,14 @@ impl Machine {
             .ok_or_else(|| format!("{name:?} is not a Cortex-M CPU"))
     }
 
+    pub fn cortex_m_monitor_cpu(&mut self, name: &str) -> Result<&mut Hart, String> {
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_none() {
+            return Err(format!("{name:?} is not a Cortex-M CPU"));
+        }
+        Ok(hart)
+    }
+
     pub fn set_cortex_m_cpu_wait(&mut self, name: &str, asserted: bool) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if hart.thumb.is_none() {
@@ -281,6 +293,7 @@ impl Machine {
             return Err("machine Reset requires a Cortex-M CPU".into());
         }
         self.bus.reset_cortex_m_devices(false);
+        self.primary.monitor_paused = false;
         self.primary.reset_cortex_m(&mut self.bus);
         Ok(())
     }
@@ -340,6 +353,9 @@ impl Machine {
         output: &mut W,
         matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
+        if self.primary.monitor_paused {
+            return Ok((Stop::Limit, 0));
+        }
         let mut retired = 0;
         for _ in 0..limit {
             let index = self.next_hart;
@@ -395,6 +411,7 @@ impl Hart {
     fn reset_cortex_m(&mut self, bus: &mut Bus) {
         let thumb = self.thumb.as_mut().unwrap();
         let vectors = thumb.vector_base();
+        self.monitor_halted = false;
         self.reset_held = self.cpu_wait_asserted;
         self.reset_pc_written = false;
         let (sp, pc, lr) = if self.reset_held {
@@ -554,6 +571,10 @@ impl Hart {
                 return Ok(Step::Trap);
             }
             let thumb = self.thumb.as_mut().unwrap();
+            if self.monitor_halted {
+                thumb.sample_interrupts(bus);
+                return Ok(Step::Trap);
+            }
             if thumb
                 .service_interrupts(&mut self.pc, &mut self.registers, bus)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?

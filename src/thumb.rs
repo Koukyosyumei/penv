@@ -573,12 +573,7 @@ impl Thumb {
         }
     }
 
-    pub fn service_interrupts(
-        &mut self,
-        pc: &mut u32,
-        r: &mut [u32; 32],
-        bus: &mut Bus,
-    ) -> Result<bool, String> {
+    pub(crate) fn sample_interrupts(&mut self, bus: &mut Bus) -> u64 {
         bus.sample_nvic(self.active_exceptions);
         if let Some(timer) = bus.systick.as_mut() {
             timer.tick();
@@ -591,6 +586,16 @@ impl Thumb {
             self.signal_event();
         }
         self.pending = pending;
+        pending
+    }
+
+    pub fn service_interrupts(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Result<bool, String> {
+        let pending = self.sample_interrupts(bus);
         if pending & (1 << NMI) != 0 && self.active_exceptions & (1 << NMI) == 0 {
             *pc = self.exception_entry(NMI, *pc, r, bus);
             self.acknowledge(NMI, bus);

@@ -244,6 +244,106 @@ ram: Memory.MappedMemory @ sysbus 0
 }
 
 #[test]
+fn renode_resc_cortex_m_pause_halt_and_virtual_time() {
+    let directory = std::env::temp_dir().join(format!("penv-cpu-flow-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 100000000
+    initialLimit: 0xffffffff
+"#,
+    )
+    .unwrap();
+    let mut firmware = vec![0; 0x100];
+    firmware[..8].copy_from_slice(&[0, 8, 0, 0, 1, 1, 0, 0]);
+    // Upstream nop; nop; nop; jump: nop; b jump.
+    firmware.extend([0, 0xbf, 0, 0xbf, 0, 0xbf, 0, 0xbf, 0xfd, 0xe7]);
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("flow.resc");
+    let run_and_observe = concat!(
+        "emulation RunFor \"0.00000001\"\n",
+        "cpu IsPaused\ncpu IsHalted\ncpu PC\nsysbus ReadDoubleWord 0x40000024\n",
+    );
+    let run_case = |phases: &[(&str, bool, bool, u32, u32)]| {
+        let mut commands = String::from(concat!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\n",
+            "sysbus LoadBinary @firmware.bin 0\nsysbus WriteDoubleWord 0x40000000 1\n",
+            "emulation RunFor \"0.00000002\"\n",
+        ));
+        let mut expected = String::new();
+        for &(change, paused, halted, pc, ticks) in phases {
+            use std::fmt::Write as _;
+            commands.push_str(change);
+            commands.push_str("emulation SynchroniseQuantum\n");
+            commands.push_str(run_and_observe);
+            let flag = |state| if state { "True" } else { "False" };
+            writeln!(
+                expected,
+                "{}\n{}\n0x{pc:08x}\n0x{ticks:08x}",
+                flag(paused),
+                flag(halted)
+            )
+            .unwrap();
+        }
+        fs::write(&script, commands).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "10", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            expected,
+            "{phases:?}"
+        );
+    };
+    run_case(&[("", false, false, 0x106, 3)]);
+    run_case(&[
+        ("cpu Pause\n", true, false, 0x104, 2),
+        ("cpu Resume\n", false, false, 0x106, 3),
+    ]);
+    run_case(&[
+        ("cpu IsHalted true\n", false, true, 0x104, 3),
+        ("cpu Resume\n", false, true, 0x104, 4),
+    ]);
+    for first in [
+        "cpu Pause\ncpu IsHalted true\n",
+        "cpu IsHalted true\ncpu Pause\n",
+    ] {
+        for resume_first in [true, false] {
+            let (middle, last, ticks) = if resume_first {
+                (
+                    ("cpu Resume\n", false, true, 0x104, 3),
+                    "cpu IsHalted false\n",
+                    4,
+                )
+            } else {
+                (
+                    ("cpu IsHalted false\n", true, false, 0x104, 2),
+                    "cpu Resume\n",
+                    3,
+                )
+            };
+            run_case(&[
+                (first, true, true, 0x104, 2),
+                middle,
+                (last, false, false, 0x106, ticks),
+            ]);
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_stm32_timer_frequency_changes_counter_rate_and_resets() {
     let directory =
         std::env::temp_dir().join(format!("penv-timer-frequency-{}", std::process::id()));

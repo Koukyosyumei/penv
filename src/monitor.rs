@@ -40,6 +40,10 @@ enum Action {
     CpuCondition(String, u32),
     CpuXpsr(String),
     CpuWait(String, bool),
+    CpuPaused(String, Option<bool>),
+    CpuHalted(String, Option<bool>),
+    ReadCpuPc(String),
+    SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
     MachineReset,
@@ -138,6 +142,9 @@ pub fn run(
                     _ => Err("RunFor requires a Cortex-M platform".into()),
                 };
                 valid_cpu.and_then(|()| {
+                    if machine.primary.monitor_paused {
+                        return Ok(None);
+                    }
                     let chunk = (*steps).min(budget);
                     machine.run(chunk, &mut output).map(|(stop, count)| {
                         retired += count;
@@ -161,6 +168,31 @@ pub fn run(
                     .map_err(|e| e.to_string())
                     .map(|()| None)
             }),
+            Action::CpuPaused(cpu, requested) | Action::CpuHalted(cpu, requested) => {
+                machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
+                    let state = if matches!(command.action, Action::CpuPaused(..)) {
+                        &mut hart.monitor_paused
+                    } else {
+                        &mut hart.monitor_halted
+                    };
+                    if let Some(requested) = requested {
+                        *state = *requested;
+                        Ok(None)
+                    } else {
+                        let value = if *state { "True" } else { "False" };
+                        writeln!(output.output, "{value}")
+                            .map_err(|e| e.to_string())
+                            .map(|()| None)
+                    }
+                })
+            }
+            Action::ReadCpuPc(cpu) => machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
+                writeln!(output.output, "0x{:08x}", hart.pc)
+                    .map_err(|e| e.to_string())
+                    .map(|()| None)
+            }),
+            // Synchronous script actions run at completed instruction boundaries.
+            Action::SynchroniseQuantum => Ok(None),
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
@@ -917,6 +949,36 @@ fn execute(
         {
             let cpu = resolve(target)?;
             Some(Action::CpuXpsr(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+            ))
+        }
+        ["emulation", "SynchroniseQuantum"] => Some(Action::SynchroniseQuantum),
+        [target, operation @ ("Pause" | "Resume" | "IsPaused")] => {
+            let cpu = resolve(target)?;
+            let requested = match *operation {
+                "Pause" => Some(true),
+                "Resume" => Some(false),
+                _ => None,
+            };
+            Some(Action::CpuPaused(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                requested,
+            ))
+        }
+        [target, "IsHalted", value @ ..] if value.len() <= 1 => {
+            let cpu = resolve(target)?;
+            let requested = value
+                .first()
+                .map(|value| resolve(value).and_then(parse_tester_bool))
+                .transpose()?;
+            Some(Action::CpuHalted(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                requested,
+            ))
+        }
+        [target, "PC"] => {
+            let cpu = resolve(target)?;
+            Some(Action::ReadCpuPc(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
