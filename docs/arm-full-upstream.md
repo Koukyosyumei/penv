@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 61 | 41 | 11 | 239 |
-| Renode Infrastructure NUnit | 134 | 61 | 4 | 69 | 9 |
-| 合計 | **247** | **122** | **45** | **80** | **248** |
+| Renode Infrastructure NUnit | 134 | 66 | 4 | 64 | 9 |
+| 合計 | **247** | **127** | **45** | **75** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -437,9 +437,20 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-rtc-modes-verification
 
 固定 Infrastructure の `TimeSourceTests.cs` の遅延アクション4件を、初回同期と 10 tick ごとの境界を持つ単一クロックの Rust フィクスチャに移植した。初回の要求は tick 10、第10ラウンドの要求は tick 100、tick 30 の指定は tick 30、tick 31 の指定は tick 40 で処理する。指定時刻より前には実行せず、次の同期境界でアクションを消費するため、同じアクションは再実行されない。
 
-STM32F072 の CPUWAIT 解除に同じ処理を使う。CPUWAIT が保持中に解除された場合は次の実行境界でベクターを取得する。境界の前に再アサートするかリセットを行うと保留を取り消す。マスター・スレーブ間の時間付与、ブロック、記録・再生を観測する他の時間ソースケースは、これらを実装するまで未達。
+STM32F072 の CPUWAIT 解除に同じ処理を使う。CPUWAIT が保持中に解除された場合は次の実行境界でベクターを取得する。境界の前に再アサートするかリセットを行うと保留を取り消す。ブロック中の時間付与と記録・再生を観測する時間ソースケースは未達。
 
 ```sh
 cargo test --locked renode_time_source
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-sync-actions-verification
+```
+
+## 時間ソースの完了量子
+
+固定上流の `TimeSourceTests.cs` から、5つの sink、同じ量子、異なる量子、端数が残る量子、切断後に進まない sink の5ケースをまとめて移植した。上流の初回同期では経過時間が進まない。以後、付与された時刻までに完了できる量子だけを進め、未完了部分は次回の付与に持ち越す。Rust フィクスチャでは上流と同じ量子とラウンド数を使い、同期回数、sink のラウンド数、仮想経過時刻を確認する。実行時の Cortex-M は同じ時間ソースを1ステップ量子で使い、CPUWAIT や周辺機器イベントへ時刻を供給する。
+
+この実装は直列の完了量子を扱う。TimeHandle のブロック・報告と記録・再生には別の実装が必要。ホスト Stopwatch を測る AdvanceImmediately のケースは、個別に指定された性能工程に残す。
+
+```sh
+cargo test --locked renode_time_source
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-grants-verification
 ```

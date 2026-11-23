@@ -7,6 +7,7 @@ use crate::{
     sv32::TranslationCache,
     sync_action::SyncAction,
     thumb::{Thumb, ThumbStep},
+    time_source::TimeSource,
 };
 
 pub const MAX_HARTS: usize = 8;
@@ -16,7 +17,7 @@ pub struct Machine {
     pub primary: Hart,
     secondary: Vec<Hart>,
     next_hart: usize,
-    elapsed_steps: u64,
+    time_source: TimeSource<1>,
     pub rtc_clock: RtcClock,
     uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
@@ -177,7 +178,7 @@ impl Machine {
             },
             secondary: Vec::new(),
             next_hart: 0,
-            elapsed_steps: 0,
+            time_source: TimeSource::default(),
             rtc_clock: RtcClock::default(),
             uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
@@ -287,7 +288,7 @@ impl Machine {
     }
 
     pub fn set_cortex_m_cpu_wait(&mut self, name: &str, asserted: bool) -> Result<(), String> {
-        let boundary = self.elapsed_steps.saturating_add(1);
+        let boundary = self.elapsed_steps().saturating_add(1);
         let hart = self.named_hart(name)?;
         if hart.thumb.is_none() {
             return Err("CpuWaitSignal requires a Cortex-M CPU".into());
@@ -362,7 +363,7 @@ impl Machine {
     }
 
     pub fn elapsed_steps(&self) -> u64 {
-        self.elapsed_steps
+        self.time_source.elapsed()
     }
 
     pub fn run_until<W: Write>(
@@ -376,6 +377,9 @@ impl Machine {
         }
         let mut retired = 0;
         for _ in 0..limit {
+            self.time_source
+                .grant_until(self.time_source.elapsed().saturating_add(1));
+            let elapsed_steps = self.time_source.elapsed();
             let index = self.next_hart;
             if index == self.secondary.len() {
                 self.next_hart = 0;
@@ -387,11 +391,10 @@ impl Machine {
             } else {
                 &mut self.secondary[index - 1]
             };
-            self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
             while self
                 .uart_input
                 .front()
-                .is_some_and(|(step, _)| *step <= self.elapsed_steps)
+                .is_some_and(|(step, _)| *step <= elapsed_steps)
             {
                 let (_, bytes) = self.uart_input.pop_front().unwrap();
                 self.bus.queue_uart_input(bytes);
@@ -399,7 +402,7 @@ impl Machine {
             while self
                 .button_events
                 .front()
-                .is_some_and(|(step, _, _)| *step <= self.elapsed_steps)
+                .is_some_and(|(step, _, _)| *step <= elapsed_steps)
             {
                 let (_, button, pressed) = self.button_events.pop_front().unwrap();
                 self.bus.set_button(button, pressed);
@@ -407,12 +410,12 @@ impl Machine {
             while self
                 .adc_events
                 .front()
-                .is_some_and(|(step, _, _)| *step <= self.elapsed_steps)
+                .is_some_and(|(step, _, _)| *step <= elapsed_steps)
             {
                 let (_, channel, volts) = self.adc_events.pop_front().unwrap();
                 self.bus.set_stm32f0_adc_input(channel, volts)?;
             }
-            match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
+            match hart.execute_step(&mut self.bus, elapsed_steps, output)? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),

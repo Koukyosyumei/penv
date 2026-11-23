@@ -301,7 +301,18 @@ def classify_nunit(name, case, attrs, parameter):
         if case in checks:
             check, tick = checks[case]
             return PASS, COMMON, f"renode_time_source_should_execute_{check}; same 10-tick boundaries, due at tick {tick}, deterministic single-source boundary fixture"
-        return OPEN, COMMON, "Requires master/slave time grants, sink blocking or record/replay beyond the single-source boundary scheduler"
+        grants = {
+            "ShouldHandleMultipleSinks": "handle_multiple_sinks",
+            "ShouldHandleSlaveTimeSourceWithSameQuantum": "handle_slave_time_source_with_same_quantum",
+            "ShouldHandleSlaveTimeSourceWithDifferentQuantum": "handle_slave_time_source_with_different_quantum",
+            "ShouldHandleSlaveTimeSourceWithNotAlignedQuantum": "handle_slave_time_source_with_not_aligned_quantum",
+            "ShouldNotTickDisconnectedSlaveTimeSource": "not_tick_disconnected_slave_time_source",
+        }
+        if case in grants:
+            return PASS, COMMON, f"renode_time_source_should_{grants[case]}; same complete-grant boundaries, sink round counts and elapsed virtual time"
+        if case == "ShouldNotSleepOnAdvanceImmediately":
+            return OPEN, COMMON, "Requires host stopwatch comparison for a paced versus immediate time source; deferred to explicit performance work"
+        return OPEN, COMMON, "Requires blocked-sink grant and report synchronization or record/replay; serial complete grants are implemented"
     if name == "SystemBusTests":
         if case in {"ShouldFindAfterRegistration", "ShouldFindAfterManyRegistrations"}:
             return PASS, COMMON, "renode_resc_global_array_memory_above_32bit_preserves_guest_writes; same registered ranges, 32-bit reads at base and 0x666/0x667/0x668 values using prefilled ArrayMemory"
