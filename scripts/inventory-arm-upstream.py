@@ -302,9 +302,25 @@ def classify_nunit(name, case, attrs, parameter):
             "ContinueShouldFinishWaiting2": (PARTIAL, "continue_finishes_wait_request_first"),
             "ContinueShouldFinishWaiting3": (PARTIAL, "continue_finishes_wait_grant_first"),
         }
+        checks.update({
+            "ShouldNotAllowToGrantTwiceInARow": (PASS, "rejects_double_grant"),
+            "ShouldNotAllowToWaitBeforeGranting": (PASS, "rejects_wait_before_grant"),
+            "ShouldNotAllowToCallWaitTwiceAfterReportingContinue": (PASS, "rejects_repeated_wait_after_continue"),
+            "ShouldNotAllowToRequestTwiceInARow": (PASS, "rejects_double_request"),
+            "ShouldNotAllowToReportContinueBeforeRequesting": (PASS, "rejects_continue_before_request"),
+            "ShouldNotAllowToReportBreakBeforeRequesting": (PASS, "rejects_break_before_request"),
+            "ShouldNotAllowToReportContinueTwiceInARow": (PASS, "rejects_double_continue"),
+            "ShouldNotAllowToReportBreakTwiceInARow": (PASS, "rejects_double_break"),
+            "ShouldNotAllowToReportContinueAfterBreak": (PASS, "rejects_continue_after_break"),
+            "ShouldNotAllowToReportBreakAfterContinue": (PASS, "rejects_break_after_continue"),
+            "ShouldNotAllowToCallGrantAfterReportingBreak": (PASS, "rejects_grant_after_break"),
+            "SecondWaitShouldReturnEmptyIntervalOnBlockingHandle": (PASS, "second_wait_after_break_returns_zero"),
+            "WaitShouldNotBlockAfterBreak": (PASS, "wait_returns_after_break_grant_first"),
+            "WaitShouldNotBlockAfterBreak2": (PARTIAL, "wait_returns_after_break_request_first"),
+        })
         if case in checks:
             status, check = checks[case]
-            note = "same 1000-tick grant and report ordering"
+            note = "same operation ordering and return value or rejected transition; 1000-tick grant where required"
             if status == PARTIAL:
                 note += "; synchronous pending/ready results, actual host-thread blocking and wakeup remain"
             return status, COMMON, f"renode_time_handle_{check}; {note}"
