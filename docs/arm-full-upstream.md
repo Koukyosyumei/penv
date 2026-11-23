@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 21 | 35 | 57 | 239 |
+| Renode Robot | 113 | 21 | 40 | 52 | 239 |
 | Renode Infrastructure NUnit | 134 | 35 | 0 | 99 | 9 |
-| 合計 | **247** | **56** | **35** | **156** | **248** |
+| 合計 | **247** | **56** | **40** | **151** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植35件と未達156件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植40件と未達151件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -210,4 +210,19 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-findbytes-verification
 ```sh
 cargo test --locked systembus
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systembus-tags-verification
+```
+
+
+## Cortex-M の同期ロード・ストア Fault
+
+固定 Renode の `arm-cortex-m-bus-fault.robot` 322–343行、1267–1271行を Armv6-M へ移植した。単一ステップでは `0x100000` で失敗する周辺機器への `LDR` / `STR` と、`ThrowException` を設定した `0x200000` への未割り当て `LDR` を実行した。R1/R2、SP `0xfe0`、保存 PC `0x200` を照合し、失敗したストアが値を変えないことも検査した。
+
+連続実行ではベクターテーブルから起動して100ステップを実行する。失敗命令のアドレスを R10 に残し、例外ハンドラーがスタックから読み取った PC を R11 に保存して WFI で待つ。Cortex-M0 の命令符号化に合わせ、SP 相対ロードの結果を低位レジスタ経由で R11 に移す。M55 の独立した BusFault と CFSR/BFAR/HFSR が必要な等価検証は Cortex-M0 ではできないため、5構成とも部分移植とした。
+
+保存フレームの観測には通常の RESC で `sysbus ReadDoubleWord` を使える。今回、16・32ビットのスカラー読み書きも追加し、CLI のリトルエンディアン値と幅を検査した。ホスト側の周辺機器例外オブジェクトの同一性を検証する NUnit ケースは未達。
+
+```sh
+cargo test --locked renode_precise
+cargo test --locked --test cli renode_resc_systembus
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-precise-verification
 ```

@@ -828,6 +828,45 @@ impl Hart {
 mod tests {
     use super::*;
 
+    #[test]
+    fn renode_precise_load_store_fault_without_single_step() {
+        for opcode in [0x6803, 0x6003] {
+            // ldr/str r3, [r0]
+            let mut machine = Machine::without_default_ram();
+            let mut output = std::io::sink();
+            machine.bus.map_ram(0, 0x1000).unwrap();
+            machine.bus.map_ram(0x100000, 0x1000).unwrap();
+            machine.bus.faulting_device = Some(0x100000..=0x100fff);
+            machine.primary.configure_cortex_m(Some(0));
+            for (addr, value) in [(0, 0x1000), (4, 0x101), (12, 0x201), (0x114, 0x100000)] {
+                machine.bus.write(addr, 4, value, &mut output).unwrap();
+            }
+            for (addr, opcode) in [
+                (0x100, 0x4804), // ldr r0, =0x100000
+                (0x102, 0xa101), // adr r1, fault_instr
+                (0x104, 0x468a), // mov r10, r1
+                (0x106, 0x2355), // movs r3, #0x55
+                (0x108, opcode),
+                (0x10a, 0x2100), // movs r1, #0
+                (0x10c, 0x468a), // mov r10, r1
+                (0x10e, 0xbf30), // wfi
+                (0x110, 0xe7fd), // b 0x10e
+                (0x200, 0x9906), // ldr r1, [sp, #24]
+                (0x202, 0x468b), // mov r11, r1
+                (0x204, 0xbf30), // wfi
+                (0x206, 0xe7fd), // b 0x204
+            ] {
+                machine.bus.write(addr, 2, opcode, &mut output).unwrap();
+            }
+            machine.validate_entry().unwrap();
+            machine.run(100, &mut output).unwrap();
+            assert_eq!(machine.primary.registers[10], 0x108);
+            assert_eq!(machine.primary.registers[11], 0x108);
+            assert_eq!(machine.primary.registers[13], 0xfe0);
+            assert_eq!(machine.primary.pc, 0x206);
+        }
+    }
+
     fn cpuwait_fixture(asserted: bool) -> Machine {
         let mut machine = Machine::without_default_ram();
         machine.primary.name = Some("cpu".into());

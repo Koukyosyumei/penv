@@ -40,8 +40,8 @@ enum Action {
     CpuReset(String),
     CpuPc(String, u32),
     MachineReset,
-    ReadByte(u32),
-    WriteByte(u32, u8),
+    ReadScalar(u32, ScalarWidth),
+    WriteScalar(u32, ScalarWidth, u32),
     Tag(u32, u32, u64, bool),
     UnhandledAccess(UnhandledAccess),
     ReadBytes(u32, usize),
@@ -56,6 +56,23 @@ enum Action {
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     WriteUartLine(String, String, &'static [u8]),
+}
+
+#[derive(Clone, Copy)]
+enum ScalarWidth {
+    Byte = 1,
+    Word = 2,
+    DoubleWord = 4,
+}
+
+impl ScalarWidth {
+    fn read(self, machine: &mut Machine, address: u32) -> Result<u32, crate::bus::BusError> {
+        match self {
+            Self::Byte => machine.bus.read_scalar::<1>(address, true),
+            Self::Word => machine.bus.read_scalar::<2>(address, true),
+            Self::DoubleWord => machine.bus.read_scalar::<4>(address, true),
+        }
+    }
 }
 
 struct ScriptOutput<'a, W> {
@@ -120,17 +137,17 @@ pub fn run(
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset => machine.reset_cortex_m_machine().map(|()| None),
-            Action::ReadByte(address) => machine
-                .bus
-                .read_scalar::<1>(*address, true)
+            Action::ReadScalar(address, width) => width
+                .read(machine, *address)
                 .map_err(|error| error.to_string())
                 .and_then(|value| {
-                    writeln!(output.output, "0x{value:02x}").map_err(|e| e.to_string())
+                    let digits = *width as usize * 2;
+                    writeln!(output.output, "0x{value:0digits$x}").map_err(|e| e.to_string())
                 })
                 .map(|()| None),
-            Action::WriteByte(address, value) => machine
+            Action::WriteScalar(address, width, value) => machine
                 .bus
-                .write_scalar(*address, 1, u32::from(*value), &mut output, true)
+                .write_scalar(*address, *width as usize, *value, &mut output, true)
                 .map_err(|error| error.to_string())
                 .map(|()| None),
             Action::Tag(start, size, default, throws) => machine
@@ -602,14 +619,39 @@ fn execute(
                 throws.unwrap_or(false),
             ))
         }
-        ["sysbus", "ReadByte", address] => {
-            Some(Action::ReadByte(crate::parse_address(resolve(address)?)?))
-        }
-        ["sysbus", "WriteByte", address, value] => Some(Action::WriteByte(
+        [
+            "sysbus",
+            method @ ("ReadByte" | "ReadWord" | "ReadDoubleWord"),
+            address,
+        ] => Some(Action::ReadScalar(
             crate::parse_address(resolve(address)?)?,
-            u8::try_from(crate::parse_address(resolve(value)?)?)
-                .map_err(|_| "byte value out of range")?,
+            match *method {
+                "ReadByte" => ScalarWidth::Byte,
+                "ReadWord" => ScalarWidth::Word,
+                _ => ScalarWidth::DoubleWord,
+            },
         )),
+        [
+            "sysbus",
+            method @ ("WriteByte" | "WriteWord" | "WriteDoubleWord"),
+            address,
+            value,
+        ] => {
+            let width = match *method {
+                "WriteByte" => ScalarWidth::Byte,
+                "WriteWord" => ScalarWidth::Word,
+                _ => ScalarWidth::DoubleWord,
+            };
+            let value = crate::parse_address(resolve(value)?)?;
+            if (u32::MAX >> (32 - width as usize * 8)) < value {
+                return Err(format!("value {value:#x} does not fit {method}"));
+            }
+            Some(Action::WriteScalar(
+                crate::parse_address(resolve(address)?)?,
+                width,
+                value,
+            ))
+        }
         ["sysbus", "ReadBytes", address, count] => Some(Action::ReadBytes(
             crate::parse_address(resolve(address)?)?,
             crate::parse_address(resolve(count)?)? as usize,

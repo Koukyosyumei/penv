@@ -1204,6 +1204,46 @@ mod tests {
     }
 
     #[test]
+    fn renode_precise_fault_on_peripheral_load_store_or_configured_unmapped_read() {
+        for (address, opcode, mapped) in [
+            (0x100000, 0x6802, true), // ldr r2, [r0]
+            (0x100000, 0x6002, true), // str r2, [r0]
+            (0x200000, 0x6802, false),
+        ] {
+            let (mut bus, mut thumb, mut registers) = fault_fixture();
+            let mut output = std::io::sink();
+            bus.faulting_accesses = None;
+            if mapped {
+                bus.faulting_device = Some(0x100000..=0x100fff);
+            } else {
+                bus.unhandled_access = Some(crate::bus::UnhandledAccess::ThrowException);
+            }
+            bus.write(12, 4, 0x341, &mut output).unwrap();
+            bus.write(0x200, 2, opcode, &mut output).unwrap();
+            bus.write(0x202, 2, 0x2122, &mut output).unwrap(); // movs r1, #0x22
+            bus.write(0x204, 2, 0xe7fe, &mut output).unwrap(); // b .
+            registers[..3].copy_from_slice(&[address, 0x11, 0xa5a5a5a5]);
+            let mut pc = 0x200;
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Exception)
+            );
+            assert_eq!(
+                (pc, registers[13], thumb.active_exception),
+                (0x340, 0xfe0, HARDFAULT)
+            );
+            assert_eq!(&registers[1..3], &[0x11, 0xa5a5a5a5]);
+            for (addr, expected) in [(0xfe4, 0x11), (0xfe8, 0xa5a5a5a5), (0xff8, 0x200)] {
+                assert_eq!(bus.read_ram::<4>(addr).unwrap(), expected);
+            }
+            if mapped {
+                bus.faulting_device = None;
+                assert_eq!(bus.read_ram::<4>(address).unwrap(), 0);
+            }
+        }
+    }
+
+    #[test]
     fn renode_invalid_reset_state_enters_lockup_after_two_steps() {
         let (mut bus, mut thumb, mut registers) = fault_fixture();
         let (sp, mut pc, lr) = thumb.reset(&bus);

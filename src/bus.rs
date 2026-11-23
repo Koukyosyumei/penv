@@ -102,6 +102,8 @@ pub struct Bus {
     #[cfg(test)]
     pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
+    pub faulting_device: Option<std::ops::RangeInclusive<u32>>,
+    #[cfg(test)]
     pub faulting_stack_writes: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
     byte_peripheral: std::collections::BTreeMap<u32, u8>,
@@ -1343,6 +1345,14 @@ impl Bus {
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         #[cfg(test)]
+        if self
+            .faulting_device
+            .as_ref()
+            .is_some_and(|range| range.contains(&address))
+        {
+            return Err(BusError::AddressError(address));
+        }
+        #[cfg(test)]
         if N == 1
             && let Some(&value) = self.byte_peripheral.get(&address)
         {
@@ -1568,6 +1578,14 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        #[cfg(test)]
+        if self
+            .faulting_device
+            .as_ref()
+            .is_some_and(|range| range.contains(&address))
+        {
+            return Err(BusError::AddressError(address));
+        }
         #[cfg(test)]
         if width == 1
             && let Some(byte) = self.byte_peripheral.get_mut(&address)

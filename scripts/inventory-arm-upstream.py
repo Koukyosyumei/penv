@@ -351,10 +351,13 @@ def classify_robot(name, case, body, parameter):
             "Should Raise Precise BusFault On Peripheral Read",
             "Should Raise Precise BusFault On Peripheral Write",
             "Should Raise Precise BusFault On Unmapped Read When Configured",
+        }:
+            return PARTIAL, V6, "renode_precise_fault_on_peripheral_load_store_or_configured_unmapped_read; same address, LDR/STR, R1/R2, SP and stacked PC; HardFault replaces BusFault and M55 syndrome is absent"
+        if case in {
             "Read Access Should Produce Precise Bus Fault Without Single Step",
             "Write Access Should Produce Precise Bus Fault Without Single Step",
         }:
-            return OPEN, V6, "Portable faulting LDR/STR and precise saved frame contract; Armv6-M routing must use HardFault and the same access and run mode"
+            return PARTIAL, V6, "renode_precise_load_store_fault_without_single_step; 100 execution slots, R10/R11 hold faulting PC and handler sleeps; HardFault replaces BusFault and M55 syndrome is absent"
         if "Enable BusFault" in body:
             return OUT, "Cortex-M55 with configurable BusFault", "Asserts BusFault handler, priority or syndrome; HardFault adaptation is represented by the disabled-BusFault cases"
         if case == "Should Replace External IRQ With HardFault On Vector BusFault":

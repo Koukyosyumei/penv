@@ -203,6 +203,9 @@ sysbus FindBytes "11 22"
 sysbus FindBytes [0x04, 0x05, 0x06, 0x07] 0xc0000000 0xc0000003
 sysbus FindBytes "04050607" 0xc0000000 0xc0000002
 sysbus ReadByte 0xabcd1234
+sysbus WriteDoubleWord 0xc0000008 0x12345678
+sysbus ReadWord 0xc000000a
+sysbus ReadDoubleWord 0xc0000008
 sysbus UnhandledAccessBehaviour ThrowExceptionIfNotTagged
 sysbus Tag <0xabcd1200, 0x100> "parent" throwException=True
 sysbus Tag <0xabcd1230 0x10> "child tag" 0x142
@@ -226,7 +229,7 @@ sysbus ReadByte 0xabcd1234
         concat!(
             "[0x11, 0x22, 0x00, 0x00]\n",
             "[0x00, 0x00, 0x00, 0x00, 0x04, 0x05, 0x06, 0x07]\n",
-            "[]\n[0x0000000e]\n[0xc0000000]\n[]\n0x00\n0x42\n",
+            "[]\n[0x0000000e]\n[0xc0000000]\n[]\n0x00\n0x1234\n0x12345678\n0x42\n",
         )
         .as_bytes()
     );
