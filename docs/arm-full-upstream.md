@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 43 | 38 | 32 | 239 |
-| Renode Infrastructure NUnit | 134 | 35 | 0 | 99 | 9 |
-| 合計 | **247** | **78** | **38** | **131** | **248** |
+| Renode Infrastructure NUnit | 134 | 39 | 0 | 95 | 9 |
+| 合計 | **247** | **82** | **38** | **127** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植38件と未達131件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植38件と未達127件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -292,4 +292,18 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-binary-verification
 ```sh
 cargo test --locked renode_resc_uart_testers
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-patterns-verification
+```
+
+
+## STM32 比較タイマー
+
+固定 Infrastructure の `ComparingTimerTests.cs` と `STM32_Timer.cs` を参照した。REPL の `initialLimit` の最上位セットビットに合わせて CNT・ARR・CCR の幅を設定し、ゼロ幅になる設定を拒否する。例えば `initialLimit: 0x1ff` は9ビット。この変更は既存 F072 の16・32ビット設定にも同じ規則を適用する。
+
+上流の1 MHz と各経過時間を維持し、周期 `limit` を STM32 の `ARR=limit-1` に、比較値を CCR1 に対応させた。比較イベント数は CC1IE を有効にし、CC1IF をクリアしながら数える。65536カウント周期の途中で CCR1 を 65535 から0へ変える場合、CNT をゼロにしても CCR1 を保持する場合、ゼロへの書き込み後に次の比較を発火する場合、現在値を CNT に書き直しても余分な比較イベントが発生しない場合の4ケースを検証した。
+
+`ShouldThrowOnCompareHigherThanLimit` は専用ホスト API の例外を観測する。STM32 の CCR1 は幅でマスクされる MMIO レジスタのため、ARR を超える値をホスト例外として見せる互換動作は未達のまま。入力キャプチャや別タイマーモデルの LimitTimer ケースも別の残件。
+
+```sh
+cargo test --locked stm32_timer
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-compare-timer-verification
 ```

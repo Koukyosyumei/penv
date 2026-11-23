@@ -45,11 +45,8 @@ impl Stm32Timer {
         Self {
             base,
             frequency,
-            counter_mask: if initial_limit > 0xffff {
-                u32::MAX
-            } else {
-                0xffff
-            },
+            // The REPL limit defines the width by its highest set bit.
+            counter_mask: u32::MAX >> initial_limit.leading_zeros(),
             routes,
             dma_routes: [0; 8],
             dma_requests: 0,
@@ -339,6 +336,100 @@ impl Stm32Timer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const COMPARE_IRQ: u32 = 1 << 15;
+    const CC1: u32 = 1 << 1;
+    const CNT: u32 = 0x24;
+    const CCR1: u32 = 0x34;
+    const SR: u32 = 0x10;
+
+    fn comparing_timer(period: u32, compare: u32) -> Stm32Timer {
+        let mut timer = Stm32Timer::new(
+            0,
+            1_000_000,
+            u16::MAX as u32,
+            [0, COMPARE_IRQ, 0, 0, 0, 0, 0, 0],
+        );
+        timer.write(0x2c, period - 1);
+        timer.write(CCR1, compare);
+        timer.write(0x0c, CC1);
+        timer.write(0, ENABLE);
+        timer
+    }
+
+    fn advance_us(timer: &mut Stm32Timer, microseconds: u64) -> u32 {
+        let mut events = 0;
+        for _ in 0..microseconds * (CORTEX_M_STEP_HZ / 1_000_000) {
+            if timer.tick() & COMPARE_IRQ != 0 {
+                assert_eq!(timer.read(SR) & CC1, CC1);
+                events += 1;
+                timer.write(SR, !CC1);
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn renode_stm32_timer_compare_change_while_running() {
+        let mut timer = comparing_timer(65536, 65535);
+        for (elapsed, count, compare, events) in [
+            (65535, 65535, 65535, 1),
+            (1, 0, 65535, 0),
+            (16304, 16304, 65535, 0),
+        ] {
+            assert_eq!(advance_us(&mut timer, elapsed), events);
+            assert_eq!((timer.read(CNT), timer.read(CCR1)), (count, compare));
+        }
+        timer.write(CCR1, 0);
+        assert_eq!(
+            (timer.read(CNT), timer.read(CCR1), timer.read(SR) & CC1),
+            (16304, 0, 0)
+        );
+        for (elapsed, count, events) in [
+            (65535 - 16304, 65535, 0),
+            (1, 0, 1),
+            (65535, 65535, 0),
+            (1, 0, 1),
+        ] {
+            assert_eq!(advance_us(&mut timer, elapsed), events);
+            assert_eq!((timer.read(CNT), timer.read(CCR1)), (count, 0));
+        }
+    }
+
+    #[test]
+    fn renode_stm32_timer_compare_clear_preserves_compare_and_rearms() {
+        let mut timer = comparing_timer(300, 200);
+        assert_eq!(advance_us(&mut timer, 100), 0);
+        assert_eq!((timer.read(CNT), timer.read(CCR1)), (100, 200));
+        timer.write(CNT, 0);
+        assert_eq!((timer.read(CNT), timer.read(CCR1)), (0, 200));
+
+        let mut timer = comparing_timer(300, 100);
+        assert_eq!(advance_us(&mut timer, 200), 1);
+        timer.write(CNT, 0);
+        assert_eq!(advance_us(&mut timer, 100), 1);
+        assert_eq!((timer.read(CNT), timer.read(CCR1)), (100, 100));
+    }
+
+    #[test]
+    fn renode_stm32_timer_compare_same_counter_write_is_not_an_event() {
+        let mut timer = comparing_timer(300, 100);
+        assert_eq!(timer.read(SR) & CC1, 0);
+        assert_eq!(advance_us(&mut timer, 100), 1);
+        timer.write(CNT, 100);
+        assert_eq!(timer.read(SR) & CC1, 0);
+        assert_eq!(advance_us(&mut timer, 300), 1);
+        assert_eq!((timer.read(CNT), timer.read(CCR1)), (100, 100));
+    }
+
+    #[test]
+    fn stm32_timer_register_width_follows_initial_limit_highest_bit() {
+        let mut timer = Stm32Timer::new(0, 1_000_000, 0x1ff, [0; 8]);
+        for offset in [CNT, 0x2c, CCR1] {
+            timer.write(offset, 0xffff);
+            assert_eq!(timer.read(offset), 0x1ff);
+        }
+    }
 
     // STM32F4_Discovery.robot: Should Fire Update Event When Counting Up/Down.
     #[test]

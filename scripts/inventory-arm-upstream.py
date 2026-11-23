@@ -247,6 +247,17 @@ def classify_nunit(name, case, attrs, parameter):
             return OPEN, V6, "One ActivelyAskingCPU with ActivelyAskedPeripheral; reproduce concurrent bus-read guard with the single-core bus"
         count = 10 if not parameter.startswith("cpuCount=") else parameter.split("=")[1]
         return OUT, f"{count} concurrent mock CPUs", "Requires multiple CPU registration slots or multiple independent requesters of one peripheral"
+    if name == "ComparingTimerTests":
+        checks = {
+            "ShouldHandleCompareValueChangeWhenEnabled": "renode_stm32_timer_compare_change_while_running",
+            "ShouldClearWhenValueSetToZero": "renode_stm32_timer_compare_clear_preserves_compare_and_rearms; compare=200",
+            "ShouldGenerateCompareEventAtCompareAfterClear": "renode_stm32_timer_compare_clear_preserves_compare_and_rearms; compare=100",
+            "ShouldNotGenerateAdditionalCompareEvent": "renode_stm32_timer_compare_same_counter_write_is_not_an_event",
+        }
+        if case in checks:
+            return PASS, F072, checks[case] + "; same 1 MHz, period, CNT/CCR1 values and compare-event observations"
+        if case == "ShouldThrowOnCompareHigherThanLimit":
+            return OPEN, COMMON, "Dedicated ComparingTimer.Compare setter throws InvalidOperationException; STM32 CCR1 is a width-masked MMIO register and does not enforce ARR as an argument limit"
     if name == "SystemBusTests":
         if case in {
             "ShouldHandleWriteToMemorySegment",

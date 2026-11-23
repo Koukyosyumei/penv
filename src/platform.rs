@@ -1119,7 +1119,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     let value = number(value.trim()).map_err(|e| timer.error(&e))?;
                     match key.trim() {
                         "frequency" if frequency.is_none() && value != 0 => frequency = Some(value),
-                        "initialLimit" if limit.is_none() => limit = Some(value),
+                        "initialLimit" if limit.is_none() && value != 0 => limit = Some(value),
                         _ => {
                             return Err(timer
                                 .error("unsupported, duplicate, or invalid STM32 timer property"));
