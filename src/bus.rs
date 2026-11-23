@@ -108,6 +108,8 @@ pub struct Bus {
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
     pub nvic: Option<Nvic>,
+    nvic_name: Option<String>,
+    external_nvic_levels: u32,
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
@@ -321,6 +323,28 @@ impl Bus {
         Ok(())
     }
 
+    pub fn set_nvic_name(&mut self, name: String) {
+        self.nvic_name = Some(name);
+    }
+
+    pub fn drive_nvic_line(&mut self, target: &str, line: u8, high: bool) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        let nvic = self
+            .nvic
+            .as_mut()
+            .filter(|_| self.nvic_name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown Cortex-M NVIC {target:?}"))?;
+        let mask = 1u32 << line;
+        if high {
+            self.external_nvic_levels |= mask;
+            // Latch a pulse even when both commands occur before the next CPU step.
+            nvic.set_line(line, true, 0);
+        } else {
+            self.external_nvic_levels &= !mask;
+        }
+        Ok(())
+    }
+
     pub fn advance_stm32_dma(&mut self, output: &mut impl Write) -> Result<(), BusError> {
         let Some(dma) = self
             .stm32_dma
@@ -456,7 +480,7 @@ impl Bus {
                 .exti
                 .as_mut()
                 .map_or(0, |exti| exti.sample(exti_inputs));
-            irqs |= timer_irqs;
+            irqs |= timer_irqs | self.external_nvic_levels;
             if self
                 .stm32_flash
                 .as_ref()

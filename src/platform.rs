@@ -1214,6 +1214,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .bus
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
+        if let Some(controller) = nvic {
+            machine.bus.set_nvic_name(controller.name.clone());
+        }
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors);
         return Ok(machine);

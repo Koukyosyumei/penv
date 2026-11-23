@@ -151,6 +151,59 @@ fn upstream_stm32f072_console_echo_replies_after_uart_prompt() {
 }
 
 #[test]
+fn renode_resc_nvic_gpio_wakes_wfe_with_sevonpend() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-nvic-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: irqController
+irqController: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x200
+uart: UART.LiteX_UART @ sysbus 0x40000000
+"#,
+    )
+    .unwrap();
+    // Set SCR.SEVONPEND, execute WFE, and write W to the UART on waking.
+    fs::write(
+        directory.join("wfe.hex"),
+        ":20000000000200000900000003481021016020BF02485721017000BE10ED00E0000000400B\n:00000001FF\n",
+    )
+    .unwrap();
+    let script = directory.join("wfe.resc");
+    let run = |gpio_command| {
+        fs::write(
+            &script,
+            format!(
+                "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadHEX @wfe.hex\nemulation RunFor \"0.0000001s\"\n{gpio_command}\nsysbus.irqController OnGPIO 5 false\nwaitForUartPrompt \"W\"\n"
+            ),
+        )
+        .unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "20", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let pulse = run("sysbus.irqController OnGPIO 5 true");
+    let inactive = run("sysbus.irqController OnGPIO 5 false");
+    let wrong_target = run("sysbus.nvic OnGPIO 5 true");
+    fs::remove_dir_all(directory).unwrap();
+    assert!(pulse.status.success(), "{pulse:?}");
+    assert_eq!(pulse.stdout, b"W");
+    assert_eq!(inactive.status.code(), Some(1), "{inactive:?}");
+    assert!(inactive.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&inactive.stderr).contains("(Limit)"));
+    assert_eq!(wrong_target.status.code(), Some(1), "{wrong_target:?}");
+    assert!(
+        String::from_utf8_lossy(&wrong_target.stderr).contains("wfe.resc:5: unknown Cortex-M NVIC")
+    );
+}
+
+#[test]
 fn waits_for_cr_lines_and_unterminated_uart_prompts() {
     let directory = std::env::temp_dir().join(format!("penv-resc-cr-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

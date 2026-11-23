@@ -37,6 +37,7 @@ pub struct RuntimeCommand {
 enum Action {
     RunFor(u64),
     Button(String, bool),
+    NvicGpio(String, u8, bool),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode),
@@ -102,6 +103,10 @@ pub fn run(
             Action::Button(name, pressed) => {
                 machine.bus.set_named_button(name, *pressed).map(|()| None)
             }
+            Action::NvicGpio(target, line, high) => machine
+                .bus
+                .drive_nvic_line(target, *line, *high)
+                .map(|()| None),
             Action::Adc(name, channel, volts) => machine
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
@@ -418,6 +423,20 @@ fn execute(
             resolve(device)?.to_owned(),
             *state == "Press",
         )),
+        [target, "OnGPIO", line, value] => {
+            let line = crate::parse_address(resolve(line)?)?;
+            if line >= 32 {
+                return Err("expected NVIC IRQ line 0 through 31".into());
+            }
+            let high = resolve(value)?
+                .parse()
+                .map_err(|_| "expected NVIC level true or false")?;
+            Some(Action::NvicGpio(
+                resolve(target)?.to_owned(),
+                line as u8,
+                high,
+            ))
+        }
         [channel, "Volts", voltage] => {
             let target = resolve(channel)?;
             let target = target.strip_prefix("sysbus.").unwrap_or(target);
