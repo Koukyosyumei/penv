@@ -1528,6 +1528,74 @@ mod tests {
     }
 
     #[test]
+    fn renode_stm32_flash_erase_modes_preserve_the_expected_ranges() {
+        // Adapt stm32f4-erase.robot and STM32L072.robot to F072 page geometry.
+        const FLASH: u32 = 0x0800_0000;
+        const PAGE_SIZE: usize = 2048;
+        const BANK_SIZE: usize = 0x20000;
+        let mut bus = Bus::default();
+        let controller = Stm32F0Flash::BASE;
+        bus.map_ram(FLASH, BANK_SIZE).unwrap();
+        bus.set_stm32f0_tags(vec![controller..=0x4002_23ff]);
+        bus.map_stm32f072_flash().unwrap();
+        let write = |bus: &mut Bus, offset, value| {
+            bus.write(controller + offset, 4, value, &mut std::io::sink())
+                .unwrap();
+        };
+        // Seed flash as an image loader, equivalent to the upstream fixture setup.
+        let page = FLASH + PAGE_SIZE as u32;
+        let markers = [
+            FLASH,
+            FLASH + 2 * PAGE_SIZE as u32,
+            FLASH + BANK_SIZE as u32 - 4,
+        ];
+        for (address, word) in markers
+            .into_iter()
+            .zip([0xdead_beefu32, 0xcafe_babe, 0x4433_2211])
+        {
+            bus.memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&word.to_le_bytes());
+        }
+        bus.memory(page, PAGE_SIZE).unwrap().fill(0x12);
+        write(&mut bus, 4, 0x4567_0123);
+        write(&mut bus, 4, 0xcdef_89ab);
+
+        write(&mut bus, 0x14, page + 4);
+        write(&mut bus, 0x10, 1 << 6); // STRT alone
+        assert_ne!(bus.read::<4>(controller + 0x0c).unwrap() & (1 << 2), 0);
+        assert!(
+            bus.memory(page, PAGE_SIZE)
+                .unwrap()
+                .iter()
+                .all(|&byte| byte == 0x12)
+        );
+
+        write(&mut bus, 0x0c, 1 << 2); // clear PGERR
+        write(&mut bus, 0x10, (1 << 1) | (1 << 6)); // PER | STRT
+        assert!(
+            bus.memory(page, PAGE_SIZE)
+                .unwrap()
+                .iter()
+                .all(|&byte| byte == 0xff)
+        );
+        for (address, word) in markers
+            .into_iter()
+            .zip([0xdead_beef, 0xcafe_babe, 0x4433_2211])
+        {
+            assert_eq!(bus.read::<4>(address).unwrap(), word);
+        }
+
+        write(&mut bus, 0x10, (1 << 2) | (1 << 6)); // MER | STRT
+        assert!(
+            bus.memory(FLASH, BANK_SIZE)
+                .unwrap()
+                .iter()
+                .all(|&byte| byte == 0xff)
+        );
+    }
+
+    #[test]
     fn stm32f072_flash_preserves_programmed_data_on_reload_and_erases_a_page() {
         let mut bus = Bus::default();
         let flash = 0x0800_0000;

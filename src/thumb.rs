@@ -750,6 +750,92 @@ impl Thumb {
 mod tests {
     use super::*;
 
+    // Instructions from the ELF in tlib/arm/thumb2-data-processing-instr.robot.
+    #[test]
+    fn renode_thumb2_fixture_branches_and_reads_apsr() {
+        let mut bus = Bus::default();
+        bus.map_ram(0x1000, 0x1000).unwrap();
+        let mut registers = [0; 32];
+        let mut thumb = Thumb {
+            negative: true,
+            ..Thumb::default()
+        };
+        let mut output = std::io::sink();
+        for (address, halfwords, next, link) in [
+            (0x1002, [0xf000u16, 0xf804u16], 0x100e, 0x1007),
+            (0x1006, [0xf000, 0xfcbc], 0x1982, 0x100b),
+        ] {
+            for (offset, halfword) in halfwords.into_iter().enumerate() {
+                bus.write(address + 2 * offset as u32, 2, halfword.into(), &mut output)
+                    .unwrap();
+            }
+            let mut pc = address;
+            assert!(
+                thumb
+                    .step(&mut pc, &mut registers, &mut bus, &mut output)
+                    .unwrap()
+            );
+            assert_eq!((pc, registers[14]), (next, link));
+        }
+
+        // The upstream ORRS case expects N=1, Z=0, and C=0. Seed those flags
+        // directly to test its MRS encoding without the ARMv8-M ORRS.W setup.
+        let mut pc = 0x1a1e;
+        bus.write(pc, 2, 0xf3ef, &mut output).unwrap();
+        bus.write(pc + 2, 2, 0x8000, &mut output).unwrap();
+        assert!(
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap()
+        );
+        assert_eq!(pc, 0x1a22);
+        assert_eq!(registers[0] & 0xe000_0000, 0x8000_0000);
+    }
+
+    // arm-cortex-m-exception-return.robot, the non-TrustZone BX LR case.
+    #[test]
+    fn renode_exception_bx_lr_restores_interrupted_thread() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        let mut output = std::io::sink();
+        bus.write(16 * 4, 4, 0x101, &mut output).unwrap();
+        bus.write(0x20, 2, 0xe7fe, &mut output).unwrap(); // b .
+        bus.write(0x100, 2, 0xbf00, &mut output).unwrap(); // nop
+        bus.write(0x102, 2, 0x4770, &mut output).unwrap(); // bx lr
+        let mut thumb = Thumb::new(Some(0));
+        let mut pc = 0x20;
+        let mut registers = [0; 32];
+        registers[13] = 0x800;
+
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 0x20);
+        bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
+        bus.write(0xe000_e200, 4, 1, &mut output).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(
+            (pc, registers[13], registers[14]),
+            (0x100, 0x7e0, 0xffff_fff9)
+        );
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 0x102);
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0x20, 0x800, 0)
+        );
+    }
+
     #[test]
     fn vtor_relocates_exception_vectors_without_resetting_the_cpu() {
         use crate::nvic::VTOR;
@@ -1053,6 +1139,49 @@ mod tests {
 #[cfg(test)]
 mod wait_tests {
     use super::*;
+
+    // arm-cortex-m-interrupts.robot, Should Wake Up From WFE When SEVONPEND Is Set.
+    #[test]
+    fn renode_wfe_wakes_on_new_pending_irq_only_with_sevonpend() {
+        const TARGET: u32 = 0x2000_1000;
+        for enabled in [false, true] {
+            let mut bus = Bus::default();
+            bus.map_ram(0x2000_0000, 0x2000).unwrap();
+            bus.map_nvic(0xc0, None).unwrap();
+            let mut output = std::io::sink();
+            bus.write(0xe000_ed10, 4, u32::from(enabled) << 4, &mut output)
+                .unwrap();
+            let mut pc = 0x2000_0000;
+            bus.write(pc, 2, 0xbf20, &mut output).unwrap(); // wfe
+            bus.write(pc + 2, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
+            let mut registers = [0; 32];
+            registers[0] = TARGET;
+            registers[1] = 0xdead_beef;
+            let mut thumb = Thumb::default();
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap();
+            assert!(thumb.sleeping());
+            assert_eq!(bus.read_ram::<4>(TARGET).unwrap(), 0);
+
+            bus.nvic.as_mut().unwrap().set_line(5, true, 0);
+            assert!(
+                !thumb
+                    .service_interrupts(&mut pc, &mut registers, &mut bus)
+                    .unwrap()
+            );
+            assert_eq!(thumb.sleeping(), !enabled);
+            if !thumb.sleeping() {
+                thumb
+                    .step(&mut pc, &mut registers, &mut bus, &mut output)
+                    .unwrap();
+            }
+            assert_eq!(
+                bus.read_ram::<4>(TARGET).unwrap(),
+                if enabled { 0xdead_beef } else { 0 }
+            );
+        }
+    }
 
     #[test]
     fn wfi_wakes_on_an_enabled_interrupt_even_while_primask_is_set() {

@@ -142,6 +142,23 @@ fn width_mask(width: usize) -> u32 {
 mod tests {
     use super::*;
 
+    // STM32_UART.robot: Should Drop Characters When UART Or Receiver Disabled.
+    #[test]
+    fn renode_stm32_usart_drops_input_if_either_enable_is_clear() {
+        let mut uart = Stm32Usart::new("uart".into(), 0, None, false);
+        for (control, byte) in [(UE, 0x12), (RE, 0x34)] {
+            uart.write(0, 4, control, |_| Ok(())).unwrap();
+            uart.queue_input([byte]);
+            assert_eq!(uart.read(0x1c, 4) & RXNE, 0);
+            uart.write(0, 4, UE | RE | RXNE, |_| Ok(())).unwrap();
+            assert_eq!(uart.read(0x1c, 4) & RXNE, 0);
+            assert!(!uart.interrupt_pending());
+            uart.queue_input([byte]);
+            assert!(uart.interrupt_pending());
+            assert_eq!(uart.read(0x24, 4), u32::from(byte));
+        }
+    }
+
     #[test]
     fn receive_irq_and_transmit_follow_control_and_status_registers() {
         let mut uart = Stm32Usart::new("uart".into(), 0, Some(Stm32Irq::Nvic(3)), false);
