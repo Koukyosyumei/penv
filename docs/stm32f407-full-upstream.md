@@ -1558,3 +1558,35 @@ sysbus 更新を伴うケースは上流と同様の模擬ハンドラーで初�
 
 `cargo test renode_stmcan` で再現できます。全体テストと未変更 REPL を使う
 FreeRTOS ELF のログと終了状態は `target/stm32f407-can-reset-fixture` に保存します。
+
+### Cortex-M4F CMSIS-DSP の公開 ELF 13 件
+
+固定 Renode の `tests/unit-tests/arm-dsp-examples-cortex-m4.robot` を読み、
+元の Cortex-M4F・NVIC・ROM/RAM・TrivialUart 構成と ELF を使って一括実行します。
+各 ELF のサイズと SHA-1 を配布名に照合します。全 13 件は
+`UART.TrivialUart` の `TypeNotResolved` で停止し、台帳では未達です。
+UART を LiteX に差し替えた切り分けでも `cortex-m4f` の指定が拒否されました。
+Class Marks には UART 行の正規表現、残りにはリテラル照合が必要です。
+上流との CPU 仮想時刻の対応と ELF 起動後の出力は未検証です。
+
+```sh
+work=target/stm32f407-cmsis-dsp
+mkdir -p "$work"
+cargo test > "$work/cargo-test.log" 2>&1
+cargo build --release
+python3 tests/cortex-m4-cmsis-dsp.py "$work" > "$work/exact.tsv"
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu > "$work/freertos.log" 2>&1
+```
+
+現状の一括実行は終了コード 1 です。各行の `BLOCKED` に対応する
+`arm_*_example.log` が個別の停止理由です。代表 1 件は実行コマンド末尾に
+`--case arm_bayes_example` を加えて再現できます。ARM 担当への依頼は
+`~/.local/state/penv-dispatch/shared-requests/stm32f407-cmsis-dsp-uart.md` です。
+
+独立した STM32F4 I²C の HS3001 2 件も確認しました。
+`using "platforms/cpus/stm32f4.repl"` に
+`hs3001: Sensors.HS3001 @ i2c1 0x44` の宣言を加え、
+`target/release/penv platform check --file "$work/hs3001/board.repl" --platform-root ../renode`
+を実行すると、`TypeNotResolved: unsupported platform model "Sensors.HS3001"`
+で停止します。センサーの実装、温湿度の設定と RESD ストリーム、元の Zephyr
+ELF による UART 検証が残っています。
