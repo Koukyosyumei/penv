@@ -1344,3 +1344,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 172件、固定 STM32H7 REPL 7構成、既存の構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-declaration-verification.qM3fX7GY` に保存しました。台帳は対象786件のうち等価合格158件、部分検証17件、未達611件です。
+
+### backlog-network-b374c0eff2fa-1
+
+REPL の宣言で引用符付きエイリアスを解析し、登録の省略と明示的な `@ none` を別々に診断します。固定上流 `VerificationTests.cs` の2件を同じバイナリで実行し、同じ入力で診断の種類と該当行を照合しました。正当なエイリアスを実行時に公開する上流ケースは、REPL 宣言名からバス上の公開名を分離する名前解決が必要なため未達です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 174件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-alias-validation.4RXZtf3f` に保存しました。台帳は対象786件のうち等価合格160件、部分検証17件、未達609件です。

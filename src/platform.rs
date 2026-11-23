@@ -35,6 +35,7 @@ pub(crate) struct Entry {
     pub(crate) name: String,
     pub(crate) model: String,
     local: bool,
+    alias: Option<String>,
     pub(crate) registration: Option<String>,
     pub(crate) body: Properties,
     source: PathBuf,
@@ -312,7 +313,9 @@ fn inline_body<'a>(
             Some((index, '{')) if declaration[end + 1..index].trim().is_empty() => {
                 begin = index;
             }
-            None if declaration[end + 1..].trim().is_empty() => {
+            None if declaration[end + 1..].trim().is_empty()
+                || declaration[end + 1..].trim_start().starts_with("as ") =>
+            {
                 return Ok((declaration, Vec::new()));
             }
             _ => return Err("unexpected text after registrations"),
@@ -669,6 +672,28 @@ fn indent_boundary(from: usize, to: usize) -> IndentBoundary {
     }
 }
 
+fn declaration_alias(declaration: &str) -> Result<(&str, Option<String>), &'static str> {
+    let mut depth = 0;
+    for (index, delimiter) in unquoted_delimiters(declaration, &['{', '}', ' ', '\t', '\n']) {
+        match delimiter {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ if depth == 0 => {
+                if let Some(alias) = declaration[index..]
+                    .trim_start()
+                    .strip_prefix("as")
+                    .filter(|tail| tail.starts_with(char::is_whitespace))
+                {
+                    let alias = quoted_value(alias.trim())?;
+                    return Ok((declaration[..index].trim_end(), Some(alias)));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok((declaration, None))
+}
+
 fn parse_text(
     content: &str,
     path: &Path,
@@ -849,6 +874,7 @@ fn parse_text(
             declaration
         };
         let (declaration, body) = inline_body(declaration, &source).map_err(error)?;
+        let (declaration, alias) = declaration_alias(declaration).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
             Some((model, registration)) => {
                 let registration = registration.trim();
@@ -872,6 +898,7 @@ fn parse_text(
             name: name.into(),
             model: model.into(),
             local: local_name.is_some(),
+            alias,
             registration,
             body,
             source: path.into(),
@@ -1075,6 +1102,14 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
     }
     let mut declared = HashSet::new();
     for entry in &entries {
+        if entry.alias.is_some() {
+            match entry.registration.as_deref() {
+                None => return Err(entry.error("alias requires a registration")),
+                Some("none") => return Err(entry.error("alias cannot use @ none")),
+                Some(_) => return Err(entry.error("registered peripheral aliases are unsupported")),
+            }
+        }
+
         if entry.model.is_empty() {
             if entry.registration.is_none() && entry.body.is_empty() {
                 return Err(entry.error("empty REPL entry"));
@@ -2928,6 +2963,34 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    #[test]
+    fn upstream_verify_alias_without_registration() {
+        let error = check_text(
+            r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral as "alias""#,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(":2: peripheral: alias requires a registration"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn upstream_verify_alias_with_none_registration() {
+        let error = check_text(
+            r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ none as "alias""#,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(":2: peripheral: alias cannot use @ none"),
+            "{error}"
+        );
     }
 
     #[test]

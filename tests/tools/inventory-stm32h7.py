@@ -324,6 +324,11 @@ def triage(row):
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
     elif suite == 'VerificationTests.cs' and name in {
+        'ShouldFailOnAliasWithoutRegistrationInfo',
+        'ShouldFailOnAliasWithNoneRegistrationInfo',
+    }:
+        status, reason = 'PASS', '固定上流と同じ入力で、未登録と @ none のエイリアスを区別する診断を照合。src/platform.rs'
+    elif suite == 'VerificationTests.cs' and name in {
         'ShouldFailIfTypeIsSpecifiedSecondTime',
         'ShouldFailOnEmptyEntry',
         'ShouldFailWithMoreThanOneInitAttribute',
