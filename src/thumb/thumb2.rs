@@ -284,6 +284,18 @@ impl Thumb {
                     r[rn] = indexed;
                 }
             }
+            0xeac0..=0xeacf
+                if low & 0x8010 == 0
+                    && [rn, rd, rm].into_iter().all(|reg| !matches!(reg, 13 | 15)) =>
+            {
+                let shift = ((low >> 10) & 0x1c) | ((low >> 6) & 3);
+                r[rd] = if low & 0x20 == 0 {
+                    (r[rn] & 0xffff) | ((r[rm] << shift) & 0xffff_0000)
+                } else {
+                    let shifted = (r[rm] as i32) >> if shift == 0 { 31 } else { shift };
+                    (r[rn] & 0xffff_0000) | (shifted as u32 & 0xffff)
+                };
+            }
             0xea00..=0xea9f
                 if rt < 8
                     && rm < 15

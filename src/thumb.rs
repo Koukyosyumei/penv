@@ -17,6 +17,28 @@ enum Sleep {
     Event,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstructionBoundary {
+    Begin,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ThumbBoundary {
+    pub phase: InstructionBoundary,
+    pub pc: u32,
+    pub itstate: u8,
+    pub active_exception: u8,
+    pub exception_depth: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DebugStep {
+    Retired,
+    Sleeping,
+    Breakpoint,
+}
+
 #[derive(Clone, Default)]
 pub struct Thumb {
     vectors: Option<u32>,
@@ -24,6 +46,8 @@ pub struct Thumb {
     basepri: u8,
     faultmask: bool,
     itstate: u8,
+    clock_gated: bool,
+    retired_instructions: u64,
     negative: bool,
     zero: bool,
     carry: bool,
@@ -57,8 +81,21 @@ impl Thumb {
         *self = Self {
             vectors: self.vectors,
             thumb2: self.thumb2,
+            clock_gated: self.clock_gated,
             ..Self::default()
         };
+    }
+
+    pub fn set_clocked(&mut self, clocked: bool) {
+        self.clock_gated = !clocked;
+    }
+
+    pub fn clocked(&self) -> bool {
+        !self.clock_gated
+    }
+
+    pub fn executed_instructions(&self) -> u64 {
+        self.retired_instructions
     }
 
     pub fn vector_base(&self) -> u32 {
@@ -568,6 +605,34 @@ impl Thumb {
         Ok(())
     }
 
+    pub(crate) fn debug_vfp_registers(&self) -> (&[u32; 32], u32) {
+        (&self.fp, self.fpscr)
+    }
+
+    pub(crate) fn debug_step(
+        &mut self,
+        pc: &mut u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+        enter_debug_mode: bool,
+    ) -> Result<DebugStep, String> {
+        if !self.clocked() {
+            return Ok(DebugStep::Sleeping);
+        }
+        if self.sleeping() {
+            if !enter_debug_mode || self.sleep != Sleep::Interrupt {
+                return Ok(DebugStep::Sleeping);
+            }
+            self.sleep = Sleep::Running;
+        }
+        if self.step(pc, registers, bus, output)? {
+            Ok(DebugStep::Retired)
+        } else {
+            Ok(DebugStep::Breakpoint)
+        }
+    }
+
     pub fn step(
         &mut self,
         pc: &mut u32,
@@ -575,7 +640,49 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<bool, String> {
+        self.step_with_boundaries(pc, r, bus, output, |_| {})
+    }
+
+    /// Observe instruction boundaries for MaximumBlockSize=1. PC at End
+    /// is the next PC, including a taken branch or a skipped IT slot.
+    pub(crate) fn step_with_boundaries(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+        mut observe: impl FnMut(ThumbBoundary),
+    ) -> Result<bool, String> {
         let inst = bus.thumb_fetch(*pc)?;
+        observe(ThumbBoundary {
+            phase: InstructionBoundary::Begin,
+            pc: *pc,
+            itstate: self.itstate,
+            active_exception: self.active_exception,
+            exception_depth: self.active_exceptions.depth(),
+        });
+        let retired = self.step_fetched(inst, pc, r, bus, output)?;
+        if retired {
+            self.retired_instructions = self.retired_instructions.wrapping_add(1);
+            observe(ThumbBoundary {
+                phase: InstructionBoundary::End,
+                pc: *pc,
+                itstate: self.itstate,
+                active_exception: self.active_exception,
+                exception_depth: self.active_exceptions.depth(),
+            });
+        }
+        Ok(retired)
+    }
+
+    fn step_fetched(
+        &mut self,
+        inst: u32,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<bool, String> {
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);
@@ -814,14 +921,12 @@ impl Thumb {
                         "unaligned multiple-register transfer at {address:#010x}"
                     ));
                 }
-                bus.check_thumb_access(address, count as usize * 4, !load, false)?;
                 let selected = (0..8).filter(|register| registers & (1 << register) != 0);
                 if load {
                     let mut values = *r;
                     for (index, register) in selected.enumerate() {
-                        values[register] = bus
-                            .read_ram::<4>(address.wrapping_add(index as u32 * 4))
-                            .map_err(|error| error.to_string())?;
+                        values[register] =
+                            bus.thumb_read::<4>(address.wrapping_add(index as u32 * 4))?;
                     }
                     *r = values;
                 } else {
@@ -830,11 +935,13 @@ impl Thumb {
                     {
                         return Err(unsupported());
                     }
-                    let memory = bus
-                        .guest_memory(address, count as usize * 4)
-                        .map_err(|error| error.to_string())?;
-                    for (word, register) in memory.as_chunks_mut::<4>().0.iter_mut().zip(selected) {
-                        *word = r[register].to_le_bytes();
+                    for (index, register) in selected.enumerate() {
+                        bus.thumb_write(
+                            address.wrapping_add(index as u32 * 4),
+                            4,
+                            r[register],
+                            output,
+                        )?;
                     }
                 }
                 if !load || registers & (1 << base_register) == 0 {
@@ -981,6 +1088,155 @@ impl Thumb {
 mod tests {
     use super::*;
 
+    #[test]
+    fn synchronized_instruction_boundaries_follow_taken_branch() {
+        use InstructionBoundary::{Begin, End};
+        let mut bus = Bus::default();
+        let mut out = std::io::sink();
+        bus.map_ram(0x1000, 0x1000).unwrap();
+        for (index, opcode) in [0xbf00, 0xbf00, 0xbf00, 0xe7fb].into_iter().enumerate() {
+            bus.write(0x1000 + index as u32 * 2, 2, opcode, &mut out)
+                .unwrap();
+        }
+        let mut thumb = Thumb::default();
+        let mut pc = 0x1000;
+        let mut regs = [0; 32];
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            assert!(
+                thumb
+                    .step_with_boundaries(&mut pc, &mut regs, &mut bus, &mut out, |e| events
+                        .push(e))
+                    .unwrap()
+            );
+        }
+        assert_eq!(events.len(), 40);
+        for (step, pair) in events.chunks_exact(2).enumerate() {
+            assert_eq!(
+                pair[0],
+                ThumbBoundary {
+                    phase: Begin,
+                    pc: 0x1000 + (step % 4) as u32 * 2,
+                    itstate: 0,
+                    active_exception: 0,
+                    exception_depth: 0,
+                }
+            );
+            assert_eq!(
+                pair[1],
+                ThumbBoundary {
+                    phase: End,
+                    pc: 0x1000 + ((step + 1) % 4) as u32 * 2,
+                    itstate: 0,
+                    active_exception: 0,
+                    exception_depth: 0,
+                }
+            );
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.phase == Begin && e.pc == 0x1004)
+                .count(),
+            5
+        );
+    }
+
+    #[test]
+    fn instruction_boundaries_capture_it_state_and_skipped_slot() {
+        let mut bus = Bus::default();
+        let mut out = std::io::sink();
+        bus.map_ram(0x1000, 0x1000).unwrap();
+        // ITTET EQ; MOV r1,1; MOV r2,2; MOV r3,3 (NE, skipped); MOV r4,4.
+        for (index, opcode) in [0xbf05, 0x2101, 0x2202, 0x2303, 0x2404]
+            .into_iter()
+            .enumerate()
+        {
+            bus.write(0x1000 + index as u32 * 2, 2, opcode, &mut out)
+                .unwrap();
+        }
+        let mut thumb = Thumb {
+            thumb2: true,
+            zero: true,
+            ..Thumb::default()
+        };
+        let mut pc = 0x1000;
+        let mut regs = [0; 32];
+        let mut events = Vec::new();
+        for _ in 0..5 {
+            assert!(
+                thumb
+                    .step_with_boundaries(&mut pc, &mut regs, &mut bus, &mut out, |e| events
+                        .push(e))
+                    .unwrap()
+            );
+        }
+        assert_eq!(&regs[1..5], &[1, 2, 0, 4]);
+        for (step, pair) in events.chunks_exact(2).enumerate() {
+            let states = [0, 5, 10, 20, 8, 0];
+            assert_eq!(
+                (pair[0].phase, pair[0].pc, pair[0].itstate),
+                (
+                    InstructionBoundary::Begin,
+                    0x1000 + step as u32 * 2,
+                    states[step]
+                )
+            );
+            assert_eq!(
+                (pair[1].phase, pair[1].pc, pair[1].itstate),
+                (
+                    InstructionBoundary::End,
+                    0x1002 + step as u32 * 2,
+                    states[step + 1]
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn debug_step_wfi_respects_debug_mode() {
+        for enabled in [false, true] {
+            let mut bus = Bus::default();
+            let mut out = std::io::sink();
+            bus.map_ram(0, 0x1000).unwrap();
+            bus.write(0x10, 2, 0xbf30, &mut out).unwrap();
+            bus.write(0x12, 2, 0xbf00, &mut out).unwrap();
+            let mut thumb = Thumb::default();
+            let mut registers = [0; 32];
+            let mut pc = 0x10;
+            assert_eq!(
+                thumb
+                    .debug_step(&mut pc, &mut registers, &mut bus, &mut out, enabled)
+                    .unwrap(),
+                DebugStep::Retired
+            );
+            assert_eq!(pc, 0x12);
+            let stop = thumb
+                .debug_step(&mut pc, &mut registers, &mut bus, &mut out, enabled)
+                .unwrap();
+            if enabled {
+                assert_eq!((stop, pc), (DebugStep::Retired, 0x14));
+            } else {
+                assert_eq!((stop, pc), (DebugStep::Sleeping, 0x12));
+                assert!(thumb.sleeping());
+            }
+        }
+    }
+
+    #[test]
+    fn debug_vfp_readback_preserves_scalar_register_number_and_bits() {
+        let mut thumb = Thumb::default();
+        for (i, register) in thumb.fp.iter_mut().enumerate() {
+            *register = (100.0 + i as f32).to_bits();
+        }
+        thumb.fpscr = 0x6000_0000;
+        let (registers, fpscr) = thumb.debug_vfp_registers();
+        for (i, &register) in registers.iter().enumerate() {
+            assert_eq!(f32::from_bits(register), 100.0 + i as f32);
+        }
+        assert_eq!(fpscr, 0x6000_0000);
+    }
+
     // Instructions from the ELF in tlib/arm/thumb2-data-processing-instr.robot.
     #[test]
     fn renode_thumb2_fixture_branches_and_reads_apsr() {
@@ -1125,6 +1381,48 @@ mod tests {
             (0xffff_fff8, 0x7e0, 16)
         );
         assert_eq!(bus.read_ram::<4>(0x7e0 + 24).unwrap(), 0x20);
+    }
+
+    #[test]
+    fn profiler_boundaries_report_nested_context_depth() {
+        let mut bus = Bus::default();
+        let mut out = std::io::sink();
+        bus.map_ram(0, 0x4000).unwrap();
+        bus.write(0x38, 4, 0x1001, &mut out).unwrap(); // PendSV vector
+        bus.write(0x14, 4, 0x1201, &mut out).unwrap(); // Nested BusFault vector
+        bus.write(0x2000, 2, 0xbf00, &mut out).unwrap();
+        bus.write(0x1000, 2, 0x4770, &mut out).unwrap();
+        bus.write(0x1200, 2, 0x4770, &mut out).unwrap();
+
+        let mut thumb = Thumb::new(Some(0));
+        let mut regs = [0; 32];
+        regs[13] = 0x4000;
+        let mut pc = 0x2000;
+        let mut events = Vec::new();
+        let mut step = |thumb: &mut Thumb, pc: &mut u32, regs: &mut [u32; 32], bus: &mut Bus| {
+            assert!(
+                thumb
+                    .step_with_boundaries(pc, regs, bus, &mut out, |event| events.push(event))
+                    .unwrap()
+            );
+        };
+        step(&mut thumb, &mut pc, &mut regs, &mut bus);
+        pc = thumb
+            .exception_entry(PENDSV, pc, &mut regs, &mut bus)
+            .unwrap();
+        pc = thumb.exception_entry(5, pc, &mut regs, &mut bus).unwrap();
+        step(&mut thumb, &mut pc, &mut regs, &mut bus);
+        step(&mut thumb, &mut pc, &mut regs, &mut bus);
+
+        let contexts: Vec<_> = events
+            .iter()
+            .map(|e| (e.active_exception, e.exception_depth))
+            .collect();
+        assert_eq!(
+            contexts,
+            [(0, 0), (0, 0), (5, 2), (PENDSV, 1), (PENDSV, 1), (0, 0)]
+        );
+        assert_eq!(pc, 0x2002);
     }
 
     #[test]

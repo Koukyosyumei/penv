@@ -31,6 +31,10 @@ impl ActiveExceptions {
         self.0[usize::from(exception / 32)] &= !(1 << (exception % 32));
     }
 
+    pub(crate) fn depth(&self) -> u32 {
+        self.0.iter().map(|bank| bank.count_ones()).sum()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.iter().all(|&bank| bank == 0)
     }
@@ -334,6 +338,9 @@ impl Nvic {
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         if width == 4 {
             let offset = address.wrapping_sub(BASE);
+            if offset == 4 {
+                return Some((BANKS - 1) as u32);
+            }
             if self.mpu.is_some() {
                 match offset {
                     0xd78 => return Some(0x0300_0003), // L1 instruction and data caches
