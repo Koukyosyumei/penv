@@ -1304,3 +1304,20 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 固定 Zicsr ELF は V を外した 2 MiB RAM の診断構成で 6/6 件が通過しました。固定 Robot 構成では V の未対応で 6 件すべてが CPU 作成時に停止しました。Rust テストは 88 件すべてが通過しました。台帳の上流等価合格は累計 155 件です。
 
 公開 Minerva BIOS の SFL UART ブートは転送・ジャンプを完了し、アドレス `0x40000000` から実行したペイロードの `~` を観測しました。IRQ CSR の実 ELF は固定 Renode のソースに基づく追加プローブです。固定 Renode バイナリとの同一 ELF の比較が残っています。ケースログ、終了状態、使用したプローブは上記の証拠ディレクトリに保存しました。
+
+### VexRiscv ECALL/EBREAK の固定 Robot フィクスチャ
+
+固定 `tests/unit-tests/riscv-ebreak.robot` の `Should Generate Ebreak` は、`rv32gc`、`timeProvider: empty`、1 ページの RAM、送信 FIFO 無効の LiteX UART を使います。変更前は VexRiscv の `timeProvider: empty` が CPU 作成時に拒否され、既存の回帰は縮小 ISA を使っていました。空のタイマープロバイダー指定を受け付け、回帰フィクスチャを上流と同じ設定に変更しました。
+
+```bash
+work=/tmp/penv-full-riscv
+elf=$(find "$work/regression/assets" -maxdepth 1 -name 'riscv32--ebreak_custom_test.elf-*' -print -quit)
+cargo test --locked
+cargo build --locked --release
+repro=$(mktemp -d)
+printf 'mach create\nmachine LoadPlatformDescription @%s\nsysbus LoadELF @%s\n' \
+  "$PWD/scripts/fixtures/rv32-ebreak.repl" "$elf" > "$repro/ebreak.resc"
+target/release/penv run --script "$repro/ebreak.resc" --max-steps 20000
+```
+
+同じ release バイナリで、Robot のインライン設定とリポジトリの REPL の両方から公開 ELF を実行し、開始、ECALL と EBREAK の 2 組、完了の UART 6 行が順番どおり一致しました。完了行の後に命令上限で停止しました。ELF は倍精度 ABI フラグを持つため、上流の `sysbus LoadELF` と同じスクリプト経由で検証しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 156 件です。固定最大 ISA の V と他の未達ケースは残っています。

@@ -142,7 +142,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if operations == {"RV32"}:
             return "target", "ported", "fixed RV32 ISA and hartId 2; single-step registers, memory and illegal-instruction assertions checked with inactive RV64 omitted"
     if filename == "riscv-ebreak.robot" and re.search(r"(?m)^\s+Create Machine\s*$", source):
-        return "target", "partial", "CPU.VexRiscv rv32gc and LiteX UART; upstream ELF UART sequence tested with reduced ISA"
+        return "target", "ported", "fixed VexRiscv rv32gc/timeProvider, RAM, LiteX UART and ELF; six ordered UART lines matched"
     if filename in {"memory-assertions.robot", "riscv-bkb.robot", "riscv-mret.robot", "riscv-priv.robot",
                     "riscv-unit-tests.robot", "riscv-vector-csr.robot", "riscv-zicond-extension.robot"}:
         choices = {a or b for a, b in re.findall(

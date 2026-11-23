@@ -1096,7 +1096,8 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                         _ => return Err(entry.error("unsupported RV32 privilegeLevels")),
                     };
                 }
-                ("timeProvider", "empty") if entry.model == "CPU.RiscV32" => {}
+                ("timeProvider", "empty")
+                    if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.VexRiscv") => {}
                 ("zfaFli", "true" | "false") if entry.model == "CPU.RiscV32" => {
                     zfa_fli = value == "true";
                 }

@@ -2475,7 +2475,7 @@ Renode	tests/unit-tests/riscv-custom-instructions.robot	110	Should Override An E
 Renode	tests/unit-tests/riscv-custom-instructions.robot	132	Should Install Custom 32-bit Instructions Sharing State		outside	outside	inline CPU.RiscV64 rv64imac_zicsr fixture
 Renode	tests/unit-tests/riscv-custom-instructions.robot	169	Should Register Simple Custom CSR		outside	outside	inline CPU.RiscV64 rv64imac_zicsr fixture
 Renode	tests/unit-tests/riscv-custom-instructions.robot	187	Should Register Custom CSR		outside	outside	inline CPU.RiscV64 rv64imac_zicsr fixture
-Renode	tests/unit-tests/riscv-ebreak.robot	13	Should Generate Ebreak		target	partial	CPU.VexRiscv rv32gc and LiteX UART; upstream ELF UART sequence tested with reduced ISA
+Renode	tests/unit-tests/riscv-ebreak.robot	13	Should Generate Ebreak		target	ported	fixed VexRiscv rv32gc/timeProvider, RAM, LiteX UART and ELF; six ordered UART lines matched
 Renode	tests/unit-tests/riscv-extensions.robot	19	Should Create CPUs With Supported ISAs	RV32I_Smepmp	target	ported	fixed CPU-only RV32I_Smepmp fixture constructs without RAM or firmware
 Renode	tests/unit-tests/riscv-extensions.robot	20	Should Create CPUs With Supported ISAs	RV32I_Sscofpmf	target	ported	fixed CPU-only RV32I_Sscofpmf fixture constructs without RAM or firmware
 Renode	tests/unit-tests/riscv-extensions.robot	21	Should Create CPUs With Supported ISAs	RV32I_V	target	blocked-cpu	fixed CPU-only fixture requires unsupported V
