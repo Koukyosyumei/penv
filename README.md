@@ -898,3 +898,25 @@ bash tests/stm32h7-tim8-smoke.sh "$base" timer8
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-rcc-timer.0zFmYqdC` に保存しました。クロック構成の公開 ELF は既合格の 6 件が再度通過しました。CSI 4 は引き続き 8 仮想秒以内に USART3 出力がありません。台帳は対象 789 件のうち等価合格 55 件、部分検証 10 件、未達 724 件です。
+
+### backlog-network-6caf4b37ab9c-1
+
+STM32 タイマーの出力比較で、対応する CCxIE が有効な場合に CCxIF を立てるようにしました。固定 Renode の STM32_Timer と同じ条件です。比較割り込みをマスクしたまま PWM 出力は動作します。
+
+上流 `ComparingTimerTests.cs` から 4 件を移植しました。1 MHz、比較値、経過時間、CNT への書き戻しを揃え、CNT・CCR1 と各区間の比較イベント数を照合しました。汎用タイマーが周期を上限とするフィクスチャに対し、STM32 の ARR にはラップ直前の値である周期 − 1 を設定しています。汎用 `Compare` setter の範囲外例外は、STM32 の CCR 書き込みで観測する契約が違うため未達のままです。
+
+公開 Zephyr 参照 ELF を実行し、TIM3 の PWM 出力を有効にした状態で CC1IE の前後を観測しました。ステータスはマスク中が `0x1`、有効化後が `0x3` で、比較フラグだけが追加されました。TIM1/TIM8 実 ELF スモークと RCC の TIM1 3 ケースも通過しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test comparing_timer_cases
+cargo build --release
+e=~/.local/state/penv-dispatch/evidence/h7-compare.z8PftPwj
+target/release/penv run --script "$e/tim3-final/boot.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1500000
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+```
+
+ログと終了状態は上記の証拠ディレクトリに保存しました。台帳は対象 789 件のうち等価合格 59 件、部分検証 10 件、未達 720 件です。

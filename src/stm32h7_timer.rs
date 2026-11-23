@@ -349,11 +349,117 @@ impl Timer {
                 let mode = self.registers[6 + channel / 2] >> (channel % 2 * 8);
                 if mode & 3 == 0
                     && self.counter == self.registers[13 + channel]
-                    && (!self.uses_advanced_events() || self.registers[3] & (2 << channel) != 0)
+                    && self.registers[3] & (2 << channel) != 0
                 {
                     self.registers[4] |= 2 << channel;
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod comparing_timer_cases {
+    use super::*;
+
+    const CR1: u32 = 0;
+    const DIER: u32 = 0x0c;
+    const SR: u32 = 0x10;
+    const CNT: u32 = 0x24;
+    const ARR: u32 = 0x2c;
+    const CCR1: u32 = 0x34;
+    const CC1: u32 = 1 << 1;
+
+    fn periodic_timer(period: u32, compare: u32) -> Timer {
+        // ComparingTimer names the wrap boundary "limit", while STM32 ARR
+        // names the last count before wrap.
+        let mut timer = Timer::new("timer3".into(), 0, 1_000_000, 0xffff, None);
+        timer.write(ARR, period - 1);
+        timer.write(CCR1, compare);
+        timer.write(DIER, CC1);
+        timer.write(CR1, CEN);
+        timer
+    }
+
+    fn advance(timer: &mut Timer, microseconds: u32) -> u32 {
+        let mut compare_events = 0;
+        for _ in 0..microseconds {
+            timer.tick();
+            if timer.read(SR) & CC1 != 0 {
+                compare_events += 1;
+                timer.write(SR, !CC1);
+            }
+        }
+        compare_events
+    }
+
+    fn check(timer: &Timer, counter: u32, compare: u32) {
+        assert_eq!(timer.read(CNT), counter);
+        assert_eq!(timer.read(CCR1), compare);
+    }
+
+    #[test]
+    fn should_handle_compare_value_change_when_enabled() {
+        let mut timer = periodic_timer(65_536, 65_535);
+        assert_eq!(advance(&mut timer, 65_535), 1);
+        check(&timer, 65_535, 65_535);
+        assert_eq!(advance(&mut timer, 1), 0);
+        check(&timer, 0, 65_535);
+
+        assert_eq!(advance(&mut timer, 16_304), 0);
+        check(&timer, 16_304, 65_535);
+        timer.write(CCR1, 0);
+        check(&timer, 16_304, 0);
+        assert_eq!(timer.read(SR) & CC1, 0);
+
+        for _ in 0..2 {
+            let remaining = 65_535 - timer.read(CNT);
+            assert_eq!(advance(&mut timer, remaining), 0);
+            check(&timer, 65_535, 0);
+            assert_eq!(advance(&mut timer, 1), 1);
+            check(&timer, 0, 0);
+        }
+    }
+
+    #[test]
+    fn should_clear_when_value_set_to_zero() {
+        let mut timer = periodic_timer(300, 200);
+        assert_eq!(advance(&mut timer, 100), 0);
+        check(&timer, 100, 200);
+        timer.write(CNT, 0);
+        check(&timer, 0, 200);
+    }
+
+    #[test]
+    fn should_generate_compare_event_at_compare_after_clear() {
+        let mut timer = periodic_timer(300, 100);
+        advance(&mut timer, 200);
+        timer.write(CNT, 0);
+        assert_eq!(advance(&mut timer, 100), 1);
+        check(&timer, 100, 100);
+    }
+
+    #[test]
+    fn should_not_generate_additional_compare_event() {
+        let mut timer = periodic_timer(300, 100);
+        assert_eq!(timer.read(SR) & CC1, 0);
+        assert_eq!(advance(&mut timer, 100), 1);
+        timer.write(CNT, 100);
+        assert_eq!(timer.read(SR) & CC1, 0);
+        assert_eq!(advance(&mut timer, 300), 1);
+        check(&timer, 100, 100);
+    }
+
+    #[test]
+    fn compare_match_only_sets_interrupt_flag_for_an_enabled_channel() {
+        let mut timer = periodic_timer(300, 100);
+        timer.write(DIER, 0);
+        // PWM output can run while its compare interrupt is masked.
+        timer.write(0x18, 0x60);
+        timer.write(0x20, 1);
+        assert_eq!(advance(&mut timer, 100), 0);
+        assert_eq!(timer.pwm_pin(0), Some(false));
+        timer.write(DIER, CC1);
+        assert_eq!(advance(&mut timer, 300), 1);
     }
 }
