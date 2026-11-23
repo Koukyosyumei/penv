@@ -1577,3 +1577,33 @@ target/release/penv run --platform "$evidence/priv.repl" --max-steps 20 "$eviden
 ```
 
 ケース別結果、実行構成、補助 ELF とソースは上記の証拠ディレクトリに保存しました。
+
+### 固定ディスカバリーに含まれる RV32 ACT 署名用 ELF
+
+固定 Robot が列挙する `build/` の署名用 ELF 23 件を、同じ release バイナリで一括検証しました。固定の `ArrayMemoryRiscVTestWatcher.cs` はオフセット 0 への奇数の書き込みで終了を判定します。penv の `--tohost` もこの入力で終了判定します。Sm・TVM・Zicntr の 4 ELF は、上位ワードが UART パケットを示している間に下位ワードへ奇数の文字を書き、終了コード 36169534507319329 として停止しました。ACT パケットを処理する `--tohost-act` では同じ 4 ELF が完走しました。署名用 ELF の終了観測を検証した結果であり、署名の全バイト比較は別工程です。
+
+| 構成 | 固定形式の監視 | ACT パケット監視 |
+| --- | ---: | ---: |
+| V を外しベクトル初期化と CLINT を加えた診断構成 | 18/23 | 22/23 |
+| 診断構成から Smepmp を外す | 19/23 | 23/23 |
+| 固定 Robot の CPU 型 | 0/23 | 未実行 |
+
+診断構成で共通して停止する `SsstrictCsrSm.sig.elf` は、Smepmp を外すと完走します。Svinval の終了コード 0 は命令対応を示さず、前回の補助 ELF は引き続き未達です。固定構成は V の未対応で全件が CPU 作成時に停止しました。台帳の上流等価合格は累計 174 件で、署名用 23 件は引き続き対象です。今回の Rust テストは 88/88 件が通過しました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-52963bb-vJP7G2"
+repro=$(mktemp -d)
+b="$work/act/work/spike-rv32-max/build"
+cargo test --locked
+cargo build --locked --release
+for mode in fixed-format act; do
+  opts=()
+  if [ "$mode" = act ]; then opts+=(--act); fi
+  python3 scripts/validate-rv32-architecture.py "${opts[@]}" --penv target/release/penv \
+    --max-steps 10000000 --platform "$evidence/priv.repl" --artifacts "$repro/$mode" \
+    "$b"/priv/*/*.sig.elf "$b"/rv32i/Zicntr/*.sig.elf
+done
+```
+
+ケース別の結果・終了状態と構成は上記の証拠ディレクトリに保存しました。

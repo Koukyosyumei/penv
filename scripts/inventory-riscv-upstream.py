@@ -74,6 +74,15 @@ def robot_cases(root, isa, act):
                             else re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zb[abcs]/[^/]+\.elf", portable)
                         )
                         basis = MAX_ISA_BLOCKER
+                        if re.fullmatch(r"spike-rv32-max/build/(?:priv/[^/]+|rv32i/Zicntr)/[^/]+\.sig\.elf", portable):
+                            if portable.endswith("/SsstrictCsrSm.sig.elf"):
+                                basis += "; both diagnostic watchers hit step limit with Smepmp; tohost=0 with Smepmp omitted"
+                            elif re.search(r"/(?:Sm-00|mstatus_tvm_test|Zicntr-csrr[cs]-00)\.sig\.elf$", portable):
+                                basis += "; fixed watcher terminates on first UART packet; ACT packet watcher reaches tohost=0 in diagnostic ISA"
+                            elif portable.endswith("/Svinval.sig.elf"):
+                                basis += "; both diagnostic watchers reach tohost=0; M-mode SINVAL.VMA probe still traps"
+                            else:
+                                basis += "; fixed-format and ACT packet watchers reach tohost=0 in diagnostic ISA"
                         if bitmanip_checked:
                             basis += "; reduced-ISA bitmanip diagnostic passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zcb(?:M|Zbb)?/[^/]+\.elf", portable):
