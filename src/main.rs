@@ -2,6 +2,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod ethernet_switch;
 mod image;
 mod litex;
 mod litex_eth;
@@ -12,6 +13,7 @@ mod litex_panel;
 mod litex_sd;
 mod litex_tftp;
 mod litex_video;
+mod image64;
 mod machine;
 mod monitor;
 mod murax;
@@ -24,6 +26,19 @@ mod stm32_adc;
 mod stm32_can;
 mod stm32_crc;
 mod stm32_dma;
+mod rv64;
+mod rv64_devices;
+mod rv64_ethernet;
+mod rv64_float;
+mod rv64_gem;
+mod rv64_mpfs;
+mod rv64_mpfs_ihc;
+mod rv64_mpfs_sd;
+mod rv64_mpfs_wdog;
+mod rv64_platform;
+mod rv64_priv;
+mod rv64_starfive;
+mod rv64_vm;
 mod stm32_exti;
 mod stm32_flash;
 mod stm32_gpio;
@@ -56,6 +71,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_IMAGE]
+       penv switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
@@ -64,10 +80,13 @@ Options:
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
-  --raw              Load a flat binary (default: ELF32)
+  --raw              Load a flat binary (default: ELF)
+  --rv64             Run a raw image on an RV64IM CPU
   --hex              Load an Intel HEX image on a Cortex-M platform
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
+  --load-binary BASE:PATH  Load a flat companion image into RAM (repeatable)
+  --dtb BASE:PATH    Load an RV64 boot DTB and pass its address in a1
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --litex-timer-alias BASE  Map the existing LiteX timer at an additional address
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
@@ -83,7 +102,11 @@ Options:
   --litex-button-event STEP:NAME:ACTION  Press, Release, or Toggle at a step
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --uart-stdin       Forward stdin to the platform UART while running
+  --uart-stdin-reset  Enable Ctrl-] r to reload the machine on the UART session
+  --uart-device NAME  Select the RV64 platform UART that receives input
   --uart-input-at N Delay UART input until execution step N
+  --ethernet-loopback LOCAL:PEER  Link BeagleV MACs over localhost UDP ports
   --litex-uart-stdio  Bridge stdin to LiteX UART at 115200 baud and flush UART output
   --litex-uart-legacy-console  Use legacy LiteX UART console event handling
   --mtvec ADDRESS    Set the initial machine trap vector
@@ -119,14 +142,41 @@ fn run() -> Result<ExitCode, String> {
             println!("penv {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Some("switch")) => {
+            let ports = args
+                .map(|arg| {
+                    arg.to_str()
+                        .and_then(|port| port.parse::<u16>().ok())
+                        .filter(|&port| port != 0)
+                        .ok_or("switch ports must be nonzero UDP port numbers")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let [local, _, _, ..] = ports.as_slice() else {
+                return Err(
+                    "expected switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]".into(),
+                );
+            };
+            if ports
+                .iter()
+                .enumerate()
+                .any(|(index, port)| ports[..index].contains(port))
+            {
+                return Err("switch ports must be distinct".into());
+            }
+            let guests = &ports[1..];
+            ethernet_switch::run(*local, guests)
+                .map_err(|error| format!("Ethernet switch: {error}"))?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run'; see --help".into()),
+        _ => return Err("expected 'run' or 'switch'; see --help".into()),
     }
 
     let mut raw = false;
     let mut hex = false;
     let mut litex_uart_stdio = false;
     let mut enable_litex_uart_legacy_console = false;
+    let mut rv64 = false;
     let mut stats = false;
     let mut positional = false;
     let mut ram_mib = None;
@@ -134,6 +184,8 @@ fn run() -> Result<ExitCode, String> {
     let mut tohost = None;
     let mut max_steps = None;
     let mut extra_ram = Vec::new();
+    let mut companion_images = Vec::new();
+    let mut dtb = None;
     let mut clint = None;
     let mut litex_timer_aliases = Vec::new();
     let mut mtvec = None;
@@ -147,6 +199,10 @@ fn run() -> Result<ExitCode, String> {
     let mut adc_events = Vec::new();
     let mut led_events = false;
     let mut uart_input = None;
+    let mut uart_stdin = false;
+    let mut uart_stdin_reset = false;
+    let mut ethernet_loopback = None;
+    let mut uart_device = None;
     let mut uart_input_at = None;
     let mut temperature_events = Vec::new();
     let mut phy_events = Vec::new();
@@ -169,7 +225,24 @@ fn run() -> Result<ExitCode, String> {
             Some("--stm32f0-console") => stm32f0_console = true,
             Some("--litex-uart-stdio") => litex_uart_stdio = true,
             Some("--litex-uart-legacy-console") => enable_litex_uart_legacy_console = true,
+            Some("--rv64") => rv64 = true,
             Some("--stats") => stats = true,
+            Some("--uart-stdin") => uart_stdin = true,
+            Some("--uart-stdin-reset") => uart_stdin_reset = true,
+            Some("--ethernet-loopback") => {
+                let value = args.next().and_then(|value| value.into_string().ok());
+                let ports = value
+                    .as_deref()
+                    .and_then(|value| value.split_once(':'))
+                    .and_then(|(local, peer)| {
+                        Some((local.parse::<u16>().ok()?, peer.parse::<u16>().ok()?))
+                    })
+                    .filter(|&(local, peer)| local != 0 && peer != 0 && local != peer)
+                    .ok_or("--ethernet-loopback requires distinct nonzero LOCAL:PEER ports")?;
+                if ethernet_loopback.replace(ports).is_some() {
+                    return Err("--ethernet-loopback may only be specified once".into());
+                }
+            }
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
                 | "--asset-dir" | "--framebuffer-out"),
@@ -361,6 +434,16 @@ fn run() -> Result<ExitCode, String> {
                     .map_err(|_| "--uart-event requires a nonnegative step number")?;
                 uart_events.push((step, PathBuf::from(path)));
             }
+            Some("--uart-device") => {
+                let name = args
+                    .next()
+                    .and_then(|name| name.into_string().ok())
+                    .filter(|name| !name.is_empty())
+                    .ok_or("--uart-device requires NAME")?;
+                if uart_device.replace(name).is_some() {
+                    return Err("--uart-device may only be specified once".into());
+                }
+            }
             Some("--uart-input-at") => {
                 let value = args
                     .next()
@@ -376,12 +459,12 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or_else(|| format!("{option} requires a number"))?;
-                let target = if option == "--mtvec" {
-                    &mut mtvec
+                let previous = if option == "--mtvec" {
+                    mtvec.replace(parse_address64(&value)?).is_some()
                 } else {
-                    &mut vex_irq_mask
+                    vex_irq_mask.replace(parse_address(&value)?).is_some()
                 };
-                if target.replace(parse_address(&value)?).is_some() {
+                if previous {
                     return Err(format!("{option} may only be specified once"));
                 }
             }
@@ -413,6 +496,23 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
+            Some(option @ ("--load-binary" | "--dtb")) => {
+                let error = || format!("{option} requires BASE:PATH");
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(error)?;
+                let (base, path) = value
+                    .split_once(':')
+                    .filter(|(_, path)| !path.is_empty())
+                    .ok_or_else(error)?;
+                let image = (PathBuf::from(path), parse_address64(base)?);
+                if option == "--load-binary" {
+                    companion_images.push(image);
+                } else if dtb.replace(image).is_some() {
+                    return Err("--dtb may only be specified once".into());
+                }
+            }
             Some("--map-ram") => {
                 let value = args
                     .next()
@@ -421,7 +521,11 @@ fn run() -> Result<ExitCode, String> {
                 let (base, size) = value
                     .split_once(':')
                     .ok_or("--map-ram requires BASE:SIZE")?;
-                extra_ram.push((parse_address(base)?, parse_address(size)? as usize));
+                extra_ram.push((
+                    parse_address64(base)?,
+                    usize::try_from(parse_address64(size)?)
+                        .map_err(|_| "RAM size exceeds host limits")?,
+                ));
             }
             Some(option @ ("--ram-mib" | "--max-steps" | "--harts")) => {
                 let value = args
@@ -473,6 +577,9 @@ fn run() -> Result<ExitCode, String> {
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
     let mut post_run = Vec::new();
+    let mut sd_cards = Vec::new();
+    let mut mpfs_buttons = Vec::new();
+    let mut halt_hooks = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -494,7 +601,7 @@ fn run() -> Result<ExitCode, String> {
         }
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
-        mtvec = mtvec.or(boot.mtvec);
+        mtvec = mtvec.or(boot.mtvec.map(u64::from));
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         hex = boot.hex;
@@ -510,7 +617,20 @@ fn run() -> Result<ExitCode, String> {
         }
         for (value, address) in boot.binaries {
             let path = value.resolve(root, asset_dir.as_deref())?;
-            binaries.push((path, address));
+            binaries.push((path, u64::from(address)));
+        }
+        for (value, controller, capacity) in boot.sd_cards {
+            let path = value.resolve(root, asset_dir.as_deref())?;
+            sd_cards.push((path, controller, capacity));
+        }
+        mpfs_buttons = boot.mpfs_buttons;
+        for (cpu, symbol, target, value) in boot.halt_hooks {
+            let file = monitor::Asset::new(&value, script).resolve(root, asset_dir.as_deref())?;
+            let address = fs::read(&file)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| image64::symbol(&bytes, &symbol))
+                .map_err(|error| format!("{}: {error}", file.display()))?;
+            halt_hooks.push((cpu, address, target));
         }
         if let Some((controller, image, capacity)) = boot.sd_card {
             let path = image.resolve(root, asset_dir.as_deref())?;
@@ -532,72 +652,11 @@ fn run() -> Result<ExitCode, String> {
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
     }
-    let mut machine = match platform_path {
-        Some(platform_path) => {
-            if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
-                return Err(
-                    "--platform defines RAM and CLINT and cannot be combined with manual mappings"
-                        .into(),
-                );
-            }
-            platform::load(&platform_path, platform_root.as_deref(), stm32f0_console)?
-        }
-        None => {
-            if stm32f0_console {
-                return Err("--stm32f0-console requires --platform".into());
-            }
-            if platform_root.is_some() {
-                return Err("--platform-root requires --platform".into());
-            }
-            Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
-        }
-    };
-    machine.bus.report_led_events(led_events);
-    for (channel, volts) in adc_inputs {
-        machine.bus.set_stm32f0_adc_input(channel, volts)?;
+    if rv64 && (!raw || platform_path.is_some()) {
+        return Err("--rv64 requires --raw without --platform".into());
     }
-    for (step, channel, volts) in adc_events {
-        machine.schedule_adc_input(step, channel, volts)?;
-    }
-    for base in litex_timer_aliases {
-        machine.bus.map_litex_timer_alias(base)?;
-    }
-    if enable_litex_uart_legacy_console {
-        machine.bus.enable_litex_uart_legacy_console()?;
-    }
-    if script_elf_addresses.is_some() && !machine.is_cortex_m() {
-        machine.bus.use_renode_unmapped_data();
-    }
-    if let Some((name, server)) = tftp {
-        machine.bus.attach_litex_tftp(&name, server)?;
-    }
-    for analyzer in video_analyzers {
-        if machine
-            .bus
-            .litex_video
-            .as_ref()
-            .is_none_or(|video| video.name != analyzer)
-        {
-            return Err(format!("unknown analyzer peripheral {analyzer:?}"));
-        }
-    }
-    if framebuffer_out.is_some() && machine.bus.litex_video.is_none() {
-        return Err("--framebuffer-out requires a LiteX framebuffer".into());
-    }
-    if let Some((controller, path, capacity)) = sd_card {
-        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let card =
-            litex_sd::Card::new(file, capacity).map_err(|e| format!("{}: {e}", path.display()))?;
-        machine.bus.attach_litex_sd(&controller, card)?;
-    }
-    for (base, size) in silence_ranges {
-        machine.bus.map_silencer(base, size)?;
-    }
-    for (base, size) in extra_ram {
-        machine.bus.map_ram(base, size)?;
-    }
-    if let Some(base) = clint {
-        machine.bus.map_clint(base, harts.unwrap_or(1))?;
+    if uart_stdin_reset && !uart_stdin {
+        return Err("--uart-stdin-reset requires --uart-stdin".into());
     }
     if uart_input_at.is_some() && uart_input.is_none() {
         return Err("--uart-input-at requires --uart-input".into());
@@ -605,95 +664,214 @@ fn run() -> Result<ExitCode, String> {
     if let Some(path) = uart_input {
         uart_events.insert(0, (uart_input_at.unwrap_or(0), path));
     }
-    for (step, path) in uart_events {
-        let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        machine.schedule_uart_input(step, bytes)?;
-    }
-    if let Some(value) = mtvec {
-        machine.primary.set_mtvec(value);
-    }
-    if let Some(value) = vex_irq_mask {
-        machine.primary.set_vex_irq_mask(value)?;
-    }
-    if let Some(value) = vex_supervisor_irq_mask {
-        machine.primary.set_vex_supervisor_irq_mask(value)?;
-    }
-    if let Some(path) = path {
-        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let loaded = if hex {
-            image::load_hex(&mut machine, file)
-        } else {
-            image::load(&mut machine, file, raw, script_elf_addresses)
+    let boot_machine = || -> Result<Machine, String> {
+        let mut machine = match platform_path.as_deref() {
+            Some(platform_path) => {
+                if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
+                    return Err(
+                    "--platform defines RAM and CLINT and cannot be combined with manual mappings"
+                        .into(),
+                );
+                }
+                platform::load(platform_path, platform_root.as_deref(), stm32f0_console)?
+            }
+            None => {
+                if platform_root.is_some() {
+                    return Err("--platform-root requires --platform".into());
+                }
+                Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
+            }
         };
-        loaded.map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    for (path, address) in binaries {
-        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        image::load_binary(&mut machine, file, address)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    if let Some(count) = harts {
-        if count != 1 && machine.is_cortex_m() {
-            return Err("--harts requires an RV32 machine".into());
+        machine.bus.report_led_events(led_events);
+        for (channel, volts) in &adc_inputs {
+            machine.bus.set_stm32f0_adc_input(*channel, *volts)?;
         }
-        if count != 1 && machine.bus.litex_cpu_timer.is_some() {
-            return Err("--harts cannot override a single-hart LiteX CPU timer".into());
+        for (step, channel, volts) in &adc_events {
+            machine.schedule_adc_input(*step, *channel, *volts)?;
         }
-        if machine.hart_count() != 1 {
-            return Err("--harts cannot override multiple CPU declarations".into());
+        for &base in &litex_timer_aliases {
+            machine.bus.map_litex_timer_alias(base)?;
         }
-        machine.configure_harts(count);
-    }
-    for (cpu, address) in boot_pcs {
-        machine.set_named_entry(&cpu, address)?;
-    }
-    for (cpu, address) in vector_tables {
-        machine.set_named_vector_table(&cpu, address)?;
-    }
-    for (name, action) in buttons {
-        machine.bus.set_litex_button(&name, action)?;
-    }
-    for (step, name, action) in button_events {
-        if machine.is_cortex_m() {
-            let pressed = match action {
-                litex_panel::ButtonAction::Press => true,
-                litex_panel::ButtonAction::Release => false,
-                _ => return Err("STM32 button events support press and release".into()),
+        if enable_litex_uart_legacy_console {
+            machine.bus.enable_litex_uart_legacy_console()?;
+        }
+        if script_elf_addresses.is_some() && !machine.is_cortex_m() {
+            machine.bus.use_renode_unmapped_data();
+        }
+        if let Some((name, server)) = &tftp {
+            machine.bus.attach_litex_tftp(name, server.clone())?;
+        }
+        for analyzer in &video_analyzers {
+            if machine
+                .bus
+                .litex_video
+                .as_ref()
+                .is_none_or(|video| video.name != *analyzer)
+            {
+                return Err(format!("unknown analyzer peripheral {analyzer:?}"));
+            }
+        }
+        if framebuffer_out.is_some() && machine.bus.litex_video.is_none() {
+            return Err("--framebuffer-out requires a LiteX framebuffer".into());
+        }
+        if let Some((controller, path, capacity)) = &sd_card {
+            let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let card =
+                litex_sd::Card::new(file, *capacity).map_err(|e| format!("{}: {e}", path.display()))?;
+            machine.bus.attach_litex_sd(controller, card)?;
+        }
+        for &(base, size) in &silence_ranges {
+            machine.bus.map_silencer(base, size)?;
+        }
+        for (gpio_name, button_name, pressed) in &mpfs_buttons {
+            let gpio = machine
+                .bus
+                .rv64_devices
+                .mpfs_gpio
+                .iter_mut()
+                .find(|gpio| {
+                    gpio.name == *gpio_name
+                        && gpio
+                            .button
+                            .as_ref()
+                            .is_some_and(|(name, _, _)| name == button_name)
+                })
+                .ok_or_else(|| format!("unknown GPIO button {gpio_name}.{button_name}"))?;
+            gpio.set_button(*pressed);
+        }
+        for (source, pc, target) in &halt_hooks {
+            machine.halt_on_pc(source, *pc, target)?;
+        }
+        for (path, name, capacity) in &sd_cards {
+            let controller = machine
+                .bus
+                .rv64_devices
+                .mpfs_sd
+                .iter_mut()
+                .find(|sd| sd.name == *name)
+                .ok_or_else(|| format!("unknown MPFS SD controller {name:?}"))?;
+            controller
+                .attach(path, *capacity)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+        }
+        if rv64 {
+            machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));
+        }
+        for &(base, size) in &extra_ram {
+            machine.bus.map_ram64(base, size)?;
+        }
+        if let Some(base) = clint {
+            machine.bus.map_clint(base, harts.unwrap_or(1))?;
+        }
+        if let Some(name) = uart_device.as_deref() {
+            machine.bus.rv64_devices.select_uart(name)?;
+        }
+        for (step, path) in &uart_events {
+            let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            machine.schedule_uart_input(*step, bytes)?;
+        }
+        if let Some(value) = vex_irq_mask {
+            machine.primary.set_vex_irq_mask(value)?;
+        }
+        if let Some(value) = vex_supervisor_irq_mask {
+            machine.primary.set_vex_supervisor_irq_mask(value)?;
+        }
+        if let Some(path) = path.as_deref() {
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let loaded = if hex {
+                image::load_hex(&mut machine, file)
+            } else {
+                image::load(&mut machine, file, raw, script_elf_addresses)
             };
-            machine.schedule_stm32_button(step, &name, pressed)?;
-        } else {
-            machine.schedule_button(step, name, action)?;
+            loaded.map_err(|e| format!("{}: {e}", path.display()))?;
         }
-    }
-    for (step, name, expected) in led_assertions {
-        machine.schedule_led_assertion(step, name, expected)?;
-    }
-    for (step, name, value) in temperature_events {
-        machine.schedule_sensor_temperature(step, name, value)?;
-    }
-    for (step, name, value) in phy_events {
-        machine.schedule_phy_vendor_specific1(step, name, value)?;
-    }
-    for (step, path) in framebuffer_events {
-        machine.schedule_framebuffer_capture(step, path)?;
-    }
-    for (step, path, region) in frame_waits {
-        let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let reference = litex_video::ReferenceFrame::parse(data)
-            .and_then(|frame| match region {
-                Some(region) => frame.with_region(region),
-                None => Ok(frame),
-            })
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        machine.schedule_frame_wait(step, reference)?;
-    }
-    if let Some((address, act)) = tohost {
-        if machine.is_cortex_m() {
-            return Err("--tohost requires an RV32 machine".into());
+        if let Some(value) = mtvec {
+            if let Some(cpu) = &mut machine.primary.rv64 {
+                cpu.privilege.set_vector(value);
+            } else {
+                machine
+                    .primary
+                    .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
+            }
         }
-        machine.bus.watch_tohost(address, act)?;
-    }
-    machine.validate_entry()?;
+        for (path, address) in binaries.iter().chain(&companion_images) {
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load_binary(&mut machine, file, *address)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        if let Some(count) = harts {
+            if count != 1 && machine.is_cortex_m() {
+                return Err("--harts requires a RISC-V machine".into());
+            }
+            if machine.hart_count() != 1 {
+                return Err("--harts cannot override multiple CPU declarations".into());
+            }
+            machine.configure_harts(count);
+        }
+        for (cpu, address) in &boot_pcs {
+            machine.set_named_entry(cpu, *address)?;
+        }
+        if let Some((path, address)) = &dtb {
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load_rv64_dtb(&mut machine, file, *address)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        for (cpu, address) in &vector_tables {
+            machine.set_named_vector_table(cpu, *address)?;
+        }
+        for (name, action) in &buttons {
+            machine.bus.set_litex_button(name, *action)?;
+        }
+        for (step, name, action) in &button_events {
+            if machine.is_cortex_m() {
+                let pressed = match action {
+                    litex_panel::ButtonAction::Press => true,
+                    litex_panel::ButtonAction::Release => false,
+                    _ => return Err("STM32 button events support press and release".into()),
+                };
+                machine.schedule_stm32_button(*step, name, pressed)?;
+            } else {
+                machine.schedule_button(*step, name.clone(), *action)?;
+            }
+        }
+        for (step, name, expected) in &led_assertions {
+            machine.schedule_led_assertion(*step, name.clone(), *expected)?;
+        }
+        for (step, name, value) in &temperature_events {
+            machine.schedule_sensor_temperature(*step, name.clone(), *value)?;
+        }
+        for (step, name, value) in &phy_events {
+            machine.schedule_phy_vendor_specific1(*step, name.clone(), *value)?;
+        }
+        for (step, path) in &framebuffer_events {
+            machine.schedule_framebuffer_capture(*step, path.clone())?;
+        }
+        for (step, path, region) in &frame_waits {
+            let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let reference = litex_video::ReferenceFrame::parse(data)
+                .and_then(|frame| match region {
+                    Some(region) => frame.with_region(*region),
+                    None => Ok(frame),
+                })
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            machine.schedule_frame_wait(*step, reference)?;
+        }
+        if let Some((address, act)) = tohost {
+            if machine.is_cortex_m() {
+                return Err("--tohost requires an RV32 machine".into());
+            }
+            machine.bus.watch_tohost(address, act)?;
+        }
+        machine.validate_entry()?;
+        if let Some((local, peer)) = ethernet_loopback {
+            machine.bus.connect_rv64_ethernet(local, peer)?;
+        }
+        if uart_stdin && !machine.bus.has_uart_input() {
+            return Err("--uart-stdin requires a platform UART with input support".into());
+        }
+        Ok(machine)
+    };
+    let mut machine = boot_machine()?;
     for action in &post_run {
         if let monitor::PostRun::DisposePcm(name) = action
             && !machine
@@ -760,10 +938,10 @@ fn run() -> Result<ExitCode, String> {
         (Some(cli), Some(script)) => cli.min(script),
         (cli, script) => cli.or(script).unwrap_or(10_000_000),
     };
-    let result = if let Some(script) = script.as_deref() {
+    let result = if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
         monitor::run(&mut machine, script, &runtime, limit, &mut output)
     } else {
-        machine.run(limit, &mut output)
+        run_machine(&mut machine, limit, &mut output, &boot_machine, uart_stdin, uart_stdin_reset)
     };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
@@ -806,7 +984,7 @@ fn run() -> Result<ExitCode, String> {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",
             elapsed.as_secs_f64() * 1000.0,
-            machine.primary.pc
+            machine.primary.program_counter()
         );
     }
     if let Stop::Tohost(code) = stop {
@@ -823,7 +1001,7 @@ fn run() -> Result<ExitCode, String> {
     if stop == Stop::Limit && !completed_run_for {
         eprintln!(
             "penv: instruction limit reached at pc={:#010x}",
-            machine.primary.pc
+            machine.primary.program_counter()
         );
         return Ok(ExitCode::from(2));
     }
@@ -849,10 +1027,118 @@ impl<W: Write> Write for UartOutput<W> {
     }
 }
 
+fn uart_stdin_receiver() -> Result<std::sync::mpsc::Receiver<io::Result<Vec<u8>>>, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    std::thread::Builder::new()
+        .name("uart-stdin".into())
+        .spawn(move || {
+            let mut input = io::stdin().lock();
+            let mut buffer = [0; 4096];
+            loop {
+                let bytes = match input.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => Ok(buffer[..count].to_vec()),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                };
+                if sender.send(bytes).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| format!("UART stdin: {error}"))?;
+    Ok(receiver)
+}
+
+fn reset_machine(
+    machine: &mut Machine,
+    output: &mut impl Write,
+    boot: &impl Fn() -> Result<Machine, String>,
+) -> Result<(), String> {
+    output.flush().map_err(|error| format!("UART: {error}"))?;
+    // Release the old RAM and socket before reloading firmware and rebinding.
+    drop(std::mem::replace(machine, Machine::without_default_ram()));
+    *machine = boot()?;
+    Ok(())
+}
+
+fn run_machine(
+    machine: &mut Machine,
+    mut remaining: u64,
+    output: &mut impl Write,
+    boot: &impl Fn() -> Result<Machine, String>,
+    uart_stdin: bool,
+    uart_stdin_reset: bool,
+) -> Result<(Stop, u64), String> {
+    let receiver = uart_stdin.then(uart_stdin_receiver).transpose()?;
+    let mut retired = 0;
+    let mut escaped = false;
+    while remaining != 0 {
+        for bytes in receiver
+            .iter()
+            .flat_map(|receiver| receiver.try_iter())
+            .take(8)
+        {
+            let bytes = bytes.map_err(|error| format!("UART stdin: {error}"))?;
+            if uart_stdin_reset {
+                let mut uart = Vec::with_capacity(bytes.len());
+                for byte in bytes {
+                    match (std::mem::take(&mut escaped), byte) {
+                        (false, 0x1d) => escaped = true,
+                        (true, b'r') => {
+                            uart.clear();
+                            reset_machine(machine, output, boot)?;
+                        }
+                        (true, 0x1d) | (false, _) => uart.push(byte),
+                        (true, _) => uart.extend([0x1d, byte]),
+                    }
+                }
+                machine.bus.queue_uart_input(uart);
+            } else {
+                machine.bus.queue_uart_input(bytes);
+            }
+        }
+        let batch = if uart_stdin {
+            remaining.min(65_536)
+        } else {
+            remaining
+        };
+        let before = machine.elapsed_steps();
+        let (stop, count) = machine.run(batch, output)?;
+        remaining -= machine.elapsed_steps().wrapping_sub(before);
+        retired += count;
+        match stop {
+            Stop::Reset if remaining != 0 => {
+                escaped = false;
+                reset_machine(machine, output, boot)?;
+            }
+            Stop::Reset | Stop::Limit => {
+                // Login and shell prompts are often written without a newline.
+                if uart_stdin {
+                    output.flush().map_err(|error| format!("UART: {error}"))?;
+                }
+            }
+            _ => return Ok((stop, retired)),
+        }
+    }
+    Ok((Stop::Limit, retired))
+}
+
 fn parse_address(value: &str) -> Result<u32, String> {
     let parsed = match value.strip_prefix("0x") {
         Some(hex) => u32::from_str_radix(hex, 16),
         None => value.parse(),
     };
     parsed.map_err(|_| format!("invalid 32-bit number: {value}"))
+}
+
+fn parse_address64(value: &str) -> Result<u64, String> {
+    let parsed = match value.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => value.parse(),
+    };
+    parsed.map_err(|_| format!("invalid 64-bit number: {value}"))
 }

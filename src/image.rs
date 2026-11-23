@@ -12,7 +12,7 @@ struct ArmSegment {
     physical_address: u32,
 }
 
-pub fn load_binary(machine: &mut Machine, mut file: File, address: u32) -> Result<(), String> {
+pub fn load_binary(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     if length == 0 {
         return Err("empty raw image".into());
@@ -20,8 +20,8 @@ pub fn load_binary(machine: &mut Machine, mut file: File, address: u32) -> Resul
     let size = usize::try_from(length).map_err(|_| "raw image too large")?;
     let memory = machine
         .bus
-        .memory(address, size)
-        .map_err(|error| error.to_string())?;
+        .memory64(address, size)
+        .ok_or_else(|| format!("unmapped RAM access at {address:#010x} ({size} bytes)"))?;
     file.read_exact(memory).map_err(|error| error.to_string())
 }
 
@@ -122,6 +122,35 @@ pub fn load_hex(machine: &mut Machine, file: File) -> Result<(), String> {
     Ok(())
 }
 
+pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {
+    if machine.primary.rv64.is_none() {
+        return Err("--dtb requires an RV64 machine".into());
+    }
+    if address & 7 != 0 {
+        return Err("DTB address must be 8-byte aligned".into());
+    }
+    let mut header = [0; 40];
+    file.read_exact(&mut header)
+        .map_err(|e| format!("DTB header: {e}"))?;
+    let total_size = u32::from_be_bytes(header[4..8].try_into().unwrap());
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    if header[..4] != [0xd0, 0x0d, 0xfe, 0xed] || total_size < 40 || u64::from(total_size) > length
+    {
+        return Err("invalid DTB magic or size".into());
+    }
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    load_binary(machine, file, address)?;
+    for hart in 0..machine.hart_count() {
+        machine
+            .hart_mut(hart)
+            .rv64
+            .as_mut()
+            .expect("RV64 machine")
+            .set_boot_arguments(hart, address);
+    }
+    Ok(())
+}
+
 pub fn load(
     machine: &mut Machine,
     mut file: File,
@@ -129,13 +158,19 @@ pub fn load(
     script_virtual_addresses: Option<bool>,
 ) -> Result<(), String> {
     if raw {
-        return load_binary(machine, file, machine.raw_load_address());
+        return load_binary(machine, file, u64::from(machine.raw_load_address()));
     }
     let cortex_m = machine.is_cortex_m();
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     let mut header = [0; 52];
     file.read_exact(&mut header)
         .map_err(|e| format!("ELF header: {e}"))?;
+    if header[..7] == *b"\x7fELF\x02\x01\x01" {
+        return crate::image64::load(machine, file, length);
+    }
+    if machine.primary.rv64.is_some() {
+        return Err("RV64 requires a little-endian RISC-V ELF64 executable".into());
+    }
     if header[..7] != *b"\x7fELF\x01\x01\x01"
         || half(&header, 16) != 2
         || word(&header, 20) != 1

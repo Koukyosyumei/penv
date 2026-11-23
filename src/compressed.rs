@@ -1,5 +1,13 @@
 // Expand RV32 compressed integer encodings into the base decoder's format.
 pub fn expand(insn: u32) -> Option<u32> {
+    expand_integer(insn, false)
+}
+
+pub fn expand_rv64(insn: u32) -> Option<u32> {
+    expand_integer(insn, true)
+}
+
+fn expand_integer(insn: u32, rv64: bool) -> Option<u32> {
     let bits = |lsb: u32, width: u32| (insn >> lsb) & ((1u32 << width) - 1);
     let rd = bits(7, 5);
     let rs2 = bits(2, 5);
@@ -24,6 +32,17 @@ pub fn expand(insn: u32) -> Option<u32> {
                 store(rs1_prime, rs2_prime, offset)
             }
         }
+        (0, kind @ (1 | 3 | 5 | 7)) if rv64 => {
+            let offset = (bits(5, 2) << 6) | (bits(10, 3) << 3);
+            match kind {
+                1 => immediate(0x07, 3, rs2_prime, rs1_prime, offset),
+                3 => immediate(0x03, 3, rs2_prime, rs1_prime, offset),
+                5 => store(rs1_prime, rs2_prime, offset) | (1 << 12) | 4,
+                _ => store(rs1_prime, rs2_prime, offset) | (1 << 12),
+            }
+        }
+        (1, 1) if rv64 && rd != 0 => immediate(0x1b, 0, rd, rd, imm),
+        (1, 1) if rv64 => return None,
         (1, 0) => immediate(0x13, 0, rd, rd, imm),
         (1, kind @ (1 | 5)) => {
             let offset = (bits(12, 1) << 11)
@@ -56,13 +75,20 @@ pub fn expand(insn: u32) -> Option<u32> {
         }
         (1, 3) if imm != 0 => (imm << 12) | (rd << 7) | 0x37,
         (1, 4) => match bits(10, 2) {
-            shift @ (0 | 1) if bits(12, 1) == 0 => {
-                immediate(0x13, 5, rs1_prime, rs1_prime, (shift << 10) | bits(2, 5))
-            }
+            shift @ (0 | 1) if rv64 || bits(12, 1) == 0 => immediate(
+                0x13,
+                5,
+                rs1_prime,
+                rs1_prime,
+                (shift << 10) | (bits(12, 1) << 5) | bits(2, 5),
+            ),
             2 => immediate(0x13, 7, rs1_prime, rs1_prime, imm),
             3 if bits(12, 1) == 0 => {
                 let (funct3, funct7) = [(0, 0x20), (4, 0), (6, 0), (7, 0)][bits(5, 2) as usize];
                 register(funct3, funct7, rs1_prime, rs1_prime, rs2_prime)
+            }
+            3 if rv64 && bits(5, 2) < 2 => {
+                register(0, (1 - bits(5, 2)) * 0x20, rs1_prime, rs1_prime, rs2_prime) | 8
             }
             _ => return None,
         },
@@ -81,10 +107,20 @@ pub fn expand(insn: u32) -> Option<u32> {
                 | ((offset & 0x800) >> 4)
                 | 0x63
         }
-        (2, 0) if bits(12, 1) == 0 => immediate(0x13, 1, rd, rd, bits(2, 5)),
+        (2, 0) if rv64 || bits(12, 1) == 0 => {
+            immediate(0x13, 1, rd, rd, (bits(12, 1) << 5) | bits(2, 5))
+        }
         (2, 2) if rd != 0 => {
             let offset = (bits(2, 2) << 6) | (bits(12, 1) << 5) | (bits(4, 3) << 2);
             immediate(0x03, 2, rd, 2, offset)
+        }
+        (2, kind @ (1 | 3)) if rv64 && (kind == 1 || rd != 0) => {
+            let offset = (bits(2, 3) << 6) | (bits(12, 1) << 5) | (bits(5, 2) << 3);
+            immediate(if kind == 1 { 0x07 } else { 0x03 }, 3, rd, 2, offset)
+        }
+        (2, kind @ (5 | 7)) if rv64 => {
+            let offset = (bits(7, 3) << 6) | (bits(10, 3) << 3);
+            store(2, rs2, offset) | (1 << 12) | (u32::from(kind == 5) << 2)
         }
         (2, 4) => match (bits(12, 1), rd, rs2) {
             (0, 0, 0) => return None,

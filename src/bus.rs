@@ -82,7 +82,8 @@ impl fmt::Display for BusError {
 }
 
 pub(crate) struct Region {
-    base: u32,
+    base: u64,
+    mapped: usize,
     aliases: Vec<u32>,
     bytes: Vec<u8>,
     flash_pages: Option<Vec<bool>>,
@@ -94,12 +95,28 @@ struct LiteXTimer {
     vex_irq: Option<(usize, u8)>,
 }
 
+struct RamAlias {
+    backing: usize,
+    base: u64,
+    length: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Reservation64 {
+    backing: usize,
+    offset: usize,
+    width: usize,
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
     silencers: Vec<(u32, u32)>,
     tags: Vec<(u32, u32)>,
     renode_unmapped_data: bool,
+    aliases: Vec<RamAlias>,
+    pub rv64_devices: crate::rv64_devices::Devices,
+    rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -150,9 +167,8 @@ pub struct Bus {
 }
 
 impl Region {
-    fn new(base: u32, size: usize) -> Result<Self, String> {
-        let end = u64::from(base).saturating_add(size as u64);
-        if size == 0 || end > 1 << 32 {
+    fn new(base: u64, size: usize, mapped: usize) -> Result<Self, String> {
+        if size == 0 || mapped > size || base.checked_add(mapped as u64).is_none() {
             return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
         }
         let layout = Layout::array::<u8>(size).map_err(|error| error.to_string())?;
@@ -168,6 +184,7 @@ impl Region {
         Ok(Self {
             base,
             aliases: Vec::new(),
+            mapped,
             bytes,
             flash_pages: None,
         })
@@ -223,12 +240,12 @@ impl Region {
         }
     }
 
-    fn offset(&self, address: u32, width: usize) -> Option<usize> {
+    fn offset(&self, address: u64, width: usize) -> Option<usize> {
         let at = |base| {
-            let offset = address.checked_sub(base)? as usize;
-            (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+            let offset = usize::try_from(address.checked_sub(base)?).ok()?;
+            (width <= self.mapped.checked_sub(offset)?).then_some(offset)
         };
-        at(self.base).or_else(|| self.aliases.iter().find_map(|&base| at(base)))
+        at(self.base).or_else(|| self.aliases.iter().find_map(|&base| at(u64::from(base))))
     }
 }
 
@@ -284,14 +301,51 @@ impl Bus {
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
-        let start = u64::from(base);
-        let end = start.saturating_add(size as u64);
-        if self.overlaps(start, end) {
+        if u64::from(base).saturating_add(size as u64) > 1 << 32 {
+            return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
+        }
+        self.map_ram64(u64::from(base), size)
+    }
+
+    pub fn map_ram64(&mut self, base: u64, size: usize) -> Result<(), String> {
+        self.map_ram_backing64(base, size, size).map(|_| ())
+    }
+
+    pub fn map_ram_backing64(
+        &mut self,
+        base: u64,
+        size: usize,
+        mapped: usize,
+    ) -> Result<usize, String> {
+        self.check_ram_range(base, mapped)?;
+        let index = self.regions.len();
+        self.regions.push(Region::new(base, size, mapped)?);
+        Ok(index)
+    }
+
+    pub fn map_alias64(&mut self, backing: usize, base: u64, length: usize) -> Result<(), String> {
+        self.check_ram_range(base, length)?;
+        if length > self.regions[backing].bytes.len() {
+            return Err("RAM alias is larger than its backing".into());
+        }
+        self.aliases.push(RamAlias {
+            backing,
+            base,
+            length,
+        });
+        Ok(())
+    }
+
+    fn check_ram_range(&self, base: u64, size: usize) -> Result<(), String> {
+        let end = base.checked_add(size as u64).ok_or("RAM range overflow")?;
+        if size == 0 {
+            return Err("RAM range must be nonempty".into());
+        }
+        if self.overlaps(base, end) {
             return Err(format!(
                 "overlapping RAM range at {base:#010x} ({size} bytes)"
             ));
         }
-        self.regions.push(Region::new(base, size)?);
         Ok(())
     }
 
@@ -312,7 +366,7 @@ impl Bus {
                 return Err(format!("invalid or overlapping RAM view at {base:#010x}"));
             }
         }
-        let mut region = Region::new(base, size)?;
+        let mut region = Region::new(u64::from(base), size, size)?;
         region.aliases.extend_from_slice(aliases);
         self.regions.push(region);
         Ok(())
@@ -323,13 +377,13 @@ impl Bus {
             .iter()
             .find_map(|region| {
                 region
-                    .offset(address, 4)
-                    .map(|offset| region.base + offset as u32)
+                    .offset(u64::from(address), 4)
+                    .map(|offset| (region.base + offset as u64) as u32)
             })
             .unwrap_or(address)
     }
 
-    fn overlaps(&self, start: u64, end: u64) -> bool {
+    pub(crate) fn overlaps(&self, start: u64, end: u64) -> bool {
         (self.nvic.is_some() && Nvic::overlaps(start, end))
             || (self.systick.is_some() && SysTick::overlaps(start, end))
             || self
@@ -474,13 +528,17 @@ impl Bus {
                 .iter()
                 .any(|&(base, size)| overlaps_range(start, end, base, size))
             || self.regions.iter().any(|region| {
-                std::iter::once(&region.base)
-                    .chain(&region.aliases)
-                    .any(|&base| {
+                let other = region.base;
+                (start < other + region.mapped as u64 && other < end)
+                    || region.aliases.iter().any(|&base| {
                         let other = u64::from(base);
-                        start < other + region.bytes.len() as u64 && other < end
+                        start < other + region.mapped as u64 && other < end
                     })
             })
+            || self
+                .aliases
+                .iter()
+                .any(|alias| start < alias.base + alias.length as u64 && alias.base < end)
     }
 
     pub fn map_clint(&mut self, base: u32, targets: usize) -> Result<(), String> {
@@ -1227,7 +1285,7 @@ impl Bus {
         let index = self
             .regions
             .iter()
-            .position(|region| region.base == backing)
+            .position(|region| region.base == u64::from(backing))
             .ok_or("flash backing must be mapped memory")?;
         let region = &mut self.regions[index];
         let size = region.bytes.len();
@@ -1524,7 +1582,7 @@ impl Bus {
             return Ok(());
         }
         let Some(index) = self.regions.iter().position(|region| {
-            region.base == BANK.start && region.bytes.len() == (BANK.end - BANK.start) as usize
+            region.base == u64::from(BANK.start) && region.bytes.len() == (BANK.end - BANK.start) as usize
         }) else {
             return Ok(());
         };
@@ -1591,6 +1649,7 @@ impl Bus {
             || self.ns16550.is_some()
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
+            || !self.rv64_devices.uarts.is_empty()
     }
 
     pub fn queue_uart_input(&mut self, bytes: Vec<u8>) {
@@ -1602,6 +1661,8 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.stm32_uarts.first_mut() {
             uart.queue_input(bytes);
+        } else {
+            self.rv64_devices.queue_input(bytes);
         }
     }
 
@@ -1702,23 +1763,73 @@ impl Bus {
     }
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
-        for region in &mut self.regions {
-            if let Some(offset) = region.offset(address, width) {
-                if width != 0 {
-                    let address = u64::from(region.base) + offset as u64;
-                    for reservation in &mut self.reservations {
-                        if reservation.is_some_and(|reserved| {
-                            address < u64::from(reserved) + 4
-                                && u64::from(reserved) < address + width as u64
-                        }) {
-                            *reservation = None;
-                        }
-                    }
+        self.memory64(u64::from(address), width)
+            .ok_or(BusError::Unmapped(address, width))
+    }
+
+    pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {
+        let (backing, offset) = self.ram_location64(address, width)?;
+        let region = &mut self.regions[backing];
+        if width != 0 {
+            let address = region.base + offset as u64;
+            for reservation in &mut self.rv64_reservations {
+                if reservation.is_some_and(|reserved| {
+                    reserved.backing == backing
+                        && offset < reserved.offset + reserved.width
+                        && reserved.offset < offset + width
+                }) {
+                    *reservation = None;
                 }
-                return Ok(region.bytes_mut(offset, width));
+            }
+            for reservation in &mut self.reservations {
+                if reservation.is_some_and(|reserved| {
+                    address < u64::from(reserved) + 4
+                        && u64::from(reserved) < address + width as u64
+                }) {
+                    *reservation = None;
+                }
             }
         }
-        Err(BusError::Unmapped(address, width))
+        Some(region.bytes_mut(offset, width))
+    }
+
+    pub fn reserve64(&mut self, hart: usize, address: u64, width: usize) {
+        self.rv64_reservations[hart] = self.reservation_key64(address, width);
+    }
+
+    pub fn reservation_key64(&self, address: u64, width: usize) -> Option<Reservation64> {
+        let (backing, offset) = self.ram_location64(address, width)?;
+        Some(Reservation64 {
+            backing,
+            offset,
+            width,
+        })
+    }
+
+    pub fn take_reservation64(&mut self, hart: usize) -> Option<Reservation64> {
+        self.rv64_reservations[hart].take()
+    }
+
+    pub fn ram_location64(&self, address: u64, width: usize) -> Option<(usize, usize)> {
+        for (index, region) in self.regions.iter().enumerate() {
+            if let Some(offset) = region.offset(address, width) {
+                return Some((index, offset));
+            }
+        }
+        for alias in &self.aliases {
+            if let Some(offset) = address.checked_sub(alias.base)
+                && offset <= alias.length as u64
+                && width as u64 <= alias.length as u64 - offset
+            {
+                return Some((alias.backing, offset as usize));
+            }
+        }
+        None
+    }
+
+    pub fn ram64(&self, address: u64, width: usize) -> Option<&[u8]> {
+        let (index, offset) = self.ram_location64(address, width)?;
+        Some(&self.regions[index].bytes[offset..offset + width])
     }
 
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
@@ -2020,7 +2131,7 @@ impl Bus {
             return Err(BusError::Misaligned(address, N));
         }
         for region in &self.regions {
-            if let Some(offset) = region.offset(address, N) {
+            if let Some(offset) = region.offset(u64::from(address), N) {
                 let mut bytes = [0; 4];
                 if region.flash_pages.is_some() {
                     for (index, byte) in bytes[..N].iter_mut().enumerate() {

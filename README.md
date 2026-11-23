@@ -919,6 +919,392 @@ target/release/penv run --platform "$assets/thumb2-subset.repl" \
   --max-steps 10000 "$assets/thumb2-upstream.elf"
 ```
 
+## RV64
+
+リトルエンディアンの静的な RISC-V ELF64 は、クラスから RV64 を自動選択します。セグメントは物理アドレスにロードされます。起動時はページ変換が無効です。実行可能セグメントの仮想エントリーポイントは、同じ RAM を指す別名で起動するか、対応する物理アドレスに変換されます。raw の RV64IM イメージには `--raw --rv64` を指定します。`--map-ram` と `--load-binary BASE:PATH` には 4 GiB 以上のアドレスも指定できます。後者は DTB、カーネル、initramfs などをファームウェアと一緒にロードします。
+
+```sh
+target/release/penv run --platform ../renode/platforms/cpus/sifive-fu740.repl \
+  --platform-root ../renode --stats firmware64.elf
+```
+
+`CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。CLINT の REPL に `frequency` がある場合、各ハートが既定の 100 MIPS で進む仮想時間に合わせて `mtime` を更新します。複数の UART がある場合は `--uart-device NAME` で入力先を選択できます。REPL の `Tag` と `SilenceRange` で指定した範囲では既定値を返します。その他の未実装アドレスへのアクセスはゲストの例外になります。
+
+### 汎用 RV64 virt の Linux 起動
+
+[`platforms/rv64_virt.repl`](platforms/rv64_virt.repl) と [`platforms/rv64_virt.dts`](platforms/rv64_virt.dts) は QEMU 9.2 の legacy CLINT/PLIC を使う virt に対応する単一ハートの構成です。Renode 上流の `platforms/cpus/riscv_virt.repl` は RV32 ハート、M モード用 PLIC コンテキスト 1 個、UART ソース 3 を定義しています。Penv の RV64 virt では QEMU と同じ UART ソース 10、PLIC の M/S コンテキスト、512 MiB の RAM を使います。BeagleV 固有のリセットや Ethernet はこの構成に登録しません。[QEMU virt のメモリマップと DTB](https://github.com/qemu/qemu/blob/v9.2.0/hw/riscv/virt.c) [QEMU virt の IRQ 定義](https://github.com/qemu/qemu/blob/v9.2.0/include/hw/riscv/virt.h)
+
+| 機器 | アドレス | この構成での接続 |
+| --- | --- | --- |
+| RAM | `0x80000000` | 起動ファームウェア、Linux、initramfs、DTB |
+| CLINT | `0x02000000` | 10 MHz、hart 0 の MSIP/MTIP |
+| PLIC | `0x0c000000` | 95 ソース、hart 0 の MEIP/SEIP |
+| NS16550A | `0x10000000` | バイト間隔の UART、PLIC ソース 10 |
+
+`--dtb BASE:PATH` は RV64 のファームウェア入口で `a0` に hart ID、`a1` に DTB の物理アドレスを設定します。QEMU のリセット ROM が設定する引数に対応します。この手順では OpenSBI FW_JUMP を DDR 先頭から直接起動し、Linux の物理入口を `0x80200000` に固定します。DTB を `--load-binary` で置くだけの試行では `a1` が 0 のままで、OpenSBI の UART 出力まで進みませんでした。[QEMU の RV64 リセット ROM](https://github.com/qemu/qemu/blob/v9.2.0/hw/riscv/boot.c) [OpenSBI FW_JUMP の引数](https://github.com/riscv-software-src/opensbi/blob/v1.6/docs/firmware/fw_jump.md)
+
+RISC-V クロスコンパイラー、DTC 一式、U-Boot の `dumpimage` が必要です。検証では下記の StarLight ビルド手順と同じ Bootlin GCC 10.3.0 を使いました。`$assets` は StarLight デモの公開ファイルを保存したディレクトリです。既存 FIT の Linux 5.10.6 と Buildroot initramfs を再利用し、起動ファームウェアと DTB は virt 用に用意します。
+
+```sh
+set -e
+cargo build --release
+work=$(mktemp -d)
+fit="$assets/beaglev--image.fit-s_83025501-3c24fa8a3dd087ac05f6a17399ff2f44f673e1c4"
+printf '%s  %s\n' '3c24fa8a3dd087ac05f6a17399ff2f44f673e1c4' "$fit" | sha1sum -c -
+curl -fLsS https://codeload.github.com/riscv-software-src/opensbi/tar.gz/refs/tags/v1.6 \
+  -o "$work/opensbi.tar.gz"
+printf '%s  %s\n' 'd11702103f177a2914e94eec57ce5ed820296d874f6b6525c4482e55d71a3667' \
+  "$work/opensbi.tar.gz" | sha256sum -c -
+tar -xf "$work/opensbi.tar.gz" -C "$work"
+make -C "$work/opensbi-1.6" -j8 CROSS_COMPILE="${CROSS_COMPILE:-riscv64-linux-gnu-}" \
+  PLATFORM=generic FW_JUMP=y FW_JUMP_ADDR=0x80200000 FW_JUMP_FDT_ADDR=0x88000000
+"${DUMPIMAGE:-dumpimage}" -T flat_dt -p 0 -o "$work/Image" "$fit"
+"${DUMPIMAGE:-dumpimage}" -T flat_dt -p 1 -o "$work/rootfs.cpio" "$fit"
+end=$(printf '%x' "$((0x84000000 + $(stat -c %s "$work/rootfs.cpio")))")
+dtc -I dts -O dtb -o "$work/virt.dtb" platforms/rv64_virt.dts
+fdtput -t x "$work/virt.dtb" /chosen linux,initrd-start 0 84000000
+fdtput -t x "$work/virt.dtb" /chosen linux,initrd-end 0 "$end"
+dtc -I dtb -O dtb -p 4096 -o "$work/virt-padded.dtb" "$work/virt.dtb"
+python3 scripts/verify-rv64-virt.py "$work" --logs target/rv64-virt-verification
+```
+
+検証スクリプトは UART で公開デモの `root` / `starfive` を使って認証し、`id -u` と `uname -m` の出力を照合します。initramfs の起動スクリプトは `eth0` を探してタイムアウトします。この virt 構成の残課題は VirtIO、PCIe、RTC、SiFive Test のリセットと電源断、QEMU の `a2` を使う FW_DYNAMIC、複数ハートの Linux 検証です。PLIC の閾値と MMIO 範囲には既存の Renode 向けモデルを使用します。
+
+OpenSBI v1.6 が `Penv RV64 virt` と 10 MHz のタイマーを認識し、Linux 5.10.6 が `0x10000000` の `ttyS0` を有効にして `/init` を実行しました。UART のパスワード認証後、`id -u` が `0`、`uname -m` が `riscv64` を返しました。`cargo test` は全 49 件通過しました。CLI の回帰テストは 2 ハートの `a0` と 4 GiB 超の `a1`、DTB のマジックとアラインメントの検証を含みます。
+
+### BeagleV StarLight
+
+Renode の `scripts/single-node/beaglev_starlight.resc` と同じ OpenSBI、U-Boot、Linux 5.10.6、Buildroot を起動します。ファイル名に含まれる SHA-1 を照合してから実行します。RESC 内のシンボル指定はデバッガー用メタデータとして扱い、ゲスト RAM には ELF と FIT をロードします。
+
+```sh
+set -e
+cargo test
+cargo build --release
+resc=../renode/scripts/single-node/beaglev_starlight.resc
+assets=$(mktemp -d)
+rg -o 'https://[^[:space:]]+' "$resc" | while IFS= read -r url; do
+  name=${url##*/}
+  curl -fLsS --retry 2 "$url" -o "$assets/$name"
+  printf '%s  %s\n' "${name##*-}" "$assets/$name" | sha1sum -c -
+done
+target/release/penv run --script "$resc" --platform-root ../renode \
+  --asset-dir "$assets" --uart-device uart3 --uart-stdin \
+  --max-steps 14000000000 --stats
+```
+
+`buildroot login:` に `root`、`Password:` に上流デモのパスワード `starfive` を入力します。シェルで `id -u` と `uname -m` を実行すると、それぞれ `0` と `riscv64` を確認できます。`--uart-stdin` は標準入力のバイトを実行中の UART に送り、改行のないプロンプトも出力します。
+
+UART 単体、2 台直結、スイッチ経由の検証は同じ公開イメージを使います。上の手順で取得した `$assets` を指定してください。
+
+```sh
+python3 scripts/verify-starlight.py "$assets"
+python3 scripts/verify-starlight.py "$assets" --ports 30451 30452
+python3 scripts/verify-starlight.py "$assets" --ports 30454 30455 --switch-port 30453
+```
+
+各モードでブートメッセージ、UART ログイン、`id -u` の `0` と `uname -m` の `riscv64` を確認します。直結モードではゲストの UDP ポート 2 つ、スイッチモードでは追加でスイッチ用ポート 1 つを指定します。ゲストの `eth0` に上流 Robot と同じ MAC アドレス、静的 IPv4 アドレス、MTU 440 を設定します。56 バイトと 3200 バイトの ICMP ペイロードを両方向に各 10 回送り、各ゲストの `/proc/interrupts` で `eth0` の割り込み増加を確認します。3200 バイトのケースは IP フラグメントを使用します。ログは `target/starlight-verification/` に保存します。
+
+スイッチモードは上流 `tests/platforms/BeagleV-StarLight.robot` の `CreateSwitch` と、各 `sysbus.ethernet` の `connector Connect` に対応する配線です。スクリプトは `penv switch 30453 30454 30455` を起動し、ゲストをそれぞれ `--ethernet-loopback 30454:30453` と `--ethernet-loopback 30455:30453` で接続します。スイッチは送信元 MAC を学習し、宛先が分かるユニキャストは該当ポートへ、未学習の宛先やブロードキャストは他のポートへ転送します。UDP はすべて `127.0.0.1` に限定します。
+
+ゲストは起動中に DHCP Discover を送信します。DHCP 応答のない検証リンクでは、3 回の Discover と `udhcpc: no lease, failing` を経て `buildroot login:` に到達します。65 億ステップで切ると DHCP 再試行中に上限へ達します。ゲスト内の DHCP サーバー起動は `FAIL` を報告します。
+
+BeagleV MAC は通常記述子の TX/RX DMA、チェーンとリング折り返し、RX フレーム長と FCS、割り込みマスクと PLIC 配線をモデル化します。回帰テストでは RX の複数記述子と 2 バッファーへの転送、記述子不足からの復帰、完了 IRQ の抑止、PLIC の claim・完了、TX バスエラー後のリセットを検証します。
+
+Linux の通信試験では、PLIC の出力が下がってもゲストが supervisor 外部割り込みの処理を繰り返すことがありました。`mip` の CSRRS/CSRRC は命令の戻り値に外部信号を反映し、書き戻しには `SEIP` のソフトウェア側の値を使うよう修正しました。[RISC-V Privileged Architecture v1.10](https://riscv.org/wp-content/uploads/2017/05/riscv-privileged-v1.10.pdf)
+
+公開イメージによる無人のペア検証では、直結とスイッチ経由の両方でログインとコマンド実行に成功し、それぞれ 4 ケースすべてが 10/10 応答、パケット損失 0% でした。スイッチ経由の `eth0` IRQ カウンターは A が 3 から 109、B が 3 から 108 に増加しました。3 ポートの UDP 疎通試験でフラッディング、学習済みユニキャスト、学習済みの同一入出力ポートへの転送、未登録ポートの除外を確認しました。`cargo test` は 45 件通過しました。
+
+スイッチのポートは起動時に固定し、MAC 学習表は最大 1024 件です。動的な着脱、スイッチのポート単位のプロミスキャスモード、Renode Monitor 構文の実行、複数マシン間の仮想時刻同期、外部ネットワーク接続は残課題です。MAC 側のマルチキャストハッシュの厳密な照合、チェックサムオフロード、MAC 送信無効時の TX 先読みも未実装です。上流 Robot の外部 PMP 付きケースは未検証です。性能最適化と比較計測は互換性実装が揃った後に行います。
+
+共通 CLI の回帰確認では、上記の Murax デモが UART に `Ant` を出力し、LiteX VexRiscv SMP デモがログイン後の `cat /proc/cpuinfo` で 4 ハートを出力しました。どちらも指定ステップ上限で終了します。
+
+#### Ethernet とマシンの復帰
+
+```sh
+python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
+  --switch-port 30456 --recovery --logs target/starlight-recovery
+```
+
+最初の ping に続いて、ゲスト A の `eth0` を down/up し、Linux の stmmac ドライバーに DMA を再初期化させます。DMA リセットは記述子・割り込みの状態とキューに残った受信フレームをクリアします。ドライバーを開き直した後、同じ UART シェルでコマンドを実行し、両方向の ping を確認します。[Linux 5.10 stmmac の DMA 初期化](https://github.com/torvalds/linux/blob/v5.10/drivers/net/ethernet/stmicro/stmmac/stmmac_main.c)
+
+次に Linux の `reboot` が `Restarting system` を出力したところで、検証スクリプトがホスト側のマシンリセットを要求します。`--uart-stdin --uart-stdin-reset` では標準入力の `1d 72`（Ctrl-]、`r`）がリセット、`1d 1d` が UART へのリテラル `1d` です。リセット時は同じプロセス内で CPU、RAM、デバイスを作り直し、RESC のファームウェアと FIT を再ロードします。UART ストリームとスイッチを維持し、Ethernet は同じローカルポートに再接続します。`--max-steps` は全ブートの合計です。
+
+公開 FIT のデバイスツリーには `gpio-restart` ノードがあります。同梱カーネルの埋め込み設定では `CONFIG_POWER_RESET_GPIO_RESTART` が無効で、`reboot` 単独の試行は `machine_restart`（PC `0xffffffe000201b94`）に留まりました。ボードの再起動にはホスト側のリセットが必要です。実機の GPIO やウォッチドッグによるリセット、RAM を保持するウォームリセットは対象外です。[Linux 5.10 RISC-V の再起動処理](https://github.com/torvalds/linux/blob/v5.10/arch/riscv/kernel/reset.c)
+
+公開イメージで、DMA 再初期化後の UART コマンドと 56 バイトの両方向 ping を確認しました。マシンリセット後は A が OpenSBI から再起動して UART に再ログインし、`id -u` と `uname -m` が再び `0` と `riscv64` を返しました。A のネットワークを設定し直した後も、56 バイトと 3200 バイトの両方向 ping は各 10/10 応答でした。A の `eth0` IRQ は 0 から 104、起動を継続した B は 3 から 240 に増えました。`cargo test` は全 46 件通過しました。
+
+#### Linux ゲストからの GPIO リセット
+
+公開 FIT の `/soc/gpio-restart` は、`/soc/gpio@11910000` の GPIO10 をアクティブ Low で使います。同梱カーネルの `CONFIG_POWER_RESET_GPIO_RESTART` は無効で、`CONFIG_DEVMEM` と BusyBox の `devmem` は利用できます。従来の REPL の GPIO プレースホルダーに加え、StarLight ボードではこの GPIO の出力値と出力イネーブルを実際の JH7100 アドレスにモデル化します。起動時はハイインピーダンスで、出力を有効にして Low を駆動するとボードリセットが発生します。[StarFive JH7100 GPIO レジスター](https://lkml.rescloud.iu.edu/hypermail/linux/kernel/2106.3/06179.html)
+
+```sh
+python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
+  --switch-port 30456 --recovery --guest-reboot --logs target/starlight-guest-reboot
+```
+
+対応するゲスト側の操作は次のとおりです。StarLight の root シェルから実行します。
+
+```sh
+devmem 0x119100a0 32 1   # GPIO10 DOUT を High にする
+devmem 0x119100a4 32 0   # GPIO10 DOEN を有効にする
+sync
+devmem 0x119100a0 32 0   # リセット線を Low にする
+```
+
+この操作はボードリセットを直接要求します。同梱カーネルの標準 `reboot` を GPIO に接続するには、GPIO 再起動ドライバーを有効にしたゲストカーネルが必要です。その構成でのシャットダウン処理と、GPIO10 以外の GPIO・割り込み・周辺機能へのピン多重化は残課題です。検証スクリプトの `--guest-reboot` はホスト UART リセットエスケープを無効にしたまま、GPIO を駆動して再ログインと通信復帰を確認します。
+
+公開イメージで DOUT=`1`、DOEN=`0` を読み戻し、DOUT=`0` の書き込みで A の 2 回目の OpenSBI が始まりました。A は再認証し、`id -u` が `0`、`uname -m` が `riscv64` を返しました。再設定後は 56 バイトと 3200 バイトの両方向 ping が各 10/10 応答し、`eth0` IRQ は A が 0 → 100、稼働を継続した B が 3 → 245 に増えました。`cargo test` は全 48 件通過しました。
+
+#### GPIO ドライバーを有効にした Linux の標準 reboot
+
+ビルドには x86-64 Linux ホスト、C コンパイラーと開発ヘッダー、GNU Make、`bc`、`bison`、`flex`、OpenSSL 開発ヘッダー、`curl`、Python 3、Device Tree Compiler 一式、U-Boot の `mkimage` と `dumpimage` が必要です。上の手順で取得した公開ファームウェアを入力にします。スクリプトは公開カーネルのコミット `93604a0a3ecc4ef8efb9d877854f89df2c7208f7` と Bootlin の GCC 10.3.0 ツールチェーンを取得し、ハッシュを照合します。元の ELF に埋め込まれた設定を使い、`CONFIG_POWER_RESET_GPIO_RESTART=y` とリリース接尾辞 `-penv-gpio` を設定します。
+
+```sh
+out=target/starlight-linux-reboot-build
+JOBS=12 scripts/build-starlight-linux-reboot.sh "$assets" "$out"
+cargo build --release
+python3 scripts/verify-starlight.py "$out/assets" --ports 30457 30458 \
+  --switch-port 30456 --recovery --linux-reboot --logs target/starlight-linux-reboot
+```
+
+`MKIMAGE` と `DUMPIMAGE` でツールのパスを指定できます。Linux FIT は元の Buildroot initramfs と DTB を使用し、DTB の `gpio-restart` に `open-source` を追加します。この設定で GPIO10 はドライバーの probe 時に入力のままになり、再起動通知で初めて駆動されます。元の StarFive GPIO ドライバーは出力値を書き込む前に出力を有効にするため、この順序が必要です。ビルド済み資材は `$out/assets` に保存され、上流 RESC が参照するファイル名で読み込めます。[StarFive の GPIO 再起動ドライバー](https://github.com/starfive-tech/beagle_kernel_5.10/blob/93604a0a3ecc4ef8efb9d877854f89df2c7208f7/drivers/power/reset/gpio-restart.c) [StarFive の GPIO 出力制御](https://github.com/starfive-tech/beagle_kernel_5.10/blob/93604a0a3ecc4ef8efb9d877854f89df2c7208f7/drivers/gpio/gpio-starfive-vic.c)
+
+別のビルドディレクトリで再構築し、カーネル `Image` と FIT のバイト列が一致することを確認しました。検証時のツールは Bootlin GCC 10.3.0、DTC 1.6.1、`mkimage` 2023.01 です。生成 FIT の SHA-256 は `d835ed80f222889adc54f5705c28b29d78ca62359581617a67bf14948279a8c1` です。
+
+Linux `5.10.6-penv-gpio` で GPIO 再起動ドライバーへのバインドを確認しました。ゲスト A の標準 `reboot` からサービス停止、`Restarting system`、2 回目の OpenSBI、UART 再認証まで自動確認しました。再ログイン後の `id -u` は `0`、`uname -m` は `riscv64` を返し、56 バイトと 3200 バイトの ping は両方向で各 10/10 応答しました。ホスト側のリセットエスケープは無効のまま検証しました。`cargo test` は全 48 件通過しました。物理ボードでの検証とウォームリセット時の RAM 保持は残課題です。
+
+### 上流 Renode の RV64 ケース対応
+
+棚卸しの参照点は `../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` です。上流の `platforms/cpus/riscv_virt.repl` は RV32 定義で、このリビジョンの Robot スイートには RV64 virt の Linux 起動ケースが見当たりません。RV64 virt の実ファームウェア検証は上記の OpenSBI FW_JUMP 手順で行い、RV64 CPU に共通する次のケースを Robot から Rust に移植しました。上流の `VirtioMMIOConsole.robot` は Cortex-A53/Zephyr を対象とします。[Renode riscv_virt.repl](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/riscv_virt.repl) [Renode VirtioMMIOConsole.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/peripherals/VirtioMMIOConsole.robot)
+
+| 上流ケース | 移植先と確認内容 |
+| --- | --- |
+| `riscv-priv.robot` の `Should Increment MCYCLE RV64` / `Should Increment MINSTRET RV64` | `increments_mcycle` / `increments_minstret`。CSR 読み出し間の差分が 2 |
+| 同 `Should Inhibit MCYCLE RV64` / `Should Inhibit MINSTRET RV64` | `inhibits_mcycle` / `inhibits_minstret`。抑止中の差分が 0 |
+| 同 `Should Inhibit MCYCLE After Write Finishes RV64` / `Should Inhibit MINSTRET After Write Finishes RV64` | `inhibits_mcycle_after_write_finishes` / `inhibits_minstret_after_write_finishes`。抑止を書き替える命令を境界にした差分が 2 |
+| 同 `Should Trap On SFENCE.VMA In User Mode RV64` | `traps_sfence_vma_in_user_mode`。例外の入口、原因 2、`mepc` |
+| 同 `Should Fail On Counter Access` | `traps_on_counter_access_from_user_mode`。ユーザーモードからの `mcycle` と `instret` を拒否 |
+| 同 `Should [Not] Trap On Sret When MSTATUS.TSR Is {One,Zero} RV64` | `sret_obeys_tsr_in_supervisor_mode`。例外と `sepc` への復帰 |
+| 同 `Should [Not] Trap On {SATP Write,SATP Read,SFENCE.VMA} When TVM Is {One,Zero}` | `supervisor_satp_and_sfence_obey_tvm`。3 命令それぞれの許可と例外 |
+| `riscv-amocas.robot` の `Amocas.{w,d,q} On RV64 Should Set Value At Single-Page Memory Location` | `amocas_{w,d,q}_changes_single_page_on_match`。旧値の返却、置換、アドレス・置換レジスター、書き込み幅 |
+| 同 `Amocas.{w,d,q} On RV64 Shouldn't Set Value At Single-Page Memory Location` | `amocas_{w,d,q}_preserves_single_page_on_mismatch`。旧値の返却とメモリ保持 |
+| 同 `Amocas.q On RV64 Should Handle Zero {Source,Destination} Register` / `Amocas.q On RV64 Using Odd Registers Should Throw Illegal Instruction` | `amocas_q_zero_*` / `amocas_q_traps_on_odd_register_pairs`。`x1` とメモリの保持、奇数レジスター対の例外 |
+
+Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジスター設定と Step を Rust のレジスター初期化と実際の命令実行に置き換えました。`amocas.w` は旧値の下位 32 ビットに加えて、RV64 での符号拡張を検証します。対象はこの表の上流 25 ケースです。Renode の `allowUnalignedAccesses: true` を前提とする AMOCAS のページ境界またぎ、`Memory.ArrayMemory` を使う MMIO、他の AMO と汎用 ISA スイート（`riscv-isa-tests.robot` と `riscv-arch-tests.robot`）は残課題です。[Renode riscv-priv.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-priv.robot) [Renode riscv-amocas.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-amocas.robot)
+
+| プラットフォームの検証ケース | CLI での対応 |
+| --- | --- |
+| StarLight `Should Boot U-Boot` | 両ゲストの UART3 で OpenSBI v0.9、StarFive、U-Boot 2021.01、`dwmac.10020000` を順に照合 |
+| StarLight `Should Provide Two Linux Machines With Ethernet Connection` | U-Boot 確認後にローカルスイッチを起動し、両ゲストにログインして上流と同じ MAC・IPv4・MTU 440 を設定 |
+| StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
+| StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
+| StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | 上流と同じ外部 PMP を両 U74 に接続。2 台の起動、ログインと 56 バイト ping の 10/10 応答を確認 |
+| StarLight の標準 `reboot`（Penv 回帰） | GPIO 再起動ドライバーを有効にした Linux で `--recovery --linux-reboot`。ゲストの再起動、OpenSBI 再表示、UART 再認証、ローカル Ethernet 復帰を確認 |
+| RV64 virt の Linux 起動（Penv 回帰） | `verify-rv64-virt.py`。OpenSBI v1.6、Linux 5.10.6 の `ttyS0`、UART の root 認証とコマンド出力を確認 |
+| Fire `Should Boot Buildroot From SD Card` | `verify-fire.py` で通過。公開 HSS と SD を元の RESC で起動し、OpenSBI v1.2、U-Boot 2023.07.02、Linux 6.6.35、UART の root ログイン、`uname -m` と `uname -n` を確認。さらにゲストから SD の先頭セクターを読み、公開イメージとの SHA-256 一致を確認 |
+
+StarLight の上流ケースは `verify-starlight.py --upstream-cases` で実行します。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
+
+`monitor-tests.robot` にも Fire の REPL を使うケースがあります。配列プロパティ設定、`Select` の整形、スカラー型エラーを検証する Monitor ケースなので、UART 起動や RV64 CPU の優先ケースとは別に保留しました。[Renode monitor-tests.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/monitor-tests.robot)
+
+以下では公開 StarLight 素材を `$assets`、再起動用 FIT のビルド先を `$out`、RV64 virt の起動素材を `$work`、公開 Fire 素材を `$fire_assets` に用意します。素材の取得と作成方法は各プラットフォームの節にあります。StarLight のスイッチはループバックだけを使います。
+
+```sh
+cargo test
+cargo build --release
+logs=target/close-rv64
+python3 scripts/verify-starlight.py "$assets" --ports 30801 30802 \
+  --switch-port 30800 --upstream-cases --logs "$logs/starlight"
+python3 scripts/verify-starlight.py "$assets" --ports 30804 30805 \
+  --switch-port 30803 --upstream-cases --external-pmp --logs "$logs/starlight-pmp"
+python3 scripts/verify-starlight.py "$out/assets" --ports 30807 30808 \
+  --switch-port 30806 --recovery --linux-reboot --logs "$logs/starlight-reboot"
+python3 scripts/verify-rv64-virt.py "$work" --logs "$logs/virt"
+python3 scripts/verify-fire.py "$fire_assets" --max-steps 9000000000 \
+  --timeout 1800 --logs "$logs/fire"
+```
+
+`cargo test` は全 89 件通過し、上流の Rust 移植 19 テストが含まれます。 StarLight の上流 7 ケースが通過し、両ゲストの root ログイン、通常構成の 56・3200 バイト ping と外部 PMP 構成の 56 バイト ping で各 10/10 応答を確認しました。両構成で両ゲストの `eth0` IRQ が増加しました。RV64 virt は OpenSBI v1.6 から Linux 5.10.6 を起動し、UART ログイン後の `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
+標準 `reboot` は、GPIO 再起動ドライバーのバインドを確認してから実行しました。`Restarting system`、2 回目の OpenSBI、UART 再認証を確認し、再起動後の 56・3200 バイト ping は両方向で各 10/10 応答でした。公開 FIT に同梱のカーネルには GPIO 再起動ドライバーがないため、このケースでは前述の手順で作成した FIT を使います。 Fire の SD 起動ケースも再実行し、UART ログイン後に読んだ先頭セクターの SHA-256 が公開 SD イメージと一致しました。
+
+#### StarLight の外部 PMP ケース
+
+REPL の `Miscellaneous.RiscVExternalPMP @ CPU` で対象ハートに外部 PMP を接続します。Renode と同様に有効な領域がない間はアクセスを許可し、領域を設定すると PMP の一致判定と権限を適用します。検証スクリプトは上流 Robot と同じ 2 つの宣言を一時 REPL に追加し、公開イメージを起動します。[Renode RiscVExternalPMP](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Cores/RiscV/RiscVExternalPMP.cs)
+
+```sh
+cargo build --release
+python3 scripts/verify-starlight.py "$assets" --ports 30667 30668 \
+  --switch-port 30666 --upstream-cases --external-pmp
+```
+
+外部 PMP の上流対応 3 ケースが通過しました。両ゲストで root ログインと `id -u`／`uname -m` を確認し、56 バイトの ping は 10/10 応答でした。`eth0` IRQ は A が 3 → 14、B が 2 → 13 でした。
+
+### BeagleV-Fire の SD 起動の再現
+
+参照リビジョンの SD 起動テストは BeagleV-Fire（PolarFire SoC）にあります。BeagleV-StarLight の公開デモは RAM の `0xa0000000` に読み込んだ FIT を起動します。Fire の Robot ケースは OpenSBI 1.2、U-Boot 2023.07、Linux の root ログイン、`uname -m` の `riscv64`、`uname -n` の `buildroot` を検証します。[Fire のテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot) [Fire の RESC](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/beaglev-fire.resc) [StarLight の RESC](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/beaglev_starlight.resc)
+
+```sh
+cargo test
+cargo build --release
+fire_assets=$(mktemp -d)
+fire_resc=../renode/scripts/single-node/beaglev-fire.resc
+rg -o 'https://[^[:space:]]+' "$fire_resc" | while IFS= read -r url; do
+  name=${url##*/}
+  curl -fLsS --retry 2 "$url" -o "$fire_assets/$name" &&
+    printf '%s  %s\n' "${name##*-}" "$fire_assets/$name" | sha1sum -c - || exit 1
+done
+
+# 上流スクリプトの構成と HSS の開始を確認する。
+target/release/penv run --script "$fire_resc" --platform-root ../renode \
+  --asset-dir "$fire_assets" --max-steps 100000
+
+# 上流 REPL と HSS ELF を直接指定し、e51 の到達 PC を確認する。
+for steps in 3763661 3763760 3763761; do
+  target/release/penv run --platform ../renode/platforms/boards/beaglev-fire.repl \
+    --platform-root ../renode --uart-device mmuart0 --max-steps "$steps" --stats \
+    "$fire_assets"/hss-envm-wrapper.elf-s_*
+done
+```
+
+変更前の `11b9d76` では同じ 3,763,660 ステップで `pc=0x20220350` に入りました。HSS は e51 の `pc=0x20231a74` で `amoswap.d` によるストアアクセス例外（原因 7、`mtval=0x02010008`）を起こしました。上流 REPL の `CacheConfig_WayEnable` と同じ初期値 0 の保持レジスターを追加し、HSS が使うアトミック交換をそのレジスターに実装しました。CLI テスト `polarfire_hss_can_swap_the_cache_way_enable_register` が初期値、64 ビットの交換前の値、ロードとストアの読み戻しを確認します。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
+
+コミット `9807d54` では、3,763,661 ステップ目の `MPFS_Sysreg` 書き込みで早期トラップハンドラー `0x20220350` に入りました。上流の SYSREG は 4 KiB の 32 ビット MMIO で、HSS が書き込むオフセット `0x174` は未定義です。今回の実装ではこの書き込みを受け付けて破棄し、未定義オフセットは 0 を返します。上流のリセット値とクロック・ソフトリセットレジスターの書き込み可能ビットを再現しました。各周辺機器へのクロック制御とリセットの配線は残課題です。[Renode MPFS_Sysreg](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/MPFS_Sysreg.cs)
+
+| 実行ステップ数 | 変更後の e51 の PC |
+| --- | --- |
+| 3,763,661 | `0x20231a80`（SYSREG 書き込みの次の命令） |
+| 3,763,760 | `0x20231ad2`（`0x02010800` に対する `amoswap.d`） |
+| 3,763,761 | `0x20220350`（早期トラップハンドラー） |
+
+次の例外は L2 キャッシュ設定へのアトミックアクセスです。対象アドレスは上流 REPL の `SilenceRange` に含まれます。現在の Penv はこの範囲の通常ロード／ストアに対応し、`amoswap.d` はそこでストアアクセス例外（原因 7、`mtval=0x02010800`）になります。この段階の Fire の UART 出力は空です。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
+
+上流の `SdCardFromFile $image mmc 0x100000000` は、ファイルを裏付けにした公称容量 4 GiB の SD カードを `mmc` に接続します。永続化は既定で有効です。`mmc` は `0x20008000` にマップされる MPFS SD コントローラーで、PLIC の IRQ 88 と WakeupIRQ 89 に接続されます。Penv の実装範囲と残課題は下の SD イメージ接続の節に記録しています。[Renode SDCardExtensions](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/SDCardExtensions.cs) [Renode MPFS_SDController](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/MPFS_SDController.cs)
+
+今回の `cargo test` は全 64 件が通過しました。CLI テスト `polarfire_sysreg_handles_hss_access_and_register_defaults` は HSS と同じオフセットへの書き込みと、PLL 状態およびクロック・ソフトリセットレジスターの読み戻しを確認します。
+
+前回は上記の StarLight 公開素材を使った `python3 scripts/verify-starlight.py "$assets"` でも、UART から root にログインし、`id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
+#### Fire の L2 キャッシュと DDR トレーニング
+
+上流の `SilenceRange` に含まれる PolarFire L2 way-mask レジスターに限り、HSS の `amoswap.d` を受け付けて 0 を返します。続く `mss_nwc_init` では静的なタグだけだとトレーニングが進まないため、上流 REPL の `MPFS_DDRMock` を移植しました。32 ビットの固定応答と交互応答、8 ビットのレーン選択状態はインスタンスごとに管理します。[Renode MPFS_DDRMock](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/MPFS_DDRMock.cs)
+
+前節の直接起動で `--max-steps 4885985` を指定すると、e51 は `0x20233214` まで実行します。次のステップの `0x20110008` 読み出しはロードアクセス例外となり、`0x20220350` に入ります。対象は最初の Cadence GEM のネットワーク状態レジスターです。この段階では UART はまだ空です。`cargo test` は 65 件通過しました。
+
+#### Fire の HSS バナーまでの起動
+
+Cadence GEM の Network Status は、両方のバスエイリアスで管理インターフェイスの idle ビットを返し、書き込みを無視します。さらに HSS の USB 初期化がアクセスする未定義の 32 ビットオフセット `0x3fc` は上流と同じく 0 を返し、書き込みを破棄します。GEM の送受信と USB 転送は未実装です。[Renode CadenceGEM](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Network/CadenceGEM.cs) [Renode MPFS_USB](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/USB/MPFS_USB.cs)
+
+前節の直接起動を `--max-steps 150000000` で実行すると、UART に HSS の展開成功、バージョン `0.99.36-BVF-0.3.0-2-g3d347fe`、`Attempting to select eMMC` が出ます。その後、e51 の `pc=0x0a0144c8` でファブリックのメディア選択 `0x4fffff00` への書き込みがストアアクセス例外になります。バナー内の OpenSBI 1.2 は HSS に組み込まれたバージョン表示です。ゲストの起動は未到達です。
+
+#### Fire の SD イメージ接続
+
+`SdCardFromFile $image mmc 0x100000000` を MPFS SD コントローラーへの読み出し専用の接続として実装しました。SDHC/SDXC の容量検証、Present State の挿入状態、CMD0・CMD8・CMD55/ACMD41・CMD2/3/7/9/13/16 と単一セクターの CMD17 PIO 読み出し、完了ステータスの W1C を実装しています。容量末尾までのファイルに含まれない領域は 0 を返します。主 IRQ は REPL の PLIC 入力に接続します。書き込みと永続化、ADMA、WakeupIRQ は残課題です。旧 MMC 経路と SDMA の検証は後述します。
+
+```sh
+PENV_FIRE_SD_IMAGE="$(find "$fire_assets" -maxdepth 1 -name 'sdcard.img-s_*')" \
+  cargo test --test cli polarfire_resc_reads_a_sector_from_an_attached_sd_image
+```
+
+ゲストのプローブがファブリック選択レジスター `0x4fffff00` に 1 を書くと SD カードが見えるようになります。リセット直後は eMMC 側です。Renode の `SdCardFromFile` と同じく、接続先はコントローラーが持つ単一の媒体です。プローブにより OCR、4 GiB の CSD、CMD17 の先頭 512 バイトとステータスクリアを確認しました。上流 RESC は `SdCardFromFile` を解析して次の未対応コマンド `SetGlobalQuantum` で停止します。[HSS のメディア選択](https://github.com/polarfire-soc/hart-software-services/blob/5e3f86966381ee9acb94969d0e18ad666f272a30/baremetal/polarfire-soc-bare-metal-library/src/platform/mpfs_hal/common/nwc/mss_io.c)
+
+Fire の直接起動を `--max-steps 400000000` で実行すると、MPFS SD ホストの初期設定を通過します。eMMC 未接続のため選択は失敗し、HSS は CLI の待機を経て `Initializing Mi-V IHC` まで進みます。次に `pc=0x0a01353e` からの `0x50000004` 書き込みでストアアクセス例外になります。この時点では Mi-V IHC、GPIO ボタンの配線、残りの SD コマンドと DMA、RESC のシンボルロードと CPU フックが残っています。Fire の U-Boot と Buildroot ログインは未到達です。[Fire の IHC アドレス定義](https://github.com/polarfire-soc/hart-software-services/blob/5e3f86966381ee9acb94969d0e18ad666f272a30/boards/mpfs-beaglev-fire/drivers_config/fpga_ip/miv_ihc/miv_ihc_add_mapping.h)
+
+継続作業では `cargo test` 68 件が通過しました。StarLight の上流対応 4 ケースを公開ファームウェアで再実行し、両ゲストの root ログイン、56 バイトと 3200 バイトの ping 各 10/10 応答、`eth0` IRQ の A 側 3 → 61 と B 側 3 → 60 を確認しました。外部 PMP の結果はこの次の節に記録しています。RV64 virt は OpenSBI v1.6、Linux 5.10.6、UART ログインを経て `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
+#### Fire の Mi-V IHC と MMC 起動試行
+
+Fire の 5 ハート用 Mi-V IHC に、ハート間のメッセージレジスター、受信確認、アグリゲーターの割り込みマスクと PLIC 接続を追加しました。Rust のテストで片方向のメッセージ転送と受信確認の IRQ を確認しています。[Mi-V IHC のレジスター定義](https://github.com/polarfire-soc/hart-software-services/blob/5e3f86966381ee9acb94969d0e18ad666f272a30/baremetal/drivers/fpga_ip/miv_ihc/miv_ihc_regs.h)
+
+Fire の直接起動を `--max-steps 410000000` で再実行し、実 HSS が `Initializing Mi-V IHC`、`Initializing IPI Queues`、`Initializing Boot Image`、`Trying to boot via MMC` を出力することを確認しました。この実行は命令上限で停止しました。GPIO ボタン、SD/eMMC 選択から実際の起動イメージのロード、後続の RESC コマンドが残っています。`cargo test` は 69 件通過しました。
+
+#### 公開 SD から Fire の HSS ペイロードを読み込む
+
+公開 HSS は接続したカードに旧 MMC のコマンド列を送ります。この経路の CMD1、CMD6、EXT_CSD、CMD21 のチューニングブロック、CMD12 と、CMD17/18 の読み出し専用 SDMA を実装しました。SDMA は 64 ビットの宛先と複数ブロックを扱い、転送結果をコントローラーのステータスと PLIC に反映します。[Renode MPFS_SDController](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/MPFS_SDController.cs)
+
+```sh
+# 上流 RESC の素材、プラットフォーム、カード接続と ELF ロードを使う。
+fire_probe=$(mktemp)
+sed -n -e '/^\$/p' -e '/^using sysbus$/p' -e '/^mach create$/p' \
+  -e '/^machine LoadPlatformDescription /p' -e '/^machine SdCardFromFile /p' \
+  -e 's/^    \(sysbus LoadELF .*\)$/\1/p' "$fire_resc" > "$fire_probe"
+target/release/penv run --script "$fire_probe" --platform-root ../renode \
+  --asset-dir "$fire_assets" --uart-device mmuart0 --max-steps 500000000 --stats
+```
+
+公開 HSS がカードを初期化し、GPT ヘッダーとパーティション表を検証しました。起動パーティションから 701,624 バイトを DDR の `0x103fc00000` に読み込み、`Boot image passed CRC` と `Boot image set name: "PolarFire-SoC-HSS::U-Boot"` を出力しました。U-Boot 本体の起動と Linux は未到達です。ユニットテストは SDMA の複数ブロック転送と未マップ宛先のエラーも検証します。
+
+#### Fire の OpenSBI と U-Boot 起動
+
+HSS がペイロード登録後に `0x2000100c` を読み出すため、PolarFire のウォッチドッグの設定・ステータス、リフレッシュウィンドウ、IRQ とリセット要求を実装しました。前節と同じ公開素材とコマンドで、実行中の OpenSBI v1.2、U-Boot 2023.07.02、`Model: BeagleBoard BeagleV-Fire` を UART で確認しました。U-Boot は MMC 列挙中の `0x200082fe` の 16 ビット読み出しでロードアクセス例外になります。[Renode MPFS_Watchdog](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Timers/MPFS_Watchdog.cs)
+
+#### Fire の U-Boot MMC 列挙
+
+MPFS SD ホストに 8・16・32 ビットのレジスターアクセス、ホストクロックとソフトリセットを追加しました。公開イメージで前節の手順を `--max-steps 650000000` まで実行し、U-Boot の `MMC: mmc@20008000: 0` とシリアル入出力の初期化を確認しました。次は `Net:` に続く Cadence GEM の `0x20110294` への読み出しでロードアクセス例外になります。これは Design Configuration 6 です。Linux 起動は未到達です。
+
+#### Fire の U-Boot から SD のブートスクリプトを実行
+
+Cadence GEM の設計情報、ステーションアドレスと MDIO を実装し、U-Boot のネットワーク列挙を通過しました。MPFS SD は CMD0 後にネイティブ SD と旧 MMC を再識別し、SD の SCR（ACMD51）とカード状態（ACMD13）を PIO または SDMA で転送できます。複数ブロックの PIO 読み出しも追加しました。Cadence GEM のフレーム DMA と実データの通信は未実装です。
+
+公開イメージで前節の手順を `--max-steps 1250000000` まで実行し、`Net: eth0: ethernet@20110000`、`mmc0 is current device`、`Scanning mmc 0:2...`、`Found U-Boot script /boot.scr` とスクリプト実行開始を確認しました。[U-Boot の MMC モード選択](https://github.com/u-boot/u-boot/blob/v2023.07/drivers/mmc/mmc.c) [Renode CadenceGEM](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Network/CadenceGEM.cs)
+
+#### Fire の Linux コンソールと残課題
+
+```sh
+cargo test
+cargo build --release
+python3 scripts/verify-fire.py "$fire_assets" --until linux
+# ログインまで追う場合は --until linux を外す。
+```
+
+公開 HSS と SD イメージの実行を `--max-steps 6000000000` の上限まで追いました。U-Boot は SD 上の FIT を読み込み、カーネルと DTB の SHA-256 を検証しました。`Starting kernel` の後に Linux `6.6.35-linux4microchip+fpga-2024.06` が起動し、`20000000.serial` を `ttyS0` コンソールとして有効にしました。カーネル引数は元のイメージの `root=/dev/mmcblk0p3 rootwait` を使用しています。
+
+前回の最初の阻害点は `mchp_corespi_probe+0x174` の 32 ビット読み出しです。Linux は仮想アドレス `0xffff8f800004d000` でロードアクセス例外を報告し、起動中にパニックになりました。この阻害点の修正と次の例外は下の CoreSPI の節に記録しています。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
+
+この時点の検証スクリプトは上流 RESC の一部を抽出していました。元の RESC 全体への対応は後述します。この段階では `cargo test` 75 件、StarLight の上流対応 7 ケース、RV64 virt の実 Linux ログインが通過しました。
+
+#### Fire の CoreSPI プローブ
+
+Fire の FIT に含まれる DTB は `spi@20108000` と `spi@20109000` を有効にしています。Penv は上流 REPL の `SPI.MPFS_SPI` を認識し、それぞれの 4 KiB の窓に CoreSPI の 32 ビット制御・状態レジスターを割り当てます。Linux のプローブで使う制御、フレーム幅、クロック分周、チップ選択とリセットを実装しました。SPI スレーブ、データ転送、転送割り込みは残課題です。[Renode MPFS_SPI](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SPI/MPFS_SPI.cs) [Linux 6.6 CoreSPI ドライバー](https://github.com/torvalds/linux/blob/v6.6/drivers/spi/spi-microchip-core.c)
+
+```sh
+cargo test
+cargo build --release
+python3 scripts/verify-fire.py "$fire_assets" --max-steps 6500000000 \
+  --logs target/fire-spi-probe
+```
+
+比較には同じ公開 HSS と SD イメージを使いました。FIT 内の元の DTB を使い、U-Boot のハッシュ検証が通過しました。修正前の `17b85ea` は Linux 6.6.35 の `console [ttyS0] enabled` の後、`mchp_corespi_probe+0x174` のロードアクセス例外を再現しました。修正後は同じコンソールの初期化を経て、`20108000.spi` と `20109000.spi` がそれぞれコントローラー 0 と 1 を登録しました。
+
+この段階の次の停止は `mpfs_musb_set_vbus` が呼ぶ `musb_default_readb` の USB 対象オフセット `0x60` への 8 ビット読み出しです。検証スクリプトはログイン待ちでこのカーネルパニックを検出します。SD ルートのマウントからログインまでの検証は次節に記録しています。この段階の `cargo test` は 76 件通過しました。
+
+#### Fire の上流 RESC と Linux 周辺機器のプローブ
+
+`verify-fire.py` は上記の公開素材と上流の `beaglev-fire.resc` をそのまま使います。Fire の設定に必要な GPIO ボタン操作と、ELF の `_start` で管理ハートを停止する CPU フックを実装しました。`SetGlobalQuantum` は時間指定の妥当性を検査します。Penv は命令単位でハートを切り替えるため、スケジューリングの粒度は変わりません。フックは上流スクリプトの停止処理に対応します。任意の Python フックの実行と管理ハート停止時の Monitor メッセージは未対応です。
+
+CoreSPI の次に発生した MUSB のプローブ例外は、接続機器がない場合の USB レジスターと 8 ビット DEVCTL の実装で解消しました。その次の CoreI2C には初期状態、スレーブ不在時の NACK と PLIC 割り込みを実装しました。CoreQSPI にはプローブ時のレジスター応答を実装しました。USB の転送、I2C スレーブ、SPI/QSPI のデータ転送と GPIO 割り込みは残課題です。[Renode MPFS_USB](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/USB/MPFS_USB.cs) [Renode MPFS_I2C](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/I2C/MPFS_I2C.cs) [Renode MPFS_QSPI](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SPI/MPFS_QSPI.cs)
+
+```sh
+cargo test
+cargo build --release
+python3 scripts/verify-fire.py "$fire_assets" --max-steps 9000000000 \
+  --timeout 1800 --logs target/fire-sd
+```
+
+検証スクリプトは UART から root としてログインし、`uname -m` と `uname -n` を確認します。続いてゲストの `/dev/mmcblk0` の先頭 512 バイトを `dd` で読み、ホスト側の公開 SD イメージの同じ範囲と SHA-256 が一致した場合にのみ PASS を出力します。UART と標準エラーは指定ログディレクトリに残ります。
+
+公開イメージで `PASS Should Boot Buildroot From SD Card` を確認しました。U-Boot で元の FIT 内のカーネルと DTB の SHA-256 検証が通過し、Linux は両 CoreSPI、両 CoreI2C と SDHCI を初期化しました。DMA で GPT を読み出して 3 パーティションを認識し、`mmcblk0p3` の ext4 をマウントしました。UART ログイン後の `uname -m` は `riscv64`、`uname -n` は `buildroot` を返しました。ゲストとホストの先頭セクターの SHA-256 はともに `c0d1a9055fedfc78ee08193dc4b6c269c1124988d6727d62d02649595b016912` でした。`cargo test` は 83 件通過しました。
+
+StarLight の外部 PMP 付き上流 3 ケースも前掲のコマンドで再実行しました。両ゲストの UART root ログインと 56 バイト ping の 10/10 応答を確認し、両側の `eth0` IRQ は 3 → 14 でした。
+
+SD の書き込みが未実装なので ext4 の書き込み可能な再マウントは失敗し、ルートは読み取り専用で動作します。Fire の Ethernet は PHY 接続とフレーム転送が残っています。起動ログには GNU Parted の GPT 末尾位置の警告と、非コヒーレント DMA に関する Linux の警告も残ります。
+
+## Cortex-M0 / Cortex-M0+
+
+REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。
+
+Cortex-M の REPL で `UART.STM32F7_USART` を複数配置し、各 USART を NVIC に直接接続するか、STM32F4 EXTI や CombinedInput を経由して接続できます。受信は USART と受信器を有効にした後に届けてください。標準入力用のファイルは、STM32 USART だけを配置した場合は最初に宣言した USART へ送られます。送信は即時で、DMA 配線は未対応です。
+
 ## 現在の実装範囲
 
 RV32I 基本整数命令、M 拡張、Zifencei を実装しています。REPL で `rv32ima` または `rv32ima_zicsr_zifencei` を指定すると、共有 RAM 上の A 拡張命令を使用できます。`rv32imc` と `rv32imac` では RV32C の整数圧縮命令に対応します。`cycle`、`instret`、`time` と各上位 32 ビットを読み取れます。CLINT がある場合の `time` は `mtime` に従います。Zicsr の命令と、マシンモードの CSR の一部、および `ECALL`・`EBREAK` からの `MRET` を実装しています。`CPU.RiscV32` ではユーザーモードへの移行とマシンモードへのトラップ、16 エントリーの PMP に対応しています。スーパーバイザーモードでは同期例外の委譲と `SRET`、32 ビット物理アドレス範囲の Sv32 ページ変換に対応しています。変換はハートごとに 64 エントリーをキャッシュし、SFENCE.VMA でそのハートのキャッシュを無効化します。マシンモードから設定したスーパーバイザー割り込みを委譲できます。3 コンテキスト以上の PLIC、その他の ISA 拡張、REPL のその他の構文とデバイス、起動コマンド以外の RESC 構文、ネットワーク、複数ノードは未対応です。標準構成の UART は単一の送信レジスターを提供します。

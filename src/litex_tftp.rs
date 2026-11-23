@@ -10,12 +10,14 @@ struct Peer {
     port: u16,
 }
 
+#[derive(Clone)]
 struct Transfer {
     peer: Peer,
     block: u16,
     offset: usize,
 }
 
+#[derive(Clone)]
 pub struct Server {
     ip: [u8; 4],
     port: u16,

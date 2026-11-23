@@ -5,6 +5,7 @@ use crate::{
     csr::{Csr, EXTERNAL},
     litex_panel::ButtonAction,
     litex_video::ReferenceFrame,
+    rv64::Rv64,
     sv32::TranslationCache,
     thumb::Thumb,
 };
@@ -16,6 +17,8 @@ pub struct Machine {
     pub primary: Hart,
     secondary: Vec<Hart>,
     next_hart: usize,
+    halt_hooks: Vec<(usize, u64, usize)>,
+    halted: u8,
     elapsed_steps: u64,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
@@ -42,6 +45,7 @@ pub struct Hart {
     thumb: Option<Thumb>,
     unaligned_accesses: bool,
     zicond: bool,
+    pub rv64: Option<Box<Rv64>>,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -52,12 +56,13 @@ pub enum Stop {
     Tohost(u64),
     Ecall,
     Ebreak,
+    Reset,
     Limit,
     ScriptComplete,
     OutputMatch,
 }
 
-enum Step {
+pub(crate) enum Step {
     Retired,
     Trap,
     Stop(Stop),
@@ -169,11 +174,14 @@ impl Machine {
                 thumb: None,
                 unaligned_accesses: false,
                 zicond: false,
+                rv64: None,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
             secondary: Vec::new(),
             next_hart: 0,
+            halt_hooks: Vec::new(),
+            halted: 0,
             elapsed_steps: 0,
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
@@ -208,7 +216,11 @@ impl Machine {
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
-        self.named_hart(name)?.pc = entry;
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.pc = u64::from(entry);
+        }
+        hart.pc = entry;
         Ok(())
     }
 
@@ -234,7 +246,16 @@ impl Machine {
 
     pub fn set_entry(&mut self, entry: u32) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.pc = u64::from(entry);
+            }
             hart.pc = entry;
+        }
+    }
+
+    pub fn set_rv64_entry(&mut self, entry: u64) {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            hart.rv64.as_mut().expect("RV64 machine").pc = entry;
         }
     }
 
@@ -257,6 +278,10 @@ impl Machine {
 
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &hart.rv64 {
+                cpu.validate(&mut self.bus)?;
+                continue;
+            }
             if hart.thumb.is_some() {
                 hart.reset_cortex_m(&mut self.bus)?;
                 continue;
@@ -409,6 +434,18 @@ impl Machine {
         self.inputs.insert(index, (step, input));
     }
 
+    pub fn halt_on_pc(&mut self, source: &str, pc: u64, target: &str) -> Result<(), String> {
+        let find = |name: &str| {
+            let name = name.strip_prefix("sysbus.").unwrap_or(name);
+            std::iter::once(&self.primary)
+                .chain(&self.secondary)
+                .position(|hart| hart.rv64.is_some() && hart.name.as_deref() == Some(name))
+                .ok_or_else(|| format!("unknown RV64 hook hart {name:?}"))
+        };
+        self.halt_hooks.push((find(source)?, pc, find(target)?));
+        Ok(())
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_until(limit, output, |_, _| false)
     }
@@ -424,6 +461,7 @@ impl Machine {
         matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
+        let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
             while self
@@ -486,6 +524,9 @@ impl Machine {
                     }
                 }
             }
+            if ethernet_link && self.elapsed_steps % 16_384 == 0 {
+                self.bus.poll_rv64_ethernet();
+            }
             let index = self.next_hart;
             if index == self.secondary.len() {
                 self.next_hart = 0;
@@ -516,6 +557,17 @@ impl Machine {
             self.bus
                 .tick_litex_uart(self.elapsed_steps, output)
                 .map_err(|error| format!("UART: {error}"))?;
+            if self.halted & (1 << index) != 0 {
+                continue;
+            }
+            for &(source, pc, target) in &self.halt_hooks {
+                if index == source && hart.rv64.as_ref().is_some_and(|cpu| cpu.pc == pc) {
+                    self.halted |= 1 << target;
+                }
+            }
+            if self.halted & (1 << index) != 0 {
+                continue;
+            }
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
@@ -526,6 +578,9 @@ impl Machine {
             }
             if let Some(code) = self.bus.tohost_exit {
                 return Ok((Stop::Tohost(code), retired));
+            }
+            if self.bus.rv64_devices.reset_requested {
+                return Ok((Stop::Reset, retired));
             }
         }
         Ok((Stop::Limit, retired))
@@ -691,6 +746,10 @@ impl Hart {
             .map_err(|error| Fault::Bus(Access::Store, error))
     }
 
+    pub fn program_counter(&self) -> u64 {
+        self.rv64.as_ref().map_or(u64::from(self.pc), |cpu| cpu.pc)
+    }
+
     pub fn set_mtvec(&mut self, value: u32) {
         self.csr.set_vector(value);
     }
@@ -740,6 +799,9 @@ impl Hart {
         elapsed_steps: u64,
         output: &mut impl Write,
     ) -> Result<Step, String> {
+        if let Some(cpu) = &mut self.rv64 {
+            return cpu.step(bus, self.csr.hart_id, elapsed_steps, output);
+        }
         if self.thumb.is_some() && bus.reset_cortex_m_if_requested() {
             self.reset_cortex_m(bus)?;
         }
@@ -1178,6 +1240,29 @@ mod tests {
             (Stop::Ebreak, 3)
         );
         assert_eq!(machine.primary.registers[10], 21);
+    }
+
+    #[test]
+    fn named_pc_hook_halts_only_the_target_hart() {
+        let mut machine = Machine::new(16).unwrap();
+        machine.configure_harts(2);
+        for (index, name) in ["e51", "u54_4"].into_iter().enumerate() {
+            let hart = machine.hart_mut(index);
+            hart.name = Some(name.into());
+            hart.rv64 = Some(Box::new(Rv64::new(crate::rv64::Isa::IM)));
+        }
+        machine
+            .bus
+            .memory(RAM_BASE, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+        machine
+            .halt_on_pc("u54_4", u64::from(RAM_BASE), "e51")
+            .unwrap();
+        assert_eq!(
+            machine.run(6, &mut std::io::sink()).unwrap(),
+            (Stop::Limit, 4)
+        );
     }
 
     #[test]
