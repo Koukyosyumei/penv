@@ -918,6 +918,77 @@ impl Hart {
         }
     }
 
+    fn andes_gp_operation(
+        &mut self,
+        insn: u32,
+        store_value: u32,
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<Option<u32>, Fault> {
+        // (width, store, sign extension, ADDIGP), from the custom opcode and funct bits.
+        let (width, store, signed, add) = match (insn & 0x7f, (insn >> 12) & 7) {
+            (0x0b, 0 | 4) => (1, false, true, false),
+            (0x0b, 1 | 5) => (1, false, false, true),
+            (0x0b, 2 | 6) => (1, false, false, false),
+            (0x0b, 3 | 7) => (1, true, false, false),
+            (0x2b, 0) => (2, true, false, false),
+            (0x2b, 1) => (2, false, true, false),
+            (0x2b, 2) => (4, false, false, false),
+            (0x2b, 4) => (4, true, false, false),
+            (0x2b, 5) => (2, false, false, false),
+            _ => return Err(Fault::Illegal(insn)),
+        };
+        let bits = |shift: u32, mask: u32| (insn >> shift) & mask;
+        let shared = (bits(17, 7) << 12) | (bits(15, 3) << 15);
+        let offset = if store {
+            let immediate = shared | (bits(25, 63) << 5) | (bits(7, 1) << 11);
+            if width == 4 {
+                sign(
+                    immediate | (bits(9, 7) << 2) | (bits(8, 1) << 17) | (bits(31, 1) << 18),
+                    19,
+                )
+            } else {
+                let low_bit = if width == 1 { bits(14, 1) } else { 0 };
+                sign(
+                    immediate | (bits(8, 15) << 1) | (bits(31, 1) << 17) | low_bit,
+                    18,
+                )
+            }
+        } else {
+            let immediate = shared | (bits(20, 1) << 11);
+            if width == 4 {
+                sign(
+                    immediate | (bits(22, 511) << 2) | (bits(21, 1) << 17) | (bits(31, 1) << 18),
+                    19,
+                )
+            } else {
+                let low_bit = if width == 1 { bits(14, 1) } else { 0 };
+                sign(
+                    immediate | (bits(21, 1023) << 1) | (bits(31, 1) << 17) | low_bit,
+                    18,
+                )
+            }
+        };
+        let address = self.registers[3].wrapping_add(offset);
+        if add {
+            return Ok(Some(address));
+        }
+        if store {
+            self.store(bus, address, width, store_value, output)?;
+            return Ok(None);
+        }
+        let value = match width {
+            1 => self.load::<1>(bus, address)?,
+            2 => self.load::<2>(bus, address)?,
+            _ => self.load::<4>(bus, address)?,
+        };
+        Ok(Some(if signed {
+            sign(value, width as u32 * 8)
+        } else {
+            value
+        }))
+    }
+
     fn uses_rv32e_registers(insn: u32) -> bool {
         const RD_HIGH: u32 = 1 << 11;
         const RS1_HIGH: u32 = 1 << 19;
@@ -928,6 +999,18 @@ impl Hart {
             0x03 | 0x13 | 0x67 => RD_HIGH | RS1_HIGH,
             0x23 | 0x63 => RS1_HIGH | RS2_HIGH,
             0x2f | 0x33 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+            0x0b => {
+                if (insn >> 12) & 3 == 3 {
+                    RS2_HIGH
+                } else {
+                    RD_HIGH
+                }
+            }
+            0x2b => match (insn >> 12) & 7 {
+                0 | 4 => RS2_HIGH,
+                1 | 2 | 5 => RD_HIGH,
+                _ => 0,
+            },
             0x5b => match (insn >> 12) & 7 {
                 0 => RD_HIGH | RS1_HIGH | RS2_HIGH,
                 2 | 3 => RD_HIGH | RS1_HIGH,
@@ -1169,6 +1252,7 @@ impl Hart {
             0x0f if funct3 <= 1 => None,
             // Renode VexRiscv accepts the custom whole-data-cache flush.
             0x0f if insn == 0x0000_500f && self.csr.vex => None,
+            0x0b | 0x2b if bitmanip.xandesperf => self.andes_gp_operation(insn, b, bus, output)?,
             0x5b if funct3 == 0 => Some(bitmanip.andes_register(funct7, a, b).ok_or_else(illegal)?),
             0x5b if bitmanip.xandesperf && matches!(funct3, 2 | 3) && insn & 0x8200_0000 == 0 => {
                 Some(BitManip::andes_bit_field(insn, a, funct3 == 3))

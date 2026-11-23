@@ -807,3 +807,21 @@ python3 scripts/validate-rv32-andes-register.py target/release/penv ../renode "$
 上流等価合格は累計 134 件です。GP 相対ロード・ストア、ADDIGP、専用 CSR、`Xandes` 別名と Andes のベクトル系は残っています。
 
 変更前の再現 ELF、固定入力から生成した ELF・RESC、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-fa92fd7-EoZgDI/` に保存しました。
+
+### RV32 XandesPerf の GP 相対メモリー操作
+
+LBGP、LBUGP、LHGP、LHUGP、LWGP、SBGP、SHGP、SWGP と ADDIGP を実装しました。修正前の ADDIGP 再現 ELF は不正命令で 0x1010 にトラップしました。修正後は固定 Renode と同じ 18・19 ビットの符号付き変位を復元し、GP との加算を RV32 幅で行います。ロードとストアは通常の RV32 アクセス処理を使います。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-andes-gp.py target/release/penv ../renode "$evidence/robot-rerun"
+python3 scripts/validate-rv32-andes-register.py target/release/penv ../renode "$evidence/register-rerun"
+python3 scripts/validate-rv32-andes-branch-field.py target/release/penv ../renode "$evidence/branch-rerun"
+```
+
+検証器は固定 Robot の 11 ケース・33 入力を抽出し、元の ISA・RAM・PC 0x2000 と入力値を使います。試験命令の次の PC から、ロード・ADDIGP の a2 またはストア先メモリーを照合します。全件が通過し、既存 XandesPerf 13 ケース、Rust テスト 86 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC も通過しました。
+
+上流等価合格は累計 145 件です。専用 CSR、`Xandes` 別名と Andes の浮動小数点・ベクトル系は残っています。固定 GP ケースは物理 RAM 内を対象とし、保護・ページ変換を伴う構成の上流等価性は別途確認が必要です。
+
+再現用 REPL、RESC、ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-5ca0da3-38QdsS/` に保存しました。

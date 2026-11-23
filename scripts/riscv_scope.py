@@ -108,6 +108,14 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
             arguments = selection[1] or ""
             bits = "64" if re.search(r"\bbits=64\b|^64(?:\s|$)", arguments) else "32"
             if bits == "32" and case in {
+                "Should Store Half Words With SHGP", "Should Execute LBGP", "Should Execute LBUGP",
+                "Should Execute LHGP", "Should Execute LHUGP", "Should Execute LWGP",
+                "Should Wrap ADDIGP At Thirty Two Bits", "Should Decode SBGP Displacements",
+                "Should Decode SHGP Displacements", "Should Decode SWGP Displacements",
+                "Should Decode Nineteen Bit LWGP Displacements",
+            }:
+                return "target", "ported", "fixed RV32 XandesPerf GP operands, memory inputs and result assertions checked on ELF"
+            if bits == "32" and case in {
                 "Should Execute BBC", "Should Execute BBS", "Should Execute BEQC",
                 "Should Execute BNEC", "Should Execute BFOZ", "Should Execute BFOS",
             }:
