@@ -206,14 +206,10 @@ impl<'a> EthernetDma<'a> {
         for region in self.regions {
             if let Some(offset) = region.offset(address, width) {
                 if width != 0 {
-                    for reservation in self.reservations.iter_mut() {
-                        if reservation.is_some_and(|reserved| {
-                            u64::from(address) < u64::from(reserved) + 4
-                                && u64::from(reserved) < u64::from(address) + width as u64
-                        }) {
-                            *reservation = None;
-                        }
-                    }
+                    invalidate_reservations(
+                        self.reservations,
+                        u64::from(address)..u64::from(address) + width as u64,
+                    );
                 }
                 return Ok(&mut region.bytes[offset..offset + width]);
             }
@@ -222,7 +218,41 @@ impl<'a> EthernetDma<'a> {
     }
 }
 
+fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
+    for reservation in reservations {
+        if reservation.is_some_and(|reserved| {
+            written.start < u64::from(reserved) + 4 && u64::from(reserved) < written.end
+        }) {
+            *reservation = None;
+        }
+    }
+}
+
+fn memory_byte_range(address: u32, count: usize) -> Result<std::ops::Range<u64>, String> {
+    let start = u64::from(address);
+    let end = start
+        .checked_add(count as u64)
+        .filter(|&end| end <= 1 << 32)
+        .ok_or("SystemBus byte range exceeds address space")?;
+    Ok(start..end)
+}
+
 impl Region {
+    fn byte_window(
+        &self,
+        request: &std::ops::Range<u64>,
+    ) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+        let base = u64::from(self.base);
+        let start = base.max(request.start);
+        let end = (base + self.bytes.len() as u64).min(request.end);
+        (start < end).then(|| {
+            (
+                (start - request.start) as usize..(end - request.start) as usize,
+                (start - base) as usize..(end - base) as usize,
+            )
+        })
+    }
+
     fn new(base: u32, size: usize) -> Result<Self, String> {
         let end = u64::from(base).saturating_add(size as u64);
         if size == 0 || end > 1 << 32 {
@@ -266,6 +296,36 @@ impl Bus {
             ));
         }
         self.regions.push(Region::new(base, size)?);
+        Ok(())
+    }
+
+    pub(crate) fn read_memory_bytes(&self, address: u32, count: usize) -> Result<Vec<u8>, String> {
+        let request = memory_byte_range(address, count)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(count)
+            .map_err(|_| "cannot allocate SystemBus byte read")?;
+        bytes.resize(count, 0);
+        for region in &self.regions {
+            if let Some((buffer, memory)) = region.byte_window(&request) {
+                bytes[buffer].copy_from_slice(&region.bytes[memory]);
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn write_memory_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), String> {
+        let request = memory_byte_range(address, bytes.len())?;
+        for region in &mut self.regions {
+            if let Some((buffer, memory)) = region.byte_window(&request) {
+                let base = u64::from(region.base);
+                invalidate_reservations(
+                    &mut self.reservations,
+                    base + memory.start as u64..base + memory.end as u64,
+                );
+                region.bytes[memory].copy_from_slice(&bytes[buffer]);
+            }
+        }
         Ok(())
     }
 
@@ -2702,5 +2762,75 @@ mod unhandled_access_cases {
         };
         bus.tag_with_policy(0x1000..=0x10ff, 0, true).unwrap();
         address_error(&mut bus, 0x1000);
+    }
+}
+
+#[cfg(test)]
+mod memory_segment_cases {
+    use super::*;
+
+    const BYTES: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+    fn exercise(address: u32, bytes: &[u8], expected: &[u8]) {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 16).unwrap();
+        bus.map_ram(0xc000_0000, 16).unwrap();
+        bus.write_memory_bytes(address, bytes).unwrap();
+        assert_eq!(
+            bus.read_memory_bytes(address, bytes.len()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn bulk_write_invalidates_only_overlapping_reservations() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 16).unwrap();
+        bus.reservations[0] = Some(8);
+        bus.reservations[1] = Some(4);
+        bus.write_memory_bytes(10, &BYTES).unwrap();
+        assert_eq!(bus.reservations[..2], [None, Some(4)]);
+    }
+
+    #[test]
+    fn upstream_write_to_memory_segment() {
+        exercise(4, &BYTES, &BYTES);
+    }
+
+    #[test]
+    fn upstream_partial_write_at_beginning() {
+        exercise(10, &BYTES, &[0, 1, 2, 3, 4, 5, 0, 0]);
+    }
+
+    #[test]
+    fn upstream_partial_write_at_end() {
+        exercise(0xc000_0000 - 4, &BYTES, &[0, 0, 0, 0, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn upstream_write_to_hole() {
+        exercise(100, &BYTES, &[0; 8]);
+    }
+
+    #[test]
+    fn upstream_overlapping_write() {
+        let bytes: Vec<_> = (0..32).collect();
+        let mut expected = [0; 32];
+        expected[4..20].copy_from_slice(&bytes[4..20]);
+        exercise(0xc000_0000 - 4, &bytes, &expected);
+    }
+
+    #[test]
+    fn upstream_read_bytes_both_memory() {
+        let mut bus = Bus::default();
+        bus.map_ram(50, 100).unwrap();
+        bus.map_ram(200, 100).unwrap();
+        let bytes: Vec<_> = (0..350).map(|value| (value % 255) as u8).collect();
+        bus.write_memory_bytes(0, &bytes).unwrap();
+        let mut expected = [0; 350];
+        for range in [50..150, 200..300] {
+            expected[range.clone()].copy_from_slice(&bytes[range]);
+        }
+        assert_eq!(bus.read_memory_bytes(0, 350).unwrap(), expected);
     }
 }

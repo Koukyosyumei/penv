@@ -132,6 +132,16 @@ pub enum Action {
         node: usize,
         address: u32,
     },
+    ReadMemoryBytes {
+        node: usize,
+        address: u32,
+        count: usize,
+    },
+    WriteMemoryBytes {
+        node: usize,
+        address: u32,
+        bytes: Vec<u8>,
+    },
     ObserveUart {
         node: usize,
         name: String,
@@ -419,6 +429,30 @@ pub fn run(
                         node.name
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::ReadMemoryBytes {
+                    node,
+                    address,
+                    count,
+                } => {
+                    let node = &simulation.nodes[node];
+                    let bytes = node.machine.bus.read_memory_bytes(address, count)?;
+                    writeln!(
+                        output,
+                        "{}: sysbus[{address:#010x}] = {bytes:02x?}",
+                        node.name
+                    )
+                    .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::WriteMemoryBytes {
+                    node,
+                    address,
+                    bytes,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .write_memory_bytes(address, &bytes)?;
                 }
                 Action::ObserveUart { node, name } => {
                     simulation.nodes[node]

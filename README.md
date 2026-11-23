@@ -1415,3 +1415,21 @@ done
 ```
 
 CLI の期待終了状態は順に 1、0、1 です。`cargo test` 184件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格168件、部分検証17件、未達601件です。上流既定の未マップアクセス方針、タグの階層名を用いた報告、周辺機器からのアドレス以外のバス例外の伝播が残っています。
+
+### backlog-network-dc6513219158-1
+
+SystemBus の RAM 一括読み書きを実装しました。書き込みは RAM 範囲との交差部分に適用し、読み取りでは穴をゼロで埋めます。書き込みと重なる排他アクセス予約を解除します。固定上流 `SystemBusTests.cs` の6件を同じバイナリで実行し、同じアドレス、RAM 範囲、入力バイト列、期待値を照合しました。固定フィクスチャが同一 RAM を二重登録する5件では、各ケースが片側の範囲だけに触れるため、独立した同サイズ RAM で同じ観測点を再現しています。STM32H743 の CLI でも RAM 終端を越える8バイトの読み書きで、末尾2バイトがゼロになることを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-memory-bytes.fzZp4oFY
+target/release/penv run --script "$e/bytes.resc" --platform-root ../renode
+```
+
+`cargo test` 191件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。上記にケース別結果と終了状態を保存しました。台帳は対象786件のうち等価合格174件、部分検証17件、未達595件です。`ShouldReadBytes` の残り3構成にはバイト幅の周辺機器転送が必要です。今回の CLI コマンドは RAM 転送に限り、上流が `onlyMemory` 指定時に行う周辺機器交差の診断と RAM の別名登録は残っています。

@@ -307,6 +307,41 @@ impl Plan {
                     high,
                 });
             }
+            ["sysbus", "ReadBytes", address, count, "true" | "True"] => {
+                let node = self.monitor_node()?;
+                let address = crate::platform::number(resolve(*address)?)?;
+                let count = crate::platform::number(resolve(*count)?)? as usize;
+                self.actions.push(Action::ReadMemoryBytes {
+                    node,
+                    address,
+                    count,
+                });
+            }
+            ["sysbus", "WriteBytes", bytes @ .., address, "true" | "True"] => {
+                let node = self.monitor_node()?;
+                let address = crate::platform::number(resolve(*address)?)?;
+                let bytes = bytes.join(" ");
+                let list = bytes
+                    .strip_prefix('[')
+                    .and_then(|value| value.strip_suffix(']'))
+                    .ok_or("expected bracketed SystemBus byte array")?;
+                let bytes = if list.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    list.split(',')
+                        .map(|value| {
+                            let value = crate::platform::number(value.trim())?;
+                            u8::try_from(value)
+                                .map_err(|_| "SystemBus byte value exceeds 255".to_owned())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                self.actions.push(Action::WriteMemoryBytes {
+                    node,
+                    address,
+                    bytes,
+                });
+            }
             ["sysbus", "WriteDoubleWord", address, value] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;
