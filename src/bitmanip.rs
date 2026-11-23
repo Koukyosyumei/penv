@@ -122,6 +122,26 @@ impl BitManip {
         }
     }
 
+    pub fn andes_bit_field(insn: u32, source: u32, signed: bool) -> u32 {
+        let msb = (insn >> 26) & 31;
+        let lsb = (insn >> 20) & 31;
+        let (start, width, shift) = if msb == 0 {
+            (0, 1, lsb)
+        } else if msb < lsb {
+            (0, lsb - msb + 1, msb)
+        } else {
+            (lsb, msb - lsb + 1, 0)
+        };
+        let pad = 32 - width;
+        let aligned = (source >> start) << pad;
+        let field = if signed {
+            ((aligned as i32) >> pad) as u32
+        } else {
+            aligned >> pad
+        };
+        field << shift
+    }
+
     fn single_bit(self, funct3: u32, funct7: u32, value: u32, index: u32) -> Option<u32> {
         if !self.zbs {
             return None;

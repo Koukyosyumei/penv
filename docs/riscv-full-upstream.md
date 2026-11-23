@@ -790,3 +790,20 @@ python3 scripts/validate-rv32-andes-register.py target/release/penv ../renode "$
 固定 7 ケース、Rust テスト 85 件、既存 ISA 構成 50 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC が通過しました。上流等価合格は累計 128 件です。XandesPerf は今回のレジスター演算に対応します。GP 相対のロード・ストア、条件分岐、ビットフィールド演算、専用 CSR、`Xandes` 別名と Andes のベクトル系は残っています。
 
 再現用 REPL、RESC、ELF とログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-3685669-dbvUOP/` に保存しました。
+
+### RV32 XandesPerf の条件分岐とビットフィールド演算
+
+BBC、BBS、BEQC、BNEC、BFOZ、BFOS を実装しました。変更前の BBC 再現 ELF は不正命令として 0x1010 にトラップしました。修正後は固定 Robot と同じ PC 0x2000 から分岐し、符号付き変位、ビット番号、7 ビットの比較定数を反映します。BFOZ/BFOS は抽出、挿入、下位ビットをゼロにする形式を区別し、BFOS ではフィールドを符号拡張します。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-andes-branch-field.py target/release/penv ../renode "$evidence/robot-rerun"
+python3 scripts/validate-rv32-andes-register.py target/release/penv ../renode "$evidence/register-rerun"
+```
+
+固定 Robot の 6 ケース、全 26 入力が通過しました。分岐 ELF は 1 ステップ後の PC を照合し、分岐先のコードで a0 が維持されたことを確認しました。自己分岐の a0 は同じ命令語を使った Rust テストで照合しました。ビットフィールド演算では次の PC に置いたコードで a2 を確認しました。既存 XandesPerf 7 ケース、Rust テスト 86 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC も通過しました。
+
+上流等価合格は累計 134 件です。GP 相対ロード・ストア、ADDIGP、専用 CSR、`Xandes` 別名と Andes のベクトル系は残っています。
+
+変更前の再現 ELF、固定入力から生成した ELF・RESC、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-fa92fd7-EoZgDI/` に保存しました。

@@ -108,6 +108,11 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
             arguments = selection[1] or ""
             bits = "64" if re.search(r"\bbits=64\b|^64(?:\s|$)", arguments) else "32"
             if bits == "32" and case in {
+                "Should Execute BBC", "Should Execute BBS", "Should Execute BEQC",
+                "Should Execute BNEC", "Should Execute BFOZ", "Should Execute BFOS",
+            }:
+                return "target", "ported", "fixed RV32 XandesPerf branch or field inputs; PC and register results checked"
+            if bits == "32" and case in {
                 "Should Execute LEA H", "Should Execute LEA W", "Should Execute LEA D",
                 "Should Execute FFB", "Should Execute FFZMISM", "Should Execute FFMISM",
                 "Should Execute FLMISM",

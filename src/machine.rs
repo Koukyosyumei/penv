@@ -927,7 +927,13 @@ impl Hart {
             0x17 | 0x37 | 0x6f => RD_HIGH,
             0x03 | 0x13 | 0x67 => RD_HIGH | RS1_HIGH,
             0x23 | 0x63 => RS1_HIGH | RS2_HIGH,
-            0x2f | 0x33 | 0x5b => RD_HIGH | RS1_HIGH | RS2_HIGH,
+            0x2f | 0x33 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+            0x5b => match (insn >> 12) & 7 {
+                0 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+                2 | 3 => RD_HIGH | RS1_HIGH,
+                5..=7 => RS1_HIGH,
+                _ => 0,
+            },
             0x73 => match (insn >> 12) & 7 {
                 1..=3 => RD_HIGH | RS1_HIGH,
                 5..=7 => RD_HIGH,
@@ -1164,6 +1170,29 @@ impl Hart {
             // Renode VexRiscv accepts the custom whole-data-cache flush.
             0x0f if insn == 0x0000_500f && self.csr.vex => None,
             0x5b if funct3 == 0 => Some(bitmanip.andes_register(funct7, a, b).ok_or_else(illegal)?),
+            0x5b if bitmanip.xandesperf && matches!(funct3, 2 | 3) && insn & 0x8200_0000 == 0 => {
+                Some(BitManip::andes_bit_field(insn, a, funct3 == 3))
+            }
+            0x5b if bitmanip.xandesperf && matches!(funct3, 5..=7) => {
+                let immediate = (insn >> 20) & 31;
+                let bit30 = (insn >> 30) & 1;
+                let bit7 = (insn >> 7) & 1;
+                let taken = if funct3 == 7 {
+                    if bit7 != 0 {
+                        return Err(illegal());
+                    }
+                    ((a >> immediate) & 1) == bit30
+                } else {
+                    let constant = (bit30 << 6) | (bit7 << 5) | immediate;
+                    (a == constant) == (funct3 == 5)
+                };
+                if taken {
+                    let offset =
+                        ((insn >> 31) << 10) | ((insn >> 20) & 0x3e0) | ((insn >> 7) & 0x1e);
+                    next = pc.wrapping_add(sign(offset, 11));
+                }
+                None
+            }
             0x57 if !self.csr.vector_configured() => {
                 eprintln!(
                     "PC: 0x{pc:x}, opcode: 0x{encoded:08x}, RISC-V 'V' instruction set is not enabled for this CPU!"
@@ -1588,6 +1617,29 @@ mtvec: Memory.MappedMemory @ sysbus 0x1000
             machine.primary.registers[6],
             (3 << 11) | (1 << 7) | (1 << 3)
         );
+    }
+
+    #[test]
+    fn upstream_rv32_andes_self_branches_preserve_a0() {
+        for (opcode, a0) in [(0x0005_705bu32, 0), (0x4005_705b, 1)] {
+            let mut machine = Machine::new(4).unwrap();
+            machine.primary.set_bitmanip(BitManip {
+                xandesperf: true,
+                ..BitManip::default()
+            });
+            machine.primary.registers[10] = a0;
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+            assert_eq!(
+                machine.run(1, &mut std::io::sink()).unwrap(),
+                (Stop::Limit, 1)
+            );
+            assert_eq!(machine.primary.pc, RAM_BASE);
+            assert_eq!(machine.primary.registers[10], a0);
+        }
     }
 
     #[test]

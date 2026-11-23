@@ -1870,8 +1870,8 @@ Renode	tests/unit-tests/riscv-amocas.robot	360	Amocas.q On RV64 Shouldn't Set Va
 Renode	tests/unit-tests/riscv-amocas.robot	363	Amocas.q On RV64 Shouldn't Set Value At MMIO Memory Location		outside	outside	AMOCAS keyword selects CPU.RiscV64 from mixed CPU fixture
 Renode	tests/unit-tests/riscv-amocas.robot	368	Amocas.d On RV32 Using Odd Registers Should Throw Illegal Instruction		target	ported	fixed RV32 ISA and hartId 2; single-step registers, memory and illegal-instruction assertions checked with inactive RV64 omitted
 Renode	tests/unit-tests/riscv-amocas.robot	378	Amocas.q On RV64 Using Odd Registers Should Throw Illegal Instruction		outside	outside	AMOCAS keyword selects CPU.RiscV64 from mixed CPU fixture
-Renode	tests/unit-tests/riscv-andestar-v5.robot	205	Should Execute BBC		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	213	Should Execute BBS		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
+Renode	tests/unit-tests/riscv-andestar-v5.robot	205	Should Execute BBC		target	ported	fixed RV32 XandesPerf branch or field inputs; PC and register results checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	213	Should Execute BBS		target	ported	fixed RV32 XandesPerf branch or field inputs; PC and register results checked
 Renode	tests/unit-tests/riscv-andestar-v5.robot	221	Should Store Half Words With SHGP		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	227	Should Execute LBGP		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	233	Should Execute LBUGP		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
@@ -1879,10 +1879,10 @@ Renode	tests/unit-tests/riscv-andestar-v5.robot	239	Should Execute LHGP		target	
 Renode	tests/unit-tests/riscv-andestar-v5.robot	245	Should Execute LHUGP		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	251	Should Execute LWGP		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	257	Should Wrap ADDIGP At Thirty Two Bits		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	263	Should Execute BEQC		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	270	Should Execute BNEC		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	277	Should Execute BFOZ		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	284	Should Execute BFOS		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
+Renode	tests/unit-tests/riscv-andestar-v5.robot	263	Should Execute BEQC		target	ported	fixed RV32 XandesPerf branch or field inputs; PC and register results checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	270	Should Execute BNEC		target	ported	fixed RV32 XandesPerf branch or field inputs; PC and register results checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	277	Should Execute BFOZ		target	ported	fixed RV32 XandesPerf branch or field inputs; PC and register results checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	284	Should Execute BFOS		target	ported	fixed RV32 XandesPerf branch or field inputs; PC and register results checked
 Renode	tests/unit-tests/riscv-andestar-v5.robot	291	Should Decode SBGP Displacements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	297	Should Decode SHGP Displacements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	303	Should Decode SWGP Displacements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
