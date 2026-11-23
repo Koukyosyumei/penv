@@ -1366,7 +1366,10 @@ mod tests {
 
     #[test]
     fn renode_button_press_and_release_latches_exti_between_steps() {
-        use crate::{stm32_gpio::Stm32Gpio, stm32_gpio_board::GpioButton};
+        use crate::{
+            stm32_gpio::Stm32Gpio,
+            stm32_gpio_board::{GpioButton, GpioEndpoints},
+        };
 
         // nucleo_wba52cg.robot: Should have Working EXTI (GPIO/EXTI portion).
         const GPIO: u32 = 0x4800_0000;
@@ -1378,11 +1381,12 @@ mod tests {
         let mut gpio = Stm32Gpio::new(GPIO, 0x400, [0; 3], 8);
         gpio.exti_routes[0] = 1;
         machine.bus.map_stm32_gpio(gpio).unwrap();
+        let mut endpoints = GpioEndpoints::default();
+        endpoints.connect(GPIO, "gpioPortA", 0, 16).unwrap();
         machine.bus.add_gpio_button(GpioButton::new(
             "button".into(),
             Some("gpioPortA".into()),
-            GPIO,
-            0,
+            endpoints,
             false,
         ));
         let mut output = io::sink();

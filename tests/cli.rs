@@ -244,6 +244,60 @@ ram: Memory.MappedMemory @ sysbus 0
 }
 
 #[test]
+fn renode_resc_gpio_button_fans_out_to_distinct_pins() {
+    let directory = std::env::temp_dir().join(format!("penv-gpio-fanout-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let repl = directory.join("board.repl");
+    let platform = r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+gpioA: GPIOPort.STM32_GPIOPort @ sysbus 0x48000000
+gpioB: GPIOPort.STM32_GPIOPort @ sysbus 0x48000400
+button: Miscellaneous.Button @ none
+    -> gpioA@2 | gpioB@3 | gpioA@2
+unused: Miscellaneous.Button @ none
+"#;
+    fs::write(&repl, platform).unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0, 8, 0, 0, 9, 0, 0, 0, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("fanout.resc");
+    fs::write(
+        &script,
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n\
+         unused PressAndRelease\nbutton Press\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
+         button Release\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n",
+    ).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let output = run();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"0x00000004\n0x00000008\n0x00000000\n0x00000000\n"
+    );
+    fs::write(&repl, platform.replace("gpioB@3", "gpioB@16")).unwrap();
+    let invalid = run();
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("Cannot connect 16th input of gpioB; it has only 16 GPIO inputs.")
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_cortex_m_pause_halt_and_virtual_time() {
     let directory = std::env::temp_dir().join(format!("penv-cpu-flow-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

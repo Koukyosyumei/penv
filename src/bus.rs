@@ -916,12 +916,12 @@ impl Bus {
 
     pub fn set_button(&mut self, index: usize, pressed: bool) {
         let button = &self.gpio_buttons[index];
-        if let Some(port) = self
-            .stm32_gpios
-            .iter_mut()
-            .find(|port| port.base == button.port)
-        {
-            port.set_external(button.pin, pressed ^ button.invert);
+        for &(base, pin) in button.endpoints.as_slice() {
+            if let Some(port) = self.stm32_gpios.iter_mut().find(|port| port.base == base) {
+                port.set_external(pin, pressed ^ button.invert);
+            }
+        }
+        if !button.endpoints.as_slice().is_empty() {
             self.refresh_gpio_wiring();
         }
     }

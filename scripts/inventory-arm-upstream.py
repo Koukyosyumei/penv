@@ -258,6 +258,19 @@ def classify_nunit(name, case, attrs, parameter):
             return PASS, F072, checks[case] + "; same 1 MHz, period, CNT/CCR1 values and compare-event observations"
         if case == "ShouldThrowOnCompareHigherThanLimit":
             return OPEN, COMMON, "Dedicated ComparingTimer.Compare setter throws InvalidOperationException; STM32 CCR1 is a width-masked MMIO register and does not enforce ARR as an argument limit"
+    if name == "GPIOTests":
+        checks = {
+            "ShouldPropagateConnected": "unbounded receiver identity and input 2",
+            "ShouldBeEmptyWhenNotConnected": "empty endpoint list before connecting",
+            "ShouldConnectBoundGPIOs": "input 2 on a five-input receiver",
+            "ShouldThrowOnIllegalInputNo": "reject input 10 on a five-input receiver with the upstream diagnostic",
+        }
+        if case in checks:
+            return PASS, COMMON, "renode_gpio_endpoint_registration_and_input_bounds; " + checks[case]
+    if name == "GPIODetachingTests":
+        if case in {"ShouldGetAllGPIOConnections", "ShouldConnectGPIOToReceiverAndReturnTheSameReceiver"}:
+            return OPEN, COMMON, "Requires numbered generic sender registration and output enumeration, including outputs with no endpoints"
+        return OPEN, COMMON, "Requires removing incoming and outgoing endpoints on peripheral unregistration or external or machine disposal; STM32 button fan-out uses static REPL topology"
     if name == "LimitTimerTests":
         if case in {"ShouldBeAscending", "ShouldBeDescending"}:
             return PASS, F072, "renode_stm32_limit_timer_monotonic_and_bounded; same 100 Hz, period 100000, and 100 one-second monotonicity checks"

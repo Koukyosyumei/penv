@@ -12,7 +12,7 @@ use crate::{
     stm32_can::Stm32Can,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
-    stm32_gpio_board::{GpioButton, GpioLed},
+    stm32_gpio_board::{GpioButton, GpioEndpoints, GpioLed},
     stm32_i2c::{Eeprom, Stm32I2c},
     stm32_rtc::Stm32Rtc,
     stm32_spi::{Stm32F0Spi, Stp08},
@@ -667,18 +667,24 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         }
         for button in gpio_buttons {
             let mut invert = None;
-            let mut target = None;
+            let mut endpoints = GpioEndpoints::default();
             for (_, text) in &button.body {
                 if let Some((source, destination)) = text.split_once("->")
                     && matches!(source.trim(), "" | "0" | "IRQ")
-                    && let Some((port, pin)) = destination.split_once('@')
-                    && target.is_none()
                 {
-                    let (base, _) = gpio_ports
-                        .get(port.trim())
-                        .ok_or_else(|| button.error("unknown button GPIO port"))?;
-                    let pin = irq_index(pin, 16).map_err(|e| button.error(&e))?;
-                    target = Some((*base, pin));
+                    for target in destination.split('|') {
+                        let (port, pin) = target
+                            .split_once('@')
+                            .ok_or_else(|| button.error("expected button target port@pin"))?;
+                        let port = port.trim();
+                        let (base, _) = gpio_ports
+                            .get(port)
+                            .ok_or_else(|| button.error("unknown button GPIO port"))?;
+                        let pin = irq_index(pin, 256).map_err(|e| button.error(&e))?;
+                        endpoints
+                            .connect(*base, port, pin, 16)
+                            .map_err(|e| button.error(&e))?;
+                    }
                 } else if let Some(value) = text.strip_prefix("invert:")
                     && invert.is_none()
                 {
@@ -689,11 +695,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                             .map_err(|_| button.error("invalid button invert property"))?,
                     );
                 } else {
-                    return Err(button.error("unsupported or duplicate button property or wiring"));
+                    return Err(button.error(
+                        "unsupported button wiring or invalid or duplicate button property",
+                    ));
                 }
             }
-            let (port, pin) =
-                target.ok_or_else(|| button.error("expected button wired to a GPIO input"))?;
             machine.bus.add_gpio_button(GpioButton::new(
                 button.name.clone(),
                 button
@@ -701,8 +707,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .as_deref()
                     .and_then(|registration| registration.split_whitespace().next())
                     .map(str::to_owned),
-                port,
-                pin,
+                endpoints,
                 invert.unwrap_or(false),
             ));
         }
