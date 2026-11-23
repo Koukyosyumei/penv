@@ -1735,3 +1735,29 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
 `SetHookAtBlockBegin`、`SetHookAtBlockEnd` を含む RESC は、どちらも
 コマンドの解決時に停止します。代表再現の `hook-Begin.resc` と
 `hook-End.resc`、実測ログは同じ作業ディレクトリにあります。
+
+### Discovery 上流 Zephyr MPU ELF
+
+固定 `mpu.robot:73–82` の4本を台帳化し、未変更 Discovery REPL と
+USART2 の `PROJECT EXECUTION SUCCESSFUL` を使う一括ランナーを追加しました。
+通常実行は Robot の既定8仮想秒で照合します。今回は先に失敗箇所を切り分けるため、
+同じバイナリで各100万ステップの実行をまとめました。
+
+```sh
+work=target/stm32f407-mpu-zephyr-bounded
+mkdir -p "$work"
+cargo build --release
+PENV_MPU_DIAGNOSTIC_STEPS=1000000 tests/stm32f407-mpu-zephyr.sh "$work" > "$work/cases.tsv"
+```
+
+`cases.tsv` の数値はエミュレーター終了状態です。
+`mem_protect` は禁止アクセスを通して予期しない fatal error、
+`protection` はヒープ実行と書き込み禁止領域への書き込みを通して
+`PROJECT EXECUTION FAILED` を出しました。`userspace` はモードと保護の
+アサーションを失敗し、`stackprot` は最初の試験でスタックオーバーフローを報告しました。
+保護判定とフォルト配送は ARM 担当に引き渡しました。
+厳密な待機を使った最初の `mem_protect` 実行は、失敗出力を採取後に中断しました。
+4件とも未達です。ログと生の UART は `$work` にあります。
+
+別件の ArrayMemory は共有担当が起動前スナップショットまで実装しましたが、
+元の Neonkey ELF の UART 完了行は同担当の検証でも未到達です。台帳に反映しました。
