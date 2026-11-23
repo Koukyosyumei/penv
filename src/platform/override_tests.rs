@@ -2381,3 +2381,33 @@ fn renode_existing_registration_resolves_cpu_identity() {
         &original
     ));
 }
+
+#[test]
+fn renode_quoted_fixture_single() {
+    let machine = mock_registration_machine("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: \"one with \\''' escaped quote\"").unwrap();
+    let cpu = machine.bus.fixture_cpu_properties("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("one with ''' escaped quote")
+    );
+}
+
+#[test]
+fn renode_quoted_fixture_closing() {
+    let machine = mock_registration_machine("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''one with escaped quote\\\\'''").unwrap();
+    let cpu = machine.bus.fixture_cpu_properties("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("one with escaped quote\\\\")
+    );
+}
+
+#[test]
+fn renode_quoted_fixture_interior() {
+    let machine = mock_registration_machine("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is \\\\\\'''\nnot a single line '''").unwrap();
+    let cpu = machine.bus.fixture_cpu_properties("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is \\\\\\'''\nnot a single line ")
+    );
+}

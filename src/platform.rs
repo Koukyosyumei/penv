@@ -350,6 +350,7 @@ fn quoted_string(value: &str) -> Option<String> {
             '"' => return chars.as_str().trim().is_empty().then_some(decoded),
             '\\' => match chars.next()? {
                 escaped @ ('"' | '\\') => decoded.push(escaped),
+                '\'' if chars.as_str().starts_with("''") => decoded.push('\''),
                 _ => return None,
             },
             character => decoded.push(character),
@@ -1075,7 +1076,17 @@ fn normalize_registration(registration: &mut String) -> Result<(), &'static str>
 
 pub(crate) fn multiline_value(value: &str) -> Option<String> {
     let body = value.trim().strip_prefix("'''")?.strip_suffix("'''")?;
-    Some(body.replace("\\'''", "'''"))
+    let mut decoded = String::new();
+    let mut start = 0;
+    for (index, _) in body.match_indices("\\'''") {
+        if index != 0 && body.as_bytes()[index - 1] == b'\\' {
+            continue;
+        }
+        decoded.push_str(&body[start..index]);
+        start = index + 1;
+    }
+    decoded.push_str(&body[start..]);
+    Some(decoded)
 }
 
 fn parse_using_statement(statement: &str) -> Result<Option<String>, &'static str> {
