@@ -10,6 +10,7 @@ use crate::{
 };
 
 const HARD_FAULT: u8 = 3;
+const LOCKUP_PC: u32 = 0xefff_fffe;
 
 #[derive(Clone, Copy, Default, PartialEq)]
 enum Sleep {
@@ -44,6 +45,7 @@ pub struct Thumb {
     fpscr: u32,
     fp_active: bool,
     active_exception: u8,
+    locked_up: bool,
     active_exceptions: u128,
     interrupts_masked: bool,
     sleep: Sleep,
@@ -307,15 +309,21 @@ impl Thumb {
             || self.interrupts_masked
             || self.faultmask
             || (self.basepri != 0 && priority >= self.basepri);
-        let fault_name = if let Some(address) = bus_address {
-            nvic.record_precise_bus_fault(address, escalate);
-            "BusFault"
+        let cannot_escalate =
+            escalate && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask);
+        if let Some(address) = bus_address {
+            nvic.record_precise_bus_fault(address, escalate && !cannot_escalate);
+            if cannot_escalate {
+                self.locked_up = true;
+                self.sleep = Sleep::Running;
+                nvic.lockup = true;
+                return Ok(LOCKUP_PC);
+            }
         } else {
             nvic.record_no_coprocessor_fault(escalate);
-            "NOCP"
-        };
-        if escalate && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask) {
-            return Err(format!("Cortex-M lockup on {fault_name} at {pc:#010x}"));
+            if cannot_escalate {
+                return Err(format!("Cortex-M lockup on NOCP at {pc:#010x}"));
+            }
         }
         self.exception_entry(if escalate { HARD_FAULT } else { exception }, pc, r, bus)
     }
@@ -389,11 +397,16 @@ impl Thumb {
         bus.clear_reservation(0);
         self.active_exceptions |= 1 << exception;
         self.active_exception = exception;
+        if exception == HARD_FAULT
+            && let Some(nvic) = bus.nvic.as_mut()
+        {
+            nvic.set_hard_fault_active(true);
+        }
         self.itstate = 0;
         Ok(handler & !1)
     }
 
-    fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &Bus) -> Result<u32, String> {
+    fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
         let basic_target = if self.thumb2 { target | 0x10 } else { target };
         if self.active_exception != 0
             && matches!(basic_target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd)
@@ -450,6 +463,11 @@ impl Thumb {
             }
             self.set_apsr(xpsr);
             self.itstate = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
+            if self.active_exception == HARD_FAULT
+                && let Some(nvic) = bus.nvic.as_mut()
+            {
+                nvic.set_hard_fault_active(false);
+            }
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
             self.signal_event();
@@ -461,6 +479,11 @@ impl Thumb {
             ));
         }
         Ok(target & !1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lockup_state(&self) -> (bool, u8) {
+        (self.locked_up, self.itstate)
     }
 
     pub fn sleeping(&self) -> bool {
@@ -513,11 +536,18 @@ impl Thumb {
         if pending & (1 << NMI) != 0 && self.active_exception != NMI {
             *pc = self.exception_entry(NMI, *pc, r, bus)?;
             self.sleep = Sleep::Running;
+            self.locked_up = false;
+            if let Some(nvic) = bus.nvic.as_mut() {
+                nvic.lockup = false;
+            }
             bus.systick.as_mut().unwrap().acknowledge(NMI);
             self.pending &= !(1 << NMI);
             return Ok(true);
         }
-        if self.faultmask || (self.interrupts_masked && self.sleep != Sleep::Interrupt) {
+        if self.locked_up
+            || self.faultmask
+            || (self.interrupts_masked && self.sleep != Sleep::Interrupt)
+        {
             return Ok(false);
         }
         let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
@@ -625,6 +655,9 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
+        if self.locked_up {
+            return Ok(ThumbStep::Fault);
+        }
         let original_itstate = self.itstate;
         bus.thumb_negative_priority = matches!(self.active_exception, NMI | HARD_FAULT);
         let result = self.step_instruction(pc, r, bus, output);

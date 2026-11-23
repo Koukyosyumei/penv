@@ -445,6 +445,8 @@ impl Hart {
         thumb.thumb2 = thumb2;
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
+            nvic.lockup = false;
+            nvic.set_hard_fault_active(false);
         }
         self.registers.fill(0);
         self.registers[13] = sp;
@@ -869,6 +871,100 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn enter_instruction_time_lockup() -> Machine {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut out = std::io::sink();
+        for (address, value) in [
+            (0, 0x1000),
+            (4, 0x201),
+            (8, 0x381),
+            (12, 0x341),
+            (0x354, 0xe000_ed2c),
+        ] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        // The same READ_ASSEMBLY and LOCKUP_ASSEMBLY as the upstream Robot.
+        for (base, words) in [
+            (0x200, &[0x6802, 0x2122, 0xe7fe][..]),
+            (
+                0x340,
+                &[
+                    0x4b04, 0xf04f, 0x4480, 0x601c, 0x2d00, 0xbf04, 0x6802, 0x2122, 0xe7fe,
+                ][..],
+            ),
+            (0x380, &[0xe7fe][..]),
+        ] {
+            for (index, &word) in words.iter().enumerate() {
+                machine
+                    .bus
+                    .write(base + index as u32 * 2, 2, word, &mut out)
+                    .unwrap();
+            }
+        }
+        machine.primary.reset_cortex_m(&mut machine.bus).unwrap();
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(20, &mut out).unwrap(), (Stop::Limit, 5));
+        machine
+    }
+
+    #[test]
+    fn upstream_double_bus_fault_locks_until_reset() {
+        let mut machine = enter_instruction_time_lockup();
+        let mut out = std::io::sink();
+        let thumb = machine.primary.thumb.as_ref().unwrap();
+        let state = thumb.lockup_state();
+        assert!(state.0);
+        assert_ne!(state.1, 0);
+        assert!(!thumb.sleeping());
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[1], 0x11);
+        assert_eq!(machine.primary.registers[2], 0xa5a5_a5a5);
+        for (address, expected) in [
+            (0xe000_ed28, 0x8200),
+            (0xe000_ed38, 0x100000),
+            (0xe000_ed2c, 0),
+            (0xe000_ed24, 4),
+        ] {
+            assert_eq!(machine.bus.read::<4>(address).unwrap(), expected);
+        }
+        assert_eq!(machine.run(10, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            state
+        );
+        machine.primary.reset_cortex_m(&mut machine.bus).unwrap();
+        assert!(!machine.primary.thumb.as_ref().unwrap().lockup_state().0);
+        assert!(!machine.bus.nvic.as_ref().unwrap().lockup);
+    }
+
+    #[test]
+    fn upstream_nmi_preempts_instruction_time_lockup() {
+        let mut machine = enter_instruction_time_lockup();
+        let mut out = std::io::sink();
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x380);
+        assert_eq!(machine.bus.read::<4>(0xfd8).unwrap(), 0xefff_fffe);
+        assert!(!machine.primary.thumb.as_ref().unwrap().lockup_state().0);
+        assert!(!machine.bus.nvic.as_ref().unwrap().lockup);
+    }
 
     #[test]
     fn handles_ecall_and_returns_to_guest_code() {

@@ -51,6 +51,8 @@ pub struct Nvic {
     priority: [u8; 64],
     system_priority: [u8; 12],
     fault_enables: u32,
+    hard_fault_active: bool,
+    pub lockup: bool,
     cfsr: u32,
     hfsr: u32,
     bfar: u32,
@@ -77,6 +79,8 @@ impl Nvic {
             priority: [0; 64],
             system_priority: [0; 12],
             fault_enables: 0,
+            hard_fault_active: false,
+            lockup: false,
             cfsr: 0,
             hfsr: 0,
             bfar: 0,
@@ -150,6 +154,10 @@ impl Nvic {
 
     pub fn ignores_negative_priority_bus_fault(&self) -> bool {
         self.ignore_negative_priority_bus_fault
+    }
+
+    pub fn set_hard_fault_active(&mut self, active: bool) {
+        self.hard_fault_active = active;
     }
 
     pub fn bus_fault_enabled(&self) -> bool {
@@ -260,7 +268,9 @@ impl Nvic {
                     | (u32::from(self.div_zero_trap) << 4)
                     | (u32::from(self.unalign_trap) << 3)
             }
-            (SHCSR, 4) if self.cortex_m4 => self.fault_enables,
+            (SHCSR, 4) if self.cortex_m4 => {
+                self.fault_enables | (u32::from(self.hard_fault_active) << 2)
+            }
             (CFSR..=CFSR_END, 1 | 2 | 4) if self.cortex_m4 && address + width as u32 <= HFSR => {
                 let mask = u32::MAX >> (32 - width * 8);
                 (self.cfsr >> ((address - CFSR) * 8)) & mask

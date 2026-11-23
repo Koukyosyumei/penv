@@ -222,7 +222,9 @@ mod tests {
         thumb.fp[0] = 0;
         thumb.fpscr = 0;
         assert_eq!(
-            thumb.branch(registers[14], &mut registers, &bus).unwrap(),
+            thumb
+                .branch(registers[14], &mut registers, &mut bus)
+                .unwrap(),
             0x60
         );
         assert_eq!(registers[13], 0x2000_0204);

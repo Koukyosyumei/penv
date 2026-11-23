@@ -260,3 +260,46 @@ ASM
         >"$out/$name.log" 2>&1
     printf '%s: all fault checks passed\n' "$name"
 done
+
+# Robot 369-423. Monitor state and NMI injection are checked by cargo test.
+cat >"$out/lockup.s" <<'ASM'
+.syntax unified
+.thumb
+.global reset
+.word 0x1000, reset, nmi, hardfault
+.thumb_func
+reset:
+    ldr r0, =0x100000
+    movs r1, #0x11
+    ldr r2, =0xa5a5a5a5
+    b fault
+    .ltorg
+    .org 0x200
+fault:
+    ldr r2, [r0]
+    movs r1, #0x22
+    b .
+    .org 0x340
+.thumb_func
+hardfault:
+    ldr r3, =0xe000ed2c
+    ldr r4, =0x40000000
+    str r4, [r3]
+    cmp r5, #0
+    itt eq
+    ldreq r2, [r0]
+    moveq r1, #0x22
+    b .
+    .ltorg
+    .org 0x380
+.thumb_func
+nmi:
+    b .
+ASM
+clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/lockup.s" -o "$out/lockup.o"
+ld.lld -N -Ttext=0 --entry=reset "$out/lockup.o" -o "$out/lockup.elf"
+status=0
+"$penv" run --platform "$out/bus-fault.repl" --max-steps 30 "$out/lockup.elf" \
+    >"$out/lockup.log" 2>&1 || status=$?
+[ "$status" -eq 2 ]
+grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/lockup.log"
