@@ -13,6 +13,12 @@ pub struct Boot {
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
     pub named_analyzers: Vec<String>,
+    pub uart_irqs: Vec<UartIrq>,
+}
+
+pub enum UartIrq {
+    Read(String),
+    Set(String, bool),
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
@@ -158,6 +164,25 @@ fn execute(
         ] if boot.platform.is_some() => {
             boot.named_analyzers
                 .push(name.strip_prefix("sysbus.").unwrap_or(name).into());
+        }
+        [
+            name @ ("uart0" | "uart1" | "sysbus.uart0" | "sysbus.uart1"),
+            "IRQ",
+        ] if boot.platform.is_some() => {
+            let name = name.strip_prefix("sysbus.").unwrap_or(name);
+            boot.uart_irqs.push(UartIrq::Read(name.into()));
+        }
+        [
+            name @ ("uart0" | "uart1" | "sysbus.uart0" | "sysbus.uart1"),
+            "IRQ",
+            "Set",
+            level,
+        ] if boot.platform.is_some() => {
+            let name = name.strip_prefix("sysbus.").unwrap_or(name);
+            let level = level
+                .parse()
+                .map_err(|_| "expected IRQ level true or false")?;
+            boot.uart_irqs.push(UartIrq::Set(name.into(), level));
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }

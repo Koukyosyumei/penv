@@ -48,7 +48,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | `tests/peripherals/LSM9DS1.robot` / Should Detect RING Motion | Nano 33 BLE、`circle_rotated.data` | `Magic starts` → `RING:`。元の REPL・ELF・入力で確認 |
 | 同 / Should Detect SLOPE Motion | Nano 33 BLE、`angle_rotated.data` | `Magic starts` → `SLOPE:`。元の REPL・ELF・入力で確認 |
 | `tests/platforms/imxrt500.robot` / Should Run Pigweed Bluetooth Advertiser | mixed RESC の nRF52840 observer と i.MX RT500 beacon、HCI UART と BLE | nRF 側で RSSI −10 の広告受信。混成構成を対象に残す。未移植。上流 RESC は `emulation CreateUARTHub "hci_beacon"` で停止 |
-| `tests/unit-tests/monitor-tests.robot` / Should Call GPIO Set | nRF52840 RESC、`uart0 IRQ Set true` | monitor の unset → set。未移植 |
+| `tests/unit-tests/monitor-tests.robot` / Should Call GPIO Set | nRF52840 RESC、`uart0 IRQ Set true` | 元の RESC 読み込み後、同じ monitor コマンドで `GPIO: unset` → `GPIO: set` を確認 |
 
 ## 共有 CPU・周辺部品の適用性
 
@@ -82,6 +82,7 @@ tests/nrf52840-lis2ds12-upstream.sh target/release/penv ../renode /tmp/nrf52-lis
 tests/nrf52840-sensors-upstream.sh target/release/penv ../renode /tmp/nrf52-sensors
 tests/nrf52840-hci-upstream.sh target/release/penv ../renode /tmp/nrf52-hci
 tests/nrf52840-nano33-upstream.sh target/release/penv ../renode /tmp/nrf52-nano33
+tests/nrf52840-monitor-upstream.sh target/release/penv ../renode /tmp/nrf52-monitor
 tests/nrf52840-task-wdt-upstream.sh /tmp/nrf52-acceptance/audio/task-watchdog.log
 ```
 

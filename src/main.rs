@@ -379,6 +379,7 @@ fn run() -> Result<ExitCode, String> {
         return Err("--asset-dir requires --script".into());
     }
     let mut named_analyzers = Vec::new();
+    let mut uart_irqs = Vec::new();
     if let Some(script) = script {
         if platform_path.is_some() || raw || hex {
             return Err("--script cannot be combined with --platform, --raw, or --hex".into());
@@ -409,6 +410,7 @@ fn run() -> Result<ExitCode, String> {
         }
         boot_pcs = boot.boot_pcs;
         named_analyzers = boot.named_analyzers;
+        uart_irqs = boot.uart_irqs;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -534,6 +536,21 @@ fn run() -> Result<ExitCode, String> {
         return Err("--ble-hci-controller requires --ble-peer".into());
     }
     let mut output = LineWriter::new(io::stdout().lock());
+    for command in uart_irqs {
+        match command {
+            monitor::UartIrq::Read(uart) => {
+                let state = if machine.bus.nrf_uart_irq(&uart, None)? {
+                    "set"
+                } else {
+                    "unset"
+                };
+                writeln!(output, "GPIO: {state}").map_err(|error| error.to_string())?;
+            }
+            monitor::UartIrq::Set(uart, level) => {
+                machine.bus.nrf_uart_irq(&uart, Some(level))?;
+            }
+        }
+    }
     let start = Instant::now();
     let result = if let Some(peer_path) = ble_peer {
         let platform = platform_path

@@ -107,6 +107,7 @@ struct Uarte {
     events: u32,
     raised: u32,
     interrupts: u32,
+    irq_level: bool,
     shorts: u32,
     pins: [u32; 4],
     baud: u32,
@@ -132,6 +133,7 @@ impl Default for Uarte {
             events: 0,
             raised: 0,
             interrupts: 0,
+            irq_level: false,
             shorts: 0,
             pins: [u32::MAX; 4],
             baud: 0x0400_0000,
@@ -760,6 +762,12 @@ impl Peripheral {
         matches!(self.device, Device::Uarte(_))
     }
 
+    pub fn set_uart_irq(&mut self, level: bool) {
+        if let Device::Uarte(uart) = &mut self.device {
+            uart.irq_level = level;
+        }
+    }
+
     pub fn reset(&mut self) {
         match &mut self.device {
             Device::Gpio(gpio) => gpio.reset(),
@@ -819,7 +827,7 @@ impl Peripheral {
             | Device::Gpio(_)
             | Device::Ppi(_) => false,
             Device::Watchdog(watchdog) => watchdog.pending(),
-            Device::Uarte(uart) => uart.events & uart.interrupts != 0,
+            Device::Uarte(uart) => uart.irq_level,
             Device::Gpiote(gpiote) => gpiote.pending(),
             Device::Rtc(rtc) => rtc.events & rtc.interrupts != 0,
             Device::Twi(twi) => twi.pending(),
@@ -1063,9 +1071,14 @@ fn dma_address(address: u32, length: usize) -> Result<u32, BusError> {
 }
 
 impl Uarte {
+    fn update_irq(&mut self) {
+        self.irq_level = self.events & self.interrupts != 0;
+    }
+
     fn raise(&mut self, events: u32) {
         self.events |= events;
         self.raised |= events;
+        self.update_irq();
     }
 
     const RX_READY: u32 = 1 << 2;
@@ -1162,9 +1175,14 @@ impl Uarte {
             }
             0x02c => {}
             0x200 => self.shorts = value & 0x60,
-            0x300 => self.interrupts = value & UART_EVENTS,
-            0x304 => self.interrupts |= value & UART_EVENTS,
-            0x308 => self.interrupts &= !value,
+            0x300 | 0x304 | 0x308 => {
+                self.interrupts = match offset {
+                    0x300 => value & UART_EVENTS,
+                    0x304 => self.interrupts | (value & UART_EVENTS),
+                    _ => self.interrupts & !value,
+                };
+                self.update_irq();
+            }
             0x500 if matches!(value, 0 | 4 | 8) => {
                 self.enabled = value;
                 if value == 0 {
@@ -1185,6 +1203,7 @@ impl Uarte {
             _ => match Self::event(offset) {
                 Some(bit) => {
                     set_event(&mut self.events, bit, value);
+                    self.update_irq();
                     if bit == Self::RX_READY && self.legacy_rx && value == 0 {
                         self.receive(bus)?;
                     }

@@ -316,7 +316,7 @@ renode	tests/unit-tests/llvm-asm-disasm.robot	548-551	Should Refuse To Infer Tri
 renode	tests/unit-tests/llvm-asm-disasm.robot	552-555	Should Refuse To Infer Triple For Addressed Disassembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
 renode	tests/unit-tests/llvm-asm-disasm.robot	556-559	Should Infer Triple For PC-Based Disassembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
 renode	tests/unit-tests/llvm-asm-disasm.robot	560-563	Should Assemble And Disassemble After Deserialization	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/monitor-tests.robot	106-113	Should Call GPIO Set	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/unit-tests/monitor-tests.robot	106-113	Should Call GPIO Set	scripts/single-node/nrf52840.resc; uart0 IRQ / Set true / IRQ	nRF peripheral reference・fixture 単位で判定	合格・上流 RESC と元の ELF を読み込み、GPIO: unset → GPIO: set
 renode	tests/unit-tests/opcodes-counting.robot	32-45	Should Count Custom 16-bit Instruction	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
 renode	tests/unit-tests/opcodes-counting.robot	46-59	Should Count Custom 32-bit Instruction	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
 renode	tests/unit-tests/opcodes-counting.robot	60-74	Should Count Custom 64-bit Instruction	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認

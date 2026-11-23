@@ -461,6 +461,18 @@ impl Bus {
             .any(|device| device.is_uart() && device.name == name)
     }
 
+    pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
+        let uart = self
+            .nrf_peripherals
+            .iter_mut()
+            .find(|device| device.is_uart() && device.name == name)
+            .ok_or_else(|| format!("unsupported UART IRQ target {name:?}"))?;
+        if let Some(level) = level {
+            uart.set_uart_irq(level);
+        }
+        Ok(uart.pending())
+    }
+
     pub(crate) fn memory_slice(&self, address: u32, length: usize) -> Result<&[u8], BusError> {
         self.regions
             .iter()
