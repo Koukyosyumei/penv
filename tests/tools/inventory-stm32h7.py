@@ -323,6 +323,12 @@ def triage(row):
             status, reason = 'OPEN', '汎用 ComparingTimer の Compare setter 拒否条件は STM32 TIM の CCR で観測できない。汎用 API の等価移植が残る'
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
+    elif suite == 'PreLexerTests.cs' and name in {
+        'ShouldFailOnUnterminatedString',
+        'ShouldFailIfTheMultilineCommentFinishesBeforeEndOfLine',
+        'ShouldFailOnSingleLineMultilineComment',
+    }:
+        status, reason = 'PASS', '固定上流の入力文字列でコメント・文字列処理の構文エラーを照合。src/platform.rs'
     elif suite == 'UsingTests.cs':
         if name in {f'ShouldFollowAttributeOverrideOrder{index}' for index in range(5)}:
             status, reason = 'PASS', '固定上流と同じ REPL・インクルード順・Placeholder 期待値を合成結果で照合。MockCPU の Placeholder は単純な文字列プロパティ。実 H743 GPIO でも合成値を観測'
@@ -342,7 +348,7 @@ def triage(row):
         }:
             status, reason = 'OUT', '上流 RuntimeInfo.IsWindows() ガードが非 Windows で Assert.Ignore。Windows ホストとドライブパスを要求'
         else:
-            status, reason = 'OPEN', 'MockCPU の参照・local スコープを検証。等価移植が残る'
+            status, reason = 'OPEN', 'ファイル単位の local シンボル表と前後方向の型付き参照解決が未実装。MockCPU.OtherCpu の固定フィクスチャは対象に維持'
     elif suite == 'MultiCPUTests.cs':
         status, reason = 'OPEN', '汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持'
     elif suite == 'MCAN.robot' and name in {

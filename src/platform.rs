@@ -80,10 +80,84 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
     .map_err(|_| format!("invalid 32-bit number {value:?}"))
 }
 
-fn without_comment(line: &str) -> &str {
-    unquoted_delimiters(line, &['/'])
-        .find(|(index, _)| line[*index..].starts_with("//"))
-        .map_or(line, |(index, _)| &line[..index])
+#[derive(Default)]
+struct ReplComments {
+    in_block: bool,
+    braces: i32,
+}
+
+impl ReplComments {
+    fn line(&mut self, raw: &str) -> Result<String, &'static str> {
+        let mut result = String::new();
+        let mut rest = raw;
+        loop {
+            if self.in_block {
+                let Some(end) = rest.find("*/") else {
+                    break;
+                };
+                let tail = &rest[end + 2..];
+                if self.braces == 0 && !tail.trim().is_empty() {
+                    return Err(
+                        "Multiline comment in indent mode can only finish at the end of the line.",
+                    );
+                }
+                result.extend(std::iter::repeat_n(' ', rest[..end + 2].chars().count()));
+                self.in_block = false;
+                rest = tail;
+            }
+            let mut quoted = false;
+            let mut chars = rest.char_indices().peekable();
+            let mut next = None;
+            while let Some((index, ch)) = chars.next() {
+                match ch {
+                    '\\' if quoted => {
+                        chars.next();
+                    }
+                    '"' => quoted = !quoted,
+                    '/' if !quoted && rest[index..].starts_with("/*") => {
+                        result.push_str(&rest[..index]);
+                        if let Some(end) = rest[index + 2..].find("*/") {
+                            let end = index + 4 + end;
+                            if self.braces == 0
+                                && result.trim().is_empty()
+                                && !rest[end..].trim().is_empty()
+                            {
+                                return Err(
+                                    "Single line multiline comment cannot precede code in indent mode.",
+                                );
+                            }
+                            result
+                                .extend(std::iter::repeat_n(' ', rest[index..end].chars().count()));
+                            next = Some(&rest[end..]);
+                        } else {
+                            self.in_block = true;
+                        }
+                        rest = "";
+                        break;
+                    }
+                    '/' if !quoted
+                        && rest[index..].starts_with("//")
+                        && (index == 0 || rest[..index].ends_with(char::is_whitespace)) =>
+                    {
+                        rest = &rest[..index];
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if quoted {
+                return Err("Unterminated string.");
+            }
+            result.push_str(rest);
+            if let Some(tail) = next {
+                rest = tail;
+            } else {
+                break;
+            }
+        }
+        self.braces += brace_depth(&result);
+        Ok(result)
+    }
 }
 
 fn unquoted_delimiters<'a>(
@@ -222,9 +296,12 @@ fn parse_text(
     let mut definitions = Vec::new();
     let mut registration_depth = 0;
     let mut seen_usings = HashSet::new();
+    let mut comments = ReplComments::default();
     let mut lines = content.lines().enumerate();
     while let Some((index, raw)) = lines.next() {
-        let line = without_comment(raw);
+        let line = comments
+            .line(raw)
+            .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
         let text = line.trim();
         let lineno = index + 1;
         let source = SourceLine {
@@ -283,7 +360,7 @@ fn parse_text(
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            if !seen_usings.insert(filename) {
+            if !seen_usings.insert(filename.to_owned()) {
                 return Err(error("Duplicate using entry."));
             }
             let include_path = resolve_using(filename, include_dir, root)
@@ -329,6 +406,9 @@ fn parse_text(
             source: path.into(),
             line: lineno,
         });
+    }
+    if comments.in_block {
+        return Err(format!("{}: unterminated block comment", path.display()));
     }
     if registration_depth != 0 {
         return Err(current.unwrap().error("unterminated Ethernet registration"));
@@ -1836,5 +1916,53 @@ cpu:
                 Path::new(r"/tmp/plat\form.repl")
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod comment_cases {
+    use super::*;
+
+    fn lines(source: &str) -> Result<Vec<String>, &'static str> {
+        let mut comments = ReplComments::default();
+        source.lines().map(|line| comments.line(line)).collect()
+    }
+
+    #[test]
+    fn should_fail_on_unterminated_string() {
+        assert_eq!(
+            lines("\nline1 \"i'm unterminated"),
+            Err("Unterminated string.")
+        );
+    }
+
+    #[test]
+    fn should_fail_if_the_multiline_comment_finishes_before_end_of_line() {
+        let source =
+            "\nline1 /* here we begin\n    here it goes\nhere the comment ends*/ x: 5\nline2";
+        assert_eq!(
+            lines(source),
+            Err("Multiline comment in indent mode can only finish at the end of the line.")
+        );
+    }
+
+    #[test]
+    fn should_fail_on_single_line_multiline_comment() {
+        assert_eq!(
+            lines("\nfirst line\n    /*something*/ second line"),
+            Err("Single line multiline comment cannot precede code in indent mode.")
+        );
+    }
+
+    #[test]
+    fn keeps_strings_and_brace_members_when_filtering_block_comments() {
+        let source = "uart: Type { /* begin\n */ name: \"/* quoted */\"; /* gap */ field: 1 }";
+        assert_eq!(
+            lines(source).unwrap(),
+            [
+                "uart: Type { ",
+                "    name: \"/* quoted */\";           field: 1 }"
+            ]
+        );
     }
 }

@@ -975,3 +975,24 @@ target/release/penv run --script "$e/gpio.resc" --platform-root ../renode
 ```
 
 検証ログと終了状態は上記のディレクトリに保存しました。台帳は対象 786 件のうち等価合格 75 件、部分検証 10 件、未達 701 件です。
+
+### backlog-network-35d1690c36de-1
+
+REPL にブロックコメント処理を追加し、引用符の内側にあるコメント記号を保持しました。固定上流 `PreLexerTests.cs` の 3 件を移植し、閉じていない文字列、インデント構文で複数行コメントの終了直後にコードが続く入力、行頭のブロックコメント直後にコードが続く入力を、同じ入力で構文エラーとして検出しました。実 STM32H743 REPL の GPIO 追記でも、コメントを含む入力が構築され、設定値 `0x55555555` が MMIO に反映されることを確認しました。
+
+`UsingTests.cs` の参照 4 件にはファイル単位の `local` スコープと型付き前方・後方参照が必要です。これらは未達のままです。ブロックコメントの処理と、任意の複数行インライン属性ブロックの構文解析は別の段階であり、後者の対応も残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test platform::comment_cases
+cargo build --release
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-repl-comments.Zk9Rz9Cz
+target/release/penv run --script "$e/probe.resc" --platform-root ../renode
+```
+
+ログと終了状態は上記のディレクトリに保存しました。台帳は対象 786 件のうち等価合格 78 件、部分検証 10 件、未達 698 件です。
