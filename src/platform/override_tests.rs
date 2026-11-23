@@ -1921,3 +1921,30 @@ fn renode_previous_registration_rejects_memory_range_for_cpu() {
     let error = mock_registration_machine(source).err().unwrap();
     assert!(error.contains("NoCtorForRegistrationPoint:"), "{error}");
 }
+
+#[test]
+fn renode_empty_scalar_integer() {
+    let machine = mock_registration_machine("\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithNumericalAttrubute @ sysbus  <0, 1>\n    mockInt: empty").unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.mockPeripheral"),
+        Some(&FixtureValue::Integer(0))
+    );
+}
+
+#[test]
+fn renode_empty_scalar_string() {
+    let machine = mock_registration_machine("\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithStringAttribute @ sysbus  <0, 1>\n    mockString: empty").unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.mockPeripheral"),
+        Some(&FixtureValue::Text(None))
+    );
+}
+
+#[test]
+fn renode_empty_scalar_bool() {
+    let machine = mock_registration_machine("\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithBoolAttribute @ sysbus  <0, 1>\n    mockBool: empty").unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.mockPeripheral"),
+        Some(&FixtureValue::Boolean(false))
+    );
+}

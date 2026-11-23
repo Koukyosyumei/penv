@@ -132,6 +132,14 @@ struct ByteSpan {
     peripheral: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FixtureValue {
+    Enums([u8; 2]),
+    Integer(i32),
+    Text(Option<String>),
+    Boolean(bool),
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
@@ -141,7 +149,7 @@ pub struct Bus {
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
     fixture_cpus: HashMap<String, String>,
-    fixture_enums: HashMap<String, [u8; 2]>,
+    fixture_values: HashMap<String, FixtureValue>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
@@ -464,20 +472,28 @@ impl Bus {
         self.empty_peripherals.get(name).map(Vec::as_slice)
     }
 
-    pub fn register_fixture_enum(
+    pub(crate) fn register_fixture_value(
         &mut self,
         name: String,
         range: (u32, u32),
-        values: [u8; 2],
+        value: FixtureValue,
     ) -> Result<(), String> {
         self.register_empty_peripheral(name.clone(), vec![range])?;
-        self.fixture_enums.insert(name, values);
+        self.fixture_values.insert(name, value);
         Ok(())
     }
 
     #[cfg(test)]
+    pub(crate) fn fixture_value(&self, path: &str) -> Option<&FixtureValue> {
+        self.fixture_values.get(path)
+    }
+
+    #[cfg(test)]
     pub fn fixture_enum_value(&self, path: &str) -> Option<[u8; 2]> {
-        self.fixture_enums.get(path).copied()
+        match self.fixture_value(path)? {
+            FixtureValue::Enums(values) => Some(*values),
+            _ => None,
+        }
     }
 
     pub fn register_fixture_cpu(

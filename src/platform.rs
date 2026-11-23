@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::{
+    bus::FixtureValue,
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
@@ -86,6 +87,7 @@ impl Entry {
     fn parse_sysbus_range(&self, registration: &str) -> Result<(u32, u32), String> {
         let range = registration
             .strip_prefix("sysbus ")
+            .map(str::trim_start)
             .ok_or_else(|| self.error("expected sysbus range"))?;
         let range = if let Some(body) = range.strip_prefix(TYPED_BUS_RANGE) {
             body.trim()
@@ -1892,6 +1894,36 @@ fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
 }
 
 const MOCK_EXTERNAL: &str = "Antmicro.Renode.UnitTests.Mocks.MockExternal";
+const MOCK_INTEGER: &str =
+    "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithNumericalAttrubute";
+const MOCK_STRING: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithStringAttribute";
+const MOCK_BOOL: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithBoolAttribute";
+
+fn bind_scalar_fixture(entry: &Entry) -> Result<FixtureValue, String> {
+    let key = match entry.model.as_str() {
+        MOCK_INTEGER => "mockInt",
+        MOCK_STRING => "mockString",
+        MOCK_BOOL => "mockBool",
+        _ => unreachable!(),
+    };
+    let properties = keys(entry, &[key])?;
+    let [(_, text)] = properties.as_slice() else {
+        return Err(entry.error("NoCtor: missing scalar constructor argument"));
+    };
+    let bound = match (key, *text, scalar_value(text)) {
+        ("mockInt", "empty", _) => Some(FixtureValue::Integer(0)),
+        ("mockString", "empty", _) => Some(FixtureValue::Text(None)),
+        ("mockBool", "empty", _) => Some(FixtureValue::Boolean(false)),
+        ("mockInt", _, Some(ScalarValue::Number(value))) => {
+            value.parse().ok().map(FixtureValue::Integer)
+        }
+        ("mockString", _, Some(ScalarValue::Text(value))) => Some(FixtureValue::Text(Some(value))),
+        ("mockBool", _, Some(ScalarValue::Boolean(value))) => Some(FixtureValue::Boolean(value)),
+        _ => None,
+    };
+    bound.ok_or_else(|| entry.error("NoCtor: incompatible scalar constructor argument"))
+}
+
 const MOCK_ENUM: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute";
 
 fn bind_fixture_enums(entry: &Entry) -> Result<[u8; 2], String> {
@@ -2065,15 +2097,19 @@ fn build_entries_with_scripts(
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
-            MOCK_ENUM if check_only => {
-                let values = bind_fixture_enums(entry)?;
+            MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL if check_only => {
+                let value = if entry.model == MOCK_ENUM {
+                    FixtureValue::Enums(bind_fixture_enums(entry)?)
+                } else {
+                    bind_scalar_fixture(entry)?
+                };
                 if !matches!(entry.registration.as_deref(), None | Some("none")) {
                     machine
                         .bus
-                        .register_fixture_enum(
+                        .register_fixture_value(
                             format!("sysbus.{}", entry.registered_name()),
                             entry.bus_range()?,
-                            values,
+                            value,
                         )
                         .map_err(|error| entry.error(&error))?;
                 }
@@ -2335,6 +2371,9 @@ fn build_entries_with_scripts(
                         | MOCK_CPU
                         | MOCK_DEPENDENCY
                         | MOCK_ENUM
+                        | MOCK_INTEGER
+                        | MOCK_STRING
+                        | MOCK_BOOL
                         | MOCK_REGISTER
                         | NULL_REGISTER
                 )
