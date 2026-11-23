@@ -580,10 +580,13 @@ elif request.IsRead:
 elif request.IsWrite:
     reg = request.Value
 '''
+sysbus:
+    init:
+        SilenceRange <0x02010010, 0x02010FFF>
 "#,
     )
     .unwrap();
-    let instructions: [u32; 18] = [
+    let instructions: [u32; 22] = [
         0x0201_02b7, // lui t0, 0x02010
         0x0082_8293, // addi t0, t0, 8
         0x1000_03b7, // lui t2, 0x10000
@@ -601,6 +604,10 @@ elif request.IsWrite:
         0x0062_b023, // sd t1, 0(t0)
         0x0862_be2f, // amoswap.d t3, t1, (t0): value from sd
         0x01c3_8023, // sb t3, 0(t2)
+        0x0201_12b7, // lui t0, 0x02011
+        0x8002_8293, // addi t0, t0, -2048
+        0x0862_be2f, // amoswap.d t3, t1, (t0): silenced way-mask register
+        0x01c3_8023, // sb t3, 0(t2)
         0x0010_0073, // ebreak
     ];
     let program: Vec<_> = instructions
@@ -617,7 +624,7 @@ elif request.IsWrite:
     fs::remove_dir_all(directory).unwrap();
 
     assert!(result.status.success(), "{result:?}");
-    assert_eq!(result.stdout, b"\0ABC");
+    assert_eq!(result.stdout, b"\0ABC\0");
 }
 
 #[test]

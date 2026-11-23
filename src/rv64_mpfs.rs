@@ -50,3 +50,82 @@ impl Sysreg {
         Some(())
     }
 }
+
+// Behavioral DDR training mock used by the upstream PolarFire platform.
+pub struct DdrMock {
+    pub base: u32,
+    next_word: u32,
+    byte_lane: u32,
+}
+
+impl DdrMock {
+    pub const SIZE: u64 = 0x1000;
+
+    pub fn new(base: u32) -> Self {
+        Self {
+            base,
+            next_word: 0,
+            byte_lane: 0,
+        }
+    }
+
+    pub fn accepts(&self, address: u32, width: usize) -> bool {
+        matches!(width, 1 | 4)
+            && address
+                .checked_sub(self.base)
+                .is_some_and(|offset| u64::from(offset) + width as u64 <= Self::SIZE)
+    }
+
+    pub fn read(&mut self, address: u32, width: usize) -> u32 {
+        let offset = address - self.base;
+        if width == 1 {
+            return match offset {
+                0x814 => {
+                    let value = 1 << self.byte_lane;
+                    self.byte_lane = (self.byte_lane + 1) % 5;
+                    value
+                }
+                0x834 => 8,
+                0x84c..=0x84f => 0xff,
+                _ => 0,
+            };
+        }
+        match offset {
+            0x008 | 0x010 => 0x200,
+            0x02c | 0x824 => u32::MAX,
+            0x0b4 => 0x5245_4e44,
+            0x81c | 0x820 => 0,
+            0x834 => 8,
+            0x84c | 0x850 | 0xc08 => 0xff,
+            0x864 => 0x4433_2211,
+            0x868 => 0xddcc_bbaa,
+            _ => {
+                let value = self.next_word;
+                self.next_word = !self.next_word;
+                value
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DdrMock;
+
+    #[test]
+    fn ddr_training_state_is_per_controller_and_per_access_width() {
+        let mut phy = DdrMock::new(0x2000_7000);
+        let mut controller = DdrMock::new(0x3e00_1000);
+        assert_eq!(phy.read(phy.base + 8, 4), 0x200);
+        assert_eq!(phy.read(phy.base, 4), 0);
+        assert_eq!(phy.read(phy.base + 0xb4, 4), 0x5245_4e44);
+        assert_eq!(phy.read(phy.base + 0x814, 1), 1);
+        assert_eq!(phy.read(phy.base, 4), u32::MAX);
+        assert_eq!(controller.read(controller.base, 4), 0);
+        for expected in [2, 4, 8, 16, 1] {
+            assert_eq!(phy.read(phy.base + 0x814, 1), expected);
+        }
+        assert!(!phy.accepts(phy.base + 0x1000, 1));
+        assert!(!phy.accepts(phy.base, 8));
+    }
+}

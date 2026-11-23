@@ -6,7 +6,7 @@ use crate::{
     rv64::{Isa, Rv64},
     rv64_devices::{FallbackRange, MpfsCacheWayEnable, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
-    rv64_mpfs::Sysreg,
+    rv64_mpfs::{DdrMock, Sysreg},
     rv64_priv::Pmp,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
@@ -220,6 +220,14 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
         machine.bus.rv64_devices.uarts.push(uart);
     }
     for entry in &entries {
+        if entry.model == "Miscellaneous.MPFS_DDRMock"
+            && entry.registration.as_deref() != Some("none")
+        {
+            let base = entry.address()?;
+            check_mapping(&machine, entry, base, DdrMock::SIZE)?;
+            machine.bus.rv64_devices.mpfs_ddr.push(DdrMock::new(base));
+            continue;
+        }
         if entry.model == "Miscellaneous.MPFS_Sysreg"
             && entry.registration.as_deref() != Some("none")
         {
@@ -246,7 +254,26 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
                 return Err(entry.error("invalid PolarFire cache way-enable register size"));
             }
             check_mapping(&machine, entry, base, MpfsCacheWayEnable::SIZE)?;
-            machine.bus.rv64_devices.mpfs_cache_way_enable = Some(MpfsCacheWayEnable::new(base));
+            let way_masks = base
+                .checked_add(MpfsCacheWayEnable::WAY_MASK_OFFSET)
+                .filter(|&start| {
+                    machine
+                        .bus
+                        .rv64_devices
+                        .fallback_ranges
+                        .iter()
+                        .any(|range| {
+                            range.silent
+                                && range.start <= u64::from(start)
+                                && u64::from(start) + MpfsCacheWayEnable::WAY_MASK_SIZE - 1
+                                    <= range.end
+                        })
+                });
+            if let Some(start) = way_masks {
+                check_mapping(&machine, entry, start, MpfsCacheWayEnable::WAY_MASK_SIZE)?;
+            }
+            machine.bus.rv64_devices.mpfs_cache_way_enable =
+                Some(MpfsCacheWayEnable::new(base, way_masks));
             continue;
         }
         if !matches!(
@@ -437,7 +464,12 @@ fn fallback_range(entry: &Entry, command: &str) -> Result<Option<FallbackRange>,
             value = number(entry, default)?;
         }
     }
-    Ok(Some(FallbackRange { start, end, value }))
+    Ok(Some(FallbackRange {
+        start,
+        end,
+        value,
+        silent: command == "SilenceRange",
+    }))
 }
 
 fn range_end(entry: &Entry, start: u64, size: u64) -> Result<u64, String> {
@@ -514,12 +546,20 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
             .mpfs_cache_way_enable
             .as_ref()
             .is_some_and(|device| {
-                start < u64::from(device.base) + MpfsCacheWayEnable::SIZE
-                    && u64::from(device.base) < end
+                (start < u64::from(device.base) + MpfsCacheWayEnable::SIZE
+                    && u64::from(device.base) < end)
+                    || device.way_masks.is_some_and(|base| {
+                        start < u64::from(base) + MpfsCacheWayEnable::WAY_MASK_SIZE
+                            && u64::from(base) < end
+                    })
             });
     let overlaps = overlaps
         || devices.mpfs_sysreg.as_ref().is_some_and(|device| {
             start < u64::from(device.base) + Sysreg::SIZE && u64::from(device.base) < end
+        });
+    let overlaps = overlaps
+        || devices.mpfs_ddr.iter().any(|device| {
+            start < u64::from(device.base) + DdrMock::SIZE && u64::from(device.base) < end
         });
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));

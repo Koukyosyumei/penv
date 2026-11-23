@@ -7,7 +7,7 @@ use crate::{
     machine::MAX_HARTS,
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
-    rv64_mpfs::Sysreg,
+    rv64_mpfs::{DdrMock, Sysreg},
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
@@ -17,6 +17,7 @@ pub struct Devices {
     pub uarts: Vec<Uart>,
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
+    pub mpfs_ddr: Vec<DdrMock>,
     pub mpfs_sysreg: Option<Sysreg>,
     pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
     pub fallback_ranges: Vec<FallbackRange>,
@@ -30,13 +31,21 @@ pub struct Devices {
 pub struct MpfsCacheWayEnable {
     pub base: u32,
     value: u64,
+    pub way_masks: Option<u32>,
 }
 
 impl MpfsCacheWayEnable {
     pub const SIZE: u64 = 8;
 
-    pub fn new(base: u32) -> Self {
-        Self { base, value: 0 }
+    pub const WAY_MASK_OFFSET: u32 = 0x800 - 8;
+    pub const WAY_MASK_SIZE: u64 = 15 * 8;
+
+    pub fn new(base: u32, way_masks: Option<u32>) -> Self {
+        Self {
+            base,
+            value: 0,
+            way_masks,
+        }
     }
 
     fn mask(&self, address: u32, width: usize) -> Option<u64> {
@@ -54,6 +63,14 @@ impl MpfsCacheWayEnable {
     }
 
     pub fn swap(&mut self, address: u32, width: usize, value: u64) -> Option<u64> {
+        // Renode leaves these cache way-mask registers in a silenced range.
+        if width == 8
+            && let Some(base) = self.way_masks
+            && let Some(offset) = address.checked_sub(base)
+            && u64::from(offset) + 8 <= Self::WAY_MASK_SIZE
+        {
+            return Some(0);
+        }
         let mask = self.mask(address, width)?;
         let previous = std::mem::replace(&mut self.value, value & mask);
         Some(previous & mask)
@@ -64,6 +81,7 @@ pub struct FallbackRange {
     pub start: u64,
     pub end: u64,
     pub value: u64,
+    pub silent: bool,
 }
 
 impl Devices {
@@ -152,6 +170,13 @@ impl Devices {
         {
             return Some(value);
         }
+        if let Some(ddr) = self
+            .mpfs_ddr
+            .iter_mut()
+            .find(|ddr| ddr.accepts(address, width))
+        {
+            return Some(ddr.read(address, width));
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -189,6 +214,9 @@ impl Devices {
             .as_mut()
             .and_then(|reg| reg.write(address, width, value))
         {
+            return Some(Ok(()));
+        }
+        if self.mpfs_ddr.iter().any(|ddr| ddr.accepts(address, width)) {
             return Some(Ok(()));
         }
         let plic = self.plic.as_mut()?;
