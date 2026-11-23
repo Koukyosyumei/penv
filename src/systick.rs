@@ -20,6 +20,7 @@ pub struct SysTick {
     phase: u64,
     clock_gated: bool,
     counting: bool,
+    zero_state_reload: bool,
 }
 
 impl Default for SysTick {
@@ -36,6 +37,7 @@ impl Default for SysTick {
             phase: 0,
             clock_gated: false,
             counting: false,
+            zero_state_reload: false,
         }
     }
 }
@@ -54,6 +56,8 @@ impl SysTick {
             frequency: self.frequency,
             steps_per_second: self.steps_per_second,
             clock_gated: self.clock_gated,
+            zero_state_reload: self.zero_state_reload,
+            current: if self.zero_state_reload { 0 } else { 0xff_ffff },
             ..Self::default()
         };
     }
@@ -67,12 +71,18 @@ impl SysTick {
         self.steps_per_second = u64::from(steps_per_second);
     }
 
+    pub fn set_zero_state_reload(&mut self) {
+        self.zero_state_reload = true;
+        self.current = 0;
+    }
+
     pub fn set_clocked(&mut self, clocked: bool) {
         self.clock_gated = !clocked;
     }
 
     pub fn tick(&mut self) {
-        if self.clock_gated || !self.counting {
+        if self.clock_gated || self.control & 1 == 0 || (!self.counting && !self.zero_state_reload)
+        {
             return;
         }
         let cycles = if let Some(frequency) = self.frequency {
@@ -83,6 +93,10 @@ impl SysTick {
         } else {
             1
         };
+        if self.zero_state_reload {
+            self.tick_zero_state_reload(cycles);
+            return;
+        }
         if self.current == 0 {
             return;
         }
@@ -99,6 +113,26 @@ impl SysTick {
         } else {
             self.current = self.reload - ((cycles - self.current) % self.reload);
         }
+    }
+
+    fn tick_zero_state_reload(&mut self, cycles: u32) {
+        let to_zero = if self.current == 0 {
+            self.reload + 1
+        } else {
+            self.current
+        };
+        if cycles < to_zero {
+            if cycles != 0 {
+                self.current = to_zero - cycles;
+            }
+            return;
+        }
+        if self.current != 0 || self.reload != 0 {
+            self.count_flag = true;
+            self.pending |= self.control & 2 != 0;
+        }
+        self.current =
+            (self.reload + 1 - (cycles - to_zero) % (self.reload + 1)) % (self.reload + 1);
     }
 
     pub fn pending_exceptions(&self) -> u64 {
@@ -134,6 +168,12 @@ impl SysTick {
 
     pub fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
+            CSR if self.zero_state_reload => self.control = value & 3,
+            RELOAD if self.zero_state_reload => self.reload = value & 0xff_ffff,
+            CURRENT if self.zero_state_reload => {
+                self.current = 0;
+                self.count_flag = false;
+            }
             CSR => {
                 // Renode starts a zero-valued counter at RELOAD when enabled.
                 let enabled = value & 1 != 0;

@@ -130,11 +130,12 @@ impl Nvic {
         }
     }
 
-    pub const RANGES: [(u32, u32); 11] = [
+    pub const RANGES: [(u32, u32); 12] = [
         (ENABLE, PRIORITY_END + 1),
         (VTOR, VTOR + 4),
         (AIRCR, AIRCR + 4),
         (BASE + 0xd00, BASE + 0xd04),
+        (BASE + 0xf00, BASE + 0xf04),
         (BASE + 0xf34, BASE + 0xf38),
         (CPACR, CPACR + 4),
         (BASE + 0xd24, BASE + 0xd30),
@@ -411,6 +412,14 @@ impl Nvic {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
         let offset = address.wrapping_sub(BASE);
+        if width == 4 && offset == 0xf00 && self.has_fpu() {
+            let irq = (value & 0x1ff) as usize;
+            if irq < IRQ_LINES {
+                self.pend(irq / 32, 1 << (irq % 32));
+            }
+            return true;
+        }
+
         if width == 4
             && let Some(mpu) = &mut self.nrf_mpu
         {

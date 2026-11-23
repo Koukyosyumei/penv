@@ -1287,6 +1287,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             )
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
+        if cortex_m4 && let Some(timer) = &mut machine.bus.systick {
+            timer.set_zero_state_reload();
+        }
         machine.primary.configure_cortex_m(vectors, cortex_m4);
         return Ok(machine);
     }

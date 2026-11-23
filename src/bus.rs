@@ -3469,10 +3469,14 @@ impl Bus {
         if address as usize % N != 0 {
             return Err(BusError::Misaligned(address, N).to_string());
         }
-        let value = self.read_ram::<N>(address).map_err(|e| e.to_string())?;
-        self.reservations[0] = self
-            .canonical_ram_address(address, N)
-            .map(|address| (address, N));
+        let canonical = self.canonical_ram_address(address, N);
+        let value = if N == 4 && self.f4_rcc.is_some() {
+            self.read::<N>(address)
+        } else {
+            self.read_ram::<N>(address)
+        }
+        .map_err(|error| error.to_string())?;
+        self.reservations[0] = Some((canonical.unwrap_or(address), N));
         Ok(value)
     }
 
@@ -3480,6 +3484,7 @@ impl Bus {
         &mut self,
         address: u32,
         value: u32,
+        output: &mut impl Write,
     ) -> Result<u32, String> {
         self.check_thumb_access(address, N, true, false)?;
         if address as usize % N != 0 {
@@ -3487,13 +3492,13 @@ impl Bus {
         }
         let canonical = self
             .canonical_ram_address(address, N)
+            .or_else(|| (N == 4 && self.f4_rcc.is_some()).then_some(address))
             .ok_or_else(|| BusError::Unmapped(address, N).to_string())?;
         if self.reservations[0].take() != Some((canonical, N)) {
             return Ok(1);
         }
-        self.memory(address, N)
-            .map_err(|e| e.to_string())?
-            .copy_from_slice(&value.to_le_bytes()[..N]);
+        self.write(address, N, value, output)
+            .map_err(|error| error.to_string())?;
         Ok(0)
     }
 

@@ -207,24 +207,20 @@ impl Thumb {
                     && rm != rt =>
             {
                 r[rm] = if low & 0x10 == 0 {
-                    bus.thumb_store_exclusive::<1>(r[rn], r[rt])?
+                    bus.thumb_store_exclusive::<1>(r[rn], r[rt], output)?
                 } else {
-                    bus.thumb_store_exclusive::<2>(r[rn], r[rt])?
+                    bus.thumb_store_exclusive::<2>(r[rn], r[rt], output)?
                 };
             }
             0xe850..=0xe85e if low & 0xf00 == 0xf00 && !matches!(rt, 13 | 15) => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
-                bus.check_thumb_access(address, 4, false, false)?;
-                r[rt] = bus.load_reserved(0, address).map_err(|e| e.to_string())?;
+                r[rt] = bus.thumb_load_exclusive::<4>(address)?;
             }
             0xe840..=0xe84e
                 if !matches!(rt, 13 | 15) && !matches!(rd, 13 | 15) && rd != rt && rd != rn =>
             {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
-                bus.check_thumb_access(address, 4, true, false)?;
-                r[rd] = bus
-                    .store_conditional(0, address, r[rt])
-                    .map_err(|e| e.to_string())?;
+                r[rd] = bus.thumb_store_exclusive::<4>(address, r[rt], output)?;
             }
             0xe880..=0xe8be | 0xe900..=0xe93e
                 if low.count_ones() >= 2 && low & 0xa000 == 0 && rn < 15 =>
