@@ -159,6 +159,7 @@ enum ScalarValue<'a> {
     Range(u64, u64),
     Enum(Option<&'a str>, &'a str),
     List(Vec<ScalarValue<'a>>),
+    Dictionary(Vec<(ScalarValue<'a>, ScalarValue<'a>)>),
     Object(&'a str, Vec<(&'a str, ScalarValue<'a>)>),
 }
 
@@ -172,6 +173,7 @@ fn parse_value(value: &str, nesting: usize) -> Option<ScalarValue<'_>> {
     }
     let value = value.trim();
     match value {
+        _ if value.starts_with('{') => parse_dictionary(value, nesting).ok(),
         _ if value.starts_with('[') => {
             let body = value.strip_prefix('[')?.strip_suffix(']')?;
             let items = value_items(body, ',')?
@@ -209,6 +211,56 @@ fn parse_value(value: &str, nesting: usize) -> Option<ScalarValue<'_>> {
             .map(ScalarValue::Number)
             .or_else(|| enum_token(value).map(|(kind, member)| ScalarValue::Enum(kind, member))),
     }
+}
+
+fn parse_dictionary(value: &str, nesting: usize) -> Result<ScalarValue<'_>, String> {
+    let body = value
+        .strip_prefix('{')
+        .and_then(|text| text.strip_suffix('}'))
+        .ok_or("Unexpected end of input")?;
+    let mut pairs = Vec::new();
+    for item in value_items(body, ';').ok_or("invalid dictionary separator")? {
+        let (key, remainder) = if item.starts_with('"') {
+            let close = item
+                .match_indices('"')
+                .skip(1)
+                .find(|&(index, _)| !repl_is_escaped(item, index))
+                .map(|(index, _)| index + 1)
+                .ok_or("Unexpected end of input")?;
+            item.split_at(close)
+        } else {
+            let colon = unquoted_delimiters(item, &[':'])
+                .next()
+                .map(|(offset, _)| offset)
+                .ok_or("expected dictionary colon")?;
+            item.split_at(colon)
+        };
+        let key = parse_value(key, nesting + 1).ok_or("invalid dictionary key")?;
+        let remainder = remainder.trim_start();
+        let value = remainder
+            .strip_prefix(':')
+            .ok_or_else(|| unexpected_dictionary_token(remainder))?
+            .trim_start();
+        let value = parse_value(value, nesting + 1).ok_or_else(|| {
+            // Identify a separator after a simple atom without recursively
+            // reparsing candidate prefixes of a malformed collection.
+            let tail = value
+                .find(|c: char| c.is_whitespace() || c == ',')
+                .map(|index| value[index..].trim_start())
+                .filter(|tail| !tail.is_empty())
+                .unwrap_or(value);
+            unexpected_dictionary_token(tail)
+        })?;
+        pairs.push((key, value));
+    }
+    Ok(ScalarValue::Dictionary(pairs))
+}
+
+fn unexpected_dictionary_token(tail: &str) -> String {
+    tail.chars().next().map_or_else(
+        || "Unexpected end of input".to_owned(),
+        |token| format!("unexpected '{token}'"),
+    )
 }
 
 fn value_items(text: &str, separator: char) -> Option<Vec<&str>> {

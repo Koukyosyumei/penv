@@ -1294,3 +1294,78 @@ fn renode_list_value_inline_objects() {
         )]
     );
 }
+
+fn dictionary_syntax(source: &str) -> Result<ScalarValue<'_>, String> {
+    // The grammar assertion operates on the attribute value after parsing the entry.
+    let (_, value) = source
+        .lines()
+        .find_map(|line| line.trim().split_once("dict:"))
+        .unwrap();
+    attribute_syntax(source)?;
+    parse_dictionary(value.trim(), 0)
+}
+
+#[test]
+fn renode_dict_empty() {
+    assert_eq!(
+        dictionary_syntax("\ndevice: Something\n    dict: {}").unwrap(),
+        ScalarValue::Dictionary(vec![])
+    );
+}
+
+fn assert_dictionary_pair(source: &str) {
+    use ScalarValue::*;
+    assert_eq!(
+        dictionary_syntax(source).unwrap(),
+        Dictionary(vec![
+            (Text("key0".into()), Number("0".into())),
+            (Text("key1".into()), Number("1".into())),
+        ])
+    );
+}
+
+#[test]
+fn renode_dict_simple() {
+    assert_dictionary_pair("\ndevice: Something\n    dict: {\"key0\": 0; \"key1\": 1}");
+}
+
+#[test]
+fn renode_dict_trailing_separator() {
+    assert_dictionary_pair("\ndevice: Something\n    dict: {\"key0\": 0; \"key1\": 1;}");
+}
+
+#[test]
+fn renode_dict_missing_closing_brace() {
+    assert!(
+        dictionary_syntax("\ndevice: Something\n    dict: {\"key0\": 0; \"key1\": 1")
+            .unwrap_err()
+            .contains("Unexpected end of input")
+    );
+}
+
+#[test]
+fn renode_dict_comma() {
+    assert!(
+        dictionary_syntax("\ndevice: Something\n    dict: {\"key0\": 0, \"key1\": 1}")
+            .unwrap_err()
+            .contains("unexpected ','")
+    );
+}
+
+#[test]
+fn renode_dict_missing_separator() {
+    assert!(
+        dictionary_syntax("\ndevice: Something\n    dict: {\"key0\": 0 \"key1\": 1}")
+            .unwrap_err()
+            .contains("unexpected '\"'")
+    );
+}
+
+#[test]
+fn renode_dict_missing_colon() {
+    assert!(
+        dictionary_syntax("\ndevice: Something\n    dict: {\"key0\" 0, \"key1\": 1}")
+            .unwrap_err()
+            .contains("unexpected '0'")
+    );
+}
