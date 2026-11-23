@@ -8,6 +8,7 @@ use crate::{
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
     rv64_mpfs::{DdrMock, Sysreg},
+    rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
@@ -19,6 +20,7 @@ pub struct Devices {
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
     pub read_only_words: Vec<(u32, u32)>,
+    pub fire_ihc: Option<Box<FireIhc>>,
     pub fire_media_controller: Option<usize>,
     pub mpfs_sd: Vec<rv64_mpfs_sd::Controller>,
     pub mpfs_ddr: Vec<DdrMock>,
@@ -134,6 +136,11 @@ impl Devices {
             }
         }
         if let Some(plic) = &mut self.plic {
+            if let Some(ihc) = self.fire_ihc.as_ref() {
+                for (source, pending) in ihc.interrupts() {
+                    plic.line(source, pending);
+                }
+            }
             for sd in &self.mpfs_sd {
                 let (source, pending) = sd.interrupt();
                 plic.line(source, pending);
@@ -195,6 +202,13 @@ impl Devices {
         {
             return Some(*value);
         }
+        if let Some(value) = self
+            .fire_ihc
+            .as_ref()
+            .and_then(|ihc| ihc.read(address, width))
+        {
+            return Some(value);
+        }
         if width == 4
             && address == rv64_mpfs_sd::FIRE_MEDIA_SELECT
             && let Some(index) = self.fire_media_controller
@@ -253,6 +267,14 @@ impl Devices {
                 .read_only_words
                 .iter()
                 .any(|&(word, _)| word == address)
+        {
+            return Some(Ok(()));
+        }
+        if self
+            .fire_ihc
+            .as_mut()
+            .and_then(|ihc| ihc.write(address, width, value))
+            .is_some()
         {
             return Some(Ok(()));
         }

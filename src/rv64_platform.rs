@@ -7,6 +7,7 @@ use crate::{
     rv64_devices::{FallbackRange, MpfsCacheWayEnable, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
     rv64_mpfs::{DdrMock, Sysreg},
+    rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_priv::Pmp,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
@@ -361,6 +362,13 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         check_mapping(&machine, entry, rv64_mpfs_sd::FIRE_MEDIA_SELECT, 4)?;
         machine.bus.rv64_devices.mpfs_sd[index].select_sd(false);
         machine.bus.rv64_devices.fire_media_controller = Some(index);
+    }
+    if board_name == Some("beaglev-fire.repl")
+        && cpus.len() == 5
+        && sources >= FireIhc::FIRST_IRQ as u64
+    {
+        check_mapping(&machine, cpus[0].1, FireIhc::BASE, FireIhc::SIZE)?;
+        machine.bus.rv64_devices.fire_ihc = Some(Box::default());
     }
     Ok(machine)
 }

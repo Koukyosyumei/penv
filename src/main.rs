@@ -18,6 +18,7 @@ mod rv64_devices;
 mod rv64_ethernet;
 mod rv64_float;
 mod rv64_mpfs;
+mod rv64_mpfs_ihc;
 mod rv64_mpfs_sd;
 mod rv64_platform;
 mod rv64_priv;
