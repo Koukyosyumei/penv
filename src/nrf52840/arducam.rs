@@ -16,6 +16,8 @@ impl ArduCam {
     pub(super) fn reset(&mut self) {
         *self = Self {
             image: std::mem::take(&mut self.image),
+            frame: std::mem::take(&mut self.frame),
+            position: self.position,
             ..Self::default()
         };
     }

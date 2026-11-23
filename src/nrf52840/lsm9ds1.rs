@@ -26,9 +26,11 @@ impl Lsm9ds1 {
     }
 
     pub(super) fn reset(&mut self) {
-        let samples = std::mem::take(&mut self.samples);
-        *self = Self::new(self.magnetic);
-        self.samples = samples;
+        *self = Self {
+            samples: std::mem::take(&mut self.samples),
+            sample: self.sample,
+            ..Self::new(self.magnetic)
+        };
     }
 
     pub(super) fn imu_samples(&mut self) -> Option<&mut VecDeque<[f64; 3]>> {
