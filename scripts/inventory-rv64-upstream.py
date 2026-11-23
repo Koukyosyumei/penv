@@ -427,6 +427,11 @@ def disposition(path, name, context):
         "Should Read Quad Word At Raw Address", "Should Read Quad Word Zero At Raw Address",
     }:
         return "pass", "Fixed RV64 raw quadword writes and all immediate comparisons verified (rv64-memory-values.md)"
+    if path.name == "memory-assertions.robot":
+        if name == "Should Read Quad Word At Raw Address After":
+            return "pass", "Fixed RV64 ELF store loop and observed quadword transition verified (rv64-memory-values.md)"
+        if name == "Should Read Signed Quad Word At Raw Address":
+            return "partial", "Fixed assertions pass on ARM integration with reduced ISA; fixed REPL is blocked (rv64-memory-values.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"
