@@ -1854,3 +1854,14 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
 で検査すると `Video.STM32LTDC` の型解決で停止します。
 UART・GPIO の実ファームウェア検証やフックの始点と終点の照合は残っています。
 実測は `$work/interrupt-hooks.log` です。両群とも未達です。
+
+### Tock と UART 失敗文字列
+
+`tests/stm32f407-uart-tock.sh target/stm32f407-uart-tock` は固定 Tock RESC、
+カーネル、アプリを使用します。元の RESC は F407 Discovery REPL を選ぶため、
+Tock 起動ケースも対象に戻しました。初回故障は ICTR 読み出し
+（PC 0x08000386、BFAR 0xe000e004、CFSR 0x8200）です。
+診断用 ICTR タグを追加すると次の STMIA で故障します
+（PC 0x08000390、BFAR 0xe000e180）。USART は空で、
+UART 失敗文字列の3件は前提の起動で停止しています。
+診断ログ、終了状態と再現パッチは同作業ディレクトリに保存しました。
