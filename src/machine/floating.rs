@@ -113,9 +113,9 @@ impl Hart {
                     format.convert(source.decode(lhs), rounding()?)
                 }
                 0x0b if rs2 == 0 => format.sqrt(decode_lhs(), rounding()?),
-                0x14 => {
+                0x14 if funct3 <= 2 || (self.zfa_quiet_compare && matches!(funct3, 4 | 5)) => {
                     integer_result = true;
-                    format.compare(lhs, rhs, funct3).ok_or_else(illegal)?
+                    format.compare(lhs, rhs, funct3 & 3, funct3 & 4 != 0)
                 }
                 0x18 => {
                     integer_result = true;

@@ -430,21 +430,18 @@ impl Format {
         }
     }
 
-    pub fn compare(self, lhs: u64, rhs: u64, operation: u32) -> Option<ResultBits> {
-        if operation > 2 {
-            return None;
-        }
+    pub fn compare(self, lhs: u64, rhs: u64, operation: u32, quiet: bool) -> ResultBits {
         let left = self.decode(lhs);
         let right = self.decode(rhs);
         if left.is_nan() || right.is_nan() {
-            return Some(ResultBits::flagged(
+            return ResultBits::flagged(
                 0,
-                if operation == 2 {
+                if quiet || operation == 2 {
                     nan_flags(&[left, right])
                 } else {
                     NV
                 },
-            ));
+            );
         }
         let both_zero = matches!((left.number, right.number), (Number::Zero, Number::Zero));
         let lhs = self.order_key(self.unbox(lhs));
@@ -454,7 +451,7 @@ impl Format {
             1 => lhs < rhs && !both_zero,
             _ => lhs == rhs || both_zero,
         };
-        Some(ResultBits::new(u64::from(condition)))
+        ResultBits::new(u64::from(condition))
     }
 
     pub fn class(self, bits: u64) -> u64 {

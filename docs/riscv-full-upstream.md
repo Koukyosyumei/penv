@@ -1100,3 +1100,24 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 同じ release バイナリで、診断構成の固定 ACT ELF は `fminm`・`fmaxm` 12 件、既存の `fli` 6 件、`fmin`・`fmax` 12 件がすべて完了コード 0 に到達しました。Rust テストも 88 件すべて通過しました。固定 Robot 構成では V の未対応で対象 12 件すべてが CPU 作成時に停止しました。Zfa の残りの命令と固定構成での検証が残り、上流等価合格は累計 155 件です。構成別のケースログ、`results.jsonl` と終了状態は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zfa の静かな浮動小数点比較
+
+V を外した構成で代表の `ZfaF-fleq.s-00.elf` は、最初の `fleq.s` で不正命令になりました。半精度・単精度・倍精度の `fleq` と `fltq` を実装しました。NaN が入力されると比較結果は偽になり、シグナリング NaN の場合に無効演算フラグを立てます。診断用の `CPU.RiscV32` プロパティ `zfaQuietCompare: true` で有効になります。[RISC-V Zfa 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zfa.html)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-832642a-FhHl3j"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/compare.repl" --artifacts "$repro/compare" \
+  "$elfs"/Zfa*/*f{le,lt}q*.elf "$elfs"/Zfa*/*fli*.elf \
+  "$elfs"/Zfa*/*f{min,max}m*.elf "$elfs"/{F,D,Zfh,ZfhD}/*f{eq,le,lt}.*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zfa*/*f{le,lt}q*.elf
+```
+
+診断構成では同じ release バイナリで静かな比較 10 件と、既存の比較・最小最大・即値ロード 33 件がすべて完了コード 0 に到達しました。Rust テストも 88 件すべて通過しました。固定 Robot 構成では V の未対応で対象 10 件すべてが CPU 作成時に停止しました。Zfa の残りの命令と固定構成での検証が残り、上流等価合格は累計 155 件です。構成別のケースログ、`results.jsonl` と終了状態は上記の証拠ディレクトリに保存しました。
