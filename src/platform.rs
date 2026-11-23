@@ -711,7 +711,8 @@ fn parse_content(
         }
         if line.starts_with(char::is_whitespace) {
             let mut attribute = text.to_owned();
-            if inline_model(text).is_some() {
+            let init = matches!(text, "init:" | "init add:");
+            if init || inline_model(text).is_some() {
                 let indent = line.len() - line.trim_start().len();
                 while let Some((_, nested)) = lines.peek() {
                     if !nested.trim().is_empty()
@@ -720,7 +721,12 @@ fn parse_content(
                         break;
                     }
                     attribute.push('\n');
-                    attribute.push_str(lines.next().unwrap().1);
+                    let next = lines.next().unwrap().1;
+                    if init {
+                        attribute.push_str(comments.line(next).map_err(error)?.trim());
+                    } else {
+                        attribute.push_str(next);
+                    }
                 }
             }
             current
@@ -1448,7 +1454,11 @@ fn validate_entry_attributes(entry: &Entry) -> Result<(), String> {
     let mut properties = HashSet::new();
     let mut init = false;
     for (_, text) in &entry.body {
-        if matches!(text.as_str(), "init:" | "init add:") {
+        if text
+            .lines()
+            .next()
+            .is_some_and(|header| matches!(header, "init:" | "init add:"))
+        {
             if std::mem::replace(&mut init, true) {
                 return Err(entry.error("MoreThanOneInitAttribute: duplicate init section"));
             }
@@ -2520,14 +2530,37 @@ fn json_string(value: &str) -> String {
     output
 }
 
+fn init_commands(attribute: &str) -> Option<(&str, Vec<&str>)> {
+    let (header, text) = attribute.split_once('\n').unwrap_or((attribute, ""));
+    if !matches!(header, "init:" | "init add:") {
+        return None;
+    }
+    let mut commands = Vec::new();
+    let mut start = 0;
+    for end in unquoted_delimiters(text, &['\n', ';'])
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+    {
+        let command = text[start..end].trim();
+        if !command.is_empty() {
+            commands.push(command);
+        }
+        start = end + 1;
+    }
+    Some((header, commands))
+}
+
 fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String> {
-    let Some(((_, init), commands)) = entry.body.split_first() else {
-        return Err(entry.error("missing sysbus init"));
+    let [(_, attribute)] = entry.body.as_slice() else {
+        return Err(entry.error("expected a single sysbus init section"));
     };
-    if init != "init:" || entry.registration.is_some() {
+    let Some(("init:", commands)) = init_commands(attribute) else {
+        return Err(entry.error("expected sysbus init"));
+    };
+    if entry.registration.is_some() {
         return Err(entry.error("expected sysbus init"));
     }
-    for (_, command) in commands {
+    for command in commands {
         if let Some(mode) = command.strip_prefix("UnhandledAccessBehaviour ") {
             use crate::bus::UnhandledAccess;
             machine.bus.set_unhandled_access(match mode.trim() {

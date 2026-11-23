@@ -1128,3 +1128,37 @@ fn renode_irq_syntax_local_receiver() {
         )],
     );
 }
+
+fn assert_init_syntax(source: &str, expected: &[&str]) {
+    let entry = attribute_syntax(source).unwrap();
+    let [(_, attribute)] = entry.body.as_slice() else {
+        panic!("expected one init attribute")
+    };
+    let (header, commands) = init_commands(attribute).unwrap();
+    assert_eq!(header, "init:");
+    assert_eq!(commands, expected);
+}
+
+#[test]
+fn renode_init_syntax_one_line() {
+    assert_init_syntax(
+        "\nuart:\n    init:\n        DoSomething 3\n",
+        &["DoSomething 3"],
+    );
+}
+
+#[test]
+fn renode_init_syntax_multiple_lines() {
+    assert_init_syntax(
+        "\nuart:\n    init:\n        Method1 a b\n        Method2 true\n        Method3",
+        &["Method1 a b", "Method2 true", "Method3"],
+    );
+}
+
+#[test]
+fn renode_init_syntax_quoted_semicolon() {
+    assert_init_syntax(
+        "\nuart:\n    init:\n        CallMethod \"string ; with semicolon\"\n",
+        &["CallMethod \"string ; with semicolon\""],
+    );
+}
