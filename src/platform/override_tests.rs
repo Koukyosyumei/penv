@@ -361,3 +361,62 @@ fn renode_irq_capabilities_rejects_missing_source_pin() {
     let error = check_string(source, None).unwrap_err();
     assert!(error.contains("IrqSourcePinDoesNotExist:"));
 }
+
+fn assert_empty_peripheral_mapping(source: &str, expected: (u32, u32)) {
+    let mut entries = Vec::new();
+    let path = Path::new("<platform string>");
+    parse_content(
+        path,
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )
+    .unwrap();
+    let entries = merge_declarations(entries).unwrap();
+    let [mock] = entries.as_slice() else {
+        panic!("expected one mock peripheral")
+    };
+    assert_eq!(mock.name, "mock");
+    assert_eq!(
+        mock.model,
+        "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"
+    );
+    assert_eq!(mock.bus_range().unwrap(), expected);
+}
+
+#[test]
+fn renode_declaration_late_attach() {
+    assert_empty_peripheral_mapping(
+        "\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n\nmock: @sysbus <0x0, +0x100>",
+        (0, 0x100),
+    );
+}
+
+#[test]
+fn renode_declaration_registration_before_type() {
+    assert_empty_peripheral_mapping(
+        "\nmock: @sysbus <0x0, 0x1000>\n\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral",
+        (0, 0x1000),
+    );
+}
+
+#[test]
+fn renode_declaration_duplicate_type() {
+    let source = "\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+    assert!(
+        check_string(source, None)
+            .unwrap_err()
+            .contains("VariableAlreadyDeclared:")
+    );
+}
+
+#[test]
+fn renode_declaration_empty_entry() {
+    assert!(
+        check_string("\nmock:", None)
+            .unwrap_err()
+            .contains("EmptyEntry:")
+    );
+}

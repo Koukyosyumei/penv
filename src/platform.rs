@@ -917,6 +917,13 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut blocks = Vec::new();
     let mut irq_checks = Vec::new();
     for mut entry in entries {
+        if entry.model.is_empty()
+            && entry.registration.is_none()
+            && entry.alias.is_none()
+            && entry.body.is_empty()
+        {
+            return Err(entry.error("EmptyEntry: expected a type, registration, or attributes"));
+        }
         validate_entry_attributes(&entry)?;
         irq_checks.push(validate_entry_irq_shape(&entry));
         if entry.model.is_empty() && entry.name != "sysbus" {
@@ -927,12 +934,12 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             .insert(entry.name.clone(), declarations.len())
             .is_some()
         {
-            return Err(entry.error("duplicate declarations are unsupported"));
+            return Err(entry.error("VariableAlreadyDeclared: duplicate declaration"));
         }
         blocks.push(Entry {
             name: entry.name.clone(),
             model: String::new(),
-            registration: None,
+            registration: entry.registration.take(),
             alias: None,
             body: std::mem::take(&mut entry.body),
             source: entry.source.clone(),
