@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 21 | 35 | 57 | 239 |
-| Renode Infrastructure NUnit | 134 | 27 | 0 | 107 | 9 |
-| 合計 | **247** | **48** | **35** | **164** | **248** |
+| Renode Infrastructure NUnit | 134 | 35 | 0 | 99 | 9 |
+| 合計 | **247** | **56** | **35** | **156** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植35件と未達164件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植35件と未達156件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -191,9 +191,23 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systembus-verification
 
 RESC の `sysbus FindBytes "00 01 02 03 04 05 06 07"` は引用符付き16進文字列とバイトリストを受け付ける。開始・終了アドレスは任意で、指定時は両端を含む。マップされたメモリのみ走査し、隣接領域の間では途中一致を維持し、穴や MMIO では途切れる。検索結果はアドレスリストとして標準出力へ返し、UART の待機履歴には入れない。
 
-CPU コンテキスト付き検索と動的な別名登録は残件。SystemBus の未割り当てアクセス方針とタグの分割を検査する別群も未達に残した。
+CPU コンテキスト付き検索と動的な別名登録は残件。未割り当てアクセス方針とタグの分割は以下を参照。
 
 ```sh
 cargo test --locked systembus
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-findbytes-verification
+```
+
+
+## SystemBus の未割り当てアクセスとタグ
+
+固定 Infrastructure の `SystemBusTests.cs` 41–129行の8ケースと、`SystemBus.cs` の `Tag`、`ReportNonExistingRead`、`ReportNonExistingWrite` を参照した。RESC に `sysbus ReadByte`、`sysbus WriteByte`、`sysbus UnhandledAccessBehaviour`、`sysbus Tag` を追加した。未割り当て領域の既定のモニター読み出しはゼロ。指定可能な方針は `ThrowException`、`ThrowExceptionIfNotTagged`、`DoNotReport`。設定した方針はゲストのスカラー・データアクセスにも使い、従来のゲスト既定動作は設定を省略したときに維持する。
+
+テストはアドレス `0xabcd1234` の既定値とエラー、タグの既定値 `0x42`、`DoNotReport` を指定した場合も例外タグが優先されること、`0x1000`–`0x10ff` の親タグを `0x1010`–`0x101f` の子で分割したときに左右のエラー属性が残ることを確認する。通常のタグは未割り当て領域に対して適用する。ブロック転送の穴の扱いは前節のとおり。
+
+周辺機器自身が返す `CommandError` オブジェクトの同一性、上流のログ報告フィルター、マップ済み周辺機器を置き換えるタグ、ワンショットタグ、SVD メタデータは未移植。
+
+```sh
+cargo test --locked systembus
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systembus-tags-verification
 ```

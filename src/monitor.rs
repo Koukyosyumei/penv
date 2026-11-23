@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    bus::CORTEX_M_STEP_HZ,
+    bus::{CORTEX_M_STEP_HZ, UnhandledAccess},
     machine::{Machine, Stop},
     uart::{UartHistory, UartWaitMode},
 };
@@ -40,6 +40,10 @@ enum Action {
     CpuReset(String),
     CpuPc(String, u32),
     MachineReset,
+    ReadByte(u32),
+    WriteByte(u32, u8),
+    Tag(u32, u32, u64, bool),
+    UnhandledAccess(UnhandledAccess),
     ReadBytes(u32, usize),
     FindBytes(Vec<u8>, u32, u32),
     WriteBytes(u32, Vec<u8>),
@@ -116,6 +120,27 @@ pub fn run(
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset => machine.reset_cortex_m_machine().map(|()| None),
+            Action::ReadByte(address) => machine
+                .bus
+                .read_scalar::<1>(*address, true)
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    writeln!(output.output, "0x{value:02x}").map_err(|e| e.to_string())
+                })
+                .map(|()| None),
+            Action::WriteByte(address, value) => machine
+                .bus
+                .write_scalar(*address, 1, u32::from(*value), &mut output, true)
+                .map_err(|error| error.to_string())
+                .map(|()| None),
+            Action::Tag(start, size, default, throws) => machine
+                .bus
+                .tag(*start, *size, *default, *throws)
+                .map(|()| None),
+            Action::UnhandledAccess(policy) => {
+                machine.bus.unhandled_access = Some(*policy);
+                Ok(None)
+            }
             Action::ReadBytes(address, count) => {
                 read_bus_bytes(machine, *address, *count, output.output).map(|()| None)
             }
@@ -518,6 +543,73 @@ fn execute(
                 crate::parse_address(resolve(address)?)?,
             ))
         }
+        ["sysbus", "UnhandledAccessBehaviour", policy] => {
+            let policy = match resolve(policy)? {
+                "DoNotReport" => UnhandledAccess::DoNotReport,
+                "ThrowException" => UnhandledAccess::ThrowException,
+                "ThrowExceptionIfNotTagged" => UnhandledAccess::ThrowExceptionIfNotTagged,
+                other => return Err(format!("unsupported UnhandledAccessBehaviour {other:?}")),
+            };
+            Some(Action::UnhandledAccess(policy))
+        }
+        ["sysbus", "Tag", ..] => {
+            let args = text["sysbus".len()..].trim_start()["Tag".len()..].trim_start();
+            let (range, remainder) = args
+                .strip_prefix('<')
+                .and_then(|args| args.split_once('>'))
+                .ok_or("expected Tag <start size>")?;
+            let fields = range
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|field| !field.is_empty())
+                .collect::<Vec<_>>();
+            let [start, size] = fields.as_slice() else {
+                return Err("expected Tag <start size>".into());
+            };
+            let (_, options) =
+                quoted_argument(remainder.trim()).ok_or("expected quoted tag name")?;
+            let mut default = None;
+            let mut throws = None;
+            for option in options.split_whitespace() {
+                if let Some(value) = option.strip_prefix("throwException=") {
+                    if throws.is_some() {
+                        return Err("duplicate throwException option".into());
+                    }
+                    throws = Some(
+                        resolve(value)?
+                            .to_ascii_lowercase()
+                            .parse()
+                            .map_err(|_| "invalid throwException value")?,
+                    );
+                } else if default.is_none() {
+                    let value = resolve(option.strip_prefix("defaultValue=").unwrap_or(option))?;
+                    default = Some(
+                        match value.strip_prefix("0x") {
+                            Some(hex) => u64::from_str_radix(hex, 16),
+                            None => value.parse(),
+                        }
+                        .map_err(|_| {
+                            format!("unsupported Tag option or invalid default: {option}")
+                        })?,
+                    );
+                } else {
+                    return Err(format!("unsupported Tag option {option}"));
+                }
+            }
+            Some(Action::Tag(
+                crate::parse_address(resolve(start)?)?,
+                crate::parse_address(resolve(size)?)?,
+                default.unwrap_or(0),
+                throws.unwrap_or(false),
+            ))
+        }
+        ["sysbus", "ReadByte", address] => {
+            Some(Action::ReadByte(crate::parse_address(resolve(address)?)?))
+        }
+        ["sysbus", "WriteByte", address, value] => Some(Action::WriteByte(
+            crate::parse_address(resolve(address)?)?,
+            u8::try_from(crate::parse_address(resolve(value)?)?)
+                .map_err(|_| "byte value out of range")?,
+        )),
         ["sysbus", "ReadBytes", address, count] => Some(Action::ReadBytes(
             crate::parse_address(resolve(address)?)?,
             crate::parse_address(resolve(count)?)? as usize,

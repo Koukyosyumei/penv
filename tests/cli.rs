@@ -202,25 +202,46 @@ sysbus ReadBytes 0 0
 sysbus FindBytes "11 22"
 sysbus FindBytes [0x04, 0x05, 0x06, 0x07] 0xc0000000 0xc0000003
 sysbus FindBytes "04050607" 0xc0000000 0xc0000002
+sysbus ReadByte 0xabcd1234
+sysbus UnhandledAccessBehaviour ThrowExceptionIfNotTagged
+sysbus Tag <0xabcd1200, 0x100> "parent" throwException=True
+sysbus Tag <0xabcd1230 0x10> "child tag" 0x142
+sysbus WriteByte 0xabcd1234 0
+sysbus ReadByte 0xabcd1234
 "#,
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_penv"))
-        .arg("run")
-        .arg("--script")
-        .arg(&script)
-        .output()
-        .unwrap();
-    fs::remove_dir_all(directory).unwrap();
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .arg("run")
+            .arg("--script")
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let run = invoke();
     assert!(run.status.success(), "{run:?}");
     assert_eq!(
         run.stdout,
         concat!(
             "[0x11, 0x22, 0x00, 0x00]\n",
             "[0x00, 0x00, 0x00, 0x00, 0x04, 0x05, 0x06, 0x07]\n",
-            "[]\n[0x0000000e]\n[0xc0000000]\n[]\n",
+            "[]\n[0x0000000e]\n[0xc0000000]\n[]\n0x00\n0x42\n",
         )
         .as_bytes()
+    );
+    let source = fs::read_to_string(&script).unwrap();
+    fs::write(
+        &script,
+        source + "sysbus UnhandledAccessBehaviour DoNotReport\nsysbus WriteByte 0xabcd1240 0\n",
+    )
+    .unwrap();
+    let fault = invoke();
+    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(fault.status.code(), Some(1), "{fault:?}");
+    assert!(
+        String::from_utf8_lossy(&fault.stderr).contains("AddressError at 0xabcd1240"),
+        "{fault:?}"
     );
 }
 

@@ -58,7 +58,9 @@ impl From<String> for InstructionError {
 impl From<BusError> for InstructionError {
     fn from(error: BusError) -> Self {
         match error {
-            BusError::Unmapped(..) | BusError::Misaligned(..) => Self::GuestFault,
+            BusError::Unmapped(..) | BusError::Misaligned(..) | BusError::AddressError(_) => {
+                Self::GuestFault
+            }
             other => Self::Host(other.to_string()),
         }
     }

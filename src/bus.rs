@@ -37,6 +37,7 @@ pub const UART_TX: u32 = 0x1000_0000;
 #[derive(Debug)]
 pub enum BusError {
     Unmapped(u32, usize),
+    AddressError(u32),
     Denied(u32),
     Page(u32),
     Misaligned(u32, usize),
@@ -47,6 +48,7 @@ impl BusError {
     pub fn at_virtual(self, address: u32) -> Self {
         match self {
             Self::Unmapped(_, width) => Self::Unmapped(address, width),
+            Self::AddressError(_) => Self::AddressError(address),
             _ => self,
         }
     }
@@ -58,6 +60,10 @@ impl fmt::Display for BusError {
             Self::Unmapped(address, width) => {
                 write!(f, "unmapped RAM access at {address:#010x} ({width} bytes)")
             }
+            Self::AddressError(address) => write!(
+                f,
+                "Bus access failed with error: AddressError at {address:#010x}"
+            ),
             Self::Page(address) => write!(f, "page fault at {address:#010x}"),
             Self::Denied(address) => write!(
                 f,
@@ -69,6 +75,21 @@ impl fmt::Display for BusError {
             Self::Output(error) => write!(f, "UART: {error}"),
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UnhandledAccess {
+    DoNotReport,
+    ThrowException,
+    ThrowExceptionIfNotTagged,
+}
+
+#[derive(Clone, Copy)]
+struct BusTag {
+    start: u32,
+    end: u32,
+    default: u64,
+    throws: bool,
 }
 
 struct Region {
@@ -107,6 +128,8 @@ pub struct Bus {
     stm32_adc: Option<Stm32F0Adc>,
     stm32_adc_name: Option<String>,
     stm32_dma: Option<Stm32Dma>,
+    tags: Vec<BusTag>,
+    pub unhandled_access: Option<UnhandledAccess>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
     stm32_flash: Option<Stm32F0Flash>,
@@ -657,6 +680,64 @@ impl Bus {
         })
     }
 
+    pub fn tag(&mut self, start: u32, size: u32, default: u64, throws: bool) -> Result<(), String> {
+        let end = size
+            .checked_sub(1)
+            .and_then(|last| start.checked_add(last))
+            .ok_or("tag range must be nonempty and within the 32-bit bus")?;
+        let tag = BusTag {
+            start,
+            end,
+            default,
+            throws,
+        };
+        if let Some(index) = self
+            .tags
+            .iter()
+            .position(|tag| tag.start <= end && start <= tag.end)
+        {
+            let parent = self.tags[index];
+            if start < parent.start || end > parent.end {
+                return Err("subtag must be completely contained in a single existing tag".into());
+            }
+            self.tags.swap_remove(index);
+            if parent.start < start {
+                self.tags.push(BusTag {
+                    end: start - 1,
+                    ..parent
+                });
+            }
+            if end < parent.end {
+                self.tags.push(BusTag {
+                    start: end + 1,
+                    ..parent
+                });
+            }
+        }
+        self.tags.push(tag);
+        Ok(())
+    }
+
+    fn unhandled_value(&self, address: u32, width: usize, monitor: bool) -> Result<u32, BusError> {
+        let tag = self
+            .tags
+            .iter()
+            .find(|tag| tag.start <= address && address <= tag.end);
+        let tagged = tag.is_some() || self.stm32f0_tagged(address, width);
+        if tag.is_some_and(|tag| tag.throws)
+            || self.unhandled_access == Some(UnhandledAccess::ThrowException)
+            || (!tagged
+                && self.unhandled_access == Some(UnhandledAccess::ThrowExceptionIfNotTagged))
+        {
+            return Err(BusError::AddressError(address));
+        }
+        if tagged || monitor || self.unhandled_access == Some(UnhandledAccess::DoNotReport) {
+            let mask = u32::MAX >> (32 - width * 8);
+            return Ok(tag.map_or(0, |tag| tag.default as u32 & mask));
+        }
+        Err(BusError::Unmapped(address, width))
+    }
+
     pub fn map_stm32_can(&mut self, can: Stm32Can) -> Result<(), String> {
         let start = u64::from(can.base);
         let end = start + u64::from(can.size);
@@ -1125,7 +1206,7 @@ impl Bus {
         count: usize,
     ) -> Result<impl Iterator<Item = Result<u8, BusError>> + '_, BusError> {
         Ok(Self::byte_range(address, count)?.map(move |address| {
-            match self.read::<1>(address as u32) {
+            match self.read_mapped::<1>(address as u32) {
                 Ok(value) => Ok(value as u8),
                 Err(BusError::Unmapped(..)) => Ok(0),
                 Err(error) => Err(error),
@@ -1195,7 +1276,7 @@ impl Bus {
             if let Ok(memory) = self.memory(address, 1) {
                 memory[0] = byte;
             } else {
-                match self.write(address, 1, u32::from(byte), uart) {
+                match self.write_mapped(address, 1, u32::from(byte), uart) {
                     Ok(()) | Err(BusError::Unmapped(..)) => {}
                     Err(error) => return Err(error),
                 }
@@ -1246,6 +1327,21 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        self.read_scalar::<N>(address, false)
+    }
+
+    pub fn read_scalar<const N: usize>(
+        &mut self,
+        address: u32,
+        monitor: bool,
+    ) -> Result<u32, BusError> {
+        match self.read_mapped::<N>(address) {
+            Err(BusError::Unmapped(..)) => self.unhandled_value(address, N, monitor),
+            result => result,
+        }
+    }
+
+    fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         #[cfg(test)]
         if N == 1
             && let Some(&value) = self.byte_peripheral.get(&address)
@@ -1414,10 +1510,7 @@ impl Bus {
         {
             return Ok(crc.read(address, N));
         }
-        match self.read_ram::<N>(address) {
-            Err(BusError::Unmapped(..)) if self.stm32f0_tagged(address, N) => Ok(0),
-            result => result,
-        }
+        self.read_ram::<N>(address)
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
@@ -1443,6 +1536,32 @@ impl Bus {
     }
 
     pub fn write(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+        uart: &mut impl Write,
+    ) -> Result<(), BusError> {
+        self.write_scalar(address, width, value, uart, false)
+    }
+
+    pub fn write_scalar(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+        uart: &mut impl Write,
+        monitor: bool,
+    ) -> Result<(), BusError> {
+        match self.write_mapped(address, width, value, uart) {
+            Err(BusError::Unmapped(..)) => {
+                self.unhandled_value(address, width, monitor).map(|_| ())
+            }
+            result => result,
+        }
+    }
+
+    fn write_mapped(
         &mut self,
         address: u32,
         width: usize,
@@ -1663,15 +1782,8 @@ impl Bus {
             }
             return Ok(());
         }
-        match self.memory(address, width) {
-            Ok(bytes) => bytes.copy_from_slice(&value.to_le_bytes()[..width]),
-            Err(error @ BusError::Unmapped(..)) => {
-                if !self.stm32f0_tagged(address, width) {
-                    return Err(error);
-                }
-            }
-            Err(error) => return Err(error),
-        }
+        self.memory(address, width)?
+            .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
     }
 }
@@ -1679,6 +1791,81 @@ impl Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_systembus_unhandled_access_policies() {
+        let mut bus = Bus::default();
+        let missing = 0xabcd_1234;
+        let mut output = io::sink();
+        assert_eq!(bus.read_scalar::<1>(missing, true).unwrap(), 0);
+        assert!(matches!(
+            bus.read::<1>(missing),
+            Err(BusError::Unmapped(..))
+        ));
+        for policy in [
+            UnhandledAccess::ThrowException,
+            UnhandledAccess::ThrowExceptionIfNotTagged,
+        ] {
+            bus.unhandled_access = Some(policy);
+            assert!(
+                matches!(bus.read_scalar::<1>(missing, true), Err(BusError::AddressError(addr)) if addr == missing)
+            );
+            assert!(
+                matches!(bus.write_scalar(missing, 1, 0, &mut output, true), Err(BusError::AddressError(addr)) if addr == missing)
+            );
+        }
+
+        bus.tag(0xabcd_1200, 0x100, 0x42, false).unwrap();
+        bus.write_scalar(missing, 1, 0, &mut output, true).unwrap();
+        assert_eq!(bus.read_scalar::<1>(missing, true).unwrap(), 0x42);
+        assert_eq!(
+            bus.read_bytes(missing, 1).unwrap().next().unwrap().unwrap(),
+            0
+        );
+        bus.unhandled_access = Some(UnhandledAccess::ThrowException);
+        assert!(matches!(
+            bus.read_scalar::<1>(missing, true),
+            Err(BusError::AddressError(_))
+        ));
+    }
+
+    #[test]
+    fn renode_systembus_tag_overrides_unhandled_policy_and_splits() {
+        let mut bus = Bus::default();
+        let mut output = io::sink();
+        bus.tag(0x1000, 0x100, 0, true).unwrap();
+        for policy in [None, Some(UnhandledAccess::DoNotReport)] {
+            bus.unhandled_access = policy;
+            assert!(matches!(
+                bus.read_scalar::<1>(0x1000, true),
+                Err(BusError::AddressError(0x1000))
+            ));
+            assert!(matches!(
+                bus.write_scalar(0x1000, 1, 0, &mut output, true),
+                Err(BusError::AddressError(0x1000))
+            ));
+        }
+        bus.tag(0x1010, 0x10, 0, false).unwrap();
+        assert!(matches!(
+            bus.read_scalar::<1>(0x1000, true),
+            Err(BusError::AddressError(0x1000))
+        ));
+        assert_eq!(bus.read_scalar::<1>(0x1010, true).unwrap(), 0);
+        assert!(matches!(
+            bus.read_scalar::<1>(0x10f0, true),
+            Err(BusError::AddressError(0x10f0))
+        ));
+        assert!(bus.tag(0x100f, 2, 0, false).is_err());
+
+        let mut bus = Bus::default();
+        bus.tag(0x1000, 0x100, 0x42, false).unwrap();
+        bus.write_scalar(0x1000, 1, 0, &mut output, true).unwrap();
+        assert_eq!(bus.read_scalar::<1>(0x1000, true).unwrap(), 0x42);
+        bus.map_ram(0x1000, 0x100).unwrap();
+        bus.write_scalar(0x1000, 1, 0x77, &mut output, true)
+            .unwrap();
+        assert_eq!(bus.read_scalar::<1>(0x1000, true).unwrap(), 0x77);
+    }
 
     #[test]
     fn renode_systembus_bulk_memory_clips_writes_and_zero_fills_gaps() {
