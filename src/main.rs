@@ -130,7 +130,7 @@ fn run() -> Result<ExitCode, String> {
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
-    let mut frame_wait = None;
+    let mut frame_waits = Vec::new();
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
     let mut path = None;
@@ -251,8 +251,8 @@ fn run() -> Result<ExitCode, String> {
                 let event = (step, PathBuf::from(path));
                 if option == "--framebuffer-event" {
                     framebuffer_events.push(event);
-                } else if frame_wait.replace((event.0, event.1, None)).is_some() {
-                    return Err("only one framebuffer wait may be specified".into());
+                } else {
+                    frame_waits.push((event.0, event.1, None));
                 }
             }
             Some("--wait-for-frame-roi") => {
@@ -282,12 +282,7 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .filter(|path| !path.is_empty())
                     .ok_or(FORMAT)?;
-                if frame_wait
-                    .replace((step, PathBuf::from(path), Some(region)))
-                    .is_some()
-                {
-                    return Err("only one framebuffer wait may be specified".into());
-                }
+                frame_waits.push((step, PathBuf::from(path), Some(region)));
             }
             Some("--uart-event") => {
                 let value = args
@@ -583,7 +578,7 @@ fn run() -> Result<ExitCode, String> {
     for (step, path) in framebuffer_events {
         machine.schedule_framebuffer_capture(step, path)?;
     }
-    if let Some((step, path, region)) = frame_wait {
+    for (step, path, region) in frame_waits {
         let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         let reference = litex_video::ReferenceFrame::parse(data)
             .and_then(|frame| match region {
@@ -670,6 +665,9 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    for step in machine.intermediate_frame_matches() {
+        eprintln!("penv: framebuffer matched at step {step}");
+    }
     machine.verify_required_events_completed()?;
     let completed_run_for = stop == Stop::Limit && run_steps == Some(limit);
     if completed_run_for {

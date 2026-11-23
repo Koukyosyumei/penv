@@ -239,15 +239,14 @@ nexys_events=(
 run_expecting_status 0 nexys-video "$nexys_video" --max-steps 730000000 "${nexys_events[@]}" \
     --framebuffer-event "675000000:$artifacts/nexys-video-logo.ppm" \
     --wait-for-frame "700000000:$assets/${frame_url##*/}" \
+    --wait-for-frame-roi "710000000:0:0:75:80:$assets/${roi_url##*/}" \
     --framebuffer-out "$artifacts/nexys-video-motd.ppm"
-run_expecting_status 0 nexys-video-roi "$nexys_video" --max-steps 730000000 "${nexys_events[@]}" \
-    --wait-for-frame-roi "710000000:0:0:75:80:$assets/${roi_url##*/}"
-for name in nexys-video nexys-video-roi; do
-    for marker in 'Booting from SDCard in SD-Mode' "root login on 'console'"; do
-        rg -aqF "$marker" "$artifacts/$name.uart.log"
-    done
-    rg -aqF 'penv: framebuffer matched at step ' "$artifacts/$name.stderr.log"
+for marker in 'Booting from SDCard in SD-Mode' "root login on 'console'"; do
+    rg -aqF "$marker" "$artifacts/nexys-video.uart.log"
 done
+diff -u <(printf '%s\n' 'penv: framebuffer matched at step 708000000' 'penv: framebuffer matched at step 710000000') <(
+    rg -aF 'penv: framebuffer matched at step ' "$artifacts/nexys-video.stderr.log"
+)
 # Compare the MOTD frame and the 75x80 top-left logo ROI to the reference PNGs' RGB.
 {
     printf '%s  %s\n' \
@@ -270,6 +269,22 @@ if sha256(roi).hexdigest() != "e64eaa319a979cfb4bae39ee9e0c1ea2a04c688211a4ebe95
 print(f"{path} (75x80 logo ROI): OK")
 PYTHON
 } > "$artifacts/nexys-video.frames.log"
+python3 - "$artifacts/nexys-video-logo.ppm" "$artifacts/nexys-video-changed.ppm" <<'PYTHON'
+from pathlib import Path
+import sys
+
+pixels = bytearray(Path(sys.argv[1]).read_bytes())
+pixels[len(b"P6\n800 600\n255\n")] ^= 255
+Path(sys.argv[2]).write_bytes(pixels)
+PYTHON
+run_expecting_status 1 nexys-video-negative "$nexys_video" --max-steps 730000000 "${nexys_events[@]}" \
+    --wait-for-frame "700000000:$assets/${frame_url##*/}" \
+    --wait-for-frame-roi "710000000:0:0:75:80:$artifacts/nexys-video-changed.ppm"
+diff -u <(printf '%s\n' 'penv: framebuffer matched at step 708000000') <(
+    rg -aF 'penv: framebuffer matched at step ' "$artifacts/nexys-video-negative.stderr.log"
+)
+rg -aqF 'execution ended before the reference frame matched' "$artifacts/nexys-video-negative.stderr.log"
+rg -aqF "root login on 'console'" "$artifacts/nexys-video-negative.uart.log"
 sd_root=$renode_root/scripts/single-node/litex_vexriscv_sdcard.resc
 sd_fat=$(dirname -- "$0")/fixtures/litex-sd-fat.resc
 prepare_assets "$sd_root"

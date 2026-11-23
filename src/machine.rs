@@ -18,6 +18,8 @@ pub struct Machine {
     next_hart: usize,
     elapsed_steps: u64,
     inputs: VecDeque<(u64, Input)>,
+    queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
+    intermediate_frame_matches: Vec<u64>,
 }
 
 enum Input {
@@ -170,6 +172,8 @@ impl Machine {
             next_hart: 0,
             elapsed_steps: 0,
             inputs: VecDeque::new(),
+            queued_frame_waits: VecDeque::new(),
+            intermediate_frame_matches: Vec::new(),
         }
     }
 
@@ -316,8 +320,21 @@ impl Machine {
         if self.bus.litex_video.is_none() {
             return Err("framebuffer wait requires a LiteX framebuffer".into());
         }
-        self.schedule_input(step, Input::FrameWait(Box::new(reference)));
+        let reference = Box::new(reference);
+        if self
+            .inputs
+            .iter()
+            .any(|(_, input)| matches!(input, Input::FrameWait(_)))
+        {
+            self.queued_frame_waits.push_back((step, reference));
+        } else {
+            self.schedule_input(step, Input::FrameWait(reference));
+        }
         Ok(())
+    }
+
+    pub fn intermediate_frame_matches(&self) -> &[u64] {
+        &self.intermediate_frame_matches
     }
 
     pub fn verify_required_events_completed(&self) -> Result<(), String> {
@@ -369,14 +386,22 @@ impl Machine {
                             .as_ref()
                             .ok_or("no LiteX framebuffer")?;
                         if video.matches(&self.bus, &reference)? {
-                            return Ok((Stop::FrameMatched(self.elapsed_steps), retired));
+                            let Some((step, reference)) = self.queued_frame_waits.pop_front()
+                            else {
+                                return Ok((Stop::FrameMatched(self.elapsed_steps), retired));
+                            };
+                            self.intermediate_frame_matches.push(self.elapsed_steps);
+                            self.schedule_input(
+                                step.max(self.elapsed_steps),
+                                Input::FrameWait(reference),
+                            );
+                        } else {
+                            const FRAME_POLL_STEPS: u64 = 1_000_000;
+                            let next = self.elapsed_steps.checked_add(FRAME_POLL_STEPS).ok_or(
+                                "step counter exhausted before the reference frame matched",
+                            )?;
+                            self.schedule_input(next, Input::FrameWait(reference));
                         }
-                        const FRAME_POLL_STEPS: u64 = 1_000_000;
-                        let next = self
-                            .elapsed_steps
-                            .checked_add(FRAME_POLL_STEPS)
-                            .ok_or("step counter exhausted before the reference frame matched")?;
-                        self.schedule_input(next, Input::FrameWait(reference));
                     }
                     Input::FramebufferCapture(path) => {
                         self.bus.capture_litex_framebuffer(&path).map_err(|error| {

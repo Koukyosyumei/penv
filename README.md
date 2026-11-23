@@ -240,11 +240,11 @@ run_nexys() {
 }
 full="$artifacts/assets/penguin_with_litex_logo.png-s_13404-8664342616adc3edda335db849dd1f5cd1805596"
 roi="$artifacts/assets/penguin_logo.png-s_14782-2e0fc81dbcd56b3ed9c86790fe8d390a935395c5"
-run_nexys --wait-for-frame "700000000:$full"
-run_nexys --wait-for-frame-roi "710000000:0:0:75:80:$roi"
+run_nexys --wait-for-frame "700000000:$full" \
+  --wait-for-frame-roi "710000000:0:0:75:80:$roi"
 ```
 
-上流ファームウェアで、全画面はステップ 708,000,000、左上 75×80 の領域はステップ 710,000,000 で一致し、両方とも終了コード 0 でした。参照 URL の CLI からの取得と Robot Framework のテスター API 互換性は残課題です。
+一度の起動で指定順に画像を待ち、最後の一致で終了します。上流ファームウェアで、全画面はステップ 708,000,000、左上 75×80 の領域はステップ 710,000,000 で一致し、両方とも終了コード 0 でした。参照 URL の CLI からの取得と Robot Framework のテスター API 互換性は残課題です。
 
 ## RV32 riscv_virt の UART とタイマー
 
