@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:-$(mktemp -d)}
 base=${1:?Pass the directory printed by tests/stm32h7-zephyr-smoke.sh}
@@ -77,7 +78,7 @@ emulation RunFor "4.1"
 RESC
             ;;
     esac
-    target/release/penv run --script "$script" --platform-root "$renode" --asset-dir "$assets" \
+    "$penv" run --script "$script" --platform-root "$renode" --asset-dir "$assets" \
         --max-steps 5000000 --uart-log-dir "$work/$scenario" \
         > "$work/$scenario/monitor.log" 2> "$work/$scenario/penv.log"
 done

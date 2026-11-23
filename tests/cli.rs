@@ -5,13 +5,19 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
+fn penv_command() -> Command {
+    let path = std::env::var_os("PENV_BIN")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_penv").into());
+    Command::new(path)
+}
+
 fn upstream_stm32f072_command(fixture: &str, limit: &str) -> Command {
     let root = std::env::var_os("PENV_RENODE_ROOT").expect("set PENV_RENODE_ROOT");
     let assets = std::env::var_os("PENV_RENODE_ASSETS").expect("set PENV_RENODE_ASSETS");
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(fixture);
-    let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+    let mut command = penv_command();
     command
         .args(["run", "--script"])
         .arg(script)
@@ -202,7 +208,7 @@ ram: Memory.MappedMemory @ sysbus 0
         fs::write(&path, format!(
             "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n{commands}"
         )).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", limit, "--script"])
             .arg(&path)
             .output()
@@ -278,7 +284,7 @@ ram: Memory.MappedMemory @ sysbus 0
     fs::write(&script, format!(
         "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\ncpu EnableProfilerCollapsedStack \"trace.txt\" true {limit_arg}\nemulation RunFor \"0.001\"\n"
     )).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--max-steps", "100000", "--script"])
         .arg(&script)
         .output()
@@ -357,7 +363,7 @@ sram: Memory.ArrayMemory @ sysbus 0x20000000
         fs::write(&script, format!(
             "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0x08000000\ncpu VectorTableOffset 0x08000000\n{commands}"
         )).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "10", "--script"])
             .arg(&script)
             .output()
@@ -422,7 +428,7 @@ machine RealTimeClockDateTime
 "#,
     )
     .unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .env("TZ", "UTC0")
         .args(["run", "--script"])
         .arg(&script)
@@ -464,7 +470,7 @@ ram: Memory.MappedMemory @ sysbus 0
             "mach create\nmachine LoadPlatformDescription @board.repl\nemulation CreateUartPtyTerminal \"tmp\" \"{}\" {force}\n",
             link.display()
         )).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--script"])
             .arg(&script)
             .output()
@@ -542,7 +548,7 @@ sysbus ReadByte 0x8_0000_0003
 "#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--max-steps", "100000", "--script"])
         .arg(script)
         .output()
@@ -582,7 +588,7 @@ sysbus ReadDoubleWord 1000
 "#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--max-steps", "1", "--script"])
         .arg(single)
         .output()
@@ -628,7 +634,7 @@ emulation RunFor "0.00000002"
 "#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--max-steps", "2", "--script"])
         .arg(script)
         .output()
@@ -681,7 +687,7 @@ cpu PC
 "#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--max-steps", "18", "--script"])
         .arg(script)
         .output()
@@ -732,7 +738,7 @@ unused: Miscellaneous.Button @ none
          machine UnregisterFromParent sysbus.gpioB\nbutton Release\nsysbus ReadDoubleWord 0x48000410\n",
     ).unwrap();
     let run = || {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "1", "--script"])
             .arg(&script)
             .output()
@@ -810,7 +816,7 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
             .unwrap();
         }
         fs::write(&script, commands).unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        let result = penv_command()
             .args(["run", "--max-steps", "10", "--script"])
             .arg(&script)
             .output()
@@ -918,7 +924,7 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
     let setup = "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n";
     let run = |commands: &str| {
         fs::write(&script, format!("{setup}{commands}")).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "1000", "--script"])
             .arg(&script)
             .output()
@@ -1017,7 +1023,7 @@ ram: Memory.MappedMemory @ sysbus 0
     }
     let path = directory.join("boot.resc");
     fs::write(&path, script).unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--max-steps", "7", "--script"])
         .arg(&path)
         .output()
@@ -1070,7 +1076,7 @@ sysbus ReadByte 0xabcd1234
     )
     .unwrap();
     let invoke = || {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .arg("run")
             .arg("--script")
             .arg(&script)
@@ -1176,7 +1182,7 @@ uart1: UART.STM32F7_USART @ sysbus 0x40004400
     let run = |setup: &str, output: &str, selection: &str| {
         let script = directory.join("boot.resc");
         fs::write(&script, format!("{boot}{setup}{output}{selection}")).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "1000", "--script"])
             .arg(script)
             .output()
@@ -1417,7 +1423,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
             ),
         )
         .unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "20", "--script"])
             .arg(&script)
             .output()
@@ -1471,7 +1477,7 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
             ),
         )
         .unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--stats", "--max-steps", limit, "--script"])
             .arg(&script)
             .output()
@@ -1566,7 +1572,7 @@ flash: Memory.MappedMemory @ sysbus 0x08000000
     )
     .unwrap();
     let command = || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        let mut command = penv_command();
         command.args(["run", "--script"]).arg(&script);
         command
     };
@@ -1655,7 +1661,7 @@ fn runs_raw_and_elf_and_reports_faults() {
     fs::write(&elf, [header.as_slice(), &program].concat()).unwrap();
 
     let command = || {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        let mut command = penv_command();
         command.args(["run", "--ram-mib", "1"]);
         command
     };
@@ -1733,7 +1739,7 @@ clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x0200_0000
     .unwrap();
     fs::write(&firmware, 0x0010_0073u32.to_le_bytes()).unwrap();
     let run = || {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--raw", "--platform"])
             .arg(&board)
             .arg("--platform-root")
@@ -1793,7 +1799,7 @@ uart: UART.Murax_UART @ sysbus 0xf0010000
     )
     .unwrap();
     fs::write(&input, b"Q").unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--raw", "--platform"])
         .arg(&board)
         .arg("--uart-input")
@@ -1822,7 +1828,7 @@ uart: UART.Murax_UART @ sysbus 0xf0010000
     )
     .unwrap();
     for reset in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        let mut command = penv_command();
         command.args(["run", "--raw", "--uart-stdin"]);
         if reset {
             command.arg("--uart-stdin-reset");
@@ -1893,7 +1899,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     image.extend_from_slice(&0x4000_0000u32.to_le_bytes());
     fs::write(&firmware, &image).unwrap();
     let invoke = || {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "1000", "--raw", "--platform"])
             .arg(&board)
             .arg(&firmware)
@@ -1901,7 +1907,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
             .unwrap()
     };
     let output = invoke();
-    let reset = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let reset = penv_command()
         .args([
             "run",
             "--raw",
@@ -1992,7 +1998,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
         [header.as_slice(), &payload, b"E\0\0\0"].concat(),
     )
     .unwrap();
-    let arm_elf = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let arm_elf = penv_command()
         .args(["run", "--platform"])
         .arg(&board)
         .arg(&elf_path)
@@ -2051,7 +2057,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
         0x70, 0x47, // Exception return.
     ]);
     fs::write(&firmware, image).unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--raw", "--max-steps", "32", "--platform"])
         .arg(&board)
         .arg("--uart-input")
@@ -2109,7 +2115,7 @@ timer0: Timers.LiteX_Timer_CSR32 @ { sysbus 0x60002800; sysbus 0xe0002800 }
     ];
     fs::write(raw.as_path(), program.map(u32::to_le_bytes).as_flattened()).unwrap();
     fs::write(&input, b"Q").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--raw", "--platform"])
         .arg(&board)
         .arg("--uart-input")
@@ -2153,7 +2159,7 @@ fn loads_resc_wrappers_with_shared_variables_and_relative_assets() {
     ).unwrap();
     fs::write(board.join("local board.bin"), 0x0010_0073u32.to_le_bytes()).unwrap();
     let run = || {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--script"])
             .arg(&wrapper)
             .output()
@@ -2202,7 +2208,7 @@ fn distinguishes_rv32_act_console_packets_from_tohost_completion() {
         ),
         ("--tohost", "20", 1, &b""[..], "tohost exit code 32"),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        let output = penv_command()
             .args(["run", "--raw", option, "0x80000080", "--max-steps", limit])
             .arg(&raw)
             .output()
@@ -2251,7 +2257,7 @@ gpio: GPIOPort.SiFive_GPIO @ sysbus 0x1191000
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--raw", "--max-steps", "19", "--platform"])
         .arg(&board)
         .arg(&raw)
@@ -2311,7 +2317,7 @@ fn rv64_dtb_passes_hart_ids_and_a_64_bit_pointer() {
         .collect::<Vec<_>>();
     fs::write(&dtb, &bytes).unwrap();
     let invoke = |address: &str| {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--raw", "--rv64", "--harts", "2", "--ram-mib", "1"])
             .args(["--map-ram", "0x100000000:4096", "--dtb"])
             .arg(format!("{address}:{}", dtb.display()))
@@ -2392,7 +2398,7 @@ sysbus:
         .flat_map(u32::to_le_bytes)
         .collect();
     fs::write(&raw, program).unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--raw", "--platform"])
         .arg(&board)
         .arg(&raw)
@@ -2450,7 +2456,7 @@ TopSystemRegisters: Miscellaneous.MPFS_Sysreg @ sysbus 0x20002000
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--raw", "--platform"])
         .arg(&board)
         .arg(&raw)
@@ -2500,7 +2506,7 @@ mac0: Network.CadenceGEM @ { sysbus 0x20110000; sysbus 0x28110000 }
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--raw", "--platform"])
         .arg(&board)
         .arg(&raw)
@@ -2635,7 +2641,7 @@ cpu PC 0x80000000
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let result = penv_command()
         .args(["run", "--max-steps", "2000", "--script"])
         .arg(script)
         .arg("--asset-dir")
@@ -2693,7 +2699,7 @@ emulation RunFor "0"
     .unwrap();
     fs::create_dir(directory.join("uart")).unwrap();
     for simulation in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        let mut command = penv_command();
         command
             .args(["run", "--max-steps", "1", "--script"])
             .arg(&script);
@@ -2739,7 +2745,7 @@ fn renode_repl_reports_duplicate_attribute_before_overlays() {
         )
         .unwrap();
         for simulation in [false, true] {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+            let mut command = penv_command();
             command.args(["run", "--script"]).arg(&script);
             if simulation {
                 command.arg("--uart-log-dir").arg(directory.join("uart"));
@@ -2787,7 +2793,7 @@ ram: Memory.ArrayMemory @ sysbus 0x20000000
             &script,
             format!("mach create\nmachine LoadPlatformDescription @snapshot.repl\nsysbus LoadBinary @boot.bin 0x08000000\ncpu VectorTableOffset 0x08000000\n{actions}"),
         ).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--max-steps", "1000", "--script"])
             .arg(&script)
             .output()
@@ -2831,7 +2837,7 @@ fn cli_setup_memory_preserves_signed_values_on_rv64_and_cortex_m() {
         )
         .unwrap();
         let run = |options: &[&str]| {
-            Command::new(env!("CARGO_BIN_EXE_penv"))
+            penv_command()
                 .args(["run", "--max-steps", "0", "--platform"])
                 .arg(&repl)
                 .args(options)
@@ -2925,7 +2931,7 @@ sysbus ReadByte 0x20
             format!("{cpu}ram: Memory.MappedMemory @ sysbus 0\n    size: 0x40000\n"),
         )
         .unwrap();
-        let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        let result = penv_command()
             .args(["run", "--script"])
             .arg(&script)
             .output()
@@ -2976,7 +2982,7 @@ second: SD.STM32HSDMMC @ sysbus 0x5200a000
                 body.push_str("mach create \"other\"\nmachine LoadPlatformDescription @board.repl\nmachine SdCardFromFile \"card input.img\" sdmmc 0x1000\n");
             }
             fs::write(&script, body).unwrap();
-            let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+            let result = penv_command()
                 .args(["run", "--script"])
                 .arg(&script)
                 .output()
@@ -3036,7 +3042,7 @@ second: Memory.MappedMemory @ sysbus 0x80000020
     fs::write(&elf, image).unwrap();
 
     let invoke = |options: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--platform"])
             .arg(&platform)
             .args(options)
@@ -3088,7 +3094,7 @@ uart: UART.NS16550 @ sysbus 0x10000000
     )
     .unwrap();
     fs::write(&input, b"Q").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+    let output = penv_command()
         .args(["run", "--raw", "--platform"])
         .arg(&board)
         .arg("--uart-input")
@@ -3130,7 +3136,7 @@ uart: UART.NS16550 @ sysbus 0x40000000
     .unwrap();
     let run = |commands: &str| {
         fs::write(&plan, commands).unwrap();
-        Command::new(env!("CARGO_BIN_EXE_penv"))
+        penv_command()
             .args(["run", "--raw", "--platform"])
             .arg(&board)
             .arg("--uart-check")

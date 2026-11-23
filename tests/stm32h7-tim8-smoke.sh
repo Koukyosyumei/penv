@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:?Set PENV_ASSET_DIR to the reference ELF directory}
 base=${1:?Pass the directory printed by tests/stm32h7-zephyr-smoke.sh}
@@ -77,7 +78,7 @@ emulation RunFor "0.00001"
 sysbus ReadDoubleWord $pending
 RESC
 
-target/release/penv run --script "$work/boot.resc" --platform-root "$renode" \
+"$penv" run --script "$work/boot.resc" --platform-root "$renode" \
     --asset-dir "$assets" --max-steps 1500000 --uart-log-dir "$work" \
     > "$work/monitor.log" 2> "$work/penv.log"
 rg -aqF 'Booting STM32H7 Renode Platform Demo' "$work/0.uart.log"

@@ -493,6 +493,7 @@ impl Machine {
             cpu.set_program_counter(u64::from(entry));
         }
         hart.pc = entry;
+        hart.reset_pc_written |= hart.reset_held;
         Ok(())
     }
 
@@ -510,7 +511,6 @@ impl Machine {
             return Err("Zephyr busy-wait hooks currently require Cortex-M".into());
         }
         hart.busy_wait = BusyWait::new(entries);
-        hart.reset_pc_written |= hart.reset_held;
         Ok(())
     }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 work=${1:-$(mktemp -d)}
 renode=${RENODE_ROOT:-../renode}
 test "$(git -C "$renode" rev-parse HEAD)" = c38ac3babcd38a7144b9498e3ca4c2226b76aa37
@@ -79,8 +80,10 @@ failed_message: .asciz "STM32F407 CRC FAIL\n"
 ASM
 "${CLANG:-clang}" --target=arm-none-eabi -mcpu=cortex-m4 -mthumb -nostdlib -fuse-ld=lld \
     -Wl,-T,"$work/crc.ld" "$work/crc.S" -o "$work/crc.elf"
-cargo build --release
-target/release/penv run --platform "$renode/platforms/boards/stm32f4_discovery-kit.repl" \
+if [[ -z ${PENV_BIN:-} ]]; then
+    cargo build --release
+fi
+"$penv" run --platform "$renode/platforms/boards/stm32f4_discovery-kit.repl" \
     --platform-root "$renode" --max-steps 1000 "$work/crc.elf" > "$work/uart.log"
 diff -u <(printf '%s\n' 'STM32F407 CRC DR=49E3C2FB RESET=FFFFFFFF IDR=5A') "$work/uart.log"
 cat "$work/uart.log"

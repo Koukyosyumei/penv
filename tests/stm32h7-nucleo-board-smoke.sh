@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:-$(mktemp -d)}
 base=${1:-}
@@ -65,7 +66,7 @@ sysbus ReadDoubleWord 0x58020414
 RESC
     fi
     status=0
-    target/release/penv run --script "$script" --platform-root "$renode" --asset-dir "$assets" \
+    "$penv" run --script "$script" --platform-root "$renode" --asset-dir "$assets" \
         --max-steps 10000000 --uart-log-dir "$work/$scenario" \
         > "$work/$scenario/monitor.log" 2> "$work/$scenario/penv.log" || status=$?
     printf '%s\n' "$status" > "$work/$scenario/exit"

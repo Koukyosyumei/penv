@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 work=${1:-target/stm32f407-timed-tests}
 renode=$(realpath "${RENODE_ROOT:-../renode}")
 mkdir -p "$work"
-cargo build --release
+if [[ -z ${PENV_BIN:-} ]]; then
+    cargo build --release
+fi
 
 cat > "$work/rtc-32khz.repl" <<'REPL'
 using "platforms/cpus/stm32f4.repl"
@@ -28,7 +31,7 @@ machine LoadPlatformDescription @$(realpath "$platform")
 sysbus LoadELF @$(basename "$elf")
 showAnalyzer sysbus.usart2
 RESC
-    target/release/penv run --script "$work/$name.resc" --platform-root "$renode" \
+    "$penv" run --script "$work/$name.resc" --platform-root "$renode" \
         --virtual-mips 100 --f4-repl-timing --uart-check "$work/$name.tsv" \
         >"$work/$name.log" 2>"$work/$name-check.log" || {
         cat "$work/$name-check.log" "$work/$name.log" >&2

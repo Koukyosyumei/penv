@@ -259,7 +259,7 @@ for version in 420 440; do
                 expected='temp -9.31 Cel, pressure 101.325000 kPa' ;;
         esac
         status=0
-        target/release/penv run --script "$sample/poll.resc" \
+        "$penv" run --script "$sample/poll.resc" \
             --platform-root "$renode" --asset-dir "$assets" --max-steps 1500000 "$elf" \
             > "$sample/uart.log" 2> "$sample/penv.log" || status=$?
         if [[ $status != 2 ]] || ! rg -aqF "$expected" "$sample/uart.log"; then

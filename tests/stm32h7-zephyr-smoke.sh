@@ -239,7 +239,7 @@ for command in '0x4001482c 32' '0x580244e8 32 0x40000' '0x4001482c 32' \
     step=$((step + 150000))
 done
 status=0
-target/release/penv run --script "$work/boot.resc" \
+"$penv" run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" > "$work/tim17-uart.log" 2> "$work/tim17-penv.log" || status=$?
 expected=$(printf '%s\n' 0x0 0x0 0xffff 0x42 0x1 0x400000 0x40000 0x0 0xffff 0x0 0x0 0x0)

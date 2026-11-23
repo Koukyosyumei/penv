@@ -14,7 +14,7 @@ tests/stm32f407-freertos-smoke.sh "$work/loopback"
 
 # STM32F4_Discovery.robot: Peripheral Export File Created.
 map="$work/peripherals.json"
-target/release/penv peripherals export "$map" \
+"$penv" peripherals export "$map" \
     --platform "$renode/platforms/cpus/stm32f4.repl" --platform-root "$renode"
 test -f "$map" && test -s "$map"
 for marker in 'Peripheral Map 1.0' SynopsysEthernetMAC STM32_GPIOPort STM32F4_RCC; do
