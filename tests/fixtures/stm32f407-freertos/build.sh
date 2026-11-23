@@ -22,6 +22,6 @@ port="$kernel/portable/GCC/ARM_CM3"
     -std=c11 -Os -ffreestanding -ffunction-sections -fdata-sections \
     -I"$fixture" -I"$fixture/freestanding" -I"$kernel/include" -I"$port" \
     -nostdlib -fuse-ld=lld -Wl,--gc-sections -T "$fixture/memory.ld" \
-    "$fixture/startup.S" "$fixture/firmware.c" "$fixture/can.c" "$fixture/spi.c" "$fixture/freestanding/string.c" \
+    "$fixture/startup.S" "$fixture/firmware.c" "$fixture/can.c" "$fixture/spi.c" "$fixture/i2c.c" "$fixture/freestanding/string.c" \
     "$kernel/tasks.c" "$kernel/list.c" "$kernel/queue.c" "$port/port.c" -o "$work/freertos.elf"
 cp "$fixture/board.repl" "$fixture/boot.resc" "$work/"

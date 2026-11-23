@@ -228,6 +228,7 @@ STM32F407 FreeRTOS V11.1.0
 PWR ready OK
 CAN loopback OK
 SPI IRQ and DMA OK
+I2C echo 01 23 and NACK OK
 task A tick=01
 task B tick=03
 TIM2 queue=1
@@ -250,11 +251,11 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 49 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 51 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `b238a3f9924fcf803dabcb65a42cfa8266d93b50b1444a533c21fdeb5a866c6b` です。
+  SHA-256 は `b56d356383c27a596d14af477ef6df42e1343b9eaeb5562532fd4a536ee0dfd4` です。
 
 ### CAN1/CAN2 のローカル検証
 
@@ -306,6 +307,27 @@ SPI は転送を同期完了として扱います。SCK/NSS とビット時間�
 スレーブ、片方向・受信専用モード、CRC 計算、I2S、ループバック以外の SPI 接続先、
 送信 DMA、DMA の CHSEL による要求の選択は残課題です。
 
+### STM32F407 の I2C
+
+上流と同じ `I2C.STM32F1_I2C` 宣言を使用し、イベント・エラー割り込みを I2C1 は
+NVIC 31/32、I2C2 は 33/34、I2C3 は 72/73 に配線します。旧世代レジスター構成の
+7 ビットマスター送受信、反復 START、STOP、アドレス NACK を扱います。ADDR は SR1、SR2
+の順に読むと解除され、AF は SR1 の該当ビットへのゼロ書き込みで解除されます。
+[Renode の STM32F1_I2C モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b6a841a013db85/src/Emulator/Peripherals/Peripherals/I2C/STM32F1_I2C.cs)
+[RM0090 の I2C 章](https://www.st.com/resource/en/reference_manual/rm0090-stm32f407-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+
+検証用 REPL は `Mocks.EchoI2CDevice` を I2C1 のアドレス `0x10` に接続します。
+上流の ZynqMP エコーテストの `01 23 45` を書いて反復 START から `01 23` を読む
+ケースを FreeRTOS ELF に移植しました。ファームウェアはイベント IRQ で送受信し、
+未接続の `0x11` へのアクセスでエラー IRQ を確認して `I2C echo 01 23 and NACK OK`
+を出力します。Zedboard の 20 バイト書き込み・21 バイト読み出しも Rust テストに移植し、
+最後のゼロ埋めまで確認します。
+[Renode の ZynqMP エコーテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/zynqmp_linux.robot#L143)
+[Renode の Zedboard エコーテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/Zedboard.robot#L291)
+
+SCL/SDA の信号とタイミング、RCC クロックゲート、10 ビットアドレス、スレーブ動作、
+DMA、SMBus、バス仲裁、エコー以外の接続先は残課題です。
+
 ### 未変更の上流 REPL
 
 `../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` で確認しました。
@@ -332,9 +354,9 @@ target/release/penv run --script "$work/upstream.repro.resc" \
 ```
 
 `10cea9f` では `stm32f4.repl:31` の CAN、`2fb7018` では 47 行目の PWR、
-`ddd976f` では 130 行目の `SPI.STM32SPI` で停止しました。現在は SPI1〜3 の宣言を通過し、
-`stm32f4.repl:143: i2c1: unsupported platform model "I2C.STM32F1_I2C"` で終了コード 1 に
-なります。上流 REPL での ELF 起動には I2C 以降の対応が必要です。
+`ddd976f` では 130 行目の SPI、`9348d9c` では 143 行目の `I2C.STM32F1_I2C`
+で停止しました。現在は I2C1〜3 の宣言を通過し、`stm32f4.repl:165: iwdg: unsupported platform model "Timers.STM32_IndependentWatchdog"`
+で終了コード 1 になります。上流 REPL での ELF 起動には IWDG 以降の対応が必要です。
 
 残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
 浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの

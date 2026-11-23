@@ -17,6 +17,7 @@ use crate::{
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
     stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
+    stm32f1_i2c::F1I2c,
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
     stm32f4_spi::F4Spi,
@@ -109,6 +110,7 @@ pub struct Bus {
     h7_spi: Vec<Spi>,
     f4_spi: Vec<F4Spi>,
     h7_i2c: Vec<I2c>,
+    f1_i2c: Vec<F1I2c>,
     h7_rng: Vec<Rng>,
     h7_qspi: Vec<Qspi>,
     h7_timers: Vec<H7Timer>,
@@ -446,6 +448,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_f1_i2c(&mut self, i2c: F1I2c) -> Result<(), String> {
+        self.check_peripheral_range(i2c.base, F1I2c::SIZE)?;
+        self.f1_i2c.push(i2c);
+        Ok(())
+    }
+
     pub fn map_h7_i2c(&mut self, i2c: I2c) -> Result<(), String> {
         self.check_peripheral_range(i2c.base, I2c::SIZE)?;
         self.h7_i2c.push(i2c);
@@ -592,6 +600,7 @@ impl Bus {
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE)))
                 .chain(self.f4_spi.iter().map(|spi| (spi.base, F4Spi::SIZE)))
                 .chain(self.h7_spi.iter().map(|spi| (spi.base, Spi::SIZE)))
+                .chain(self.f1_i2c.iter().map(|i2c| (i2c.base, F1I2c::SIZE)))
                 .chain(self.h7_i2c.iter().map(|i2c| (i2c.base, I2c::SIZE)))
                 .chain(self.h7_rng.iter().map(|rng| (rng.base, Rng::SIZE)))
                 .chain(self.h7_qspi.iter().map(|qspi| (qspi.base, Qspi::SIZE)))
@@ -775,6 +784,7 @@ impl Bus {
                         .filter(|spi| spi_clocked(control, spi))
                         .filter_map(Spi::interrupt),
                 )
+                .chain(self.f1_i2c.iter().flat_map(F1I2c::interrupts))
                 .chain(
                     self.h7_i2c
                         .iter()
@@ -1285,6 +1295,11 @@ impl Bus {
                 0
             });
         }
+        if address as usize & (N - 1) == 0
+            && let Some(i2c) = self.f1_i2c.iter_mut().find(|i2c| i2c.contains(address))
+        {
+            return Ok(i2c.read(address, N));
+        }
         if matches!(N, 1 | 2 | 4)
             && address as usize & (N - 1) == 0
             && let Some(i2c) = self.h7_i2c.iter().find(|i2c| i2c.contains(address))
@@ -1720,6 +1735,10 @@ impl Bus {
                     }
                 }
             }
+            return Ok(());
+        }
+        if let Some(i2c) = self.f1_i2c.iter_mut().find(|i2c| i2c.contains(address)) {
+            i2c.write(address, width, value);
             return Ok(());
         }
         if let Some(i2c) = self.h7_i2c.iter_mut().find(|i2c| i2c.contains(address)) {

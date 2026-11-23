@@ -2,6 +2,7 @@ STM32F407 FreeRTOS V11.1.0
 PWR ready OK
 CAN loopback OK
 SPI IRQ and DMA OK
+I2C echo 01 23 and NACK OK
 task A tick=01
 task B tick=03
 TIM2 queue=1

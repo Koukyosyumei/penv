@@ -10,6 +10,7 @@ use crate::{
     nvic::IRQ_LINES,
     stm32_can::StmCan,
     stm32_uart::{Stm32Irq, UsartLayout},
+    stm32f1_i2c::F1I2c,
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
     stm32f4_spi::F4Spi,
@@ -417,6 +418,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 || stm32h7_adc_platform::is_device(&entry.model)
                 || stm32h7_gpio_platform::is_device(&entry.model)
                 || entry.model == stm32h7_rtc_platform::RTC
+                || matches!(entry.model.as_str(), F1I2c::MODEL | F1I2c::ECHO_MODEL)
                 || matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL)
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
@@ -541,6 +543,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         configure_stm32_can(&stm32_can, nvic, &mut machine)?;
         configure_f4_spi(&entries, nvic, &mut machine)?;
+        configure_f1_i2c(&entries, nvic, &mut machine)?;
         let mut uart_irq = None;
         if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
@@ -726,6 +729,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             nvic.map(|entry| entry.name.as_str()),
         )?;
         return Ok(machine);
+    }
+    if let Some(entry) = entries
+        .iter()
+        .find(|entry| matches!(entry.model.as_str(), F1I2c::MODEL | F1I2c::ECHO_MODEL))
+    {
+        return Err(entry.error("STM32F1 I2C requires a Cortex-M CPU"));
     }
     if let Some(entry) = entries
         .iter()
@@ -995,6 +1004,59 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_f1_i2c(
+    entries: &[Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let mut controllers = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.model == F1I2c::MODEL) {
+        let mut i2c = F1I2c::new(entry.address()?);
+        for (_, text) in &entry.body {
+            let (output, target, input) =
+                crate::stm32h7_board_platform::wire(text).map_err(|error| entry.error(error))?;
+            let route = match output {
+                "EventInterrupt" if i2c.event.is_none() => &mut i2c.event,
+                "ErrorInterrupt" if i2c.error.is_none() => &mut i2c.error,
+                _ => return Err(entry.error("unsupported or duplicate I2C interrupt output")),
+            };
+            if !nvic.is_some_and(|nvic| nvic.name == target) {
+                return Err(entry.error("expected I2C interrupt connected to NVIC"));
+            }
+            *route = Some(Stm32Irq::Nvic(
+                irq_index(input, IRQ_LINES as u32).map_err(|error| entry.error(&error))?,
+            ));
+        }
+        controllers.push((entry, i2c));
+    }
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == F1I2c::ECHO_MODEL)
+    {
+        keys(entry, &[])?;
+        let (parent, address) = entry
+            .registration
+            .as_deref()
+            .and_then(|registration| registration.split_once(char::is_whitespace))
+            .ok_or_else(|| entry.error("expected I2C controller and target address"))?;
+        let (_, controller) = controllers
+            .iter_mut()
+            .find(|(entry, _)| entry.name == parent)
+            .ok_or_else(|| entry.error("expected echo attached to STM32F1 I2C"))?;
+        let address = irq_index(address, 128).map_err(|error| entry.error(&error))?;
+        if !controller.attach_echo(address) {
+            return Err(entry.error("duplicate I2C target address"));
+        }
+    }
+    for (entry, controller) in controllers {
+        machine
+            .bus
+            .map_f1_i2c(controller)
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
 }
 
 fn configure_f4_spi(

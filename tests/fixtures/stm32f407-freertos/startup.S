@@ -30,7 +30,12 @@
 .word firmware_fault
 .endr
 .word tim2_irq
-.rept 6
+.rept 2
+.word firmware_fault
+.endr
+.word i2c1_event_irq
+.word i2c1_error_irq
+.rept 2
 .word firmware_fault
 .endr
 .word spi1_irq
