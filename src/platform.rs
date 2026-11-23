@@ -158,11 +158,45 @@ enum ScalarValue<'a> {
     Reference(&'a str),
     Range(u64, u64),
     Enum(Option<&'a str>, &'a str),
+    List(Vec<ScalarValue<'a>>),
+    Object(&'a str, Vec<(&'a str, ScalarValue<'a>)>),
 }
 
 fn scalar_value(value: &str) -> Option<ScalarValue<'_>> {
+    parse_value(value, 0)
+}
+
+fn parse_value(value: &str, nesting: usize) -> Option<ScalarValue<'_>> {
+    if nesting >= 64 {
+        return None;
+    }
     let value = value.trim();
     match value {
+        _ if value.starts_with('[') => {
+            let body = value.strip_prefix('[')?.strip_suffix(']')?;
+            let items = value_items(body, ',')?
+                .into_iter()
+                .map(|item| parse_value(item, nesting + 1))
+                .collect::<Option<_>>()?;
+            Some(ScalarValue::List(items))
+        }
+        _ if value.starts_with("new ") => {
+            let (model, body) = value.strip_prefix("new ")?.split_once('{')?;
+            let model = model.trim();
+            if !model.split('.').all(is_repl_identifier) {
+                return None;
+            }
+            let body = body.strip_suffix('}')?;
+            let properties = value_items(body, ';')?
+                .into_iter()
+                .map(|attribute| {
+                    let (key, value) = attribute.split_once(':')?;
+                    let key = key.trim();
+                    is_repl_identifier(key).then_some((key, parse_value(value, nesting + 1)?))
+                })
+                .collect::<Option<_>>()?;
+            Some(ScalarValue::Object(model, properties))
+        }
         "true" | "True" => Some(ScalarValue::Boolean(true)),
         "false" | "False" => Some(ScalarValue::Boolean(false)),
         _ if value.starts_with('"') => quoted_string(value).map(ScalarValue::Text),
@@ -175,6 +209,41 @@ fn scalar_value(value: &str) -> Option<ScalarValue<'_>> {
             .map(ScalarValue::Number)
             .or_else(|| enum_token(value).map(|(kind, member)| ScalarValue::Enum(kind, member))),
     }
+}
+
+fn value_items(text: &str, separator: char) -> Option<Vec<&str>> {
+    let mut items = Vec::new();
+    let mut delimiters = Vec::new();
+    let mut start = 0;
+    if text.trim().is_empty() {
+        return Some(items);
+    }
+    for (offset, character) in unquoted_delimiters(text, &['[', ']', '{', '}', '<', '>', ',', ';'])
+    {
+        match character {
+            '[' => delimiters.push(']'),
+            '{' => delimiters.push('}'),
+            '<' => delimiters.push('>'),
+            ']' | '}' | '>' if delimiters.pop() != Some(character) => return None,
+            character if character == separator && delimiters.is_empty() => {
+                let item = text[start..offset].trim();
+                if item.is_empty() {
+                    return None;
+                }
+                items.push(item);
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    if !delimiters.is_empty() {
+        return None;
+    }
+    let last = text[start..].trim();
+    if !last.is_empty() {
+        items.push(last);
+    }
+    Some(items)
 }
 
 fn hexadecimal_unsigned(value: &str) -> Option<u64> {

@@ -1218,3 +1218,79 @@ fn renode_typed_scalar_escaped_backslashes() {
     assert!(entry.model.is_empty());
     assert_eq!(typed_attributes(&entry), [("string", ScalarValue::Text("\\escaped backslash: \\, two in a row: \\\\, before quote: \\\", and one at the end: \\".into()))]);
 }
+
+#[test]
+fn renode_list_value_empty() {
+    let entry = attribute_syntax("\ndevice: Something\n    list: []").unwrap();
+    assert_eq!(
+        typed_attributes(&entry),
+        [("list", ScalarValue::List(vec![]))]
+    );
+}
+
+#[test]
+fn renode_list_value_trailing_comma() {
+    use ScalarValue::*;
+    let entry = attribute_syntax("\ndevice: Something\n    list: [1, 0x10, 3,]").unwrap();
+    assert_eq!(
+        typed_attributes(&entry),
+        [(
+            "list",
+            List(vec![
+                Number("1".into()),
+                Number("0x10".into()),
+                Number("3".into())
+            ])
+        )]
+    );
+}
+
+#[test]
+fn renode_list_value_nested() {
+    use ScalarValue::*;
+    let entry = attribute_syntax("\ndevice: Something\n    eye: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]")
+        .unwrap();
+    let rows = [["1", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]];
+    let expected = rows.map(|row| List(row.into_iter().map(|v| Number(v.into())).collect()));
+    assert_eq!(typed_attributes(&entry), [("eye", List(expected.into()))]);
+}
+
+#[test]
+fn renode_list_value_mixed_scalars() {
+    use ScalarValue::*;
+    let entry =
+        attribute_syntax("\ndevice: Something\n    list: [1, \"hello\", true, other, <0, +10>]")
+            .unwrap();
+    assert_eq!(
+        typed_attributes(&entry),
+        [(
+            "list",
+            List(vec![
+                Number("1".into()),
+                Text("hello".into()),
+                Boolean(true),
+                Reference("other"),
+                Range(0, 10),
+            ])
+        )]
+    );
+}
+
+#[test]
+fn renode_list_value_inline_objects() {
+    use ScalarValue::*;
+    let entry = attribute_syntax("\ndisplay: Display\n    resolutions: [new Point { x: 640; y: 480 }, new Point { x: 5120; y: 2160 }]\n").unwrap();
+    let point = |x: &str, y: &str| {
+        Object(
+            "Point",
+            vec![("x", Number(x.into())), ("y", Number(y.into()))],
+        )
+    };
+    assert_eq!(
+        typed_attributes(&entry),
+        [(
+            "resolutions",
+            List(vec![point("640", "480"), point("5120", "2160")])
+        )]
+    );
+}
