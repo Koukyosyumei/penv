@@ -1,5 +1,7 @@
 mod bitmanip;
 mod floating;
+#[cfg(test)]
+mod upstream_tests;
 
 use std::io::Write;
 

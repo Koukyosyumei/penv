@@ -221,6 +221,44 @@ python3 scripts/verify-starlight.py "$out/assets" --ports 30457 30458 \
 
 Linux `5.10.6-penv-gpio` で GPIO 再起動ドライバーへのバインドを確認しました。ゲスト A の標準 `reboot` からサービス停止、`Restarting system`、2 回目の OpenSBI、UART 再認証まで自動確認しました。再ログイン後の `id -u` は `0`、`uname -m` は `riscv64` を返し、56 バイトと 3200 バイトの ping は両方向で各 10/10 応答しました。ホスト側のリセットエスケープは無効のまま検証しました。`cargo test` は全 48 件通過しました。物理ボードでの検証とウォームリセット時の RAM 保持は残課題です。
 
+### 上流 Renode の RV64 ケース対応
+
+棚卸しの参照点は `../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` です。上流の `platforms/cpus/riscv_virt.repl` は RV32 定義で、このリビジョンの Robot スイートには RV64 virt の Linux 起動ケースが見当たりません。RV64 virt の実ファームウェア検証は上記の OpenSBI FW_JUMP 手順で行い、RV64 CPU に共通する次のケースを Robot から Rust に移植しました。上流の `VirtioMMIOConsole.robot` は Cortex-A53/Zephyr を対象とします。[Renode riscv_virt.repl](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/riscv_virt.repl) [Renode VirtioMMIOConsole.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/peripherals/VirtioMMIOConsole.robot)
+
+| 上流ケース | 移植先と確認内容 |
+| --- | --- |
+| `riscv-priv.robot` の `Should Increment MCYCLE RV64` / `Should Increment MINSTRET RV64` | `increments_mcycle` / `increments_minstret`。CSR 読み出し間の差分が 2 |
+| 同 `Should Inhibit MCYCLE RV64` / `Should Inhibit MINSTRET RV64` | `inhibits_mcycle` / `inhibits_minstret`。抑止中の差分が 0 |
+| 同 `Should Inhibit MCYCLE After Write Finishes RV64` / `Should Inhibit MINSTRET After Write Finishes RV64` | `inhibits_mcycle_after_write_finishes` / `inhibits_minstret_after_write_finishes`。抑止を書き替える命令を境界にした差分が 2 |
+| 同 `Should Trap On SFENCE.VMA In User Mode RV64` | `traps_sfence_vma_in_user_mode`。例外の入口、原因 2、`mepc` |
+| `riscv-amocas.robot` の `Amocas.{w,d,q} On RV64 Should Set Value At Single-Page Memory Location` | `amocas_{w,d,q}_changes_single_page_on_match`。旧値の返却、置換、アドレス・置換レジスター、書き込み幅 |
+| 同 `Amocas.{w,d,q} On RV64 Shouldn't Set Value At Single-Page Memory Location` | `amocas_{w,d,q}_preserves_single_page_on_mismatch`。旧値の返却とメモリ保持 |
+
+Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジスター設定と Step を Rust のレジスター初期化と実際の命令実行に置き換えました。`amocas.w` は旧値の下位 32 ビットに加えて、RV64 での符号拡張を検証します。ページ境界またぎ、MMIO、他の AMO、残りの特権・PMP・ISA 拡張ケースは未移植です。[Renode riscv-priv.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-priv.robot) [Renode riscv-amocas.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-amocas.robot)
+
+| BeagleV の上流ケース | CLI での対応 |
+| --- | --- |
+| StarLight `Should Boot U-Boot` | 両ゲストの UART3 で OpenSBI v0.9、StarFive、U-Boot 2021.01、`dwmac.10020000` を順に照合 |
+| StarLight `Should Provide Two Linux Machines With Ethernet Connection` | U-Boot 確認後にローカルスイッチを起動し、両ゲストにログインして上流と同じ MAC・IPv4・MTU 440 を設定 |
+| StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
+| StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
+| StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
+| Fire `Should Boot Buildroot From SD Card` | PolarFire の HSS・SD カード起動経路のため保留 |
+
+CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
+
+`monitor-tests.robot` にも Fire の REPL を使うケースがあります。配列プロパティ設定、`Select` の整形、スカラー型エラーを検証する Monitor ケースなので、UART 起動や RV64 CPU の優先ケースとは別に保留しました。[Renode monitor-tests.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/monitor-tests.robot)
+
+```sh
+cargo test rv64::upstream_tests
+cargo test
+cargo build --release
+python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
+  --switch-port 30456 --upstream-cases --logs target/rv64-upstream-tests/starlight
+```
+
+移植した Rust ケース 13 件を含む `cargo test` 全 62 件と、StarLight の CLI ケース 4 件が通過しました。56 バイトと 3200 バイトは各 10/10 応答で、`eth0` IRQ は A が 3 → 61、B が 3 → 54 でした。RV64 virt の OpenSBI v1.6 → Linux 5.10.6 も再実行し、UART ログイン後の `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。
