@@ -1684,3 +1684,28 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
 MUX の選択・有効状態と出力接続は、検証用 REPL の起動時に設定しています。
 元の Robot の同一マシン上の `OnGPIO`、`ConnectOutput`、`IsFloating` の戻り値、
 動的登録・`Transmit` は共有モニター対応待ちのため、両ケースは部分移植です。
+
+### Discovery 2台の F429 Zephyr TCP エコー
+
+固定上流 `nucleo_f429zi.robot:28` の公開サーバー・クライアント ELF を
+未変更 Discovery REPL でロードし、両機の Ethernet を仮想スイッチに接続します。
+
+```sh
+work=target/stm32f407-f429-echo
+mkdir -p "$work"
+cargo test > "$work/cargo.log" 2>&1
+cargo build --release
+tests/stm32f407-f429-echo.sh "$work" > "$work/case.log" 2>&1
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+再現スクリプトは現状コード1、エミュレーターはコード2で終了します。
+100万ラウンド時点でサーバーの PC は `0x08018af4`、クライアントは
+`0x08018a08` で、どちらもそれぞれの ELF の `arch_system_halt` 内です。
+最初の `Initializing network` を含め UART 出力は空です。停止原因の特定と、
+機器別 UART 出力で Robot の順序、8秒の待機と4往復を照合する共有経路が残っています。
+
+別の `arm-cortex-m-fpu.robot:105` は
+`target/release/penv platform check --file ../renode/platforms/cpus/nxp-k6xf.repl`
+で `UART.K6xF_UART` の型解決が停止します。ログは `$work/k6xf.log` です。
+元の ELF で32仮想秒以内の `PROJECT EXECUTION SUCCESSFUL` を確認する条件が残っています。
