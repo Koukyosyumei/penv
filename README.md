@@ -302,17 +302,58 @@ tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
 
 参照元は Renode の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` に固定しました。以下のパスはこのリビジョンからの相対パスです。[Renode の固定リビジョン](https://github.com/renode/renode/tree/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests)
 
+棚卸しの対象は、STM32F072B Discovery を直接使う Robot ケース全件、Cortex-M0/M0+ で実行できる命令・例外・割り込みの観測条件、および F072 と観測条件を共有する STM32 USART・フラッシュのケースです。別 SoC のフルシステム、TrustZone、FPU、CPU ごとのメモリ登録に依存するケースは移植の対象外としました。
+
+#### STM32F072B Discovery
+
+最初の 6 件は `tests/platforms/STM32F072b.robot`、最後の 1 件は `tests/unit-tests/hex.robot` です。いずれも `tests/fixtures/stm32f072-*.resc` から、上流の変更していないボード REPL と公開イメージを使用します。
+
+| 上流ケース | 移植状況 | 観測条件 |
+| --- | --- | --- |
+| `Should Run Zephyr Hello Sample` | 今回追加。 `upstream_stm32f072_hello_world_boots_elf_and_hex` の ELF 実行 | `Hello World! stm32f072b_disco` の完了行。 |
+| `Should Run Zephyr Console Echo Sample` | 既存。 `upstream_stm32f072_console_echo_accepts_resc_uart_input` と `upstream_stm32f072_console_echo_replies_after_uart_prompt` | 入力案内を受けて送信し、次に `Echo working?` を受信。 |
+| `Should Run Zephyr Blinky Sample` | 今回追加。 `upstream_stm32f072_blinky_alternates_led_states` | 4 秒の実行区間における LED の点灯・消灯 3 往復。Robot の状態ごとのタイムアウト判定は残課題。 |
+| `Should Run Zephyr Button Sample` | 今回追加。 `upstream_stm32f072_button_updates_led_and_reports_press` | 3 回の押下・解放、数値の押下時刻を含む UART 行、LED の遷移列。1 秒の保持区間を含み、検査は遷移ログを使う。Robot の各操作での保持判定は残課題。 |
+| `Should Read ADC` | 既存。 `upstream_stm32f072_adc_waits_for_uart_between_voltage_changes` | 起動行、0.6 V で `745`、1.2 V で `1489`。 |
+| `Should Run stm32f0-crc-test Application` | 今回追加。 `upstream_stm32f072_crc_firmware_passes_840_cases` | `test result: ok. 840 passed; 0 failed` の完了行。 |
+| `Should Load HEX` | 今回追加。 `upstream_stm32f072_hello_world_boots_elf_and_hex` の HEX 実行 | `LoadHEX`、明示的な `VectorTableOffset`、同じ Hello World 完了行。 |
+
+`tests/unit-tests/per-core-registration.robot` の `Should Load Hex To Core Specific Memory` と `Should Not Load Hex To Invalid Core Specific Memory` は同じ HEX を参照します。CPU ごとのメモリ登録とロード先指定が必要なため、上表の単一 CPU の HEX 回帰とは別の残課題です。
+
+#### Cortex-M と STM32 周辺機器
+
 | 分野 | 上流のケース | penv の対応と検証範囲 |
 | --- | --- | --- |
 | Thumb-2 | `tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot` の `Should Run All Instructions` | `renode_thumb2_fixture_branches_and_reads_apsr` に ELF の `BL`（`0x1002`、`0x1006`）と `MRS APSR`（`0x1a1e`）の命令語を移植しました。分岐先と LR を検査し、ORRS ケースが期待する N/Z/C を事前設定して APSR の読出しを検査します。 |
 | Thumb 状態 | `tests/unit-tests/arm-thumb.robot` の `Should Expose Thumb State In CPSR`、`tests/unit-tests/arm-thumb2-srs-rfe.robot` の SRS/RFE | Cortex-A の ARM/Thumb 切り替え、CPSR、SRS/RFE は対象外です。既存の `runs_cortex_m0_from_vector_table_and_reports_invalid_thumb_state` はリセットベクターの Thumb ビットを検査します。 |
 | 例外復帰 | `tests/unit-tests/arm-cortex-m-exception-return.robot` の `Should Return From Exception When Using Allowed Instruction` | 非 TrustZone の `BX LR` を `renode_exception_bx_lr_restores_interrupted_thread` に移植しました。上流の NMI を Cortex-M0 の外部 IRQ に置き換え、ハンドラーへの遷移とスレッドの PC・SP の復帰を検査します。TrustZone、MPU、HardFault のケースは見送りました。 |
-| 例外とイベント | `tests/unit-tests/arm-cortex-m-interrupts.robot` の `Should Wake Up From WFE When SEVONPEND Is Set` | `renode_wfe_wakes_on_new_pending_irq_only_with_sevonpend` は上流と同じ IRQ 5、書込みアドレス、データを使い、SEVONPEND の有無を比較します。BASEPRI は対象外です。SysTick は既存の `systick_defers_a_pending_interrupt_until_interrupts_are_enabled` が配送を検査します。上流の CVR 書込み順とリロード境界の比較は残課題です。 |
+| 例外とイベント | `tests/unit-tests/arm-cortex-m-interrupts.robot` の `Should Wake Up From WFE When SEVONPEND Is Set` | 移植済み。 `renode_wfe_wakes_on_new_pending_irq_only_with_sevonpend` は上流と同じ IRQ 5、書込みアドレス、データを使い、SEVONPEND の有無を比較します。 |
+| SysTick | 同ファイルの `Should Count Down SysTick With Reload Set Before Reset` と `Should Count Down SysTick With Reload Set After Reset` | 今回追加。 `renode_systick_counts_and_reloads_for_both_cvr_write_orders` で CVR/RVR の両順序、カウントダウン、COUNTFLAG の読出しによる解除、再ロードを検査します。4 実行ステップを 1 ティックに縮尺し、penv ではゼロを観測してから次ティックで再ロードします。上流の仮想時間境界と同じ結果を保証するテストは残課題です。 |
+| NVIC のリセット | 同ファイルの `NVIC Base Priority Mask Setting Should Not Survive Reset` | 対象外。BASEPRI は現行の Cortex-M0/M0+ の範囲外です。 |
+| Fault、クロック信号 | `tests/unit-tests/arm-cortex-m-bus-fault.robot` と `tests/unit-tests/arm-cortex-m-signals.robot` | Fault の例外配送・ロックアップ、Cortex-M Complex の外部クロックゲートと DWT を対象とするため未移植。既存の CLI テストは無効なリセットベクターをエラーとして検査します。 |
 | UART 受信 | `tests/peripherals/STM32_UART.robot` の `Should Drop Characters When UART Or Receiver Disabled` | `renode_stm32_usart_drops_input_if_either_enable_is_clear` は F072 のレジスター配置で、上流の `0x12` と `0x34` が受信器または USART の無効中に破棄され、再有効化しても現れないことを検査します。フレーム時間、パリティ、アイドル検出の上流ケースは対象外です。 |
 | UART 端末 | `tests/platforms/STM32F072b.robot` の Console Echo と ADC、`tests/unit-tests/uart-tester.robot` の端末選択 | 既存の公開 ELF 回帰は Echo、プロンプト待機、ADC をカバーします。`uart_watch_ignores_other_ports_without_filtering_stdout` は端末選択に対応する USART 分離を検査します。Robot のテスター ID とバイナリ・正規表現モードは未移植です。 |
 | STM32 フラッシュ | `tests/unit-tests/stm32f4-erase.robot` の `Should Ignore Erase When MER And SER Are Reset`、`Should Perform Mass Erase`、`Should Perform Sector Erase`。隣接ページの観測条件は `tests/platforms/STM32L072.robot` の `Should Handle Flash Operations` | `renode_stm32_flash_erase_modes_preserve_the_expected_ranges` は F072 の 128 KiB バンク、2 KiB ページ、消去値 `0xff` を使用します。消去モードなし、指定ページ全体と隣接ページ、バンク全消去を検査します。F4/L0/H7 固有のコントローラーとフラッシュ用 ELF は対象外です。既存の `stm32f072_flash_preserves_programmed_data_on_reload_and_erases_a_page` は F072 のプログラムと再ロードを検査します。 |
 
-通常の `cargo test` は 60 件成功しました。公開 ELF は上記の取得手順と `cargo test --release upstream_stm32f072 -- --ignored` で Console Echo 2 件と ADC 1 件を検証しました。上流の Hello World HEX はこの README の RESC 手順で UART 出力を確認しました。CRC ELF は上記の `demo crc-test 150000000` と同じ REPL と ELF を使い、RESC で `waitForUart sysbus.usart1 "test result: ok. 840 passed; 0 failed"` を実行して結果を確認しました。STM32 フラッシュの消去操作は Rust のバス回帰で検証しています。
+STM32 フラッシュの消去操作は Rust のバス回帰で検証しています。
+
+#### 対応表の回帰を実行する
+
+```sh
+renode_root=$(realpath ../renode)
+test "$(git -C "$renode_root" rev-parse HEAD)" = c38ac3babcd38a7144b9498e3ca4c2226b76aa37
+cargo test
+assets=$(mktemp -d)
+sed -En 's/^sysbus Load(ELF|HEX) @//p' tests/fixtures/stm32f072-*.resc |
+  sort -u |
+  while IFS= read -r url; do
+    curl -fL "$url" -o "$assets/${url##*/}" || exit 1
+  done
+PENV_RENODE_ROOT="$renode_root" PENV_RENODE_ASSETS="$assets" \
+  cargo test --release upstream_stm32f072 -- --ignored
+```
+
+通常の `cargo test` は 61 件成功しました。公開イメージによる回帰は 7 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky、Button、CRC の計 8 シナリオを確認しました。
 
 Thumb-2 ELF 全体は Cortex-M85 向けです。移植元の命令と現行の実行限界は次の手順で再現できます。Cortex-M0 の最小 REPL での実行は、最初のワイド `MOVS.W`（PC `0x108e`、命令の先頭半ワード `0xf05f`）で停止します。
 

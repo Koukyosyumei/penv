@@ -1,0 +1,4 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/stm32f072b_disco--zephyr-hello_world.elf-s_451704-a4d8c888e36c324dcc1dfde33bac33fc6ed3ed1b
+waitForUart sysbus.usart1 "Hello World! stm32f072b_disco"

@@ -127,3 +127,51 @@ impl SysTick {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // arm-cortex-m-interrupts.robot, the two SysTick reload/CVR write orders.
+    #[test]
+    fn renode_systick_counts_and_reloads_for_both_cvr_write_orders() {
+        for writes in [[CURRENT, RELOAD], [RELOAD, CURRENT]] {
+            let mut timer = SysTick::default();
+            // Scale the upstream 100 Hz setup to four execution steps per tick.
+            timer.set_frequency((CORTEX_M_STEP_HZ / 4) as u32);
+            assert!(timer.write(CSR, 0));
+            for address in writes {
+                assert!(timer.write(address, if address == RELOAD { 10 } else { 0 }));
+            }
+            assert_eq!(timer.read(CURRENT), Some(0));
+            assert!(timer.write(CSR, 5));
+            for _ in 0..3 {
+                timer.tick();
+            }
+            assert_eq!(timer.read(CURRENT), Some(0));
+            timer.tick();
+            assert_eq!(timer.read(CURRENT), Some(10));
+
+            for _ in 0..36 {
+                timer.tick();
+            }
+            assert_eq!(timer.read(CURRENT), Some(1));
+            assert_eq!(timer.read(CSR).unwrap() & (1 << 16), 0);
+
+            for _ in 0..4 {
+                timer.tick();
+            }
+            assert_eq!(timer.read(CURRENT), Some(0));
+            assert_ne!(timer.read(CSR).unwrap() & (1 << 16), 0);
+            assert_eq!(timer.read(CSR).unwrap() & (1 << 16), 0);
+            assert!(!timer.pending(SYSTICK));
+
+            for (steps, expected) in [(4, 10), (4, 9)] {
+                for _ in 0..steps {
+                    timer.tick();
+                }
+                assert_eq!(timer.read(CURRENT), Some(expected));
+            }
+        }
+    }
+}

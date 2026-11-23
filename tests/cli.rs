@@ -4,22 +4,98 @@ use std::{
     process::{Command, Output},
 };
 
-fn run_upstream_stm32f072_script(fixture: &str, limit: &str) -> Output {
+fn upstream_stm32f072_command(fixture: &str, limit: &str) -> Command {
     let root = std::env::var_os("PENV_RENODE_ROOT").expect("set PENV_RENODE_ROOT");
     let assets = std::env::var_os("PENV_RENODE_ASSETS").expect("set PENV_RENODE_ASSETS");
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(fixture);
-    Command::new(env!("CARGO_BIN_EXE_penv"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+    command
         .args(["run", "--script"])
         .arg(script)
         .arg("--platform-root")
         .arg(root)
         .arg("--asset-dir")
         .arg(assets)
-        .args(["--max-steps", limit])
+        .args(["--max-steps", limit]);
+    command
+}
+
+fn run_upstream_stm32f072_script(fixture: &str, limit: &str) -> Output {
+    upstream_stm32f072_command(fixture, limit).output().unwrap()
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World images"]
+fn upstream_stm32f072_hello_world_boots_elf_and_hex() {
+    for fixture in ["stm32f072-hello-elf.resc", "stm32f072-hello-hex.resc"] {
+        let result = run_upstream_stm32f072_script(fixture, "1000000");
+        assert!(result.status.success(), "{fixture}: {result:?}");
+        let uart = String::from_utf8(result.stdout).unwrap();
+        assert_eq!(
+            uart.lines().last(),
+            Some("Hello World! stm32f072b_disco"),
+            "{fixture}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and the public STM32F0 CRC ELF"]
+fn upstream_stm32f072_crc_firmware_passes_840_cases() {
+    let result = run_upstream_stm32f072_script("stm32f072-crc.resc", "150000000");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let uart = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(
+        uart.lines().last(),
+        Some("test result: ok. 840 passed; 0 failed")
+    );
+}
+
+fn run_upstream_led_scenario(fixture: &str, limit: &str, states: &[&str]) -> String {
+    let result = upstream_stm32f072_command(fixture, limit)
+        .arg("--led-events")
         .output()
-        .unwrap()
+        .unwrap();
+    assert!(result.status.success(), "{fixture}: {result:?}");
+    let diagnostics = String::from_utf8(result.stderr).unwrap();
+    let transitions: Vec<_> = diagnostics
+        .lines()
+        .filter_map(|line| line.strip_prefix("LED led "))
+        .collect();
+    assert_eq!(transitions, states, "{fixture}");
+    String::from_utf8(result.stdout).unwrap()
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and the public STM32F072 Blinky ELF"]
+fn upstream_stm32f072_blinky_alternates_led_states() {
+    run_upstream_led_scenario(
+        "stm32f072-blinky.resc",
+        "400000000",
+        &["on", "off", "on", "off", "on", "off"],
+    );
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and the public STM32F072 Button ELF"]
+fn upstream_stm32f072_button_updates_led_and_reports_press() {
+    let uart = run_upstream_led_scenario(
+        "stm32f072-button.resc",
+        "331000000",
+        &["on", "off", "on", "off", "on", "off", "on"],
+    );
+    assert!(
+        uart.lines().any(|line| line
+            .strip_prefix("Button pressed at ")
+            .is_some_and(|timestamp| timestamp.trim().parse::<u64>().is_ok())),
+        "{uart}"
+    );
 }
 
 #[test]

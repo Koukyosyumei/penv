@@ -1,0 +1,4 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/stm32f072b_disco--zephyr-blinky.elf-s_460516-9452135ae6af4492bb284a6f88b196b1314909c8
+emulation RunFor "4s"
