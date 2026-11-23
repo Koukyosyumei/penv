@@ -627,6 +627,11 @@ impl Hart {
             .map_err(|error| Fault::Bus(Access::Store, error))
     }
 
+    pub fn set_mstatus(&mut self, value: u32) {
+        self.csr.set_mstatus(value);
+        self.translations.clear();
+    }
+
     pub fn set_mtvec(&mut self, value: u32) {
         self.csr.set_vector(value);
     }

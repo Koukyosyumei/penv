@@ -94,7 +94,7 @@ def robot_cases(root, isa, act):
                         if key == "TESTS_32" and re.match(r"rv32uzfh-[pv]-", portable):
                             basis += "; Zfh ISA diagnostic passed with 2 MiB RAM"
                         if portable == "spike-rv32-max/elfs/priv/Sm/Sm-00.elf":
-                            basis += "; Smepmp diagnostic reaches test 34, mstatus signature mismatch"
+                            basis += "; default reduced ISA fails test 34 (MPP); Sail MSTATUS init passes 34, fails 35 (VS)"
                         if key == "TESTS_32" and re.match(r"rv32[ms]i-", portable):
                             basis += "; privileged ISA diagnostic passed with Smepmp enabled"
                         yield ("Renode", name, case.lineno, case.name, portable, "target",

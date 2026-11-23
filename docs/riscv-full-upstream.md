@@ -304,3 +304,21 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 台帳で適用を確認済みの下限は 1,079 件（上流等価合格 1、部分移植 31、未達 1,047）です。対象外 331 件、適用または展開が未確定の行が 2,773 件残っています。
+
+## 固定 Sm-00 の mstatus 観測値
+
+`Sm-00.S` の test 34 は、開始時に読み取った `mstatus` から SD・FS・XS・VS を消し、MPP を保持した値を書き戻します。固定 Sail の `Sm-00.results` 35 行目は `0x00000000` です。固定 Renode の tlib `arch/riscv/cpu.h` の `set_default_mstatus()` は MPP を M に設定します。penv の既定値でも test 34 は `0x00001800` を読み戻しました。
+
+標準 RV32 REPL の `init:` で `MSTATUS VALUE` を受け付け、ISA と特権レベルを設定した後に通常の CSR 書き込み規則を適用します。この初期化を省略した場合、従来どおり MPP は M です。Sail と同じ初期値を明示した診断構成では test 34 を通過し、test 35 で `VS=01` の期待値 `0x00000200` に対し `0x00000000` を読み戻しました。最大構成が必要とする V は未実装のため、この先の Smepmp 署名と上流等価の合格は未確認です。
+
+```bash
+# smepmp.repl は上段の Smepmp 節で生成した縮小 ISA、RAM 1 MiB の REPL
+sed '/cpuType:/a\    init:\n        MSTATUS 0' "$work/smepmp.repl" > "$work/smepmp-sail-init.repl"
+for profile in smepmp smepmp-sail-init; do
+  python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+    --max-steps 10000000 --platform "$work/$profile.repl" --artifacts "$work/sm-$profile" \
+    "$work"/act/work/spike-rv32-max/elfs/priv/Sm/Sm-00.elf || test "$?" -eq 1
+done
+```
+
+公開特権 ISA は両方の初期化で各 22/22 が通過しました。RV32 Smepmp 検証 ELF も両構成で許可領域の読み書きと例外 `5/7/1` を再確認しました。

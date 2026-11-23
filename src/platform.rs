@@ -885,8 +885,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         } else {
             0
         };
-        for (key, value) in keys(
+        for (key, value) in keys_in(
             entry,
+            split_rv32_init(entry).0,
             &[
                 "cpuType",
                 "hartId",
@@ -1054,6 +1055,15 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             if smepmp {
                 hart.enable_smepmp();
             }
+        }
+        if let Some(commands) = split_rv32_init(entry).1 {
+            let [(_, command)] = commands else {
+                return Err(entry.error("expected one RV32 init command: MSTATUS VALUE"));
+            };
+            let value = command
+                .strip_prefix("MSTATUS ")
+                .ok_or_else(|| entry.error("expected RV32 init command MSTATUS VALUE"))?;
+            hart.set_mstatus(number(value.trim()).map_err(|error| entry.error(&error))?);
         }
     }
     let cpu = configs[0].1;
@@ -2079,10 +2089,25 @@ fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
 }
 
 fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)>, String> {
+    keys_in(entry, &entry.body, allowed)
+}
+
+fn split_rv32_init(entry: &Entry) -> (&[(usize, String)], Option<&[(usize, String)]>) {
+    if entry.model == "CPU.RiscV32"
+        && let Some(index) = entry.body.iter().position(|(_, text)| text == "init:")
+    {
+        return (&entry.body[..index], Some(&entry.body[index + 1..]));
+    }
+    (&entry.body, None)
+}
+
+fn keys_in<'a>(
+    entry: &'a Entry,
+    body: &'a [(usize, String)],
+    allowed: &[&str],
+) -> Result<Vec<(&'a str, &'a str)>, String> {
     let mut seen = HashSet::new();
-    entry
-        .body
-        .iter()
+    body.iter()
         .map(|(line, text)| {
             let pair = text
                 .split_once(':')

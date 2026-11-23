@@ -547,6 +547,10 @@ impl Csr {
         }
     }
 
+    pub fn set_mstatus(&mut self, value: u32) {
+        self.write(0x300, value);
+    }
+
     pub fn set_vector(&mut self, value: u32) {
         self.vector = Some(vector_value(value));
     }
