@@ -10,7 +10,7 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 status=0
-"$1" run --platform "$2/platforms/cpus/nrf52840.repl" --platform-root "$2" --pdm-input "$4" --max-steps 500000000 "$3" \
+"$1" run --platform "$2/platforms/cpus/nrf52840.repl" --platform-root "$2" --pdm-input "$4" --max-steps 320000000 "$3" \
     > "$work/uart" || status=$?
 cat "$work/uart"
 if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then

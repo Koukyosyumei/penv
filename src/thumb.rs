@@ -1,3 +1,4 @@
+mod fpu;
 mod thumb2;
 
 use std::io::Write;
@@ -28,6 +29,10 @@ pub struct Thumb {
     carry: bool,
     overflow: bool,
     saturation: bool,
+    greater_equal: u32,
+    fp: [u32; 32],
+    fpscr: u32,
+    fp_active: bool,
     active_exception: u8,
     active_exceptions: u128,
     interrupts_masked: bool,
@@ -164,6 +169,7 @@ impl Thumb {
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
             | ((u32::from(self.overflow) << 28) | (u32::from(self.saturation) << 27))
+            | (self.greater_equal << 16)
     }
 
     fn set_apsr(&mut self, value: u32) {
@@ -172,6 +178,7 @@ impl Thumb {
         self.carry = value & (1 << 29) != 0;
         self.overflow = value & (1 << 28) != 0;
         self.saturation = self.thumb2 && value & (1 << 27) != 0;
+        self.greater_equal = if self.thumb2 { (value >> 16) & 15 } else { 0 };
     }
 
     fn uses_psp(&self) -> bool {
@@ -219,7 +226,7 @@ impl Thumb {
             16 => u32::from(self.interrupts_masked),
             17 if self.thumb2 => u32::from(self.basepri),
             19 if self.thumb2 => self.faultmask.into(),
-            20 => u32::from(self.uses_psp()) << 1,
+            20 => (u32::from(self.fp_active) << 2) | (u32::from(self.uses_psp()) << 1),
             _ => return None,
         })
     }
@@ -241,7 +248,12 @@ impl Thumb {
                 }
             }
             19 if self.thumb2 => self.faultmask = value & 1 != 0,
-            20 => self.select_thread_stack(value & 2 != 0, r),
+            20 => {
+                self.select_thread_stack(value & 2 != 0, r);
+                if self.thumb2 {
+                    self.fp_active = value & 4 != 0;
+                }
+            }
             _ => return false,
         }
         true
@@ -270,8 +282,9 @@ impl Thumb {
             ));
         }
         let sp = r[13];
-        let stack = (sp & !7).wrapping_sub(32);
-        bus.check_thumb_access(stack, 32, true, false)?;
+        let frame_size = if self.fp_active { 104 } else { 32 };
+        let stack = (sp & !7).wrapping_sub(frame_size as u32);
+        bus.check_thumb_access(stack, frame_size, true, false)?;
         let it = u32::from(self.itstate);
         let xpsr = self.apsr()
             | (1 << 24)
@@ -280,7 +293,19 @@ impl Thumb {
             | ((it & 0xfc) << 8)
             | u32::from(self.active_exception);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        let memory = bus.memory(stack, 32).map_err(|error| error.to_string())?;
+        let memory = bus
+            .memory(stack, frame_size)
+            .map_err(|error| error.to_string())?;
+        if self.fp_active {
+            for (word, value) in memory[32..]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(self.fp[..16].iter().copied().chain([self.fpscr, 0]))
+            {
+                *word = value.to_le_bytes();
+            }
+        }
         for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
             *word = value.to_le_bytes();
         }
@@ -296,6 +321,10 @@ impl Thumb {
                 0xffff_fff1
             };
         }
+        if self.fp_active {
+            r[14] &= !0x10;
+        }
+        self.fp_active = false;
         bus.clear_reservation(0);
         self.active_exceptions |= 1 << exception;
         self.active_exception = exception;
@@ -304,10 +333,15 @@ impl Thumb {
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &Bus) -> Result<u32, String> {
-        if self.active_exception != 0 && matches!(target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd) {
-            let use_psp = target == 0xffff_fffd;
+        let basic_target = if self.thumb2 { target | 0x10 } else { target };
+        if self.active_exception != 0
+            && matches!(basic_target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd)
+        {
+            let extended = target & 0x10 == 0;
+            let use_psp = basic_target == 0xffff_fffd;
+            let frame_size = if extended { 104 } else { 32 };
             let stack = if use_psp { self.psp } else { r[13] };
-            bus.check_thumb_access(stack, 32, false, false)?;
+            bus.check_thumb_access(stack, frame_size, false, false)?;
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
                 *word = bus
@@ -317,13 +351,24 @@ impl Thumb {
             let [r0, r1, r2, r3, r12, lr, pc, xpsr] = frame;
             let previous = xpsr & 0x1ff;
             let remaining = self.active_exceptions & !(1 << self.active_exception);
-            let valid_mode = if target != 0xffff_fff1 {
+            let valid_mode = if basic_target != 0xffff_fff1 {
                 previous == 0 && remaining == 0
             } else {
                 previous != 0 && previous < 80 && remaining & (1 << previous) != 0
             };
-            if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
-                return Err("invalid Cortex-M exception return frame".into());
+            if xpsr & (1 << 24) == 0 || !valid_mode {
+                return Err(format!(
+                    "invalid Cortex-M exception return frame: pc={pc:#x} xpsr={xpsr:#x} target={target:#x}"
+                ));
+            }
+            if extended {
+                let saved = bus
+                    .memory_slice(stack.wrapping_add(32), 68)
+                    .map_err(|e| e.to_string())?;
+                for (value, bytes) in self.fp[..16].iter_mut().zip(saved.as_chunks::<4>().0) {
+                    *value = u32::from_le_bytes(*bytes);
+                }
+                self.fpscr = u32::from_le_bytes(saved[64..68].try_into().unwrap());
             }
             r[..4].copy_from_slice(&[r0, r1, r2, r3]);
             r[12] = r12;
@@ -336,14 +381,16 @@ impl Thumb {
                     self.sleep = Sleep::Interrupt;
                 }
             }
-            r[13] = stack.wrapping_add(32 + ((xpsr >> 7) & 4));
+            self.fp_active = extended;
+            r[13] = stack.wrapping_add(frame_size as u32 + ((xpsr >> 7) & 4));
             r[14] = lr;
             self.faultmask = false;
             self.set_apsr(xpsr);
             self.itstate = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
-            return Ok(pc);
+            self.signal_event();
+            return Ok(pc & !1);
         }
         if target & 1 == 0 {
             return Err(format!(
@@ -855,7 +902,7 @@ impl Thumb {
                     && (low & (1 << 15) == 0 || (inst == 0xe8bd && low & (1 << 14) == 0))
                 {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
-                } else {
+                } else if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
                     self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
                 }
             }

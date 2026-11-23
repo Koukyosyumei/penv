@@ -83,7 +83,7 @@ pub struct Bus {
     regions: Vec<Region>,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
-    reservations: [Option<u32>; crate::machine::MAX_HARTS],
+    reservations: [Option<(u32, usize)>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
@@ -215,6 +215,14 @@ impl Bus {
             .unwrap_or_default()
     }
 
+    pub fn nrf_gpio_driven_high(&self, base: u32) -> u32 {
+        self.nrf_peripherals
+            .iter()
+            .find(|device| device.base == base)
+            .and_then(NrfPeripheral::gpio_driven_high)
+            .unwrap_or_default()
+    }
+
     pub fn nrf_gpio_task(&mut self, base: u32, pin: u32, action: u32) {
         if let Some(device) = self
             .nrf_peripherals
@@ -222,6 +230,14 @@ impl Bus {
             .find(|device| device.base == base)
         {
             device.gpio_task(pin, action);
+            let high = device.gpio_driven_high().unwrap_or_default();
+            self.release_nrf_spi_cs(base, high);
+        }
+    }
+
+    pub fn release_nrf_spi_cs(&mut self, gpio: u32, pins: u32) {
+        for device in &mut self.nrf_peripherals {
+            device.release_spi_cs(gpio, pins);
         }
     }
 
@@ -253,6 +269,27 @@ impl Bus {
         }
         device.set_pdm_input(input);
         Ok(())
+    }
+
+    pub fn configure_nrf_i2s_pcm(&mut self, input: Vec<u8>, capture: bool) -> Result<(), String> {
+        let mut devices = self
+            .nrf_peripherals
+            .iter_mut()
+            .filter(|device| device.is_i2s());
+        let device = devices
+            .next()
+            .ok_or("I2S PCM requires an nRF52840 I2S peripheral")?;
+        if devices.next().is_some() {
+            return Err("I2S PCM requires exactly one I2S peripheral".into());
+        }
+        device.configure_i2s_pcm(input, capture);
+        Ok(())
+    }
+
+    pub fn nrf_i2s_pcm_output(&self) -> Option<&[u8]> {
+        self.nrf_peripherals
+            .iter()
+            .find_map(NrfPeripheral::i2s_pcm_output)
     }
 
     pub fn advance_nrf_audio(&mut self) -> Result<(), BusError> {
@@ -1136,7 +1173,8 @@ impl Bus {
                 if width != 0 {
                     let address = region.base + offset as u32;
                     for reservation in &mut self.reservations {
-                        if reservation.is_some_and(|reserved| {
+                        if reservation.is_some_and(|(reserved, _)| {
+                            let reserved = reserved & !3;
                             u64::from(address) < u64::from(reserved) + 4
                                 && u64::from(reserved) < u64::from(address) + width as u64
                         }) {
@@ -1164,7 +1202,9 @@ impl Bus {
 
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
         let value = self.read_ram::<4>(address)?;
-        self.reservations[hart] = self.canonical_ram_address(address, 4);
+        self.reservations[hart] = self
+            .canonical_ram_address(address, 4)
+            .map(|address| (address, 4));
         Ok(value)
     }
 
@@ -1177,7 +1217,7 @@ impl Bus {
         let canonical = self.canonical_ram_address(address, 4);
         let reserved = self.reservations[hart]
             .take()
-            .is_some_and(|reserved| Some(reserved) == canonical);
+            .is_some_and(|reserved| Some(reserved) == canonical.map(|address| (address, 4)));
         if reserved {
             self.atomic_word(address)?
                 .copy_from_slice(&value.to_le_bytes());
@@ -1186,6 +1226,39 @@ impl Bus {
             self.read_ram::<4>(address)?;
             Ok(1)
         }
+    }
+
+    pub fn thumb_load_exclusive<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
+        self.check_thumb_access(address, N, false, false)?;
+        if address as usize % N != 0 {
+            return Err(BusError::Misaligned(address, N).to_string());
+        }
+        let value = self.read_ram::<N>(address).map_err(|e| e.to_string())?;
+        self.reservations[0] = self
+            .canonical_ram_address(address, N)
+            .map(|address| (address, N));
+        Ok(value)
+    }
+
+    pub fn thumb_store_exclusive<const N: usize>(
+        &mut self,
+        address: u32,
+        value: u32,
+    ) -> Result<u32, String> {
+        self.check_thumb_access(address, N, true, false)?;
+        if address as usize % N != 0 {
+            return Err(BusError::Misaligned(address, N).to_string());
+        }
+        let canonical = self
+            .canonical_ram_address(address, N)
+            .ok_or_else(|| BusError::Unmapped(address, N).to_string())?;
+        if self.reservations[0].take() != Some((canonical, N)) {
+            return Ok(1);
+        }
+        self.memory(address, N)
+            .map_err(|e| e.to_string())?
+            .copy_from_slice(&value.to_le_bytes()[..N]);
+        Ok(0)
     }
 
     pub fn atomic_update(

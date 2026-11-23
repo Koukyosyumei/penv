@@ -216,6 +216,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         &mut HashSet::new(),
         &mut entries,
     )?;
+    nrf52840::apply_overrides(&mut entries)?;
     let mut machine = Machine::without_default_ram();
     if stm32f0::is_stm32f0(&entries) {
         machine
@@ -319,7 +320,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "GPIOPort.NRF52840_GPIO" if cortex_m4 => {
-                nrf52840::map_gpio(entry, &mut machine.bus)?;
+                nrf52840::map_gpio(entry, &entries, &mut machine.bus)?;
             }
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
             "Miscellaneous.LED" => gpio_leds.push(entry),
@@ -353,6 +354,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "Sensors.ADXL372" if cortex_m4 => nrf52840::validate_adxl(entry, &entries)?,
             "SPI.SPILoopback" if cortex_m4 => nrf52840::validate_spi_loopback(entry, &entries)?,
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),

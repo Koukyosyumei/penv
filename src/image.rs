@@ -142,8 +142,11 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
 
     let flags = word(&header, 36);
     if cortex_m {
-        if half(&header, 18) != 40 || flags >> 24 != 5 || flags & 0x400 != 0 {
-            return Err("expected an ARM EABI5 ELF32 executable without the hard-float ABI".into());
+        if half(&header, 18) != 40
+            || flags >> 24 != 5
+            || (flags & 0x400 != 0 && !machine.has_cortex_m4())
+        {
+            return Err("expected an ARM EABI5 ELF32 executable with a supported float ABI".into());
         }
     } else if half(&header, 18) != 243
         || flags & !u32::from(machine.primary.compressed_instructions()) != 0

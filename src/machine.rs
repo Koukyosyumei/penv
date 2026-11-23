@@ -214,6 +214,13 @@ impl Machine {
         self.primary.thumb.is_some()
     }
 
+    pub fn has_cortex_m4(&self) -> bool {
+        self.primary
+            .thumb
+            .as_ref()
+            .is_some_and(|thumb| thumb.thumb2)
+    }
+
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if hart.thumb.is_some() {

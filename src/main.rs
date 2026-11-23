@@ -66,6 +66,8 @@ Options:
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
   --ble-peer PATH    Run a second nRF52840 ELF on an in-process RADIO medium
+  --i2s-input PATH   Feed PCM bytes to nRF52840 I2S
+  --i2s-output PATH  Save PCM bytes transmitted by nRF52840 I2S
   --pdm-input PATH   Feed signed 16-bit little-endian PCM to nRF52840 PDM
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
@@ -125,6 +127,8 @@ fn run() -> Result<ExitCode, String> {
     let mut led_events = false;
     let mut uart_input = None;
     let mut pdm_input = None;
+    let mut i2s_input = None;
+    let mut i2s_output = None;
     let mut ble_peer = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
@@ -143,7 +147,8 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--pdm-input" | "--ble-peer"),
+                | "--asset-dir" | "--pdm-input" | "--i2s-input" | "--i2s-output"
+                | "--ble-peer"),
             ) => {
                 let path = args
                     .next()
@@ -154,6 +159,8 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--pdm-input" => &mut pdm_input,
+                    "--i2s-input" => &mut i2s_input,
+                    "--i2s-output" => &mut i2s_output,
                     "--ble-peer" => &mut ble_peer,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
@@ -387,6 +394,16 @@ fn run() -> Result<ExitCode, String> {
             return Err(format!("unsupported UART analyzer target {name:?}"));
         }
     }
+    if i2s_input.is_some() || i2s_output.is_some() {
+        let input = if let Some(path) = i2s_input {
+            fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?
+        } else {
+            Vec::new()
+        };
+        machine
+            .bus
+            .configure_nrf_i2s_pcm(input, i2s_output.is_some())?;
+    }
     if let Some(path) = pdm_input {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         machine
@@ -474,6 +491,11 @@ fn run() -> Result<ExitCode, String> {
     };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
+    if let Some(path) = i2s_output
+        && let Some(pcm) = machine.bus.nrf_i2s_pcm_output()
+    {
+        fs::write(&path, pcm).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
     let (stop, steps) = result?;
     if stats {
         eprintln!(

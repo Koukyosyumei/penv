@@ -1,6 +1,95 @@
 use super::{Entry, number};
 use crate::{bus::Bus, nrf52840::Peripheral};
 
+pub(super) fn apply_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
+    let mut index = 0;
+    while index < entries.len() {
+        let entry = &entries[index];
+        let Some(parent) = entries[..index].iter().position(|old| {
+            old.name == entry.name
+                && matches!(
+                    old.model.as_str(),
+                    "UART.NRF52840_UART" | "GPIOPort.NRF52840_GPIO"
+                )
+        }) else {
+            index += 1;
+            continue;
+        };
+        if !entry.model.is_empty() || entry.registration.is_some() {
+            index += 1;
+            continue;
+        }
+        if entries[parent].model == "UART.NRF52840_UART" {
+            if !matches!(entry.body.as_slice(), [(_, property)] if property.starts_with("easyDMA:"))
+            {
+                return Err(entry.error("expected an easyDMA UART override"));
+            }
+            entries[parent]
+                .body
+                .retain(|(_, value)| !value.starts_with("easyDMA:"));
+        }
+        let mut entry = entries.remove(index);
+        entries[parent].body.append(&mut entry.body);
+    }
+    Ok(())
+}
+
+fn acceleration(entry: &Entry) -> Result<[i16; 3], String> {
+    let mut values = [0; 3];
+    let axes = ["accelerationX", "accelerationY", "accelerationZ"];
+    for (axis, value) in super::keys(entry, &axes)? {
+        let gs = value
+            .parse::<f64>()
+            .map_err(|_| entry.error("invalid acceleration"))?;
+        if !gs.is_finite() || !(-200.0..=200.0).contains(&gs) {
+            return Err(entry.error("acceleration must be within ±200 g"));
+        }
+        let index = axes.iter().position(|&name| name == axis).unwrap();
+        values[index] = (gs * 10.0).round() as i16;
+    }
+    Ok(values)
+}
+
+pub(super) fn validate_adxl(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    let registration = entry.registration.as_deref().unwrap_or("");
+    let parent = registration.split_whitespace().next();
+    let controller = entries
+        .iter()
+        .find(|other| Some(other.name.as_str()) == parent);
+    match controller.map(|device| device.model.as_str()) {
+        Some("SPI.NRF52840_SPI") if Some(registration) == parent => {
+            spi_cs(entry, entries)?;
+        }
+        Some("I2C.NRF52840_I2C") if registration.split_whitespace().count() == 2 => {}
+        _ => return Err(entry.error("expected an ADXL372 registered on SPI or TWI")),
+    }
+    acceleration(entry)?;
+    Ok(())
+}
+
+fn spi_cs(entry: &Entry, entries: &[Entry]) -> Result<(u32, u32), String> {
+    let endpoint = format!("{}@0", entry.name);
+    let endpoint = endpoint.as_str();
+    let mut pins = entries
+        .iter()
+        .filter(|gpio| gpio.model == "GPIOPort.NRF52840_GPIO")
+        .flat_map(|gpio| {
+            gpio.body.iter().filter_map(move |(_, wire)| {
+                let (pin, target) = wire.split_once("->")?;
+                (target.trim() == endpoint).then_some((gpio, pin.trim()))
+            })
+        });
+    let (gpio, pin) = pins
+        .next()
+        .ok_or_else(|| entry.error("missing ADXL372 chip-select wiring"))?;
+    let base = gpio.address()?;
+    let pin = number(pin).map_err(|e| gpio.error(&e))?;
+    if pins.next().is_some() || pin >= if base == 0x5000_0500 { 32 } else { 16 } {
+        return Err(gpio.error("invalid or duplicate ADXL372 chip-select pin"));
+    }
+    Ok((base, pin))
+}
+
 pub(super) fn map_aliases(entry: &Entry, bus: &mut Bus, size: usize) -> Result<(), String> {
     let registrations = entry
         .registration
@@ -99,9 +188,6 @@ pub(super) fn map_peripheral(
             return Err(entry.error("unsupported nRF52840 peripheral property or wiring"));
         }
     }
-    if uart && easy_dma != Some(true) {
-        return Err(entry.error("only the EasyDMA UART mode is supported"));
-    }
     let irq = irq
         .filter(|line| *line < 48)
         .ok_or_else(|| entry.error("expected an nRF52840 NVIC IRQ in 0–47"))?;
@@ -110,6 +196,19 @@ pub(super) fn map_peripheral(
     if entry.model == "Miscellaneous.NRF_CLOCK" && base == 0x4000_0000 {
         bus.map_nrf_peripheral(Peripheral::nvmc())
             .map_err(|e| entry.error(&e))?;
+        bus.map_nrf_peripheral(Peripheral::spim3_config())
+            .map_err(|e| entry.error(&e))?;
+        bus.map_nrf_peripheral(Peripheral::usbd_config())
+            .map_err(|e| entry.error(&e))?;
+        // Nordic SDK checks for pre-production parts before applying errata.
+        bus.add_nrf_tag(0xf000_0fe0, 0xf000_0fe3, 0);
+        for (index, base) in [0x4001_c000, 0x4002_1000, 0x4002_2000, 0x4002_d000]
+            .into_iter()
+            .enumerate()
+        {
+            bus.map_nrf_peripheral(Peripheral::pwm_config(base, index))
+                .map_err(|e| entry.error(&e))?;
+        }
     }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
@@ -147,20 +246,28 @@ pub(super) fn map_peripheral(
             return Err(entry.error("nRF52840 SPIM EasyDMA is unsupported"));
         }
         let mut children = entries.iter().filter(|child| {
-            child.model == "SPI.SPILoopback"
+            matches!(child.model.as_str(), "SPI.SPILoopback" | "Sensors.ADXL372")
                 && child.registration.as_deref() == Some(entry.name.as_str())
         });
-        let loopback = children.next().is_some();
+        let child = children.next();
+        let loopback = child.is_some_and(|child| child.model == "SPI.SPILoopback");
         if let Some(extra) = children.next() {
             return Err(extra.error("nRF52840 SPI accepts only one attached device"));
         }
-        Peripheral::spi(base, irq as u8, name, loopback)
+        let mut spi = Peripheral::spi(base, irq as u8, name, loopback);
+        if let Some(child) = child.filter(|child| child.model == "Sensors.ADXL372") {
+            let (gpio, pin) = spi_cs(child, entries)?;
+            spi.attach_adxl_spi(gpio, pin, acceleration(child)?);
+        }
+        spi
     } else if entry.model == "I2C.NRF52840_I2C" {
         let mut twi = Peripheral::twi(base, irq as u8, name);
-        for child in entries
-            .iter()
-            .filter(|child| child.model == "Memory.GenericI2cEeprom")
-        {
+        for child in entries.iter().filter(|child| {
+            matches!(
+                child.model.as_str(),
+                "Memory.GenericI2cEeprom" | "Sensors.ADXL372"
+            )
+        }) {
             let Some((parent, address)) = child
                 .registration
                 .as_deref()
@@ -170,8 +277,12 @@ pub(super) fn map_peripheral(
             };
             if parent == entry.name {
                 let address = number(address.trim()).map_err(|e| child.error(&e))?;
-                twi.attach_eeprom(address, super::i2c_eeprom(child)?)
-                    .map_err(|e| child.error(&e))?;
+                if child.model == "Sensors.ADXL372" {
+                    twi.attach_adxl_i2c(address, acceleration(child)?)
+                } else {
+                    twi.attach_eeprom(address, super::i2c_eeprom(child)?)
+                }
+                .map_err(|e| child.error(&e))?;
             }
         }
         twi
@@ -194,8 +305,22 @@ pub(super) fn validate_spi_loopback(entry: &Entry, entries: &[Entry]) -> Result<
     Ok(())
 }
 
-pub(super) fn map_gpio(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
-    super::keys(entry, &[])?;
+pub(super) fn map_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Result<(), String> {
+    for (_, wire) in &entry.body {
+        let (_, target) = wire
+            .split_once("->")
+            .ok_or_else(|| entry.error("unsupported GPIO property"))?;
+        let target = target
+            .trim()
+            .strip_suffix("@0")
+            .ok_or_else(|| entry.error("unsupported GPIO connection"))?;
+        if !entries
+            .iter()
+            .any(|child| child.name == target && child.model == "Sensors.ADXL372")
+        {
+            return Err(entry.error("unsupported GPIO destination"));
+        }
+    }
     let address = entry.address()?;
     let pins = match address {
         0x5000_0500 => 32,

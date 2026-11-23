@@ -25,6 +25,10 @@ pub(super) struct I2s {
     interrupts: u32,
     pub(super) raised: u32,
     active: Option<Transfer>,
+    input: Vec<u8>,
+    file_pcm: bool,
+    input_offset: usize,
+    output: Option<Vec<u8>>,
 }
 
 impl I2s {
@@ -41,11 +45,32 @@ impl I2s {
             interrupts: 0,
             raised: 0,
             active: None,
+            input: Vec::new(),
+            file_pcm: false,
+            input_offset: 0,
+            output: None,
         }
     }
 
     pub(super) fn reset(&mut self) {
+        let input = std::mem::take(&mut self.input);
+        let output = self.output.take();
+        let file_pcm = self.file_pcm;
         *self = Self::new(self.loopback);
+        self.input = input;
+        self.output = output;
+        self.file_pcm = file_pcm;
+    }
+
+    pub(super) fn configure_pcm(&mut self, input: Vec<u8>, capture: bool) {
+        self.input = input;
+        self.input_offset = 0;
+        self.output = capture.then(Vec::new);
+        self.file_pcm = true;
+    }
+
+    pub(super) fn pcm_output(&self) -> Option<&[u8]> {
+        self.output.as_deref()
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -102,7 +127,13 @@ impl I2s {
             rx: rx.then_some(self.rx),
             tx: tx.then_some(self.tx),
         });
-        self.raise((if rx { RX_UPDATED } else { 0 }) | (if tx { TX_UPDATED } else { 0 }));
+        if !self.file_pcm {
+            self.raise(Self::pointer_events(rx, tx));
+        }
+    }
+
+    fn pointer_events(rx: bool, tx: bool) -> u32 {
+        (if rx { RX_UPDATED } else { 0 }) | (if tx { TX_UPDATED } else { 0 })
     }
 
     pub(super) fn tick(&mut self) -> bool {
@@ -137,9 +168,20 @@ impl I2s {
                 destination.copy_from_slice(&samples);
             } else {
                 destination.fill(0);
+                let count = length.min(self.input.len() - self.input_offset);
+                destination[..count]
+                    .copy_from_slice(&self.input[self.input_offset..self.input_offset + count]);
+                self.input_offset += count;
             }
         }
+        if let (Some(address), Some(output)) = (tx, &mut self.output) {
+            // Renode feeds RX before collecting TX, including when the guest shares a buffer.
+            output.extend_from_slice(bus.memory_slice(address, length)?);
+        }
         self.latch(active.period, length, rx.is_some(), tx.is_some());
+        if self.file_pcm {
+            self.raise(Self::pointer_events(rx.is_some(), tx.is_some()));
+        }
         Ok(())
     }
 

@@ -7,6 +7,7 @@ pub const VTOR: u32 = BASE + 0xd08;
 const MPU_TYPE: u32 = BASE + 0xd90;
 const MPU_RASR: u32 = BASE + 0xda0;
 const STIR: u32 = BASE + 0xf00;
+const DEMCR: u32 = BASE + 0xdfc;
 const CPACR: u32 = BASE + 0xd88;
 const AIRCR: u32 = BASE + 0xd0c;
 const SCR: u32 = BASE + 0xd10;
@@ -39,6 +40,8 @@ pub struct Nvic {
     priority: [u8; 64],
     system_priority: [u8; 12],
     fault_enables: u32,
+    cpacr: u32,
+    demcr: u32,
     div_zero_trap: bool,
     unalign_trap: bool,
     mpu: Mpu,
@@ -58,6 +61,8 @@ impl Nvic {
             priority: [0; 64],
             system_priority: [0; 12],
             fault_enables: 0,
+            cpacr: 0,
+            demcr: 0,
             div_zero_trap: false,
             unalign_trap: false,
             mpu: Mpu::default(),
@@ -75,6 +80,7 @@ impl Nvic {
             Some((SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1)),
             cortex_m4.then_some((CCR, HFSR + 4)),
             cortex_m4.then_some((CPACR, CPACR + 4)),
+            cortex_m4.then_some((DEMCR, DEMCR + 4)),
             cortex_m4.then_some((STIR, STIR + 4)),
             cortex_m4.then_some((MPU_TYPE, MPU_RASR + 4)),
         ]
@@ -109,6 +115,10 @@ impl Nvic {
 
     pub fn take_reset_request(&mut self) -> bool {
         std::mem::take(&mut self.reset_requested)
+    }
+
+    pub fn fpu_access(&self) -> bool {
+        (self.cpacr >> 20) & 3 == (self.cpacr >> 22) & 3 && self.cpacr & 0x0010_0000 != 0
     }
 
     pub fn reset(&mut self) {
@@ -186,7 +196,8 @@ impl Nvic {
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         Some(match (address, width) {
             (AIRCR, 4) => 0xfa05_0000,
-            (CPACR, 4) if self.cortex_m4 => 0,
+            (CPACR, 4) if self.cortex_m4 => self.cpacr,
+            (DEMCR, 4) if self.cortex_m4 => self.demcr,
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => return self.mpu.read(address - MPU_TYPE),
             (CCR, 4) if self.cortex_m4 => {
                 (1 << 9)
@@ -238,7 +249,8 @@ impl Nvic {
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => {
                 return self.mpu.write(address - MPU_TYPE, value);
             }
-            (CPACR, 4) if self.cortex_m4 && value & 0x00f0_0000 == 0 => {}
+            (CPACR, 4) if self.cortex_m4 => self.cpacr = value & 0x00f0_0000,
+            (DEMCR, 4) if self.cortex_m4 => self.demcr = value,
             (CCR, 4) if self.cortex_m4 && value & !0x18 == 1 << 9 => {
                 self.div_zero_trap = value & 0x10 != 0;
                 self.unalign_trap = value & 8 != 0

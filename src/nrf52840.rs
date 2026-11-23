@@ -1,3 +1,6 @@
+mod adxl372;
+use adxl372::Adxl372;
+
 mod aar;
 use aar::Aar;
 
@@ -70,6 +73,9 @@ enum Device {
     Gpiote(Gpiote),
     Ppi(Box<Ppi>),
     Nvmc { cache_config: u32 },
+    PwmConfig { output_pin: u32 },
+    UsbdConfig { iso_in: u32 },
+    Spim3Config([u32; 10]),
 }
 
 #[derive(Default)]
@@ -79,6 +85,9 @@ struct Clock {
     interrupts: u32,
     lf_source: u32,
     dcdc: u32,
+    dcdc0: u32,
+    trace_config: u32,
+    retention: u32,
     ram_priority: [u32; 14],
 }
 
@@ -87,6 +96,7 @@ struct Uarte {
     events: u32,
     raised: u32,
     interrupts: u32,
+    shorts: u32,
     pins: [u32; 4],
     baud: u32,
     config: u32,
@@ -94,6 +104,9 @@ struct Uarte {
     rx_count: u32,
     rx_amount: u32,
     rx_active: Option<(u32, u32)>,
+    legacy_rx: bool,
+    legacy_tx: bool,
+    rx_byte: Option<u8>,
     tx_pointer: u32,
     tx_count: u32,
     tx_amount: u32,
@@ -107,6 +120,7 @@ impl Default for Uarte {
             events: 0,
             raised: 0,
             interrupts: 0,
+            shorts: 0,
             pins: [u32::MAX; 4],
             baud: 0x0400_0000,
             config: 0,
@@ -114,6 +128,9 @@ impl Default for Uarte {
             rx_count: 0,
             rx_amount: 0,
             rx_active: None,
+            legacy_rx: false,
+            legacy_tx: false,
+            rx_byte: None,
             tx_pointer: 0,
             tx_count: 0,
             tx_amount: 0,
@@ -124,6 +141,43 @@ impl Default for Uarte {
 
 impl Peripheral {
     pub const SIZE: u32 = 0x1000;
+
+    pub fn spim3_config() -> Self {
+        Self {
+            base: 0x4002_f000,
+            irq: 47,
+            name: "spim3".into(),
+            device: Device::Spim3Config([0; 10]),
+        }
+    }
+
+    fn spim3_config_index(offset: u32) -> Option<usize> {
+        [
+            0x500, 0x508, 0x50c, 0x510, 0x514, 0x524, 0x554, 0x560, 0x564, 0x5c0,
+        ]
+        .iter()
+        .position(|&register| offset == register)
+    }
+
+    pub fn usbd_config() -> Self {
+        Self {
+            base: 0x4002_7000,
+            irq: 39,
+            name: "usbd".into(),
+            device: Device::UsbdConfig { iso_in: 0 },
+        }
+    }
+
+    pub fn pwm_config(base: u32, index: usize) -> Self {
+        Self {
+            base,
+            irq: 0,
+            name: format!("pwm{index}"),
+            device: Device::PwmConfig {
+                output_pin: u32::MAX,
+            },
+        }
+    }
 
     pub fn clock(base: u32, irq: u8, name: String) -> Self {
         Self {
@@ -234,6 +288,23 @@ impl Peripheral {
         matches!(self.device, Device::Pdm(_))
     }
 
+    pub fn is_i2s(&self) -> bool {
+        matches!(self.device, Device::I2s(_))
+    }
+
+    pub fn configure_i2s_pcm(&mut self, input: Vec<u8>, capture: bool) {
+        if let Device::I2s(i2s) = &mut self.device {
+            i2s.configure_pcm(input, capture);
+        }
+    }
+
+    pub fn i2s_pcm_output(&self) -> Option<&[u8]> {
+        match &self.device {
+            Device::I2s(i2s) => i2s.pcm_output(),
+            _ => None,
+        }
+    }
+
     pub fn set_pdm_input(&mut self, input: Vec<u8>) {
         if let Device::Pdm(pdm) = &mut self.device {
             pdm.set_input(input);
@@ -295,6 +366,28 @@ impl Peripheral {
         }
     }
 
+    pub fn attach_adxl_i2c(&mut self, address: u32, acceleration: [i16; 3]) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("ADXL372 requires TWI".into());
+        };
+        twi.attach(
+            address,
+            twi::Target::Adxl372(Box::new(Adxl372::new(acceleration))),
+        )
+    }
+
+    pub fn attach_adxl_spi(&mut self, gpio: u32, pin: u32, acceleration: [i16; 3]) {
+        if let Device::Spi(spi) = &mut self.device {
+            spi.attach_adxl(gpio, pin, Adxl372::new(acceleration));
+        }
+    }
+
+    pub fn release_spi_cs(&mut self, gpio: u32, pins: u32) {
+        if let Device::Spi(spi) = &mut self.device {
+            spi.release_cs(gpio, pins);
+        }
+    }
+
     pub fn attach_eeprom(
         &mut self,
         address: u32,
@@ -303,7 +396,7 @@ impl Peripheral {
         let Device::Twi(twi) = &mut self.device else {
             return Err("expected an nRF52840 TWI controller".into());
         };
-        twi.attach(address, target)
+        twi.attach(address, twi::Target::Eeprom(target))
     }
 
     pub fn ppi(base: u32, name: String) -> Self {
@@ -394,6 +487,13 @@ impl Peripheral {
             irq,
             name,
             device: Device::Gpiote(gpiote),
+        }
+    }
+
+    pub fn gpio_driven_high(&self) -> Option<u32> {
+        match &self.device {
+            Device::Gpio(gpio) => Some(gpio.driven_high()),
+            _ => None,
         }
     }
 
@@ -493,8 +593,16 @@ impl Peripheral {
             Device::Egu(egu) => *egu = Egu::default(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
-            Device::Clock(clock) => *clock = Clock::default(),
+            Device::Clock(clock) => {
+                *clock = Clock {
+                    retention: clock.retention,
+                    ..Clock::default()
+                };
+            }
             Device::Nvmc { cache_config } => *cache_config = 0,
+            Device::PwmConfig { output_pin } => *output_pin = u32::MAX,
+            Device::UsbdConfig { iso_in } => *iso_in = 0,
+            Device::Spim3Config(registers) => registers.fill(0),
             Device::Watchdog(watchdog) => *watchdog = Watchdog::default(),
             Device::Uarte(uart) => *uart = Uarte::default(),
             Device::Rtc(rtc) => {
@@ -513,7 +621,12 @@ impl Peripheral {
     pub fn pending(&self) -> bool {
         match &self.device {
             Device::Clock(clock) => clock.events & clock.interrupts != 0,
-            Device::Nvmc { .. } | Device::Gpio(_) | Device::Ppi(_) => false,
+            Device::Nvmc { .. }
+            | Device::PwmConfig { .. }
+            | Device::UsbdConfig { .. }
+            | Device::Spim3Config(_)
+            | Device::Gpio(_)
+            | Device::Ppi(_) => false,
             Device::Watchdog(watchdog) => watchdog.pending(),
             Device::Uarte(uart) => uart.events & uart.interrupts != 0,
             Device::Gpiote(gpiote) => gpiote.pending(),
@@ -533,7 +646,7 @@ impl Peripheral {
 
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
         if let Device::Uarte(uart) = &mut self.device
-            && uart.rx_active.is_some()
+            && (uart.rx_active.is_some() || uart.legacy_rx)
         {
             uart.input.extend(bytes);
         }
@@ -549,6 +662,13 @@ impl Peripheral {
     pub fn read(&mut self, address: u32) -> Option<u32> {
         let offset = address - self.base;
         match &mut self.device {
+            Device::UsbdConfig { iso_in } => (offset == 0x530).then_some(*iso_in),
+            Device::Spim3Config(registers) => Some(registers[Self::spim3_config_index(offset)?]),
+            Device::PwmConfig { output_pin } => match offset {
+                0x500 => Some(0),
+                0x560 => Some(*output_pin),
+                _ => None,
+            },
             Device::Clock(clock) => clock.read(offset),
             Device::Twi(twi) => twi.read(offset),
             Device::Spi(spi) => spi.read(offset),
@@ -579,6 +699,29 @@ impl Peripheral {
     ) -> Result<(), BusError> {
         let offset = address - self.base;
         let supported = match &mut self.device {
+            Device::Spim3Config(registers) => {
+                if let Some(index) = Self::spim3_config_index(offset)
+                    && (offset != 0x500 || matches!(value, 0 | 7))
+                {
+                    registers[index] = value;
+                    true
+                } else {
+                    false
+                }
+            }
+            Device::UsbdConfig { iso_in } if offset == 0x530 => {
+                *iso_in = value & 1;
+                true
+            }
+            Device::UsbdConfig { .. } => false,
+            Device::PwmConfig { output_pin } => match offset {
+                0x500 => value == 0,
+                0x560 => {
+                    *output_pin = value;
+                    true
+                }
+                _ => false,
+            },
             Device::Clock(clock) => clock.write(offset, value),
             Device::Nvmc { cache_config } => {
                 if offset == 0x540 && value & !1 == 0 {
@@ -588,7 +731,13 @@ impl Peripheral {
                     false
                 }
             }
-            Device::Gpio(gpio) => gpio.write(offset, value),
+            Device::Gpio(gpio) => {
+                let supported = gpio.write(offset, value);
+                if supported {
+                    bus.release_nrf_spi_cs(self.base, gpio.driven_high());
+                }
+                supported
+            }
             Device::Gpiote(gpiote) => gpiote.write(offset, value, bus),
             Device::Ppi(ppi) => ppi.write(
                 offset,
@@ -603,7 +752,12 @@ impl Peripheral {
             Device::Uarte(uart) => uart.write(offset, value, bus, output)?,
             Device::Rtc(rtc) => rtc.write(offset, value),
             Device::Twi(twi) => twi.write(offset, value),
-            Device::Spi(spi) => spi.write(offset, value),
+            Device::Spi(spi) => {
+                if offset == 0x51c {
+                    spi.sample_cs(bus);
+                }
+                spi.write(offset, value)
+            }
             Device::Timer(timer) => timer.write(offset, value),
             Device::I2s(i2s) => i2s.write(offset, value),
             Device::Pdm(pdm) => pdm.write(offset, value),
@@ -633,8 +787,12 @@ impl Clock {
             0x304 | 0x308 => self.interrupts,
             0x40c => (self.running & 1) * 0x10001,
             0x418 => ((self.running & 2) << 15) | (self.lf_source & 3),
+            0x438 => 0, // USB VBUS is disconnected.
             0x518 => self.lf_source,
+            0x51c => self.retention,
+            0x55c => self.trace_config,
             0x578 => self.dcdc,
+            0x580 => self.dcdc0,
             0xe00..=0xe34 => self.ram_priority[((offset - 0xe00) / 4) as usize],
             _ => return None,
         })
@@ -659,7 +817,10 @@ impl Clock {
             0x304 => self.interrupts |= value & 0xb,
             0x308 => self.interrupts &= !value,
             0x518 => self.lf_source = value & 0x30003,
+            0x51c => self.retention = value & 0xff,
+            0x55c => self.trace_config = value & 0x30003,
             0x578 => self.dcdc = value & 1,
+            0x580 => self.dcdc0 = value & 1,
             // AMLI RAMPRI shares the POWER/CLOCK page. Bus accesses are serialized.
             0xe00..=0xe34 => self.ram_priority[((offset - 0xe00) / 4) as usize] = value,
             _ => return false,
@@ -697,12 +858,18 @@ impl Uarte {
         (bit & UART_EVENTS != 0).then_some(bit)
     }
 
-    fn read(&self, offset: u32) -> Option<u32> {
+    fn read(&mut self, offset: u32) -> Option<u32> {
         Some(match offset {
-            0x000 | 0x004 | 0x008 | 0x00c | 0x200 | 0x480 => 0,
+            0x000 | 0x004 | 0x008 | 0x00c | 0x02c | 0x480 => 0,
+            0x200 => self.shorts,
             0x300 | 0x304 | 0x308 => self.interrupts,
             0x500 => self.enabled,
             0x508..=0x514 => self.pins[((offset - 0x508) / 4) as usize],
+            0x518 if self.enabled == 4 => {
+                let data = self.rx_byte.take().unwrap_or(0);
+                self.receive_legacy();
+                u32::from(data)
+            }
             0x524 => self.baud,
             0x534 => self.rx_pointer,
             0x538 => self.rx_count,
@@ -724,15 +891,31 @@ impl Uarte {
     ) -> Result<bool, BusError> {
         let trigger = value & 1 != 0 && self.enabled == 8;
         match offset {
+            0x000 if self.enabled == 4 && value & 1 != 0 => {
+                self.legacy_rx = true;
+                self.receive(bus)?;
+            }
             0x000 if trigger => {
                 self.rx_amount = 0;
                 self.rx_active = Some((self.rx_pointer, self.rx_count));
                 self.raise(Self::RX_STARTED);
                 self.receive(bus)?;
             }
-            0x004 if trigger => {
+            0x004 if value & 1 != 0 => {
                 self.rx_active = None;
-                self.raise(Self::END_RX | Self::RX_TIMEOUT);
+                self.legacy_rx = false;
+                self.raise(Self::RX_TIMEOUT);
+                if self.rx_amount < self.rx_count {
+                    self.raise(Self::END_RX);
+                }
+            }
+            0x008 if self.enabled == 4 && value & 1 != 0 => self.legacy_tx = true,
+            0x00c if self.enabled == 4 && value & 1 != 0 => self.legacy_tx = false,
+            0x51c if self.enabled == 4 => {
+                if self.legacy_tx {
+                    output.write_all(&[value as u8]).map_err(BusError::Output)?;
+                    self.raise(Self::TX_READY);
+                }
             }
             0x008 if trigger => {
                 if self.tx_count != 0 {
@@ -749,14 +932,22 @@ impl Uarte {
             }
             0x00c if trigger => self.raise(Self::TX_STOPPED),
             0x000 | 0x004 | 0x008 | 0x00c | 0x480 => {}
-            0x200 if value == 0 => {}
+            0x02c if trigger => {
+                self.receive(bus)?;
+                self.raise(Self::END_RX);
+            }
+            0x02c => {}
+            0x200 => self.shorts = value & 0x60,
             0x300 => self.interrupts = value & UART_EVENTS,
             0x304 => self.interrupts |= value & UART_EVENTS,
             0x308 => self.interrupts &= !value,
-            0x500 if matches!(value, 0 | 8) => {
+            0x500 if matches!(value, 0 | 4 | 8) => {
                 self.enabled = value;
                 if value == 0 {
                     self.rx_active = None;
+                    self.legacy_rx = false;
+                    self.legacy_tx = false;
+                    self.rx_byte = None;
                     self.input.clear();
                 }
             }
@@ -768,14 +959,31 @@ impl Uarte {
             0x548 => self.tx_count = value & 0xffff,
             0x56c => self.config = value,
             _ => match Self::event(offset) {
-                Some(bit) => set_event(&mut self.events, bit, value),
+                Some(bit) => {
+                    set_event(&mut self.events, bit, value);
+                    if bit == Self::RX_READY && self.legacy_rx && value == 0 {
+                        self.receive(bus)?;
+                    }
+                }
                 None => return Ok(false),
             },
         }
         Ok(true)
     }
 
+    fn receive_legacy(&mut self) {
+        if self.legacy_rx
+            && self.rx_byte.is_none()
+            && self.events & Self::RX_READY == 0
+            && let Some(byte) = self.input.pop_front()
+        {
+            self.rx_byte = Some(byte);
+            self.raise(Self::RX_READY);
+        }
+    }
+
     fn receive(&mut self, bus: &mut Bus) -> Result<(), BusError> {
+        self.receive_legacy();
         let Some((pointer, count)) = self.rx_active else {
             return Ok(());
         };
@@ -798,6 +1006,13 @@ impl Uarte {
         if self.rx_amount == count {
             self.rx_active = None;
             self.raise(Self::END_RX);
+            if self.shorts & 0x40 != 0 {
+                self.raise(Self::RX_TIMEOUT);
+            } else if self.shorts & 0x20 != 0 && self.rx_count != 0 {
+                self.rx_amount = 0;
+                self.rx_active = Some((self.rx_pointer, self.rx_count));
+                self.raise(Self::RX_STARTED);
+            }
         }
         Ok(())
     }

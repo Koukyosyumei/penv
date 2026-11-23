@@ -1,9 +1,13 @@
 use std::collections::VecDeque;
 
+use super::Adxl372;
+
 pub(super) const READY: u32 = 1 << 2;
 
 pub(super) struct Spi {
     loopback: bool,
+    adxl: Option<(u32, u32, Box<Adxl372>)>,
+    selected: bool,
     enabled: bool,
     ready: bool,
     interrupts: u32,
@@ -19,6 +23,8 @@ impl Spi {
     pub(super) fn new(loopback: bool) -> Self {
         Self {
             loopback,
+            adxl: None,
+            selected: false,
             enabled: false,
             ready: false,
             interrupts: 0,
@@ -32,7 +38,34 @@ impl Spi {
     }
 
     pub(super) fn reset(&mut self) {
+        let mut adxl = self.adxl.take();
+        if let Some((_, _, device)) = &mut adxl {
+            device.reset();
+        }
         *self = Self::new(self.loopback);
+        self.adxl = adxl;
+    }
+
+    pub(super) fn attach_adxl(&mut self, gpio: u32, pin: u32, device: Adxl372) {
+        self.adxl = Some((gpio, pin, Box::new(device)));
+    }
+
+    pub(super) fn sample_cs(&mut self, bus: &crate::bus::Bus) {
+        if let Some((gpio, pin, device)) = &mut self.adxl {
+            self.selected = bus.nrf_gpio_driven_high(*gpio) & (1 << *pin) == 0;
+            if !self.selected {
+                device.exchange(0, false);
+            }
+        }
+    }
+
+    pub(super) fn release_cs(&mut self, gpio: u32, pins: u32) {
+        if let Some((base, pin, device)) = &mut self.adxl
+            && *base == gpio
+            && pins & (1 << *pin) != 0
+        {
+            device.exchange(0, false);
+        }
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -75,8 +108,15 @@ impl Spi {
             }
             0x51c => {
                 self.transmit = value as u8;
-                if self.enabled && self.loopback && self.receive.len() < 2 {
-                    self.receive.push_back(self.transmit);
+                if self.enabled && self.receive.len() < 2 {
+                    let response = if let Some((_, _, device)) = &mut self.adxl {
+                        device.exchange(self.transmit, self.selected)
+                    } else if self.loopback {
+                        self.transmit
+                    } else {
+                        return true;
+                    };
+                    self.receive.push_back(response);
                     if self.receive.len() == 1 {
                         self.raise_ready();
                     }

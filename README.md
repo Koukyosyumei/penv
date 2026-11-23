@@ -92,7 +92,7 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ### nRF52840 の上流 Zephyr Shell
 
-nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNG、ECB、EGU0–5 と、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
+nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、UART/UARTE0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモードと ADXL372、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNG、ECB、EGU0–5 と、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 
 RTC と Watchdog は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。Watchdog は有効な全リロード要求の受理でカウンターを再ロードします。タイムアウト割り込みを有効にした場合は 2 LFCLK サイクル後にリセットします。UART の TX は即時に転送され、CLI 入力は最初に宣言した UART が受信を開始していれば SRAM に転送されます。
 
@@ -137,7 +137,7 @@ target/release/penv run --platform ../renode/platforms/cpus/nrf52840.repl \
   --max-steps 130000000 "$assets/watchdog.elf"
 ```
 
-`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。CCM の固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・RTC・I²S・PDM・RADIO・RNG・ECB・EGU 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。CCM の固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・RTC・I²S・PDM・RADIO・RNG・ECB・EGU 以外をイベント源とする PPI、UART のフロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモードです。REPL の NVIC IRQ 3/4 に接続し、アドレス NACK、受信・送信・停止・一時停止イベントと割り込み、繰り返し START、受信時の BB_STOP/BB_SUSPEND に対応します。`Memory.GenericI2cEeprom @ twi1 0x50` のように EEPROM を接続できます。TWIM EasyDMA、スレーブモード、ピン波形とバス速度の再現は未実装です。
 
@@ -146,9 +146,9 @@ TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモード�
 tests/nrf52840-twi.sh target/release/penv ../renode
 ```
 
-このスクリプトは、上流の TWI 配線を含む一時 REPL でベアメタル ARM ELF を起動します。TWI0 で未接続アドレスの NACK と IRQ 3 を、TWI1 で IRQ 4、EEPROM の書き込み、繰り返し START からの 2 バイト読み出し、SUSPEND/RESUME/STOP を検証し、UART に `TWI OK` を出力します。上流の ADXL372 I²C サンプル（ELF の SHA-1 は `aacf7d772ebcc5a26c156f78ebdef2e03f803cc3`）は、上流テストと同じ接続を追加すると未実装の `Sensors.ADXL372` で読み込みを停止します。センサー宣言を含めない診断実行では、PC `0x00005fd2` の未対応 Thumb-2 命令で停止し、センサー値の出力には未到達です。
+このスクリプトは、上流の TWI 配線を含む一時 REPL でベアメタル ARM ELF を起動します。TWI0 で未接続アドレスの NACK と IRQ 3 を、TWI1 で IRQ 4、EEPROM の書き込み、繰り返し START からの 2 バイト読み出し、SUSPEND/RESUME/STOP を検証し、UART に `TWI OK` を出力します。上流 ADXL372 ELF は `Sensors.ADXL372 @ twi1 0x11` から識別子、ステータスと加速度を読み出します。
 
-SPI2 は 8 ビット転送、2 バイトの受信バッファ、READY イベントと NVIC IRQ 35、PPI への READY イベント通知に対応します。上流モデルと同様に、ターゲット未接続時は TXD に書いても転送完了イベントは発生しません。`loopback: SPI.SPILoopback @ spi2` を追加すると、送信したバイトが受信バッファへ戻ります。SPIM EasyDMA、外部チップセレクトやピン波形、ADXL372 などの SPI ターゲットは未実装です。
+SPI2 は 8 ビット転送、2 バイトの受信バッファ、READY イベントと NVIC IRQ 35、PPI への READY イベント通知に対応します。上流モデルと同様に、ターゲット未接続時は TXD に書いても転送完了イベントは発生しません。`loopback: SPI.SPILoopback @ spi2` を追加すると、送信したバイトが受信バッファへ戻ります。`Sensors.ADXL372 @ spi2` は GPIO のアクティブ Low チップセレクトに対応します。SPIM3 は起動処理で使用する一部の設定レジスターに対応します。SPIM EasyDMA、ピン波形、センサー FIFO と物理入力は未実装です。
 
 ```sh
 # clang と ld.lld が必要
@@ -173,7 +173,7 @@ I²S はマスターの START/STOP、RXPTRUPD/TXPTRUPD/STOPPED イベント、NV
 tests/nrf52840-i2s.sh target/release/penv ../renode
 ```
 
-ベアメタル ARM ELF は IRQ 37 で次のバッファを設定し、2 組のワード転送とバッファ境界、STOPPED を検証して `I2S OK` を出力します。スレーブモード、外部 PCM ファイル入出力、ピン波形は未実装です。上流の `Should Echo I2S Audio` が参照する `nrf52840--nordic_snippets_i2s_master.elf`（SHA-1 `98d5e53081cf7d76d30a183978a03b3e00beaf53`）も試しましたが、現行 ELF ローダーが hard-float ABI を拒否するため、上流サンプルの PCM 比較には未到達です。
+ベアメタル ARM ELF は IRQ 37 で次のバッファを設定し、2 組のワード転送とバッファ境界、STOPPED を検証して `I2S OK` を出力します。スレーブモードとピン波形は未実装です。`--i2s-input` と `--i2s-output` は EasyDMA 形式の PCM バイト列を扱います。ファイル入出力を設定すると、上流モデルと同じく RX を SRAM に書き込んでから TX を採取し、バッファ転送時にポインターイベントを通知します。上流の hard-float I²S ELF は上流テストと同じ 32 バイトの入力をエコーし、出力がバイト単位で一致します。
 
 PDM は EasyDMA の SAMPLE.PTR と SAMPLE.MAXCNT をバッファ境界でラッチし、16 ビットサンプルを書き込みます。STARTED/END/STOPPED は NVIC IRQ 29 とプログラマブル PPI に接続できます。`--pdm-input PATH` に符号付き 16 ビットの little-endian PCM を指定します。ステレオは左右交互に格納した PCM を使います。入力がない場合やファイル終端以降は無音になり、システムリセット時に入力位置を先頭へ戻します。STOP は転送途中のバッファを中止します。ピン波形、ゲインの信号処理、STOP 時の部分バッファ書き込みは未実装です。
 
@@ -194,7 +194,15 @@ curl -fL "https://dl.antmicro.com/projects/renode/$pcm_asset" -o "$assets/yes.pc
 tests/nrf52840-pdm-upstream.sh target/release/penv ../renode "$assets/speech.elf" "$assets/yes.pcm"
 ```
 
-現状は PC `0x00023fb8` からの SCB CPACR（`0xe000ed88`）への FPU 有効化書き込みで停止します。PDM の初期化と音声認識の判定には未到達です。
+未変更の上流 REPL で `Heard yes (204) @2560ms` を確認しました。Cortex-M4 は CPACR、単精度 VFP 演算、VFP レジスター転送、例外時の拡張フレームに対応します。FPU コンテキストは例外発生時に保存します。遅延保存、丸めモードの切り替え、浮動小数点例外の正確なフラグ、USB 通信、PWM 出力は未実装です。
+
+上流の実 ELF と PCM を取得して SHA-1 を照合する回帰スクリプトを用意しています。UART/UARTE のリセット前後の `demo ping`、ハードウェア Watchdog による再起動とタスク Watchdog の 2 回連続再起動、WFE と Zephyr `kernel.interrupt`、I²S の PCM 一致、TWI/SPI の ADXL372、PDM の認識を確認できます。ADXL372 の 4 組の入力値は、REPL の軸プロパティを変えて独立した起動で検証します。
+
+```sh
+cargo test
+cargo build --release
+tests/nrf52840-audio-upstream.sh target/release/penv ../renode /tmp/nrf52840-audio-upstream
+```
 
 RADIO は TXEN/RXEN/START/STOP/DISABLE、READY/ADDRESS/PAYLOAD/END/DISABLED、TXREADY/RXREADY/PHYEND と IRQ 1 に対応します。PACKETPTR が指す SRAM 範囲を PCNF0/PCNF1 のヘッダーと長さ設定に従ってアクセスします。`loopback: true` の検証構成では最後の送信パケットを 1 件保管し、同じ周波数・MODE・パケット設定で受信を開始すると SRAM にコピーして CRCOK を立てます。READY_START や END_DISABLE などの一部ショートカットとプログラマブル PPI を使用できます。
 

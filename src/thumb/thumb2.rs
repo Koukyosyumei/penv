@@ -189,6 +189,26 @@ impl Thumb {
                 };
                 *next = next.wrapping_add(offset * 2);
             }
+            0xe8d0..=0xe8de if matches!(low & 0xfff, 0xf4f | 0xf5f) && !matches!(rt, 13 | 15) => {
+                r[rt] = if low & 0x10 == 0 {
+                    bus.thumb_load_exclusive::<1>(r[rn])?
+                } else {
+                    bus.thumb_load_exclusive::<2>(r[rn])?
+                };
+            }
+            0xe8c0..=0xe8ce
+                if matches!(low & 0xff0, 0xf40 | 0xf50)
+                    && !matches!(rt, 13 | 15)
+                    && !matches!(rm, 13 | 15)
+                    && rm != rn
+                    && rm != rt =>
+            {
+                r[rm] = if low & 0x10 == 0 {
+                    bus.thumb_store_exclusive::<1>(r[rn], r[rt])?
+                } else {
+                    bus.thumb_store_exclusive::<2>(r[rn], r[rt])?
+                };
+            }
             0xe850..=0xe85e if low & 0xf00 == 0xf00 && !matches!(rt, 13 | 15) => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
                 bus.check_thumb_access(address, 4, false, false)?;
@@ -234,7 +254,7 @@ impl Thumb {
                 }
                 *r = values;
             }
-            0xe940..=0xe97e | 0xe9c0..=0xe9fe
+            0xe860..=0xe87e | 0xe8e0..=0xe8fe | 0xe940..=0xe97e | 0xe9c0..=0xe9fe
                 if rn < 15
                     && !matches!(rt, 13 | 15)
                     && !matches!(rd, 13 | 15)
@@ -242,11 +262,12 @@ impl Thumb {
                     && (high & 0x20 == 0 || (rn != rt && rn != rd)) =>
             {
                 let offset = (low & 0xff) * 4;
-                let address = if high & 0x80 == 0 {
+                let indexed = if high & 0x80 == 0 {
                     r[rn].wrapping_sub(offset)
                 } else {
                     r[rn].wrapping_add(offset)
                 };
+                let address = if high & 0x100 == 0 { r[rn] } else { indexed };
                 if address & 3 != 0 {
                     return Err(format!("unaligned double-word transfer at {address:#010x}"));
                 }
@@ -261,7 +282,7 @@ impl Thumb {
                     bus.thumb_write(second, 4, r[rd], output)?;
                 }
                 if high & 0x20 != 0 {
-                    r[rn] = address;
+                    r[rn] = indexed;
                 }
             }
             0xea00..=0xea9f
@@ -340,6 +361,61 @@ impl Thumb {
                     r[rn].wrapping_add(extended)
                 };
             }
+            0xfa20..=0xfa3f
+                if rn != 13
+                    && rt == 15
+                    && low & 0xc0 == 0x80
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let value = r[rm].rotate_right(((low >> 4) & 3) * 8);
+                let base = if rn == 15 { 0 } else { r[rn] };
+                let extend = |byte: u8| {
+                    if high & 0x10 == 0 {
+                        byte as i8 as i16 as u16
+                    } else {
+                        u16::from(byte)
+                    }
+                };
+                let low = (base as u16).wrapping_add(extend(value as u8));
+                let high = ((base >> 16) as u16).wrapping_add(extend((value >> 16) as u8));
+                r[rd] = u32::from(low) | (u32::from(high) << 16);
+            }
+            0xfa80..=0xfa8e
+                if rt == 15
+                    && low & 0xf0 == 0x40
+                    && rn != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = r[rn].to_le_bytes();
+                let b = r[rm].to_le_bytes();
+                let mut value = [0; 4];
+                self.greater_equal = 0;
+                for index in 0..4 {
+                    let (sum, carry) = a[index].overflowing_add(b[index]);
+                    value[index] = sum;
+                    self.greater_equal |= u32::from(carry) << index;
+                }
+                r[rd] = u32::from_le_bytes(value);
+            }
+            0xfaa0..=0xfaae
+                if rt == 15
+                    && low & 0xf0 == 0x80
+                    && rn != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = r[rn].to_le_bytes();
+                let b = r[rm].to_le_bytes();
+                r[rd] = u32::from_le_bytes(std::array::from_fn(|index| {
+                    if self.greater_equal & (1 << index) != 0 {
+                        a[index]
+                    } else {
+                        b[index]
+                    }
+                }));
+            }
             0xfa90..=0xfa9e
                 if rn == rm
                     && rt == 15
@@ -402,6 +478,23 @@ impl Thumb {
                     self.saturation |= overflow;
                 }
             }
+            0xfb20..=0xfb2e
+                if rn != 13
+                    && low & 0xe0 == 0
+                    && rt != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = r[rn];
+                let b = r[rm].rotate_right(if low & 0x10 == 0 { 0 } else { 16 });
+                let lower = i32::from(a as i16) * i32::from(b as i16);
+                let upper = i32::from((a >> 16) as i16) * i32::from((b >> 16) as i16);
+                let acc = if rt == 15 { 0 } else { r[rt] as i32 };
+                let (product, q1) = lower.overflowing_add(upper);
+                let (sum, q2) = product.overflowing_add(acc);
+                self.saturation |= q1 || q2;
+                r[rd] = sum as u32;
+            }
             0xfb80..=0xfb8e | 0xfba0..=0xfbae | 0xfbc0..=0xfbce | 0xfbe0..=0xfbee
                 if rn != 13
                     && low & 0xf0 == 0
@@ -459,6 +552,8 @@ impl Thumb {
                     (bus.thumb_read::<2>(address)? as i16 as i32) as u32
                 };
             }
+            // PLD is a hint. The bus has no cache to prefetch into.
+            0xf890..=0xf89f if rt == 15 => {}
             0xf880..=0xf8df if rn < 15 && rt < 15 => {
                 let address = r[rn].wrapping_add(low & 0xfff);
                 let width = 1 << ((high >> 5) & 3);
@@ -473,18 +568,13 @@ impl Thumb {
                     bus.thumb_write(address, width, r[rt], output)?;
                 }
             }
-            0xf85d if low == 0xfb04 => {
-                let target = bus.thumb_read::<4>(r[13])?;
-                r[13] = r[13].wrapping_add(4);
-                *next = self.branch(target, r, bus)?;
-            }
             0xf850..=0xf85e if rt == 15 && low & 0x0fc0 == 0 && !matches!(rm, 13 | 15) => {
                 let address = r[rn].wrapping_add(r[rm] << ((low >> 4) & 3));
                 *next = self.branch(bus.thumb_read::<4>(address)?, r, bus)?;
             }
             0xf800..=0xf85e | 0xf910..=0xf91e | 0xf930..=0xf93e
                 if high & 15 != 15
-                    && rt < 15
+                    && (rt < 15 || high & 0xfff0 == 0xf850)
                     && (low & 0x0fc0 == 0 || (low & 0x800 != 0 && low & 0x500 != 0)) =>
             {
                 let width = 1 << ((high >> 5) & 3);
@@ -519,11 +609,19 @@ impl Thumb {
                         2 => bus.thumb_read::<2>(address),
                         _ => bus.thumb_read::<4>(address),
                     }?;
-                    r[rt] = match (high & 0x100 != 0, width) {
+                    let value = match (high & 0x100 != 0, width) {
                         (true, 1) => (data as i8 as i32) as u32,
                         (true, 2) => (data as i16 as i32) as u32,
                         _ => data,
                     };
+                    if rt == 15 {
+                        if writeback {
+                            r[rn] = indexed;
+                        }
+                        *next = self.branch(value, r, bus)?;
+                        return Ok(());
+                    }
+                    r[rt] = value;
                 }
                 if writeback {
                     r[rn] = indexed;

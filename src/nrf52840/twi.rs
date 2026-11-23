@@ -1,5 +1,35 @@
 use crate::stm32_i2c::Eeprom;
 
+use super::{Adxl372, Spi};
+
+pub(super) enum Target {
+    Eeprom(Eeprom),
+    Adxl372(Box<Adxl372>),
+}
+
+impl Target {
+    fn start_write(&mut self) {
+        match self {
+            Self::Eeprom(device) => device.start_write(),
+            Self::Adxl372(device) => device.start_write(),
+        }
+    }
+
+    fn write(&mut self, value: u8) {
+        match self {
+            Self::Eeprom(device) => device.write(value),
+            Self::Adxl372(device) => device.write(value),
+        }
+    }
+
+    fn read(&mut self) -> u8 {
+        match self {
+            Self::Eeprom(device) => device.read(),
+            Self::Adxl372(device) => device.read(),
+        }
+    }
+}
+
 const STOPPED: u32 = 1 << 1;
 const RXDREADY: u32 = 1 << 2;
 const TXDSENT: u32 = 1 << 7;
@@ -16,7 +46,9 @@ enum Direction {
 }
 
 pub(super) struct Twi {
-    targets: Vec<(u32, Eeprom)>,
+    targets: Vec<(u32, Target)>,
+    spi: Spi,
+    spi_enabled: bool,
     active: Option<(usize, Direction)>,
     suspended: bool,
     rx: Option<u8>,
@@ -35,6 +67,8 @@ impl Default for Twi {
     fn default() -> Self {
         Self {
             targets: Vec::new(),
+            spi: Spi::new(false),
+            spi_enabled: false,
             active: None,
             suspended: false,
             rx: None,
@@ -52,7 +86,7 @@ impl Default for Twi {
 }
 
 impl Twi {
-    pub(super) fn attach(&mut self, address: u32, target: Eeprom) -> Result<(), String> {
+    pub(super) fn attach(&mut self, address: u32, target: Target) -> Result<(), String> {
         if address >= 128 || self.targets.iter().any(|(other, _)| *other == address) {
             return Err(format!(
                 "invalid or duplicate TWI target address {address:#x}"
@@ -63,6 +97,11 @@ impl Twi {
     }
 
     pub(super) fn reset(&mut self) {
+        for (_, target) in &mut self.targets {
+            if let Target::Adxl372(device) = target {
+                device.reset();
+            }
+        }
         *self = Self {
             targets: std::mem::take(&mut self.targets),
             ..Self::default()
@@ -135,6 +174,9 @@ impl Twi {
     }
 
     pub(super) fn read(&mut self, offset: u32) -> Option<u32> {
+        if self.spi_enabled || matches!(offset, 0x510 | 0x554) {
+            return self.spi.read(offset);
+        }
         Some(match offset {
             offset if Self::is_task(offset) => 0,
             0x200 => self.shorts,
@@ -160,6 +202,20 @@ impl Twi {
     }
 
     pub(super) fn write(&mut self, offset: u32, value: u32) -> bool {
+        if offset == 0x500 {
+            if value == 1 && !self.enabled {
+                self.spi_enabled = true;
+            } else if value == 0 && self.spi_enabled {
+                self.spi_enabled = false;
+                return self.spi.write(offset, value);
+            }
+        }
+        if self.spi_enabled || matches!(offset, 0x510 | 0x554) {
+            return self.spi.write(offset, value);
+        }
+        if !self.enabled && matches!(offset, 0x508 | 0x50c | 0x524) {
+            self.spi.write(offset, value);
+        }
         let trigger = self.enabled && value & 1 != 0;
         match offset {
             0x000 if trigger => self.start(Direction::Read),

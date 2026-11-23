@@ -105,6 +105,10 @@ impl Gpio {
 }
 
 impl Gpio {
+    pub(super) fn driven_high(&self) -> u32 {
+        self.direction & self.out
+    }
+
     pub(super) fn sample(&self) -> (u32, bool) {
         let detect = if self.detect_mode == 0 {
             self.detect()
