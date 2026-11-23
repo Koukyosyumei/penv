@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 25 | 0 | 192 | 7 |
-| **合計** | **730** | **103** | **0** | **627** | **244** |
+| Infrastructure | 217 | 29 | 0 | 188 | 7 |
+| **合計** | **730** | **107** | **0** | **623** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 627 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 623 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -569,3 +569,36 @@ TIM2 の公開 ELF 回帰は `tests/stm32f407-upstream-smoke.sh` の TIM2 段を
 3 回以上の周期コールバックの順序を照合します。ログは `tim2-up.log` と
 `tim2-down.log` に保存しました。比較値変更と比較イベントを扱う共有
 `ComparingTimerTests.cs` は別群に残っています。
+
+## STM32 GPIO の静的接続
+
+固定 Infrastructure の `src/Emulator/Main/Tests/UnitTests/GPIOTests.cs` 全 4 件を
+Rust に移植しました。STM32 REPL のポート間配線も同じ接続登録を通ります。
+受信側の識別子と入力ピン番号、未接続時の空リスト、5 入力の受信側のピン 2 を
+確認しました。ピン 10 では上流と同じエラー文を検査します。モックオブジェクトの
+参照同一性は、Rust のバス内で一意な受信側アドレスで照合します。
+
+比較タイマー群は未達です。上流 `ComparingTimer` は上限超過の比較値を拒否し、
+比較値や現在値を書いたときに期限を再計算します。STM32 TIM の CCR には ARR より
+大きな値も書けるため、そのレジスター規則を維持した上で共有比較タイマーを扱う必要が
+あります。GPIO の動的な切り離しも別群に残ります。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-gpio-connections
+mkdir -p "$work"
+cargo test renode_gpio
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+配線の回帰には `tests/stm32f407-upstream-smoke.sh` の Quadrature Decoder 段を
+使います。公開 ELF の SHA-1 を照合し、上流 REPL に PD12→PA6 と PD13→PA7 を
+追加して 2100000 ステップ実行します。期待値は最初の 2 出力が 10±1 度と 20±1 度です。
+この実行の UART と判定結果は `qdec.uart` と `qdec.log` にあります。

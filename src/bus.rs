@@ -146,10 +146,10 @@ pub struct Bus {
     pub timer: Option<(u32, Timer)>,
 }
 
-pub struct GpioWire {
-    pub source: (u32, u8),
-    pub target: (u32, u8),
-    pub level: bool,
+struct GpioWire {
+    source: (u32, u8),
+    target: (u32, u8),
+    level: bool,
 }
 
 pub struct TimerPin {
@@ -793,9 +793,45 @@ impl Bus {
             .map(|port| port.pins() & (1 << pin) != 0)
     }
 
-    pub fn set_gpio_links(&mut self, pins: Vec<TimerPin>, wires: Vec<GpioWire>) {
+    pub fn set_timer_pins(&mut self, pins: Vec<TimerPin>) {
         self.timer_pins = pins;
-        self.gpio_wires = wires;
+    }
+
+    pub fn connect_gpio(
+        &mut self,
+        source: (u32, u8),
+        receiver: u32,
+        input: u8,
+        input_count: Option<u8>,
+        receiver_name: &str,
+    ) -> Result<(), String> {
+        if let Some(count) = input_count
+            && input >= count
+        {
+            let suffix = match (input % 100, input % 10) {
+                (11..=13, _) => "th",
+                (_, 1) => "st",
+                (_, 2) => "nd",
+                (_, 3) => "rd",
+                _ => "th",
+            };
+            return Err(format!(
+                "Cannot connect {input}{suffix} input of {receiver_name}; it has only {count} GPIO inputs."
+            ));
+        }
+        let target = (receiver, input);
+        if !self
+            .gpio_wires
+            .iter()
+            .any(|wire| wire.source == source && wire.target == target)
+        {
+            self.gpio_wires.push(GpioWire {
+                source,
+                target,
+                level: false,
+            });
+        }
+        Ok(())
     }
 
     fn sample_timer_pins(&mut self) {
@@ -2516,4 +2552,50 @@ fn gpio_clocked(control: Option<&NetworkControl>, port: &Stm32Gpio) -> bool {
 
 fn rtc_clocked(control: Option<&NetworkControl>, rtc: &Stm32Rtc) -> bool {
     !rtc.rcc_bound || control.is_none_or(NetworkControl::rtc_enabled)
+}
+
+#[cfg(test)]
+mod gpio_connection_tests {
+    use super::*;
+
+    const SOURCE: (u32, u8) = (0, 0);
+    const DESTINATION: u32 = 0x10;
+    const UNCONSTRAINED: &str = "Antmicro.Renode.UnitTests.Mocks.MockReceiver";
+    const CONSTRAINED: &str = "Antmicro.Renode.UnitTests.Mocks.MockReceiverConstrained";
+
+    #[test]
+    fn renode_gpio_propagates_connected_endpoint() {
+        let mut bus = Bus::default();
+        bus.connect_gpio(SOURCE, DESTINATION, 2, None, UNCONSTRAINED)
+            .unwrap();
+        let endpoint = &bus.gpio_wires[0];
+        assert_eq!(endpoint.target, (DESTINATION, 2));
+    }
+
+    #[test]
+    fn renode_gpio_endpoints_are_empty_when_disconnected() {
+        let bus = Bus::default();
+        assert!(bus.gpio_wires.is_empty());
+    }
+
+    #[test]
+    fn renode_gpio_connects_bounded_input() {
+        let mut bus = Bus::default();
+        bus.connect_gpio(SOURCE, DESTINATION, 2, Some(5), CONSTRAINED)
+            .unwrap();
+        assert_eq!(bus.gpio_wires[0].target, (DESTINATION, 2));
+    }
+
+    #[test]
+    fn renode_gpio_rejects_out_of_range_input() {
+        let mut bus = Bus::default();
+        let error = bus
+            .connect_gpio(SOURCE, DESTINATION, 10, Some(5), CONSTRAINED)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Cannot connect 10th input of Antmicro.Renode.UnitTests.Mocks.MockReceiverConstrained; it has only 5 GPIO inputs."
+        );
+        assert!(bus.gpio_wires.is_empty());
+    }
 }
