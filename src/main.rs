@@ -422,7 +422,7 @@ fn run() -> Result<ExitCode, String> {
     }
     for (path, address) in binaries {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        image::load_binary(&mut machine, file, address)
+        image::load_script_binary(&mut machine, file, address)
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     if let Some(count) = harts {

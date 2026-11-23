@@ -425,6 +425,38 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
                 let size = number(size).map_err(|e| entry.error(&e))?;
+                if let Some(mappings) = entry
+                    .registration
+                    .as_deref()
+                    .and_then(|value| value.trim().strip_prefix('{'))
+                    .and_then(|value| value.strip_suffix('}'))
+                {
+                    let mut addresses = mappings
+                        .split(';')
+                        .map(str::trim)
+                        .filter(|part| !part.is_empty())
+                        .map(|part| {
+                            let value = part
+                                .strip_prefix("sysbus ")
+                                .ok_or_else(|| entry.error("expected a sysbus memory address"))?;
+                            number(value.trim()).map_err(|e| entry.error(&e))
+                        });
+                    let base = addresses
+                        .next()
+                        .ok_or_else(|| entry.error("empty memory registration"))??;
+                    machine
+                        .bus
+                        .map_ram(base, size as usize)
+                        .map_err(|e| entry.error(&e))?;
+                    for address in addresses {
+                        machine
+                            .bus
+                            .map_ram_alias(base, address?)
+                            .map_err(|e| entry.error(&e))?;
+                    }
+                    ram = true;
+                    continue;
+                }
                 let address = if let Some(range) = entry
                     .registration
                     .as_deref()

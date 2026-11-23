@@ -25,6 +25,26 @@ pub fn load_binary(machine: &mut Machine, mut file: File, address: u32) -> Resul
     file.read_exact(memory).map_err(|error| error.to_string())
 }
 
+pub fn load_script_binary(
+    machine: &mut Machine,
+    mut file: File,
+    address: u32,
+) -> Result<(), String> {
+    if !machine.bus.permits_unmapped_binary_bytes() {
+        return load_binary(machine, file, address);
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.is_empty() {
+        return Err("empty raw image".into());
+    }
+    machine
+        .bus
+        .write_mapped_bytes(address, &bytes)
+        .map_err(|error| error.to_string())
+}
+
 pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), String> {
     if raw {
         return load_binary(machine, file, machine.raw_load_address());

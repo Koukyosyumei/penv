@@ -152,7 +152,7 @@ impl Node {
         }
         for (value, address) in boot.binaries {
             let (file, path) = open(&value)?;
-            image::load_binary(&mut machine, file, address)
+            image::load_script_binary(&mut machine, file, address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         for (address, value) in boot.writes {

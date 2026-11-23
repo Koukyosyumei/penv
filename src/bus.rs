@@ -84,6 +84,7 @@ impl fmt::Display for BusError {
 
 struct Region {
     base: u32,
+    aliases: Vec<u32>,
     bytes: Vec<u8>,
 }
 
@@ -223,8 +224,9 @@ impl<'a> EthernetDma<'a> {
                 if width != 0 {
                     for reservation in self.reservations.iter_mut() {
                         if reservation.is_some_and(|reserved| {
-                            u64::from(address) < u64::from(reserved) + 4
-                                && u64::from(reserved) < u64::from(address) + width as u64
+                            region.offset(reserved, 1).is_some_and(|reserved_offset| {
+                                offset < reserved_offset + 4 && reserved_offset < offset + width
+                            })
                         }) {
                             *reservation = None;
                         }
@@ -253,12 +255,22 @@ impl Region {
         // SAFETY: Global allocation with u8 alignment and size bytes, all initialized.
         // Vec takes ownership and deallocates with the same layout.
         let bytes = unsafe { Vec::from_raw_parts(allocation, size, size) };
-        Ok(Self { base, bytes })
+        Ok(Self {
+            base,
+            aliases: Vec::new(),
+            bytes,
+        })
+    }
+
+    fn bases(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::once(self.base).chain(self.aliases.iter().copied())
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<usize> {
-        let offset = address.checked_sub(self.base)? as usize;
-        (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        self.bases().find_map(|base| {
+            let offset = address.checked_sub(base)? as usize;
+            (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        })
     }
 }
 
@@ -1212,8 +1224,10 @@ impl Bus {
                 start < base + u64::from(peripheral.size) && base < end
             })
             || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
-                start < other + region.bytes.len() as u64 && other < end
+                region.bases().any(|base| {
+                    let other = u64::from(base);
+                    start < other + region.bytes.len() as u64 && other < end
+                })
             })
     }
 
@@ -1585,6 +1599,76 @@ impl Bus {
             ));
         }
         Ok(())
+    }
+
+    pub fn map_ram_alias(&mut self, base: u32, alias: u32) -> Result<(), String> {
+        let index = self
+            .regions
+            .iter()
+            .position(|region| region.base == base)
+            .ok_or("memory alias requires an existing backing region")?;
+        let start = u64::from(alias);
+        let end = start + self.regions[index].bytes.len() as u64;
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping memory alias at {alias:#010x}"
+            ));
+        }
+        self.regions[index].aliases.push(alias);
+        Ok(())
+    }
+
+    pub fn permits_unmapped_binary_bytes(&self) -> bool {
+        matches!(
+            self.unhandled_access,
+            UnhandledAccess::Report | UnhandledAccess::DoNotReport
+        )
+    }
+
+    fn memory_spans(
+        &self,
+        address: u32,
+        size: usize,
+    ) -> Result<Vec<(u32, std::ops::Range<usize>)>, BusError> {
+        let start = u64::from(address);
+        let end = start
+            .checked_add(size as u64)
+            .filter(|&end| end <= 1 << 32)
+            .ok_or(BusError::Unmapped(address, size))?;
+        let mut spans = Vec::new();
+        for region in &self.regions {
+            for base in region.bases().map(u64::from) {
+                let lo = start.max(base);
+                let hi = end.min(base + region.bytes.len() as u64);
+                if lo < hi {
+                    spans.push((lo as u32, (lo - start) as usize..(hi - start) as usize));
+                }
+            }
+        }
+        // Two mappings can share a backing. Apply writes in address order.
+        spans.sort_by_key(|(address, _)| *address);
+        Ok(spans)
+    }
+
+    pub fn write_mapped_bytes(&mut self, address: u32, input: &[u8]) -> Result<(), BusError> {
+        for (start, bytes) in self.memory_spans(address, input.len())? {
+            self.memory(start, bytes.len())?
+                .copy_from_slice(&input[bytes]);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn read_mapped_bytes(&mut self, address: u32, size: usize) -> Result<Vec<u8>, BusError> {
+        let mut output = vec![0; size];
+        for (start, bytes) in self.memory_spans(address, size)? {
+            let memory = EthernetDma {
+                regions: &mut self.regions,
+                reservations: &mut self.reservations,
+            };
+            output[bytes.clone()].copy_from_slice(memory.read(start, bytes.len()).unwrap());
+        }
+        Ok(output)
     }
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
@@ -2759,5 +2843,81 @@ mod unhandled_bus_tests {
             );
         }
         assert_eq!(bus.read::<1>(0x1010).unwrap(), 0);
+    }
+}
+
+#[cfg(test)]
+mod mapped_byte_tests {
+    use super::*;
+
+    const ALIAS: u32 = 0xc000_0000;
+    const BYTES: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+    fn aliased_segment() -> Bus {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 16).unwrap();
+        bus.map_ram_alias(0, ALIAS).unwrap();
+        bus
+    }
+
+    #[test]
+    fn renode_mapped_bytes_write_fits_inside_segment() {
+        let mut bus = aliased_segment();
+        bus.write_mapped_bytes(4, &BYTES).unwrap();
+        assert_eq!(bus.read_mapped_bytes(4, 8).unwrap(), BYTES);
+        assert_eq!(bus.read_mapped_bytes(ALIAS + 4, 8).unwrap(), BYTES);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_partial_write_at_beginning() {
+        let mut bus = aliased_segment();
+        bus.write_mapped_bytes(10, &BYTES).unwrap();
+        assert_eq!(
+            bus.read_mapped_bytes(10, 8).unwrap(),
+            [0, 1, 2, 3, 4, 5, 0, 0]
+        );
+    }
+
+    #[test]
+    fn renode_mapped_bytes_partial_write_at_end() {
+        let mut bus = aliased_segment();
+        bus.write_mapped_bytes(ALIAS - 4, &BYTES).unwrap();
+        assert_eq!(
+            bus.read_mapped_bytes(ALIAS - 4, 8).unwrap(),
+            [0, 0, 0, 0, 4, 5, 6, 7]
+        );
+        assert_eq!(bus.read_mapped_bytes(0, 4).unwrap(), [4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_write_to_hole() {
+        let mut bus = aliased_segment();
+        bus.write_mapped_bytes(100, &BYTES).unwrap();
+        assert_eq!(bus.read_mapped_bytes(100, 8).unwrap(), [0; 8]);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_write_overlaps_both_ends() {
+        let mut bus = aliased_segment();
+        let input = (0..32).collect::<Vec<_>>();
+        bus.write_mapped_bytes(ALIAS - 4, &input).unwrap();
+        let expected = [&[0; 4][..], &input[4..20], &[0; 12]].concat();
+        assert_eq!(bus.read_mapped_bytes(ALIAS - 4, 32).unwrap(), expected);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_reads_both_memory_segments() {
+        let mut bus = Bus::default();
+        bus.map_ram(50, 100).unwrap();
+        bus.map_ram(200, 100).unwrap();
+        let input = (0..350)
+            .map(|value| (value % 255) as u8)
+            .collect::<Vec<_>>();
+        bus.write_mapped_bytes(0, &input).unwrap();
+        let mut expected = vec![0; 350];
+        for span in [50..150, 200..300] {
+            expected[span.clone()].copy_from_slice(&input[span]);
+        }
+        assert_eq!(bus.read_mapped_bytes(0, 350).unwrap(), expected);
     }
 }
