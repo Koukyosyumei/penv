@@ -194,6 +194,31 @@ mod tests {
     }
 
     #[test]
+    fn sector_eleven_erase_preserves_the_first_word_of_the_bank() {
+        // stm32f4-erase.robot: Should Perform Sector Erase.
+        const FLASH: u32 = 0x0800_0000;
+        const LAST_SECTOR: u32 = 0x080e_0000;
+        let mut bus = Bus::default();
+        bus.map_ram(FLASH, F4Flash::BANK_SIZE as usize).unwrap();
+        bus.map_f4_flash(F4Flash::new(
+            0x4002_3c00,
+            0x1fff_c000,
+            0x100,
+            FLASH..FLASH + F4Flash::BANK_SIZE,
+        ))
+        .unwrap();
+        let mut write =
+            |address, value| bus.write(address, 4, value, &mut std::io::sink()).unwrap();
+        write(FLASH, 0xdead_beef);
+        write(LAST_SECTOR, 0xcafe_babe);
+        write(0x4002_3c04, 0x4567_0123);
+        write(0x4002_3c04, 0xcdef_89ab);
+        write(0x4002_3c10, CR_START | CR_SECTOR_ERASE | (11 << 3));
+        assert_eq!(bus.read::<4>(FLASH).unwrap(), 0xdead_beef);
+        assert_eq!(bus.read::<4>(LAST_SECTOR).unwrap(), u32::MAX);
+    }
+
+    #[test]
     fn sector_erase_requires_unlock_and_updates_only_the_selected_sector() {
         const FLASH: u32 = 0x0800_0000;
         const BASE: u32 = 0x4002_3c00;

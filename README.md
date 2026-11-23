@@ -254,11 +254,11 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 62 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 63 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `7c884a855b292a20bfc3ff9ec6dc6deb62bdc944329ef85010e57a04c2a148ff` です。
+  SHA-256 は `93f6e7b142181ccf75446ebdc9f5274a98d7a9927638c9a944a4200f54c28661` です。
 
 ### CAN1/CAN2 のローカル検証
 
@@ -416,14 +416,13 @@ FreeRTOS の上流構成では、基板上にエコー機器がない状態で S
 確認します。UART 出力には `Discovery bit-band GPIO and SRAM OK` と
 `I2C unpopulated bus NACK OK` が現れ、残りの TIM2、キュー、CAN、UART、IWDG の期待出力は
 検証用 REPL と共通です。上流構成の ELF の SHA-256 は
-`bb6aae7a2d3ccdef3e556aa73a97c6c26af6d8b3e6cf6b341b8c92b7f46aff82` です。
+`01a5823906138f045a7545050cff3051023e98bb5f6f78f67157e8cb4056283a` です。
 
 Renode の TIM2 上り・下りカウントケースは公開 ELF のまま移植し、開始後の
 `period elapsed callback` をそれぞれ 3 回以上確認します。Zephyr Hello World の公開 ELF は
 未変更の kit REPL から起動し、`Hello World! stm32f4_disco` を確認します。
-FAULTMASK の 2 ケースはクロックを有効にした TIM9 で FreeRTOS ELF に移植し、
-マスク中の IRQ 保留と例外復帰後の再配送を `TIM9 FAULTMASK OK` で確認します。
-フラッシュの消去モード未指定と一括消去のケースは Rust テストに移植しました。
+FAULTMASK の 2 ケースは公開 ELF の TIM3 と FreeRTOS ELF の TIM9 で実行します。
+フラッシュの消去モード未指定、一括消去、セクター 11 の選択消去は Rust テストで照合します。
 [上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
 [上流フラッシュ消去テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/stm32f4-erase.robot)
 
@@ -488,3 +487,41 @@ tests/stm32f407-freertos-smoke.sh target/stm32f407-cm4f --fpu
 残課題は FPv4-SP の算術命令、FPCCR の遅延スタック保存（現状は例外進入時に保存）、
 FPU アクセス違反時の UsageFault、一般の Python モニターコマンド、
 Contiki の DHCP リース取得と UDP 疎通の検証です。
+
+### STM32F407 上流ケースの棚卸し
+
+Renode の参照リビジョンは `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` です。
+
+| 対象 | 上流ケースと penv での検査 |
+|---|---|
+| PWM・直交位相 | Discovery の `PWM Capture` 2 件と `Quadrature Decoder` を公開 ELF と同じ GPIO 接続で実行。2 番目の周波数とデューティ比、最初の 2 つの角度を照合 |
+| タイマー IRQ・FAULTMASK | Discovery の TIM2 上り・下りと FAULTMASK 2 件を公開 ELF で実行。FAULTMASK ELF は TIM3 を直接設定するため、生成 RESC が起動前に `RCC_APB1ENR.TIM3EN` を設定。マスク中に出力がないこと、解除後 3 回以上、例外復帰後 4 回以上の割り込みを照合。FreeRTOS では TIM9 と TIM2 のキュー配送も検査 |
+| RTC | Discovery の `Should Not Crash On RTC Writes` を公開 Zephyr ELF で実行し、初期値、月変更後、時変更後の UART 出力を順に照合 |
+| I²C | Discovery に専用の上流 ELF ケースは見当たりませんでした。FreeRTOS の検証用 REPL で `01 23` の書き込み・読み戻しとイベント IRQ、未接続アドレスの NACK とエラー IRQ を検査。未変更 kit でも NACK を確認 |
+| SPI | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流ループバックケースと同様に、検証用 REPL の FreeRTOS で 8/16 ビット転送、RX/TX 割り込み、DMA を検査。未変更 kit では未接続の応答を確認 |
+| CAN | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流 CAN ループバックケースに対応する範囲として、FreeRTOS で bxCAN のフィルター、CAN1 FIFO0、CAN2 FIFO1、送受信・状態 IRQ とペイロードを検査 |
+| フラッシュ | `stm32f4-erase.robot` の 3 ケースを Rust で移植。消去モード未指定で値保持、一括消去で両端が `0xffffffff`、セクター 11 消去で先頭の `0xdeadbeef` が残ることを照合。FreeRTOS ELF でも ACR レイテンシ、ロック、オプションバイトを検査 |
+| 再起動 | 上流 Cortex-M の BASEPRI リセットと STM32L072 の IWDG ケースに相当する検査を F407 FreeRTOS ELF で実施。IWDG のリフレッシュ、期限切れ、SRAM 保持、BASEPRI の `0x50 → 0`、周辺機器の初期状態、再起動後の UART・キュー出力を照合 |
+| 起動回帰 | 未変更の Contiki RESC で公開 Contiki と Zephyr Hello World を実行。FreeRTOS は未変更 kit の ARM_CM3・ARM_CM4F と検証用 REPL の 3 構成で実行 |
+
+[Discovery Robot ケース](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
+[フラッシュ消去](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/stm32f4-erase.robot)
+[Cortex-M 割り込みとリセット](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/arm-cortex-m-interrupts.robot)
+[STM32L072 IWDG](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32L072.robot)
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-upstream-smoke.sh target/close-f407-tests
+```
+
+公開 ELF は自動取得と SHA-1 照合の対象です。ログは指定ディレクトリに残ります。
+IRQ は `faultmask*.log`、I²C/SPI/CAN は `loopback/uart.log`、再起動は各構成の
+`watchdog-uart.log` で確認できます。`cargo test` は 68 件です。
+
+残課題として、Discovery の標準・カスタムフラッシュレイテンシ CubeMX ELF は
+どちらも `USB_DisableGlobalInt` の `0x50000008` で停止しました。
+RIOT の RTC アラーム ELF は上流と同じ 32 kHz オーバーレイでも
+`0x0800043a` の Cortex-M 例外復帰で停止しました。上流 Cortex-M の WFE/SEVONPEND と
+モニター操作による SysTick の境界時刻照合、Discovery の周辺機器マップのエクスポート、
+フラッシュ書き込み、CAN 通常モードでのノード間通信も未移植です。

@@ -144,8 +144,13 @@ static void trigger_watchdog_reset(void)
     /* Survived the original deadline. Wait without another refresh. */
     watchdog_marker = WATCHDOG_FED;
     uart_text("IWDG refresh held\n");
+    /* Hold a nonzero priority mask across the watchdog reset. */
+    __asm volatile("msr basepri, %0" :: "r"(0x50U) : "memory");
+    uint32_t basepri;
+    __asm volatile("mrs %0, basepri" : "=r"(basepri));
+    configASSERT(basepri == 0x50U);
     for (;;) {
-        vTaskDelay(portMAX_DELAY);
+        __asm volatile("wfi");
     }
 }
 
@@ -373,12 +378,14 @@ void firmware_main(void)
     static StaticTask_t event_tcb;
 
     /* Check reset state before the firmware writes these peripheral registers. */
+    uint32_t basepri;
+    __asm volatile("mrs %0, basepri" : "=r"(basepri));
     const uint32_t systick = REG(0xe000e010);
     const uint32_t irq_enables = REG(0xe000e100) | REG(0xe000e104) | REG(0xe000e108);
     const uint32_t clock_state = RCC_CFGR | (RCC_CR & 0x03030000U);
     const uint32_t clock_gates = RCC_APB1ENR | RCC_APB2ENR;
     const uint32_t uart_control = uart_init();
-    configASSERT((systick & 3) == 0 && irq_enables == 0 && uart_control == 0);
+    configASSERT(basepri == 0 && (systick & 3) == 0 && irq_enables == 0 && uart_control == 0);
     configASSERT(IWDG_PR == 4 && IWDG_RLR == 0xfff && IWDG_SR == 0);
     configASSERT(clock_state == 0 && clock_gates == 0);
     const bool restarted = watchdog_marker != 0;
