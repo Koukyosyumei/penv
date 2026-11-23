@@ -412,6 +412,8 @@ fn run() -> Result<ExitCode, String> {
     let mut ram_access_logs = Vec::new();
     let mut ram_io_pages = Vec::new();
     let mut cpu_hooks = Vec::new();
+    let mut cpu_paused = None;
+    let mut cpu_halted = None;
     let mut itstate_log_hook = None;
     let mut opcode_counters = Vec::new();
     let mut opcode_counting = None;
@@ -459,6 +461,8 @@ fn run() -> Result<ExitCode, String> {
         ram_access_logs = boot.ram_access_logs;
         ram_io_pages = boot.ram_io_pages;
         cpu_hooks = boot.cpu_hooks;
+        cpu_paused = boot.cpu_paused;
+        cpu_halted = boot.cpu_halted;
         itstate_log_hook = boot.itstate_log_hook;
         opcode_counters = boot.opcode_counters;
         opcode_counting = boot.opcode_counting;
@@ -659,6 +663,17 @@ fn run() -> Result<ExitCode, String> {
             return Err("single-step ITSTATE logging requires a single Cortex-M4 machine".into());
         }
         machine.bus.itstate_log_hook = itstate_log_hook;
+    }
+    if cpu_paused.is_some() || cpu_halted.is_some() {
+        if !machine.is_cortex_m() || ble_peer.is_some() {
+            return Err("CPU pause and halt require a single Cortex-M machine".into());
+        }
+        match cpu_paused {
+            Some(true) => machine.pause_cpu(),
+            Some(false) => machine.resume_cpu(),
+            None => {}
+        }
+        machine.set_cpu_halted(cpu_halted.unwrap_or(false));
     }
     if !cpu_hooks.is_empty() {
         if !machine.is_cortex_m() || ble_peer.is_some() {

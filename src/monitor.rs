@@ -22,6 +22,8 @@ pub struct Boot {
     pub ram_access_logs: Vec<String>,
     pub ram_io_pages: Vec<(u32, bool)>,
     pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
+    pub cpu_paused: Option<bool>,
+    pub cpu_halted: Option<bool>,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
@@ -204,6 +206,29 @@ fn execute(
             let value = crate::parse_address(resolve(value)?)?;
             boot.cpu_hooks
                 .push((pc, crate::bus::CpuHook::Write32(address, value)));
+        }
+        ["cpu" | "sysbus.cpu", "AddLogHook", pc, ..] if boot.platform.is_some() => {
+            let (_, remainder) = text.split_once("AddLogHook").unwrap();
+            let message = remainder.trim_start().strip_prefix(pc).unwrap().trim();
+            let message = message
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .filter(|value| !value.contains('"'))
+                .ok_or("expected a quoted hook message")?;
+            let pc = crate::parse_address(resolve(pc)?)? & !1;
+            boot.cpu_hooks
+                .push((pc, crate::bus::CpuHook::Log(message.into())));
+        }
+        ["cpu" | "sysbus.cpu", command @ ("Pause" | "Resume")] if boot.platform.is_some() => {
+            boot.cpu_paused = Some(*command == "Pause");
+        }
+        ["cpu" | "sysbus.cpu", "IsHalted", value] if boot.platform.is_some() => {
+            boot.cpu_halted = Some(
+                value
+                    .to_ascii_lowercase()
+                    .parse()
+                    .map_err(|_| "expected true or false")?,
+            );
         }
         ["cpu" | "sysbus.cpu", "AddPauseHook", pc] if boot.platform.is_some() => {
             let pc = crate::parse_address(resolve(pc)?)? & !1;

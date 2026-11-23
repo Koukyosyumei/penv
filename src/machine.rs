@@ -17,6 +17,8 @@ pub struct Machine {
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
+    cpu_paused: bool,
+    cpu_halted: bool,
     uart_step_prefix: bool,
     uart_line_start: bool,
     reset_steps: VecDeque<u64>,
@@ -160,6 +162,8 @@ impl Machine {
             secondary: Vec::new(),
             next_hart: 0,
             elapsed_steps: 0,
+            cpu_paused: false,
+            cpu_halted: false,
             uart_step_prefix: false,
             uart_line_start: true,
             reset_steps: VecDeque::new(),
@@ -333,6 +337,18 @@ impl Machine {
         self.uart_step_prefix = enabled;
     }
 
+    pub fn pause_cpu(&mut self) {
+        self.cpu_paused = true;
+    }
+
+    pub fn resume_cpu(&mut self) {
+        self.cpu_paused = false;
+    }
+
+    pub fn set_cpu_halted(&mut self, halted: bool) {
+        self.cpu_halted = halted;
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_steps(limit, output, None)
     }
@@ -343,6 +359,9 @@ impl Machine {
         output: &mut impl Write,
         mut radio_outbox: Option<&mut Vec<crate::nrf52840::AirFrame>>,
     ) -> Result<(Stop, u64), String> {
+        if self.cpu_paused {
+            return Ok((Stop::Paused, 0));
+        }
         let mut retired = 0;
         for _ in 0..limit {
             let index = self.next_hart;
@@ -412,9 +431,19 @@ impl Machine {
                     step: self.elapsed_steps,
                     line_start: &mut self.uart_line_start,
                 };
-                hart.execute_step(&mut self.bus, self.elapsed_steps, &mut stamped)
+                hart.execute_step(
+                    &mut self.bus,
+                    self.elapsed_steps,
+                    self.cpu_halted && index == 0,
+                    &mut stamped,
+                )
             } else {
-                hart.execute_step(&mut self.bus, self.elapsed_steps, output)
+                hart.execute_step(
+                    &mut self.bus,
+                    self.elapsed_steps,
+                    self.cpu_halted && index == 0,
+                    output,
+                )
             };
             if let Some(outbox) = radio_outbox.as_deref_mut()
                 && let Some(frame) = self.bus.tick_radio_air()
@@ -424,7 +453,12 @@ impl Machine {
             match result? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
-                Step::Stop(stop) => return Ok((stop, retired)),
+                Step::Stop(stop) => {
+                    if stop == Stop::Paused {
+                        self.pause_cpu();
+                    }
+                    return Ok((stop, retired));
+                }
             }
         }
         Ok((Stop::Limit, retired))
@@ -601,6 +635,7 @@ impl Hart {
         &mut self,
         bus: &mut Bus,
         elapsed_steps: u64,
+        halted: bool,
         output: &mut impl Write,
     ) -> Result<Step, String> {
         if self.thumb.is_some() && bus.reset_cortex_m_if_requested(false) {
@@ -617,6 +652,9 @@ impl Hart {
             }
             if clock_ticks != 1 && bus.reset_cortex_m_if_requested(false) {
                 self.reset_cortex_m(bus)?;
+                return Ok(Step::Trap);
+            }
+            if halted {
                 return Ok(Step::Trap);
             }
             if thumb
@@ -906,6 +944,115 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn started_cortex_m() -> Machine {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut output = Vec::new();
+        for (address, value) in [(0, 0x800), (4, 0x101)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        // nop; nop; nop; jump: nop; b jump.
+        for (address, value) in [
+            (0x100, 0xbf00),
+            (0x102, 0xbf00),
+            (0x104, 0xbf00),
+            (0x106, 0xbf00),
+            (0x108, 0xe7fd),
+        ] {
+            machine.bus.write(address, 2, value, &mut output).unwrap();
+        }
+        machine
+            .bus
+            .cpu_hooks
+            .insert(0x104, vec![crate::bus::CpuHook::Log("PC moved".into())]);
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(3, &mut output).unwrap(), (Stop::Limit, 3));
+        assert_eq!(output, b"PC moved\n");
+        machine
+    }
+
+    fn check_cpu_flow(machine: &mut Machine, paused: bool, halted: bool) {
+        assert_eq!(machine.cpu_paused, paused);
+        assert_eq!(machine.cpu_halted, halted);
+        let before = machine.elapsed_steps;
+        let pc = machine.primary.pc;
+        let (stop, retired) = machine.run(4, &mut std::io::sink()).unwrap();
+        assert_eq!(machine.elapsed_steps, before + if paused { 0 } else { 4 });
+        assert_eq!(stop, if paused { Stop::Paused } else { Stop::Limit });
+        assert_eq!(retired, if paused || halted { 0 } else { 4 });
+        if paused || halted {
+            assert_eq!(machine.primary.pc, pc);
+        }
+    }
+
+    #[test]
+    fn upstream_cpu_control_starts() {
+        check_cpu_flow(&mut started_cortex_m(), false, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_pauses() {
+        let mut machine = started_cortex_m();
+        machine.pause_cpu();
+        check_cpu_flow(&mut machine, true, false);
+        machine.resume_cpu();
+        check_cpu_flow(&mut machine, false, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_halts() {
+        let mut machine = started_cortex_m();
+        machine.set_cpu_halted(true);
+        check_cpu_flow(&mut machine, false, true);
+        machine.resume_cpu();
+        check_cpu_flow(&mut machine, false, true);
+    }
+
+    fn check_pause_halt(pause_first: bool, resume_first: bool) {
+        let mut machine = started_cortex_m();
+        if pause_first {
+            machine.pause_cpu();
+            machine.set_cpu_halted(true);
+        } else {
+            machine.set_cpu_halted(true);
+            machine.pause_cpu();
+        }
+        check_cpu_flow(&mut machine, true, true);
+        if resume_first {
+            machine.resume_cpu();
+            check_cpu_flow(&mut machine, false, true);
+            machine.set_cpu_halted(false);
+        } else {
+            machine.set_cpu_halted(false);
+            check_cpu_flow(&mut machine, true, false);
+            machine.resume_cpu();
+        }
+        check_cpu_flow(&mut machine, false, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_pause_first_resume_first() {
+        check_pause_halt(true, true);
+    }
+
+    #[test]
+    fn upstream_cpu_control_pause_first_unhalt_first() {
+        check_pause_halt(true, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_halt_first_resume_first() {
+        check_pause_halt(false, true);
+    }
+
+    #[test]
+    fn upstream_cpu_control_halt_first_unhalt_first() {
+        check_pause_halt(false, false);
+    }
 
     #[test]
     fn upstream_invalid_reset_state_locks_on_second_step() {

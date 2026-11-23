@@ -119,9 +119,10 @@ struct RamIoRead {
     value: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum CpuHook {
     Write32(u32, u32),
+    Log(String),
     Pause,
 }
 
@@ -1694,6 +1695,7 @@ impl Bus {
         for hook in hooks {
             match hook {
                 CpuHook::Write32(address, value) => self.write(address, 4, value, output)?,
+                CpuHook::Log(message) => writeln!(output, "{message}").map_err(BusError::Output)?,
                 CpuHook::Pause => {
                     writeln!(output, "Machine paused").map_err(BusError::Output)?;
                     return Ok(true);
