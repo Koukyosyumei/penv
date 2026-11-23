@@ -1,4 +1,4 @@
-use crate::platform::{Entry, number};
+use crate::platform::{Entry, multiline_value, number};
 
 pub struct ConstantMmio {
     pub base: u32,
@@ -31,7 +31,8 @@ impl ConstantMmio {
             .ok_or("missing Python peripheral size")?;
         let base = entry.sysbus()?.ok_or("missing Python peripheral address")?;
         let script = script.ok_or("missing Python peripheral script")?;
-        let (mut values, warn_unhandled) = parse(script, size)?;
+        let decoded = multiline_value(script);
+        let (mut values, warn_unhandled) = parse(decoded.as_deref().unwrap_or(script), size)?;
         values.sort_unstable_by_key(|&(offset, _)| offset);
         if values.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err("duplicate Python peripheral offset".into());

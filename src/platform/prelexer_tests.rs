@@ -146,3 +146,99 @@ fn renode_multiline_loader_any_string_after_closed_multiline_string() {
     assert!(error.contains("SyntaxError:"));
     assert_eq!(error.lines().nth(1), Some("At 4:23:"));
 }
+
+fn assert_mock_placeholders(source: &str, expected: &[(&str, &str)]) {
+    use std::{
+        collections::{HashMap, HashSet},
+        path::Path,
+    };
+    let mut entries = Vec::new();
+    super::parse_content(
+        Path::new("<platform string>"),
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )
+    .unwrap();
+    let fixtures: HashMap<_, _> = super::merge_declarations(entries)
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            assert_eq!(entry.model, "Antmicro.Renode.UnitTests.Mocks.MockCPU");
+            assert_eq!(entry.registration.as_deref(), Some("sysbus"));
+            let props = super::keys(entry, &["Placeholder"]).unwrap();
+            assert_eq!(props.len(), 1);
+            (
+                format!("sysbus.{}", entry.name),
+                super::multiline_value(props[0].1).unwrap(),
+            )
+        })
+        .collect();
+    for &(name, value) in expected {
+        assert_eq!(fixtures.get(name).map(String::as_str), Some(value));
+    }
+}
+
+#[test]
+fn renode_multiline_binding_handle_multiline_quoted_string_as_value() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline\nstring'''",
+        &[("sysbus.cpu", "this is\nmultiline\nstring")],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_handle_multiple_multiline_quoted_strings() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is a\nmultiline\nstring'''\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is another\nmultilineeee\nstringgggg'''",
+        &[
+            ("sysbus.cpu", "this is a\nmultiline\nstring"),
+            ("sysbus.cpu2", "this is another\nmultilineeee\nstringgggg"),
+        ],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_handle_multiline_quoted_string_in_one_line() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is single line'''",
+        &[("sysbus.cpu", "this is single line")],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_handle_escaped_quote_in_multiline_string() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is \\''' single line'''",
+        &[("sysbus.cpu", "this is ''' single line")],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_handle_escaped_unescaped_single_quote_char_in_multiline_string() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: ''' this is string with ' and '' '''",
+        &[("sysbus.cpu", " this is string with ' and '' ")],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_handle_multiple_escaped_multiline_string_signs_in_one_line() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is \\''' \\''' \\''' \\'''\nnot a single line '''",
+        &[("sysbus.cpu", "this is ''' ''' ''' '''\nnot a single line ")],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_not_treat_double_slash_in_multiline_string_as_comment() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: ''' // this is //\n// not\na comment // neither is this\nor //this\nor// this\nor this // '''",
+        &[(
+            "sysbus.cpu",
+            " // this is //\n// not\na comment // neither is this\nor //this\nor// this\nor this // ",
+        )],
+    );
+}

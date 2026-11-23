@@ -634,6 +634,19 @@ fn parse_content(
     while let Some((index, raw)) = lines.next() {
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
+        if registration_depth == 0
+            && raw.starts_with(char::is_whitespace)
+            && let Some((_, value)) = raw.split_once(':')
+            && let Some(open) = value.trim_start().strip_prefix("'''")
+        {
+            let entry = current
+                .as_mut()
+                .ok_or_else(|| error("property has no declaration"))?;
+            let property =
+                read_multiline_property(raw, raw.len() - open.len(), lineno, &mut lines)?;
+            entry.body.push((lineno, property));
+            continue;
+        }
         let line = comments
             .line(raw)
             .map_err(|e| error(&format!("SyntaxError: {e}")))?;
@@ -651,38 +664,12 @@ fn parse_content(
             }
             continue;
         }
-        if text == "script: '''"
-            && let Some(entry) = current
-                .as_mut()
-                .filter(|entry| entry.model == "Python.PythonPeripheral")
-        {
-            let mut property = String::from("script:");
-            loop {
-                let (_, raw) = lines
-                    .next()
-                    .ok_or_else(|| error("unterminated Python peripheral script"))?;
-                if raw.trim() == "'''" {
-                    break;
-                }
-                property.push('\n');
-                property.push_str(raw);
-            }
-            entry.body.push((lineno, property));
-            continue;
-        }
         if line.starts_with(char::is_whitespace) {
-            let entry = current
+            current
                 .as_mut()
-                .ok_or_else(|| error("property has no declaration"))?;
-            let property = if let Some((_, value)) = text.split_once(':')
-                && let Some(open) = value.trim_start().strip_prefix("'''")
-            {
-                let offset = line.trim_end().len() - open.len();
-                read_multiline_property(&line, offset, lineno, &mut lines)?
-            } else {
-                text.to_owned()
-            };
-            entry.body.push((lineno, property));
+                .ok_or_else(|| error("property has no declaration"))?
+                .body
+                .push((lineno, text.to_owned()));
             continue;
         }
         entries.extend(current.take());
@@ -750,6 +737,11 @@ fn parse_content(
     }
     entries.extend(current);
     Ok(())
+}
+
+pub(crate) fn multiline_value(value: &str) -> Option<String> {
+    let body = value.trim().strip_prefix("'''")?.strip_suffix("'''")?;
+    Some(body.replace("\\'''", "'''"))
 }
 
 fn read_multiline_property<'a>(
