@@ -635,3 +635,18 @@ target/debug/penv validate-platform "$ARTIFACT_DIR/spi-thumb-probe.repl"
 ### スナップショットの共有依頼
 
 `it-status.robot:219–237` と `ArrayMemory.robot:41–50` は Save/Load の共有経路に依存する。固定 IT 命令 ELF を `tests/nrf52840-itstate-hooks-upstream.sh "$PWD/target/release/penv" ../renode "$ARTIFACT_DIR/itstate"` で生成し、ITSTATE フック回帰を確認した。次に `target/release/penv run --script "$ARTIFACT_DIR/itstate/snapshot.resc"` で、4ステップ後の `Save @itstate.save` が停止点になることを確認した。保存だけを切り分けるため再現用 RESC では GetItState の照会を省いた。固定 Neonkey の UART 起動も残課題。2ケースの期待値と必要な入口は `nrf52-snapshot-e8df14ac.md` で ARM 担当へ渡した。再現用 RESC と検証結果は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/external-spi.mUqXXvfW` に保存した。
+
+### 固定 Observer の広告受信条件
+
+`imxrt500.robot:2–18` の Observer 側を、固定の nRF52840 Observer と HCI コントローラ ELF、および代替の nRF52840 広告ファームウェアで検証した。代替側は UART1 の H:4 を通して固定コントローラに広告パラメータとデータを設定し、コマンド完了を待つ。Observer 側 UART でスキャン開始後に `Device found: C6:05:04:03:02:01 (random) (RSSI -10), type 2, AD data len 28` を確認した。i.MX RT500 の固定 Pigweed ELF とその UART 出力は残件であり、台帳では部分移植を維持する。
+
+```sh
+cargo test --locked
+tests/nrf52840-observer-advertiser.sh "$PWD/target/release/penv" ../renode "$OBSERVER_ELF" "$HCI_CONTROLLER_ELF" "$ARTIFACT_DIR/observer"
+tests/nrf52840-radio.sh "$PWD/target/release/penv" ../renode
+tests/nrf52840-shell.sh "$PWD/target/release/penv" ../renode "$SHELL_ELF"
+```
+
+Observer とコントローラを固定 RESC が指定するファイルと SHA-1 で照合する。各ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/observer-advertiser.3BATnf14` に保存した。
+
+GDB メモリの3ケースは nRF52840 REPL 上の `machine StartGdbServer 3333` で未対応を再現し、固定アドレス、値、期待値とともに ARM 担当へ `nrf52-gdb-memory-c78598b.md` を渡した。再現用 `gdb.resc` とログも同じディレクトリに保存した。
