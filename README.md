@@ -135,8 +135,8 @@ target/release/penv run --script "$smp" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 400000000 --stats
 ```
 
-- `cargo test` はユニットテスト 46 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
-- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。`eaef188` は `stm32h7.repl:225` の `Video.STM32LTDC` で停止しました。`0de37fd` は `stm32h7.repl:500` のシステムフラッシュ初期化 `init:` で停止しました。現行コードは初期化を通過し、`stm32h7.repl:524` の `Timers.STM32L0_LpTimer`（`lptimer1`）で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
+- `cargo test` はユニットテスト 48 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
+- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。`eaef188` は `stm32h7.repl:225` の `Video.STM32LTDC` で停止しました。`0de37fd` は `stm32h7.repl:500` のシステムフラッシュ初期化 `init:` で停止しました。`71beca0` は `stm32h7.repl:524` の `Timers.STM32L0_LpTimer`（`lptimer1`）で停止しました。現行コードは LPTIM の宣言を通過し、`stm32h7.repl:559` の `Timers.STM32_IndependentWatchdog` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
 双方向 Ethernet の回帰テストは個別に実行できます。STM32H7 の DMA 記述子から LiteX の受信スロットへフレームを送り、逆方向では LiteX の送信スロットから STM32H7 の受信バッファーへ返した内容を照合します。
@@ -266,4 +266,27 @@ target/release/penv run --script "$work/boot.resc" \
     --platform-root ../renode --asset-dir "$assets" --max-steps "$step" "${events[@]}"
 ```
 
-公開 Zephyr ELF の Shell から、容量ワード `0x800` と UID の `0x08e827a7`、`0x175bcde3`、`0x6ae78d93` を確認しました。同じ初期化を含む診断構成で、VEML7700 の `499.000000` lux と、DMA2D から LTDC に渡した PPM の RGB 値 `34 ab cd` も再確認しました。未変更の上流 RESC での起動には、次の `Timers.STM32L0_LpTimer` への対応が残っています。
+公開 Zephyr ELF の Shell から、容量ワード `0x800` と UID の `0x08e827a7`、`0x175bcde3`、`0x6ae78d93` を確認しました。同じ初期化を含む診断構成で、VEML7700 の `499.000000` lux と、DMA2D から LTDC に渡した PPM の RGB 値 `34 ab cd` も再確認しました。未変更の上流 RESC の次の停止箇所は独立ウォッチドッグです。
+
+### LPTIM の比較イベントと割り込み
+
+`Timers.STM32L0_LpTimer` は内部クロックによる単発・連続カウント、プリスケーラー、比較・自動再ロードイベント、ステータスのクリアに対応します。上流 STM32H7 REPL の LPTIM1〜5 は RCC の APB1L／APB4 と EXTI に配線します。外部クロック・トリガー、エンコーダー、波形出力、プリロード、繰り返し回数によるイベント制御は未対応です。 [Renode の LPTIM モデル](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Peripherals/Peripherals/Timers/STM32L0_LpTimer.cs)
+
+USART2 スモークテストが表示した診断用ディレクトリを `work`、公開 ELF の保存先を `assets` に設定して実行します。
+
+```bash
+events=()
+step=1000000
+for command in '0x580244e8 32 0x200' '0x40002408 32 1' '0x40002410 32 1' \
+    '0x40002414 16 64' '0x40002418 16 128' '0x40002404 32 0xffffffff' \
+    '0x40002410 32 3' '0x40002400 32' '0xe000e208 32' \
+    '0x40002404 32 3' '0xe000e288 32 0x20000000' '0x40002400 32' '0xe000e208 32'; do
+    printf 'devmem %s\r' "$command" > "$work/lp-$step.txt"
+    events+=(--uart-event "$step:$work/lp-$step.txt")
+    step=$((step + 200000))
+done
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root ../renode --asset-dir "$assets" --max-steps "$step" "${events[@]}"
+```
+
+公開 Zephyr Shell は LPTIM1 の比較・自動再ロードフラグ `0x3` と、EXTI 47 を経由する NVIC IRQ 93 の保留ビット `0x20000000` を読み戻しました。フラグと保留をクリアした後は両方とも `0x0` でした。ユニットテストでは、この経路でゲストのハンドラーへ分岐して先頭命令を実行することも確認しています。VEML7700 の読み出し、システムフラッシュ、DMA2D から LTDC への PPM 出力も再確認しました。

@@ -25,6 +25,7 @@ use crate::{
     stm32h7_flash::FlashController,
     stm32h7_gpio::Stm32Gpio,
     stm32h7_i2c::I2c,
+    stm32h7_lptim::LpTimer,
     stm32h7_ltdc::Ltdc,
     stm32h7_net_control::{Change, NetworkControl},
     stm32h7_qspi::Qspi,
@@ -107,6 +108,7 @@ pub struct Bus {
     h7_rng: Vec<Rng>,
     h7_qspi: Vec<Qspi>,
     h7_timers: Vec<H7Timer>,
+    h7_lptimers: Vec<LpTimer>,
     h7_crc: Vec<Stm32Crc>,
     h7_fdcan: Vec<Fdcan>,
     h7_dma2d: Vec<Dma2d>,
@@ -392,6 +394,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_h7_lptim(&mut self, timer: LpTimer) -> Result<(), String> {
+        self.check_peripheral_range(timer.base, LpTimer::SIZE)?;
+        self.h7_lptimers.push(timer);
+        Ok(())
+    }
+
     pub fn map_h7_timer(&mut self, timer: H7Timer) -> Result<(), String> {
         self.check_peripheral_range(timer.base, H7Timer::SIZE)?;
         self.h7_timers.push(timer);
@@ -437,6 +445,11 @@ impl Bus {
             regions: &mut self.regions,
             reservations: &mut self.reservations,
         };
+        for timer in &mut self.h7_lptimers {
+            if lptim_clocked(control, timer) {
+                timer.tick();
+            }
+        }
         for timer in &mut self.h7_timers {
             if timer_clocked(control, timer) {
                 timer.tick();
@@ -542,6 +555,11 @@ impl Bus {
                 .chain(self.h7_i2c.iter().map(|i2c| (i2c.base, I2c::SIZE)))
                 .chain(self.h7_rng.iter().map(|rng| (rng.base, Rng::SIZE)))
                 .chain(self.h7_qspi.iter().map(|qspi| (qspi.base, Qspi::SIZE)))
+                .chain(
+                    self.h7_lptimers
+                        .iter()
+                        .map(|timer| (timer.base, LpTimer::SIZE)),
+                )
                 .chain(
                     self.h7_timers
                         .iter()
@@ -731,6 +749,12 @@ impl Bus {
                         .iter()
                         .filter(|i2c| i2c_clocked(control, i2c))
                         .filter_map(I2c::interrupt),
+                )
+                .chain(
+                    self.h7_lptimers
+                        .iter()
+                        .filter(|timer| lptim_clocked(control, timer))
+                        .filter_map(LpTimer::interrupt),
                 )
                 .chain(
                     self.h7_timers
@@ -1308,6 +1332,19 @@ impl Bus {
                 0
             });
         }
+        if matches!(N, 1 | 2 | 4)
+            && address as usize & (N - 1) == 0
+            && let Some(timer) = self
+                .h7_lptimers
+                .iter()
+                .find(|timer| timer.contains(address))
+        {
+            return Ok(if lptim_clocked(self.h7_network_control.as_ref(), timer) {
+                (timer.read(address & !3) >> ((address & 3) * 8)) & (u32::MAX >> (32 - N * 8))
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1466,6 +1503,14 @@ impl Bus {
             for i2c in &mut self.h7_i2c {
                 if i2c.clock.is_some_and(|clock| control.i2c_in_reset(clock)) {
                     i2c.reset();
+                }
+            }
+            for timer in &mut self.h7_lptimers {
+                if timer
+                    .clock
+                    .is_some_and(|clock| control.lptim_in_reset(clock))
+                {
+                    timer.reset();
                 }
             }
             for timer in &mut self.h7_timers {
@@ -1723,6 +1768,16 @@ impl Bus {
             }
             return Ok(());
         }
+        if let Some(timer) = self
+            .h7_lptimers
+            .iter_mut()
+            .find(|timer| timer.contains(address))
+        {
+            if lptim_clocked(self.h7_network_control.as_ref(), timer) {
+                timer.write(address, width, value);
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
@@ -1760,6 +1815,12 @@ fn request_h7_stream(
 
 fn crc_clocked(control: Option<&NetworkControl>, crc: &Stm32Crc) -> bool {
     !crc.rcc_bound || control.is_some_and(NetworkControl::crc_enabled)
+}
+
+fn lptim_clocked(control: Option<&NetworkControl>, timer: &LpTimer) -> bool {
+    timer
+        .clock
+        .is_none_or(|clock| control.is_some_and(|control| control.lptim_enabled(clock)))
 }
 
 fn timer_clocked(control: Option<&NetworkControl>, timer: &H7Timer) -> bool {

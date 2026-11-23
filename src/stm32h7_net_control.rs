@@ -8,6 +8,8 @@ const ADC3: u32 = 1 << 24;
 const CRC: u32 = 1 << 19;
 const BDMA: u32 = 1 << 21;
 const GPIO_PORTS: u32 = 0x7ff;
+const LPTIM1: u32 = 1 << 9;
+const LPTIM2_TO_5: u32 = 15 << 9;
 const LTDC: u32 = 1 << 3;
 const DMA2D: u32 = 1 << 4;
 const SPI4: u32 = 1 << 13;
@@ -158,6 +160,23 @@ impl NetworkControl {
 
     pub fn rng_in_reset(&self) -> bool {
         self.ahb2_reset & (1 << 6) != 0
+    }
+
+    pub fn lptim_enabled(&self, instance: u8) -> bool {
+        let enabled = if instance == 1 {
+            self.apb1l_clock & LPTIM1
+        } else {
+            self.apb4_clock & (1 << (instance + 7))
+        };
+        enabled != 0 && !self.lptim_in_reset(instance)
+    }
+
+    pub fn lptim_in_reset(&self, instance: u8) -> bool {
+        if instance == 1 {
+            self.apb1l_reset & LPTIM1 != 0
+        } else {
+            self.apb4_reset & (1 << (instance + 7)) != 0
+        }
     }
 
     pub fn timer_enabled(&self, bit: u8) -> bool {
@@ -370,11 +389,11 @@ impl NetworkControl {
                 Change::None
             }
             0x90 => {
-                self.apb1l_reset = value & ((7 << 21) | 0x1ff);
+                self.apb1l_reset = value & ((7 << 21) | 0x1ff | LPTIM1);
                 Change::None
             }
             0x9c => {
-                self.apb4_reset = value & (1 << 7);
+                self.apb4_reset = value & ((1 << 7) | LPTIM2_TO_5);
                 Change::None
             }
             0x98 => {
