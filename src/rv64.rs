@@ -42,6 +42,7 @@ pub struct Isa {
     vector: bool,
     zcb: bool,
     zicboz: bool,
+    xandesperf: bool,
     pub cas: bool,
     pub smepmp: bool,
     bitmanip: bitmanip::Extensions,
@@ -85,6 +86,7 @@ impl Isa {
                 "smepmp" => isa.smepmp = true,
                 "zfh" if isa.single => isa.half = true,
                 "zicboz" => isa.zicboz = true,
+                "xandesperf" => isa.xandesperf = true,
                 extension if isa.bitmanip.enable(extension) => {}
                 _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
             }
@@ -115,6 +117,7 @@ impl Isa {
         vector: false,
         zcb: false,
         zicboz: false,
+        xandesperf: false,
         cas: false,
         smepmp: false,
         bitmanip: bitmanip::Extensions::NONE,
@@ -538,6 +541,14 @@ impl Rv64 {
                     .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs))
                     .ok_or(illegal)?,
             ),
+            0x5b if self.isa.xandesperf && fields.funct3() == 0 => {
+                let (index, shift) = match instruction >> 25 {
+                    op @ 5..=7 => (rhs, op - 4),
+                    op @ 8..=11 => (u64::from(rhs as u32), op - 8),
+                    _ => return Err(illegal),
+                };
+                Some(lhs.wrapping_add(index << shift))
+            }
             0x0f if instruction & 0xfff0_7fff == 0x0040_200f
                 && self.privilege.allows_cbo_zero() =>
             {

@@ -347,6 +347,10 @@ def disposition(path, name, context):
         return "pass", "Fixed instruction words, operands, PC and trap cause verified (rv64-ldsd.md)"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
+    if path.name == "riscv-andestar-v5.robot" and re.fullmatch(
+        r"Should (?:Execute LEA [BHWD] ZE|Preserve Full Width LEA [HWD]) On RV64", name
+    ):
+        return "pass", "Fixed XAndesPerf LEA operands, destination and next PC verified (rv64-andes-lea.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"
