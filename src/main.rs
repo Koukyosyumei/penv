@@ -257,6 +257,7 @@ fn run() -> Result<ExitCode, String> {
 
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
+    let mut uart_device = None;
     let mut zephyr = zephyr_boot::BootOptions::default();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
@@ -315,6 +316,7 @@ fn run() -> Result<ExitCode, String> {
             binaries.push((path, address));
         }
         boot_pcs = boot.boot_pcs;
+        uart_device = boot.uart_input;
         zephyr = boot.zephyr;
     }
     if path.is_none() && binaries.is_empty() {
@@ -342,6 +344,9 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(base) = clint {
         machine.bus.map_clint(base, harts.unwrap_or(1))?;
+    }
+    if let Some(uart) = uart_device {
+        machine.bus.select_uart_input(&uart);
     }
     if uart_input_at.is_some() && uart_input.is_none() {
         return Err("--uart-input-at requires --uart-input".into());

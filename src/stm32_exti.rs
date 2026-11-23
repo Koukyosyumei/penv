@@ -52,21 +52,23 @@ impl Exti {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn sample(&mut self, inputs: u32) -> u32 {
+    pub fn sample(&mut self, inputs: u32) -> impl Iterator<Item = u8> + '_ {
         let rising = inputs & !self.input;
         let falling = self.input & !inputs;
         self.input = inputs;
         self.pending |=
             ((rising & self.rising) | (falling & self.falling)) & self.mask & !self.direct;
         self.levels = inputs & self.direct;
+        let sources = self.levels | self.pending | self.software;
         self.outputs
             .iter()
             .enumerate()
-            .fold(0, |active, (line, output)| match output {
-                Some(irq) if (self.levels | self.pending | self.software) & (1 << line) != 0 => {
-                    active | (1 << irq)
+            .filter_map(move |(line, &output)| {
+                if sources & (1 << line) != 0 {
+                    output
+                } else {
+                    None
                 }
-                _ => active,
             })
     }
 
@@ -107,12 +109,21 @@ mod tests {
         let mut exti = Exti::new(0, vec![Some(4), Some(7)], 1);
         exti.write(0, 1);
         exti.write(8, 1);
-        assert_eq!(exti.sample(3), (1 << 4) | (1 << 7));
+        assert_eq!(
+            exti.sample(3).fold(0, |mask, line| mask | (1 << line)),
+            (1 << 4) | (1 << 7)
+        );
         assert_eq!(exti.read(20), 3);
-        assert_eq!(exti.sample(0), 1 << 4);
+        assert_eq!(
+            exti.sample(0).fold(0, |mask, line| mask | (1 << line)),
+            1 << 4
+        );
         exti.write(20, 1);
-        assert_eq!(exti.sample(0), 0);
+        assert_eq!(exti.sample(0).fold(0, |mask, line| mask | (1 << line)), 0);
         exti.write(16, 3);
-        assert_eq!(exti.sample(0), 1 << 4);
+        assert_eq!(
+            exti.sample(0).fold(0, |mask, line| mask | (1 << line)),
+            1 << 4
+        );
     }
 }

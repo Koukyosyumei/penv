@@ -26,7 +26,9 @@
 .word can1_rx0_irq
 .word firmware_fault  /* CAN1 RX1 */
 .word can1_sce_irq
-.rept 5
+.word firmware_fault  /* EXTI9_5 */
+.word tim9_irq
+.rept 3
 .word firmware_fault
 .endr
 .word tim2_irq

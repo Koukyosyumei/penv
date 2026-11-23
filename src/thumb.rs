@@ -370,10 +370,15 @@ impl Thumb {
             return Ok(false);
         }
         let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
+        let preemption = |priority| {
+            bus.nvic
+                .as_ref()
+                .map_or(priority, |nvic| nvic.preemption_priority(priority))
+        };
         let current_priority = if self.active_exception == 0 {
             256
         } else {
-            u16::from(priority(self.active_exception))
+            u16::from(preemption(priority(self.active_exception)))
         };
         let mut selected = bus
             .nvic
@@ -396,8 +401,8 @@ impl Thumb {
             }
         }
         if let Some((exception, _)) = selected.filter(|(_, priority)| {
-            u16::from(*priority) < current_priority
-                && (self.basepri == 0 || *priority < self.basepri)
+            u16::from(preemption(*priority)) < current_priority
+                && (self.basepri == 0 || preemption(*priority) < preemption(self.basepri))
         }) {
             self.waiting_for_interrupt = false;
             if self.interrupts_masked {
@@ -706,9 +711,15 @@ impl Thumb {
                 }
                 self.stack_transfer(mask, pop, &mut next, r, bus)?;
             }
-            0xb661 | 0xb671 if self.thumb2 => self.faultmask = inst & 0x10 != 0,
-            0xb662 => self.interrupts_masked = false, // cpsie i
-            0xb672 => self.interrupts_masked = true,  // cpsid i
+            0xb661..=0xb663 | 0xb671..=0xb673 if self.thumb2 || inst & 1 == 0 => {
+                let masked = inst & 0x10 != 0;
+                if inst & 1 != 0 {
+                    self.faultmask = masked;
+                }
+                if inst & 2 != 0 {
+                    self.interrupts_masked = masked;
+                }
+            }
             0xb200..=0xb2ff => {
                 r[rd] = match (inst >> 6) & 3 {
                     0 => (r[rn] as i16 as i32) as u32,

@@ -98,6 +98,8 @@ pub struct Bus {
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
+    stm32_uart_names: Vec<String>,
+    stm32_uart_input: usize,
     iwdgs: Vec<Iwdg>,
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
@@ -122,6 +124,10 @@ pub struct Bus {
     h7_crc: Vec<Stm32Crc>,
     h7_fdcan: Vec<Fdcan>,
     stm32_can: Vec<StmCan>,
+    bitbands: Vec<(u32, u32, u32)>,
+    bus_tags: Vec<(u32, u32, u32)>,
+    timer_pins: Vec<TimerPin>,
+    gpio_leds: Vec<(String, u32, u8)>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -130,6 +136,15 @@ pub struct Bus {
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
+}
+
+pub struct TimerPin {
+    pub timer: u32,
+    pub gpio: u32,
+    pub channel: usize,
+    pub pin: u8,
+    pub function: u8,
+    pub capture: bool,
 }
 
 pub struct EthernetDma<'a> {
@@ -654,7 +669,68 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_gpio_led(&mut self, name: String, gpio: u32, pin: u8) {
+        self.gpio_leds.push((name, gpio, pin));
+    }
+
+    #[cfg(test)]
+    pub fn gpio_led(&self, name: &str) -> Option<bool> {
+        let (_, gpio, pin) = self.gpio_leds.iter().find(|(led, _, _)| led == name)?;
+        self.h7_gpio
+            .iter()
+            .find(|port| port.base == *gpio)
+            .map(|port| port.pins() & (1 << pin) != 0)
+    }
+
+    pub fn set_timer_pins(&mut self, pins: Vec<TimerPin>) {
+        self.timer_pins = pins;
+    }
+
+    fn sample_timer_pins(&mut self) {
+        if self.timer_pins.is_empty() {
+            return;
+        }
+        for gpio in &mut self.h7_gpio {
+            gpio.clear_timer_output();
+        }
+        let clocked = |timer: &H7Timer| {
+            timer_clocked(self.h7_network_control.as_ref(), timer)
+                && f4_clocked(self.f4_rcc.as_ref(), timer.base)
+        };
+        for route in &self.timer_pins {
+            if let Some(timer) = self
+                .h7_timers
+                .iter()
+                .find(|timer| timer.base == route.timer && clocked(timer))
+                && let Some(high) = timer.output(route.channel)
+                && let Some(gpio) = self.h7_gpio.iter_mut().find(|gpio| gpio.base == route.gpio)
+                && gpio.alternate_selected(route.pin, route.function)
+            {
+                gpio.drive_timer_output(route.pin, high);
+            }
+        }
+        for timer in self.h7_timers.iter_mut().filter(|timer| clocked(timer)) {
+            for channel in 0..4 {
+                let high = self
+                    .timer_pins
+                    .iter()
+                    .filter(|wire| {
+                        wire.capture && wire.timer == timer.base && wire.channel == channel
+                    })
+                    .any(|wire| {
+                        self.h7_gpio.iter().any(|gpio| {
+                            gpio.base == wire.gpio
+                                && gpio.alternate_selected(wire.pin, wire.function)
+                                && gpio.pins() & (1 << wire.pin) != 0
+                        })
+                    });
+                timer.sample_input(channel, high);
+            }
+        }
+    }
+
     pub fn tick_h7_peripherals(&mut self) {
+        self.sample_timer_pins();
         let control = self.h7_network_control.as_ref();
         let mut dma = EthernetDma {
             regions: &mut self.regions,
@@ -716,8 +792,47 @@ impl Bus {
         }
     }
 
+    pub fn map_bitband(&mut self, base: u32, size: u32, target: u32) -> Result<(), String> {
+        if !matches!(target, 0x2000_0000 | 0x4000_0000)
+            || base != target + 0x0200_0000
+            || size == 0
+            || size > 0x0200_0000
+            || size % 32 != 0
+        {
+            return Err("invalid Cortex-M bit-band aperture".into());
+        }
+        self.check_peripheral_range(base, size)?;
+        self.bitbands.push((base, size, target));
+        Ok(())
+    }
+
+    fn bitband(&self, address: u32) -> Option<(u32, u32)> {
+        self.bitbands.iter().find_map(|&(base, size, target)| {
+            let offset = address.wrapping_sub(base);
+            (offset < size).then_some((target + (offset / 128) * 4, 1 << ((offset / 4) & 31)))
+        })
+    }
+
+    pub fn map_bus_tag(&mut self, start: u32, end: u32, value: u32) -> Result<(), String> {
+        if start > end {
+            return Err("invalid sysbus Tag range".into());
+        }
+        self.bus_tags.push((start, end, value));
+        Ok(())
+    }
+
+    fn bus_tag(&self, address: u32, width: usize) -> Option<u32> {
+        let last = address.checked_add(width as u32 - 1)?;
+        self.bus_tags
+            .iter()
+            .find_map(|&(start, end, value)| (address >= start && last <= end).then_some(value))
+    }
+
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        self.h7_network_control.as_ref().is_some_and(|control| {
+        self.bitbands.iter().any(|&(base, size, _)| {
+            let base = u64::from(base);
+            start < base + u64::from(size) && base < end
+        }) || self.h7_network_control.as_ref().is_some_and(|control| {
             control
                 .ranges()
                 .any(|(base, limit)| start < limit && base < end)
@@ -989,7 +1104,7 @@ impl Bus {
                             timer_clocked(control, timer)
                                 && f4_clocked(self.f4_rcc.as_ref(), timer.base)
                         })
-                        .filter_map(H7Timer::interrupt),
+                        .flat_map(H7Timer::interrupts),
                 )
             {
                 match route {
@@ -1045,16 +1160,23 @@ impl Bus {
                     }
                 }
             }
+            for gpio in &self.h7_gpio {
+                let pins = gpio.pins();
+                for (pin, line) in gpio.exti_inputs.iter().enumerate() {
+                    if let Some(line) = line
+                        && pins & (1 << pin) != 0
+                    {
+                        exti_inputs[usize::from(line / 32)] |= 1 << (line % 32);
+                    }
+                }
+            }
             if let Some(exti) = self.h7_exti.as_mut() {
                 for line in exti.sample(exti_inputs) {
                     nvic.set_line(line, true, active);
                 }
             }
             if let Some(exti) = self.exti.as_mut() {
-                let mut mask = exti.sample(exti_inputs[0]);
-                while mask != 0 {
-                    let line = mask.trailing_zeros() as u8;
-                    mask &= mask - 1;
+                for line in exti.sample(exti_inputs[0]) {
                     nvic.set_line(line, true, active);
                 }
             }
@@ -1119,6 +1241,7 @@ impl Bus {
 
     pub fn map_stm32_usart(
         &mut self,
+        name: &str,
         base: u32,
         irq: Option<Stm32Irq>,
         layout: UsartLayout,
@@ -1131,7 +1254,14 @@ impl Bus {
             ));
         }
         self.stm32_uarts.push(Stm32Usart::new(base, irq, layout));
+        self.stm32_uart_names.push(name.into());
         Ok(())
+    }
+
+    pub fn select_uart_input(&mut self, name: &str) {
+        if let Some(index) = self.stm32_uart_names.iter().position(|uart| uart == name) {
+            self.stm32_uart_input = index;
+        }
     }
 
     pub fn has_uart_input(&self) -> bool {
@@ -1148,7 +1278,7 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.litex_uart.as_mut() {
             uart.queue_input(bytes);
-        } else if let Some(uart) = self.stm32_uarts.first_mut()
+        } else if let Some(uart) = self.stm32_uarts.get_mut(self.stm32_uart_input)
             && f4_clocked(self.f4_rcc.as_ref(), uart.base)
         {
             uart.queue_input(bytes);
@@ -1289,6 +1419,14 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4
+            && address & 3 == 0
+            && let Some((target, bit)) = self.bitband(address)
+        {
+            return self
+                .read::<4>(target)
+                .map(|value| u32::from(value & bit != 0));
+        }
         if address as usize & (N - 1) == 0 {
             if let Some(rcc) = &self.f4_rcc
                 && rcc.contains(address)
@@ -1589,7 +1727,11 @@ impl Bus {
         {
             return Ok(device.read(address));
         }
-        self.read_ram::<N>(address)
+        self.read_ram::<N>(address).or_else(|error| {
+            self.bus_tag(address, N)
+                .map(|value| value & (u32::MAX >> (32 - N * 8)))
+                .ok_or(error)
+        })
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
@@ -1622,6 +1764,17 @@ impl Bus {
         }
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));
+        }
+        if width == 4
+            && let Some((target, bit)) = self.bitband(address)
+        {
+            let prior = self.read::<4>(target)?;
+            return self.write(
+                target,
+                4,
+                (prior & !bit) | if value & 1 != 0 { bit } else { 0 },
+                uart,
+            );
         }
         if self
             .f4_rcc
@@ -2040,8 +2193,14 @@ impl Bus {
             device.write(address, value);
             return Ok(());
         }
-        self.guest_memory(address, width)?
-            .copy_from_slice(&value.to_le_bytes()[..width]);
+        match self.guest_memory(address, width) {
+            Ok(memory) => memory.copy_from_slice(&value.to_le_bytes()[..width]),
+            Err(error) => {
+                if self.bus_tag(address, width).is_none() {
+                    return Err(error);
+                }
+            }
+        }
         Ok(())
     }
 }

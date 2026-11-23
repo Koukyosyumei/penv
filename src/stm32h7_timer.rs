@@ -11,7 +11,8 @@ const ARPE: u32 = 1 << 7;
 pub struct Timer {
     pub base: u32,
     pub clock: Option<u8>,
-    pub irq: Option<Stm32Irq>,
+    pub irq: [Option<Stm32Irq>; 5],
+    input: [bool; 4],
     frequency: u32,
     limit: u32,
     phase: u64,
@@ -32,7 +33,8 @@ impl Timer {
             frequency,
             limit,
             clock,
-            irq: None,
+            irq: [None; 5],
+            input: [false; 4],
             phase: 0,
             divider: 0,
             counter: 0,
@@ -58,9 +60,51 @@ impl Timer {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn interrupt(&self) -> Option<Stm32Irq> {
+    pub fn interrupts(&self) -> impl Iterator<Item = Stm32Irq> + '_ {
+        let pending = self.registers[3] & self.registers[4] & 0xff;
+        let masks = [0xff, 1 << 7, 1, (1 << 5) | (1 << 6), 0x1e];
         self.irq
-            .filter(|_| self.registers[3] & self.registers[4] & 0xff != 0)
+            .into_iter()
+            .zip(masks)
+            .filter_map(move |(irq, mask)| irq.filter(|_| pending & mask != 0))
+    }
+
+    fn channel_mode(&self, channel: usize) -> u32 {
+        self.registers[6 + channel / 2] >> (channel % 2 * 8)
+    }
+
+    pub fn output(&self, channel: usize) -> Option<bool> {
+        let ccer = self.registers[8] >> (channel * 4);
+        if ccer & 1 == 0 || self.channel_mode(channel) & 3 != 0 {
+            return None;
+        }
+        if matches!(self.base, 0x4001_0000 | 0x4001_0400) && self.registers[17] & (1 << 15) == 0 {
+            return None;
+        }
+        let high = match (self.channel_mode(channel) >> 4) & 7 {
+            4 => false,
+            5 => true,
+            6 => self.counter < self.registers[13 + channel],
+            7 => self.counter >= self.registers[13 + channel],
+            _ => return None,
+        };
+        Some(high ^ (ccer & 2 != 0))
+    }
+
+    pub fn sample_input(&mut self, channel: usize, high: bool) {
+        let previous = std::mem::replace(&mut self.input[channel], high);
+        let ccer = self.registers[8] >> (channel * 4);
+        if self.registers[0] & CEN == 0
+            || self.channel_mode(channel) & 3 != 1
+            || ccer & 1 == 0
+            || previous == high
+        {
+            return;
+        }
+        if ccer & 0xa == 0xa || high != (ccer & 2 != 0) {
+            self.registers[13 + channel] = self.counter;
+            self.registers[4] |= 2 << channel;
+        }
     }
 
     pub fn read(&self, address: u32) -> u32 {
@@ -167,5 +211,34 @@ impl Timer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advanced_timer_routes_input_capture_and_update_to_distinct_interrupts() {
+        let mut timer = Timer::new(0, 1_000_000, 0xffff, None);
+        timer.irq[2] = Some(Stm32Irq::Nvic(25));
+        timer.irq[4] = Some(Stm32Irq::Nvic(27));
+        timer.write(0x0c, 3);
+        timer.write(0x18, 1);
+        timer.write(0x20, 1);
+        timer.write(0, CEN);
+        timer.tick();
+        timer.sample_input(0, true);
+        assert_eq!(timer.read(0x34), 1);
+        assert!(matches!(
+            timer.interrupts().next(),
+            Some(Stm32Irq::Nvic(27))
+        ));
+        timer.write(0x10, 0);
+        timer.write(0x14, 1);
+        assert!(matches!(
+            timer.interrupts().next(),
+            Some(Stm32Irq::Nvic(25))
+        ));
     }
 }

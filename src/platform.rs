@@ -59,6 +59,24 @@ impl Entry {
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
     }
 
+    fn bus_range(&self) -> Result<(u32, u32), String> {
+        let (base, size) = self
+            .registration
+            .as_deref()
+            .and_then(|text| text.strip_prefix("sysbus <"))
+            .and_then(|text| text.strip_suffix('>'))
+            .and_then(|text| text.split_once(','))
+            .ok_or_else(|| self.error("expected sysbus range"))?;
+        let size = size
+            .trim()
+            .strip_prefix('+')
+            .ok_or_else(|| self.error("expected +size in sysbus range"))?;
+        Ok((
+            number(base.trim()).map_err(|e| self.error(&e))?,
+            number(size).map_err(|e| self.error(&e))?,
+        ))
+    }
+
     fn address_with_optional_range(&self, size: u32) -> Result<u32, String> {
         let Some(range) = self
             .registration
@@ -293,8 +311,36 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut HashSet::new(),
         &mut entries,
     )?;
+    let mut declarations: Vec<Entry> = Vec::new();
+    let mut declared = HashMap::<String, usize>::new();
+    for entry in entries {
+        if entry.model.is_empty() && entry.name != "sysbus" {
+            let target = declared
+                .get(&entry.name)
+                .and_then(|&index| declarations.get_mut(index))
+                .ok_or_else(|| entry.error("extension has no earlier declaration"))?;
+            if !matches!(
+                target.model.as_str(),
+                stm32h7_gpio_platform::GPIO
+                    | crate::stm32h7_timer::Timer::MODEL
+                    | stm32h7_rtc_platform::RTC
+            ) || entry.registration.is_some()
+            {
+                return Err(entry.error("unsupported declaration extension"));
+            }
+            target.body.extend(entry.body);
+        } else {
+            if declared
+                .insert(entry.name.clone(), declarations.len())
+                .is_some()
+            {
+                return Err(entry.error("duplicate declarations are unsupported"));
+            }
+            declarations.push(entry);
+        }
+    }
+    let entries = declarations;
     let mut machine = Machine::without_default_ram();
-    let mut names = HashSet::new();
     let mut cpus = Vec::new();
     let mut clint = None;
     let mut dwt = None;
@@ -311,10 +357,20 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
-        if !names.insert(&entry.name) {
-            return Err(entry.error("duplicate declarations and overrides are unsupported"));
-        }
         match entry.model.as_str() {
+            "" if entry.name == "sysbus" => configure_bus_init(entry, &mut machine)?,
+            "Miscellaneous.BitBanding" => {
+                let properties = keys(entry, &["peripheralBase"])?;
+                let [(_, target)] = properties.as_slice() else {
+                    return Err(entry.error("expected bit-band target base"));
+                };
+                let target = number(target).map_err(|e| entry.error(&e))?;
+                let (base, size) = entry.bus_range()?;
+                machine
+                    .bus
+                    .map_bitband(base, size, target)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
@@ -672,9 +728,6 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
                 let mut outputs = vec![None; count as usize];
                 exti_outputs(controller, nvic, &combined_routes, &mut outputs)?;
-                if outputs.iter().flatten().any(|&line| line >= 32) {
-                    return Err(controller.error("STM32F4 EXTI outputs require NVIC lines 0–31"));
-                }
                 machine
                     .bus
                     .map_exti(controller.address()?, outputs, direct)
@@ -745,7 +798,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             let base = uart.address_with_optional_range(layout.size())?;
             machine
                 .bus
-                .map_stm32_usart(base, irq, layout)
+                .map_stm32_usart(&uart.name, base, irq, layout)
                 .map_err(|e| uart.error(&e))?;
         }
         if let Some(rcc) = f4_rcc {
@@ -1053,6 +1106,42 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String> {
+    let Some(((_, init), commands)) = entry.body.split_first() else {
+        return Err(entry.error("missing sysbus init"));
+    };
+    if init != "init:" || entry.registration.is_some() {
+        return Err(entry.error("expected sysbus init"));
+    }
+    for (_, command) in commands {
+        if let Some(path) = command.strip_prefix("ApplySVD @")
+            && !path.is_empty()
+            && !path.chars().any(char::is_whitespace)
+        {
+            // SVD register names are diagnostic metadata, not peripheral models.
+            continue;
+        }
+        let (range, rest) = command
+            .strip_prefix("Tag <")
+            .and_then(|text| text.split_once('>'))
+            .ok_or_else(|| entry.error("unsupported sysbus init command"))?;
+        let (start, end) = range
+            .split_once(',')
+            .ok_or_else(|| entry.error("invalid Tag range"))?;
+        let (_, value) = rest
+            .trim()
+            .strip_prefix('"')
+            .and_then(|text| text.split_once('"'))
+            .ok_or_else(|| entry.error("expected quoted Tag name"))?;
+        let parse = |text: &str| number(text.trim()).map_err(|e| entry.error(&e));
+        machine
+            .bus
+            .map_bus_tag(parse(start)?, parse(end)?, parse(value)?)
+            .map_err(|e| entry.error(&e))?;
+    }
+    Ok(())
 }
 
 fn configure_f4_rcc(rcc: &Entry, entries: &[Entry], machine: &mut Machine) -> Result<(), String> {

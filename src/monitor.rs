@@ -15,6 +15,7 @@ pub struct Boot {
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
     pub zephyr: BootOptions,
+    pub uart_input: Option<String>,
 }
 
 pub type Variables = HashMap<String, String>;
@@ -267,7 +268,7 @@ pub fn execute(
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
         ["showAnalyzer", name] if boot.platform.is_some() && serial_analyzer(name) => {
-            // UART output is already connected to stdout.
+            boot.uart_input = Some(name.strip_prefix("sysbus.").unwrap_or(name).into());
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }

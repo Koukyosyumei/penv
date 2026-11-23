@@ -88,12 +88,14 @@ void firmware_i2c_test(void)
     REG(0xe000e100) = 1U << 31; /* I2C1 event IRQ */
     REG(0xe000e104) = 1;       /* I2C1 error IRQ */
     I2C_CR2 = 16 | ITEVTEN | ITERREN;
+#ifndef F407_UPSTREAM_BOARD
     I2C_CR1 = PE | START;
     while (event_count != 1) {
     }
     configASSERT(received[0] == 0x01 && received[1] == 0x23);
     configASSERT((I2C_SR1 & (RXNE | BTF)) == 0 && (I2C_SR2 & BUSY) == 0);
 
+#endif
     transaction = READ_ABSENT;
     I2C_CR1 = PE | START;
     while (error_count != 1) {

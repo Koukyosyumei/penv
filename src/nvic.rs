@@ -41,6 +41,7 @@ pub struct Nvic {
     priority: [u8; IRQ_LINES],
     system_priority: [u8; 12],
     priority_mask: u8,
+    priority_group: u8,
     scr: u32,
     ccr: u32,
     cpacr: u32,
@@ -107,6 +108,7 @@ impl Nvic {
             priority: [0; IRQ_LINES],
             system_priority: [0; 12],
             priority_mask,
+            priority_group: 0,
             scr: 0,
             ccr: 1 << 9,
             cpacr: 0,
@@ -189,6 +191,10 @@ impl Nvic {
         }
     }
 
+    pub fn preemption_priority(&self, priority: u8) -> u8 {
+        (u16::from(priority & self.priority_mask) & (0xff_u16 << (self.priority_group + 1))) as u8
+    }
+
     pub fn next_irq(&self, active: &ActiveExceptions) -> Option<(u8, u8)> {
         let mut selected = None;
         for bank in 0..BANKS {
@@ -266,8 +272,7 @@ impl Nvic {
                 return Some(self.cpacr);
             }
             if address == AIRCR {
-                // VECTKEYSTAT and fixed reset PRIGROUP.
-                return Some(0xfa05_0000);
+                return Some(0xfa05_0000 | (u32::from(self.priority_group) << 8));
             }
             if address == VTOR {
                 return Some(self.vector_base.unwrap_or(0));
@@ -296,6 +301,12 @@ impl Nvic {
     }
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
+        if width == 4 && address == AIRCR {
+            if value >> 16 == 0x05fa {
+                self.priority_group = ((value >> 8) & 7) as u8;
+            }
+            return true;
+        }
         let offset = address.wrapping_sub(BASE);
         if width == 4 && self.has_cache {
             if offset == 0xd84 {
@@ -373,5 +384,23 @@ impl Nvic {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aircr_requires_key_and_splits_preemption_from_subpriority() {
+        let mut nvic = Nvic::new(0xf0, None);
+        assert!(nvic.write(AIRCR, 4, 0x500));
+        assert_eq!(nvic.read(AIRCR, 4), Some(0xfa05_0000));
+        assert!(nvic.write(AIRCR, 4, 0x05fa_0500));
+        assert_eq!(nvic.read(AIRCR, 4), Some(0xfa05_0500));
+        assert_eq!(nvic.preemption_priority(0x70), 0x40);
+        assert_eq!(nvic.preemption_priority(0x50), 0x40);
+        nvic.reset();
+        assert_eq!(nvic.preemption_priority(0x70), 0x70);
     }
 }

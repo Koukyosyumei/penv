@@ -4,6 +4,9 @@ pub struct Stm32Gpio {
     pub rcc_pin: Option<u8>,
     pub syscfg_port: Option<u8>,
     pub syscfg_inputs: [Option<u8>; 16],
+    pub exti_inputs: [Option<u8>; 16],
+    timer_output: u16,
+    timer_driven: u16,
     external: u16,
     reset_values: [u32; 3],
     mode: u32,
@@ -34,6 +37,9 @@ impl Stm32Gpio {
             rcc_pin: None,
             syscfg_port: None,
             syscfg_inputs: [None; 16],
+            exti_inputs: [None; 16],
+            timer_output: 0,
+            timer_driven: 0,
             external: 0,
             reset_values: [mode, speed, pull],
             mode,
@@ -52,6 +58,7 @@ impl Stm32Gpio {
         self.output_type = 0;
         self.output = 0;
         self.alternate.fill(0);
+        self.clear_timer_output();
         self.lock = Lock::Idle;
     }
 
@@ -64,15 +71,32 @@ impl Stm32Gpio {
         self.external = (self.external & !bit) | (u16::from(high) << pin);
     }
 
+    pub fn alternate_selected(&self, pin: u8, function: u8) -> bool {
+        (self.mode >> (pin * 2)) & 3 == 2
+            && (self.alternate[usize::from(pin / 8)] >> ((pin % 8) * 4)) & 15 == u32::from(function)
+    }
+
+    pub fn clear_timer_output(&mut self) {
+        self.timer_output = 0;
+        self.timer_driven = 0;
+    }
+
+    pub fn drive_timer_output(&mut self, pin: u8, high: bool) {
+        let bit = 1 << pin;
+        self.timer_driven |= bit;
+        self.timer_output = (self.timer_output & !bit) | (u16::from(high) << pin);
+    }
+
     pub fn pins(&self) -> u16 {
         let mut pins = 0;
-        let mut active = self.external | self.output as u16;
+        let mut active = self.external | self.output as u16 | self.timer_output;
         while active != 0 {
             let pin = active.trailing_zeros();
             active &= active - 1;
             let mask = 1 << pin;
             match (self.mode >> (pin * 2)) & 3 {
-                0 | 2 => pins |= self.external & mask,
+                0 => pins |= self.external & mask,
+                2 => pins |= (self.timer_output | (self.external & !self.timer_driven)) & mask,
                 1 => pins |= self.output as u16 & mask,
                 _ => {}
             }

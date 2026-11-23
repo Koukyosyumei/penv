@@ -185,7 +185,7 @@ Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の�
 入出力と割り込み配送を共用します。
 
 上流の `stm32f4_discovery.resc` は Contiki 用で、`PerformanceInMips` の解釈で停止します。
-ボード定義だけを読み込む場合の阻害点は下記の「未変更の上流 REPL」で再現できます。
+未変更の上流ボード定義で FreeRTOS を起動する手順は下記の「未変更の上流 REPL」にあります。
 FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
 TIM2（`0x40000000`、IRQ 28）、GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
 128 KiB メイン SRAM を使用します。リセット時は HSI 16 MHz で、ファームウェアは
@@ -197,7 +197,7 @@ RCC から SysTick を含む HCLK を 32 MHz に切り替えます。
 
 最初の TIM2 割り込みでは、FreeRTOS の `xQueueSendFromISR` が IRQ 優先度を
 検証するために SCB_AIRCR（`0xe000ed0c`）を読み、未マップアクセスで停止しました。
-NVIC モデルはリセット値 `0xfa050000` を返し、`PRIGROUP=0` を公開します。
+NVIC モデルはリセット値 `0xfa050000` を返し、キー付きの書き込みで `PRIGROUP` を変更できます。
 [STM32 Cortex-M4 プログラミングマニュアル PM0214、4.4.5](https://www.st.com/resource/en/programming_manual/pm0214-stm32-cortexm4-mcus-and-mpus-programming-manual-stmicroelectronics.pdf)
 
 ### ビルドと実行
@@ -227,6 +227,7 @@ target/release/penv run --script "$work/boot.resc" --max-steps 36000 \
 ```text
 STM32F407 FreeRTOS V11.1.0
 RCC PLL 32 MHz, RTC and TIM9 OK
+TIM9 FAULTMASK OK
 PWR ready OK
 CAN loopback OK
 SPI IRQ and DMA OK
@@ -253,11 +254,11 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 55 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 59 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `aed6d0cde78ab12b70751275cb133d8d113d2e41ec42d4ec0232b977a8e2177e` です。
+  SHA-256 は `7c884a855b292a20bfc3ff9ec6dc6deb62bdc944329ef85010e57a04c2a148ff` です。
 
 ### CAN1/CAN2 のローカル検証
 
@@ -396,27 +397,39 @@ F407 の先頭 1 MiB の同期消去を扱います。FreeRTOS ELF は同じフ�
 [Renode の F4 フラッシュモデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/MTD/STM32F4_FlashController.cs)
 [STM32F407 リファレンスマニュアル RM0090](https://www.st.com/resource/en/reference_manual/rm0090-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
 
-上記のスモークテストで生成した ELF を、未変更の上流ボード定義で指定します。
+上流の `stm32f4_discovery-kit.repl` をそのまま読み込み、FreeRTOS の通常起動と
+IWDG 後の再起動を実行できます。タイマーと GPIO の追加宣言を既存定義に適用し、TIM1/TIM8 の
+分割 IRQ、GPIO の代替機能・EXTI・LED の配線、ボタンの初期状態、2 つのビットバンド領域を
+扱います。CRC と RNG の F4 指定を受理します。複数 UART がある構成では
+`showAnalyzer sysbus.uart4` が UART4 を入力先に選びます。
 
 ```sh
-work=target/stm32f407-freertos
-cat > "$work/upstream.repro.resc" <<'EOF'
-mach create "F407_reference"
-machine LoadPlatformDescription @platforms/boards/stm32f4_discovery-kit.repl
-sysbus LoadELF @freertos.elf
-EOF
-target/release/penv run --script "$work/upstream.repro.resc" \
-    --platform-root ../renode --max-steps 36000
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-freertos-smoke.sh target/stm32f407-freertos
+tests/stm32f407-upstream-smoke.sh target/stm32f407-upstream
 ```
 
-`d4512ad` では `stm32f4.repl:173` の `Miscellaneous.STM32F4_RCC` で停止しました。
-現在はその宣言を通過し、`stm32f4.repl:254: timer1: duplicate declarations and overrides are unsupported`
-で終了コード 1 になります。上流 REPL での ELF 起動には、タイマーの追加配線宣言以降の
-対応が必要です。
+`RENODE_ROOT` の既定値は `../renode` です。上流スモークテストは公開 ELF の SHA-1 を確認し、
+`PENV_ASSET_DIR` を指定した場合はそのディレクトリをキャッシュとして使用します。
+FreeRTOS の上流構成では、基板上にエコー機器がない状態で SPI のゼロ応答と I2C の NACK を
+確認します。UART 出力には `Discovery bit-band GPIO and SRAM OK` と
+`I2C unpopulated bus NACK OK` が現れ、残りの TIM2、キュー、CAN、UART、IWDG の期待出力は
+検証用 REPL と共通です。上流構成の ELF の SHA-256 は
+`bb6aae7a2d3ccdef3e556aa73a97c6c26af6d8b3e6cf6b341b8c92b7f46aff82` です。
 
-残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
-浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの
-プログラム動作、消去の所要時間と IRQ、RDP の強制、キャッシュ動作は未実装です。
-UART のビット時間や GPIO 信号線の動作は検証範囲外です。
-CAN の通常モードでのノード間通信、CAN ハブ、ビット時間、バス仲裁、ACK やエラーの
-生成は残課題です。
+Renode の TIM2 上り・下りカウントケースは公開 ELF のまま移植し、開始後の
+`period elapsed callback` をそれぞれ 3 回以上確認します。Zephyr Hello World の公開 ELF は
+未変更の kit REPL から起動し、`Hello World! stm32f4_disco` を確認します。
+FAULTMASK の 2 ケースはクロックを有効にした TIM9 で FreeRTOS ELF に移植し、
+マスク中の IRQ 保留と例外復帰後の再配送を `TIM9 FAULTMASK OK` で確認します。
+フラッシュの消去モード未指定と一括消去のケースは Rust テストに移植しました。
+[上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
+[上流フラッシュ消去テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/stm32f4-erase.robot)
+
+残課題は上流の PWM キャプチャ・直交位相デコーダー用の外部ピン配線とタイマー動作、
+`ApplySVD` からのレジスター展開、Contiki 用 RESC のモニターコマンド、
+AIRCR のソフトウェアリセット要求、FPU と ARM_CM4F ポート、実機での確認です。
+GPIO の PWM 出力と直接入力キャプチャはモデルのテストで検証しています。
+フラッシュプログラム動作、UART のビット時間、CAN の通常モードでのノード間通信も
+残課題です。

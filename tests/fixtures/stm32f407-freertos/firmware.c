@@ -29,6 +29,9 @@
 #define UART4_DR  REG(0x40004c04)
 #define UART4_BRR REG(0x40004c08)
 #define UART4_CR1 REG(0x40004c0c)
+#define TIM9_DIER REG(0x4001400c)
+#define TIM9_SR   REG(0x40014010)
+#define TIM9_EGR  REG(0x40014014)
 #define TIM2_CR1  REG(0x40000000)
 #define TIM2_DIER REG(0x4000000c)
 #define TIM2_SR   REG(0x40000010)
@@ -199,6 +202,58 @@ static void power_test(void)
     configASSERT((PWR_CSR & BRE) == 0 && (PWR_CR & DBP) == 0);
 }
 
+static volatile unsigned tim9_interrupts;
+
+void tim9_irq(void)
+{
+    configASSERT((TIM9_SR & TIM_UPDATE) != 0);
+    TIM9_SR = (uint32_t)~TIM_UPDATE;
+    ++tim9_interrupts;
+    __asm volatile ("cpsid f" ::: "memory");
+}
+
+/* Adapt the two STM32F4_Discovery.robot FAULTMASK cases with TIM9 clocked. */
+static void faultmask_test(void)
+{
+    TIM9_DIER = TIM_UPDATE;
+    NVIC_ISER(24) = 1U << 24;
+    __asm volatile ("cpsid if" ::: "memory");
+    __asm volatile ("cpsie i" ::: "memory");
+    TIM9_EGR = TIM_UPDATE;
+    configASSERT((REG(0xe000e200) & (1U << 24)) != 0);
+    configASSERT(tim9_interrupts == 0);
+    __asm volatile ("cpsie if" ::: "memory");
+    while (tim9_interrupts != 1) {
+    }
+
+    TIM9_EGR = TIM_UPDATE;
+    while (tim9_interrupts != 2) {
+    }
+    TIM9_DIER = 0;
+}
+
+#ifdef F407_UPSTREAM_BOARD
+static void board_wiring_test(void)
+{
+    static volatile uint32_t data;
+    const uintptr_t byte_offset = (uintptr_t)&data - 0x20000000U;
+    data = 0xa5;
+    REG(0x22000000U + byte_offset * 32U + 8U * 4U) = 1;
+    configASSERT(data == 0x1a5);
+    configASSERT(REG(0x22000000U + byte_offset * 32U + 8U * 4U) == 1);
+    REG(0x22000000U + byte_offset * 32U + 8U * 4U) = 0;
+    configASSERT(data == 0xa5);
+
+    RCC_AHB1ENR |= 1U << 3; /* GPIOD and the on-board LED on PD12. */
+    REG(0x40020c00) |= 1U << 24;
+    const uintptr_t led_alias = 0x42000000U + (0x20c14U * 32U) + (12U * 4U);
+    REG(led_alias) = 1;
+    configASSERT((REG(0x40020c10) & (1U << 12)) != 0);
+    REG(led_alias) = 0;
+    configASSERT((REG(0x40020c10) & (1U << 12)) == 0);
+}
+#endif
+
 static void clock_test(bool restarted)
 {
     enum { HSEON = 1U << 16, HSERDY = 1U << 17, PLLON = 1U << 24, PLLRDY = 1U << 25,
@@ -323,7 +378,13 @@ void firmware_main(void)
     configASSERT(FLASH_RDP == 0xaa && (FLASH_NWRP & 0xfff) == 0xfff);
     uart_text("STM32F407 FreeRTOS " tskKERNEL_VERSION_NUMBER "\n");
     clock_test(restarted);
+#ifdef F407_UPSTREAM_BOARD
+    board_wiring_test();
+    uart_text("Discovery bit-band GPIO and SRAM OK\n");
+#endif
     uart_text("RCC PLL 32 MHz, RTC and TIM9 OK\n");
+    faultmask_test();
+    uart_text("TIM9 FAULTMASK OK\n");
     power_test();
     uart_text("PWR ready OK\n");
     firmware_can_test();
@@ -331,7 +392,11 @@ void firmware_main(void)
     firmware_spi_test();
     uart_text("SPI IRQ and DMA OK\n");
     firmware_i2c_test();
+#ifdef F407_UPSTREAM_BOARD
+    uart_text("I2C unpopulated bus NACK OK\n");
+#else
     uart_text("I2C echo 01 23 and NACK OK\n");
+#endif
     configASSERT(xTaskCreateStatic(task, "A", configMINIMAL_STACK_SIZE, &workers[0],
                                    2, stacks[0], &tasks[0]) != NULL);
     configASSERT(xTaskCreateStatic(task, "B", configMINIMAL_STACK_SIZE, &workers[1],

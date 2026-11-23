@@ -126,6 +126,9 @@ impl Node {
     fn boot(node: NodeBoot, root: Option<&Path>, assets: Option<&Path>) -> Result<Self, String> {
         let NodeBoot { name, boot, source } = node;
         let mut machine = platform::load(&boot.platform.unwrap(), root)?;
+        if let Some(uart) = &boot.uart_input {
+            machine.bus.select_uart_input(uart);
+        }
         let open = |value: &str| {
             let path = monitor::asset_path(value, &source, root.unwrap_or(Path::new(".")), assets)?;
             let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;

@@ -164,6 +164,35 @@ mod tests {
     use super::*;
     use crate::bus::Bus;
 
+    // Port the start-without-erase-mode and mass-erase cases from stm32f4-erase.robot.
+    #[test]
+    fn start_requires_an_erase_mode_and_mass_erase_covers_the_f407_bank() {
+        const FLASH: u32 = 0x0800_0000;
+        const CR: u32 = 0x4002_3c10;
+        let mut bus = Bus::default();
+        bus.map_ram(FLASH, F4Flash::BANK_SIZE as usize).unwrap();
+        bus.map_f4_flash(F4Flash::new(
+            CR - 0x10,
+            0x1fff_c000,
+            0x100,
+            FLASH..FLASH + F4Flash::BANK_SIZE,
+        ))
+        .unwrap();
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut std::io::sink()).unwrap();
+        };
+        write(&mut bus, FLASH, 0xdead_beef);
+        write(&mut bus, FLASH + 0xe_0000, 0xcafe_babe);
+        write(&mut bus, CR - 0xc, 0x4567_0123);
+        write(&mut bus, CR - 0xc, 0xcdef_89ab);
+        write(&mut bus, CR, CR_START);
+        assert_eq!(bus.read::<4>(FLASH).unwrap(), 0xdead_beef);
+        assert_eq!(bus.read::<4>(FLASH + 0xe_0000).unwrap(), 0xcafe_babe);
+        write(&mut bus, CR, CR_START | CR_MASS_ERASE);
+        assert_eq!(bus.read::<4>(FLASH).unwrap(), u32::MAX);
+        assert_eq!(bus.read::<4>(FLASH + 0xe_0000).unwrap(), u32::MAX);
+    }
+
     #[test]
     fn sector_erase_requires_unlock_and_updates_only_the_selected_sector() {
         const FLASH: u32 = 0x0800_0000;
