@@ -195,6 +195,26 @@ fn parse(
         ));
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+    parse_content(
+        path,
+        canonical.parent().unwrap(),
+        &content,
+        root,
+        visiting,
+        entries,
+    )?;
+    visiting.remove(&canonical);
+    Ok(())
+}
+
+fn parse_content(
+    path: &Path,
+    directory: &Path,
+    content: &str,
+    root: &Path,
+    visiting: &mut HashSet<PathBuf>,
+    entries: &mut Vec<Entry>,
+) -> Result<(), String> {
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
     let mut lines = content.lines().enumerate();
@@ -251,12 +271,15 @@ fn parse(
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            let local = canonical.parent().unwrap().join(filename);
+            let local = directory.join(filename);
             let include_path = if local.is_file() {
                 local
             } else {
                 root.join(filename)
             };
+            if !include_path.exists() {
+                return Err(error(&format!("Using '{filename}' does not exist")));
+            }
             parse(&include_path, root, visiting, entries).map_err(|e| error(&e))?;
             continue;
         }
@@ -299,7 +322,6 @@ fn parse(
             .error("unterminated peripheral registration"));
     }
     entries.extend(current);
-    visiting.remove(&canonical);
     Ok(())
 }
 
@@ -317,6 +339,10 @@ fn declarations(path: &Path, root: Option<&Path>) -> Result<Vec<Entry>, String> 
         &mut HashSet::new(),
         &mut entries,
     )?;
+    merge_declarations(entries)
+}
+
+fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut declarations: Vec<Entry> = Vec::new();
     let mut declared = HashMap::<String, usize>::new();
     for entry in entries {
@@ -360,6 +386,25 @@ pub fn load_with_timing(
     load_entries(path, &declarations(path, root)?, f4_repl_timing)
 }
 
+pub fn check(path: &Path, root: Option<&Path>) -> Result<(), String> {
+    check_entries(path, &declarations(path, root)?)
+}
+
+pub fn check_string(content: &str, root: Option<&Path>) -> Result<(), String> {
+    let path = Path::new("<platform string>");
+    let root = root.unwrap_or(Path::new("."));
+    let mut entries = Vec::new();
+    parse_content(path, root, content, root, &mut HashSet::new(), &mut entries)?;
+    check_entries(path, &merge_declarations(entries)?)
+}
+
+fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
+    if !entries.is_empty() {
+        load_entries(path, entries, false)?;
+    }
+    Ok(())
+}
+
 fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
     machine.bus.f4_repl_timing = f4_repl_timing;
@@ -392,6 +437,11 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .bus
                     .map_bitband(base, size, target)
                     .map_err(|e| entry.error(&e))?;
+            }
+            "CPU.TranslationCPU" => {
+                return Err(entry.error(
+                    "Antmicro.Renode.Peripherals.CPU.TranslationCPU is an abstract type. Try constructing one of the following concrete types: CPU.CortexM, CPU.RiscV32, CPU.VexRiscv",
+                ));
             }
             "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {

@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 78 | 0 | 435 | 237 |
+| Renode | 513 | 84 | 0 | 429 | 237 |
 | Infrastructure | 217 | 50 | 0 | 167 | 7 |
-| **合計** | **730** | **128** | **0** | **602** | **244** |
+| **合計** | **730** | **134** | **0** | **596** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 602 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 596 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -771,3 +771,35 @@ mkdir -p "$work"
 ```
 
 `sysbus-elf.log` には単独登録と複数登録の `OK` が出ます。各 `.status` の期待値は 0 です。
+
+### 上流プラットフォーム定義の読み込み
+
+`platform_descriptions.robot` から Discovery の独立した REPL 3 パラメーターと、
+文字列読み込み 3 件を移植しました。各入力は独立プロセスで、通常の起動と共通の
+REPL ローダーに渡します。プロセス終了が上流の `Reset Emulation` に相当します。
+空文字列の成功と、不正な `using` および抽象型を指定した場合の終了コード 1 と
+診断文字列を検査します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+work=target/stm32f407-platform-check
+mkdir -p "$work"
+(
+    run() {
+        local name=$1
+        shift
+        "$@" >"$work/$name.log" 2>&1
+        echo "$?" >"$work/$name.status"
+    }
+    run build cargo build --release
+    run platform tests/stm32f407-platform-check.sh
+    run cargo-test cargo test
+    run freertos tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu
+) &
+```
+
+`platform.log` の期待値は REPL 3 件のロード成功、空文字列の成功、指定の診断 2 件です。
+各 `.status` の期待値は 0 です。CAN の上流で無効化されたループバックケースは、
+初期化モード外で CAN_BTR を書いて読み戻す期待値が同スイートの `InitTest` と矛盾し、
+FINIT も解除しないため、元の条件を台帳に記録して未達に残しました。

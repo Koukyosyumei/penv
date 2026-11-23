@@ -77,6 +77,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv platform check (--file REPL | --string REPL) [--platform-root DIR]
        penv peripherals export OUTPUT --platform REPL [--platform-root DIR]
 
 Options:
@@ -129,8 +130,9 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}
+        Some(Some("platform")) => return check_platform(args),
         Some(Some("peripherals")) => return export_peripherals(args),
-        _ => return Err("expected 'run' or 'peripherals'; see --help".into()),
+        _ => return Err("expected 'run', 'platform' or 'peripherals'; see --help".into()),
     }
 
     let mut raw = false;
@@ -503,6 +505,35 @@ fn run() -> Result<ExitCode, String> {
             machine.primary.pc
         );
         return Ok(ExitCode::from(2));
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn check_platform(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<ExitCode, String> {
+    let usage = "expected 'platform check (--file REPL | --string REPL) [--platform-root DIR]'";
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("check")) {
+        return Err(usage.into());
+    }
+    let (mut file, mut content, mut root) = (None, None, None);
+    while let Some(flag) = args.next() {
+        let value = args.next().ok_or(usage)?;
+        match flag.to_str() {
+            Some("--file") if file.is_none() => file = Some(PathBuf::from(value)),
+            Some("--string") if content.is_none() => {
+                content = Some(
+                    value
+                        .into_string()
+                        .map_err(|_| "expected UTF-8 REPL source")?,
+                )
+            }
+            Some("--platform-root") if root.is_none() => root = Some(PathBuf::from(value)),
+            _ => return Err(usage.into()),
+        }
+    }
+    match (file, content) {
+        (Some(file), None) => platform::check(&file, root.as_deref())?,
+        (None, Some(content)) => platform::check_string(&content, root.as_deref())?,
+        _ => return Err(usage.into()),
     }
     Ok(ExitCode::SUCCESS)
 }
