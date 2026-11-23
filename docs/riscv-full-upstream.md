@@ -1396,3 +1396,21 @@ done
 ```
 
 同じ release バイナリと上流 SHA-1 が一致した公開イメージで 2/2 ケース、Rust テストは 88/88 件が通過しました。台帳の上流等価合格は累計 163 件です。残る LiteX ケースと最大 ISA 構成は未達です。UART、照合結果、終了状態を `~/.local/state/penv-dispatch/evidence/riscv/backlog-0651995-jnCbAd/` に保存しました。
+
+### Nexys Video の対話 UART とフレーム待機
+
+固定 `Nexys_Video_LiteX_VexRiscv.robot` のフレーム全面待機と、同じセッションの 75×80 領域待機をまとめて確認します。公開 BIOS と SD イメージを使い、起動案内、`litex>`、ログイン、シェルの順に待ってから各入力を送ります。固定の参照 PNG を直接渡し、全面が一致した後に領域を評価します。両方が同じフレームで一致した場合、報告ステップは同じになります。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro"
+sha256sum "$repro/nexys-video-motd.ppm"
+```
+
+固定 Robot の待機は開始ごとに 5 仮想秒です。今回の検証は起動からの共通ステップ上限を使い、全面待機を先に登録します。各待機の開始と期限を再現する作業が残るため、台帳は部分移植のままです。既存のステップ指定による一致・不一致回帰は共通スクリプトに残しました。
+
+公開アセット 4 個の SHA-1 は上流の指定と一致しました。同じ release バイナリで全面と領域が順に一致し、最終 PPM の SHA-256 は既存の上流参照由来の値と一致しました。最初の検証は同一ステップの二つの一致を拒んだため、検証側を修正して再実行しました。Rust テストは 88/88 件、上流等価合格は累計 163 件です。ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-4619106-v9dQ5P/` に保存しました。

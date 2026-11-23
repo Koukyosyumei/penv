@@ -9,7 +9,7 @@ import time
 
 
 @contextmanager
-def live_uart(command, artifacts, name):
+def live_uart(command, artifacts, name, *, wait_for_exit=False):
     artifacts.mkdir(parents=True, exist_ok=True)
     with (
         (artifacts / f"{name}.stderr.log").open("wb") as stderr,
@@ -42,6 +42,18 @@ def live_uart(command, artifacts, name):
 
         try:
             yield expect, send
+            if wait_for_exit:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise RuntimeError("LiteX UART session did not finish")
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    uart.write(chunk)
+                status = process.wait(timeout=max(0, deadline - time.monotonic()))
+                if status != 0:
+                    raise RuntimeError(f"LiteX UART session exited with status {status}")
         finally:
             if process.poll() is None:
                 process.terminate()

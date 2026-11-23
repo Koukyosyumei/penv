@@ -47,6 +47,10 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         "Should Mount Filesystem From SD Card", "Should Load RootFS From SD Card",
     }:
         return "target", "ported", "fixed DTB, kernel, OpenSBI, SD image and 64 MiB capacity; ordered UART waits and commands checked"
+    if filename == "Nexys_Video_LiteX_VexRiscv.robot" and case in {
+        "Frame Buffer Test", "Frame Buffer with ROI Test",
+    }:
+        return "target", "partial", "fixed firmware, live UART and both reference PNGs matched in order; per-wait five-second deadline remains"
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:
