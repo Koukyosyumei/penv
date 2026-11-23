@@ -75,7 +75,9 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Unmapped(address, _) | BusError::Denied(address) => (
+                BusError::Unmapped(address, _)
+                | BusError::Denied(address)
+                | BusError::SlaveFault(address) => (
                     match access {
                         Access::Fetch => 1,
                         Access::Load => 5,

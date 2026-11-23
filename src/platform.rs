@@ -273,6 +273,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 }
                 cpus.push(entry);
             }
+            "Mocks.BusFaultingPeripheral" if cortex_m4 => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_bus_faulting_peripheral(entry.address()?)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?
                     .into_iter()

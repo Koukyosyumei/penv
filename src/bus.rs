@@ -39,6 +39,7 @@ pub const UART_TX: u32 = 0x1000_0000;
 pub enum BusError {
     Unmapped(u32, usize),
     Denied(u32),
+    SlaveFault(u32),
     Page(u32),
     Misaligned(u32, usize),
     Output(io::Error),
@@ -59,6 +60,7 @@ impl fmt::Display for BusError {
             Self::Unmapped(address, width) => {
                 write!(f, "unmapped RAM access at {address:#010x} ({width} bytes)")
             }
+            Self::SlaveFault(address) => write!(f, "bus slave fault at {address:#010x}"),
             Self::Page(address) => write!(f, "page fault at {address:#010x}"),
             Self::Denied(address) => write!(
                 f,
@@ -81,6 +83,8 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    faulting_peripherals: Vec<u32>,
+    thumb_data_fault: Option<u32>,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
     nrf_cpu_hz: Option<u64>,
@@ -180,6 +184,24 @@ impl Bus {
         };
         bus.map_ram(RAM_BASE, size)?;
         Ok(bus)
+    }
+
+    pub fn map_bus_faulting_peripheral(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + 0x1000;
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping faulting peripheral at {base:#010x}"
+            ));
+        }
+        self.faulting_peripherals.push(base);
+        Ok(())
+    }
+
+    fn faulting_peripheral_contains(&self, address: u32) -> bool {
+        self.faulting_peripherals
+            .iter()
+            .any(|&base| address.wrapping_sub(base) < 0x1000)
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -507,7 +529,10 @@ impl Bus {
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        self.nrf_peripherals.iter().any(|device| {
+        self.faulting_peripherals.iter().any(|&base| {
+            let base = u64::from(base);
+            start < base + 0x1000 && base < end
+        }) || self.nrf_peripherals.iter().any(|device| {
             let other = u64::from(device.base);
             start < other + u64::from(device.size()) && other < end
         }) || self
@@ -1471,7 +1496,8 @@ impl Bus {
             value[..N].copy_from_slice(slice);
             return Ok(u32::from_le_bytes(value));
         }
-        self.read::<N>(address).map_err(|error| error.to_string())
+        self.read::<N>(address)
+            .map_err(|error| self.thumb_data_error(error))
     }
 
     pub fn thumb_write(
@@ -1490,10 +1516,24 @@ impl Bus {
             return Ok(());
         }
         self.write(address, width, value, uart)
-            .map_err(|error| error.to_string())
+            .map_err(|error| self.thumb_data_error(error))
+    }
+
+    fn thumb_data_error(&mut self, error: BusError) -> String {
+        if let BusError::SlaveFault(address) = error {
+            self.thumb_data_fault = Some(address);
+        }
+        error.to_string()
+    }
+
+    pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
+        self.thumb_data_fault.take()
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if self.faulting_peripheral_contains(address) {
+            return Err(BusError::SlaveFault(address));
+        }
         if N == 4
             && address & 3 == 0
             && let Some(device) = self
@@ -1701,6 +1741,9 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        if self.faulting_peripheral_contains(address) {
+            return Err(BusError::SlaveFault(address));
+        }
         if self.trivial_uart == Some(address) && matches!(width, 1 | 2 | 4) {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }

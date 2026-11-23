@@ -277,29 +277,45 @@ impl Thumb {
     }
 
     fn no_coprocessor(&mut self, pc: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
-        const HARD_FAULT: u8 = 3;
         const USAGE_FAULT: u8 = 6;
-        let nvic = bus.nvic.as_mut().ok_or("Cortex-M NOCP requires an NVIC")?;
-        let priority = nvic.priority(USAGE_FAULT);
+        self.synchronous_fault(USAGE_FAULT, None, pc, r, bus)
+    }
+
+    fn synchronous_fault(
+        &mut self,
+        exception: u8,
+        bus_address: Option<u32>,
+        pc: u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Result<u32, String> {
+        const HARD_FAULT: u8 = 3;
+        let nvic = bus.nvic.as_mut().ok_or("Cortex-M fault requires an NVIC")?;
+        let priority = nvic.priority(exception);
+        let enabled = if bus_address.is_some() {
+            nvic.bus_fault_enabled()
+        } else {
+            nvic.usage_fault_enabled()
+        };
         let can_preempt = self.active_exception == 0
             || (self.active_exception > HARD_FAULT
                 && priority < nvic.priority(self.active_exception));
-        let use_usage_fault = nvic.usage_fault_enabled()
-            && can_preempt
-            && !self.interrupts_masked
-            && !self.faultmask
-            && (self.basepri == 0 || priority < self.basepri);
-        nvic.record_no_coprocessor_fault(!use_usage_fault);
-        if !use_usage_fault && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask)
-        {
-            return Err(format!("Cortex-M lockup on NOCP at {pc:#010x}"));
-        }
-        let exception = if use_usage_fault {
-            USAGE_FAULT
+        let escalate = !enabled
+            || !can_preempt
+            || self.interrupts_masked
+            || self.faultmask
+            || (self.basepri != 0 && priority >= self.basepri);
+        let fault_name = if let Some(address) = bus_address {
+            nvic.record_precise_bus_fault(address, escalate);
+            "BusFault"
         } else {
-            HARD_FAULT
+            nvic.record_no_coprocessor_fault(escalate);
+            "NOCP"
         };
-        self.exception_entry(exception, pc, r, bus)
+        if escalate && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask) {
+            return Err(format!("Cortex-M lockup on {fault_name} at {pc:#010x}"));
+        }
+        self.exception_entry(if escalate { HARD_FAULT } else { exception }, pc, r, bus)
     }
 
     fn exception_entry(
@@ -601,6 +617,24 @@ impl Thumb {
     }
 
     pub fn step(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<ThumbStep, String> {
+        let original_itstate = self.itstate;
+        let result = self.step_instruction(pc, r, bus, output);
+        if let Some(address) = bus.take_thumb_data_fault() {
+            const BUS_FAULT: u8 = 5;
+            self.itstate = original_itstate;
+            *pc = self.synchronous_fault(BUS_FAULT, Some(address), *pc, r, bus)?;
+            return Ok(ThumbStep::Fault);
+        }
+        result
+    }
+
+    fn step_instruction(
         &mut self,
         pc: &mut u32,
         r: &mut [u32; 32],
@@ -1371,5 +1405,87 @@ mod wait_tests {
         );
         assert!(!thumb.sleeping());
         assert_eq!(pc, 2);
+    }
+}
+
+#[cfg(test)]
+mod bus_fault_tests {
+    use super::*;
+
+    fn check_precise_fault(opcode: u32, enabled: bool, expected_handler: u32) {
+        // arm-cortex-m-bus-fault.robot: Prepare Faulting Instruction /
+        // Execute Faulting Instruction / Fault Should Be Precise.
+        const CODE: u32 = 0x200;
+        const ADDRESS: u32 = 0x10_0000;
+        const SHCSR: u32 = 0xe000_ed24;
+        const CFSR: u32 = 0xe000_ed28;
+        const HFSR: u32 = 0xe000_ed2c;
+        const BFAR: u32 = 0xe000_ed38;
+        const FORCED: u32 = 1 << 30;
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_bus_faulting_peripheral(ADDRESS).unwrap();
+        bus.map_nvic(0xe0, None, true).unwrap();
+        let mut output = std::io::sink();
+        bus.write(0x14, 4, 0x301, &mut output).unwrap();
+        bus.write(0xc, 4, 0x341, &mut output).unwrap();
+        for (address, instruction) in [
+            (CODE, opcode),
+            (CODE + 2, 0x2122),
+            (CODE + 4, 0xe7fe),
+            (0x300, 0xe7fe),
+            (0x340, 0xe7fe),
+        ] {
+            bus.write(address, 2, instruction, &mut output).unwrap();
+        }
+        if enabled {
+            bus.write(SHCSR, 4, 1 << 17, &mut output).unwrap();
+        }
+        let mut thumb = Thumb::new(Some(0));
+        thumb.thumb2 = true;
+        let mut registers = [0; 32];
+        registers[0] = ADDRESS;
+        registers[1] = 0x11;
+        registers[2] = 0xa5a5_a5a5;
+        registers[13] = 0x1000;
+        let mut pc = CODE;
+        assert_eq!(
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap(),
+            ThumbStep::Fault
+        );
+        assert_eq!(pc, expected_handler);
+        assert_eq!(registers[1], 0x11);
+        assert_eq!(registers[2], 0xa5a5_a5a5);
+        assert_eq!(registers[13], 0xfe0);
+        assert_eq!(bus.read::<4>(0xfe4).unwrap(), 0x11);
+        assert_eq!(bus.read::<4>(0xfe8).unwrap(), 0xa5a5_a5a5);
+        assert_eq!(bus.read::<4>(0xff8).unwrap(), CODE);
+        assert_eq!(bus.read::<4>(CFSR).unwrap(), 0x8200);
+        assert_eq!(bus.read::<4>(BFAR).unwrap(), ADDRESS);
+        assert_eq!(
+            bus.read::<4>(HFSR).unwrap(),
+            if enabled { 0 } else { FORCED }
+        );
+        if !enabled {
+            bus.write(HFSR, 4, FORCED, &mut output).unwrap();
+            assert_eq!(bus.read::<4>(HFSR).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn upstream_precise_bus_fault_on_peripheral_read() {
+        check_precise_fault(0x6802, true, 0x300); // ldr r2, [r0]
+    }
+
+    #[test]
+    fn upstream_precise_bus_fault_on_peripheral_write() {
+        check_precise_fault(0x6002, true, 0x300); // str r2, [r0]
+    }
+
+    #[test]
+    fn upstream_disabled_bus_fault_escalates_to_hard_fault() {
+        check_precise_fault(0x6802, false, 0x340);
     }
 }

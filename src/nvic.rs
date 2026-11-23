@@ -23,6 +23,10 @@ const SHCSR: u32 = BASE + 0xd24;
 const CFSR: u32 = BASE + 0xd28;
 const CFSR_END: u32 = CFSR + 3;
 const HFSR: u32 = BASE + 0xd2c;
+const BFAR: u32 = BASE + 0xd38;
+const BUSFAULTENA: u32 = 1 << 17;
+const PRECISERR: u32 = 1 << 9;
+const BFARVALID: u32 = 1 << 15;
 const USGFAULTENA: u32 = 1 << 18;
 const NOCP: u32 = 1 << 19;
 const FORCED: u32 = 1 << 30;
@@ -47,6 +51,7 @@ pub struct Nvic {
     fault_enables: u32,
     cfsr: u32,
     hfsr: u32,
+    bfar: u32,
     cpacr: u32,
     fpccr: u32,
     demcr: u32,
@@ -71,6 +76,7 @@ impl Nvic {
             fault_enables: 0,
             cfsr: 0,
             hfsr: 0,
+            bfar: 0,
             cpacr: 0,
             fpccr: 0xc000_0000,
             demcr: 0,
@@ -90,6 +96,7 @@ impl Nvic {
             Some((SCR, SCR + 4)),
             Some((SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1)),
             cortex_m4.then_some((CCR, HFSR + 4)),
+            cortex_m4.then_some((BFAR, BFAR + 4)),
             cortex_m4.then_some((CPACR, CPACR + 4)),
             cortex_m4.then_some((FPCCR, FPCCR + 4)),
             cortex_m4.then_some((DEMCR, DEMCR + 4)),
@@ -134,6 +141,18 @@ impl Nvic {
             0xf => true,
             0x5 => privileged,
             _ => false,
+        }
+    }
+
+    pub fn bus_fault_enabled(&self) -> bool {
+        self.fault_enables & BUSFAULTENA != 0
+    }
+
+    pub fn record_precise_bus_fault(&mut self, address: u32, escalate: bool) {
+        self.cfsr |= PRECISERR | BFARVALID;
+        self.bfar = address;
+        if escalate {
+            self.hfsr |= FORCED;
         }
     }
 
@@ -238,6 +257,7 @@ impl Nvic {
                 (self.cfsr >> ((address - CFSR) * 8)) & mask
             }
             (HFSR, 4) if self.cortex_m4 => self.hfsr,
+            (BFAR, 4) if self.cortex_m4 => self.bfar,
             (SCR, 4) => self.sleep_control,
             (VTOR, 4) => self.vector_base.unwrap_or(0),
             (ENABLE | DISABLE, 4) => self.enabled as u32,
@@ -294,6 +314,7 @@ impl Nvic {
                 self.cfsr &= !((value & mask) << ((address - CFSR) * 8));
             }
             (HFSR, 4) if self.cortex_m4 => self.hfsr &= !value,
+            (BFAR, 4) if self.cortex_m4 => self.bfar = value,
             (AIRCR, 4) => {
                 self.reset_requested |= value >> 16 == 0x05fa && value & (1 << 2) != 0;
             }
