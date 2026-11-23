@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, io::Write, path::PathBuf};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    io::Write,
+    path::PathBuf,
+};
 
 use crate::{
     bitmanip::BitManip,
@@ -17,6 +21,7 @@ pub const MAX_HARTS: usize = 8;
 pub struct Machine {
     pub bus: Bus,
     pub primary: Hart,
+    pub function_symbols: Option<BTreeMap<u32, String>>,
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
@@ -167,6 +172,7 @@ impl Machine {
     pub fn without_default_ram() -> Self {
         Self {
             bus: Bus::default(),
+            function_symbols: None,
             primary: Hart {
                 name: None,
                 csr: Csr::default(),
@@ -190,6 +196,14 @@ impl Machine {
             queued_frame_waits: VecDeque::new(),
             intermediate_frame_matches: Vec::new(),
         }
+    }
+
+    pub fn enable_function_logging(&mut self) -> Result<(), String> {
+        if self.is_cortex_m() {
+            return Err("LogFunctionNames requires an RV32 machine".into());
+        }
+        self.function_symbols = Some(BTreeMap::new());
+        Ok(())
     }
 
     pub fn configure_harts(&mut self, count: usize) {
@@ -460,7 +474,12 @@ impl Machine {
             self.bus
                 .tick_litex_uart(self.elapsed_steps, output)
                 .map_err(|error| format!("UART: {error}"))?;
-            match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
+            match hart.execute_step(
+                &mut self.bus,
+                self.elapsed_steps,
+                output,
+                self.function_symbols.as_ref(),
+            )? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
@@ -765,6 +784,7 @@ impl Hart {
         bus: &mut Bus,
         elapsed_steps: u64,
         output: &mut impl Write,
+        symbols: Option<&BTreeMap<u32, String>>,
     ) -> Result<Step, String> {
         if let Some(thumb) = self.thumb.as_mut() {
             if thumb
@@ -831,7 +851,7 @@ impl Hart {
             self.pc = target;
             return Ok(Step::Trap);
         }
-        match self.step(bus, output) {
+        match self.step(bus, output, symbols) {
             Ok(Step::Retired) => {
                 self.csr.retire(count_retired);
                 Ok(Step::Retired)
@@ -854,7 +874,12 @@ impl Hart {
         }
     }
 
-    fn step(&mut self, bus: &mut Bus, output: &mut impl Write) -> Result<Step, Fault> {
+    fn step(
+        &mut self,
+        bus: &mut Bus,
+        output: &mut impl Write,
+        symbols: Option<&BTreeMap<u32, String>>,
+    ) -> Result<Step, Fault> {
         let pc = self.pc;
         if self.csr.address_trigger_matches(pc, crate::pmp::EXECUTE) {
             return Err(Fault::Breakpoint(pc));
@@ -862,6 +887,9 @@ impl Hart {
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
+        if let Some(name) = symbols.and_then(|symbols| symbols.get(&pc)) {
+            eprintln!("Entering function {name} at 0x{pc:X}");
+        }
         let illegal = || Fault::Illegal(encoded);
         let insn = if width == 2 {
             crate::compressed::expand(encoded).ok_or_else(illegal)?

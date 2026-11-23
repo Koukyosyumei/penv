@@ -2888,7 +2888,7 @@ Renode	tests/unit-tests/riscv-mret.robot	64	User Level Exists 64Bits	bitness=64 
 Renode	tests/unit-tests/riscv-mret.robot	68	User Level Exists 32Bits	bitness=32 | privilegeLevels=MachineUser	target	ported	fixed rv32gc fixture and instruction words; both single-step PC and MPP assertions checked
 Renode	tests/unit-tests/riscv-mret.robot	72	User Level Does Not Exists 64Bits	bitness=64 | privilegeLevels=Machine	outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-mret.robot	76	User Level Does Not Exists 32Bits	bitness=32 | privilegeLevels=Machine	target	ported	fixed rv32gc fixture and instruction words; both single-step PC and MPP assertions checked
-Renode	tests/unit-tests/riscv-mret.robot	80	Should Invalidate TLB After Mode Change		target	partial	inline CPU.RiscV32 rv32im_zicsr; upstream ELF tested, monitor/log equivalence pending
+Renode	tests/unit-tests/riscv-mret.robot	80	Should Invalidate TLB After Mode Change		target	ported	inline CPU.RiscV32 rv32im_zicsr; pinned ELF logs unrecoverable before fail_loop, which is observable in a negative control
 Renode	tests/unit-tests/riscv-priv.robot	88	Should Fail On Counter Access		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	107	Should Increment MCYCLE RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	119	Should Increment MINSTRET RV64		outside	outside	case passes bitness=64 to its CPU fixture

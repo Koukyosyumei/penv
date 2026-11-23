@@ -23,6 +23,7 @@ pub struct Boot {
     pub platform: Option<PathBuf>,
     pub image: Option<Asset>,
     pub use_virtual_elf_addresses: bool,
+    pub log_function_names: bool,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -470,6 +471,13 @@ fn execute(
                 .transpose()?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::TrapVector(register, value));
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            "LogFunctionNames",
+            value @ ("true" | "false"),
+        ] if boot.platform.is_some() => {
+            boot.log_function_names = *value == "true";
         }
         ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.platform.is_some() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;

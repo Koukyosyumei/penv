@@ -533,3 +533,19 @@ ELF をロードした追加検証では、ResetVector の変更後にも ELF �
 今回の CPU Reset は起動時の主ハートを REPL 初期状態に戻します。PC、ResetVector、Reset は互いの順序を維持します。ELF のロードと CSR・整数レジスターの起動設定は別フェーズのため、これらをリセットの前後に混在させる一般的なモニター順序や実行中のリセットは未対応です。上流等価合格は累計 73 件です。
 
 再現用 RESC、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-24652b2-DJlsCV/` に保存しました。
+
+### RV32 の MRET/TLB ケースにおける関数ログ
+
+固定 `riscv-mret.robot` の `Should Invalidate TLB After Mode Change` を等価検証しました。起動 RESC の `cpu LogFunctionNames true` で、RV32 ELF の実行可能セクションにある関数シンボルとコードラベルを読み取り、該当アドレスの命令フェッチに成功した時点で関数名を出力します。固定 ELF の `unrecoverable` と `fail_loop` は型指定のないローカルラベルです。
+
+固定 ELF の SHA-1 を確認し、Robot と同じ REPL で実行しました。期待ログ `Entering function unrecoverable` が出るまでに `Entering function fail_loop` は出ませんでした。別実行で PC を 0x2018 に設定すると `fail_loop` が出力され、失敗条件を観測できることも確認しました。実行は 44 ステップで区切り、Robot の成功・失敗判定と同じ順序でログを照合しています。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-mret-log.py target/release/penv "$evidence/mret.elf" "$evidence/robot-rerun"
+```
+
+Rust テスト 80 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC プローブ、ResetVector 回帰が通過しました。上流等価合格は累計 74 件です。関数ログはシンボルの開始アドレスに対応します。Renode の翻訳ブロック単位のログ、範囲内のシンボル解決、接頭辞フィルターは今回の範囲に含まれません。別ケースの無効命令診断ログ、最大 ISA 構成と未確定の台帳展開は残っています。
+
+固定 ELF、再現用 RESC、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-04137b1-z3RqND/` に保存しました。

@@ -147,7 +147,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 return "target", "blocked-cpu", "pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence"
             return "target", status, "case passes bitness=32 to its CPU fixture; " + (basis or "equivalence pending")
     if filename == "riscv-mret.robot" and "LoadPlatformDescriptionFromString ${invalidate_test_plat}" in source:
-        return "target", "partial", "inline CPU.RiscV32 rv32im_zicsr; upstream ELF tested, monitor/log equivalence pending"
+        return "target", "ported", "inline CPU.RiscV32 rv32im_zicsr; pinned ELF logs unrecoverable before fail_loop, which is observable in a negative control"
     return scope, status, basis or "-"
 
 

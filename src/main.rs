@@ -409,6 +409,7 @@ fn run() -> Result<ExitCode, String> {
     let mut run_steps = None;
     let mut post_run = Vec::new();
     let mut cpu_registers = Vec::new();
+    let mut log_function_names = false;
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -431,6 +432,7 @@ fn run() -> Result<ExitCode, String> {
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         cpu_registers = boot.cpu_registers;
+        log_function_names = boot.log_function_names;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         if path.is_some() && boot.image.is_none() {
@@ -560,6 +562,9 @@ fn run() -> Result<ExitCode, String> {
     }
     if let Some(value) = vex_supervisor_irq_mask {
         machine.primary.set_vex_supervisor_irq_mask(value)?;
+    }
+    if log_function_names {
+        machine.enable_function_logging()?;
     }
     if let Some(path) = path {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
