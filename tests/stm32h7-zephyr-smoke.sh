@@ -43,11 +43,15 @@ awk -v RS='' -v ORS='\n\n' '
     $2 ~ /[A-Z]/ {print}
 ' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 == "sysbus:" {print}' "$cpu" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 == "crypto:" {print}' \
+    "$renode/platforms/cpus/stm32h753.repl" >> "$work/boot.repl"
 # The reference REPL leaves HSEM IRQ unconnected. Route it for the notification check.
 awk -v RS='' -v ORS='\n\n' '$1 == "hsem:" { print $0 "\n    IRQ -> nvic@125" }' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 == "watchdog:" {print}' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(usart2|watchdog|rcc):$/' "$board" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 ~ /^(redRgbLed|greenRgbLed|blueRgbLed|gpioPortD):$/' \
+    "$board" >> "$work/boot.repl"
 awk '$1 == "veml7700:" {print}' "$board" >> "$work/boot.repl"
 printf '    Illuminance: 500\n' >> "$work/boot.repl"
 sed 's|@platforms/boards/stm32h7_renode_reference_board.repl|@boot.repl|' \
@@ -137,5 +141,64 @@ actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/sdmmc-uart.log
 if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
     cat "$work/sdmmc-penv.log" >&2
     cat "$work/sdmmc-uart.log" >&2
+    exit 1
+fi
+
+# Port the register-shadowing check from STM32LTDC.robot to the reference ELF.
+# DMA2D writes the source pixel, and a zero line count stays staged after reload.
+cp "$work/boot.repl" "$work/fill.repl"
+printf '\ndma2dScratch: Memory.MappedMemory @ sysbus 0x60000000\n    size: 0x1000\n' >> "$work/fill.repl"
+sed 's/@boot.repl/@fill.repl/' "$work/boot.resc" > "$work/fill.resc"
+events=()
+step=1000000
+for command in '0x580244d4 32 0x10' '0x52001038 32 0x1234abcd' \
+    '0x5200103c 32 0x60000000' '0x52001044 32 0x00010001' \
+    '0x52001000 32 0x00030201' '0x52001004 32' '0x60000000 32' '0xe000e208 32' \
+    '0x580244e4 32 0x8' '0x500010ac 32 0x60000000' '0x500010b0 32 0x00040007' \
+    '0x500010b4 32 1' '0x50001084 32 1' '0x50001024 32 1' '0x50001018 32 1' \
+    '0x500010b4 32 0' '0x500010b4 32'; do
+    printf 'devmem %s\r' "$command" > "$work/ltdc-$step.txt"
+    events+=(--uart-event "$step:$work/ltdc-$step.txt")
+    step=$((step + 200000))
+done
+status=0
+target/release/penv run --script "$work/fill.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
+    "${events[@]}" --framebuffer-out "$work/frame.ppm" \
+    > "$work/ltdc-uart.log" 2> "$work/ltdc-penv.log" || status=$?
+expected=$(printf '%s\n' 0x2 0x1234abcd 0x4000000 0x0)
+actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/ltdc-uart.log")
+if [[ "$status" != 2 || "$actual" != "$expected" ]] ||
+    ! printf 'P6\n1 1\n255\n\x34\xab\xcd' | cmp - "$work/frame.ppm"; then
+    cat "$work/ltdc-penv.log" >&2
+    cat "$work/ltdc-uart.log" >&2
+    exit 1
+fi
+
+# Run the AES-128 ECB known-answer vector against the guest-visible CRYP FIFO.
+events=()
+step=1000000
+for command in '0x48021030 32 0x00010203' '0x48021034 32 0x04050607' \
+    '0x48021038 32 0x08090a0b' '0x4802103c 32 0x0c0d0e0f' \
+    '0x48021014 32 2' '0x48021000 32 0x8020' '0x48021008 32 0x00112233' \
+    '0x48021008 32 0x44556677' '0x48021008 32 0x8899aabb' '0x48021008 32 0xccddeeff' \
+    '0x4802101c 32' '0x4802100c 32' '0x4802100c 32' '0x4802100c 32' '0x4802100c 32' \
+    '0x4802101c 32' '0x580244e0 32 0x8' '0x58020c00 32 0x04000000' \
+    '0x58020c18 32 0x2000'; do
+    printf 'devmem %s\r' "$command" > "$work/cryp-$step.txt"
+    events+=(--uart-event "$step:$work/cryp-$step.txt")
+    step=$((step + 150000))
+done
+status=0
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
+    "${events[@]}" --stats > "$work/cryp-uart.log" 2> "$work/cryp-penv.log" || status=$?
+expected=$(printf '%s\n' 0x2 0x69c4e0d8 0x6a7b0430 0xd8cdb780 0x70b4c55a 0x0)
+actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/cryp-uart.log")
+if [[ "$status" != 2 || "$actual" != "$expected" ]] ||
+    ! rg -qxF 'redRgbLed=on' "$work/cryp-penv.log" ||
+    ! rg -qxF 'greenRgbLed=off' "$work/cryp-penv.log"; then
+    cat "$work/cryp-penv.log" >&2
+    cat "$work/cryp-uart.log" >&2
     exit 1
 fi

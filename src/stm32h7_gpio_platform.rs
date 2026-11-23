@@ -6,10 +6,11 @@ use crate::{
 
 pub const GPIO: &str = "GPIOPort.STM32_GPIOPort";
 const SYSCFG: &str = "Miscellaneous.STM32_SYSCFG";
+const LED: &str = "Miscellaneous.LED";
 const BUTTON: &str = "Miscellaneous.Button";
 
 pub fn is_device(model: &str) -> bool {
-    matches!(model, GPIO | BUTTON)
+    matches!(model, GPIO | BUTTON | LED)
 }
 
 pub fn configure(
@@ -83,6 +84,44 @@ pub fn configure(
         port.set_external(pin, invert);
     }
 
+    for led in entries.iter().filter(|entry| entry.model == LED) {
+        let (parent, pin) = led
+            .registration
+            .as_deref()
+            .and_then(|registration| registration.split_once(char::is_whitespace))
+            .ok_or_else(|| led.error("expected LED registered on a GPIO pin"))?;
+        let pin = irq_index(pin, 16).map_err(|error| led.error(&error))?;
+        let (_, port) = ports
+            .iter()
+            .find(|(name, _)| *name == parent)
+            .ok_or_else(|| led.error("unknown LED GPIO port"))?;
+        let inverted = match led.body.as_slice() {
+            [] => false,
+            [(_, property)] => property
+                .strip_prefix("invert:")
+                .and_then(|value| value.trim().parse().ok())
+                .ok_or_else(|| led.error("expected LED invert property"))?,
+            _ => return Err(led.error("unsupported LED properties")),
+        };
+        let wired = entries
+            .iter()
+            .find(|entry| entry.name == parent)
+            .is_some_and(|entry| {
+                entry.body.iter().any(|(_, wire)| {
+                    wire.split_once("->").is_some_and(|(output, target)| {
+                        irq_index(output, 16) == Ok(pin)
+                            && target.trim().strip_suffix("@0") == Some(&led.name)
+                    })
+                })
+            });
+        if !wired {
+            return Err(led.error("expected GPIO pin wired to LED input 0"));
+        }
+        machine
+            .bus
+            .add_gpio_led(led.name.clone(), port.base, pin, inverted);
+    }
+
     for (_, port) in ports {
         machine.bus.map_h7_gpio(port)?;
     }
@@ -146,6 +185,21 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
         let (target, inputs) = target
             .split_once('@')
             .ok_or("missing GPIO destination pins")?;
+        if let Some(led) = entries
+            .iter()
+            .find(|led| led.model == LED && led.name == target.trim())
+        {
+            let expected = led
+                .registration
+                .as_deref()
+                .and_then(|registration| registration.split_once(char::is_whitespace));
+            if !matches!(expected, Some((parent, pin)) if parent == entry.name && irq_index(pin, 16) == irq_index(pins, 16) && irq_index(pins, 16).is_ok())
+                || inputs.trim() != "0"
+            {
+                return Err("invalid GPIO LED connection".into());
+            }
+            continue;
+        }
         let (name, selector) = target
             .trim()
             .split_once('#')

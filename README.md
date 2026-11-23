@@ -136,7 +136,7 @@ target/release/penv run --script "$smp" \
 ```
 
 - `cargo test` はユニットテスト 53 件、CLI テスト 5 件が通過しました。STM32H7 の DMA 記述子と LiteX の CSR32 スロットを仮想スイッチで接続し、両方向のフレームと受信データを確認しました。SPI のテストは RCC ゲート、リセット、DMAMUX の要求番号、受信 DMA、NVIC、サスペンドを確認します。
-- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。`eaef188` は `stm32h7.repl:225` の `Video.STM32LTDC` で停止しました。`0de37fd` は `stm32h7.repl:500` のシステムフラッシュ初期化 `init:` で停止しました。`71beca0` は `stm32h7.repl:524` の `Timers.STM32L0_LpTimer`（`lptimer1`）で停止しました。`43e5aa2` は `stm32h7.repl:559` の `Timers.STM32_IndependentWatchdog` で停止しました。`b96599c` は `stm32h7.repl:562` の `Miscellaneous.STM32H7_HardwareSemaphore` で停止しました。`426c3be` は `stm32h7.repl:584` の `timer1:` 追加定義で停止しました。現行コードは名前だけの追加定義を読み込み、`stm32h7.repl:726` の `SD.STM32HSDMMC` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
+- STM32H7 の上流単一ノード RESC は `aa62fb3` で `stm32h7.repl:193` の `SPI.STM32H7_SPI`、`7d09525` で `stm32h7.repl:199` の `I2C.STM32F7_I2C` により停止しました。`84dc28a` は `stm32h7.repl:219` の `DMA.STM32DMA2D` で停止しました。`eaef188` は `stm32h7.repl:225` の `Video.STM32LTDC` で停止しました。`0de37fd` は `stm32h7.repl:500` のシステムフラッシュ初期化 `init:` で停止しました。`71beca0` は `stm32h7.repl:524` の `Timers.STM32L0_LpTimer`（`lptimer1`）で停止しました。`43e5aa2` は `stm32h7.repl:559` の `Timers.STM32_IndependentWatchdog` で停止しました。`b96599c` は `stm32h7.repl:562` の `Miscellaneous.STM32H7_HardwareSemaphore` で停止しました。`426c3be` は `stm32h7.repl:584` の `timer1:` 追加定義で停止しました。`e189acf` は名前だけの追加定義を読み込み、`stm32h7.repl:726` の `SD.STM32HSDMMC` で停止します。上流複数ノード RESC は `emulation CreateCANHub` で停止します。
 - LiteX SMP は同梱指定の OpenSBI と Linux 5.0.9 を実行し、4 CPU の立ち上げと `Run /init as init process` を出力しました。その後、指定の命令上限で停止しました。
 
 双方向 Ethernet の回帰テストは個別に実行できます。STM32H7 の DMA 記述子から LiteX の受信スロットへフレームを送り、逆方向では LiteX の送信スロットから STM32H7 の受信バッファーへ返した内容を照合します。
@@ -347,4 +347,14 @@ target/release/penv run \
 
 公開 Zephyr の診断構成で Shell、VEML7700 の 499 lux、IWDG の再起動、HSEM 通知を確認しました。ゲストの `devmem` では SDMMC の `CTIMEOUT=0x4` と NVIC 保留 `0x20000` がクリア後にともに 0 になり、CCFG タグは `0x4`、タグと重なる USB の実レジスターは `0x4f54310a` を返しました。
 
-未変更の RESC は `platforms/cpus/stm32h753.repl:3` の `Miscellaneous.Crypto.STM32H7_CRYPTO` で停止します。SD カード接続、転送と IDMA、上流 `STM32SDMMC.robot` の ext2 マウント、USB ホスト接続とパケット転送は残件です。上流の専用 STM32H747I display ELF は、USART1 と SDRAM を追加した診断構成で従来の HSEM アクセスを通過し、`HAL_DSI_Init` の `pc=0x08004576` で `0x50000430` の未マップアクセスに到達しました。
+`c3c56a4` では未変更の RESC は `platforms/cpus/stm32h753.repl:3` の `Miscellaneous.Crypto.STM32H7_CRYPTO` で停止します。SD カード接続、転送と IDMA、上流 `STM32SDMMC.robot` の ext2 マウント、USB ホスト接続とパケット転送は残件です。上流の専用 STM32H747I display ELF は、USART1 と SDRAM を追加した診断構成で従来の HSEM アクセスを通過し、`HAL_DSI_Init` の `pc=0x08004576` で `0x50000430` の未マップアクセスに到達しました。
+
+### h7-continuation の追加検証
+
+STM32H753 の `Miscellaneous.Crypto.STM32H7_CRYPTO` は AES-ECB の 128、192、256 ビット鍵、暗号化・復号、FIFO と NVIC IRQ 79 のマスクに対応します。AES の実装には RustCrypto の `aes` を使用します。上記スモークテストでは公開 Zephyr Shell を通して AES-128 の暗号文 `69c4e0d8 6a7b0430 d8cdb780 70b4c55a` と出力 FIFO の割り込みステータスを照合します。`OutDMA` 配線は構文を検証し、DMA 転送と ECB 以外の暗号モードは残件です。
+
+上流 `STM32LTDC.robot` のシャドーレジスター検証を同じスモークに移植しました。DMA2D の完了と IRQ 90 を確認してから LTDC にピクセルを渡し、行数レジスターを 0 に変更しても、再読み込みまで有効な 1×1 PPM が RGB `34 ab cd` になることを照合します。専用 ELF でのボタン入力と FIFO アンダーランの検証は残件です。
+
+上流 `STM32SDMMC.robot` の ELF と ext2 イメージは取得し、SHA-1 を照合しました。USART1 と SDRAM を追加した診断構成で、ファイルシステム用 ELF は `stm32h7_m4_wakeup` の `pc=0x080011dc` で `0x58000704` の未マップアクセスに到達しました。カードを接続する RESC コマンドと、マウント・ファイル一覧の移植も残っています。
+
+`cargo test` はユニット 56 件と CLI 5 件が通過しました。個別の STM32H7 DMA と LiteX CSR32 の双方向フレーム交換も通過し、上流 LiteX SMP の実イメージは 4 CPU の起動と `Run /init as init process` に到達しました。未変更の STM32H7 RESC は CRYP と RGB LED の宣言を通過し、`platforms/boards/stm32h7_renode_reference_board.repl:9` の `pwmled0: Miscellaneous.PWMLED` で停止します。公開 Zephyr Shell から GPIOD 13 をセットし、`--stats` で `redRgbLed=on`、`greenRgbLed=off`、`blueRgbLed=off` を確認しました。PWM のデューティ比、追加 I²C センサー、タイマー代替機能配線、未変更構成でのファームウェア起動と実ゲスト間 Ethernet は残件です。

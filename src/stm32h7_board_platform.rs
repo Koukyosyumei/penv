@@ -6,6 +6,7 @@ use crate::{
     stm32_crc::Stm32Crc,
     stm32_iwdg::Iwdg,
     stm32_uart::Stm32Irq,
+    stm32h7_crypto::Crypto,
     stm32h7_dma2d::Dma2d,
     stm32h7_fdcan::Fdcan,
     stm32h7_hsem::Hsem,
@@ -43,6 +44,7 @@ pub fn is_device(model: &str) -> bool {
                 | Iwdg::MODEL
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
+                | Crypto::MODEL
         )
 }
 
@@ -98,6 +100,36 @@ pub fn configure(
             machine.bus.map_designware_usb(DesignWareUsb::new(base))
         }
         .map_err(|e| entry.error(&e))?;
+    }
+
+    for entry in entries.iter().filter(|entry| entry.model == Crypto::MODEL) {
+        let base = entry
+            .sysbus()?
+            .ok_or_else(|| entry.error("missing CRYP address"))?;
+        let mut irq = None;
+        let mut out_dma = false;
+        for (_, text) in &entry.body {
+            let (pin, target, line) = wire(text).map_err(|e| entry.error(e))?;
+            match pin {
+                "" | "IRQ" if irq.is_none() && nvic.is_some_and(|nvic| nvic.name == target) => {
+                    irq = Some(irq_index(line, IRQ_LINES as u32).map_err(|e| entry.error(&e))?);
+                }
+                "OutDMA"
+                    if !out_dma
+                        && entries.iter().any(|e| {
+                            e.name == target && e.model == "Miscellaneous.STM32_DMAMUX"
+                        }) =>
+                {
+                    irq_index(line, 128).map_err(|e| entry.error(&e))?;
+                    out_dma = true;
+                }
+                _ => return Err(entry.error("invalid CRYP connection")),
+            }
+        }
+        machine
+            .bus
+            .map_h7_crypto(Crypto::new(base, irq))
+            .map_err(|e| entry.error(&e))?;
     }
 
     for entry in entries.iter().filter(|entry| entry.model == Hsem::MODEL) {

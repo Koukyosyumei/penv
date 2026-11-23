@@ -31,6 +31,7 @@ mod stm32h7_adc_dma;
 mod stm32h7_adc_platform;
 mod stm32h7_bdma;
 mod stm32h7_board_platform;
+mod stm32h7_crypto;
 mod stm32h7_dma2d;
 mod stm32h7_ethernet;
 mod stm32h7_exti;
@@ -402,6 +403,9 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.pc
         );
+        for (name, on) in machine.bus.gpio_led_states() {
+            eprintln!("{name}={}", if on { "on" } else { "off" });
+        }
     }
     if stop == Stop::Limit {
         eprintln!(

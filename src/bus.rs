@@ -21,6 +21,7 @@ use crate::{
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
+    stm32h7_crypto::Crypto,
     stm32h7_dma2d::Dma2d,
     stm32h7_exti::H7Exti,
     stm32h7_fdcan::Fdcan,
@@ -107,6 +108,7 @@ pub struct Bus {
     h7_dma_mux: Vec<DmaMux>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
+    gpio_leds: Vec<(String, u32, u8, bool)>,
     h7_rtc: Vec<Stm32Rtc>,
     h7_spi: Vec<Spi>,
     h7_i2c: Vec<I2c>,
@@ -119,6 +121,7 @@ pub struct Bus {
     h7_dma2d: Vec<Dma2d>,
     h7_hsem: Option<Hsem>,
     h7_sdmmc: Vec<Sdmmc>,
+    h7_crypto: Vec<Crypto>,
     designware_usb: Vec<DesignWareUsb>,
     tags: Vec<(std::ops::RangeInclusive<u32>, u32)>,
     h7_ltdc: Option<Ltdc>,
@@ -347,6 +350,19 @@ impl Bus {
         Ok(())
     }
 
+    pub fn add_gpio_led(&mut self, name: String, base: u32, pin: u8, inverted: bool) {
+        self.gpio_leds.push((name, base, pin, inverted));
+    }
+
+    pub fn gpio_led_states(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.gpio_leds
+            .iter()
+            .filter_map(|(name, base, pin, inverted)| {
+                let port = self.h7_gpio.iter().find(|port| port.base == *base)?;
+                Some((name.as_str(), (port.pins() & (1 << pin) != 0) ^ inverted))
+            })
+    }
+
     pub fn map_h7_gpio(&mut self, port: Stm32Gpio) -> Result<(), String> {
         self.check_peripheral_range(port.base, port.size)?;
         self.h7_gpio.push(port);
@@ -402,6 +418,12 @@ impl Bus {
             .rev()
             .find(|(range, _)| range.contains(&address) && range.contains(&end))
             .map(|(_, value)| value & (u32::MAX >> (32 - width * 8)))
+    }
+
+    pub fn map_h7_crypto(&mut self, device: Crypto) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Crypto::SIZE)?;
+        self.h7_crypto.push(device);
+        Ok(())
     }
 
     pub fn map_h7_sdmmc(&mut self, device: Sdmmc) -> Result<(), String> {
@@ -501,6 +523,9 @@ impl Bus {
             device.reset();
         }
         for device in &mut self.designware_usb {
+            device.reset();
+        }
+        for device in &mut self.h7_crypto {
             device.reset();
         }
         for device in &mut self.h7_sdmmc {
@@ -711,6 +736,11 @@ impl Bus {
                         .iter()
                         .map(|usb| (usb.base, DesignWareUsb::SIZE)),
                 )
+                .chain(
+                    self.h7_crypto
+                        .iter()
+                        .map(|device| (device.base, Crypto::SIZE)),
+                )
                 .chain(self.h7_hsem.iter().map(|device| (device.base, Hsem::SIZE)))
                 .chain(
                     self.h7_dma2d
@@ -918,6 +948,7 @@ impl Bus {
                 .filter(|rng| rng_clocked(control, rng))
                 .filter_map(Rng::interrupt)
                 .chain(self.h7_sdmmc.iter().filter_map(Sdmmc::interrupt))
+                .chain(self.h7_crypto.iter().filter_map(Crypto::interrupt))
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
                 .chain(
                     self.h7_ltdc
@@ -1530,6 +1561,15 @@ impl Bus {
         {
             return Ok(device.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self
+                .h7_crypto
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            return Ok(device.read(address));
+        }
         match self.read_ram::<N>(address) {
             Err(error @ BusError::Unmapped(..)) => self.tag_value(address, N).ok_or(error),
             result => result,
@@ -2002,6 +2042,15 @@ impl Bus {
         if width == 4
             && let Some(device) = self
                 .designware_usb
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(device) = self
+                .h7_crypto
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
