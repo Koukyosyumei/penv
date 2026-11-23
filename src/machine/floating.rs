@@ -52,7 +52,7 @@ impl Hart {
         if opcode == 0x07 {
             let address = self.registers[rs1].wrapping_add(sign(insn >> 20, 12));
             let bits = match format {
-                Format::Half => u64::from(self.load::<2>(bus, address)?),
+                Format::Half | Format::BFloat => u64::from(self.load::<2>(bus, address)?),
                 Format::Single => u64::from(self.load::<4>(bus, address)?),
                 Format::Double => self.fp_load_double(bus, address)?,
             };
@@ -64,7 +64,7 @@ impl Hart {
             let address = self.registers[rs1].wrapping_add(sign(immediate, 12));
             let bits = floating[rs2];
             match format {
-                Format::Half | Format::Single => {
+                Format::Half | Format::BFloat | Format::Single => {
                     self.store(bus, address, format.width(), bits as u32, output)?;
                 }
                 Format::Double => self.fp_store_double(bus, address, bits, output)?,
@@ -145,6 +145,34 @@ impl Hart {
             Ok(None)
         }
     }
+    pub(super) fn andes_bfloat_instruction(&mut self, insn: u32) -> Result<(), Fault> {
+        let illegal = || Fault::Illegal(insn);
+        if !self.csr.floating_enabled() {
+            return Err(illegal());
+        }
+        let source = ((insn >> 20) & 31) as usize;
+        let rd = ((insn >> 7) & 31) as usize;
+        let mut bits = self.floating.as_ref().unwrap()[source];
+        if !self.csr.d_extension {
+            bits = Format::Single.boxed(u64::from(bits as u32));
+        }
+        let (format, result) = if insn & 0x8000 != 0 {
+            let rounding = Rounding::decode(7, self.csr.fcsr).ok_or_else(illegal)?;
+            (
+                Format::BFloat,
+                Format::BFloat.convert(Format::Single.decode(bits), rounding),
+            )
+        } else {
+            (
+                Format::Single,
+                Format::Single.convert(Format::BFloat.decode(bits), Rounding::NearestEven),
+            )
+        };
+        self.csr.fcsr |= result.flags;
+        self.fp_write(rd, format, result.bits);
+        Ok(())
+    }
+
     fn fp_load_double(&mut self, bus: &mut Bus, address: u32) -> Result<u64, Fault> {
         if self.csr.address_trigger_matches(address, pmp::READ) {
             return Err(Fault::Breakpoint(address));

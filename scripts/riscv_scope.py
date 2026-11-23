@@ -108,6 +108,13 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
             arguments = selection[1] or ""
             bits = "64" if re.search(r"\bbits=64\b|^64(?:\s|$)", arguments) else "32"
             if bits == "32" and case in {
+                "Should Box Scalar BF16 With FLEN Thirty Two", "Should Widen Scalar BF16",
+                "Should Narrow Scalar BF16", "Should Round Scalar BF16 In Every Rounding Mode",
+                "Should Reject Scalar BF16 With Floating Point Disabled",
+                "Should Reject Reserved BF16 Rounding Modes",
+            }:
+                return "target", "ported", "fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked"
+            if bits == "32" and case in {
                 "Should Store Half Words With SHGP", "Should Execute LBGP", "Should Execute LBUGP",
                 "Should Execute LHGP", "Should Execute LHUGP", "Should Execute LWGP",
                 "Should Wrap ADDIGP At Thirty Two Bits", "Should Decode SBGP Displacements",

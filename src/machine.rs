@@ -555,9 +555,11 @@ impl Hart {
 
     pub fn set_bitmanip(&mut self, extensions: BitManip) {
         self.bitmanip = extensions;
-        self.csr.andes = extensions
-            .xandesperf
-            .then(crate::andes_csr::AndesCsrs::default);
+        self.csr.andes = (extensions.xandesperf || extensions.xandesbfhcvt).then(|| {
+            let mut csrs = crate::andes_csr::AndesCsrs::default();
+            csrs.bfloat16 = extensions.xandesbfhcvt;
+            csrs
+        });
     }
 
     pub fn set_sscofpmf(&mut self, enabled: bool) {
@@ -1256,6 +1258,10 @@ impl Hart {
             // Renode VexRiscv accepts the custom whole-data-cache flush.
             0x0f if insn == 0x0000_500f && self.csr.vex => None,
             0x0b | 0x2b if bitmanip.xandesperf => self.andes_gp_operation(insn, b, bus, output)?,
+            0x5b if bitmanip.xandesbfhcvt && insn & 0xfe0f_707f == 0x0001_405b => {
+                self.andes_bfloat_instruction(insn)?;
+                None
+            }
             0x5b if funct3 == 0 => Some(bitmanip.andes_register(funct7, a, b).ok_or_else(illegal)?),
             0x5b if bitmanip.xandesperf && matches!(funct3, 2 | 3) && insn & 0x8200_0000 == 0 => {
                 Some(BitManip::andes_bit_field(insn, a, funct3 == 3))
@@ -1710,6 +1716,36 @@ mtvec: Memory.MappedMemory @ sysbus 0x1000
             machine.primary.registers[6],
             (3 << 11) | (1 << 7) | (1 << 3)
         );
+    }
+
+    #[test]
+    fn upstream_rv32_andes_bfloat_flen32_raw_boxing() {
+        for (instruction, source, expected) in [
+            (0x0011_42dbu32, 0xffff_3f80, 0xffff_ffff_3f80_0000),
+            (0x0011_42db, 0xfffe_7f81, 0xffff_ffff_7fc0_0000),
+            (0x0011_c2db, 0x3f80_0000, 0xffff_ffff_ffff_3f80),
+        ] {
+            let mut machine = Machine::new(4).unwrap();
+            machine.primary.enable_floating(false, false);
+            machine.primary.set_bitmanip(BitManip {
+                xandesbfhcvt: true,
+                ..BitManip::default()
+            });
+            machine.primary.set_mstatus(0x2000);
+            machine.primary.floating.as_mut().unwrap()[1] = source;
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&instruction.to_le_bytes());
+            assert_eq!(
+                machine.run(1, &mut std::io::sink()).unwrap(),
+                (Stop::Limit, 1)
+            );
+            assert_eq!(machine.primary.pc, RAM_BASE + 4);
+            assert_eq!(machine.primary.floating.as_ref().unwrap()[5], expected);
+            assert_eq!(machine.primary.csr.fcsr & 31, 0);
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub struct BitManip {
     pub zbkx: bool,
     pub zcb: bool,
     pub xandesperf: bool,
+    pub xandesbfhcvt: bool,
 }
 
 impl BitManip {

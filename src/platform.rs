@@ -961,6 +961,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
                             "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
+                            "xandesbfhcvt" if !bitmanip.xandesbfhcvt => {
+                                bitmanip.xandesbfhcvt = true
+                            }
                             "xandes" | "xandesperf" if !bitmanip.xandesperf => {
                                 bitmanip.xandesperf = true
                             }
@@ -977,7 +980,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     let letters = letters.replace('_', "");
                     let general = letters.contains('g');
                     let embedded = letters.contains('e');
-                    let single = general || letters.contains('f');
+                    let single = general || letters.contains('f') || bitmanip.xandesbfhcvt;
                     let double = general || letters.contains('d');
                     // Renode accepts separated C even after a named extension.
                     let compressed =
@@ -2153,6 +2156,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zcb"
                     | "xandes"
                     | "xandesperf"
+                    | "xandesbfhcvt"
                     | "zacas"
                     | "zfh"
                     | "smepmp"

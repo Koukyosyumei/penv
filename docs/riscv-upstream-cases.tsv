@@ -1906,13 +1906,13 @@ Renode	tests/unit-tests/riscv-andestar-v5.robot	409	Should Test RV64 Bits Above 
 Renode	tests/unit-tests/riscv-andestar-v5.robot	416	Should Extract And Insert Full Width Bit Fields On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64
 Renode	tests/unit-tests/riscv-andestar-v5.robot	425	Should Search All Eight Bytes On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64
 Renode	tests/unit-tests/riscv-andestar-v5.robot	434	Should Preserve Full Width Global Pointer On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64
-Renode	tests/unit-tests/riscv-andestar-v5.robot	440	Should Box Scalar BF16 With FLEN Thirty Two		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: isa=imaf_xandesbfhcvt
-Renode	tests/unit-tests/riscv-andestar-v5.robot	446	Should Widen Scalar BF16		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: isa=gc_xandesbfhcvt
-Renode	tests/unit-tests/riscv-andestar-v5.robot	452	Should Narrow Scalar BF16		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: isa=gc_xandesbfhcvt
+Renode	tests/unit-tests/riscv-andestar-v5.robot	440	Should Box Scalar BF16 With FLEN Thirty Two		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	446	Should Widen Scalar BF16		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	452	Should Narrow Scalar BF16		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
 Renode	tests/unit-tests/riscv-andestar-v5.robot	458	Should Handle Scalar BF16 NaN Boxing And Overflow On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64  isa=gc_xandesbfhcvt
-Renode	tests/unit-tests/riscv-andestar-v5.robot	463	Should Round Scalar BF16 In Every Rounding Mode		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: isa=gc_xandesbfhcvt
-Renode	tests/unit-tests/riscv-andestar-v5.robot	475	Should Reject Scalar BF16 With Floating Point Disabled		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: isa=gc_xandesbfhcvt
-Renode	tests/unit-tests/riscv-andestar-v5.robot	480	Should Reject Reserved BF16 Rounding Modes		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: isa=gc_xandesbfhcvt
+Renode	tests/unit-tests/riscv-andestar-v5.robot	463	Should Round Scalar BF16 In Every Rounding Mode		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	475	Should Reject Scalar BF16 With Floating Point Disabled		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
+Renode	tests/unit-tests/riscv-andestar-v5.robot	480	Should Reject Reserved BF16 Rounding Modes		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
 Renode	tests/unit-tests/riscv-andestar-v5.robot	489	Should Widen Vector BF16		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvbfhcvt
 Renode	tests/unit-tests/riscv-andestar-v5.robot	498	Should Narrow Vector BF16		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvbfhcvt
 Renode	tests/unit-tests/riscv-andestar-v5.robot	504	Should Convert Vector BF16 On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: xandesvbfhcvt  bits=64

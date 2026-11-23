@@ -848,3 +848,19 @@ done
 固定有効構成 49 件、無効構成 5 件、既存 Andes 24 ケース、Rust テスト 86 件、公開特権 ELF 22 件、virt の UART・CLINT・PLIC が通過しました。両別名の実 ELF で CSR の読み戻し、スタブの警告、非整列アクセスの許可・拒否と既存 LEA を確認しました。上流等価合格は累計 149 件です。Andes の浮動小数点・ベクトル拡張と最大 ISA の V が残っています。
 
 再現用 REPL、ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-9412563-bhHRXt/` に保存しました。
+
+### RV32 Andes スカラー BF16 変換
+
+`XandesBFHCvt` を受け付け、スカラーの FCVT.S.BF16 と FCVT.BF16.S を追加しました。F/D/Zfh と共通の丸め処理を使い、FLEN 32・64 の NaN ボックス、シグナリング NaN、例外フラグを反映します。FS が無効な場合と、縮小変換で予約済み丸めモードを指定した場合は不正命令になります。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-andes-bfloat.py target/release/penv ../renode "$evidence/robot-rerun"
+```
+
+固定 Robot の RV32 6 ケース・23 入力を実 ELF で検証しました。元の設定、命令語、変換位置 0x2000 を使い、結果、FFLAGS、例外時の PC・MCAUSE・MEPC を確認しました。FLEN=32 のゲストから読み出せる 32 ビットに加え、固定 Robot が検査する 64 ビットの内部表現を Rust テストで照合しました。
+
+Rust テスト 87 件、F 38 件、D 64 件、Zfh 53 件、ZfhD 30 件の既存固定 ACT ELF と virt の UART・CLINT・PLIC が通過しました。ACT 回帰は各拡張を指定する縮小構成です。上流等価合格は累計 155 件です。Andes のベクトル BF16、他の Andes ベクトル命令と最大 ISA の V が残っています。
+
+REPL、実 ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-48a16f4-TSfMx1/` に保存しました。
