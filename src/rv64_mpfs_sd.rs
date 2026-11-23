@@ -38,7 +38,13 @@ pub struct Controller {
     cursor: usize,
     transfer_size: usize,
     dma_address: u64,
-    dma_read: Option<(u32, usize)>,
+    dma_read: Option<DmaRead>,
+    next_pio_block: Option<(u32, usize)>,
+}
+
+enum DmaRead {
+    Blocks { sector: u32, size: usize },
+    Buffer { size: usize },
 }
 
 struct Card {
@@ -46,6 +52,7 @@ struct Card {
     length: u64,
     capacity: u64,
     app_command: bool,
+    mmc_protocol: bool,
     mmc_bus_width: u8,
     mmc_timing: u8,
     state: CardState,
@@ -86,6 +93,7 @@ impl Controller {
             transfer_size: 0,
             dma_address: 0,
             dma_read: None,
+            next_pio_block: None,
         }
     }
 
@@ -115,6 +123,7 @@ impl Controller {
             length,
             capacity,
             app_command: false,
+            mmc_protocol: false,
             mmc_bus_width: 0,
             mmc_timing: 0,
             state: CardState::Idle,
@@ -127,6 +136,7 @@ impl Controller {
             self.sd_selected = selected;
             self.transfer_size = 0;
             self.dma_read = None;
+            self.next_pio_block = None;
             self.status = 0;
             if let Some(card) = &mut self.card {
                 card.reset();
@@ -246,6 +256,7 @@ impl Controller {
         if value & (5 << 24) != 0 {
             self.transfer_size = 0;
             self.dma_read = None;
+            self.next_pio_block = None;
         }
     }
 
@@ -253,6 +264,7 @@ impl Controller {
         self.response.fill(0);
         self.transfer_size = 0;
         self.dma_read = None;
+        self.next_pio_block = None;
         let index = (self.command_mode >> 24) & 0x3f;
         let card = self.card.as_mut();
         let flags = match card {
@@ -270,18 +282,30 @@ impl Controller {
                 if blocks == 0 {
                     DATA_TIMEOUT
                 } else {
-                    self.dma_read = Some((self.argument, blocks * SECTOR_SIZE));
+                    self.dma_read = Some(DmaRead::Blocks {
+                        sector: self.argument,
+                        size: blocks * SECTOR_SIZE,
+                    });
                     self.response[0] = card.status();
                     COMMAND_COMPLETE
                 }
             }
             Some(card)
-                if index == 17
+                if matches!(index, 17 | 18)
                     && matches!(card.state, CardState::Transfer)
                     && (self.block_size_count & 0xfff) == SECTOR_SIZE as u32
                     && self.command_mode & 0x0020_0011 == 0x0020_0010 =>
             {
-                if card.read_blocks(self.argument, &mut self.sector).is_ok() {
+                let blocks = if index == 17 {
+                    1
+                } else {
+                    (self.block_size_count >> 16) as usize
+                };
+                if blocks != 0
+                    && card.contains(self.argument, blocks * SECTOR_SIZE)
+                    && card.read_blocks(self.argument, &mut self.sector).is_ok()
+                {
+                    self.next_pio_block = (blocks > 1).then(|| (self.argument + 1, blocks - 1));
                     card.app_command = false;
                     self.response[0] = card.status();
                     self.cursor = 0;
@@ -294,7 +318,7 @@ impl Controller {
             // Renode attaches a single card directly to the controller. The
             // Fire HSS can use it through its legacy MMC command path.
             Some(card)
-                if !self.sd_selected
+                if card.mmc_protocol
                     && index == 8
                     && self.command_mode & 0x0020_0011 == 0x0020_0010
                     && matches!(card.state, CardState::Transfer) =>
@@ -312,7 +336,7 @@ impl Controller {
                 COMMAND_COMPLETE | BUFFER_READ_READY
             }
             Some(card)
-                if !self.sd_selected
+                if card.mmc_protocol
                     && index == 21
                     && self.command_mode & 0x0020_0011 == 0x0020_0010
                     && matches!(card.state, CardState::Transfer) =>
@@ -330,11 +354,45 @@ impl Controller {
                     COMMAND_TIMEOUT
                 }
             }
-            Some(card) if index != 17 => {
+            Some(card)
+                if !card.mmc_protocol
+                    && matches!(card.state, CardState::Transfer)
+                    && self.command_mode & 0x0020_0010 == 0x0020_0010
+                    && ((matches!(index, 13 | 51) && card.app_command)
+                        || (index == 6 && !card.app_command)) =>
+            {
+                card.app_command = false;
+                self.response[0] = card.status();
+                self.sector.fill(0);
+                let size = if index == 51 {
+                    self.sector[0] = 2; // SCR: SD specification version 2.0
+                    self.sector[1] = 5; // 1-bit and 4-bit data bus
+                    8
+                } else {
+                    if index == 6 {
+                        self.sector[13] = 1; // Switch status: default speed only
+                    }
+                    64
+                };
+                if self.command_mode & 1 != 0 {
+                    self.dma_read = Some(DmaRead::Buffer { size });
+                    COMMAND_COMPLETE
+                } else {
+                    self.cursor = 0;
+                    self.transfer_size = size;
+                    COMMAND_COMPLETE | BUFFER_READ_READY
+                }
+            }
+            Some(card) if !matches!(index, 17 | 18) => {
                 match card.identify(index, self.argument, !self.sd_selected) {
                     Some(response) => {
                         self.response = response;
                         COMMAND_COMPLETE
+                            | if (self.command_mode >> 16) & 3 == 3 {
+                                TRANSFER_COMPLETE
+                            } else {
+                                0
+                            }
                     }
                     None => COMMAND_TIMEOUT,
                 }
@@ -345,14 +403,25 @@ impl Controller {
     }
 
     fn complete_dma_read(&mut self, bus: &mut crate::bus::Bus) {
-        let Some((sector, size)) = self.dma_read.take() else {
+        let Some(request) = self.dma_read.take() else {
             return;
         };
-        let card = self.card.as_mut().unwrap();
-        let flags = if card.contains(sector, size)
-            && let Some(buffer) = bus.memory64(self.dma_address, size)
-            && card.read_blocks(sector, buffer).is_ok()
-        {
+        let success = match request {
+            DmaRead::Blocks { sector, size } => {
+                let card = self.card.as_mut().unwrap();
+                card.contains(sector, size)
+                    && bus
+                        .memory64(self.dma_address, size)
+                        .is_some_and(|buffer| card.read_blocks(sector, buffer).is_ok())
+            }
+            DmaRead::Buffer { size } => {
+                bus.memory64(self.dma_address, size).is_some_and(|buffer| {
+                    buffer.copy_from_slice(&self.sector[..size]);
+                    true
+                })
+            }
+        };
+        let flags = if success {
             TRANSFER_COMPLETE
         } else {
             DATA_TIMEOUT
@@ -365,11 +434,23 @@ impl Controller {
         let Some(bytes) = self.sector[..self.transfer_size].get(self.cursor..end) else {
             return 0;
         };
+        let value = u32::from_le_bytes(bytes.try_into().unwrap());
         self.cursor = end;
         if end == self.transfer_size {
-            self.status |= TRANSFER_COMPLETE & self.status_enable;
+            if let Some((sector, remaining)) = self.next_pio_block.take() {
+                let card = self.card.as_mut().unwrap();
+                if card.read_blocks(sector, &mut self.sector).is_ok() {
+                    self.cursor = 0;
+                    self.next_pio_block = (remaining > 1).then(|| (sector + 1, remaining - 1));
+                    self.status |= BUFFER_READ_READY & self.status_enable;
+                } else {
+                    self.status |= DATA_TIMEOUT & self.status_enable;
+                }
+            } else {
+                self.status |= TRANSFER_COMPLETE & self.status_enable;
+            }
         }
-        u32::from_le_bytes(bytes.try_into().unwrap())
+        value
     }
 }
 
@@ -398,6 +479,7 @@ fn tuning_pattern(size: usize) -> Option<&'static [u32]> {
 impl Card {
     fn reset(&mut self) {
         self.app_command = false;
+        self.mmc_protocol = false;
         self.mmc_bus_width = 0;
         self.mmc_timing = 0;
         self.state = CardState::Idle;
@@ -407,7 +489,7 @@ impl Card {
         (self.state as u32) << 9 | (1 << 8)
     }
 
-    fn identify(&mut self, index: u32, argument: u32, mmc: bool) -> Option<[u32; 4]> {
+    fn identify(&mut self, index: u32, argument: u32, legacy_mmc: bool) -> Option<[u32; 4]> {
         let app_command = std::mem::take(&mut self.app_command);
         let short = match (app_command, index) {
             (_, 0) => {
@@ -415,11 +497,12 @@ impl Card {
                 0
             }
             (_, 8) => argument & 0xfff,
-            (_, 1) if mmc => {
+            (_, 1) if legacy_mmc => {
+                self.mmc_protocol = true;
                 self.state = CardState::Ready;
                 OCR_READY | OCR_HIGH_CAPACITY | 0x00ff_8080
             }
-            (_, 6) if mmc && matches!(self.state, CardState::Transfer) => {
+            (_, 6) if self.mmc_protocol && matches!(self.state, CardState::Transfer) => {
                 if argument >> 24 & 3 == 3 {
                     match (argument >> 16) & 0xff {
                         183 => self.mmc_bus_width = (argument >> 8) as u8,
@@ -429,7 +512,8 @@ impl Card {
                 }
                 self.status()
             }
-            (_, 55) => {
+            (true, 6) if !self.mmc_protocol => self.status(),
+            (_, 55) if !self.mmc_protocol => {
                 self.app_command = true;
                 self.status() | 1 << 5
             }
@@ -448,7 +532,7 @@ impl Card {
             }
             (_, 3) if matches!(self.state, CardState::Identification) => {
                 self.state = CardState::Standby;
-                if mmc {
+                if self.mmc_protocol {
                     self.status()
                 } else {
                     CARD_ADDRESS | self.status()
@@ -634,5 +718,30 @@ mod tests {
         assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x1222_0011));
         assert_eq!(bus.rv64_devices.read(base + 0x230, 4), Some(0x108001));
         assert_eq!(bus.rv64_devices.mpfs_sd[0].interrupt(), (88, false));
+
+        assert!(bus.write_rv64_sd(base + 0x230, 4, u32::MAX));
+        assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x1222_0010));
+        for expected in [0x2222_2222, 0x5555_5555] {
+            for _ in 0..128 {
+                assert_eq!(bus.rv64_devices.read(base + 0x220, 4), Some(expected));
+            }
+        }
+        assert_eq!(bus.rv64_devices.read(base + 0x230, 4), Some(0x23));
+
+        assert!(bus.write_rv64_sd(base + 0x25c, 4, 1));
+        assert!(bus.write_rv64_sd(base + 0x234, 4, u32::MAX));
+        assert!(bus.write_rv64_sd(base + 0x230, 4, u32::MAX));
+        assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x3702_0000));
+        assert!(bus.write_rv64_sd(base + 0x204, 4, 8));
+        assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x3322_0011));
+        assert_eq!(bus.ram64(address, 8).unwrap(), [2, 5, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(bus.rv64_devices.read(base + 0x230, 4), Some(3));
+
+        assert!(bus.write_rv64_sd(base + 0x230, 4, u32::MAX));
+        assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x3702_0000));
+        assert!(bus.write_rv64_sd(base + 0x204, 4, 64));
+        assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x0d22_0011));
+        assert_eq!(bus.ram64(address, 64).unwrap(), [0; 64]);
+        assert_eq!(bus.rv64_devices.read(base + 0x230, 4), Some(3));
     }
 }

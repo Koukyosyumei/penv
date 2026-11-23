@@ -7,6 +7,7 @@ use crate::{
     machine::MAX_HARTS,
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
+    rv64_gem::Gem,
     rv64_mpfs::{DdrMock, Sysreg},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
@@ -19,6 +20,7 @@ pub struct Devices {
     pub plic: Option<Plic>,
     pub uarts: Vec<Uart>,
     pub ethernet: Vec<Ethernet>,
+    pub gems: Vec<Gem>,
     pub reset_generators: Vec<ResetGenerator>,
     pub read_only_words: Vec<(u32, u32)>,
     pub fire_ihc: Option<Box<FireIhc>>,
@@ -245,6 +247,9 @@ impl Devices {
         {
             return Some(value);
         }
+        if let Some(value) = self.gems.iter().find_map(|gem| gem.read(address, width)) {
+            return Some(value);
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -316,6 +321,13 @@ impl Devices {
             .mpfs_watchdogs
             .iter_mut()
             .any(|watchdog| watchdog.write(address, width, value).is_some())
+        {
+            return Some(Ok(()));
+        }
+        if self
+            .gems
+            .iter_mut()
+            .any(|gem| gem.write(address, width, value).is_some())
         {
             return Some(Ok(()));
         }

@@ -6,6 +6,7 @@ use crate::{
     rv64::{Isa, Rv64},
     rv64_devices::{FallbackRange, MpfsCacheWayEnable, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
+    rv64_gem::Gem,
     rv64_mpfs::{DdrMock, Sysreg},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
@@ -304,7 +305,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
             continue;
         }
         if entry.model == "Network.CadenceGEM" && entry.registration.as_deref() != Some("none") {
-            map_gem_status(&mut machine, entry)?;
+            map_gem(&mut machine, entry)?;
             continue;
         }
         if entry.model == "USB.MPFS_USB" && entry.registration.as_deref() != Some("none") {
@@ -439,25 +440,50 @@ fn map_read_only_word(
     Ok(())
 }
 
-fn map_gem_status(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
+fn map_gem(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
     let registration = entry.registration.as_deref().unwrap_or("").trim();
-    let windows = registration
+    let registration = registration
         .strip_prefix('{')
         .and_then(|value| value.strip_suffix('}'))
         .unwrap_or(registration);
-    for window in windows.trim().trim_end_matches(';').split(';') {
+    let mut windows = Vec::<u32>::new();
+    for window in registration
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let value = window
-            .trim()
-            .strip_prefix("sysbus ")
+            .strip_prefix("sysbus")
+            .filter(|rest| rest.starts_with(char::is_whitespace))
             .ok_or_else(|| entry.error("expected Cadence GEM sysbus registration"))?;
-        let address = number(entry, value.trim())?;
-        let status = u32::try_from(address)
+        let address = u32::try_from(number(entry, value.trim())?)
             .ok()
             .filter(|base| base % 4 == 0)
-            .and_then(|base| base.checked_add(8))
             .ok_or_else(|| entry.error("invalid Cadence GEM address"))?;
-        map_read_only_word(machine, entry, status, 1 << 2)?; // MDIO management idle
+        if windows
+            .iter()
+            .any(|&base| u64::from(address.abs_diff(base)) < Gem::SIZE)
+        {
+            return Err(entry.error("overlapping Cadence GEM aliases"));
+        }
+        check_mapping(machine, entry, address, Gem::SIZE)?;
+        windows.push(address);
     }
+    let id = property(entry, "moduleId").map_or(Ok(2), |value| number(entry, value))?;
+    let revision =
+        property(entry, "moduleRevision").map_or(Ok(0x118), |value| number(entry, value))?;
+    if windows.is_empty() || id > 0xfff || revision > 0xffff {
+        return Err(entry.error("invalid Cadence GEM registration or module ID"));
+    }
+    let gems = &mut machine.bus.rv64_devices.gems;
+    let index =
+        u8::try_from(gems.len()).map_err(|_| entry.error("too many Cadence GEM instances"))?;
+    gems.push(Gem::new(
+        entry.name.clone(),
+        windows,
+        (id << 16 | revision) as u32,
+        index,
+    ));
     Ok(())
 }
 
@@ -523,6 +549,19 @@ fn map_ethernet(
             let Some((name, address)) = target.split_once(char::is_whitespace) else {
                 continue;
             };
+            if let Some(gem) = machine
+                .bus
+                .rv64_devices
+                .gems
+                .iter_mut()
+                .find(|gem| gem.name == name)
+            {
+                let address = number(entry, address)?;
+                if address >= 32 || !gem.attach(address as usize, ethernet_phy(entry)?) {
+                    return Err(entry.error("invalid or duplicate Cadence GEM PHY address"));
+                }
+                continue;
+            }
             let Some(&mac) = macs.get(name) else { continue };
             let address = number(entry, address)?;
             if address >= 32
@@ -729,6 +768,12 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         || devices.mpfs_watchdogs.iter().any(|device| {
             start < u64::from(device.base) + Watchdog::SIZE && u64::from(device.base) < end
         });
+    let overlaps = overlaps
+        || devices
+            .gems
+            .iter()
+            .flat_map(|gem| &gem.windows)
+            .any(|&base| start < u64::from(base) + Gem::SIZE && u64::from(base) < end);
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
     }

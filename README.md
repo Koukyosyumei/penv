@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 の Fire モデル表示まで到達。Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 の Fire モデル表示と SD 上の `/boot.scr` 実行まで到達。Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -360,6 +360,12 @@ HSS がペイロード登録後に `0x2000100c` を読み出すため、PolarFir
 #### Fire の U-Boot MMC 列挙
 
 MPFS SD ホストに 8・16・32 ビットのレジスターアクセス、ホストクロックとソフトリセットを追加しました。公開イメージで前節の手順を `--max-steps 650000000` まで実行し、U-Boot の `MMC: mmc@20008000: 0` とシリアル入出力の初期化を確認しました。次は `Net:` に続く Cadence GEM の `0x20110294` への読み出しでロードアクセス例外になります。これは Design Configuration 6 です。Linux 起動は未到達です。
+
+#### Fire の U-Boot から SD のブートスクリプトを実行
+
+Cadence GEM の設計情報、ステーションアドレスと MDIO を実装し、U-Boot のネットワーク列挙を通過しました。MPFS SD は CMD0 後にネイティブ SD と旧 MMC を再識別し、SD の SCR（ACMD51）とカード状態（ACMD13）を PIO または SDMA で転送できます。複数ブロックの PIO 読み出しも追加しました。Cadence GEM のフレーム DMA と実データの通信は未実装です。
+
+公開イメージで前節の手順を `--max-steps 1250000000` まで実行し、`Net: eth0: ethernet@20110000`、`mmc0 is current device`、`Scanning mmc 0:2...`、`Found U-Boot script /boot.scr` とスクリプト実行開始を確認しました。[U-Boot の MMC モード選択](https://github.com/u-boot/u-boot/blob/v2023.07/drivers/mmc/mmc.c) [Renode CadenceGEM](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Network/CadenceGEM.cs)
 
 ## Cortex-M0 / Cortex-M0+
 
