@@ -347,6 +347,24 @@ impl Bus {
             self.constant_mmio.swap_remove(index);
             return Ok(());
         }
+        if let Some(index) = self
+            .h7_timers
+            .iter()
+            .position(|timer| timer.base == address)
+        {
+            self.h7_timers.swap_remove(index);
+            for port in &mut self.h7_gpio {
+                port.disconnect_timer(address);
+            }
+            for led in &mut self.gpio_pwm_leds {
+                for route in &mut led.routes {
+                    if route.is_some_and(|(base, _)| base == address) {
+                        *route = None;
+                    }
+                }
+            }
+            return Ok(());
+        }
         self.unregister_ram(address)
     }
 
@@ -3150,5 +3168,41 @@ mod memory_segment_cases {
             expected[range.clone()].copy_from_slice(&bytes[range]);
         }
         assert_eq!(bus.read_bus_bytes(0, 350, false).unwrap(), expected);
+    }
+}
+
+#[cfg(test)]
+mod gpio_detaching_cases {
+    use super::*;
+
+    fn gpio_bus(receivers: usize) -> Bus {
+        let mut bus = Bus::default();
+        let mut gpio = Stm32Gpio::new(0, 0x400, [0; 3], 16);
+        for index in 0..receivers {
+            let base = (index as u32 + 1) * 0x400;
+            bus.map_h7_timer(H7Timer::new(format!("timer{index}"), base, 100, 1000, None))
+                .unwrap();
+            gpio.connect_timer_input(index as u8, base, index as u32 + 1)
+                .unwrap();
+        }
+        bus.map_h7_gpio(gpio).unwrap();
+        bus
+    }
+
+    #[test]
+    fn upstream_detach_numbered_gpio_on_receiver_removal() {
+        let mut bus = gpio_bus(1);
+        bus.unregister_from_address(0x400).unwrap();
+        assert_eq!(bus.h7_gpio[0].timer_endpoints(0).count(), 0);
+    }
+
+    #[test]
+    fn upstream_detach_only_selected_numbered_gpio() {
+        let mut bus = gpio_bus(3);
+        bus.unregister_from_address(0x400).unwrap();
+        let gpio = &bus.h7_gpio[0];
+        assert_eq!(gpio.timer_endpoints(0).count(), 0);
+        assert!(gpio.timer_endpoints(1).eq([(0x800, 2)]));
+        assert!(gpio.timer_endpoints(2).eq([(0xc00, 3)]));
     }
 }

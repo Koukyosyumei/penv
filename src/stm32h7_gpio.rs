@@ -135,6 +135,22 @@ impl Stm32Gpio {
         )
     }
 
+    pub(crate) fn disconnect_timer(&mut self, base: u32) {
+        self.timer_inputs
+            .endpoints
+            .retain(|&(_, receiver, _)| receiver != base);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn timer_endpoints(&self, pin: u8) -> impl Iterator<Item = (u32, u8)> + '_ {
+        self.timer_inputs
+            .endpoints
+            .iter()
+            .filter_map(move |&(source, receiver, input)| {
+                (source == pin).then_some((receiver, input))
+            })
+    }
+
     pub fn timer_input_changes(&mut self) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
         let pins = if self.timer_inputs.endpoints.is_empty() {
             0

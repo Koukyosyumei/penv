@@ -1621,3 +1621,22 @@ target/release/penv check-platform "$e/channel-10.repl" --platform-root ../renod
 ```
 
 最後のコマンドは意図した診断で終了します。`cargo test` 216件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格196件、部分検証17件、未達573件です。GPIO の動的切断は残っています。ComparingTimer の上限を超える比較値の拒否は、書き込み可能な STM32 TIM の CCR と契約が異なるため、汎用比較タイマーの経路が必要です。
+
+### backlog-network-12ea45ec088d-1
+
+`sysbus UnregisterFromAddress` で STM32H7 TIM を解除すると、そのタイマーへの GPIO 入力接続と PWM 参照を削除します。固定上流 `GPIODetachingTests.cs` の番号付き接続2件を同じバイナリで実行しました。上流モックの代わりに STM32H7 GPIO と TIM を使い、MMIO 領域のサイズに合わせて登録アドレスを変更しました。入力番号と接続関係を維持し、解除対象の端点が空になり、他の端点が残ることを照合しました。STM32H743 の CLI では TIM2 の解除後にその ARR がゼロ、TIM3 の ARR が元の値を返しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gpio-detach.9xXurQ8I
+target/release/penv run --script "$e/unregister.resc" --platform-root ../renode
+```
+
+`cargo test` 218件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 3件と公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格198件、部分検証17件、未達571件です。中継周辺機器の入出力を同時に切断する汎用 GPIO グラフと、外部接続・別マシンの破棄を扱うケースは残っています。
