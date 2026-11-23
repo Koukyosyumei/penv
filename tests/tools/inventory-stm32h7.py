@@ -325,6 +325,10 @@ def triage(row):
             status, reason = 'OPEN', '汎用 ComparingTimer の Compare setter 拒否条件は STM32 TIM の CCR で観測できない。汎用 API の等価移植が残る'
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
+    elif suite == 'SystemBusTests.cs' and name in {'ShouldFindAfterRegistration', 'ShouldFindAfterManyRegistrations'}:
+        status, reason = 'PASS', '固定上流と同じ登録範囲・オフセット0でのワード読み取り・返却値を REPL の定数 MMIO で照合。src/platform.rs'
+    elif suite == 'SystemBusTests.cs' and name == 'ShouldFindAfterManyRegistrationsAndRemoves':
+        status, reason = 'OPEN', '上流は Ignore 指定。固定ケースのランダムな周辺機器登録・解除には周辺機器の動的登録解除が必要'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldReturnZeroAtNonExistingDevice':
         status, reason = 'PASS', 'SystemBus の既定方針で、固定上流と同じ未マップアドレス 0xABCD1234 のバイト読み取りが 0 を返すことを照合。src/bus.rs'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldFindBytePattern':

@@ -67,6 +67,14 @@ impl Entry {
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
     }
 
+    pub(crate) fn sized_sysbus_address(&self, size: u32) -> Result<u32, String> {
+        let registration = self
+            .registration
+            .as_deref()
+            .ok_or("missing sysbus registration")?;
+        sized_address(registration_point(registration)?, size)
+    }
+
     fn address(&self) -> Result<u32, String> {
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
@@ -228,6 +236,19 @@ fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>
         Some(_) => return Err("expected a registration point after register reference"),
     };
     Ok((register, point))
+}
+
+fn sized_address(point: (&str, Option<RegistrationValue<'_>>), size: u32) -> Result<u32, String> {
+    match point {
+        ("sysbus", Some(RegistrationValue::Range { base, size: length })) => {
+            if length != u64::from(size) {
+                return Err("registration range size disagrees with size property".into());
+            }
+            u32::try_from(base).map_err(|_| "registration base exceeds 32-bit address space".into())
+        }
+        ("sysbus", Some(RegistrationValue::Other(address))) => number(address),
+        _ => Err("expected an address registered on sysbus".into()),
+    }
 }
 
 fn range_value(value: &str) -> Result<(u64, u64), &'static str> {
@@ -1233,22 +1254,7 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
                 };
                 let addresses = points
                     .into_iter()
-                    .map(|point| match point {
-                        ("sysbus", Some(RegistrationValue::Range { base, size: length })) => {
-                            if length != u64::from(size) {
-                                return Err(
-                                    entry.error("memory range size disagrees with size property")
-                                );
-                            }
-                            u32::try_from(base).map_err(|_| {
-                                entry.error("memory base exceeds 32-bit address space")
-                            })
-                        }
-                        ("sysbus", Some(RegistrationValue::Other(address))) => {
-                            number(address).map_err(|error| entry.error(&error))
-                        }
-                        _ => Err(entry.error("expected memory address registered on sysbus")),
-                    })
+                    .map(|point| sized_address(point, size).map_err(|error| entry.error(&error)))
                     .collect::<Result<Vec<_>, _>>()?;
                 let (&address, aliases) = addresses
                     .split_first()
@@ -3021,6 +3027,35 @@ uart:
             let entries = parse(source).unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
+        }
+    }
+
+    fn registered_constant_peripherals(points: &[(u32, u32, u32)]) -> Machine {
+        use std::fmt::Write as _;
+        let mut source = String::from(
+            "cpu: CPU.CortexM @ sysbus { cpuType: \"cortex-m7\" }\nram: Memory.MappedMemory @ sysbus 0x20000000 { size: 0x1000 }\n",
+        );
+        for (index, &(address, size, value)) in points.iter().enumerate() {
+            writeln!(
+                source,
+                "peripheral{index}: Python.PythonPeripheral @ sysbus <{address}, +{size}>\n    size: {size}\n    initable: false\n    script: '''\nif request.Offset == 0:\n    request.Value = {value}\n'''"
+            ).unwrap();
+        }
+        build_machine(parse(&source).unwrap(), Path::new("fixture.repl")).unwrap()
+    }
+
+    #[test]
+    fn upstream_find_after_registration() {
+        let mut machine = registered_constant_peripherals(&[(1000, 1000, 0x666)]);
+        assert_eq!(machine.bus.read::<4>(1000).unwrap(), 0x666);
+    }
+
+    #[test]
+    fn upstream_find_after_many_registrations() {
+        let points = [(1000, 100, 0x666), (2000, 100, 0x667), (3000, 100, 0x668)];
+        let mut machine = registered_constant_peripherals(&points);
+        for (address, _, value) in points {
+            assert_eq!(machine.bus.read::<4>(address).unwrap(), value);
         }
     }
 

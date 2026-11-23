@@ -28,7 +28,7 @@ impl ConstantMmio {
         let size = size
             .filter(|&size| size != 0)
             .ok_or("missing Python peripheral size")?;
-        let base = entry.sysbus()?.ok_or("missing Python peripheral address")?;
+        let base = entry.sized_sysbus_address(size)?;
         let script = script.ok_or("missing Python peripheral script")?;
         let (mut values, warn_unhandled) = parse(script, size)?;
         values.sort_unstable_by_key(|&(offset, _)| offset);

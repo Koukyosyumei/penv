@@ -1509,3 +1509,19 @@ done
 ```
 
 `cargo test` 200件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格180件、部分検証17件、未達589件です。対象を RAM に限定しており、周辺機器の動的登録解除と CPU コンテキスト別登録は残っています。
+
+### backlog-network-1f7c0ba5f3a3-1
+
+定数 MMIO 周辺機器を REPL の明示範囲で登録できるようにし、範囲サイズの検証を RAM と共有しました。固定上流 `ShouldFindAfterRegistration` と `ShouldFindAfterManyRegistrations` を同じバイナリで実行しました。上流モックのオフセット0での応答を定数 MMIO で再現し、同じ登録範囲・ワード読み取り・戻り値を照合しました。構築に必要な CPU と RAM はバス操作に参加しません。上流の `ShouldFindAfterManyRegistrationsAndRemoves` は Ignore 指定で、周辺機器の動的登録解除が必要なため台帳に未達として残しています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 202件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-sysbus-lookup.hI7esteD` にあります。台帳は対象786件のうち等価合格182件、部分検証17件、未達587件です。
