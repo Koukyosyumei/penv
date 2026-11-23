@@ -87,7 +87,7 @@ def robot_cases(root, isa, act):
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zfbfmin/[^/]+\.elf", portable):
                             basis += "; fixed ISA omits Zfbfmin"
                             if Path(portable).name == "Zfbfmin-fcvt.s.bf16-00.elf":
-                                basis += "; reduced ISA fails pinned bad NaN-boxing signature (expected 0x7e000000)"
+                                basis += "; reduced ISA fails bad NaN-boxing signature (0x7e000000); Sail 0.9 regenerated the same signature"
                             else:
                                 basis += "; reduced-ISA Zfbfmin ELF passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:Zba|Zbb|Zbc|Zbs|Zbkx|Zicond)/[^/]+\.elf", portable):
@@ -144,6 +144,8 @@ def robot_cases(root, isa, act):
                                 basis += "; Zfh diagnostic passed with 1 MiB RAM"
                         if key == "TESTS_32" and re.match(r"rv32uzfh-[pv]-", portable):
                             basis += "; Zfh ISA diagnostic passed with 2 MiB RAM"
+                        if re.fullmatch(r"spike-rv32-max/elfs/priv/(?:Exceptions(?:S|Sm|U|Zaamo|Zalrsc)/[^/]+|Sv/mstatus_tvm_test)\.elf", portable):
+                            basis += "; fixed ELF passed in vector-bootstrap diagnostic with CLINT"
                         if portable == "spike-rv32-max/elfs/priv/Sm/Sm-00.elf":
                             basis += "; vector-bootstrap diagnostic with Sail MSTATUS init passes full signature"
                         if portable == "spike-rv32-max/elfs/priv/UV/UV.elf":

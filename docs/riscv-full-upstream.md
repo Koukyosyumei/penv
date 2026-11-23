@@ -1534,3 +1534,26 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_ve
 ```
 
 CFU の固定 ELF とネイティブモデルの SHA-1 は上流と一致しました。固定 RESC は `SimulationFilePathLinux`、REPL を直接使うと `CoSimulated.CoSimulatedCFU` の読み込みで停止します。再現と既存の実装状況を ARM 担当への依頼 `riscv-cfu-4a06100.md` に記録しました。UART の 481474 比較と、CFU の機種固有命令・CSR の確認は未達です。ケース別ログと終了状態は上記の証拠ディレクトリに保存しました。
+
+### RV32 Bare の satp 読み戻しと TVM
+
+固定 ACT の `mstatus_tvm_test.elf` は test 2 で `satp=1` の読み戻しを要求しました。penv は Bare モードの書き込みを 0 に変換していました。固定 Renode tlib の `arch/riscv/op_helper.c` に合わせ、RV32 の CSR に書いた値を保持するよう修正しました。アドレス変換の有無は引き続き MODE ビットで決まります。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-7ecdd65-WuyZdb"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv --max-steps 1000000 \
+  --platform "$evidence/priv.repl" --artifacts "$repro/priv" \
+  "$work"/act/work/spike-rv32-max/elfs/priv/{ExceptionsS,ExceptionsSm,ExceptionsU,ExceptionsZaamo,ExceptionsZalrsc,Sv}/*.elf
+p="$work/act/work/common/build/rv32i/Zfbfmin/Zfbfmin-fcvt.s.bf16-00"
+"$work/tools/bin/sail_riscv_sim" --config "$work/act/config/spike/spike-rv32-max/sail.json" \
+  --test-signature "$repro/fresh.sig" "$p.sig.elf"
+cmp "$p.sig" "$repro/fresh.sig"
+```
+
+ベクトル初期化の診断設定と CLINT を使った固定特権 ELF は変更前 5/6 件、変更後 6/6 件でした。固定 Robot 構成では V の未対応により 6 件とも CPU 作成時に停止しました。Rust テストは 88/88 件が通過しました。
+
+BF16 は Sail 0.9 で署名用 ELF 6 件の署名を再生成し、固定の署名とすべて一致しました。penv の診断構成は 5/6 件で、不正な NaN ボックスの固定署名 `0x7e000000` と仕様に基づく標準 NaN の差が残っています。比較結果は上記の証拠ディレクトリに保存しました。台帳の上流等価合格は累計 174 件です。

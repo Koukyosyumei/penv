@@ -585,7 +585,7 @@ impl Csr {
                     0x141 => supervisor.epc = value & alignment,
                     0x142 => supervisor.cause = value,
                     0x143 => supervisor.value = value,
-                    0x180 => supervisor.satp = if value >> 31 == 0 { 0 } else { value },
+                    0x180 => supervisor.satp = value,
                     0x302 => supervisor.delegation = value & 0xb1ff,
                     _ => unreachable!(),
                 }
