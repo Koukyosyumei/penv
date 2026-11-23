@@ -247,6 +247,19 @@ def classify_nunit(name, case, attrs, parameter):
             return OPEN, V6, "One ActivelyAskingCPU with ActivelyAskedPeripheral; reproduce concurrent bus-read guard with the single-core bus"
         count = 10 if not parameter.startswith("cpuCount=") else parameter.split("=")[1]
         return OUT, f"{count} concurrent mock CPUs", "Requires multiple CPU registration slots or multiple independent requesters of one peripheral"
+    if name == "SystemBusTests":
+        if case in {
+            "ShouldHandleWriteToMemorySegment",
+            "ShouldHandlePartialWriteToMemorySegmentAtTheBeginning",
+            "ShouldHandlePartialWriteToMemorySegmentAtTheEnd",
+            "ShouldHandleWriteToAHoleBetweenMemorySegments",
+            "ShouldHandleWriteOverlappingMemorySegment",
+        }:
+            return PASS, COMMON, "renode_systembus_bulk_memory_clips_writes_and_zero_fills_gaps; same 16-byte ranges, input offsets, bytes and readback"
+        if case == "ShouldReadBytes":
+            return PASS, COMMON, "renode_systembus_bulk_transfers_between_memory_and_byte_peripherals; 350 bytes, four RAM/byte-MMIO combinations, zero-filled gaps"
+        if case == "ShouldFindBytePattern":
+            return OPEN, COMMON, "Requires FindBytes pattern search across adjacent mappings and the 1 MiB internal scan-buffer boundary"
     if name == "CRCTests":
         if case == "ShouldCalculateCRC31Philips":
             return OUT, "Generic CRCEngine with arbitrary polynomial width", "31-bit width cannot be selected on STM32F072 CRC"

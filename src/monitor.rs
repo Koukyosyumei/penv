@@ -40,6 +40,8 @@ enum Action {
     CpuReset(String),
     CpuPc(String, u32),
     MachineReset,
+    ReadBytes(u32, usize),
+    WriteBytes(u32, Vec<u8>),
     Button(String, bool),
     ButtonPulse(String),
     NvicGpio(String, u8, bool),
@@ -113,6 +115,14 @@ pub fn run(
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset => machine.reset_cortex_m_machine().map(|()| None),
+            Action::ReadBytes(address, count) => {
+                read_bus_bytes(machine, *address, *count, output.output).map(|()| None)
+            }
+            Action::WriteBytes(address, bytes) => machine
+                .bus
+                .write_bytes(*address, bytes, &mut output)
+                .map_err(|error| error.to_string())
+                .map(|()| None),
             Action::Button(name, pressed) => {
                 machine.bus.set_named_button(name, *pressed).map(|()| None)
             }
@@ -192,6 +202,25 @@ pub fn run(
         }
     }
     Ok((Stop::ScriptComplete, retired))
+}
+
+fn read_bus_bytes(
+    machine: &mut Machine,
+    address: u32,
+    count: usize,
+    output: &mut impl Write,
+) -> Result<(), String> {
+    let bytes = machine
+        .bus
+        .read_bytes(address, count)
+        .map_err(|error| error.to_string())?;
+    write!(output, "[").map_err(|error| error.to_string())?;
+    for (index, byte) in bytes.enumerate() {
+        let byte = byte.map_err(|error| error.to_string())?;
+        let separator = if index == 0 { "" } else { ", " };
+        write!(output, "{separator}0x{byte:02x}").map_err(|error| error.to_string())?;
+    }
+    writeln!(output, "]").map_err(|error| error.to_string())
 }
 
 fn wait_for_led(
@@ -467,6 +496,29 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
                 crate::parse_address(resolve(address)?)?,
             ))
+        }
+        ["sysbus", "ReadBytes", address, count] => Some(Action::ReadBytes(
+            crate::parse_address(resolve(address)?)?,
+            crate::parse_address(resolve(count)?)? as usize,
+        )),
+        ["sysbus", "WriteBytes", ..] => {
+            let args = text["sysbus".len()..].trim_start()["WriteBytes".len()..].trim_start();
+            let (list, address) = args
+                .strip_prefix('[')
+                .and_then(|args| args.split_once(']'))
+                .ok_or("expected sysbus WriteBytes [byte, ...] address")?;
+            let bytes = if list.trim().is_empty() {
+                Vec::new()
+            } else {
+                list.split(',')
+                    .map(|number| {
+                        let value = crate::parse_address(resolve(number.trim())?)?;
+                        u8::try_from(value).map_err(|_| format!("byte value out of range: {value}"))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+            };
+            let address = crate::parse_address(resolve(address.trim())?)?;
+            Some(Action::WriteBytes(address, bytes))
         }
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset),

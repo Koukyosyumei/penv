@@ -82,6 +82,8 @@ pub struct Bus {
     pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
     pub faulting_stack_writes: Option<std::ops::RangeInclusive<u32>>,
+    #[cfg(test)]
+    byte_peripheral: std::collections::BTreeMap<u32, u8>,
     regions: Vec<Region>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
@@ -1106,6 +1108,51 @@ impl Bus {
         Err(BusError::Unmapped(address, width))
     }
 
+    fn byte_range(address: u32, count: usize) -> Result<std::ops::Range<u64>, BusError> {
+        let start = u64::from(address);
+        let end = start.saturating_add(count as u64);
+        if end > 1 << 32 {
+            return Err(BusError::Unmapped(address, count));
+        }
+        Ok(start..end)
+    }
+
+    // Monitor bulk transfers use zero-fill/read and clipping/write semantics
+    // across holes. Typed guest accesses keep their existing bus faults.
+    pub fn read_bytes(
+        &mut self,
+        address: u32,
+        count: usize,
+    ) -> Result<impl Iterator<Item = Result<u8, BusError>> + '_, BusError> {
+        Ok(Self::byte_range(address, count)?.map(move |address| {
+            match self.read::<1>(address as u32) {
+                Ok(value) => Ok(value as u8),
+                Err(BusError::Unmapped(..)) => Ok(0),
+                Err(error) => Err(error),
+            }
+        }))
+    }
+
+    pub fn write_bytes(
+        &mut self,
+        address: u32,
+        bytes: &[u8],
+        uart: &mut impl Write,
+    ) -> Result<(), BusError> {
+        for (address, &byte) in Self::byte_range(address, bytes.len())?.zip(bytes) {
+            let address = address as u32;
+            if let Ok(memory) = self.memory(address, 1) {
+                memory[0] = byte;
+            } else {
+                match self.write(address, 1, u32::from(byte), uart) {
+                    Ok(()) | Err(BusError::Unmapped(..)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn load_reserved(&mut self, hart: usize, address: u32) -> Result<u32, BusError> {
         let value = self.read_ram::<4>(address)?;
         self.reservations[hart] = Some(address);
@@ -1148,6 +1195,12 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        #[cfg(test)]
+        if N == 1
+            && let Some(&value) = self.byte_peripheral.get(&address)
+        {
+            return Ok(u32::from(value));
+        }
         if N == 4
             && address & 3 == 0
             && let Some(uart) = self.uart.as_mut()
@@ -1345,6 +1398,13 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        #[cfg(test)]
+        if width == 1
+            && let Some(byte) = self.byte_peripheral.get_mut(&address)
+        {
+            *byte = value as u8;
+            return Ok(());
+        }
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }
@@ -1568,6 +1628,91 @@ impl Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_systembus_bulk_memory_clips_writes_and_zero_fills_gaps() {
+        let high = 0xc000_0000;
+        let bytes: Vec<u8> = (0..8).collect();
+        let large: Vec<u8> = (0..32).collect();
+        let mut start_overlap = bytes[..6].to_vec();
+        start_overlap.extend([0; 2]);
+        let mut end_overlap = vec![0; 4];
+        end_overlap.extend(&bytes[4..]);
+        let mut containing_overlap = vec![0; 4];
+        containing_overlap.extend(&large[4..20]);
+        containing_overlap.extend([0; 12]);
+        for (addr, input, expected) in [
+            (4, &bytes, bytes.clone()),
+            (10, &bytes, start_overlap),
+            (high - 4, &bytes, end_overlap),
+            (100, &bytes, vec![0; 8]),
+            (high - 4, &large, containing_overlap),
+        ] {
+            let mut bus = Bus::default();
+            bus.map_ram(0, 16).unwrap();
+            bus.map_ram(high, 16).unwrap();
+            bus.write_bytes(addr, input, &mut io::sink()).unwrap();
+            let read = bus
+                .read_bytes(addr, input.len())
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>();
+            assert_eq!(read.unwrap(), expected, "range starting at {addr:#x}");
+            assert!(matches!(
+                bus.read::<1>(100),
+                Err(BusError::Unmapped(100, 1))
+            ));
+        }
+    }
+
+    #[test]
+    fn renode_systembus_bulk_transfers_between_memory_and_byte_peripherals() {
+        let bytes: Vec<_> = (0..350).map(|index| (index % 255) as u8).collect();
+        let mut expected = vec![0; 350];
+        expected[50..150].copy_from_slice(&bytes[50..150]);
+        expected[200..300].copy_from_slice(&bytes[200..300]);
+        for first_memory in [true, false] {
+            for second_memory in [true, false] {
+                let mut bus = Bus::default();
+                for (base, is_memory) in [(50, first_memory), (200, second_memory)] {
+                    if is_memory {
+                        bus.map_ram(base, 100).unwrap();
+                    } else {
+                        bus.byte_peripheral
+                            .extend((base..base + 100).map(|addr| (addr, 0)));
+                    }
+                }
+                bus.write_bytes(0, &bytes, &mut io::sink()).unwrap();
+                let read = bus
+                    .read_bytes(0, 350)
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>();
+                assert_eq!(read.unwrap(), expected, "{first_memory}/{second_memory}");
+                for (&address, &value) in &bus.byte_peripheral {
+                    assert_eq!(value, bytes[address as usize]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn monitor_bulk_ranges_reject_address_wrap_before_writing() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 16).unwrap();
+        bus.map_ram(u32::MAX - 15, 16).unwrap();
+        assert!(bus.write_bytes(u32::MAX, &[1, 2], &mut io::sink()).is_err());
+        assert!(bus.read_bytes(u32::MAX, 2).is_err());
+        assert_eq!(bus.read::<1>(u32::MAX).unwrap(), 0);
+        assert_eq!(bus.read::<1>(0).unwrap(), 0);
+        bus.write_bytes(u32::MAX, &[3], &mut io::sink()).unwrap();
+        assert_eq!(
+            bus.read_bytes(u32::MAX, 1)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap(),
+            3
+        );
+    }
 
     #[test]
     fn writes_a_line_to_the_named_stm32_usart() {

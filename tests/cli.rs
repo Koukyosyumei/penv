@@ -173,6 +173,50 @@ fn upstream_stm32f072_console_echo_replies_after_uart_prompt() {
 }
 
 #[test]
+fn renode_resc_systembus_bulk_memory_commands() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-bulk-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x10
+extra: Memory.MappedMemory @ sysbus 0xc0000000
+    size: 0x10
+"#,
+    )
+    .unwrap();
+    let script = directory.join("boot.resc");
+    fs::write(directory.join("firmware.bin"), [0u8; 8]).unwrap();
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @firmware.bin 0
+sysbus WriteBytes [0x11, 0x22, 0x33, 0x44] 0x0e
+sysbus ReadBytes 0x0e 4
+sysbus WriteBytes [0, 1, 2, 3, 4, 5, 6, 7] 0xbffffffc
+sysbus ReadBytes 0xbffffffc 8
+sysbus ReadBytes 0 0
+"#,
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .arg("run")
+        .arg("--script")
+        .arg(&script)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(run.status.success(), "{run:?}");
+    assert_eq!(
+        run.stdout,
+        b"[0x11, 0x22, 0x00, 0x00]\n[0x00, 0x00, 0x00, 0x00, 0x04, 0x05, 0x06, 0x07]\n[]\n"
+    );
+}
+
+#[test]
 fn renode_resc_nvic_gpio_wakes_wfe_with_sevonpend() {
     let directory = std::env::temp_dir().join(format!("penv-resc-nvic-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

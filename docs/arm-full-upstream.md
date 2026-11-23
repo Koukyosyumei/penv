@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 21 | 35 | 57 | 239 |
-| Renode Infrastructure NUnit | 134 | 17 | 0 | 117 | 9 |
-| 合計 | **247** | **38** | **35** | **174** | **248** |
+| Renode Infrastructure NUnit | 134 | 26 | 0 | 108 | 9 |
+| 合計 | **247** | **47** | **35** | **165** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植35件と未達174件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植35件と未達165件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -166,4 +166,20 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-exception-boundaries-evidenc
 ```sh
 cargo test --locked stm32_crc
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-crc-verification
+```
+
+
+## SystemBus のブロック転送
+
+固定 Infrastructure の `SystemBusTests.cs` 382–489行と、`SystemBus.cs` の `ReadBytes` / `WriteBytes` を参照した。RESC の `sysbus WriteBytes [0x11, 0x22] 0x1000` と `sysbus ReadBytes 0x1000 2` で実行する。読み出し結果はアドレス昇順の16進リストで、UART 待機履歴から分離する。ホストからのブロック転送では読み出しの穴をゼロで埋め、書き込みの穴は捨てる。CPU の幅付きアクセス、ELF/HEX ローダーは既存の境界判定を使う。
+
+- `0` と `0xc0000000` の各16バイト領域を使い、全体が領域内、片端だけが領域内、全体が穴、領域が書き込み範囲に含まれる場合の5構成を移植した。上流の5構成は同じ MappedMemory の2登録を作るが、観測するのは書き込みと同じアドレス範囲のため、移植では独立した2領域を使う。
+- オフセット50–149と200–299に RAM またはバイト幅のテスト用周辺機器を置き、4組の組み合わせでオフセット0からの350バイト転送と穴のゼロ埋めを確認した。
+- RESC の解析と CLI 表示、ゼロ長の読み出し、32ビットアドレス空間端を越える書き込みの事前拒否も検査した。
+
+`FindBytes` は隣接する別領域と1 MiBの検索バッファ境界をまたぐパターン照合が必要なので未達に残した。CPU コンテキスト付き転送、`onlyMemory` オプション、バス上の別名登録はこの移植の範囲外。
+
+```sh
+cargo test --locked bulk
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systembus-verification
 ```
