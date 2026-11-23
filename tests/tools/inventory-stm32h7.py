@@ -202,7 +202,9 @@ for file, kind in robot.items():
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Zephyr Encryption Sample':
             status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3。ECB/CBC/CTR の暗号化と復号の Match 行を上流順に照合。tests/stm32h7-nucleo-ztest-robot.sh'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Not Run Out Of Ring Buffer Space When Writing Long Line To Uart':
-            status, note = 'PARTIAL', '同一 ELF・長文・CR・50 ms 後のプロンプトを観測。ただし追加観測で RX ring buffer full が出るため未達'
+            status, note = 'PASS', '同一 ELF、長文と CR、50 ms 経過後のプロンプト、RX ring buffer full の失敗条件を照合。tests/stm32h7-nucleo-uart-line.sh'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Resolve DHCP and Be Pingable':
+            status, note = 'PARTIAL', '固定 ELF 2台と上流配線でコマンドのエコーとサーバー起動を確認。クライアントのリース待ちで停止し、双方向 ping は未達。tests/stm32h7-dhcp-robot.sh'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Hear Loopback CAN Messages':
             note = '公開 ELF は初期化を完了し、Counter received: 0 で8仮想秒タイムアウト。古典フレーム転送・標準/拡張IDフィルター・TX FIFOと送信イベントをデバイス単体で検証済み。共有バスの messageRAM 接続待ち'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Interrupt Test':

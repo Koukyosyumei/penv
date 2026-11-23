@@ -1921,3 +1921,17 @@ PTP 送信側では、通常 TX 記述子で TTSE を要求し、MAC でタイ�
 同じ公開 ELF と上記手順で再実行すると、UART に Sync 送信ログが出ました。時計は 7.48 仮想秒後も `25.000000000` でした。TX の上流2件は、共有仮想時刻の接続、実フレームの Sync/Follow_Up 順序とタイムスタンプの照合、SMMUv3 ケースの実行が残っています。`cargo test` 243件と公開 IS25WP ELF が通過しました。
 
 結果と終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/h7-ptp-tx.jduubeFl` に保存しました。
+
+### H753ZI DHCP と長文 UART
+
+```sh
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+bash tests/stm32h7-dhcp-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-uart-line.sh "$(mktemp -d)"
+```
+
+固定 Zephyr ELF 2台を未変更 Nucleo REPL と仮想スイッチで実行しました。上流の既定動作と同じく各 UART コマンドのエコーを待つと、サーバーが起動しました。クライアントは15仮想秒のリース待ちでタイムアウトしました。両ノードの MAC は `00:80:e1:ab:10:c1` でした。診断で両スイッチポートを promiscuous にすると `122.101.101.2` を受け取りましたが、クライアントからの ping 応答待ちで停止しました。移植スクリプトは固定プール先頭アドレスを照合します。上流の正規表現による動的なアドレス取得と双方向 ping は残件です。
+
+同じ ELF の長文 UART ケースは、同じ入力、50 ms 後のプロンプト、リングバッファ警告の失敗条件を照合して通過しました。`cargo test` 243件も通過しました。台帳は対象786件のうち等価合格204件、部分検証19件、未達563件です。
+
+ケース別ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/h7-dhcp.tHotLqIl` に保存しました。
