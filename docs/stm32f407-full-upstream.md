@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 88 | 0 | 425 | 237 |
+| Renode | 510 | 92 | 0 | 418 | 240 |
 | Infrastructure | 217 | 50 | 0 | 167 | 7 |
-| **合計** | **730** | **138** | **0** | **592** | **244** |
+| **合計** | **727** | **142** | **0** | **585** | **247** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 592 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 585 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -815,7 +815,40 @@ A と B を一時ファイルで再現し、元のソース文字列を `platfor
 上記の REPL 読み込み手順で `work=target/stm32f407-repl-using` に設定し、
 ビルド後に `run using tests/stm32f407-repl-using.sh` を追加すると再現できます。
 `using.log` の期待値は重複 1 件、循環 2 件、欠落 1 件の診断です。
-参照の可視性、宣言前の属性上書き、パス解決 API の検証は未達です。
+参照の可視性と宣言前の属性上書きは未達です。
 初回の `cargo test` は循環エラーの従来文言を要求する CLI テストで失敗しました。
 循環診断に従来文言を残して再実行した結果は `cargo-test.log`、初回結果は
 `cargo-test-initial.log` に保存しています。
+
+### REPL の Unix パス解決
+
+固定上流の `UsingTests.cs` から、絶対パス、同一ディレクトリー、親ディレクトリー、
+バックスラッシュをファイル名の文字として扱う 4 件を移植しました。
+通常の REPL ローダーが使うリゾルバーに元と同じ引数・空の検索パスを渡し、
+返るパスを完全一致で検査します。明示的なパスは字句的に解決します。
+修飾のない名前の検索では、既存の同階層優先を保持します。
+
+Windows 専用の 3 件は、上流の `RuntimeInfo.IsWindows()` ガードとテストが要求する
+ドライブ・パス区切りを根拠に、Linux 対象の分母から外しました。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+work=target/stm32f407-using-paths
+mkdir -p "$work"
+(
+    run() {
+        local name=$1
+        shift
+        "$@" >"$work/$name.log" 2>&1
+        echo "$?" >"$work/$name.status"
+    }
+    run cargo-test cargo test
+    run freertos tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu
+    run using tests/stm32f407-repl-using.sh
+    run platform tests/stm32f407-platform-check.sh
+) &
+```
+
+`cargo-test.log` に `renode_using_` で始まるケース 4 件と全体の合格が出ます。
+各 `.status` の期待値は 0 です。

@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::Write,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use crate::{
@@ -282,17 +282,14 @@ fn parse_content(
             if !imports.insert(filename) {
                 return Err(error("DuplicateUsing: Duplicate using entry."));
             }
-            let local = directory.join(filename);
-            let include_path = if local.is_file() {
-                local
-            } else {
-                root.join(filename)
-            };
-            if !include_path.exists() {
-                return Err(error(&format!(
-                    "UsingFileNotFound: Using '{filename}' does not exist"
-                )));
-            }
+            let include_path = resolve_using(Path::new(filename), directory, root)
+                .map_err(|e| error(&e.to_string()))?
+                .filter(|path| path.is_file())
+                .ok_or_else(|| {
+                    error(&format!(
+                        "UsingFileNotFound: Using '{filename}' does not exist"
+                    ))
+                })?;
             parse(&include_path, root, visiting, entries).map_err(|e| error(&e))?;
             continue;
         }
@@ -336,6 +333,83 @@ fn parse_content(
     }
     entries.extend(current);
     Ok(())
+}
+
+fn resolve_using(
+    argument: &Path,
+    directory: &Path,
+    root: &Path,
+) -> std::io::Result<Option<PathBuf>> {
+    let resolved = if argument.is_absolute() {
+        argument.to_path_buf()
+    } else {
+        let local = directory.join(argument);
+        if matches!(
+            argument.components().next(),
+            Some(Component::CurDir | Component::ParentDir)
+        ) {
+            local
+        } else {
+            // Keep the existing sibling lookup for bare relative names.
+            let path = if local.is_file() {
+                local
+            } else {
+                root.join(argument)
+            };
+            return Ok(path.is_file().then_some(path));
+        }
+    };
+
+    // Resolve even when the explicit path does not exist. Unlike canonicalize,
+    // this preserves the lexical meaning and does not dereference symlinks.
+    let mut full = PathBuf::new();
+    for component in std::path::absolute(resolved)?.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir if full.has_root() => {
+                full.pop();
+            }
+            _ => full.push(component),
+        }
+    }
+    Ok(Some(full))
+}
+
+#[cfg(all(test, unix))]
+mod using_tests {
+    use super::*;
+
+    // Pinned Renode UsingTests.cs, with an empty search path for each vector.
+    fn assert_resolves(input: &str, expected: &str) {
+        let including_file = Path::new("/tmp/includer.repl");
+        let actual = resolve_using(
+            Path::new(input),
+            including_file.parent().unwrap(),
+            Path::new(""),
+        )
+        .unwrap();
+        assert_eq!(actual.as_deref(), Some(Path::new(expected)));
+    }
+
+    #[test]
+    fn renode_using_absolute_path_unix() {
+        assert_resolves("/tmp/platform.repl", "/tmp/platform.repl");
+    }
+
+    #[test]
+    fn renode_using_relative_path_same_directory_unix() {
+        assert_resolves("./platform.repl", "/tmp/platform.repl");
+    }
+
+    #[test]
+    fn renode_using_relative_path_parent_directory_unix() {
+        assert_resolves("../abc/platform.repl", "/abc/platform.repl");
+    }
+
+    #[test]
+    fn renode_using_backslash_is_filename_character_on_unix() {
+        assert_resolves(r"./plat\form.repl", r"/tmp/plat\form.repl");
+    }
 }
 
 fn brace_depth(text: &str) -> i32 {
