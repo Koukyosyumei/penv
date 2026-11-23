@@ -40,6 +40,17 @@ pub enum Action {
         name: String,
         pressed: bool,
     },
+    ImuFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+    },
+    ImuInput {
+        node: usize,
+        sensor: String,
+        axis: usize,
+        value: f64,
+    },
     DisplayRate {
         node: usize,
         fps: u32,
@@ -121,6 +132,24 @@ pub fn run(
                         .machine
                         .bus
                         .gpio_button(&name, pressed)?;
+                }
+                Action::ImuFeed { node, sensor, file } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_imu_samples(&sensor, &file)?;
+                }
+                Action::ImuInput {
+                    node,
+                    sensor,
+                    axis,
+                    value,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .find_imu(&sensor)?
+                        .set_input(axis, value);
                 }
                 Action::DisplayRate { node, fps } => {
                     simulation.nodes[node]

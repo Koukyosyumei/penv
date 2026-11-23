@@ -11,6 +11,7 @@ mod iis2mdc;
 mod image;
 mod litex_ethernet;
 mod lps25hb;
+mod lsm6dso;
 mod machine;
 mod mii_phy;
 mod monitor;

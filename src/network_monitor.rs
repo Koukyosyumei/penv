@@ -116,6 +116,34 @@ impl Plan {
                     resolve(*switch)?,
                 )?;
             }
+            [sensor, "FeedSamplesFromCsv", file] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let value = resolve(*file)?;
+                let value = value.strip_prefix('@').ok_or("expected @CSV path")?;
+                let file = monitor::asset_path(value.trim_matches('"'), source, root, None)?;
+                self.actions.push(Action::ImuFeed {
+                    node,
+                    sensor: (*sensor).into(),
+                    file,
+                });
+            }
+            [sensor, property, value]
+                if sensor.starts_with("sysbus.")
+                    && let Some(axis) = crate::lsm6dso::input_axis(property) =>
+            {
+                let node = self.monitor_node()?;
+                let value = resolve(*value)?
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or("expected finite LSM6DSO input value")?;
+                self.actions.push(Action::ImuInput {
+                    node,
+                    sensor: (*sensor).into(),
+                    axis,
+                    value,
+                });
+            }
             ["sysbus", "WriteDoubleWord", address, value] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;

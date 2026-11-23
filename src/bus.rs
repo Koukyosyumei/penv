@@ -672,6 +672,18 @@ impl Bus {
         Ok(())
     }
 
+    pub fn find_imu(&mut self, name: &str) -> Result<&mut crate::lsm6dso::Lsm6dso, String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_imu(name))
+            .ok_or_else(|| format!("unknown LSM6DSO sensor {name:?}"))
+    }
+
+    pub fn feed_imu_samples(&mut self, name: &str, file: &std::path::Path) -> Result<(), String> {
+        let start = self.h7_step + u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND) / 10;
+        self.find_imu(name)?.load_samples(file, start, 12)
+    }
+
     pub fn map_h7_i2c(&mut self, i2c: I2c) -> Result<(), String> {
         self.check_peripheral_range(i2c.base, I2c::SIZE)?;
         self.h7_i2c.push(i2c);
@@ -697,7 +709,7 @@ impl Bus {
         self.h7_step = self.h7_step.wrapping_add(1);
         let step = self.h7_step;
         for i2c in &mut self.h7_i2c {
-            for (base, pin, level) in i2c.sample_magnetometers(step) {
+            for (base, pin, level) in i2c.sample_sensor_outputs(step) {
                 if let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == base) {
                     port.set_external(pin, level);
                 }

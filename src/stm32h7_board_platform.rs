@@ -2,6 +2,7 @@ use crate::{
     designware_usb::DesignWareUsb,
     iis2mdc::Iis2mdc,
     lps25hb::Lps25hb,
+    lsm6dso::Lsm6dso,
     machine::Machine,
     nvic::IRQ_LINES,
     platform::{Entry, irq_index, number},
@@ -48,6 +49,7 @@ pub fn is_device(model: &str) -> bool {
                 | Iis2mdc::MODEL
                 | Tmp108::MODEL
                 | Lps25hb::MODEL
+                | Lsm6dso::MODEL
                 | Iwdg::MODEL
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
@@ -308,7 +310,7 @@ pub fn configure(
     for entry in entries.iter().filter(|entry| {
         matches!(
             entry.model.as_str(),
-            Veml7700::MODEL | Iis2mdc::MODEL | Tmp108::MODEL | Lps25hb::MODEL
+            Veml7700::MODEL | Iis2mdc::MODEL | Tmp108::MODEL | Lps25hb::MODEL | Lsm6dso::MODEL
         )
     }) {
         let (parent, address) = entry
@@ -321,6 +323,15 @@ pub fn configure(
             .iter_mut()
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Lsm6dso::MODEL {
+            let sensor = parse_imu(entry, entries).map_err(|e| entry.error(&e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Imu(format!("sysbus.{parent}.{}", entry.name), Box::new(sensor)),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
         if entry.model == Lps25hb::MODEL {
             let mut sensor = Lps25hb::new();
             let mut set = [false; 2];
@@ -552,6 +563,44 @@ pub fn configure(
     }
 
     Ok(())
+}
+
+fn parse_imu(entry: &Entry, entries: &[Entry]) -> Result<Lsm6dso, String> {
+    let mut input = [None; 6];
+    let mut route = None;
+    for (_, property) in &entry.body {
+        if property.contains("->") {
+            let (pin, name, target) = wire(property)?;
+            if pin != "Interrupt1" || route.is_some() {
+                return Err("expected a single LSM6DSO Interrupt1 GPIO route".into());
+            }
+            let port = entries
+                .iter()
+                .find(|port| port.name == name && port.model == crate::stm32h7_gpio_platform::GPIO)
+                .ok_or("unknown LSM6DSO GPIO route")?;
+            let (base, _, _) = crate::stm32h7_gpio_platform::registration(port, entries)?;
+            route = Some((base, irq_index(target, 16)?));
+            continue;
+        }
+        let (key, value) = property
+            .split_once(':')
+            .ok_or("expected LSM6DSO property")?;
+        let value = value.trim();
+        match key.trim() {
+            axis => {
+                let index = crate::lsm6dso::input_axis(axis).ok_or("invalid LSM6DSO property")?;
+                let value = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or("invalid LSM6DSO input")?;
+                if input[index].replace(value).is_some() {
+                    return Err("duplicate LSM6DSO input axis".into());
+                }
+            }
+        }
+    }
+    Ok(Lsm6dso::new(input.map(|value| value.unwrap_or(0.0)), route))
 }
 
 fn parse_timer(

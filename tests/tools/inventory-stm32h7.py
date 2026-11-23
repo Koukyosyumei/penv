@@ -113,6 +113,12 @@ def triage(row):
         'Should Handle CAN Messages Issued Through CAN Utils Tools',
     }:
         status, reason = 'OUT', '固定 Zynq Linux ゲストで実行し、CAN Utils は Zynq ログイン状態を要求'
+    elif suite == 'LSM6DSO_IMU.robot':
+        status = 'PARTIAL'
+        if 'RESD' in name:
+            reason = '同一 ELF・元の CSV 12 Hz・100 ms オフセット・3 区間と終端復帰を同順 UART で照合。RESD コンテナー、元の REPL、Robot timeout は未移植'
+        else:
+            reason = '同一 ELF と同順の実行時プロパティ刺激を UART で照合。元の REPL と Robot timeout の等価性は未確認'
     elif suite == 'LPS25HB.robot' and name != 'Should Read Samples From RESD':
         status, reason = 'PARTIAL', {
             'Should Read Temperature And Pressure': '同一 v4.2 ELF の初期値と正負の入力を別実行で照合。稼働中の入力変更と順序は未移植',

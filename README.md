@@ -467,3 +467,27 @@ LPS25HB はサブアドレスと自動インクリメント、`WHO_AM_I=0xbd`、
 | Should Work After Errata Driver Update | v4.4 の同一 ELF が `temp 100.31 Cel, pressure 101.325000 kPa` を出力。元の REPL と実行時入力の等価性は未確定。 |
 
 未変更の上流 RESC は `lps25hb` を通過し、ボード REPL の 54 行目にある `Sensors.LSM6DSO_IMU` で停止します。診断スモークの合格を全上流ケースの合格数には算入していません。
+
+### full-h7-lsm6dso
+
+`Sensors.LSM6DSO_IMU` の I²C ユーザーバンク、加速度・角速度のフルスケールと ODR、DRDY と `Interrupt1` の GPIO 配線に対応しました。RESC では上流と同じ `DefaultAccelerationX/Y/Z` と `DefaultAngularRateX/Y/Z` を設定できます。ストリームの移植は `FeedSamplesFromCsv` で上流の CSV を 12 Hz、開始オフセット 100 ms で再生します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-lsm6dso-smoke.sh /tmp/Shellスモークのログディレクトリ
+```
+
+スモークは固定上流 `LSM6DSO_IMU.robot` の ELF 3 本を SHA-1 照合し、5 シナリオの UART を Robot と同じ数値・順序で照合します。
+
+| 上流ケース | ログ | 照合 |
+| --- | --- | --- |
+| I2C polling | `poll-basic/0.uart.log` | ゼロ値のあと、加速度 1/−1/0 g と角速度 100/200/300 dps を順に設定 |
+| RESD polling | `poll-stream/0.uart.log` | 同じ CSV の 3 区間と終端後のゼロ復帰 |
+| I2C interrupt | `irq-basic/0.uart.log` | GPIOC13 の DRDY を有効にした trigger ELF で polling と同じ刺激 |
+| RESD interrupt | `irq-stream/0.uart.log` | trigger ELF で同じ 3 区間と終端後のゼロ復帰 |
+| Driver errata | `errata/0.uart.log` | Zephyr 4.4 polling ELF の起動と加速度の期待値 |
+
+いずれも診断 REPL と固定の仮想実行区間を使うため台帳は部分移植です。上流 REPL での実行、Robot の各 UART 待機タイムアウト、RESD コンテナー、FIFO と追加バンクは残件です。未変更の参照 RESC は IMU 定義を通過し、`platforms/cpus/stm32h7.repl:267` の TIM17 に対して `expected an APB1L STM32 timer RCC alias` を返します。対象分母 778 行は維持し、内訳は未達 763、部分移植 15 行です。
