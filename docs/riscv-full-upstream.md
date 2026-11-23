@@ -1640,3 +1640,17 @@ python3 scripts/validate-rv32-priv-counters.py target/release/penv ../renode "$r
 ```
 
 同じ release バイナリで、V だけを外した診断構成の 3/3 件と既存カウンターの 6/6 件が通過しました。固定構成では V の未対応で対象 3 件とも CPU 作成時に停止しました。Rust テストは 88/88 件、台帳の上流等価合格は累計 174 件です。ケース別 JSONL、ELF、ソース、終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-3befb2b-jDeT9R/` に保存しました。
+
+### 固定 RV32 PMP の実 ELF ケース
+
+固定 `pmp.robot` の RV32 3 件を実 ELF に移植しました。元のアセンブリを読み取り、固定 PC・MEPC・MTVEC とメモリー配置を使います。ELF の初期化コードが MTVEC と MEPC を設定します。NAPOT のケースでは固定データのロード・ストア、全エントリー OFF では固定トラップアドレスと MCAUSE=1・MEPC、PMP エントリーなしでは U モードの命令実行を確認します。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-pmp.py target/release/penv ../renode "$repro/pmp"
+python3 scripts/validate-rv32-priv-transitions.py target/release/penv ../renode "$repro/transitions"
+```
+
+同じ release バイナリで、V だけを外した構成の PMP 3/3 件と特権遷移 3/3 件が通過しました。PMP あり・なしの構成を入れ替えると、許可・拒否の検証はともに完了コード 1 になりました。固定構成では対象 3 件が V の未対応で CPU 作成時に停止しました。Rust テストは 88/88 件、台帳の上流等価合格は累計 174 件です。生成した ELF とソース、構成、ケース別 JSONL は `~/.local/state/penv-dispatch/evidence/riscv/backlog-8dba350-mxUbbU/` に保存しました。

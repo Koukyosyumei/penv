@@ -88,7 +88,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if re.search(r"(?m)^\s+Create RV64PRIV10 Machine\s*$", source):
             return "outside", "outside", "Create RV64PRIV10 Machine uses CPU.RiscV64 rv64gcv with 16 PMP entries"
         if re.search(r"(?m)^\s+Create RV32(?:PRIV10| No PMP) Machine\s*$", source):
-            return "target", "partial", "RV32 inline PMP fixture; Rust checks pinned addresses and results with reduced ISA"
+            return "target", "blocked-cpu", "fixed RV32 PMP fixture requires V; original programs, memory and exception assertions passed on ELF with V omitted"
     if filename == "riscv-lr-sc-strong-atomicity.robot" and parameter:
         if parameter.startswith("RV64"):
             return "outside", "outside", "riscv-lr-sc-strong-atomicity.repl selects CPU.RiscV64 cpu_0/cpu_1"

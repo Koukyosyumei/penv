@@ -1790,11 +1790,11 @@ Renode	tests/unit-tests/platform_descriptions.robot	64	Should Load Repls		review
 Renode	tests/unit-tests/platform_descriptions.robot	71	Should Gracefully Fail At Invalid Using		review-shared	pending	-
 Renode	tests/unit-tests/platform_descriptions.robot	75	Should Not Crash On Empty Platform String		review-shared	pending	-
 Renode	tests/unit-tests/platform_descriptions.robot	79	Should Gracefully Fail At Abstract Class Construction		review-shared	pending	-
-Renode	tests/unit-tests/pmp.robot	80	Should Not Throw Exception After MRET in the NAPOT GRAIN32 Configuration		target	partial	RV32 inline PMP fixture; Rust checks pinned addresses and results with reduced ISA
+Renode	tests/unit-tests/pmp.robot	80	Should Not Throw Exception After MRET in the NAPOT GRAIN32 Configuration		target	blocked-cpu	fixed RV32 PMP fixture requires V; original programs, memory and exception assertions passed on ELF with V omitted
 Renode	tests/unit-tests/pmp.robot	142	Should Trap On Odd pmpcfg Access In 64-bit Mode		outside	outside	Create RV64PRIV10 Machine uses CPU.RiscV64 rv64gcv with 16 PMP entries
 Renode	tests/unit-tests/pmp.robot	151	Should Trap On Out-of-Bound pmpaddr		outside	outside	Create RV64PRIV10 Machine uses CPU.RiscV64 rv64gcv with 16 PMP entries
-Renode	tests/unit-tests/pmp.robot	159	Should Deny User Mode Access When All PMP Entries Are OFF		target	partial	RV32 inline PMP fixture; Rust checks pinned addresses and results with reduced ISA
-Renode	tests/unit-tests/pmp.robot	171	Should Allow User Mode Access When No PMP Entries Are Implemented		target	partial	RV32 inline PMP fixture; Rust checks pinned addresses and results with reduced ISA
+Renode	tests/unit-tests/pmp.robot	159	Should Deny User Mode Access When All PMP Entries Are OFF		target	blocked-cpu	fixed RV32 PMP fixture requires V; original programs, memory and exception assertions passed on ELF with V omitted
+Renode	tests/unit-tests/pmp.robot	171	Should Allow User Mode Access When No PMP Entries Are Implemented		target	blocked-cpu	fixed RV32 PMP fixture requires V; original programs, memory and exception assertions passed on ELF with V omitted
 Renode	tests/unit-tests/precise-pause.robot	50	Terminal Tester Assert Should Start Emulation		review-shared	pending	-
 Renode	tests/unit-tests/precise-pause.robot	59	Terminal Tester Idle Assert Should Start Emulation		review-shared	pending	-
 Renode	tests/unit-tests/precise-pause.robot	69	Terminal Tester Assert Should Not Start Emulation If Matching String Has Already Been Printed		review-shared	pending	-
