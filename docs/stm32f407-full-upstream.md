@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 46 | 0 | 171 | 7 |
-| **合計** | **730** | **124** | **0** | **606** | **244** |
+| Infrastructure | 217 | 47 | 0 | 170 | 7 |
+| **合計** | **730** | **125** | **0** | **605** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 606 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 605 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -678,7 +678,7 @@ C# のモックはバイト単位でアクセスする `Mocks.BytePeripheral` �
 バスは転送範囲を登録区間ごとに処理し、RAM へは区間転送し、バイト周辺機器へは
 個別のバイト読み書きを行います。上流と同じ 50・200 番地の 100 バイト区間に対し、
 350 バイトを入力し、全バイトを検査します。読出しの隙間は 0 です。
-隣接領域と検索バッファー境界をまたぐ `FindBytes` は別件に残ります。
+隣接領域を横断する検索は次節に記載します。
 
 ```sh
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
@@ -700,3 +700,34 @@ cargo test renode_mapped_bytes
 ELF スクリプトでは、既存のメモリーエイリアスに加え、RAM とバイト周辺機器の
 混在 REPL を `LoadBinary` で初期化します。ELF が `LDRB` で 350 バイトすべてを
 検査し、UART に `OK` を出力します。台帳は Rust の 3 構成を合格として数えます。
+
+## SystemBus のバイトパターン検索
+
+固定 Infrastructure `SystemBusTests.cs` の `ShouldFindBytePattern` を移植しました。
+隣接する 1 MiB の RAM 2 区間に `00 01 02 03 04 05 06 07` を配置し、
+アドレス `0x00000000` と `0x000ffffc` の 2 件だけが見つかることを確認します。
+後者は RAM 登録境界と検索バッファー境界をまたぎます。未登録区間、バイト周辺機器、
+フォールト注入用周辺機器は検索から除きます。エイリアスを含むアドレス順で結果を返します。
+
+`penv run --script PATH --find-bytes HEX` はイメージをロードしてから検索し、
+マッチしたアドレスを標準出力に 1 行ずつ出します。上流ケースの既定検索範囲に
+対応します。検索開始・終了アドレスを指定する上流 API は別件に残ります。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-find-bytes
+mkdir -p "$work"
+cargo test renode_find_byte_pattern
+(
+    tests/cortex-m4-find-bytes.sh "$work/cli" >"$work/find-cli.log" 2>&1
+    echo "$?" >"$work/find-cli.status"
+    tests/cortex-m4-mapped-bytes.sh "$work/elf" >"$work/mixed-elf.log" 2>&1
+    echo "$?" >"$work/mixed-elf.status"
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```

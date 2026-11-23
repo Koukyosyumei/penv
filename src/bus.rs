@@ -1695,6 +1695,80 @@ impl Bus {
         Ok(spans)
     }
 
+    pub fn find_bytes(&self, pattern: &[u8]) -> Result<Vec<u32>, String> {
+        const CHUNK: usize = 1 << 20;
+        if pattern.is_empty() {
+            return Err("Pattern cannot be null or empty.".into());
+        }
+        if pattern.len() > CHUNK {
+            return Err(format!("Pattern cannot be larger than {CHUNK}."));
+        }
+
+        let mut mappings: Vec<_> = self
+            .regions
+            .iter()
+            // Fault-injection peripherals have byte backing for bus access,
+            // but are not registered memory.
+            .filter(|region| {
+                !self
+                    .faulting_regions
+                    .iter()
+                    .any(|fault| fault.0 == region.base)
+            })
+            .flat_map(|region| {
+                region.bases().map(|base| {
+                    let start = u64::from(base);
+                    start..start + region.bytes.len() as u64
+                })
+            })
+            .collect();
+        mappings.sort_unstable_by_key(|range| range.start);
+        let mut ranges: Vec<std::ops::Range<u64>> = Vec::new();
+        for mapping in mappings {
+            if let Some(last) = ranges.last_mut()
+                && mapping.start <= last.end
+            {
+                last.end = last.end.max(mapping.end);
+            } else {
+                ranges.push(mapping);
+            }
+        }
+
+        let mut matches = Vec::new();
+        let mut buffer = vec![0; CHUNK + pattern.len() - 1];
+        for range in ranges {
+            let mut cursor = range.start;
+            while cursor + pattern.len() as u64 <= range.end {
+                let count = (range.end - cursor).min(buffer.len() as u64) as usize;
+                for span in self
+                    .byte_spans(cursor as u32, count)
+                    .map_err(|e| e.to_string())?
+                {
+                    let bytes = self
+                        .regions
+                        .iter()
+                        .find_map(|region| {
+                            let offset = region.offset(span.start, span.offsets.len())?;
+                            Some(&region.bytes[offset..offset + span.offsets.len()])
+                        })
+                        .ok_or("missing mapped RAM during byte search")?;
+                    buffer[span.offsets].copy_from_slice(bytes);
+                }
+                for (offset, window) in buffer[..count]
+                    .windows(pattern.len())
+                    .take(CHUNK)
+                    .enumerate()
+                {
+                    if window == pattern {
+                        matches.push((cursor + offset as u64) as u32);
+                    }
+                }
+                cursor += CHUNK as u64;
+            }
+        }
+        Ok(matches)
+    }
+
     pub fn write_bytes(&mut self, address: u32, input: &[u8]) -> Result<(), BusError> {
         for span in self.byte_spans(address, input.len())? {
             let bytes = &input[span.offsets];
@@ -3002,6 +3076,32 @@ mod mapped_byte_tests {
     #[test]
     fn renode_mapped_bytes_reads_both_peripherals() {
         check_mixed_transfer(false, false);
+    }
+
+    #[test]
+    fn renode_find_byte_pattern_crosses_memory_and_buffer_boundaries() {
+        const BUFFER: u32 = 1 << 20;
+        let mut bus = Bus::default();
+        bus.map_ram(0, BUFFER as usize).unwrap();
+        bus.map_ram(BUFFER, BUFFER as usize).unwrap();
+        bus.write_bytes(0, &BYTES).unwrap();
+        bus.write_bytes(BUFFER - 4, &BYTES).unwrap();
+        assert_eq!(bus.find_bytes(&BYTES).unwrap(), [0, BUFFER - 4]);
+    }
+
+    #[test]
+    fn byte_search_keeps_holes_and_peripherals_outside_mapped_ranges() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 2).unwrap();
+        bus.map_byte_peripheral(2, 2).unwrap();
+        bus.map_ram(4, 2).unwrap();
+        bus.map_faulting_memory(0x1000, None).unwrap();
+        bus.memory(0x1000, 2).unwrap().copy_from_slice(&[1, 2]);
+        bus.map_ram(u32::MAX - 1, 2).unwrap();
+        bus.write_bytes(0, &[1, 2, 1, 2, 1, 2]).unwrap();
+        bus.write_bytes(u32::MAX - 1, &[1, 2]).unwrap();
+        assert_eq!(bus.find_bytes(&[1, 2]).unwrap(), [0, 4, u32::MAX - 1]);
+        assert!(bus.find_bytes(&[2, 1]).unwrap().is_empty());
     }
 
     fn check_mixed_transfer(first_memory: bool, second_memory: bool) {

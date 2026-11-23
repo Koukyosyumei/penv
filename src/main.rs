@@ -83,6 +83,7 @@ Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Run a Renode RESC boot or network script
   --raw              Load a flat binary (default: ELF32)
+  --find-bytes HEX   Search mapped RAM after loading the image
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
@@ -142,6 +143,7 @@ fn run() -> Result<ExitCode, String> {
     let mut f4_repl_timing = false;
     let mut transcript = None;
     let mut uart_reply = None;
+    let mut find_bytes = None;
     let mut uart_check = None;
     let mut boot_writes = Vec::new();
     let mut extra_ram = Vec::new();
@@ -166,6 +168,15 @@ fn run() -> Result<ExitCode, String> {
             Some("--raw") => raw = true,
             Some("--stats") => stats = true,
             Some("--f4-repl-timing") => f4_repl_timing = true,
+            Some("--find-bytes") => {
+                let hex = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--find-bytes requires a hexadecimal pattern")?;
+                if find_bytes.replace(parse_byte_pattern(&hex)?).is_some() {
+                    return Err("--find-bytes may only be specified once".into());
+                }
+            }
             Some("--uart-reply") => {
                 let line = args
                     .next()
@@ -325,6 +336,7 @@ fn run() -> Result<ExitCode, String> {
                 || transcript.is_some()
                 || uart_reply.is_some()
                 || uart_check.is_some()
+                || find_bytes.is_some()
             {
                 return Err(
                     "single-machine overrides cannot be combined with a simulation script".into(),
@@ -443,6 +455,12 @@ fn run() -> Result<ExitCode, String> {
     for (cpu, address) in boot_pcs {
         machine.set_named_entry(&cpu, address)?;
     }
+    if let Some(pattern) = find_bytes {
+        for address in machine.bus.find_bytes(&pattern)? {
+            println!("{address:#010x}");
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
     machine.validate_entry()?;
 
@@ -508,6 +526,23 @@ fn export_peripherals(
     }
     platform::export_peripherals(&platform.ok_or(usage)?, root.as_deref(), &output)?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn parse_byte_pattern(hex: &str) -> Result<Vec<u8>, String> {
+    let digits: Vec<_> = hex
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect();
+    if digits.len() % 2 != 0 || !digits.iter().all(u8::is_ascii_hexdigit) {
+        return Err("--find-bytes expects pairs of hexadecimal digits".into());
+    }
+    digits
+        .chunks_exact(2)
+        .map(|pair| {
+            u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
 }
 
 fn parse_address(value: &str) -> Result<u32, String> {
