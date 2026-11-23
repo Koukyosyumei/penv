@@ -37,8 +37,15 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "outside", "outside", other_board
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
+    if filename == "riscv-extensions.robot" and parameter == "RV32I_Smepmp":
+        return "target", "partial", "CPU.RiscV32 Smepmp creation and CSR execution tested; Robot equivalence pending"
     if filename in {"riscv-isa-string.robot", "riscv-extensions.robot"} and parameter.lower().startswith("rv32"):
         return "target", status, "CPU.RiscV32 construction keyword; " + (basis or "fixed ISA argument")
+    if filename == "pmp.robot":
+        if re.search(r"(?m)^\s+Create RV64PRIV10 Machine\s*$", source):
+            return "outside", "outside", "Create RV64PRIV10 Machine uses CPU.RiscV64 rv64gcv with 16 PMP entries"
+        if re.search(r"(?m)^\s+Create RV32(?:PRIV10| No PMP) Machine\s*$", source):
+            return "target", "partial", "RV32 inline PMP fixture; Rust checks pinned addresses and results with reduced ISA"
     if filename == "riscv-lr-sc-strong-atomicity.robot" and parameter:
         if parameter.startswith("RV64"):
             return "outside", "outside", "riscv-lr-sc-strong-atomicity.repl selects CPU.RiscV64 cpu_0/cpu_1"

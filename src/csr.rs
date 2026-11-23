@@ -213,6 +213,13 @@ impl Csr {
         })
     }
 
+    pub fn enable_smepmp(&mut self) {
+        self.pmp
+            .as_mut()
+            .expect("Smepmp requires PMP")
+            .enable_smepmp();
+    }
+
     pub fn enable_pmp(&mut self, entries: usize) {
         self.pmp = Some(Box::new(Pmp::new(entries)));
     }

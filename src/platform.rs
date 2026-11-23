@@ -877,6 +877,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         let mut floating = (false, false, false);
         let mut zicond = false;
         let mut zacas = false;
+        let mut smepmp = false;
         let mut bitmanip = BitManip::default();
         let mut id = 0;
         let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
@@ -902,12 +903,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     let mut base = architecture.as_str();
                     zicond = false;
                     zacas = false;
+                    smepmp = false;
                     let mut zfh = false;
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
                             "zacas" if !zacas => zacas = true,
+                            "smepmp" if !smepmp => smepmp = true,
                             "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
@@ -979,11 +982,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 if floating.2 && !floating.0 {
                     return Err(entry.error("Zfh requires the RV32 F extension"));
                 }
+                if smepmp && pmp == 0 {
+                    return Err(entry.error("Smepmp requires internal PMP entries"));
+                }
                 if zacas && !atomic {
                     return Err(entry.error("Zacas requires the RV32 A extension"));
                 }
                 (
-                    multiply, atomic, compressed, zicond, zacas, bitmanip, floating,
+                    multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating,
                 )
             },
             pmp,
@@ -1002,8 +1008,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         ));
     }
     machine.configure_harts(configs.len());
-    for &(id, entry, (multiply, atomic, compressed, zicond, zacas, bitmanip, floating), pmp) in
-        &configs
+    for &(
+        id,
+        entry,
+        (multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating),
+        pmp,
+    ) in &configs
     {
         let hart = machine.hart_mut(id);
         hart.name = Some(entry.name.clone());
@@ -1041,6 +1051,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         if pmp != 0 {
             hart.enable_pmp(pmp);
+            if smepmp {
+                hart.enable_smepmp();
+            }
         }
     }
     let cpu = configs[0].1;
@@ -1950,7 +1963,16 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
         missing.extend(parts.filter(|extension| {
             !matches!(
                 *extension,
-                "zicsr" | "zifencei" | "zicond" | "zba" | "zbb" | "zbc" | "zbs" | "zacas" | "zfh"
+                "zicsr"
+                    | "zifencei"
+                    | "zicond"
+                    | "zba"
+                    | "zbb"
+                    | "zbc"
+                    | "zbs"
+                    | "zacas"
+                    | "zfh"
+                    | "smepmp"
             )
         }));
     }
@@ -1968,7 +1990,16 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
 type RiscvConfig<'a> = (
     usize,
     &'a Entry,
-    (bool, bool, bool, bool, bool, BitManip, (bool, bool, bool)),
+    (
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        BitManip,
+        (bool, bool, bool),
+    ),
     usize,
 );
 

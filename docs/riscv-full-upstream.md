@@ -272,3 +272,35 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 1,076 件は現時点で確定した対象の下限です。共有 Robot の呼び出し先・動的変数・モニター条件と、共有 NUnit の対象モデルとの対応が未確認です。未展開のケースから追加の構成が出るため、台帳の 4,183 行を最終分母にはできません。
 
 台帳は上段の固定ソースとファームウェアから同じ生成コマンドで再現できます。重複は `component/file/case/parameter` の組で照合し、実ファームウェア回帰には `scripts/validate-riscv-upstream.sh` を使いました。
+
+## RV32 Smepmp
+
+RV64 の `c6889904cd78b8e29e343a76c403540f4b54ac09` から MML の権限表、MML/MMWP の固定化、RLB とロック済み TOR の規則を移植しました。RV32 では `mseccfg` に加え `mseccfgh` を実装し、Smepmp の上位ビットは 0 として読み戻します。PMP エントリーを持つ CPU で `_smepmp` を指定します。[RISC-V Smepmp 仕様](https://docs.riscv.org/reference/isa/v20260120/priv/smepmp.html)
+
+- RV64 の物理アクセス検査を RV32 ELF に移植しました。許可された共有データの読み書きと、未一致領域の拒否を確認し、ロード・ストア・フェッチの `mcause=5/7/1`、`mtval`、`mepc` を照合しました。
+- 固定 Renode `pmp.robot` の RV32 ケースは、固定アドレスと NAPOT の設定値・テストデータを使い、U モードからの許可、全エントリー OFF 時の例外、PMP がない場合の許可を Rust で確認しました。縮小 ISA を使った部分移植として台帳に反映しました。
+- Smepmp 付き縮小構成で公開 M/S 特権 ISA ELF は 22/22 件、固定 ACT は 317/510 件が通過しました。固定 `Sm-00.elf` は RAM 1 MiB と 4 MiB の両方で test 34 の `mstatus` 読み戻しが期待値 `0x00000000` に対して `0x00001800` となり、後続の `mseccfg` ケースには到達しませんでした。
+- 上流最大構成は ACT 0/510、ISA 0/290 件です。V が CPU 作成を阻むため、縮小構成の合格とは区別しています。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+sed 's/rv32gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp/rv32gc_zba_zbb_zbc_zbs_zfh_zacas_smepmp/' \
+  "$work/act-upstream.repl" > "$work/smepmp.repl"
+sed 's/size: 0x100000/size: 0x400000/' "$work/smepmp.repl" > "$work/smepmp-4m.repl"
+clang --target=riscv32-unknown-elf -march=rv32i -mabi=ilp32 \
+  -nostdlib -fuse-ld=lld -Wl,-T,scripts/firmware/rv32-virt.ld \
+  scripts/firmware/rv32-smepmp.S -o "$work/rv32-smepmp.elf"
+status=0
+target/release/penv run --platform "$work/smepmp.repl" --max-steps 1000 \
+  "$work/rv32-smepmp.elf" > "$work/smepmp.uart" || status=$?
+test "$status" -eq 2
+grep -Fx 'rv32-smepmp: allowed RW, denied R/W/X with causes 5/7/1' "$work/smepmp.uart"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/smepmp.repl" --artifacts "$work/act-smepmp" "${act[@]}"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --max-steps 10000000 --platform "$work/smepmp-4m.repl" --artifacts "$work/act-sm-4m" \
+  "$work"/act/work/spike-rv32-max/elfs/priv/Sm/*.elf
+```
+
+台帳で適用を確認済みの下限は 1,079 件（上流等価合格 1、部分移植 31、未達 1,047）です。対象外 331 件、適用または展開が未確定の行が 2,773 件残っています。

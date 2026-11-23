@@ -21,7 +21,7 @@ REVISIONS = {
     "infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85",
     "ui": "5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f",
 }
-MAX_ISA_BLOCKER = "upstream CPU creation requires V, Smepmp"
+MAX_ISA_BLOCKER = "upstream CPU creation requires V"
 DIRECT = re.compile(r"(?i)litex|vexriscv|minerva|nexys|riscv_virt|CPU\.RiscV32|bitness=32|"
                     r"ns16550|corelevelinterruptor|platformlevelinterruptcontroller")
 NUNIT = re.compile(
@@ -93,6 +93,10 @@ def robot_cases(root, isa, act):
                                 basis += "; Zfh diagnostic passed with 1 MiB RAM"
                         if key == "TESTS_32" and re.match(r"rv32uzfh-[pv]-", portable):
                             basis += "; Zfh ISA diagnostic passed with 2 MiB RAM"
+                        if portable == "spike-rv32-max/elfs/priv/Sm/Sm-00.elf":
+                            basis += "; Smepmp diagnostic reaches test 34, mstatus signature mismatch"
+                        if key == "TESTS_32" and re.match(r"rv32[ms]i-", portable):
+                            basis += "; privileged ISA diagnostic passed with Smepmp enabled"
                         yield ("Renode", name, case.lineno, case.name, portable, "target",
                                "blocked-cpu", basis)
                     continue

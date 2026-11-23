@@ -544,6 +544,10 @@ impl Hart {
         self.csr.enable_address_triggers();
     }
 
+    pub fn enable_smepmp(&mut self) {
+        self.csr.enable_smepmp();
+    }
+
     pub fn enable_pmp(&mut self, entries: usize) {
         self.csr.enable_pmp(entries);
     }
@@ -993,7 +997,7 @@ impl Hart {
                     .csr
                     .access(insn, a)
                     .map_err(|error| Fault::InvalidCsr(insn, error))?;
-                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3af | 0x3b0..=0x3ef) {
+                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3ef | 0x747) {
                     self.translations.clear();
                 }
                 Some(value)
@@ -1590,6 +1594,59 @@ mod tests {
                 machine.primary.csr.access(0x3000_2073, 0).unwrap() & (3 << 11),
                 0
             );
+        }
+    }
+
+    #[test]
+    fn renode_pmp_napot_and_unmatched_user_fetch() {
+        // Renode tests/unit-tests/pmp.robot: fixed PC, MEPC, MTVEC and NAPOT inputs.
+        const USER: u32 = 0x8000_1000;
+        const DATA: u32 = 0x8000_2000;
+        const TRAP: u32 = 0x8008_0000;
+        for (pmp, napot) in [(true, true), (true, false), (false, false)] {
+            let mut machine = Machine::new(0x81000).unwrap();
+            machine.primary.enable_user_mode();
+            if pmp {
+                machine.primary.enable_pmp(16);
+            }
+            machine.primary.set_mtvec(TRAP);
+            let csr = &mut machine.primary.csr;
+            csr.access(0x3410_9073, USER).unwrap();
+            if napot {
+                csr.access(0x3b00_9073, 0x7fff_ffff).unwrap();
+                csr.access(0x3a00_9073, 31).unwrap();
+            }
+            csr.access(0x3000_9073, 0).unwrap();
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&0x3020_0073u32.to_le_bytes()); // mret
+            machine.bus.memory(USER, 16).unwrap().copy_from_slice(
+                &[0x0000_0013u32, 0x8000_2437, 0x0004_2483, 0x0094_2223]
+                    .map(u32::to_le_bytes)
+                    .concat(),
+            ); // nop; lui s0, 0x80002; lw s1, 0(s0); sw s1, 4(s0)
+            machine
+                .bus
+                .memory(DATA, 4)
+                .unwrap()
+                .copy_from_slice(&0x65657au32.to_le_bytes());
+            let (_, retired) = machine
+                .run(if napot { 5 } else { 2 }, &mut std::io::sink())
+                .unwrap();
+            if napot {
+                assert_eq!(retired, 5);
+                assert_eq!(machine.bus.read_ram::<4>(DATA + 4).unwrap(), 0x65657a);
+            } else if pmp {
+                assert_eq!(retired, 1);
+                assert_eq!(machine.primary.pc, TRAP);
+                assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 1);
+                assert_eq!(machine.primary.csr.access(0x3410_2073, 0).unwrap(), USER);
+            } else {
+                assert_eq!(retired, 2);
+                assert_eq!(machine.primary.pc, USER + 4);
+            }
         }
     }
 
