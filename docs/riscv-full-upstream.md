@@ -1321,3 +1321,26 @@ target/release/penv run --script "$repro/ebreak.resc" --max-steps 20000
 ```
 
 同じ release バイナリで、Robot のインライン設定とリポジトリの REPL の両方から公開 ELF を実行し、開始、ECALL と EBREAK の 2 組、完了の UART 6 行が順番どおり一致しました。完了行の後に命令上限で停止しました。ELF は倍精度 ABI フラグを持つため、上流の `sysbus LoadELF` と同じスクリプト経由で検証しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 156 件です。固定最大 ISA の V と他の未達ケースは残っています。
+
+### LiteX の Tock と SMP OpenSBI の UART 順序
+
+固定の `LiteX_Tock.robot` と `LiteX_VexRiscv_SMP.robot` の OpenSBI ケースを移植しました。Tock は初期化行の後に D1・D2 が交互に 3 組現れることを確認します。OpenSBI はバージョン、プラットフォーム名、4 ハートの順に照合します。固定 RESC と公開イメージを使い、SMP は Robot と同じロードアドレスと 4 ハートの開始 PC で実行しました。
+
+```bash
+work=/tmp/penv-full-riscv
+assets="$work/regression/assets"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_tock.resc \
+  --platform-root ../renode --asset-dir "$assets" --max-steps 700000000 > "$repro/tock.uart"
+test "$?" = 2
+target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_smp.resc \
+  --platform-root ../renode --asset-dir "$assets" --max-steps 1000000 > "$repro/opensbi.uart"
+test "$?" = 2
+for case in tock opensbi; do
+  python3 scripts/validate-litex-uart-order.py "$case" "$repro/$case.uart"
+done
+```
+
+同じ release バイナリで両ケースの UART 期待行が順序どおり一致しました。各ログから抜き出した期待行を逆順にした入力は検証で拒否されました。公開アセット 5 個の SHA-1 は上流の指定と一致し、`cargo test --locked` は 88/88 件が通過しました。台帳の上流等価合格は累計 158 件です。SMP Linux のログインと `/proc/cpuinfo` は別ケースとして残ります。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-1a284f6-mdWJvs/` に保存しました。

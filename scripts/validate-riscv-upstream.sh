@@ -120,12 +120,7 @@ rg -aqF 'Zephyr version' "$artifacts/litex-zephyr.uart.log"
 
 prepare_assets "$tock"
 run_to_step_limit litex-tock "$tock" --max-steps 700000000
-rg -aqF 'LiteX+VexRiscv on ArtyA7: initialization complete, entering main loop.' "$artifacts/litex-tock.uart.log"
-# The upstream tester waits for the first D1 before checking three ordered pairs.
-diff -u <(for _ in 1 2 3; do printf 'D1 says hello\nD2 says hello\n'; done) <(
-    tr -d '\r' < "$artifacts/litex-tock.uart.log" |
-        awk '/^D[12] says hello$/ && ($0 == "D1 says hello" || count) { print; if (++count == 6) exit }'
-)
+python3 "$(dirname -- "$0")/validate-litex-uart-order.py" tock "$artifacts/litex-tock.uart.log"
 
 prepare_assets "$arty"
 printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
@@ -201,11 +196,11 @@ diff -u <(printf 'processor\t: 0\n') <(
 prepare_assets "$litex"
 run_to_step_limit litex-smp "$litex" --uart-event "600000000:$artifacts/litex-login.input" \
     --uart-event "675000000:$artifacts/litex-cpuinfo.input" --max-steps 725000000
-for marker in 'OpenSBI v0.6' 'Litex/VexRiscv SMP' 'Linux version 5.0.9' \
+python3 "$(dirname -- "$0")/validate-litex-uart-order.py" opensbi "$artifacts/litex-smp.uart.log"
+for marker in 'Linux version 5.0.9' \
     'smp: Brought up 1 node, 4 CPUs' 'Welcome to Buildroot' 'buildroot login:'; do
     rg -aqF "$marker" "$artifacts/litex-smp.uart.log"
 done
-rg -aq 'Platform Max HARTs\s+: 4' "$artifacts/litex-smp.uart.log"
 for hart in 0 1 2 3; do
     rg -aq "^processor[[:blank:]]*: $hart\r*$" "$artifacts/litex-smp.uart.log"
 done

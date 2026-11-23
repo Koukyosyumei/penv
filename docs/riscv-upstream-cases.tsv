@@ -567,11 +567,11 @@ Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	86	Should Handle SPI		ta
 Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	95	Should Handle I2C		target	partial	litex_linux_vexriscv.repl; VexRiscv, GPIO, SPI and I2C; firmware regression, Robot equivalence pending
 Renode	tests/platforms/LiteX/LiteX_Microwatt.robot	15	Should Boot		outside	outside	litex_microwatt.resc -> litex_microwatt.repl:16 requires CPU.PowerPc64
 Renode	tests/platforms/LiteX/LiteX_Microwatt.robot	30	Should Display Help		outside	outside	boot-finished fixture from Should Boot requires CPU.PowerPc64
-Renode	tests/platforms/LiteX/LiteX_Tock.robot	2	Should Run Tock		target	partial	litex_vexriscv_tock.resc; ArtyA7 VexRiscv and LiteX UART; firmware regression, Robot equivalence pending
+Renode	tests/platforms/LiteX/LiteX_Tock.robot	2	Should Run Tock		target	ported	fixed Tock ELF and RESC; initialization and three ordered D1/D2 UART pairs checked
 Renode	tests/platforms/LiteX/LiteX_VexRiscv_I2S.robot	5	Should Echo Audio		target	ported	validate-riscv-upstream.sh: same input, 3.2s, Dispose and cmp
 Renode	tests/platforms/LiteX/LiteX_VexRiscv_Linux_SDCard.robot	29	Should Mount Filesystem From SD Card		target	partial	Create Platform; VexRiscv, LiteX SD card controller; firmware regression, Robot equivalence pending
 Renode	tests/platforms/LiteX/LiteX_VexRiscv_Linux_SDCard.robot	87	Should Load RootFS From SD Card		target	partial	Create Platform; VexRiscv, LiteX SD card controller; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/LiteX_VexRiscv_SMP.robot	20	Should Run OpenSBI		target	partial	litex_vexriscv_smp REPL; four VexRiscv harts; firmware regression, Robot equivalence pending
+Renode	tests/platforms/LiteX/LiteX_VexRiscv_SMP.robot	20	Should Run OpenSBI		target	ported	fixed SMP images, load addresses and four startup PCs; ordered OpenSBI UART assertions checked
 Renode	tests/platforms/LiteX/LiteX_VexRiscv_SMP.robot	32	Should Boot Linux		target	partial	litex_vexriscv_smp REPL; four VexRiscv harts; firmware regression, Robot equivalence pending
 Renode	tests/platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot	14	Should Boot		target	partial	nexys4ddr_litex_vexriscv.repl; VexRiscv and SPI SD; firmware regression, Robot equivalence pending
 Renode	tests/platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot	29	Should List Readme File		target	partial	nexys4ddr_litex_vexriscv.repl; VexRiscv and SPI SD; firmware regression, Robot equivalence pending
