@@ -801,6 +801,10 @@ fn create_cpu(
         Some(_) => return Err(entry.error("unsupported RV64 privilege levels")),
     };
     cpu.privilege.configure_levels(levels);
+    if flag(entry, "renodeResetMstatus", false)? {
+        cpu.privilege
+            .initialize_renode_reset_status(isa.single || isa.double);
+    }
     cpu.allow_unaligned = flag(entry, "allowUnalignedAccesses", false)?;
     cpu.privilege.renode_menvcfg = flag(entry, "renodeMenvcfg", false)?;
     let pmp_count =

@@ -1157,10 +1157,11 @@ fn renode_fdiv_single_and_half_set_divide_by_zero_flag() {
     ] {
         let mut cpu = Rv64::new(Isa::parse("rv64gc_zfh").unwrap());
         cpu.pc = 0x2000;
-        // Fixed tlib enables FS at reset on an F/D machine.
-        cpu.initialize_mstatus(0x2000);
-        cpu.floating[0] = zero;
-        cpu.floating[1] = one;
+        assert_eq!(cpu.monitor_register("mstatus"), Some(0));
+        cpu.privilege.initialize_renode_reset_status(true);
+        assert_eq!(cpu.monitor_register("mstatus"), Some(0xb800));
+        cpu.initialize_freg(0, zero).unwrap();
+        cpu.initialize_freg(1, one).unwrap();
         bus.memory64(0x2000, 4)
             .unwrap()
             .copy_from_slice(&opcode.to_le_bytes());

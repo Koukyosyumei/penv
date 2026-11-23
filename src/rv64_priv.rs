@@ -143,6 +143,17 @@ pub struct Privilege {
 }
 
 impl Privilege {
+    pub(crate) fn initialize_renode_reset_status(&mut self, floating_point: bool) {
+        const FS_INITIAL: u64 = 1 << 13;
+        const XS_INITIAL: u64 = 1 << 15;
+        self.status = MPP
+            | if floating_point {
+                FS_INITIAL | XS_INITIAL
+            } else {
+                0
+            };
+    }
+
     pub fn configure_levels(&mut self, levels: Levels) {
         self.levels = levels;
         self.status = (self.status & !MPP) | levels.lowest_mpp();

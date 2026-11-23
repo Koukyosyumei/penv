@@ -60,7 +60,8 @@ Options:
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
   --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
-  --read-register CPU@NAME  Report RV64 pc, x0–x31, mstatus, mepc or sepc after execution
+  --set-freg CPU@fN:VALUE  Initialize raw RV64 floating-point register bits
+  --read-register CPU@NAME  Report a supported RV64 register after execution
   --write-memory [CPU@]BASE:WIDTH:VALUE  Write a little-endian RAM value during setup
   --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
   --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
@@ -220,6 +221,7 @@ fn run() -> Result<ExitCode, String> {
     let mut memory_reads = Vec::new();
     let mut register_reads = Vec::new();
     let mut mstatus_initializers = Vec::new();
+    let mut freg_initializers = Vec::new();
     let mut dtb = None;
     let mut clint = None;
     let mut mtvec = None;
@@ -337,6 +339,24 @@ fn run() -> Result<ExitCode, String> {
                 if clint.replace(parse_address(&value)?).is_some() {
                     return Err("--clint may only be specified once".into());
                 }
+            }
+            Some("--set-freg") => {
+                let error = "--set-freg requires CPU@fN:VALUE (f0 through f31)";
+                let argument = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or(error)?;
+                let (target, value) = argument.split_once(':').ok_or(error)?;
+                let (cpu, register) = target
+                    .split_once('@')
+                    .filter(|(cpu, _)| !cpu.is_empty())
+                    .ok_or(error)?;
+                let index = register
+                    .strip_prefix('f')
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .filter(|index| *index < 32)
+                    .ok_or(error)?;
+                freg_initializers.push((cpu.to_owned(), index, parse_address64(value)?));
             }
             Some(option @ ("--set-mstatus" | "--read-register")) => {
                 let delimiter = if option == "--set-mstatus" { ':' } else { '@' };
@@ -694,6 +714,15 @@ fn run() -> Result<ExitCode, String> {
                 .as_mut()
                 .expect("validated RV64 CPU")
                 .initialize_mstatus(*value);
+        }
+        for (cpu, index, value) in &freg_initializers {
+            let hart = machine.rv64_hart_by_name(cpu)?;
+            machine
+                .hart_mut(hart)
+                .rv64
+                .as_mut()
+                .expect("validated RV64 CPU")
+                .initialize_freg(*index, *value)?;
         }
         for (cpu, name) in &register_reads {
             let hart = machine.rv64_hart_by_name(cpu)?;

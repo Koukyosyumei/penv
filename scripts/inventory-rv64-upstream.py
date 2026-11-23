@@ -338,7 +338,7 @@ def disposition(path, name, context):
             "Should Set Flag On Single Precision Floating Point Division By Zero",
             "Should Set Flag On Half Precision Floating Point Division By Zero",
         }:
-            return "partial", "Exact operands/results checked in Rust; initial FS set explicitly to match fixed tlib"
+            return "pass", "Fixed Renode reset profile, NaN-boxed operands, one step, PC, f2 and FFLAGS verified"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(

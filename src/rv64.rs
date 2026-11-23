@@ -166,11 +166,27 @@ impl Rv64 {
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         match name {
             "pc" => Some(self.pc),
+            "fflags" if self.isa.single => Some(u64::from(self.privilege.fcsr & 31)),
+            name if self.isa.single && name.starts_with('f') => {
+                let index = name[1..].parse::<usize>().ok()?;
+                self.floating.get(index).copied()
+            }
             name => self.privilege.monitor_register(name).or_else(|| {
                 let index = name.strip_prefix('x')?.parse::<usize>().ok()?;
                 self.registers.get(index).copied()
             }),
         }
+    }
+
+    pub(crate) fn initialize_freg(&mut self, index: usize, value: u64) -> Result<(), String> {
+        if !self.isa.single {
+            return Err("floating register setup requires the RV64 F extension".into());
+        }
+        *self
+            .floating
+            .get_mut(index)
+            .ok_or("floating register must be f0 through f31")? = value;
+        Ok(())
     }
 
     pub(crate) fn initialize_mstatus(&mut self, value: u64) {
