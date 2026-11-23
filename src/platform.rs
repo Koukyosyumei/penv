@@ -588,9 +588,10 @@ fn brace_depth(text: &str) -> i32 {
 fn property_key(text: &str) -> Option<&str> {
     let (key, value) = text.split_once(':')?;
     let key = key.trim();
+    let mut characters = key.chars();
     (!value.trim().is_empty()
-        && !key.is_empty()
-        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        && characters.next().is_some_and(char::is_alphabetic)
+        && characters.all(|c| c.is_alphanumeric() || c == '_'))
     .then_some(key)
 }
 
@@ -2326,6 +2327,31 @@ uart:
             let entries = parse(source).unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
+        }
+    }
+
+    #[test]
+    fn upstream_empty_and_mixed_inline_attributes() {
+        assert!(parse("\nuart: {}").unwrap()[0].body.is_empty());
+        let entries =
+            parse("\nother: Display @ sysbus <0x0, +0x100> { refreshMode: Automatic; -> ic@3; }\n")
+                .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0]
+                .body
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .eq(["refreshMode: Automatic", "-> ic@3"])
+        );
+        for source in [
+            "\nuart: {;}",
+            "\nuart: {_nonIdentifier}",
+            "\nuart: {;_nonIdentifier}",
+            "\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000;\n    _nonIdentifier\n}",
+            "\nuart: { _invalid: 1 }",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
         }
     }
 

@@ -1110,3 +1110,21 @@ PYTHON="$venv/bin/python" bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"
 対象786件のうち等価合格108件、部分検証10件、未達668件です。その他のモデル固有プロパティへの文字列デコーダーの適用、複数行文字列、型付き参照は残っています。
 
 `cargo test` 123件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button と IIS2MDC polling・trigger ELF が通過しました。ログと終了状態は上記の証拠ディレクトリに保存しました。センサーの初回実行はシステム Python に `construct` がなく停止し、依存導入済みの仮想環境で再実行しました。
+
+### backlog-network-90e05f242bfb-1
+
+REPL のインライン属性名に固定上流と同じ先頭文字の制約を適用しました。固定 `ParserTests.cs` の6件を同じ入力で実行し、空ブロックと属性・IRQ 混在ブロックの受理、空文または裸の識別子を含む4入力の拒否を照合しました。STM32H743 では空の GPIO 追記を含む構成をロードし、範囲登録とインライン属性で追加した RAM の読み書きを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-inline-members.IMCTbep4
+target/release/penv run --script "$e/inline.resc" --platform-root ../renode
+```
+
+ログと終了状態は上記に保存しました。`cargo test` 124件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格114件、部分検証10件、未達662件です。IRQ 専用の構文ケースやオブジェクト値・辞書値を含むケースは残っています。
