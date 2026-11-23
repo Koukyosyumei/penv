@@ -285,3 +285,17 @@ fn renode_attribute_constructor_on_existing_sysbus() {
     let error = check_string("\nsysbus:\n    x: 5", None).unwrap_err();
     assert!(error.contains("CtorAttributesInNonCreatingEntry:"));
 }
+
+#[test]
+fn renode_reference_missing_irq_target() {
+    let source = "\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    IRQ -> receiver@0";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("IrqDestinationDoesNotExist:"));
+}
+
+#[test]
+fn renode_reference_missing_registration_point() {
+    let source = "\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus regPoint";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("MissingReference:"));
+}

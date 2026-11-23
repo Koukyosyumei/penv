@@ -960,6 +960,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
         target.body.extend(block.body);
     }
     for entry in &declarations {
+        validate_entry_references(entry, &declared)?;
         if entry.alias.is_some() {
             match entry.registration.as_deref() {
                 None => {
@@ -975,6 +976,48 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
         }
     }
     Ok(declarations)
+}
+
+fn validate_entry_references(
+    entry: &Entry,
+    declared: &HashMap<String, usize>,
+) -> Result<(), String> {
+    if let Some(reference) = entry
+        .registration
+        .as_deref()
+        .and_then(|registration| registration.strip_prefix("sysbus "))
+        .filter(|reference| is_repl_identifier(reference))
+        && !declared.contains_key(reference)
+    {
+        return Err(entry.error(&format!(
+            "MissingReference: registration point {reference:?}"
+        )));
+    }
+    for (_, text) in &entry.body {
+        let Some((source, destination)) = text.split_once("->") else {
+            continue;
+        };
+        // Ignore scalar properties (including script bodies) and inspect only
+        // direct GPIO targets. Device-specific wiring still validates the pins.
+        if source.contains(':') {
+            continue;
+        }
+        let Some((target, _)) = destination.split_once('@') else {
+            continue;
+        };
+        let target = target.trim();
+        if is_repl_identifier(target) && !declared.contains_key(target) && target != "sysbus" {
+            return Err(entry.error(&format!("IrqDestinationDoesNotExist: {target:?}")));
+        }
+    }
+    Ok(())
+}
+
+fn is_repl_identifier(text: &str) -> bool {
+    text.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 fn validate_entry_attributes(entry: &Entry) -> Result<(), String> {
