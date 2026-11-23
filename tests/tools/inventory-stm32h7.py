@@ -328,7 +328,7 @@ def triage(row):
     }:
         status, reason = 'PASS', '同じ周波数と仮想時間で下降周期を ARR=limit−1 に対応させ、CNT+1、更新イベント数、IRQマスクを照合。src/stm32h7_timer.rs'
     elif suite == 'LimitTimerTests.cs' and name == 'ShouldSwitchDirectionProperly':
-        status, reason = 'OPEN', '上流は方向変更後に値ゼロへ到達した時点で通知。STM32 TIM の下降更新はゼロからのアンダーフローで発火するため、汎用 LimitTimer の方向変更セマンティクスが必要'
+        status, reason = 'PASS', '上流と同じ100 Hz・上限100000・各2秒・方向変更を実行し、ゼロ到達通知をSTM32 TIMのCCR1=0で照合。src/stm32h7_timer.rs'
     elif suite == 'LimitTimerTests.cs' and name in {
         'ShouldBeAscending',
         'ShouldBeDescending',

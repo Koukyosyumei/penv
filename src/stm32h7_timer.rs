@@ -426,6 +426,31 @@ mod limit_timer_cases {
     }
 
     #[test]
+    fn upstream_switch_direction_at_zero() {
+        let mut timer = enabled_timer(100, 100_000, false);
+        timer
+            .route(TimerOutput::Combined, Stm32Irq::Nvic(28))
+            .unwrap();
+        // Compare at zero observes the descending limit on arrival.
+        timer.write(0x34, 0);
+        timer.write(0x0c, 1 << 1);
+        advance_seconds(&mut timer, 2);
+        assert_eq!(timer.read(CNT), 200);
+        assert_eq!(timer.interrupts().count(), 0);
+
+        timer.write(CR1, CEN | DIR);
+        assert_eq!(timer.read(CNT), 200);
+        timer.advance_steps(2 * VIRTUAL_STEPS_PER_SECOND - 1);
+        assert_eq!(timer.read(CNT), 1);
+        assert_eq!(timer.interrupts().count(), 0);
+
+        timer.tick();
+        assert_eq!(timer.read(CNT), 0);
+        assert_eq!(timer.read(0x10) & 3, 1 << 1);
+        assert_eq!(timer.interrupts().count(), 1);
+    }
+
+    #[test]
     fn upstream_should_be_ascending() {
         let mut timer = enabled_timer(100, 100_000, false);
         let mut previous = 0;

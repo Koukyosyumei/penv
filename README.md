@@ -1582,3 +1582,23 @@ bash tests/stm32h7-tim8-smoke.sh "$base" timer8
 ```
 
 `cargo test` 211件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 の3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-events.6PIr5DnN` に保存しました。対象786件のうち等価合格191件、部分検証17件、未達578件です。
+
+### backlog-network-5966ef07b946-1
+
+固定上流 `ShouldSwitchDirectionProperly` の100 Hz、上限100000、上昇2秒、方向切替、下降2秒を STM32 TIM で再現しました。ゼロ到達の通知は既存の `CCR1=0` の比較割り込みを使用します。切替で CNT が保持され、到達直前に通知がなく、到達時に比較割り込みが立つことを照合しました。STM32 の更新割り込みはアンダーフローで発火するため、比較割り込みを観測点に選びました。固定 `LimitTimerTests.cs` の台帳9件はすべて等価合格です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+`cargo test` 212件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 の3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-direction.xwyONkQv` に保存しました。台帳は対象786件のうち等価合格192件、部分検証17件、未達577件です。共通 ComparingTimer の上限を超える比較値の拒否は STM32 TIM の CCR 書き込みと意味が異なるため、別の未達項目です。
