@@ -968,6 +968,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
+                            "zksed" if !bitmanip.zksed => bitmanip.zksed = true,
                             "zksh" if !bitmanip.zksh => bitmanip.zksh = true,
                             "zknh" if !bitmanip.zknh => bitmanip.zknh = true,
                             "zbkc" if !bitmanip.zbkc => bitmanip.zbkc = true,
@@ -2172,6 +2173,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zbc"
                     | "zbkc"
                     | "zknh"
+                    | "zksed"
                     | "zksh"
                     | "zbs"
                     | "zbkb"

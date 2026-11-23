@@ -986,3 +986,28 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 同じ release バイナリで、`rv32ic_zksh` は固定 Zksh ACT ELF 2 件、`rv32ic_zksh_zknh` は Zksh と Zknh の 12 件が完了コード 0 に到達しました。Rust テスト 87 件と、暗号拡張を追加した RV32 virt の UART・CLINT・PLIC も通過しました。上記の最後のコマンドは固定 Robot 構成での残課題の再現です。V の未対応で 2 件とも CPU 作成時に停止し、固定 ISA 指定には Zksh もありません。台帳の等価合格は累計 155 件です。
 
 構成別の `results.jsonl`、ケースごとのログ、終了状態と RV32 virt の検証結果は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zksed の SM4 命令
+
+明示的な `Zksed` を CPU 型で受け付け、`sm4ed` と `sm4ks` を実装しました。両命令は `rs2` の指定バイトを S-box で置換し、命令ごとの線形変換を適用します。変更前は代表の `Zksed-sm4ed-00.elf` が `rv32ic_zksed` の CPU 作成時に停止しました。[RISC-V スカラー暗号拡張仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/scalar-crypto.html#sm4ed)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-0580c8c-D7rEiW"
+cargo test --locked
+cargo build --locked --release
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/scalar.repl" --artifacts "$repro/scalar" \
+  "$elfs"/Zksed/*.elf "$elfs"/Zknh/*.elf "$elfs"/Zksh/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" \
+  "$elfs"/Zksed/*.elf
+```
+
+Zksed の固定 ACT ELF は `rv32ic_zksed` と、固定最大 ISA の V を Zksed に置き換えた診断構成（`max-no-v.repl`）で、それぞれ 2 件とも完了コード 0 に到達しました。暗号拡張を併用した構成では 14 件、Rust テストでは 87 件が通過しました。RV32 virt の UART・CLINT・PLIC も期待出力と一致しました。
+
+固定 Robot の ISA 指定には Zksed がなく、V の未対応で 2 件とも CPU 作成時に停止しました。台帳に各構成の結果を反映し、上流等価合格は累計 155 件です。
+
+構成別の終了状態、ケースごとのログと `results.jsonl` は上記の証拠ディレクトリに保存しました。
