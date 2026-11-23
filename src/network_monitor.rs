@@ -333,6 +333,11 @@ impl Plan {
                     high,
                 });
             }
+            ["sysbus", "UnregisterFromAddress", address] => {
+                let node = self.monitor_node()?;
+                let address = crate::platform::number(resolve(*address)?)?;
+                self.actions.push(Action::UnregisterRam { node, address });
+            }
             ["sysbus", "ReadBytes", address, count, options @ ..] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;

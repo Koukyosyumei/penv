@@ -1219,26 +1219,50 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
                 }
                 .ok_or_else(|| entry.error("expected one memory size property before init"))?;
                 let size = number(size).map_err(|e| entry.error(&e))?;
-                let address = if let Some((
-                    "sysbus",
-                    Some(RegistrationValue::Range { base, size: length }),
-                )) = entry
+                let registration = entry
                     .registration
                     .as_deref()
-                    .and_then(|registration| registration_point(registration).ok())
+                    .ok_or_else(|| entry.error("missing memory registration"))?;
+                let points = if let Some(list) = registration
+                    .strip_prefix('{')
+                    .and_then(|text| text.strip_suffix('}'))
                 {
-                    if length != u64::from(size) {
-                        return Err(entry.error("memory range size disagrees with size property"));
-                    }
-                    u32::try_from(base)
-                        .map_err(|_| entry.error("memory base exceeds 32-bit address space"))?
+                    registration_points(list).map_err(|error| entry.error(error))?
                 } else {
-                    entry.address()?
+                    vec![registration_point(registration).map_err(|error| entry.error(error))?]
                 };
+                let addresses = points
+                    .into_iter()
+                    .map(|point| match point {
+                        ("sysbus", Some(RegistrationValue::Range { base, size: length })) => {
+                            if length != u64::from(size) {
+                                return Err(
+                                    entry.error("memory range size disagrees with size property")
+                                );
+                            }
+                            u32::try_from(base).map_err(|_| {
+                                entry.error("memory base exceeds 32-bit address space")
+                            })
+                        }
+                        ("sysbus", Some(RegistrationValue::Other(address))) => {
+                            number(address).map_err(|error| entry.error(&error))
+                        }
+                        _ => Err(entry.error("expected memory address registered on sysbus")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (&address, aliases) = addresses
+                    .split_first()
+                    .ok_or_else(|| entry.error("missing memory address"))?;
                 machine
                     .bus
                     .map_ram(address, size as usize)
                     .map_err(|e| entry.error(&e))?;
+                for &alias in aliases {
+                    machine
+                        .bus
+                        .map_ram_alias(address, alias)
+                        .map_err(|e| entry.error(&e))?;
+                }
                 for (line, command) in commands {
                     let error = |detail: &str| format!("{line}: {}: {detail}", entry.name);
                     let (offset, width, value) =

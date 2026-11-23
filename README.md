@@ -1489,3 +1489,23 @@ target/release/penv run --script "$e/memory-only.resc" --platform-root ../renode
 ```
 
 最後のコマンドは意図した診断で終了します。`cargo test` 198件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。上記にケース別結果と終了状態を保存しました。台帳は対象786件のうち等価合格179件、部分検証17件、未達590件です。CPU コンテキスト別登録と、バイト幅を持たない周辺機器の上流アクセス幅変換は残っています。
+
+### backlog-network-b18e8b6d9069-1
+
+REPL の複数 RAM 登録で、一つの記憶領域を複数のバスアドレスに割り当てます。`sysbus UnregisterFromAddress` は指定した RAM 登録だけを解除します。固定上流 `Should Unregister Only The Requested Range` の `0x800` と `0x4000` の両構成を移植し、先頭に書いた値を末尾の別名から読めること、中央の解除済み範囲がゼロを返すことを照合しました。CLI の構築に必要な Cortex-M7 宣言を加え、CPU は実行せず、固定上流と同じバス操作を実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-ram-aliases.0iTbYDsD
+for size in 0x800 0x4000; do
+    target/release/penv run --script "$e/$size.resc" --platform-root ../renode
+done
+```
+
+`cargo test` 200件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格180件、部分検証17件、未達589件です。対象を RAM に限定しており、周辺機器の動的登録解除と CPU コンテキスト別登録は残っています。

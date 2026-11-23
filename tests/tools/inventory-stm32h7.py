@@ -303,6 +303,8 @@ def triage(row):
             status, reason = 'OUT', 'Prepare Trivial Platform が Cortex-M33 と v8-M 用 NOCP アセンブリをロード'
     elif source == 'tests/unit-tests/InterruptHooks/arm-m.robot':
         status, reason = 'OUT', 'STM32F746G Discovery 専用 ELF と固定 GPIOI11 のボタン刺激を要求'
+    elif suite == 'sysbus.robot' and name == 'Should Unregister Only The Requested Range':
+        status, reason = 'PASS', '固定上流の 0x800・0x4000 の両構成で、共有 RAM を三重登録し、中央解除後の三つの読み取りを照合。src/bus.rs'
     elif suite == 'sysbus.robot' and name == 'Symbols Should Be Dynamically Loaded and Unloaded On Request':
         status, reason = 'OUT', '固定 STM32L072/STM32L07 ELF と main=0x08007644 が観測点'
     elif suite == 'arm-cortex-m-interrupts.robot':

@@ -85,6 +85,7 @@ impl fmt::Display for BusError {
 
 struct Region {
     base: u32,
+    aliases: Vec<u32>,
     bytes: Vec<u8>,
 }
 
@@ -207,12 +208,7 @@ impl<'a> EthernetDma<'a> {
     fn memory(self, address: u32, width: usize) -> Result<&'a mut [u8], BusError> {
         for region in self.regions {
             if let Some(offset) = region.offset(address, width) {
-                if width != 0 {
-                    invalidate_reservations(
-                        self.reservations,
-                        u64::from(address)..u64::from(address) + width as u64,
-                    );
-                }
+                region.invalidate_alias_reservations(self.reservations, offset, width);
                 return Ok(&mut region.bytes[offset..offset + width]);
             }
         }
@@ -242,9 +238,10 @@ fn memory_byte_range(address: u32, count: usize) -> Result<std::ops::Range<u64>,
 impl Region {
     fn byte_window(
         &self,
+        base: u32,
         request: &std::ops::Range<u64>,
     ) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
-        let base = u64::from(self.base);
+        let base = u64::from(base);
         let start = base.max(request.start);
         let end = (base + self.bytes.len() as u64).min(request.end);
         (start < end).then(|| {
@@ -270,12 +267,36 @@ impl Region {
         // SAFETY: Global allocation with u8 alignment and size bytes, all initialized.
         // Vec takes ownership and deallocates with the same layout.
         let bytes = unsafe { Vec::from_raw_parts(allocation, size, size) };
-        Ok(Self { base, bytes })
+        Ok(Self {
+            base,
+            bytes,
+            aliases: Vec::new(),
+        })
+    }
+
+    fn invalidate_alias_reservations(
+        &self,
+        reservations: &mut [Option<u32>],
+        offset: usize,
+        width: usize,
+    ) {
+        if width != 0 {
+            for base in self.bases() {
+                let start = u64::from(base) + offset as u64;
+                invalidate_reservations(reservations, start..start + width as u64);
+            }
+        }
+    }
+
+    fn bases(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::once(self.base).chain(self.aliases.iter().copied())
     }
 
     fn offset(&self, address: u32, width: usize) -> Option<usize> {
-        let offset = address.checked_sub(self.base)? as usize;
-        (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        self.bases().find_map(|base| {
+            let offset = address.checked_sub(base)? as usize;
+            (width <= self.bytes.len().checked_sub(offset)?).then_some(offset)
+        })
     }
 }
 
@@ -302,6 +323,41 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn map_ram_alias(&mut self, original: u32, alias: u32) -> Result<(), String> {
+        let region = self
+            .regions
+            .iter()
+            .position(|region| region.base == original)
+            .ok_or("missing original RAM registration")?;
+        let start = u64::from(alias);
+        let end = start + self.regions[region].bytes.len() as u64;
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!("invalid or overlapping RAM alias at {alias:#010x}"));
+        }
+        self.regions[region].aliases.push(alias);
+        Ok(())
+    }
+
+    pub(crate) fn unregister_ram(&mut self, address: u32) -> Result<(), String> {
+        let index = self
+            .regions
+            .iter()
+            .position(|region| region.bases().any(|base| base == address))
+            .ok_or_else(|| format!("no RAM registration at {address:#010x}"))?;
+        let region = &mut self.regions[index];
+        if region.base == address {
+            if let Some(base) = region.aliases.pop() {
+                region.base = base;
+            } else {
+                self.regions.swap_remove(index);
+            }
+        } else {
+            region.aliases.retain(|&base| base != address);
+        }
+        self.reservations.fill(None);
+        Ok(())
+    }
+
     pub(crate) fn read_memory_bytes(&self, address: u32, count: usize) -> Result<Vec<u8>, String> {
         let request = memory_byte_range(address, count)?;
         let mut bytes = Vec::new();
@@ -310,8 +366,10 @@ impl Bus {
             .map_err(|_| "cannot allocate SystemBus byte read")?;
         bytes.resize(count, 0);
         for region in &self.regions {
-            if let Some((buffer, memory)) = region.byte_window(&request) {
-                bytes[buffer].copy_from_slice(&region.bytes[memory]);
+            for base in region.bases() {
+                if let Some((buffer, memory)) = region.byte_window(base, &request) {
+                    bytes[buffer].copy_from_slice(&region.bytes[memory]);
+                }
             }
         }
         Ok(bytes)
@@ -379,11 +437,13 @@ impl Bus {
         let mut ranges = self
             .regions
             .iter()
-            .filter_map(|region| {
-                let base = u64::from(region.base);
-                let first = base.max(u64::from(start));
-                let limit = (base + region.bytes.len() as u64).min(u64::from(end) + 1);
-                (first < limit).then_some(first..limit)
+            .flat_map(|region| {
+                region.bases().filter_map(move |base| {
+                    let base = u64::from(base);
+                    let first = base.max(u64::from(start));
+                    let limit = (base + region.bytes.len() as u64).min(u64::from(end) + 1);
+                    (first < limit).then_some(first..limit)
+                })
             })
             .collect::<Vec<_>>();
         ranges.sort_unstable_by_key(|range| range.start);
@@ -420,15 +480,23 @@ impl Bus {
 
     pub(crate) fn write_memory_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), String> {
         let request = memory_byte_range(address, bytes.len())?;
-        for region in &mut self.regions {
-            if let Some((buffer, memory)) = region.byte_window(&request) {
-                let base = u64::from(region.base);
-                invalidate_reservations(
-                    &mut self.reservations,
-                    base + memory.start as u64..base + memory.end as u64,
-                );
-                region.bytes[memory].copy_from_slice(&bytes[buffer]);
+        let mut windows = Vec::new();
+        for (index, region) in self.regions.iter().enumerate() {
+            for base in region.bases() {
+                if let Some((buffer, memory)) = region.byte_window(base, &request) {
+                    windows.push((buffer, index, memory));
+                }
             }
+        }
+        windows.sort_unstable_by_key(|(buffer, _, _)| buffer.start);
+        for (buffer, index, memory) in windows {
+            let region = &mut self.regions[index];
+            region.invalidate_alias_reservations(
+                &mut self.reservations,
+                memory.start,
+                memory.len(),
+            );
+            region.bytes[memory].copy_from_slice(&bytes[buffer]);
         }
         Ok(())
     }
@@ -1190,8 +1258,10 @@ impl Bus {
     fn overlaps(&self, start: u64, end: u64) -> bool {
         self.peripheral_overlaps(start, end)
             || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
-                start < other + region.bytes.len() as u64 && other < end
+                region.bases().any(|base| {
+                    let other = u64::from(base);
+                    start < other + region.bytes.len() as u64 && other < end
+                })
             })
     }
 
@@ -2936,6 +3006,28 @@ mod memory_segment_cases {
             bus.read_memory_bytes(address, bytes.len()).unwrap(),
             expected
         );
+    }
+
+    fn unregister_fixture(size: u32) {
+        let mut bus = Bus::default();
+        bus.map_ram(0, size as usize).unwrap();
+        bus.map_ram_alias(0, size).unwrap();
+        bus.map_ram_alias(0, 2 * size).unwrap();
+        bus.write(0, 4, 0x12345678, &mut std::io::sink()).unwrap();
+        bus.unregister_ram(size).unwrap();
+        assert_eq!(bus.read::<4>(0).unwrap(), 0x12345678);
+        assert_eq!(bus.read::<4>(2 * size).unwrap(), 0x12345678);
+        assert_eq!(bus.read::<4>(size).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_unregister_only_requested_range_0x800() {
+        unregister_fixture(0x800);
+    }
+
+    #[test]
+    fn upstream_unregister_only_requested_range_0x4000() {
+        unregister_fixture(0x4000);
     }
 
     #[test]
