@@ -394,6 +394,12 @@ def triage(row):
     }:
         status, reason = 'PASS', '固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs'
     elif suite == 'PreLexerTests.cs' and name in {
+        'ShouldProcessEmptyFile',
+        'ShouldHandleTextOnTheFirstLine',
+        'ShouldHandleInitialIndent',
+    }:
+        status, reason = 'PASS', '固定上流と同じ入力で先頭行の出力または WrongIndent に対応する診断を照合。src/platform.rs'
+    elif suite == 'PreLexerTests.cs' and name in {
         'ShouldHandleCorrectLineComments',
         'ShouldHandleUncorrectLineComments',
         'ShouldHandleBeginningLineComment',

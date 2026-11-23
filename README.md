@@ -1292,3 +1292,21 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 159件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-comment-cases.1rP2Az0a` にあります。台帳は対象786件のうち等価合格152件、部分検証10件、未達624件です。字下げと複数段のアウトデントを扱うプリレクサケースは残っています。
+
+### backlog-network-6b71b3744382-1
+
+REPL の最初の有効行を字句処理で確認し、字下げされている場合に専用診断を返します。固定上流 `PreLexerTests.cs` の3件を同じバイナリで個別実行し、空入力、先頭行の通過、初期字下げでの拒否を照合しました。STM32H743 の `using` を最初の有効行で字下げした CLI 入力も、2行目を指す診断で拒否しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-prelexer-first-line.aEsZ3BA2
+target/release/penv check-platform "$e/initial-indent.repl" --platform-root ../renode
+```
+
+最後のコマンドは構文エラーで終了します。`cargo test` 162件、固定 STM32H7 REPL 7構成、既存の構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格155件、部分検証10件、未達621件です。段階的な字下げと EOF での境界ケースは、上流が文字列に挿入する区切りと現行パーサーが内部で扱う属性境界の対応を検証する処理が必要です。

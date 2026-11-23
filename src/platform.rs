@@ -84,10 +84,22 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
 #[derive(Default)]
 struct ReplComments {
     in_block: bool,
+    seen_text: bool,
     braces: i32,
 }
 
 impl ReplComments {
+    fn first_line(&mut self, raw: &str) -> Result<String, &'static str> {
+        let line = self.line(raw)?;
+        if !self.seen_text && !line.trim().is_empty() {
+            if line.starts_with(char::is_whitespace) {
+                return Err("First line with text cannot be indented.");
+            }
+            self.seen_text = true;
+        }
+        Ok(line)
+    }
+
     fn line(&mut self, raw: &str) -> Result<String, &'static str> {
         let mut result = String::new();
         let mut rest = raw;
@@ -657,7 +669,7 @@ fn parse_text(
     let mut lines = content.lines().enumerate().peekable();
     while let Some((index, raw)) = lines.next() {
         let line = comments
-            .line(raw)
+            .first_line(raw)
             .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
         let text = line.trim();
         let lineno = index + 1;
@@ -2429,6 +2441,27 @@ mod comment_cases {
     fn lines(source: &str) -> Result<Vec<String>, &'static str> {
         let mut comments = ReplComments::default();
         source.lines().map(|line| comments.line(line)).collect()
+    }
+
+    #[test]
+    fn upstream_prelexer_empty_file() {
+        let mut lexer = ReplComments::default();
+        assert_eq!(lexer.first_line("").unwrap(), "");
+    }
+
+    #[test]
+    fn upstream_prelexer_text_on_first_line() {
+        let mut lexer = ReplComments::default();
+        assert_eq!(lexer.first_line("onlyLine").unwrap(), "onlyLine");
+    }
+
+    #[test]
+    fn upstream_prelexer_rejects_initial_indent() {
+        let source = "\n    first line\n    second line\n        first indented\n        second indented\n    third line";
+        let mut lexer = ReplComments::default();
+        let outcome: Result<Vec<_>, _> =
+            source.lines().map(|line| lexer.first_line(line)).collect();
+        assert_eq!(outcome, Err("First line with text cannot be indented."));
     }
 
     #[test]
