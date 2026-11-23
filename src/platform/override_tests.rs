@@ -1721,3 +1721,31 @@ fn renode_script_validation_rejects_init() {
         "Invalid init section",
     );
 }
+
+#[test]
+fn renode_dependency_nested() {
+    let error = check_string("\nperi1: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n        other: peri2\n\nperi3: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: peri4\n\nperi4: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: peri1\n\nperi2: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: peri3\n", None).unwrap_err();
+    assert!(error.contains("CreationOrderCycle:"), "{error}");
+}
+
+#[test]
+fn renode_dependency_self_cycle() {
+    let error = check_string(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: peri",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("CreationOrderCycle:"), "{error}");
+}
+
+#[test]
+fn renode_dependency_imported() {
+    let error = check_reference_imports("\nusing \"A\"\nperi2: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: peri1\n\nperi3:\n    other: peri2", &[("A", "\nperi1: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: peri3\nperi3: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n")]).unwrap_err();
+    assert!(error.contains("CreationOrderCycle:"), "{error}");
+}
+
+#[test]
+fn renode_dependency_missing() {
+    let error = check_string("\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: nonExististing", None).unwrap_err();
+    assert!(error.contains("MissingReference:"), "{error}");
+}

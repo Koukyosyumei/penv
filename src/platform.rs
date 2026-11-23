@@ -1289,10 +1289,16 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             }
         }
     }
-    for entry in &declarations {
+    let mut prerequisites = vec![Vec::new(); declarations.len()];
+    for (index, entry) in declarations.iter().enumerate() {
         validate_entry_references(entry, &declared, &declarations)?;
         validate_mock_cpu_properties(entry, &declared, &declarations)?;
-        validate_dependency_constructor(entry)?;
+        validate_dependency_constructor(
+            entry,
+            &declared,
+            &declarations,
+            &mut prerequisites[index],
+        )?;
         if entry.alias.is_some() {
             match entry.registration.as_deref() {
                 None => {
@@ -1307,6 +1313,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             }
         }
     }
+    validate_creation_order(&declarations, prerequisites)?;
     // Check destinations before model outputs while preserving each block's
     // source list for duplicate detection.
     for check in irq_checks {
@@ -1356,7 +1363,43 @@ fn inline_entry(parent: &Entry, line: usize, statement: &str, model: &str) -> En
     }
 }
 
-fn validate_dependency_constructor(entry: &Entry) -> Result<(), String> {
+fn validate_creation_order(
+    entries: &[Entry],
+    prerequisites: Vec<Vec<usize>>,
+) -> Result<(), String> {
+    let mut pending: Vec<_> = prerequisites.iter().map(Vec::len).collect();
+    let mut dependents = vec![Vec::new(); entries.len()];
+    let mut ready = Vec::new();
+    for (index, dependencies) in prerequisites.into_iter().enumerate() {
+        if dependencies.is_empty() {
+            ready.push(index);
+        }
+        for dependency in dependencies {
+            dependents[dependency].push(index);
+        }
+    }
+    while let Some(index) = ready.pop() {
+        for &dependent in &dependents[index] {
+            pending[dependent] -= 1;
+            if pending[dependent] == 0 {
+                ready.push(dependent);
+            }
+        }
+    }
+    if let Some(index) = pending.iter().position(|&count| count != 0) {
+        return Err(
+            entries[index].error("CreationOrderCycle: unresolved constructor dependency cycle")
+        );
+    }
+    Ok(())
+}
+
+fn validate_dependency_constructor(
+    entry: &Entry,
+    declared: &HashMap<String, usize>,
+    entries: &[Entry],
+    dependencies: &mut Vec<usize>,
+) -> Result<(), String> {
     if entry.model != MOCK_DEPENDENCY {
         return Ok(());
     }
@@ -1366,9 +1409,28 @@ fn validate_dependency_constructor(entry: &Entry) -> Result<(), String> {
                 if let Some(model) = inline_model(statement) {
                     let nested = inline_entry(entry, *line, statement, model);
                     match nested.model.as_str() {
-                        MOCK_DEPENDENCY => validate_dependency_constructor(&nested)?,
+                        MOCK_DEPENDENCY => validate_dependency_constructor(
+                            &nested,
+                            declared,
+                            entries,
+                            dependencies,
+                        )?,
                         EMPTY_PERIPHERAL => validate_empty_peripheral_constructor(&nested)?,
                         _ => return Err(nested.error("TypeNotResolved: unknown inline dependency")),
+                    }
+                } else if let Some((_, value)) = statement.split_once(':') {
+                    let reference = value.trim();
+                    if !matches!(reference, "none" | "empty") {
+                        let index = declared
+                            .get(reference)
+                            .copied()
+                            .filter(|&index| {
+                                !entries[index].local || entries[index].source == entry.source
+                            })
+                            .ok_or_else(|| {
+                                entry.error(&format!("MissingReference: {reference}"))
+                            })?;
+                        dependencies.push(index);
                     }
                 }
             }
