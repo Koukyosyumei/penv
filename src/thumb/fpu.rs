@@ -90,6 +90,8 @@ impl Thumb {
             if address & 3 != 0 {
                 return Err(format!("unaligned FPU transfer at {address:#010x}"));
             }
+            // FP context is active before the data access can take an exception.
+            self.fp_active = true;
             for value in &mut self.fp[first..first + count] {
                 if load {
                     *value = bus.thumb_read::<4>(address)?;

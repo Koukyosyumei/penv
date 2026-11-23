@@ -80,11 +80,35 @@ struct Region {
     aliases: Vec<u32>,
 }
 
+const FAULTING_PERIPHERAL_SIZE: usize = 0x1000;
+
+struct FaultingPeripheral {
+    base: u32,
+    fault_offset: Option<usize>,
+    bytes: Box<[u8; FAULTING_PERIPHERAL_SIZE]>,
+}
+
+impl FaultingPeripheral {
+    fn offset(&self, address: u32) -> Option<usize> {
+        let offset = address.wrapping_sub(self.base) as usize;
+        (offset < FAULTING_PERIPHERAL_SIZE).then_some(offset)
+    }
+
+    fn check_byte(&self, offset: usize, transaction: u32) -> Result<(), BusError> {
+        if offset >= FAULTING_PERIPHERAL_SIZE
+            || self.fault_offset.is_none_or(|fault| fault == offset)
+        {
+            return Err(BusError::SlaveFault(transaction));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 pub struct Bus {
     pub semihosting: Option<crate::semihosting::Semihosting>,
     regions: Vec<Region>,
-    faulting_peripherals: Vec<u32>,
+    faulting_peripherals: Vec<FaultingPeripheral>,
     thumb_data_fault: Option<u32>,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
@@ -187,22 +211,27 @@ impl Bus {
         Ok(bus)
     }
 
-    pub fn map_bus_faulting_peripheral(&mut self, base: u32) -> Result<(), String> {
+    pub fn map_bus_faulting_peripheral(
+        &mut self,
+        base: u32,
+        fault_offset: Option<usize>,
+    ) -> Result<(), String> {
         let start = u64::from(base);
-        let end = start + 0x1000;
+        let end = start + FAULTING_PERIPHERAL_SIZE as u64;
         if end > 1 << 32 || self.overlaps(start, end) {
             return Err(format!(
                 "invalid or overlapping faulting peripheral at {base:#010x}"
             ));
         }
-        self.faulting_peripherals.push(base);
+        if fault_offset.is_some_and(|offset| offset >= FAULTING_PERIPHERAL_SIZE) {
+            return Err("FaultOffset is outside the faulting peripheral".into());
+        }
+        self.faulting_peripherals.push(FaultingPeripheral {
+            base,
+            fault_offset,
+            bytes: Box::new([0; FAULTING_PERIPHERAL_SIZE]),
+        });
         Ok(())
-    }
-
-    fn faulting_peripheral_contains(&self, address: u32) -> bool {
-        self.faulting_peripherals
-            .iter()
-            .any(|&base| address.wrapping_sub(base) < 0x1000)
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -530,9 +559,9 @@ impl Bus {
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        self.faulting_peripherals.iter().any(|&base| {
-            let base = u64::from(base);
-            start < base + 0x1000 && base < end
+        self.faulting_peripherals.iter().any(|device| {
+            let base = u64::from(device.base);
+            start < base + FAULTING_PERIPHERAL_SIZE as u64 && base < end
         }) || self.nrf_peripherals.iter().any(|device| {
             let other = u64::from(device.base);
             start < other + u64::from(device.size()) && other < end
@@ -781,6 +810,9 @@ impl Bus {
             handler.reset();
         }
         self.reservations.fill(None);
+        for device in &mut self.faulting_peripherals {
+            device.bytes.fill(0);
+        }
         for device in &mut self.nrf_peripherals {
             device.reset();
         }
@@ -1541,8 +1573,17 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
-        if self.faulting_peripheral_contains(address) {
-            return Err(BusError::SlaveFault(address));
+        if let Some((device, offset)) = self
+            .faulting_peripherals
+            .iter()
+            .find_map(|device| Some((device, device.offset(address)?)))
+        {
+            let mut value = [0; 4];
+            for (index, byte) in value[..N].iter_mut().enumerate() {
+                device.check_byte(offset + index, address)?;
+                *byte = device.bytes[offset + index];
+            }
+            return Ok(u32::from_le_bytes(value));
         }
         if N == 4
             && address & 3 == 0
@@ -1751,8 +1792,17 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
-        if self.faulting_peripheral_contains(address) {
-            return Err(BusError::SlaveFault(address));
+        if let Some(device) = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.offset(address).is_some())
+        {
+            let offset = device.offset(address).unwrap();
+            for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
+                device.check_byte(offset + index, address)?;
+                device.bytes[offset + index] = *byte;
+            }
+            return Ok(());
         }
         if self.trivial_uart == Some(address) && matches!(width, 1 | 2 | 4) {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);

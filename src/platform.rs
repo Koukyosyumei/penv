@@ -286,10 +286,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 semihosting_uarts.push(entry);
             }
             "Mocks.BusFaultingPeripheral" if cortex_m4 => {
-                keys(entry, &[])?;
+                let fault_offset = keys(entry, &["FaultOffset"])?
+                    .first()
+                    .map(|(_, value)| number(value).map(|offset| offset as usize))
+                    .transpose()
+                    .map_err(|e| entry.error(&e))?;
                 machine
                     .bus
-                    .map_bus_faulting_peripheral(entry.address()?)
+                    .map_bus_faulting_peripheral(entry.address()?, fault_offset)
                     .map_err(|e| entry.error(&e))?;
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {

@@ -1425,7 +1425,7 @@ mod wait_tests {
 mod bus_fault_tests {
     use super::*;
 
-    fn check_precise_fault(opcode: u32, enabled: bool, expected_handler: u32) {
+    fn check_precise_fault(instructions: &[u32], enabled: bool, expected_handler: u32, fp: bool) {
         // arm-cortex-m-bus-fault.robot: Prepare Faulting Instruction /
         // Execute Faulting Instruction / Fault Should Be Precise.
         const CODE: u32 = 0x200;
@@ -1437,19 +1437,24 @@ mod bus_fault_tests {
         const FORCED: u32 = 1 << 30;
         let mut bus = Bus::default();
         bus.map_ram(0, 0x1000).unwrap();
-        bus.map_bus_faulting_peripheral(ADDRESS).unwrap();
+        bus.map_bus_faulting_peripheral(ADDRESS, fp.then_some(0))
+            .unwrap();
         bus.map_nvic(0xe0, None, true).unwrap();
         let mut output = std::io::sink();
         bus.write(0x14, 4, 0x301, &mut output).unwrap();
         bus.write(0xc, 4, 0x341, &mut output).unwrap();
-        for (address, instruction) in [
-            (CODE, opcode),
-            (CODE + 2, 0x2122),
-            (CODE + 4, 0xe7fe),
-            (0x300, 0xe7fe),
-            (0x340, 0xe7fe),
-        ] {
-            bus.write(address, 2, instruction, &mut output).unwrap();
+        for (index, instruction) in instructions.iter().enumerate() {
+            bus.write(CODE + index as u32 * 2, 2, *instruction, &mut output)
+                .unwrap();
+        }
+        for address in [0x300, 0x340] {
+            bus.write(address, 2, 0xe7fe, &mut output).unwrap();
+        }
+        if fp {
+            bus.write(0xe000_ed88, 4, 0x00f0_0000, &mut output).unwrap();
+            // FaultOffset = 0 faults only on the first byte of the peripheral.
+            bus.write(ADDRESS + 4, 4, 0x1234_5678, &mut output).unwrap();
+            assert_eq!(bus.read::<4>(ADDRESS + 4).unwrap(), 0x1234_5678);
         }
         if enabled {
             bus.write(SHCSR, 4, 1 << 17, &mut output).unwrap();
@@ -1471,10 +1476,11 @@ mod bus_fault_tests {
         assert_eq!(pc, expected_handler);
         assert_eq!(registers[1], 0x11);
         assert_eq!(registers[2], 0xa5a5_a5a5);
-        assert_eq!(registers[13], 0xfe0);
-        assert_eq!(bus.read::<4>(0xfe4).unwrap(), 0x11);
-        assert_eq!(bus.read::<4>(0xfe8).unwrap(), 0xa5a5_a5a5);
-        assert_eq!(bus.read::<4>(0xff8).unwrap(), CODE);
+        let sp = if fp { 0xf98 } else { 0xfe0 };
+        assert_eq!(registers[13], sp);
+        assert_eq!(bus.read::<4>(sp + 4).unwrap(), 0x11);
+        assert_eq!(bus.read::<4>(sp + 8).unwrap(), 0xa5a5_a5a5);
+        assert_eq!(bus.read::<4>(sp + 24).unwrap(), CODE);
         assert_eq!(bus.read::<4>(CFSR).unwrap(), 0x8200);
         assert_eq!(bus.read::<4>(BFAR).unwrap(), ADDRESS);
         assert_eq!(
@@ -1489,16 +1495,35 @@ mod bus_fault_tests {
 
     #[test]
     fn upstream_precise_bus_fault_on_peripheral_read() {
-        check_precise_fault(0x6802, true, 0x300); // ldr r2, [r0]
+        check_precise_fault(&[0x6802, 0x2122, 0xe7fe], true, 0x300, false); // ldr r2, [r0]
     }
 
     #[test]
     fn upstream_precise_bus_fault_on_peripheral_write() {
-        check_precise_fault(0x6002, true, 0x300); // str r2, [r0]
+        check_precise_fault(&[0x6002, 0x2122, 0xe7fe], true, 0x300, false); // str r2, [r0]
     }
 
     #[test]
     fn upstream_disabled_bus_fault_escalates_to_hard_fault() {
-        check_precise_fault(0x6802, false, 0x340);
+        check_precise_fault(&[0x6802, 0x2122, 0xe7fe], false, 0x340, false);
+    }
+    #[test]
+    fn upstream_precise_bus_fault_on_vstr_s0() {
+        check_precise_fault(&[0xed80, 0x0a00, 0xe7fe], true, 0x300, true);
+    }
+
+    #[test]
+    fn upstream_precise_bus_fault_on_vstr_d0() {
+        check_precise_fault(&[0xed80, 0x0b00, 0xe7fe], true, 0x300, true);
+    }
+
+    #[test]
+    fn upstream_precise_bus_fault_on_vldr_s0() {
+        check_precise_fault(&[0xed90, 0x0a00, 0xe7fe], true, 0x300, true);
+    }
+
+    #[test]
+    fn upstream_precise_bus_fault_on_vldr_d0() {
+        check_precise_fault(&[0xed90, 0x0b00, 0xe7fe], true, 0x300, true);
     }
 }

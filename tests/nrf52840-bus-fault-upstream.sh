@@ -84,3 +84,72 @@ for operation in read write; do
     [ "$status" -eq 2 ]
     grep -Fxq PASS "$out/$operation.log"
 done
+
+# Robot 1360-1377: scalar VSTR/VLDR on the first byte of the mock.
+# The guest checks the same PC, registers, SP, stacked words and SCB state.
+sed '/^faultingPeripheral:/a\    FaultOffset: 0' "$out/bus-fault.repl" >"$out/fp.repl"
+for instruction in vstr-s0 vstr-d0 vldr-s0 vldr-d0; do
+    cat >"$out/$instruction.s" <<ASM
+.syntax unified
+.thumb
+.global reset
+.word 0x1000, reset, 0, 0, 0, handler
+.thumb_func
+reset:
+    ldr r3, =0xe000ed24
+    ldr r4, =0x20000
+    str r4, [r3]
+    ldr r3, =0xe000ed88
+    ldr r4, =0xf00000
+    str r4, [r3]
+    ldr r0, =0x100000
+    movs r1, #0x11
+    ldr r2, =0xa5a5a5a5
+    b fault
+    .ltorg
+    .org 0x200
+fault:
+    ${instruction%-*} ${instruction#*-}, [r0]
+    b .
+    .org 0x300
+.thumb_func
+handler:
+    cmp r1, #0x11
+    bne failed
+    ldr r3, =0xa5a5a5a5
+    cmp r2, r3
+    bne failed
+    mov r4, sp
+    movw r5, #0xf98
+    cmp r4, r5
+    bne failed
+    ldr r4, [sp, #4]
+    cmp r4, r1
+    bne failed
+    ldr r4, [sp, #8]
+    cmp r4, r2
+    bne failed
+    ldr r4, [sp, #24]
+    cmp.w r4, #0x200
+    bne failed
+    ldr r3, =0xe000ed28
+    ldr r4, [r3]
+    movw r5, #0x8200
+    cmp r4, r5
+    bne failed
+    ldr r4, [r3, #4]
+    cmp r4, #0
+    bne failed
+    ldr r4, [r3, #16]
+    cmp r4, r0
+    bne failed
+    bkpt 0
+failed:
+    b .
+ASM
+    clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/$instruction.s" -o "$out/$instruction.o"
+    ld.lld -N -Ttext=0 --entry=reset "$out/$instruction.o" -o "$out/$instruction.elf"
+    "$penv" run --platform "$out/fp.repl" --max-steps 100 "$out/$instruction.elf" \
+        >"$out/$instruction.log" 2>&1
+    printf '%s: all fault checks passed\n' "$instruction"
+done

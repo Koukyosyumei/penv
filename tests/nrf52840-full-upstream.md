@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 72 | 4 | 114 |
+| 監査した共有・混成 Robot | 190 | 76 | 4 | 110 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **89** | **4** | **128** |
+| 合計 | **221** | **93** | **4** | **124** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -144,7 +144,7 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 今回のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/bus-fault.WbA98rJg/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。Shell は固定 `NRF52840.robot` の Zephyr Shell ELF を使い、リセット前後で応答を確認した。
 
-同スイートの適用対象31ケース中、残る26ケースの阻害点は TSV の `verification` 欄に記録した。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、未マップアクセスの opt-in、モックのオフセット指定と FP フレームの検証、連続 fault に対する monitor step 境界が残る。
+同スイートの残課題は下記の FP 転送の回帰に続けて記録した。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、未マップアクセスの opt-in、モックのオフセット指定と FP フレームの検証、連続 fault に対する monitor step 境界が残る。
 
 ## Cortex-M4 semihosting の出力と終了
 
@@ -175,4 +175,12 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 ホスト側で明示的に作成した作業ディレクトリを使う。ゲストが指定できるのは、直下の通常ファイルと semihosting の一時ディレクトリ直下の通常ファイル。生成する一時ディレクトリ名の接尾辞はホスト側で割り当てる。上流の固定ケースは接尾辞を判定しない。
 
-今回のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting-files.H1B886nQ/` の `cargo-test.log`、`elf.log`、`shell.log` と対応する `cargo-test.final.status`、`elf.final.status`、`shell.status` に保存した。semihosting の対象25構成はすべて合格した。台帳全体には別スイートの未達128件と部分移植4件が残る。
+今回のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting-files.H1B886nQ/` の `cargo-test.log`、`elf.log`、`shell.log` と対応する `cargo-test.final.status`、`elf.final.status`、`shell.status` に保存した。semihosting の対象25構成はすべて合格した。台帳全体の残数は固定構成の集計を参照。
+
+### FP 転送の同期データ BusFault
+
+`arm-cortex-m-bus-fault.robot:1360–1377` の Cortex-M4 に適用できる VSTR/VLDR の S0・D0 の4構成を移植した。固定の命令、フォールトアドレス、`FaultOffset = 0`、R1/R2 の初期値を保持した。単体テストと生成 ELF で、BusFault ハンドラ、SP = `0xf98`、保存された R1/R2 と PC、CFSR・BFAR・HFSR を照合した。上流の monitor によるオフセット指定は、検証 ELF の REPL で同じ値を設定した。
+
+上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
+
+BusFault の適用対象31ケースのうち9件が合格し、22件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、未マップアクセスの opt-in、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
