@@ -1142,3 +1142,22 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 診断構成では、同じ release バイナリで丸めの 10 件と既存の Zfa 回帰 28 件が完了コード 0 に到達しました。Rust テストも 88 件すべて通過しました。固定 Robot 構成では V の未対応で対象 10 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。Zfa の残りは `fcvtmod.w.d`、`fmvh.x.d`、`fmvp.d.x` と固定構成での検証です。構成別のケースログ、`results.jsonl`、終了状態は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zfa の倍精度転送と剰余変換
+
+V を外した診断構成で、代表の `ZfaD-fmvh.x.d-00.elf` は最初の `fmvh.x.d` で停止しました。倍精度の上位 32 ビットを読み出す `fmvh.x.d`、整数レジスター対からビット列を組み立てる `fmvp.d.x`、ゼロ方向に丸めた整数の下位 32 ビットを返す `fcvtmod.w.d` を実装しました。剰余変換の例外フラグは既存の `fcvt.w.d` のゼロ方向丸めと同じです。ISA 名の `_zfa` で一式を有効にし、既存の診断用 REPL も引き続き利用できます。[RISC-V Zfa 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zfa.html)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-08a4c70-0iPE6V"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zfa.repl" --artifacts "$repro/zfa" "$elfs"/Zfa*/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zfa*/*.elf
+```
+
+同じ release バイナリで、固定最大 ISA の V を Zfa に置き換えた診断構成は固定 Zfa ACT ELF 41 件すべてで完了コード 0 に到達しました。`ZfaZvfh` の ELF は半精度を Zfh で有効にしています。Rust テストは 88 件すべて通過しました。固定 Robot 構成には Zfa の指定がなく、V の未対応で 41 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。ケースログ、`results.jsonl` と終了状態は上記の証拠ディレクトリに保存しました。

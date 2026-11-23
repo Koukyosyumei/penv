@@ -105,10 +105,10 @@ impl Hart {
                 0x02 => format.multiply(decode_lhs(), decode_rhs(), rounding()?),
                 0x03 => format.divide(decode_lhs(), decode_rhs(), rounding()?),
                 0x04 => format.sign_inject(lhs, rhs, funct3).ok_or_else(illegal)?,
-                0x05 if funct3 <= 1 || (self.zfa_min_max && funct3 <= 3) => {
+                0x05 if funct3 <= 1 || ((self.zfa || self.zfa_min_max) && funct3 <= 3) => {
                     format.min_max(lhs, rhs, funct3 & 1 != 0, funct3 & 2 != 0)
                 }
-                0x08 if self.zfa_round && matches!(rs2, 4 | 5) => {
+                0x08 if (self.zfa || self.zfa_round) && matches!(rs2, 4 | 5) => {
                     format.round_to_integral(lhs, rounding()?, rs2 == 5)
                 }
                 0x08 if rs2 as u32 != (insn >> 25) & 3 => {
@@ -116,9 +116,19 @@ impl Hart {
                     format.convert(source.decode(lhs), rounding()?)
                 }
                 0x0b if rs2 == 0 => format.sqrt(decode_lhs(), rounding()?),
-                0x14 if funct3 <= 2 || (self.zfa_quiet_compare && matches!(funct3, 4 | 5)) => {
+                0x14 if funct3 <= 2
+                    || ((self.zfa || self.zfa_quiet_compare) && matches!(funct3, 4 | 5)) =>
+                {
                     integer_result = true;
                     format.compare(lhs, rhs, funct3 & 3, funct3 & 4 != 0)
+                }
+                0x16 if self.zfa && matches!(format, Format::Double) && funct3 == 0 => ResultBits {
+                    bits: u64::from(self.registers[rs1]) | (u64::from(self.registers[rs2]) << 32),
+                    flags: 0,
+                },
+                0x18 if self.zfa && matches!(format, Format::Double) && rs2 == 8 && funct3 == 1 => {
+                    integer_result = true;
+                    decode_lhs().to_modular_word()
                 }
                 0x18 => {
                     integer_result = true;
@@ -129,6 +139,13 @@ impl Hart {
                     Integer::decode(rs2).ok_or_else(illegal)?,
                     rounding()?,
                 ),
+                0x1c if self.zfa && matches!(format, Format::Double) && rs2 == 1 && funct3 == 0 => {
+                    integer_result = true;
+                    ResultBits {
+                        bits: lhs >> 32,
+                        flags: 0,
+                    }
+                }
                 0x1c if rs2 == 0 => {
                     integer_result = true;
                     let bits = match funct3 {
@@ -139,7 +156,7 @@ impl Hart {
                     };
                     ResultBits { bits, flags: 0 }
                 }
-                0x1e if self.zfa_fli && rs2 == 1 && funct3 == 0 => ResultBits {
+                0x1e if (self.zfa || self.zfa_fli) && rs2 == 1 && funct3 == 0 => ResultBits {
                     bits: format.load_immediate(rs1),
                     flags: 0,
                 },

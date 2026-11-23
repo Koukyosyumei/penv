@@ -49,6 +49,7 @@ pub struct Hart {
     thumb: Option<Thumb>,
     zfh: bool,
     zfbfmin: bool,
+    zfa: bool,
     zfa_fli: bool,
     zfa_min_max: bool,
     zfa_quiet_compare: bool,
@@ -188,6 +189,7 @@ impl Machine {
                 thumb: None,
                 zfh: false,
                 zfbfmin: false,
+                zfa: false,
                 zfa_fli: false,
                 zfa_min_max: false,
                 zfa_quiet_compare: false,
@@ -567,6 +569,10 @@ impl Hart {
         self.csr.d_extension = double;
         self.zfh = half;
         self.floating = Some(Box::new([0; 32]));
+    }
+
+    pub fn set_zfa(&mut self, enabled: bool) {
+        self.zfa = enabled;
     }
 
     pub fn set_zfa_diagnostics(

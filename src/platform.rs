@@ -910,6 +910,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             _ => None,
         };
         let mut floating = (false, false, false, false);
+        let mut zfa = false;
         let mut zfa_fli = false;
         let mut zfa_min_max = false;
         let mut zfa_quiet_compare = false;
@@ -955,6 +956,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 ("cpuType", value) => {
                     let architecture = value.trim_matches('"').to_ascii_lowercase();
                     let mut base = architecture.as_str();
+                    zfa = false;
                     zicond = false;
                     zacas = false;
                     zmmul = false;
@@ -973,6 +975,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "sscofpmf" if !sscofpmf => sscofpmf = true,
                             "smepmp" if !smepmp => smepmp = true,
                             "zfbfmin" if !zfbfmin => zfbfmin = true,
+                            "zfa" if !zfa => zfa = true,
                             "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
@@ -1094,6 +1097,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             {
                 let (multiply, atomic, compressed, embedded) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
+                if zfa && !floating.0 {
+                    return Err(entry.error("Zfa requires the RV32 F extension"));
+                }
                 if zfa_fli && !floating.0 {
                     return Err(entry.error("zfaFli requires the RV32 F extension"));
                 }
@@ -1131,7 +1137,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     (smepmp, sscofpmf),
                     bitmanip,
                     (
-                        floating,
+                        (floating, zfa),
                         (zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round),
                     ),
                 )
@@ -1166,7 +1172,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 (zacas, zabha),
                 (smepmp, sscofpmf),
                 bitmanip,
-                (floating, (zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round)),
+                ((floating, zfa), (zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round)),
             ),
             pmp,
             (user, supervisor),
@@ -1197,6 +1203,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         if floating.0 {
             hart.enable_floating(floating.1, floating.2);
             hart.set_zfbfmin(floating.3);
+            hart.set_zfa(zfa);
             hart.set_zfa_diagnostics(zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round);
         }
         match entry.model.as_str() {
@@ -2225,6 +2232,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zacas"
                     | "zabha"
                     | "zmmul"
+                    | "zfa"
                     | "zfh"
                     | "zfbfmin"
                     | "smepmp"
@@ -2255,7 +2263,7 @@ type RiscvConfig<'a> = (
         (bool, bool),
         (bool, bool),
         BitManip,
-        ((bool, bool, bool, bool), (bool, bool, bool, bool)),
+        (((bool, bool, bool, bool), bool), (bool, bool, bool, bool)),
     ),
     usize,
     (bool, bool),

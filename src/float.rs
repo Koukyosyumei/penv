@@ -518,6 +518,32 @@ impl Value {
         matches!(self.number, Number::Nan { .. })
     }
 
+    pub fn to_modular_word(self) -> ResultBits {
+        let flags = self.to_integer(Integer::Word, Rounding::TowardZero).flags;
+        let Number::Finite {
+            significand,
+            exponent,
+        } = self.number
+        else {
+            return ResultBits::flagged(0, flags);
+        };
+        let magnitude = if exponent < 0 {
+            significand
+                .checked_shr(exponent.unsigned_abs())
+                .unwrap_or(0) as u32
+        } else {
+            (significand as u32)
+                .checked_shl(exponent as u32)
+                .unwrap_or(0)
+        };
+        let word = if self.negative {
+            magnitude.wrapping_neg()
+        } else {
+            magnitude
+        };
+        ResultBits::flagged(u64::from(word), flags)
+    }
+
     pub fn to_integer(self, kind: Integer, rounding: Rounding) -> ResultBits {
         let (negative_limit, positive_limit) = kind.limits();
         let (magnitude, fraction) = match self.number {
