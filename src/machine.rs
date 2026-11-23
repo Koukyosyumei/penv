@@ -555,6 +555,9 @@ impl Hart {
 
     pub fn set_bitmanip(&mut self, extensions: BitManip) {
         self.bitmanip = extensions;
+        self.csr.andes = extensions
+            .xandesperf
+            .then(crate::andes_csr::AndesCsrs::default);
     }
 
     pub fn set_sscofpmf(&mut self, enabled: bool) {
@@ -1306,6 +1309,12 @@ impl Hart {
                     .csr
                     .access(insn, a)
                     .map_err(|error| Fault::InvalidCsr(insn, error))?;
+                if insn >> 20 == crate::andes_csr::MMISC_CTL
+                    && (funct3 & 3 == 1 || (insn >> 15) & 31 != 0)
+                    && let Some(andes) = self.csr.andes.as_ref()
+                {
+                    self.unaligned_accesses = andes.unaligned_accesses();
+                }
                 if matches!(insn >> 20, 0x180 | 0x3a0..=0x3ef | 0x747) {
                     self.translations.clear();
                 }

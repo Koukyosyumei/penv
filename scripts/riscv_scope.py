@@ -49,9 +49,9 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
     }:
         return "target", "ported", "fixed CPU.RiscV32 construction rejected with expected diagnostic"
     if filename == "riscv-isa-string.robot" and case == "Should Parse All Valid ISA Strings":
-        if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*", parameter.lower()):
+        if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*(?:_xandes)?", parameter.lower()):
             return "target", "ported", "fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware"
-        return "target", "pending", "construction requires V or an Andes extension"
+        return "target", "pending", "construction requires V"
     if filename in {"riscv-isa-string.robot", "riscv-extensions.robot"} and parameter.lower().startswith("rv32"):
         return "target", status, "CPU.RiscV32 construction keyword; " + (basis or "fixed ISA argument")
     if filename == "pmp.robot":

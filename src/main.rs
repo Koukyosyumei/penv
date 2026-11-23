@@ -1,3 +1,4 @@
+mod andes_csr;
 mod bitmanip;
 mod bus;
 mod clint;

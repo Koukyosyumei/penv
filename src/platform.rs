@@ -961,7 +961,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
                             "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
-                            "xandesperf" if !bitmanip.xandesperf => bitmanip.xandesperf = true,
+                            "xandes" | "xandesperf" if !bitmanip.xandesperf => {
+                                bitmanip.xandesperf = true
+                            }
                             "zcb" if !bitmanip.zcb => bitmanip.zcb = true,
                             "zbkx" if !bitmanip.zbkx => bitmanip.zbkx = true,
                             "zbkb" if !bitmanip.zbkb => bitmanip.zbkb = true,
@@ -2149,6 +2151,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zbkb"
                     | "zbkx"
                     | "zcb"
+                    | "xandes"
                     | "xandesperf"
                     | "zacas"
                     | "zfh"

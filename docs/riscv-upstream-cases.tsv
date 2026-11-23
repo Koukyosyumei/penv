@@ -2510,10 +2510,10 @@ Renode	tests/unit-tests/riscv-interrupt-mode.robot	352	Should Correct STVEC Writ
 Renode	tests/unit-tests/riscv-isa-string.robot	25	Should Parse All Valid ISA Strings	RV32G	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	26	Should Parse All Valid ISA Strings	rv32gc	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	28	Should Parse All Valid ISA Strings	RV32GC	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
-Renode	tests/unit-tests/riscv-isa-string.robot	29	Should Parse All Valid ISA Strings	rv32gc_xandes	target	pending	construction requires V or an Andes extension
-Renode	tests/unit-tests/riscv-isa-string.robot	30	Should Parse All Valid ISA Strings	RV32GC_Xandes	target	pending	construction requires V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	29	Should Parse All Valid ISA Strings	rv32gc_xandes	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
+Renode	tests/unit-tests/riscv-isa-string.robot	30	Should Parse All Valid ISA Strings	RV32GC_Xandes	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	31	Should Parse All Valid ISA Strings	RV32GC_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
-Renode	tests/unit-tests/riscv-isa-string.robot	32	Should Parse All Valid ISA Strings	RV32G_V	target	pending	construction requires V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	32	Should Parse All Valid ISA Strings	RV32G_V	target	pending	construction requires V
 Renode	tests/unit-tests/riscv-isa-string.robot	33	Should Parse All Valid ISA Strings	rv32ia_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	34	Should Parse All Valid ISA Strings	RV32IM	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	35	Should Parse All Valid ISA Strings	RV32IMAC	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
@@ -2539,7 +2539,7 @@ Renode	tests/unit-tests/riscv-isa-string.robot	54	Should Parse All Valid ISA Str
 Renode	tests/unit-tests/riscv-isa-string.robot	55	Should Parse All Valid ISA Strings	rv32imac_zicsr_zicond	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	56	Should Parse All Valid ISA Strings	RV32IM_Zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	57	Should Parse All Valid ISA Strings	rv32im_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
-Renode	tests/unit-tests/riscv-isa-string.robot	58	Should Parse All Valid ISA Strings	RV32IZifencei_Xandes	target	pending	construction requires V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	58	Should Parse All Valid ISA Strings	RV32IZifencei_Xandes	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	59	Should Parse All Valid ISA Strings	rv32ea_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	60	Should Parse All Valid ISA Strings	RV32EM	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	61	Should Parse All Valid ISA Strings	RV32EMAC	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
@@ -2554,7 +2554,7 @@ Renode	tests/unit-tests/riscv-isa-string.robot	69	Should Parse All Valid ISA Str
 Renode	tests/unit-tests/riscv-isa-string.robot	70	Should Parse All Valid ISA Strings	RV32EMC_Zicsr_Zifencei_Zbs	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	71	Should Parse All Valid ISA Strings	RV32EM_Zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	72	Should Parse All Valid ISA Strings	rv32em_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
-Renode	tests/unit-tests/riscv-isa-string.robot	73	Should Parse All Valid ISA Strings	RV32EZifencei_Xandes	target	pending	construction requires V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	73	Should Parse All Valid ISA Strings	RV32EZifencei_Xandes	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	75	Should Handle Both 32 And 64 Bit Versions		outside	outside	requires mixed CPU.RiscV32 and CPU.RiscV64 construction
 Renode	tests/unit-tests/riscv-isa-string.robot	81	Should Throw Construction Exception	RV32IE | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-isa-string.robot	82	Should Throw Construction Exception	RV32EI | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic

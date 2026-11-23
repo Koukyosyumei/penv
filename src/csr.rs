@@ -1,4 +1,5 @@
 use crate::{
+    andes_csr::AndesCsrs,
     clint::{SOFTWARE, TIMER},
     pmp::Pmp,
     vector_bootstrap::VectorBootstrap,
@@ -133,6 +134,7 @@ pub struct Csr {
     pub c_extension: bool,
     pub embedded_base: bool,
     pub sscofpmf: bool,
+    pub andes: Option<AndesCsrs>,
     status: u32,
     pub f_extension: bool,
     pub d_extension: bool,
@@ -172,6 +174,7 @@ impl Default for Csr {
             c_extension: false,
             embedded_base: false,
             sscofpmf: false,
+            andes: None,
             status: MPP,
             f_extension: false,
             d_extension: false,
@@ -396,6 +399,15 @@ impl Csr {
         {
             return self.write(address, operand).then_some(0).ok_or_else(error);
         }
+        if operation & 3 == 1
+            && (instruction >> 7) & 31 == 0
+            && self
+                .andes
+                .as_mut()
+                .is_some_and(|andes| andes.write(address, operand))
+        {
+            return Ok(0);
+        }
         let previous = self.read(address).ok_or_else(error)?;
         // A hardware SEIP level is visible to CSR reads but must not become
         // latched as a software-injected interrupt by CSRRS/CSRRC.
@@ -494,7 +506,13 @@ impl Csr {
             0xdc0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_pending,
             0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info,
             0xfc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_pending,
-            _ => return self.pmp.as_ref()?.read(address),
+            _ => {
+                return self
+                    .andes
+                    .as_ref()
+                    .and_then(|andes| andes.read(address))
+                    .or_else(|| self.pmp.as_ref()?.read(address));
+            }
         })
     }
 
@@ -637,9 +655,13 @@ impl Csr {
             0x301 | 0x310 | 0x344 => {} // Fixed WARL fields.
             _ => {
                 return self
-                    .pmp
+                    .andes
                     .as_mut()
-                    .is_some_and(|pmp| pmp.write(address, value));
+                    .is_some_and(|andes| andes.write(address, value))
+                    || self
+                        .pmp
+                        .as_mut()
+                        .is_some_and(|pmp| pmp.write(address, value));
             }
         }
         true

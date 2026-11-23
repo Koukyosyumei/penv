@@ -825,3 +825,26 @@ python3 scripts/validate-rv32-andes-branch-field.py target/release/penv ../renod
 上流等価合格は累計 145 件です。専用 CSR、`Xandes` 別名と Andes の浮動小数点・ベクトル系は残っています。固定 GP ケースは物理 RAM 内を対象とし、保護・ページ変換を伴う構成の上流等価性は別途確認が必要です。
 
 再現用 REPL、RESC、ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-5ca0da3-38QdsS/` に保存しました。
+
+### RV32 Xandes 別名とスカラー専用 CSR
+
+固定 Renode と同様に `Xandes` と `XandesPerf` を同じスカラー拡張として扱い、専用 CSR を両表記で公開します。固定 `riscv-isa-string.robot` の 4 表記は、変更前に CPU 作成で拒否されていました。変更後は RAM を持たない元の構成で作成できます。
+
+`mmisc_ctl` のビット 6 は非整列のロード・ストアを制御します。StackSafe は制御・境界の読み書きと警告を提供します。スタック保護の実行や PMA の変更は固定上流もスタブです。Andes の浮動小数点・ベクトル系が設定する構成ビットは今回のスカラー構成に含まれません。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/valid-rerun" --valid
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/invalid-rerun"
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 -nostdlib -fuse-ld=lld \
+  -Wl,-T,scripts/firmware/rv32-virt.ld scripts/firmware/rv32-andes-csr.S -o "$evidence/andes-csr.elf"
+for isa in xandes xandesperf; do
+  target/release/penv run --platform "$evidence/$isa.repl" \
+    --tohost 0x80001000 --max-steps 150 "$evidence/andes-csr.elf"
+done
+```
+
+固定有効構成 49 件、無効構成 5 件、既存 Andes 24 ケース、Rust テスト 86 件、公開特権 ELF 22 件、virt の UART・CLINT・PLIC が通過しました。両別名の実 ELF で CSR の読み戻し、スタブの警告、非整列アクセスの許可・拒否と既存 LEA を確認しました。上流等価合格は累計 149 件です。Andes の浮動小数点・ベクトル拡張と最大 ISA の V が残っています。
+
+再現用 REPL、ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-9412563-bhHRXt/` に保存しました。

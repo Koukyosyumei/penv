@@ -33,12 +33,12 @@ def main():
         valid = isa.split("\nShould Parse All Valid ISA Strings\n", 1)[1].split(
             "\nShould Handle Both 32 And 64 Bit Versions\n", 1
         )[0]
-        # Leave inputs requiring V or Andes extensions in their existing backlog.
+        # Leave inputs requiring V in their existing backlog.
         values = dict.fromkeys(re.findall(r"(?m)^    (\w+)\s*$", valid))
         inputs = [
             ("riscv-isa-string.robot", "Should Parse All Valid ISA Strings", value, None)
             for value in values
-            if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*", value.lower())
+            if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*(?:_xandes)?", value.lower())
         ]
         supported = re.findall(r"(?m)^    (RV32I_(?:Smepmp|Sscofpmf))\s*$", extensions)
         if not inputs or set(supported) != {"RV32I_Smepmp", "RV32I_Sscofpmf"}:
