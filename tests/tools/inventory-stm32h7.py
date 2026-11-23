@@ -323,6 +323,24 @@ def triage(row):
             status, reason = 'OPEN', '汎用 ComparingTimer の Compare setter 拒否条件は STM32 TIM の CCR で観測できない。汎用 API の等価移植が残る'
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
+    elif suite == 'UsingTests.cs':
+        if name in {
+            'ShouldFailOnDuplicateUsingEntry', 'ShouldFailOnRecurringUsings',
+            'ShouldFailOnDirectlyRecurringUsings', 'ShouldFailOnNonExistingUsingFile',
+        }:
+            status, reason = 'PASS', '固定上流と同じインクルードのグラフ・ファイル別定義で、対応する診断を照合。src/platform.rs'
+        elif name in {
+            'ShouldHandleAbsolutePathUnix', 'ShouldHandleRelativePathInSameDirectoryUnix',
+            'ShouldHandleRelativePathInParentDirectoryUnix', 'BackslashShouldNotBePathSeparatorOnUnix',
+        }:
+            status, reason = 'PASS', '固定上流と同じ Unix パス引数、呼出元パス、解決結果を照合。src/platform.rs'
+        elif name in {
+            'ShouldHandleAbsolutePathWindows', 'ShouldHandleRelativePathInSameDirectoryWindows',
+            'ShouldHandleRelativePathInParentDirectoryWindows',
+        }:
+            status, reason = 'OUT', '上流 RuntimeInfo.IsWindows() ガードが非 Windows で Assert.Ignore。Windows ホストとドライブパスを要求'
+        else:
+            status, reason = 'OPEN', 'MockCPU の参照・local スコープまたはグラフ合成の属性順序を検証。等価移植が残る'
     elif suite == 'MultiCPUTests.cs':
         status, reason = 'OPEN', '汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持'
     elif suite == 'MCAN.robot' and name in {

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     rc::Rc,
 };
 
@@ -151,9 +151,15 @@ fn parse(
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    if visiting.len() >= 64 || !visiting.insert(canonical.clone()) {
+    if visiting.len() >= 64 {
         return Err(format!(
-            "{}: recursive or excessively deep platform include",
+            "{}: excessively deep platform include",
+            path.display()
+        ));
+    }
+    if !visiting.insert(canonical.clone()) {
+        return Err(format!(
+            "{}: recursive or excessively deep platform include: There is a cycle in using file dependency.",
             path.display()
         ));
     }
@@ -170,6 +176,39 @@ fn parse(
     result
 }
 
+fn resolve_using(argument: &str, include_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
+    let path = Path::new(argument);
+    let explicit_relative = matches!(
+        path.components().next(),
+        Some(Component::CurDir | Component::ParentDir)
+    );
+    if !path.is_absolute() && !explicit_relative {
+        let local = include_dir.join(path);
+        return Ok(if local.is_file() {
+            local
+        } else {
+            root.join(path)
+        });
+    }
+
+    let joined = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        include_dir.join(path)
+    };
+    let mut resolved = PathBuf::new();
+    for component in std::path::absolute(joined)?.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            _ => resolved.push(component),
+        }
+    }
+    Ok(resolved)
+}
+
 fn parse_text(
     content: &str,
     path: &Path,
@@ -181,6 +220,7 @@ fn parse_text(
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
+    let mut seen_usings = HashSet::new();
     let mut lines = content.lines().enumerate();
     while let Some((index, raw)) = lines.next() {
         let line = without_comment(raw);
@@ -239,12 +279,11 @@ fn parse_text(
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            let local = include_dir.join(filename);
-            let include_path = if local.is_file() {
-                local
-            } else {
-                root.join(filename)
-            };
+            if !seen_usings.insert(filename) {
+                return Err(error("Duplicate using entry."));
+            }
+            let include_path = resolve_using(filename, include_dir, root)
+                .map_err(|detail| error(&detail.to_string()))?;
             match parse(&include_path, root, visiting, entries) {
                 Err(_) if matches!(include_path.try_exists(), Ok(false)) => {
                     return Err(error(&format!("Using '{filename}' does not exist")));
@@ -1434,5 +1473,128 @@ system_flash_ro: Memory.MappedMemory @ sysbus 0x1ff00000
         );
         assert!(memory_init("WriteWord 0 0x10000", 0).is_err());
         assert!(memory_init("WriteDoubleWord 0 `py \"print 1\"`", 0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod using_cases {
+    use super::*;
+
+    fn parse_using_fixture(name: &str, source: &str, files: &[(&str, &str)]) -> String {
+        let directory =
+            std::env::temp_dir().join(format!("penv-using-{}-{name}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        for (name, content) in files {
+            fs::write(directory.join(name), content).unwrap();
+        }
+        let result = check_text(source, Some(&directory));
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap_err()
+    }
+
+    #[test]
+    fn should_fail_on_duplicate_using_entry() {
+        let source = r#"
+using "A"
+using "B"
+using "A"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+"#;
+        let a = r#"
+cpu:
+    Placeholder: "set by A first"
+cpu:
+    Placeholder: "set by A second"
+"#;
+        let b = r#"
+cpu:
+    Placeholder: "set by B first"
+cpu:
+    Placeholder: "set by B second"
+"#;
+        assert!(
+            parse_using_fixture("duplicate", source, &[("A", a), ("B", b)])
+                .contains("Duplicate using entry.")
+        );
+    }
+
+    #[test]
+    fn should_fail_on_recurring_usings() {
+        let source = "
+using \"B\"\np3: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+        let a = "
+using \"B\"\np2: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+        let b = "
+using \"A\"\np: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+        assert!(
+            parse_using_fixture("recursive", source, &[("A", a), ("B", b)])
+                .contains("There is a cycle in using file dependency")
+        );
+    }
+
+    #[test]
+    fn should_fail_on_directly_recurring_usings() {
+        let source = "
+using \"A\"\np2: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+        let a = "
+using \"A\"\np: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+        assert!(
+            parse_using_fixture("self", source, &[("A", a)])
+                .contains("There is a cycle in using file dependency")
+        );
+    }
+
+    #[test]
+    fn should_fail_on_non_existing_using_file() {
+        assert!(
+            parse_using_fixture("missing", "\nusing \"A\"", &[])
+                .contains("Using 'A' does not exist")
+        );
+    }
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+
+        fn resolve(argument: &str, including: &str) -> PathBuf {
+            resolve_using(
+                argument,
+                Path::new(including).parent().unwrap(),
+                Path::new("."),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn should_handle_absolute_path_unix() {
+            assert_eq!(
+                resolve("/tmp/platform.repl", "/tmp/includer.repl"),
+                Path::new("/tmp/platform.repl")
+            );
+        }
+
+        #[test]
+        fn should_handle_relative_path_in_same_directory_unix() {
+            assert_eq!(
+                resolve("./platform.repl", "/tmp/includer.repl"),
+                Path::new("/tmp/platform.repl")
+            );
+        }
+
+        #[test]
+        fn should_handle_relative_path_in_parent_directory_unix() {
+            assert_eq!(
+                resolve("../abc/platform.repl", "/tmp/includer.repl"),
+                Path::new("/abc/platform.repl")
+            );
+        }
+
+        #[test]
+        fn backslash_should_not_be_path_separator_on_unix() {
+            assert_eq!(
+                resolve(r"./plat\form.repl", "/tmp/includer.repl"),
+                Path::new(r"/tmp/plat\form.repl")
+            );
+        }
     }
 }

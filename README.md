@@ -936,3 +936,22 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 インラインから有効な STM32H743 REPL を `using` する経路、固定上流 REPL のロード 7 構成、公開 Nucleo Zephyr ELF の Blinky と Button も通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-errors.6QAE3tnn` に保存しました。台帳は対象 789 件のうち等価合格 62 件、部分検証 10 件、未達 717 件です。
+
+### backlog-network-503a5ccb5864-1
+
+共有 `UsingTests.cs` の 8 件を移植しました。同じ REPL 内の重複 `using`、直接・間接循環、存在しないファイルを、上流と同じインクルード構成と診断条件で確認しました。Unix では絶対パス、同一・親ディレクトリへの相対パス、バックスラッシュを含むファイル名を、上流と同じ入力と解決結果で照合しました。
+
+Windows パス 3 件は固定上流が非 Windows ホストで `Assert.Ignore` とするため、台帳を対象外に訂正しました。参照と `local` スコープ、合成グラフの属性上書き順を扱う残り 9 件は引き続き対象です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test platform::using_cases
+cargo build --release
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+固定 REPL の 7 構成、インライン REPL の 3 ケース、公開 Nucleo Zephyr ELF の Blinky と Button は回帰を通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-using.iKgL0z6U` に保存しました。台帳は対象 786 件のうち等価合格 70 件、部分検証 10 件、未達 706 件です。
