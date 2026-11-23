@@ -486,7 +486,7 @@ impl Bus {
         name: &str,
         variable: &str,
     ) -> Result<(), String> {
-        if !self.empty_peripherals.contains_key(parent) {
+        if parent != "sysbus" && !self.empty_peripherals.contains_key(parent) {
             return Err(format!(
                 "RegistrationException: unregistered parent {parent:?}"
             ));

@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 510 | 312 | 0 | 198 | 240 |
+| Renode | 510 | 314 | 0 | 196 | 240 |
 | Infrastructure | 217 | 50 | 0 | 167 | 7 |
-| **合計** | **727** | **362** | **0** | **365** | **247** |
+| **合計** | **727** | **364** | **0** | **363** | **247** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 365 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 363 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -1423,3 +1423,14 @@ Peripheral Export は同じ登録情報を使います。他モデルへの一�
 
 範囲検証手順で `work=target/stm32f407-repl-enum-fixture` を使います。
 `cargo-test.log` の `renode_enum_fixture_` 7 行がケース別結果です。
+
+### REPL の型宣言に先行する CPU 登録点
+
+固定上流の 2 件を一括で検証しました。型宣言が後にある `MockCPU` を
+`platform check` の SystemBus で登録名から検索できることと、不適合な範囲登録点が
+`NoCtorForRegistrationPoint` になることを元の入力で確認しました。
+実行中の CPU の追加や任意の登録点は残課題です。
+
+範囲検証手順で `work=target/stm32f407-repl-previous-registration` を使い、
+最後に `run sysbus tests/cortex-m4-sysbus.sh "$work/sysbus"` を追加します。
+`cargo-test.log` の `renode_previous_registration_` 2 行がケース別結果です。

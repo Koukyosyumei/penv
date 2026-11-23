@@ -1907,3 +1907,17 @@ fn renode_enum_fixture_arbitrary_integer() {
         Some([1, 2])
     );
 }
+
+#[test]
+fn renode_previous_registration_accepts_sysbus_point() {
+    let source = "\nmock: @ sysbus\nmock: Antmicro.Renode.UnitTests.Mocks.MockCPU";
+    let machine = mock_registration_machine(source).unwrap();
+    assert_eq!(machine.bus.fixture_cpu_name("sysbus.mock"), Some("mock"));
+}
+
+#[test]
+fn renode_previous_registration_rejects_memory_range_for_cpu() {
+    let source = "\nmock: @ sysbus <0, 1>\nmock: Antmicro.Renode.UnitTests.Mocks.MockCPU";
+    let error = mock_registration_machine(source).err().unwrap();
+    assert!(error.contains("NoCtorForRegistrationPoint:"), "{error}");
+}

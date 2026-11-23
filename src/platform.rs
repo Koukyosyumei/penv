@@ -1501,6 +1501,18 @@ fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(),
         else {
             continue;
         };
+        if registration == "sysbus" {
+            machine
+                .bus
+                .register_fixture_cpu("sysbus", entry.registered_name(), &entry.name)
+                .map_err(|error| entry.error(&error))?;
+            continue;
+        }
+        if registration.starts_with("sysbus <") {
+            return Err(
+                entry.error("NoCtorForRegistrationPoint: CPU requires a CPU registration point")
+            );
+        }
         let parents = if registration.starts_with('{') {
             registration_items(registration).map_err(|error| entry.error(error))?
         } else {
