@@ -37,6 +37,7 @@ pub struct Hart {
     translations: TranslationCache,
     thumb: Option<Thumb>,
     unaligned_accesses: bool,
+    zicond: bool,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -158,6 +159,7 @@ impl Machine {
                 translations: TranslationCache::default(),
                 thumb: None,
                 unaligned_accesses: false,
+                zicond: false,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -431,6 +433,10 @@ impl Hart {
         self.csr.m_extension = multiply;
         self.csr.a_extension = atomic;
         self.csr.c_extension = compressed;
+    }
+
+    pub fn set_zicond(&mut self, enabled: bool) {
+        self.zicond = enabled;
     }
 
     pub fn set_unaligned_accesses(&mut self, enabled: bool) {
@@ -781,6 +787,20 @@ impl Hart {
             }),
             0x33 => Some(match (funct3, funct7) {
                 (_, 1) if self.csr.m_extension => multiply_divide(funct3, a, b),
+                (5, 7) if self.zicond => {
+                    if b == 0 {
+                        0
+                    } else {
+                        a
+                    }
+                }
+                (7, 7) if self.zicond => {
+                    if b != 0 {
+                        0
+                    } else {
+                        a
+                    }
+                }
                 (0, 0) => a.wrapping_add(b),
                 (0, 0x20) => a.wrapping_sub(b),
                 (1, 0) => a << (b & 31),
@@ -890,6 +910,42 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zicond_rv32_matches_zero_nonzero_and_disabled_cases() {
+        // Renode riscv-zicond-extension.robot: RV32 data and trap cases.
+        for (funct3, selector, expected) in
+            [(5, 0, 0), (5, 1, u32::MAX), (7, 0, u32::MAX), (7, 1, 0)]
+        {
+            for enabled in [false, true] {
+                let mut machine = Machine::new(8).unwrap();
+                machine.primary.set_zicond(enabled);
+                machine.primary.set_mtvec(RAM_BASE + 4);
+                machine.primary.registers[10] = u32::MAX;
+                machine.primary.registers[11] = selector;
+                // Use rd=rs1 to also check read-before-write behavior.
+                let instruction = 0x0eb5_0533u32 | (funct3 << 12);
+                machine
+                    .bus
+                    .memory(RAM_BASE, 4)
+                    .unwrap()
+                    .copy_from_slice(&instruction.to_le_bytes());
+                let (_, retired) = machine.run(1, &mut std::io::sink()).unwrap();
+                if enabled {
+                    assert_eq!(retired, 1);
+                    assert_eq!(machine.primary.registers[10], expected);
+                } else {
+                    assert_eq!(retired, 0);
+                    assert_eq!(machine.primary.pc, RAM_BASE + 4);
+                    assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 2);
+                    assert_eq!(
+                        machine.primary.csr.access(0x3410_2073, 0).unwrap(),
+                        RAM_BASE
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn vexriscv_accepts_its_data_cache_operations() {

@@ -113,4 +113,20 @@ mod tests {
         clint.write(0x4000, 2);
         assert_eq!(clint.tick(0), 0);
     }
+
+    #[test]
+    fn compare_low_word_rollover_waits_for_the_programmed_high_word() {
+        // Adapt the two RV32 mtimecmp stores in Renode timer-reconfiguration.robot.
+        let mut clint = Clint::new(0, 1, Clint::STEP_HZ);
+        clint.write(0xbff8, u32::MAX - 1);
+        clint.write(0x4000, u32::MAX);
+        clint.write(0x4004, 1);
+        clint.write(0x4000, 1);
+        assert_eq!(clint.tick(0), 0);
+        assert_eq!(clint.read(0xbff8), u32::MAX);
+        assert_eq!(clint.tick(0), 0);
+        assert_eq!(clint.read(0xbff8), 0);
+        assert_eq!(clint.read(0xbffc), 1);
+        assert_eq!(clint.tick(0), TIMER);
+    }
 }

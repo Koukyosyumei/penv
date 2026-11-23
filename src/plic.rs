@@ -204,4 +204,23 @@ mod tests {
         assert!(plic.irq_outputs() != 0);
         assert_eq!(plic.read(0x200004), 4);
     }
+
+    #[test]
+    fn virt_plic_masks_threshold_notifications_and_high_source_enables() {
+        // Source count and machine context from Renode riscv_virt.repl.
+        let mut plic = Plic::new(0, 52, &[1 << 11]);
+        plic.write(52 * 4, 3);
+        plic.write(0x2004, u32::MAX);
+        assert_eq!(plic.read(0x2004), (1 << 21) - 1);
+        plic.write(0x200000, 3);
+        plic.set_line(52, true);
+        assert_eq!(plic.irq_outputs(), 0);
+        plic.write(0x200000, 2);
+        assert_eq!(plic.irq_outputs(), 1 << 11);
+        assert_eq!(plic.read(0x200004), 52);
+        plic.set_line(52, false);
+        plic.write(0x200004, 52);
+        assert_eq!(plic.read(0x200004), 0);
+        assert_eq!(plic.irq_outputs(), 0);
+    }
 }

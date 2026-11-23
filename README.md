@@ -457,6 +457,30 @@ python3 "$runner" --penv target/release/penv --platform "$virt" \
 
 Renode の例外ケースは Robot 内の URL から `riscv32--ebreak_custom_test.elf` を取得し、SHA-1 `4db0870a69de9bba7ccda18908832c5b72cff35e` を照合して実行しました。REPL は `CPU.VexRiscv` の `rv32im_zicsr`、RAM `0x80000000`（`0x1000` バイト）、LiteX UART `0x40008000`（`txFifoCapacity: 0`）を指定します。上流と同様に RESC の `sysbus LoadELF` からロードすることで ELF の浮動小数点 ABI フラグを受け入れます。例外ケースと LiteX の直接起動 MicroPython は `scripts/validate-riscv-upstream.sh` で再現できます。MicroPython は上流 RESC を実行し、UART の `2 + 3` → `5` を照合します。
 
+### RV32 優先ケースの追加
+
+| 分野 | 出典と対応 |
+| --- | --- |
+| ISA | Renode の `unit-tests/riscv-zicond-extension.robot` の RV32 ゼロ化・通過・無効時の違法命令、および全ビットが 1 の値の保持を Rust テスト `zicond_rv32_matches_zero_nonzero_and_disabled_cases` に移植。公開済み Zicond ELF 4 件も実行 |
+| 特権 | 公開 `rv32mi-*` / `rv32si-*` と、上流 `riscv-priv.robot`・`riscv-mret.robot` に対応する既存 ELF。デバッグトリガーを要求する `rv32mi-p-breakpoint` は残件 |
+| Sv32 | 公開 `rv32si-p-dirty`、仮想モードの I/M/A/C ELF、既存の PTE 差し替え ELF。SUM と MXR を変えたときに、キャッシュ済み変換が許可を持ち越さないことを Rust テストで追加検証 |
+| CLINT | Renode `unit-tests/timer-reconfiguration.robot` の比較値の上下ワード更新から派生し、32 ビット境界をまたぐ `mtimecmp` 比較を追加検証。10 MHz の実割り込みは virt ELF で再確認 |
+| PLIC | 上流 `platforms/cpus/riscv_virt.repl` の 52 入力・M コンテキストに合わせ、ソース 52、しきい値と同値での通知抑止、claim/complete を Rust テストで検査。ソース 3 は virt の NS16550 実 ELF で再確認 |
+
+Zicond は REPL の対応済み RV32 ISA 文字列に `_zicond` を付けると有効になります。変更前の `aaa317e` はこの CPU 型を拒否しました。変更後は `czero.eqz` と `czero.nez` の物理・仮想 ELF がすべて通過しました。上記の公開 ELF アーカイブと LLVM の `llvm-nm` を使うため、この 4 件の実行に Sail やクロスコンパイラーによる再生成は不要です。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+mkdir "$out/zicond"
+tar -xzf "$out/riscv-tests.tar.gz" -C "$out/zicond" --wildcards './rv32uzicond-*'
+sed 's/"rv32imac"/"rv32imac_zicsr_zifencei_zicond"/' "$virt" > "$out/virt-zicond.repl"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$out/virt-zicond.repl" --artifacts "$out/zicond-results" "$out"/zicond/*
+```
+
+公開 ELF の通過内訳は I/M/A/C 122 件、M/S 特権 21 件、Zicond 4 件です。virt の NS16550 と CLINT の実 ELF および LiteX の実ファームウェア回帰は、それぞれ上の再現手順を使います。残課題はデバッグトリガー、RV32 の未対応 ISA 拡張、対応 ISA に絞った ACT ELF の生成、Robot の翻訳ブロックログやネイティブ周辺機器を必要とするケースです。たとえば上流の Verilated UARTLite や Andes 固有 PLIC は、ここで検証した標準 virt の PLIC と構成が異なります。
+
 ## Renode / penv 共通計測ハーネス
 
 `python3 scripts/benchmark-riscv.py manifest.json 新規出力ディレクトリ` は Linux の GNU `/usr/bin/time` を使います。現在の動作確認は `python3 scripts/test-benchmark-riscv.py` のダミープロセスのみです。実機比較は上流互換テスト全件通過後に行います。
