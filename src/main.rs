@@ -1375,7 +1375,7 @@ fn run() -> Result<ExitCode, String> {
         let boot = match monitor::load(script, root) {
             Ok(boot) if uart_log_dir.is_none() => boot,
             result => {
-                let mut plan =
+                let plan =
                     network_monitor::Plan::load(script, root).map_err(|error| match result {
                         Ok(_) => error,
                         Err(original) => format!("{original}; network RESC: {error}"),
@@ -1410,7 +1410,7 @@ fn run() -> Result<ExitCode, String> {
                         uart_log_dir.as_deref(),
                     );
                 }
-                let boot = plan.nodes.pop().unwrap();
+                let boot = plan.into_single_boot();
                 virtual_mips = boot.boot.mips;
                 boot_writes = boot.boot.writes;
                 uart_device = uart_device.or(boot.boot.uart_input);

@@ -72,7 +72,26 @@ impl Plan {
     }
 
     pub fn is_single_boot(&self) -> bool {
-        self.nodes.len() == 1 && self.actions.len() == 1
+        let [node] = self.nodes.as_slice() else {
+            return false;
+        };
+        let [Action::Activate(0), setup @ ..] = self.actions.as_slice() else {
+            return false;
+        };
+        setup.is_empty()
+            || (node.boot.image.is_some()
+                && setup.iter().all(|action| matches!(action, Action::WriteWord { node: 0, .. })))
+    }
+
+    pub fn into_single_boot(mut self) -> NodeBoot {
+        debug_assert!(self.is_single_boot());
+        let mut node = self.nodes.pop().expect("one boot node");
+        for action in self.actions {
+            if let Action::WriteWord { address, value, .. } = action {
+                node.boot.writes.push((address, value));
+            }
+        }
+        node
     }
 
     pub(crate) fn is_sd_setup_only(&self) -> bool {
