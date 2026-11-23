@@ -1711,3 +1711,5 @@ target/release/penv run --script "$e/can.resc" --platform-root ../renode --max-s
 ```
 
 `cargo test` 221件、STM32H7 REPL 7構成と公開 Zephyr Blinky・Button ELF が通過しました。CAN の CLI は上記の未達で終了状態1です。ケース別結果、UART、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+共有配線の依頼 `network-fdcan-417181b.md` を登録後、独立した IIS2MDC の公開 polling・trigger ELF も再検証し、両モードが通過しました。上記の `iis2mdc/` に UART と終了状態があります。再現は `PYTHON=<construct 導入済みの仮想環境>/bin/python bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"` です。
