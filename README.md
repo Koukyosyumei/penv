@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | PolarFire の HSS・SD カード起動経路のため保留 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS が PolarFire のキャッシュ設定まで通過。次の阻害点は `MPFS_Sysreg`。SD 起動と Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -258,6 +258,39 @@ python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
 ```
 
 移植した Rust ケース 13 件を含む `cargo test` 全 62 件と、StarLight の CLI ケース 4 件が通過しました。56 バイトと 3200 バイトは各 10/10 応答で、`eth0` IRQ は A が 3 → 61、B が 3 → 54 でした。RV64 virt の OpenSBI v1.6 → Linux 5.10.6 も再実行し、UART ログイン後の `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
+### BeagleV-Fire の SD 起動の再現
+
+参照リビジョンの SD 起動テストは BeagleV-Fire（PolarFire SoC）にあります。BeagleV-StarLight の公開デモは RAM の `0xa0000000` に読み込んだ FIT を起動します。Fire の Robot ケースは OpenSBI 1.2、U-Boot 2023.07、Linux の root ログイン、`uname -m` の `riscv64`、`uname -n` の `buildroot` を検証します。[Fire のテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot) [Fire の RESC](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/beaglev-fire.resc) [StarLight の RESC](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/beaglev_starlight.resc)
+
+```sh
+cargo test
+cargo build --release
+fire_assets=$(mktemp -d)
+fire_resc=../renode/scripts/single-node/beaglev-fire.resc
+rg -o 'https://[^[:space:]]+' "$fire_resc" | while IFS= read -r url; do
+  name=${url##*/}
+  curl -fLsS --retry 2 "$url" -o "$fire_assets/$name" &&
+    printf '%s  %s\n' "${name##*-}" "$fire_assets/$name" | sha1sum -c - || exit 1
+done
+
+# 上流のスクリプトは 12 行目の SdCardFromFile で停止する。
+target/release/penv run --script "$fire_resc" --platform-root ../renode \
+  --asset-dir "$fire_assets" --max-steps 100000
+
+# 上流 REPL と HSS ELF を直接指定し、e51 の到達 PC を確認する。
+for steps in 3763660 3763661; do
+  target/release/penv run --platform ../renode/platforms/boards/beaglev-fire.repl \
+    --platform-root ../renode --uart-device mmuart0 --max-steps "$steps" --stats \
+    "$fire_assets"/hss-envm-wrapper.elf-s_*
+done
+```
+
+変更前の `11b9d76` では同じ 3,763,660 ステップで `pc=0x20220350` に入りました。HSS は e51 の `pc=0x20231a74` で `amoswap.d` によるストアアクセス例外（原因 7、`mtval=0x02010008`）を起こしました。上流 REPL の `CacheConfig_WayEnable` と同じ初期値 0 の保持レジスターを追加し、HSS が使うアトミック交換をそのレジスターに実装しました。CLI テスト `polarfire_hss_can_swap_the_cache_way_enable_register` が初期値、64 ビットの交換前の値、ロードとストアの読み戻しを確認します。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
+
+変更後は 3,763,660 ステップで `pc=0x20231a7c` まで到達し、次のステップで `MPFS_Sysreg` の `0x20002174` への書き込みが例外となり、早期トラップハンドラー `0x20220350` に入ります。Fire の UART 出力はこの段階では空です。残課題は `MPFS_Sysreg` と後続の HSS 初期化、MPFS SD コントローラーと SD イメージの接続、上流 RESC が使う GPIO ボタンと起動用 Monitor コマンドです。Fire の OpenSBI、U-Boot、Linux は未到達です。
+
+今回の `cargo test` は全 63 件が通過しました。上記の StarLight 公開素材を使った `python3 scripts/verify-starlight.py "$assets"` でも、UART から root にログインし、`id -u` が `0`、`uname -m` が `riscv64` を返しました。
 
 ## Cortex-M0 / Cortex-M0+
 

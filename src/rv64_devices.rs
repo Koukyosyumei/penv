@@ -16,11 +16,46 @@ pub struct Devices {
     pub uarts: Vec<Uart>,
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
+    pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
     pub fallback_ranges: Vec<FallbackRange>,
     pub starlight_reset_pin: Option<StarLightResetPin>,
     pub reset_requested: bool,
     lines: [u64; MAX_HARTS],
     input_uart: usize,
+}
+
+// Backing value for the CacheConfig_WayEnable Python peripheral in polarfire-soc.repl.
+pub struct MpfsCacheWayEnable {
+    pub base: u32,
+    value: u64,
+}
+
+impl MpfsCacheWayEnable {
+    pub const SIZE: u64 = 8;
+
+    pub fn new(base: u32) -> Self {
+        Self { base, value: 0 }
+    }
+
+    fn mask(&self, address: u32, width: usize) -> Option<u64> {
+        // The REPL script uses the same value for every offset in its window.
+        let offset = u64::from(address.checked_sub(self.base)?);
+        (offset + width as u64 <= Self::SIZE).then(|| u64::MAX >> (64 - width * 8))
+    }
+
+    pub fn read(&self, address: u32, width: usize) -> Option<u64> {
+        Some(self.value & self.mask(address, width)?)
+    }
+
+    pub fn write(&mut self, address: u32, width: usize, value: u64) -> Option<()> {
+        self.swap(address, width, value).map(|_| ())
+    }
+
+    pub fn swap(&mut self, address: u32, width: usize, value: u64) -> Option<u64> {
+        let mask = self.mask(address, width)?;
+        let previous = std::mem::replace(&mut self.value, value & mask);
+        Some(previous & mask)
+    }
 }
 
 pub struct FallbackRange {

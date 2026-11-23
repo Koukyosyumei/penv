@@ -445,6 +445,14 @@ impl Rv64 {
             return Ok(value);
         }
         if let Ok(low) = u32::try_from(physical) {
+            if let Some(value) = bus
+                .rv64_devices
+                .mpfs_cache_way_enable
+                .as_ref()
+                .and_then(|device| device.read(low, width))
+            {
+                return Ok(value);
+            }
             if let Some(value) = bus.rv64_devices.read(low, width) {
                 return Ok(u64::from(value));
             }
@@ -508,6 +516,15 @@ impl Rv64 {
             return Ok(());
         }
         if let Ok(low) = u32::try_from(physical) {
+            if bus
+                .rv64_devices
+                .mpfs_cache_way_enable
+                .as_mut()
+                .and_then(|device| device.write(low, width, value))
+                .is_some()
+            {
+                return Ok(());
+            }
             if bus.write_rv64_ethernet(low, width, value as u32) {
                 return Ok(());
             }
@@ -634,6 +651,13 @@ impl Rv64 {
             self.translations
                 .translate(bus, &self.privilege, address, width, permission)?;
         let fault = || Fault::new(if load { 5 } else { 7 }, address);
+        if operation == 1
+            && let Ok(low) = u32::try_from(physical)
+            && let Some(device) = bus.rv64_devices.mpfs_cache_way_enable.as_mut()
+            && let Some(previous) = device.swap(low, width, rhs)
+        {
+            return Ok(sign(previous, width as u32 * 8));
+        }
         let previous = ram_read(bus, physical, width).ok_or_else(fault)?;
         if operation == 2 {
             bus.reserve64(hart, physical, width);

@@ -554,3 +554,68 @@ fn rv64_dtb_passes_hart_ids_and_a_64_bit_pointer() {
     assert!(String::from_utf8_lossy(&unaligned.stderr).contains("8-byte aligned"));
     assert!(String::from_utf8_lossy(&invalid.stderr).contains("invalid DTB magic or size"));
 }
+
+#[test]
+fn polarfire_hss_can_swap_the_cache_way_enable_register() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-polarfire-cache-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("polarfire.repl");
+    let raw = directory.join("cache-swap.bin");
+    fs::write(
+        &board,
+        r#"cpu: CPU.RiscV64 @ sysbus
+    cpuType: "rv64ia"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.NS16550 @ sysbus 0x10000000
+CacheConfig_WayEnable: Python.PythonPeripheral @ sysbus 0x02010008
+    size: 0x8
+    initable: true
+    script: '''
+if request.IsInit:
+    reg = 0x0
+elif request.IsRead:
+    request.Value = reg
+elif request.IsWrite:
+    reg = request.Value
+'''
+"#,
+    )
+    .unwrap();
+    let instructions: [u32; 18] = [
+        0x0201_02b7, // lui t0, 0x02010
+        0x0082_8293, // addi t0, t0, 8
+        0x1000_03b7, // lui t2, 0x10000
+        0x0410_0313, // addi t1, zero, 'A'
+        0x0203_1313, // slli t1, t1, 32
+        0x0862_be2f, // amoswap.d t3, t1, (t0): reset value
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0420_0313, // addi t1, zero, 'B'
+        0x0862_be2f, // amoswap.d t3, t1, (t0): old value
+        0x020e_5e13, // srli t3, t3, 32
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0002_be03, // ld t3, 0(t0): current value
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0430_0313, // addi t1, zero, 'C'
+        0x0062_b023, // sd t1, 0(t0)
+        0x0862_be2f, // amoswap.d t3, t1, (t0): value from sd
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0010_0073, // ebreak
+    ];
+    let program: Vec<_> = instructions
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    fs::write(&raw, program).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--platform"])
+        .arg(&board)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, b"\0ABC");
+}

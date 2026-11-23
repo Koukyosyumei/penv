@@ -4,7 +4,7 @@ use crate::{
     machine::{MAX_HARTS, Machine},
     platform::Entry,
     rv64::{Isa, Rv64},
-    rv64_devices::{FallbackRange, Plic, Uart},
+    rv64_devices::{FallbackRange, MpfsCacheWayEnable, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
     rv64_priv::Pmp,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
@@ -219,12 +219,23 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
         machine.bus.rv64_devices.uarts.push(uart);
     }
     for entry in &entries {
-        if entry.model != "Python.PythonPeripheral"
-            || !matches!(
-                entry.name.as_str(),
-                "rstgen" | "audiorstgen" | "voutsysrstgen"
-            )
+        if entry.model != "Python.PythonPeripheral" || entry.registration.as_deref() == Some("none")
         {
+            continue;
+        }
+        if entry.name == "CacheConfig_WayEnable" {
+            let base = entry.address()?;
+            if required_number(entry, "size")? != MpfsCacheWayEnable::SIZE {
+                return Err(entry.error("invalid PolarFire cache way-enable register size"));
+            }
+            check_mapping(&machine, entry, base, MpfsCacheWayEnable::SIZE)?;
+            machine.bus.rv64_devices.mpfs_cache_way_enable = Some(MpfsCacheWayEnable::new(base));
+            continue;
+        }
+        if !matches!(
+            entry.name.as_str(),
+            "rstgen" | "audiorstgen" | "voutsysrstgen"
+        ) {
             continue;
         }
         let Ok(base) = entry.address() else { continue };
@@ -481,6 +492,14 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         || devices.ethernet.iter().any(|device| {
             start < u64::from(device.base) + Ethernet::SIZE && u64::from(device.base) < end
         });
+    let overlaps = overlaps
+        || devices
+            .mpfs_cache_way_enable
+            .as_ref()
+            .is_some_and(|device| {
+                start < u64::from(device.base) + MpfsCacheWayEnable::SIZE
+                    && u64::from(device.base) < end
+            });
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
     }
