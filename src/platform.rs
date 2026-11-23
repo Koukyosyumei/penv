@@ -1941,7 +1941,11 @@ fn bind_scalar_fixture(entry: &Entry) -> Result<FixtureValue, String> {
 const MOCK_COLLECTION: &str =
     "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes";
 
-fn bind_fixture_collections(entry: &Entry) -> Result<FixtureValue, String> {
+fn bind_fixture_collections(
+    entry: &Entry,
+    entries: &[Entry],
+    bus: &crate::bus::Bus,
+) -> Result<FixtureValue, String> {
     let mut bound = FixtureCollections::default();
     let integer = |value| match value {
         ScalarValue::Number(number) => number.parse::<i32>().ok(),
@@ -1951,6 +1955,18 @@ fn bind_fixture_collections(entry: &Entry) -> Result<FixtureValue, String> {
         ScalarValue::Text(text) => Some(text),
         _ => None,
     };
+    let cpu = |value| {
+        let ScalarValue::Reference(name) = value else {
+            return None;
+        };
+        let target = entries.iter().find(|target| {
+            target.name == name
+                && target.model == MOCK_CPU
+                && (!target.local || target.source == entry.source)
+        })?;
+        bus.fixture_cpu(&format!("sysbus.{}", target.registered_name()))
+            .cloned()
+    };
     let properties = keys(
         entry,
         &[
@@ -1958,6 +1974,9 @@ fn bind_fixture_collections(entry: &Entry) -> Result<FixtureValue, String> {
             "mockIntArray",
             "mockStringList",
             "mockIntStringDict",
+            "mockCpuList",
+            "mockIntCpuDict",
+            "mockCpuIntDict",
         ],
     )?;
     if properties.is_empty() {
@@ -2001,10 +2020,43 @@ fn bind_fixture_collections(entry: &Entry) -> Result<FixtureValue, String> {
                 }
                 bound.int_string_dict = Some(map);
             }
+            ("mockCpuList", Some(ScalarValue::List(items))) => {
+                bound.cpu_list = Some(
+                    items
+                        .into_iter()
+                        .map(cpu)
+                        .collect::<Option<_>>()
+                        .ok_or_else(mismatch)?,
+                );
+            }
+            ("mockIntCpuDict", Some(ScalarValue::Dictionary(items))) => {
+                bound.int_cpu_dict = Some(bind_reference_dictionary(entry, items, integer, cpu)?);
+            }
+            ("mockCpuIntDict", Some(ScalarValue::Dictionary(items))) => {
+                bound.cpu_int_dict = Some(bind_reference_dictionary(entry, items, cpu, integer)?);
+            }
             _ => return Err(mismatch()),
         }
     }
     Ok(FixtureValue::Collections(bound))
+}
+
+fn bind_reference_dictionary<'a, K: std::hash::Hash + Eq, V>(
+    entry: &Entry,
+    items: Vec<(ScalarValue<'a>, ScalarValue<'a>)>,
+    key: impl Fn(ScalarValue<'a>) -> Option<K>,
+    value: impl Fn(ScalarValue<'a>) -> Option<V>,
+) -> Result<HashMap<K, V>, String> {
+    let mut result = HashMap::new();
+    let mismatch = || entry.error("TypeMismatch: incompatible dictionary entry");
+    for (k, v) in items {
+        let k = key(k).ok_or_else(mismatch)?;
+        let v = value(v).ok_or_else(mismatch)?;
+        if result.insert(k, v).is_some() {
+            return Err(entry.error("RecoverableException: ArgumentException: An item with the same key has already been added."));
+        }
+    }
+    Ok(result)
 }
 
 const MOCK_ENUM: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute";
@@ -2180,14 +2232,13 @@ fn build_entries_with_scripts(
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
-            MOCK_COLLECTION | MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL | MOCK_RANGE
-            | MOCK_OBJECT | MOCK_REFERENCE
+            MOCK_COLLECTION if check_only => {}
+            MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL | MOCK_RANGE | MOCK_OBJECT
+            | MOCK_REFERENCE
                 if check_only =>
             {
                 let value = if entry.model == MOCK_ENUM {
                     FixtureValue::Enums(bind_fixture_enums(entry)?)
-                } else if entry.model == MOCK_COLLECTION {
-                    bind_fixture_collections(entry)?
                 } else {
                     bind_scalar_fixture(entry)?
                 };
@@ -2472,6 +2523,23 @@ fn build_entries_with_scripts(
         })
     {
         register_fixture_cpus(entries, &mut machine)?;
+        for entry in entries
+            .iter()
+            .filter(|entry| entry.model == MOCK_COLLECTION)
+        {
+            let value = bind_fixture_collections(entry, entries, &machine.bus)?;
+            if !matches!(entry.registration.as_deref(), None | Some("none")) {
+                machine
+                    .bus
+                    .register_fixture_value(
+                        format!("sysbus.{}", entry.registered_name()),
+                        entry.bus_range()?,
+                        value,
+                    )
+                    .map_err(|error| entry.error(&error))?;
+            }
+        }
+
         return Ok(machine);
     }
     if cpus.is_empty() || !ram {

@@ -150,6 +150,9 @@ pub(crate) struct FixtureCollections {
     pub int_array: Option<Vec<i32>>,
     pub string_list: Option<Vec<String>>,
     pub int_string_dict: Option<HashMap<i32, String>>,
+    pub cpu_list: Option<Vec<Arc<str>>>,
+    pub int_cpu_dict: Option<HashMap<i32, Arc<str>>>,
+    pub cpu_int_dict: Option<HashMap<Arc<str>, i32>>,
 }
 
 #[derive(Default)]
@@ -160,7 +163,7 @@ pub struct Bus {
     faulting_regions: Vec<(u32, Option<u32>, bool, bool)>,
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
-    fixture_cpus: HashMap<String, String>,
+    fixture_cpus: HashMap<String, Arc<str>>,
     fixture_values: HashMap<String, FixtureValue>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
@@ -520,9 +523,15 @@ impl Bus {
             ));
         }
         let path = format!("{parent}.{name}");
+        let identity = self
+            .fixture_cpus
+            .values()
+            .find(|identity| identity.as_ref() == variable)
+            .cloned()
+            .unwrap_or_else(|| Arc::from(variable));
         match self.fixture_cpus.entry(path) {
             std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(variable.to_owned());
+                slot.insert(identity);
                 Ok(())
             }
             std::collections::hash_map::Entry::Occupied(_) => {
@@ -533,7 +542,11 @@ impl Bus {
 
     #[cfg(test)]
     pub fn fixture_cpu_name(&self, path: &str) -> Option<&str> {
-        self.fixture_cpus.get(path).map(String::as_str)
+        self.fixture_cpu(path).map(AsRef::as_ref)
+    }
+
+    pub(crate) fn fixture_cpu(&self, path: &str) -> Option<&Arc<str>> {
+        self.fixture_cpus.get(path)
     }
 
     pub fn map_constant_mmio(&mut self, peripheral: ConstantMmio) -> Result<(), String> {

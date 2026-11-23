@@ -2136,3 +2136,92 @@ fn renode_collection_fixture_dict() {
             .is_some_and(|dict| dict.len() == 2 && dict[&0] == "zero" && dict[&1] == "one")
     );
 }
+
+#[test]
+fn renode_collection_reference_ordered() {
+    let result = mock_registration_machine(
+        "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockCpuList: [cpu1, cpu2]",
+    );
+    let machine = result.unwrap();
+    let cpu1 = machine.bus.fixture_cpu("sysbus.cpu1").unwrap();
+    let cpu2 = machine.bus.fixture_cpu("sysbus.cpu2").unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("missing collection fixture")
+    };
+    let list = values.cpu_list.as_ref().unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(std::sync::Arc::ptr_eq(&list[0], cpu1));
+    assert!(std::sync::Arc::ptr_eq(&list[1], cpu2));
+}
+
+#[test]
+fn renode_collection_reference_forward() {
+    let result = mock_registration_machine(
+        "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockCpuList: [cpu1, cpu2]\n\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    ",
+    );
+    let machine = result.unwrap();
+    let cpu1 = machine.bus.fixture_cpu("sysbus.cpu1").unwrap();
+    let cpu2 = machine.bus.fixture_cpu("sysbus.cpu2").unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("missing collection fixture")
+    };
+    let list = values.cpu_list.as_ref().unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(std::sync::Arc::ptr_eq(&list[0], cpu1));
+    assert!(std::sync::Arc::ptr_eq(&list[1], cpu2));
+}
+
+#[test]
+fn renode_collection_reference_values() {
+    let result = mock_registration_machine(
+        "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntCpuDict: {1: cpu1; 2: cpu2}\n\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    ",
+    );
+    let machine = result.unwrap();
+    let cpu1 = machine.bus.fixture_cpu("sysbus.cpu1").unwrap();
+    let cpu2 = machine.bus.fixture_cpu("sysbus.cpu2").unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("missing collection fixture")
+    };
+    let dict = values.int_cpu_dict.as_ref().unwrap();
+    assert_eq!(dict.len(), 2);
+    assert!(std::sync::Arc::ptr_eq(&dict[&1], cpu1));
+    assert!(std::sync::Arc::ptr_eq(&dict[&2], cpu2));
+}
+
+#[test]
+fn renode_collection_reference_keys() {
+    let result = mock_registration_machine(
+        "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockCpuIntDict: {cpu1: 1; cpu2: 2}\n\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    ",
+    );
+    let machine = result.unwrap();
+    let cpu1 = machine.bus.fixture_cpu("sysbus.cpu1").unwrap();
+    let cpu2 = machine.bus.fixture_cpu("sysbus.cpu2").unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("missing collection fixture")
+    };
+    let dict = values.cpu_int_dict.as_ref().unwrap();
+    assert_eq!(dict.len(), 2);
+    assert_eq!(dict[cpu1], 1);
+    assert_eq!(dict[cpu2], 2);
+    assert!(dict.keys().any(|key| std::sync::Arc::ptr_eq(key, cpu1)));
+    assert!(dict.keys().any(|key| std::sync::Arc::ptr_eq(key, cpu2)));
+}
+
+#[test]
+fn renode_collection_reference_duplicate() {
+    let result = mock_registration_machine(
+        "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockCpuIntDict: {cpu1: 1; cpu2: 2; cpu1: 3}\n\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    ",
+    );
+    let error = result.err().unwrap();
+    assert!(error.contains(
+        "RecoverableException: ArgumentException: An item with the same key has already been added."
+    ));
+}
