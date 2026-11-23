@@ -640,6 +640,17 @@ impl Hart {
         self.csr.configure_interrupt_mode(mode);
     }
 
+    pub fn monitor_trap_vector(
+        &mut self,
+        register: crate::csr::TrapVector,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        if self.thumb.is_some() {
+            return Err("RISC-V trap vector command requires a RISC-V CPU".into());
+        }
+        self.csr.monitor_trap_vector(register, value)
+    }
+
     pub fn set_mtvec(&mut self, value: u32) {
         self.csr.set_vector(value);
     }

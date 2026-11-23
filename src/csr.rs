@@ -28,6 +28,21 @@ const FS: u32 = 3 << 13;
 const SD: u32 = 1 << 31;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrapVector {
+    Machine,
+    Supervisor,
+}
+
+impl TrapVector {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Machine => "MTVEC",
+            Self::Supervisor => "STVEC",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum InterruptMode {
     Auto,
@@ -640,6 +655,28 @@ impl Csr {
             }
         }
         corrected
+    }
+
+    pub fn monitor_trap_vector(
+        &mut self,
+        register: TrapVector,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        if register == TrapVector::Supervisor && self.supervisor.is_none() {
+            return Err("STVEC requires supervisor mode".into());
+        }
+        if let Some(value) = value {
+            let corrected = self.correct_vector(register.name(), value, false);
+            match register {
+                TrapVector::Machine => self.vector = Some(corrected),
+                TrapVector::Supervisor => self.supervisor.as_mut().unwrap().vector = corrected,
+            }
+            return Ok(None);
+        }
+        Ok(Some(match register {
+            TrapVector::Machine => self.vector.unwrap_or(0),
+            TrapVector::Supervisor => self.supervisor.as_ref().unwrap().vector,
+        }))
     }
 
     pub fn set_vector(&mut self, value: u32) {

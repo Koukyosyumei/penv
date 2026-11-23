@@ -56,7 +56,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
             fixture = f"CPU.RiscV32 rv32imac, Priv1_10, interruptMode={mode[1]}"
             if "Written By Software" in case:
                 return "target", "ported", fixture + "; fixed guest opcodes, readbacks and warning sequence checked"
-            return "target", "pending", fixture + "; interactive monitor write/read and warning assertions pending"
+            return "target", "ported", fixture + "; ordered monitor writes, readbacks and warnings checked"
     if filename == "timer-reconfiguration.robot" and re.search(r"(?m)^\s+Create Machine\s*$", source):
         return "target", "pending", "Create Machine uses CPU.RiscV32 rv32ic, 1 MHz CLINT and block hooks"
     if re.search(r"(?m)^\s+Execute Script\s+tests/peripherals/CLIC/CLIC-test-setup\.resc\s*$", source):

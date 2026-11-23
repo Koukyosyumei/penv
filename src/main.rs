@@ -408,6 +408,7 @@ fn run() -> Result<ExitCode, String> {
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
     let mut post_run = Vec::new();
+    let mut trap_vectors = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -429,7 +430,7 @@ fn run() -> Result<ExitCode, String> {
         }
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
-        mtvec = mtvec.or(boot.mtvec);
+        trap_vectors = boot.trap_vectors;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         if path.is_some() && boot.image.is_none() {
@@ -528,6 +529,11 @@ fn run() -> Result<ExitCode, String> {
     for (step, path) in uart_events {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         machine.schedule_uart_input(step, bytes)?;
+    }
+    for (register, value) in trap_vectors {
+        if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
+            eprintln!("{} {readback:#x}", register.name());
+        }
     }
     if let Some(value) = mtvec {
         machine.primary.set_mtvec(value);

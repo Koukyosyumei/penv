@@ -1,3 +1,5 @@
+use crate::csr::TrapVector;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -21,7 +23,7 @@ pub struct Boot {
     pub platform: Option<PathBuf>,
     pub image: Option<Asset>,
     pub use_virtual_elf_addresses: bool,
-    pub mtvec: Option<u32>,
+    pub trap_vectors: Vec<(TrapVector, Option<u32>)>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
     started: bool,
@@ -426,8 +428,21 @@ fn execute(
                 crate::parse_address(resolve(value)?)?,
             ));
         }
-        ["cpu" | "sysbus.cpu", "MTVEC", value] if boot.platform.is_some() => {
-            boot.mtvec = Some(crate::parse_address(resolve(value)?)?);
+        [
+            "cpu" | "sysbus.cpu",
+            register @ ("MTVEC" | "STVEC"),
+            arguments @ ..,
+        ] if boot.platform.is_some() && arguments.len() <= 1 => {
+            let register = if *register == "MTVEC" {
+                TrapVector::Machine
+            } else {
+                TrapVector::Supervisor
+            };
+            let value = arguments
+                .first()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?;
+            boot.trap_vectors.push((register, value));
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
@@ -606,7 +621,10 @@ mod tests {
             boot.image.as_ref().map(|image| image.value.as_str()),
             Some("firmware file.elf")
         );
-        assert_eq!(boot.mtvec, Some(0x8000_0020));
+        assert_eq!(
+            boot.trap_vectors,
+            [(TrapVector::Machine, Some(0x8000_0020))]
+        );
         assert_eq!(boot.mask, Some(u32::MAX));
         fs::write(&script, content.replace("MTVEC", "unknown")).unwrap();
         let result = load(&script, &directory);
