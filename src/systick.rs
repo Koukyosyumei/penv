@@ -15,6 +15,7 @@ pub struct SysTick {
     count_flag: bool,
     pending: bool,
     pendsv_pending: bool,
+    nmi_pending: bool,
     frequency: u32,
     phase: u64,
 }
@@ -28,6 +29,7 @@ impl Default for SysTick {
             count_flag: false,
             pending: false,
             pendsv_pending: false,
+            nmi_pending: false,
             frequency: VIRTUAL_STEPS_PER_SECOND,
             phase: 0,
         }
@@ -88,6 +90,7 @@ impl SysTick {
 
     pub fn pending(&self, exception: u8) -> bool {
         match exception {
+            2 => self.nmi_pending,
             PENDSV => self.pendsv_pending,
             SYSTICK => self.pending,
             _ => false,
@@ -96,6 +99,7 @@ impl SysTick {
 
     pub fn acknowledge(&mut self, exception: u8) {
         match exception {
+            2 => self.nmi_pending = false,
             PENDSV => self.pendsv_pending = false,
             SYSTICK => self.pending = false,
             _ => unreachable!(),
@@ -108,7 +112,11 @@ impl SysTick {
             RELOAD => self.reload,
             CURRENT => self.current,
             CALIBRATION => 1 << 31, // No separate reference clock.
-            ICSR => (u32::from(self.pending) << 26) | (u32::from(self.pendsv_pending) << 28),
+            ICSR => {
+                (u32::from(self.pending) << 26)
+                    | (u32::from(self.pendsv_pending) << 28)
+                    | (u32::from(self.nmi_pending) << 31)
+            }
             _ => return None,
         })
     }
@@ -134,6 +142,7 @@ impl SysTick {
             }
             CALIBRATION => {}
             ICSR => {
+                self.nmi_pending |= value & (1 << 31) != 0;
                 if value & (1 << 25) != 0 {
                     self.pending = false;
                 }

@@ -14,6 +14,8 @@ enum ExecuteError {
     Other(String),
     Data(BusError),
     NoCoprocessor,
+    Fetch(BusError),
+    InvalidState,
 }
 
 impl From<String> for ExecuteError {
@@ -34,6 +36,8 @@ impl From<BusError> for ExecuteError {
     }
 }
 
+const LOCKUP_PC: u32 = 0xefff_fffe;
+
 pub enum Instruction {
     Retired,
     Breakpoint,
@@ -43,6 +47,8 @@ pub enum Instruction {
 #[derive(Clone, Default)]
 pub struct Thumb {
     vectors: Option<u32>,
+    locked_up: bool,
+    invalid_thumb_state: bool,
     pub(crate) thumb2: bool,
     basepri: u8,
     faultmask: bool,
@@ -93,25 +99,48 @@ impl Thumb {
         self.vectors.get_or_insert(base);
     }
 
-    pub fn reset(&self, bus: &Bus) -> Result<(u32, u32), String> {
-        let sp = bus
-            .read_ram::<4>(self.vector_base())
-            .map_err(|error| error.to_string())?;
+    pub fn reset(&mut self, bus: &mut Bus, r: &mut [u32; 32]) -> Result<u32, String> {
         let vector = self
             .vector_base()
             .checked_add(4)
             .ok_or("reset vector address overflow")?;
-        let target = bus
-            .read_ram::<4>(vector)
-            .map_err(|error| error.to_string())?;
-        if target & 1 == 0 {
+        let initial = bus
+            .read::<4>(vector)
+            .and_then(|target| bus.read::<4>(self.vector_base()).map(|sp| (target, sp)));
+        let (target, sp) = match initial {
+            Ok(initial) => initial,
+            Err(BusError::Unmapped(..)) if self.thumb2 && bus.nvic.is_some() => {
+                let nvic = bus.nvic.as_mut().unwrap();
+                nvic.record_vector_fault();
+                self.active_exceptions.insert(3);
+                nvic.set_active(self.active_exceptions);
+                r[13] = 0;
+                r[14] = u32::MAX;
+                return Ok(self.lockup(bus));
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if target & 1 == 0 && !self.thumb2 {
             return Err(format!(
                 "Cortex-M reset vector {target:#010x} must select Thumb state"
             ));
         }
-        bus.read_ram::<2>(target & !1)
-            .map_err(|error| error.to_string())?;
-        Ok((sp & !3, target & !1))
+        if !self.thumb2 {
+            bus.read_ram::<2>(target & !1)
+                .map_err(|error| error.to_string())?;
+        }
+        self.invalid_thumb_state = target & 1 == 0;
+        r[13] = sp & !3;
+        r[14] = u32::MAX;
+        Ok(target & !1)
+    }
+
+    fn lockup(&mut self, bus: &mut Bus) -> u32 {
+        self.locked_up = true;
+        if let Some(nvic) = &mut bus.nvic {
+            nvic.enter_lockup();
+        }
+        LOCKUP_PC
     }
 
     fn nz(&mut self, value: u32) {
@@ -295,17 +324,32 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<u32, String> {
-        let vector = bus
+        let base = bus
             .nvic
             .as_ref()
             .and_then(|nvic| nvic.vector_base())
-            .unwrap_or_else(|| self.vector_base())
-            .checked_add(u32::from(exception) * 4)
-            .ok_or("exception vector address overflow")?;
-        let handler = bus
-            .read_ram::<4>(vector)
-            .map_err(|error| error.to_string())?;
-        if handler & 1 == 0 {
+            .unwrap_or_else(|| self.vector_base());
+        let mut exception = exception;
+        let mut locked = false;
+        let handler = loop {
+            let vector = base
+                .checked_add(u32::from(exception) * 4)
+                .ok_or("exception vector address overflow")?;
+            match bus.read::<4>(vector) {
+                Ok(handler) => break handler,
+                Err(BusError::Unmapped(..)) if self.thumb2 && bus.nvic.is_some() => {
+                    bus.nvic.as_mut().unwrap().record_vector_fault();
+                    if exception <= 3 || (1..=3).contains(&self.active_exception) || self.faultmask
+                    {
+                        locked = true;
+                        break LOCKUP_PC;
+                    }
+                    exception = 3;
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        };
+        if handler & 1 == 0 && !self.thumb2 {
             return Err(format!(
                 "exception {exception} vector {handler:#010x} does not select Thumb state"
             ));
@@ -323,21 +367,28 @@ impl Thumb {
             | ((it & 3) << 25)
             | ((it & 0xfc) << 8);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        let memory = bus
-            .guest_memory(stack, (32 + extra) as usize)
-            .map_err(|error| error.to_string())?;
-        for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
-            *word = value.to_le_bytes();
-        }
-        if self.fp_active {
-            for (word, value) in memory[32..100]
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(self.fp[..16].iter().copied().chain([self.fpscr]))
-            {
-                *word = value.to_le_bytes();
+        match bus.cortex_exception_stack(stack, (32 + extra) as usize) {
+            Ok(memory) => {
+                for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
+                    *word = value.to_le_bytes();
+                }
+                if self.fp_active {
+                    for (word, value) in memory[32..100]
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(self.fp[..16].iter().copied().chain([self.fpscr]))
+                    {
+                        *word = value.to_le_bytes();
+                    }
+                }
             }
+            Err(BusError::Unmapped(..)) if locked => {
+                // A terminal vector fault still leaves the exception entry's
+                // stack address and any simultaneous stack syndrome observable.
+                bus.nvic.as_mut().unwrap().record_stacking_fault();
+            }
+            Err(error) => return Err(error.to_string()),
         }
         if self.uses_psp() {
             self.psp = stack;
@@ -359,10 +410,17 @@ impl Thumb {
         self.it_state = 0;
         self.active_exceptions.insert(exception);
         self.active_exception = exception;
+        if let Some(nvic) = &mut bus.nvic {
+            nvic.set_active(self.active_exceptions);
+        }
+        if locked {
+            return Ok(self.lockup(bus));
+        }
+        self.invalid_thumb_state = handler & 1 == 0;
         Ok(handler & !1)
     }
 
-    fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &Bus) -> Result<u32, String> {
+    fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
         let basic_return = target | 0x10;
         if self.active_exception != 0
             && matches!(basic_return, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd)
@@ -418,6 +476,9 @@ impl Thumb {
             self.it_state = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
+            if let Some(nvic) = &mut bus.nvic {
+                nvic.set_active(remaining);
+            }
             return Ok(pc & !1);
         }
         if target & 1 == 0 {
@@ -429,7 +490,7 @@ impl Thumb {
     }
 
     pub fn sleeping(&self) -> bool {
-        self.waiting_for_interrupt || self.waiting_for_event
+        self.locked_up || self.waiting_for_interrupt || self.waiting_for_event
     }
 
     fn signal_event(&mut self) {
@@ -455,6 +516,19 @@ impl Thumb {
         {
             self.signal_event();
         }
+        if self.locked_up {
+            return Ok(false);
+        }
+        if self.thumb2
+            && self.active_exception != 2
+            && bus.systick.as_ref().is_some_and(|timer| timer.pending(2))
+        {
+            *pc = self.exception_entry(2, *pc, r, bus)?;
+            bus.systick.as_mut().unwrap().acknowledge(2);
+            self.waiting_for_interrupt = false;
+            self.waiting_for_event = false;
+            return Ok(true);
+        }
         if self.faultmask || (self.interrupts_masked && !self.waiting_for_interrupt) {
             return Ok(false);
         }
@@ -464,10 +538,10 @@ impl Thumb {
                 .as_ref()
                 .map_or(priority, |nvic| nvic.preemption_priority(priority))
         };
-        let current_priority = if self.active_exception == 0 {
-            256
-        } else {
-            u16::from(preemption(priority(self.active_exception)))
+        let current_priority = match self.active_exception {
+            0 => 256,
+            1..=3 => 0,
+            exception => u16::from(preemption(priority(exception))),
         };
         let mut selected = bus
             .nvic
@@ -499,10 +573,12 @@ impl Thumb {
             }
             self.waiting_for_event = false;
             *pc = self.exception_entry(exception, *pc, r, bus)?;
-            if matches!(exception, PENDSV | SYSTICK) {
-                bus.systick.as_mut().unwrap().acknowledge(exception);
-            } else {
-                bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
+            if self.active_exception == exception {
+                if matches!(exception, PENDSV | SYSTICK) {
+                    bus.systick.as_mut().unwrap().acknowledge(exception);
+                } else {
+                    bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
+                }
             }
             return Ok(true);
         }
@@ -604,24 +680,43 @@ impl Thumb {
         output: &mut impl Write,
     ) -> Result<Instruction, String> {
         let it_state = self.it_state;
-        let (exception, address) = match self.step(pc, r, bus, output) {
+        let result = if self.invalid_thumb_state {
+            Err(ExecuteError::InvalidState)
+        } else {
+            self.step(pc, r, bus, output)
+        };
+        let (exception, address, instruction_fault) = match result {
             Ok(true) => return Ok(Instruction::Retired),
             Ok(false) => return Ok(Instruction::Breakpoint),
             Err(ExecuteError::Data(BusError::Unmapped(address, _)))
                 if self.thumb2 && bus.nvic.is_some() =>
             {
-                (5, Some(address))
+                (5, Some(address), None)
             }
-            Err(ExecuteError::NoCoprocessor) if bus.nvic.is_some() => (6, None),
+            Err(ExecuteError::NoCoprocessor) if bus.nvic.is_some() => (6, None, None),
             Err(ExecuteError::NoCoprocessor) => {
                 return Err("FPv4-SP instruction with coprocessor access disabled".into());
             }
             Err(ExecuteError::Data(error)) => return Err(error.to_string()),
+            Err(ExecuteError::Fetch(BusError::Unmapped(..)))
+                if self.thumb2 && bus.nvic.is_some() =>
+            {
+                (5, None, Some(false))
+            }
+            Err(ExecuteError::InvalidState) if self.thumb2 && bus.nvic.is_some() => {
+                (6, None, Some(true))
+            }
+            Err(ExecuteError::Fetch(error)) => return Err(error.to_string()),
+            Err(ExecuteError::InvalidState) => return Err("invalid Cortex-M Thumb state".into()),
             Err(ExecuteError::Other(error)) => return Err(error),
         };
         self.it_state = it_state;
         let nvic = bus.nvic.as_mut().unwrap();
-        nvic.record_fault(address);
+        if let Some(invalid_state) = instruction_fault {
+            nvic.record_instruction_fault(invalid_state);
+        } else {
+            nvic.record_fault(address);
+        }
         let priority = nvic.preemption_priority(nvic.priority(exception));
         let can_preempt = self.active_exception == 0
             || (self.active_exception > 3
@@ -634,10 +729,11 @@ impl Thumb {
         {
             exception
         } else {
-            nvic.force_hard_fault();
             if (1..=3).contains(&self.active_exception) || self.faultmask {
-                return Err("Cortex-M lockup after synchronous fault".into());
+                *pc = self.lockup(bus);
+                return Ok(Instruction::Fault);
             }
+            nvic.force_hard_fault();
             3
         };
         *pc = self
@@ -645,6 +741,8 @@ impl Thumb {
             .map_err(|error| {
                 if let Some(address) = address {
                     format!("precise BusFault at {address:#010x}: {error}")
+                } else if instruction_fault.is_some() {
+                    format!("instruction fault: {error}")
                 } else {
                     format!("NOCP UsageFault: {error}")
                 }
@@ -659,7 +757,9 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<bool, ExecuteError> {
-        let inst = bus.read_ram::<2>(*pc).map_err(|error| error.to_string())?;
+        let inst = bus
+            .read_cortex_instruction::<2>(*pc)
+            .map_err(ExecuteError::Fetch)?;
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let in_it = self.it_state != 0;
         let flags_before = self.apsr();
@@ -931,7 +1031,9 @@ impl Thumb {
                 next = architectural_pc.wrapping_add(offset);
             }
             0xf000..=0xf7ff => {
-                let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
+                let low = bus
+                    .read_cortex_instruction::<2>(next)
+                    .map_err(ExecuteError::Fetch)?;
                 let link = low & 0xd000 == 0xd000;
                 if link || (self.thumb2 && low & 0xd000 == 0x9000) {
                     let sign = (inst >> 10) & 1;
@@ -993,7 +1095,9 @@ impl Thumb {
                 }
             }
             0xe800..=0xefff | 0xf800..=0xffff if self.thumb2 => {
-                let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
+                let low = bus
+                    .read_cortex_instruction::<2>(next)
+                    .map_err(ExecuteError::Fetch)?;
                 next = architectural_pc;
                 if matches!(inst, 0xe92d | 0xe8bd)
                     && low.count_ones() >= 2
@@ -1022,6 +1126,142 @@ impl Thumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masked_instruction_fetch_fault_escalates_without_updating_bfar() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        bus.memory(12, 4)
+            .unwrap()
+            .copy_from_slice(&0x341u32.to_le_bytes());
+        let mut output = std::io::sink();
+        bus.write(0xe000_ed38, 4, 0x1234_5678, &mut output).unwrap();
+        let mut thumb = Thumb::default();
+        thumb.thumb2 = true;
+        let mut r = [0; 32];
+        r[13] = 0x1000;
+        let mut pc = 0x200000;
+        assert!(matches!(
+            thumb
+                .execute_instruction(&mut pc, &mut r, &mut bus, &mut output)
+                .unwrap(),
+            Instruction::Fault
+        ));
+        assert_eq!((pc, r[13], thumb.active_exception), (0x340, 0xfe0, 3));
+        assert_eq!(bus.read_ram::<4>(0xff8).unwrap(), 0x200000);
+        assert_eq!(bus.read::<4>(0xe000_ed28).unwrap(), 1 << 8);
+        assert_eq!(bus.read::<4>(0xe000_ed2c).unwrap(), 1 << 30);
+        assert_eq!(bus.read::<4>(0xe000_ed38).unwrap(), 0x1234_5678);
+    }
+
+    #[test]
+    fn vector_fault_locks_up_inside_nmi_or_hardfault() {
+        for exception in [2, 3] {
+            let mut bus = Bus::default();
+            bus.map_ram(0, 0x1000).unwrap();
+            bus.map_nvic(0xf0, None).unwrap();
+            bus.map_systick().unwrap();
+            bus.map_faulting_memory(0x100000, None).unwrap();
+            bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+            let mut thumb = Thumb::default();
+            thumb.thumb2 = true;
+            let mut r = [0; 32];
+            r[13] = 0x1000;
+            let pc = thumb
+                .exception_entry(exception, 0x200, &mut r, &mut bus)
+                .unwrap();
+            assert_eq!(pc, LOCKUP_PC);
+            assert!(thumb.sleeping());
+            assert_eq!(thumb.active_exception, exception);
+            assert!(thumb.active_exceptions.contains(exception));
+            assert_eq!((r[13], r[14], thumb.it_state), (0xfe0, 0xffff_fff9, 0));
+            assert_eq!(bus.read::<4>(0xe000_ed28).unwrap(), 0);
+            assert_eq!(bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+            assert_eq!(bus.read::<4>(0xe000_edf0).unwrap(), 1 << 19);
+            bus.write(0xe000_ed2c, 4, 2, &mut std::io::sink()).unwrap();
+            assert_eq!(bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn vector_and_stack_faults_remain_visible_in_nmi_lockup() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        bus.map_systick().unwrap();
+        bus.map_faulting_memory(0x100000, None).unwrap();
+        let mut r = [0; 32];
+        r[13] = 0x1000;
+        bus.memory(12, 4)
+            .unwrap()
+            .copy_from_slice(&0x341u32.to_le_bytes());
+        let mut thumb = Thumb::default();
+        thumb.thumb2 = true;
+        let mut pc = thumb.exception_entry(3, 0x200, &mut r, &mut bus).unwrap();
+        assert_eq!(pc, 0x340);
+        r[13] = 0x100020;
+        bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+        bus.write(0xe000_ed04, 4, 1 << 31, &mut std::io::sink())
+            .unwrap();
+        assert!(thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());
+        assert_eq!(
+            (pc, r[13], thumb.active_exception),
+            (LOCKUP_PC, 0x100000, 2)
+        );
+        assert!(thumb.active_exceptions.contains(3));
+        assert!(thumb.active_exceptions.contains(2));
+        assert_eq!(bus.read::<4>(0xe000_ed28).unwrap(), 1 << 12);
+        assert_eq!(bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(bus.read::<4>(0xe000_edf0).unwrap(), 1 << 19);
+    }
+
+    #[test]
+    fn fault_on_reset_vector_or_initial_msp_enters_reset_lockup() {
+        for offset in [0, 4] {
+            let mut bus = Bus::default();
+            bus.map_nvic(0xf0, None).unwrap();
+            bus.map_faulting_memory(0x100000, Some(offset)).unwrap();
+            bus.memory(0x100000, 8)
+                .unwrap()
+                .copy_from_slice(&[0, 0x10, 0, 0, 1, 2, 0, 0]);
+            let mut thumb = Thumb::new(Some(0x100000));
+            thumb.thumb2 = true;
+            let mut r = [0; 32];
+            assert_eq!(thumb.reset(&mut bus, &mut r).unwrap(), LOCKUP_PC);
+            assert_eq!((r[13], r[14], thumb.active_exception), (0, 0xffff_ffff, 0));
+            assert!(thumb.active_exceptions.contains(3));
+            assert_eq!(bus.read::<4>(0xe000_ed28).unwrap(), 0);
+            assert_eq!(bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+            assert_eq!(bus.read::<4>(0xe000_edf0).unwrap(), 1 << 19);
+        }
+    }
+
+    #[test]
+    fn invalid_reset_thumb_state_records_invstate_and_locks_up_in_hardfault() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        bus.memory(0, 4)
+            .unwrap()
+            .copy_from_slice(&0x1000u32.to_le_bytes());
+        let mut thumb = Thumb::default();
+        thumb.thumb2 = true;
+        let mut r = [0; 32];
+        let mut pc = thumb.reset(&mut bus, &mut r).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                thumb
+                    .execute_instruction(&mut pc, &mut r, &mut bus, &mut std::io::sink())
+                    .unwrap(),
+                Instruction::Fault
+            ));
+        }
+        assert_eq!(pc, LOCKUP_PC);
+        assert_eq!(bus.read::<4>(0xe000_ed28).unwrap(), 1 << 17);
+        assert_eq!(bus.read::<4>(0xe000_ed2c).unwrap(), 1 << 30);
+        assert_eq!(bus.read::<4>(0xe000_edf0).unwrap(), 1 << 19);
+    }
 
     #[test]
     fn vtor_relocates_exception_vectors_without_resetting_the_cpu() {
@@ -1162,12 +1402,12 @@ mod tests {
             0x90
         );
         assert_eq!(r[14], 0xffff_ffe1);
-        assert_eq!(thumb.branch(r[14], &mut r, &bus).unwrap(), 0x82);
+        assert_eq!(thumb.branch(r[14], &mut r, &mut bus).unwrap(), 0x82);
         assert_eq!(
             (r[13], thumb.fp[15], thumb.fpscr),
             (0x390, 0xaabb_ccdd, 0x0080_0002)
         );
-        assert_eq!(thumb.branch(r[14], &mut r, &bus).unwrap(), 0x60);
+        assert_eq!(thumb.branch(r[14], &mut r, &mut bus).unwrap(), 0x60);
         assert_eq!(
             (r[13], thumb.fp[15], thumb.fpscr),
             (0x3fc, 0x1122_3344, 0x0040_0001)

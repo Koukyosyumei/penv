@@ -7,6 +7,7 @@ const BANKS: usize = IRQ_LINES.div_ceil(32);
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
+const ACTIVE: u32 = BASE + 0x300;
 const CLEAR_PENDING: u32 = BASE + 0x280;
 const PRIORITY: u32 = BASE + 0x400;
 const FPCCR: u32 = BASE + 0xf34;
@@ -50,6 +51,8 @@ pub struct Nvic {
     cpacr: u32,
     fpccr: Option<u32>,
     fault_enables: u32,
+    active: ActiveExceptions,
+    locked_up: bool,
     cfsr: u32,
     hfsr: u32,
     bfar: u32,
@@ -122,6 +125,8 @@ impl Nvic {
             cpacr: 0,
             fpccr: None,
             fault_enables: 0,
+            active: ActiveExceptions::default(),
+            locked_up: false,
             cfsr: 0,
             hfsr: 0,
             bfar: 0,
@@ -148,7 +153,7 @@ impl Nvic {
         self.fpccr.is_some_and(|value| value & (1 << 31) != 0)
     }
 
-    pub const RANGES: [(u32, u32); 11] = [
+    pub const RANGES: [(u32, u32); 12] = [
         (ENABLE, PRIORITY_END + 1),
         (CPUID, CPUID + 4),
         (VTOR, AIRCR + 4),
@@ -156,6 +161,7 @@ impl Nvic {
         (FPCCR, FPCCR + 4),
         (BASE + 0xd24, BASE + 0xd30),
         (BASE + 0xd38, BASE + 0xd3c),
+        (BASE + 0xdf0, BASE + 0xdf4),
         (BASE + 0xd90, BASE + 0xdbc),
         (BASE + 0xd78, BASE + 0xd88),
         (BASE + 0xf50, BASE + 0xf78),
@@ -285,6 +291,26 @@ impl Nvic {
         }
     }
 
+    pub fn set_active(&mut self, active: ActiveExceptions) {
+        self.active = active;
+    }
+
+    pub fn enter_lockup(&mut self) {
+        self.locked_up = true;
+    }
+
+    pub fn record_stacking_fault(&mut self) {
+        self.cfsr |= 1 << 12; // STKERR
+    }
+
+    pub fn record_vector_fault(&mut self) {
+        self.hfsr |= 1 << 1; // VECTTBL
+    }
+
+    pub fn record_instruction_fault(&mut self, invalid_state: bool) {
+        self.cfsr |= if invalid_state { 1 << 17 } else { 1 << 8 }; // INVSTATE or IBUSERR
+    }
+
     pub fn record_fault(&mut self, address: Option<u32>) {
         if let Some(address) = address {
             self.bfar = address;
@@ -334,7 +360,24 @@ impl Nvic {
                 return Some(self.ccr);
             }
             if address == BASE + 0xd24 {
-                return Some(self.fault_enables);
+                return Some(
+                    self.fault_enables
+                        | (u32::from(self.active.contains(4)))
+                        | (u32::from(self.active.contains(5)) << 1)
+                        | (u32::from(self.active.contains(6)) << 3),
+                );
+            }
+            if address == BASE + 0xdf0 {
+                return Some(u32::from(self.locked_up) << 19);
+            }
+            if let Some(bank) = address
+                .checked_sub(ACTIVE)
+                .filter(|offset| offset & 3 == 0 && *offset < BANKS as u32 * 4)
+            {
+                let bank = (bank / 4) as usize;
+                let lower = self.active.0[bank] >> 16;
+                let upper = self.active.0.get(bank + 1).copied().unwrap_or(0) << 16;
+                return Some(lower | upper);
             }
             if address == BASE + 0xd2c {
                 return Some(self.hfsr);

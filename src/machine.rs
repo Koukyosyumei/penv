@@ -240,13 +240,11 @@ impl Machine {
 
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
-            if let Some(thumb) = &hart.thumb {
-                let (sp, pc) = thumb.reset(&self.bus)?;
+            if let Some(thumb) = &mut hart.thumb {
+                hart.pc = thumb.reset(&mut self.bus, &mut hart.registers)?;
                 if let Some(nvic) = self.bus.nvic.as_mut() {
                     nvic.set_vector_base(thumb.vector_base());
                 }
-                hart.registers[13] = sp;
-                hart.pc = pc;
                 continue;
             }
             hart.fetch(&mut self.bus)

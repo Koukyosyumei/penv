@@ -1863,6 +1863,24 @@ impl Bus {
         })
     }
 
+    pub fn cortex_exception_stack(
+        &mut self,
+        address: u32,
+        width: usize,
+    ) -> Result<&mut [u8], BusError> {
+        if let Some(address) = self.faulting_address(address, width) {
+            return Err(BusError::Unmapped(address, width));
+        }
+        self.guest_memory(address, width)
+    }
+
+    pub fn read_cortex_instruction<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
+        if let Some(address) = self.faulting_address(address, N) {
+            return Err(BusError::Unmapped(address, N));
+        }
+        self.read_ram::<N>(address)
+    }
+
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
         if address as usize & (N - 1) != 0 {
             return Err(BusError::Misaligned(address, N));

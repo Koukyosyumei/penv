@@ -73,7 +73,7 @@ TrustZone、MVE、ARMv8-M MPU や例外復帰トークンに依存するパラ�
 `expanded` 行の下には、元のケースに対応する命令別パラメーターがあります。
 
 フラッシュ消去はデータ結果を移植済みで、モードなしの消去要求に対する上流ログの検査が残ります。
-共有スイートでは Cortex-M4F のベクター・スタックアクセス時の Fault 配送、UART ビット時間・パリティー、
+共有スイートでは Cortex-M4F の例外フレームアクセス時の Fault 配送、UART ビット時間・パリティー、
 別ボードの FPU/DSP 公開 ELF の適用判定と実行、NUnit の残りのパラメーター展開が残ります。
 既存の FreeRTOS および Contiki の起動スモークは継続しますが、共有ケースの代替合格には数えません。
 
@@ -104,6 +104,28 @@ CPU モデルを ARMv7E-M に変更し、Robot がモニターから行ってい
   スタックに障害命令の PC が保存されることを確認します。フルアクセス設定時は
   `VLDR → VCVT.S32.F32 → VCVT.F32.S32 → VSTR` が完了し、`OK` を出します。
 
-残件は、命令フェッチ・ベクター読み出し・スタックアクセス自体の BusFault、リセット時の
-INVSTATE とロックアップの状態保持、遅延 FP 保存中のフォールト、未実装の FP オペコードと
-特権限定 CPACR アクセスです。台帳で `review` としているケースと全体ゲートは継続課題です。
+残件は、遅延 FP 保存中のフォールト、未実装の FP オペコード、特権限定 CPACR アクセスです。
+
+### Cortex-M4F の命令フェッチと例外ベクター
+
+上記の `tests/cortex-m4f-faults.sh` はフェッチと IRQ ベクターの ELF 3 件を追加で実行し、
+各 ELF の UART に `Fetch fault OK` が出ることを照合します。
+Rust テストはリセットベクター、初期 MSP、NMI・HardFault の取得失敗と、
+NMI 進入時にベクター取得とスタック書き込みが同時に失敗するケースの状態を検査します。
+
+- Thumb-2 の第1・第2半ワードの取得失敗は `CFSR.IBUSERR=1` を記録し、
+  命令先頭の PC を保存します。BFAR と BFARVALID は変更しません。BusFault が無効な場合は
+  HardFault に配送し、`HFSR.FORCED=1` を記録します。
+- IRQ16 のベクター取得失敗は `HFSR.VECTTBL=1` を記録して HardFault に配送します。
+  SP は `0xfe0`、CFSR は `0`、元の IRQ は ISPR に残り IABR では非アクティブです。
+- NMI・HardFault のベクター取得失敗では `DHCSR.S_LOCKUP` と例外番号、SP、LR、
+  `HFSR.VECTTBL` を検査します。同時スタック障害では `CFSR.STKERR` も記録します。
+  リセットベクターまたは初期 MSP の取得失敗は SP `0`、LR `0xffffffff`、IPSR `0` と
+  HardFault のアクティブ状態を検査します。
+
+上流 Robot の Cortex-M55 フィクスチャは、Cortex-M4F の EXC_RETURN
+（スレッド・MSP の基本フレームでは `0xfffffff9`）に置き換えました。
+上流の SHCSR に現れる NMI・HardFault のアクティブ状態は Rust テストで内部状態を照合します。
+無効なリセット状態はマップ済みスタックで INVSTATE とロックアップを確認しており、
+上流の MSP がゼロのケースは部分移植です。一般のスタック単独障害、例外復帰時の
+フレーム読み出し障害、遅延 FP 保存、ロックアップからの NMI 復帰は残件です。
