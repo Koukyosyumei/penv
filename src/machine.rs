@@ -44,6 +44,7 @@ pub struct Hart {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stop {
     FrameMatched(u64),
+    Tohost(u64),
     Ecall,
     Ebreak,
     Limit,
@@ -412,6 +413,9 @@ impl Machine {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
+            }
+            if let Some(code) = self.bus.tohost_exit {
+                return Ok((Stop::Tohost(code), retired));
             }
         }
         Ok((Stop::Limit, retired))

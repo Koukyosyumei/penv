@@ -95,6 +95,8 @@ pub struct Bus {
     litex_soc: Option<litex::SocController>,
     litex_io: Vec<(Vec<u32>, litex::IoDevice)>,
     litex_gpio_irqs: Vec<(usize, usize, u8)>,
+    tohost: Option<(u32, bool)>,
+    pub tohost_exit: Option<u64>,
     litex_eth: Option<Ethernet>,
     litex_panel: Option<Panel>,
     pub litex_i2s: Vec<I2s>,
@@ -202,6 +204,43 @@ impl Bus {
         };
         bus.map_ram(RAM_BASE, size)?;
         Ok(bus)
+    }
+
+    pub fn watch_tohost(&mut self, address: u32, act: bool) -> Result<(), String> {
+        if address & 7 != 0
+            || self.read_ram::<4>(address).is_err()
+            || self.read_ram::<4>(address + 4).is_err()
+        {
+            return Err("--tohost requires an aligned 8-byte address in RAM".into());
+        }
+        self.tohost = Some((address, act));
+        Ok(())
+    }
+
+    fn observe_tohost(
+        &mut self,
+        address: u32,
+        width: usize,
+        uart: &mut impl Write,
+    ) -> Result<(), BusError> {
+        let Some((base, act)) = self.tohost else {
+            return Ok(());
+        };
+        // ACT's RV32 Sail model commits each packet with a separate upper-word store.
+        if self.tohost_exit.is_some()
+            || address != if act { base + 4 } else { base }
+            || (act && width != 4)
+        {
+            return Ok(());
+        }
+        let low = self.read_ram::<4>(base)?;
+        let high = self.read_ram::<4>(base + 4)?;
+        if act && high == 0x0101_0000 {
+            uart.write_all(&[low as u8]).map_err(BusError::Output)?;
+        } else if (!act || high == 0) && low & 1 != 0 {
+            self.tohost_exit = Some(((u64::from(high) << 32) | u64::from(low)) >> 1);
+        }
+        Ok(())
     }
 
     pub fn use_renode_unmapped_data(&mut self) {
@@ -1254,7 +1293,7 @@ impl Bus {
         let ram_error = match self.memory(address, width) {
             Ok(bytes) => {
                 bytes.copy_from_slice(&value.to_le_bytes()[..width]);
-                return Ok(());
+                return self.observe_tohost(address, width, uart);
             }
             Err(error) => error,
         };

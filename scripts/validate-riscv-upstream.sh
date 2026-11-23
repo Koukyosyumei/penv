@@ -341,4 +341,23 @@ for marker in 'Cancelled' '> netboot' 'Downloaded 218608 bytes from boot.bin ove
     rg -aqF "$marker" "$artifacts/litex-tftp.uart.log"
 done
 tr -d '\r' < "$artifacts/litex-tftp.uart.log" | rg -a '^5$' > /dev/null
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, Nexys Video framebuffer, LiteX SD root and FAT16, LiteX Linux GPIO/SPI/I2C, Nexys4DDR SPI SD, and LiteX TFTP verified. Logs are in %s\n' "$artifacts"
+micropython=$renode_root/scripts/single-node/litex_vexriscv_micropython.resc
+prepare_assets "$micropython"
+printf '2 + 3\r' > "$artifacts/micropython-expr.input"
+run_to_step_limit litex-micropython "$micropython" --max-steps 100000000 \
+    --uart-event "80000000:$artifacts/micropython-expr.input"
+rg -aqF 'MicroPython v1.9.4-1429' "$artifacts/litex-micropython.uart.log"
+rg -aqF '>>> 2 + 3' "$artifacts/litex-micropython.uart.log"
+tr -d '\r' < "$artifacts/litex-micropython.uart.log" | rg -a '^5$' > /dev/null
+ebreak_platform=$(realpath "$(dirname -- "$0")/fixtures/rv32-ebreak.repl")
+ebreak_url=$(rg -o 'https://[^[:space:]]+' "$renode_root/tests/unit-tests/riscv-ebreak.robot")
+printf 'mach create\nmachine LoadPlatformDescription @%s\nsysbus LoadELF @%s\n' \
+    "${ebreak_platform// /\\ }" "$ebreak_url" > "$artifacts/rv32-ebreak.resc"
+prepare_assets "$artifacts/rv32-ebreak.resc"
+run_to_step_limit rv32-ebreak "$artifacts/rv32-ebreak.resc" --max-steps 20000
+diff -u <(printf '%s\n' '!starting test...' 'ecall instruction from machine mode' 'ebreak instruction' \
+    'ecall instruction from machine mode' 'ebreak instruction' 'finished test') <(
+    rg -a '^(\!starting test\.\.\.|ecall instruction from machine mode|ebreak instruction|finished test)$' \
+        "$artifacts/rv32-ebreak.uart.log"
+)
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, Nexys Video framebuffer, LiteX SD root and FAT16, LiteX Linux GPIO/SPI/I2C, Nexys4DDR SPI SD, LiteX TFTP, direct LiteX MicroPython, and RV32 ECALL/EBREAK verified. Logs are in %s\n' "$artifacts"

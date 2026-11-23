@@ -71,6 +71,8 @@ Options:
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
+  --tohost ADDRESS  Stop on an odd write to the RV32 test completion word
+  --tohost-act ADDRESS  Decode RV32 Sail ACT console and completion writes
   --max-steps N      Stop after N execution steps (default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -110,6 +112,7 @@ fn run() -> Result<ExitCode, String> {
     let mut positional = false;
     let mut ram_mib = None;
     let mut harts = None;
+    let mut tohost = None;
     let mut max_steps = None;
     let mut extra_ram = Vec::new();
     let mut clint = None;
@@ -330,6 +333,18 @@ fn run() -> Result<ExitCode, String> {
                     .and_then(|value| value.into_string().ok())
                     .ok_or("--litex-timer-alias requires BASE")?;
                 litex_timer_aliases.push(parse_address(&value)?);
+            }
+            Some(option @ ("--tohost" | "--tohost-act")) => {
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--tohost requires a physical RAM address")?;
+                if tohost
+                    .replace((parse_address(&value)?, option == "--tohost-act"))
+                    .is_some()
+                {
+                    return Err("only one tohost address may be specified".into());
+                }
             }
             Some("--clint") => {
                 let value = args
@@ -578,6 +593,12 @@ fn run() -> Result<ExitCode, String> {
             .map_err(|error| format!("{}: {error}", path.display()))?;
         machine.schedule_frame_wait(step, reference)?;
     }
+    if let Some((address, act)) = tohost {
+        if machine.is_cortex_m() {
+            return Err("--tohost requires an RV32 machine".into());
+        }
+        machine.bus.watch_tohost(address, act)?;
+    }
     machine.validate_entry()?;
     for action in &post_run {
         if let monitor::PostRun::DisposePcm(name) = action
@@ -686,6 +707,17 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.pc
         );
+    }
+    if let Stop::Tohost(code) = stop {
+        eprintln!("penv: tohost exit code {code}");
+        return Ok(if code == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
+    if tohost.is_some() && (stop != Stop::Limit || completed_run_for) {
+        return Err("execution stopped before a tohost completion write".into());
     }
     if stop == Stop::Limit && !completed_run_for {
         eprintln!(

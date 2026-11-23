@@ -261,6 +261,8 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | 対象 | 上流の出典とケース | penv のテストと検証範囲 |
 | --- | --- | --- |
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
+| RV32 アーキテクチャ | `unit-tests/riscv-arch-tests.robot` の `Should Run Arch Tests 32` と `ArrayMemoryRiscVTestWatcher.cs` | `--tohost` と `--tohost-act` で合否を取得。公開 `riscv-tests` の I/M/A/C 122 件と、M/S 特権テスト 22 件中 21 件が通過。公開 ACT I/M の 47 ELF は F 命令を含む共通初期化で停止 |
+| RV32 例外 | `unit-tests/riscv-ebreak.robot` の `Should Generate Ebreak` | 上流 ELF を同じ UART 配置の RV32IM サブセット REPL で実行し、ecall／ebreak を各 2 回処理して `finished test` を出力 |
 | RV32 カウンタ | `unit-tests/riscv-priv.robot` の MCYCLE / MINSTRET の増加・停止・書き込み確定境界（RV32 各 3 ケース）と `Should Fail On Counter Access`（RV64） | `scripts/firmware/rv32-counters.S` で 6 ケースと、RV32 U モードのアクセス拒否・再許可を実 ELF 化 |
 | LiteX Linux 入出力 | `platforms/LiteX/LiteX_Linux_VexRiscv.robot` の起動・LED・ボタン・SPI・I²C | Robot と同じ REPL と起動ファイルで、GPIO、SPI 受信列、I²C 列挙、温度値の変化を検証 |
 | Nexys4DDR | `platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot` の `Should Boot` / `Should List Readme File` | 上流 BIOS と FAT16 で、ブート中断、`spisdcardboot`、ディレクトリ列挙を検証 |
@@ -411,7 +413,49 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-
 
 Nexys4DDR は変更前に `unknown LiteX SD controller "spisdcard"` で停止しました。LiteX SPI へのカード接続、初期化、単一ブロック読み出しを実装し、実 BIOS が `Q` で起動を中断した後、`spisdcardboot` で FAT16 の `README  .TXT` を列挙することを確認しました。SPI SD の書き込み、マルチブロック転送、入力 CRC 検査は残課題です。TFTP の再現では、ダウンロードした 218,608 バイトの MicroPython が UART からの式に `5` と応答します。
 
-今回の優先範囲は、RV32 のカウンタと上記の LiteX 機能ケースです。全互換ケースの通過判定は保留です。RV32 アーキテクチャスイートには `riscv-arch-tests.robot` が指定するリビジョンのコンパイル済み ELF 一式（`RISCV_ARCH_TESTS_PATH`）と `tohost` 判定の適応が必要です。この環境では既定の `/riscv-arch-test/work` がありません。Robot の直接実行に必要な Renode Infrastructure サブモジュールは参照ツリーで未展開です。Verilated CFU は別途ネイティブモデルと実行アダプターが必要です。Microwatt は RV32 の対象外です。
+今回の優先範囲は、RV32 のカウンタと上記の LiteX 機能ケースです。全互換ケースの通過判定は保留です。RV32 アーキテクチャスイートには `riscv-arch-tests.robot` が指定するリビジョンのコンパイル済み ELF 一式（`RISCV_ARCH_TESTS_PATH`）が必要です。この環境では既定の `/riscv-arch-test/work` がありません。Robot の直接実行に必要な Renode Infrastructure サブモジュールは参照ツリーで未展開です。Verilated CFU は別途ネイティブモデルと実行アダプターが必要です。Microwatt は RV32 の対象外です。
+
+### 公開 RV32 アーキテクチャ ELF の再現
+
+[RISC-V Sail テストの 2026-08-20 リリース](https://github.com/riscv-software-src/sail-riscv-tests/releases/tag/2026-08-20) の prebuilt ELF を使います。実行用ツールは Python 3、`llvm-nm`、penv です。実行スクリプトは ELF の `tohost` シンボルを解決し、各 ELF の診断と結果を `results.jsonl` と個別ログに保存します。テスト終了を報告する書き込みが必要で、通常終了やステップ上限だけでは合格にしません。`--tohost` は奇数値の下位ワード書き込みで完了します。`--tohost-act` は上位ワードの書き込みを待ち、文字出力パケットと終了パケットを区別します。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+out=$(mktemp -d)
+release=https://github.com/riscv-software-src/sail-riscv-tests/releases/download/2026-08-20
+curl -fsSL "$release/riscv-tests.tar.gz" -o "$out/riscv-tests.tar.gz"
+printf '%s  %s\n' eb24265e83ca0b68a24a513dff7e4535975e724fe07d71f3cf75fef87fd75bec \
+  "$out/riscv-tests.tar.gz" | sha256sum --check
+mkdir "$out/isa"
+tar -xzf "$out/riscv-tests.tar.gz" -C "$out/isa" --wildcards './rv32u[imac]-[pv]-*'
+virt=../renode/platforms/cpus/riscv_virt.repl
+sed '/cpuType:/a\    allowUnalignedAccesses: true' "$virt" > "$out/virt-unaligned.repl"
+aligned=()
+for elf in "$out"/isa/rv32u[imac]-[pv]-*; do
+  [[ $elf == *-ma_data ]] || aligned+=("$elf")
+done
+runner=scripts/validate-rv32-architecture.py
+python3 "$runner" --penv target/release/penv --platform "$virt" \
+  --artifacts "$out/aligned" "${aligned[@]}"
+python3 "$runner" --penv target/release/penv --platform "$out/virt-unaligned.repl" \
+  --artifacts "$out/unaligned" "$out"/isa/rv32ui-[pv]-ma_data
+```
+
+物理モード `-p-` と仮想モード `-v-` を合わせて 122 件が通過しました。非整列の 2 件は設定を分けて実行しました。元の virt REPL では両 ELF がゲスト側の失敗コードを返し、非整列アクセスを有効にすると通過します。同じアーカイブから特権テストも実行できます。
+
+```sh
+mkdir "$out/priv"
+tar -xzf "$out/riscv-tests.tar.gz" -C "$out/priv" --wildcards './rv32mi-*' './rv32si-*'
+python3 "$runner" --penv target/release/penv --platform "$virt" \
+  --artifacts "$out/priv-results" "$out"/priv/*
+```
+
+特権テストは 22 件中 21 件が通過しました。`rv32mi-p-breakpoint` は `tselect`、`tdata1`、`tdata2` のデバッグトリガーを要求し、現行版では `tohost` コード 2 で失敗するため runner は終了コード 1 を返します。
+
+同リリースの `riscv-arch-tests.tar.gz`（SHA-256 `c07ba4f475e96395d77287e1fd471a4a43af47d09f121393f61812158462b3c1`）から `sail-rv32-max/elfs/rv32i/{I,M}/*.elf` を取り出し、同じ runner に `--act` を加えて実行しました。47 件すべてが初期化時の `fmv.w.x`（`mtval=0xf0008053`）で違法命令になり、ACT が失敗コード 1 を返しました。この配布物は Sail の最大構成で、Renode が指定する `spike-rv32-max` のビルドとは別です。penv の ISA 設定に合う ACT ELF を作るには、上流指定のソースと参照モデル・ツールチェーンが必要です。この環境では Sail と RISC-V GNU クロスコンパイラが未導入です。
+
+Renode の例外ケースは Robot 内の URL から `riscv32--ebreak_custom_test.elf` を取得し、SHA-1 `4db0870a69de9bba7ccda18908832c5b72cff35e` を照合して実行しました。REPL は `CPU.VexRiscv` の `rv32im_zicsr`、RAM `0x80000000`（`0x1000` バイト）、LiteX UART `0x40008000`（`txFifoCapacity: 0`）を指定します。上流と同様に RESC の `sysbus LoadELF` からロードすることで ELF の浮動小数点 ABI フラグを受け入れます。例外ケースと LiteX の直接起動 MicroPython は `scripts/validate-riscv-upstream.sh` で再現できます。MicroPython は上流 RESC を実行し、UART の `2 + 3` → `5` を照合します。
 
 ## Renode / penv 共通計測ハーネス
 

@@ -1,0 +1,7 @@
+// Integer subset of tests/unit-tests/riscv-ebreak.robot.
+cpu: CPU.VexRiscv @ sysbus
+    cpuType: "rv32im_zicsr"
+mem: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.LiteX_UART @ sysbus 0x40008000
+    txFifoCapacity: 0

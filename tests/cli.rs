@@ -494,3 +494,44 @@ fn loads_resc_wrappers_with_shared_variables_and_relative_assets() {
             .contains("recursive or excessively deep script include")
     );
 }
+
+#[test]
+fn distinguishes_rv32_act_console_packets_from_tohost_completion() {
+    let directory = std::env::temp_dir().join(format!("penv-tohost-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let raw = directory.join("tohost.bin");
+    let program = [
+        0x8000_02b7u32, // lui t0, 0x80000
+        0x0802_8293,    // addi t0, t0, 128
+        0x0410_0313,    // li t1, 'A' (odd low word)
+        0x0062_a023,    // sw t1, 0(t0)
+        0x0101_0337,    // lui t1, 0x01010 (ACT console command)
+        0x0062_a223,    // sw t1, 4(t0)
+        0x0010_0313,    // li t1, 1 (pass)
+        0x0062_a023,    // sw t1, 0(t0)
+        0x0002_a223,    // sw zero, 4(t0) (ACT completion command)
+        0x0010_0073,    // ebreak
+    ];
+    fs::write(&raw, program.map(u32::to_le_bytes).as_flattened()).unwrap();
+    for (option, limit, status, uart, marker) in [
+        ("--tohost-act", "20", 0, &b"A"[..], "tohost exit code 0"),
+        (
+            "--tohost-act",
+            "4",
+            2,
+            &b""[..],
+            "instruction limit reached",
+        ),
+        ("--tohost", "20", 1, &b""[..], "tohost exit code 32"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--raw", option, "0x80000080", "--max-steps", limit])
+            .arg(&raw)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(status), "{output:?}");
+        assert_eq!(output.stdout, uart);
+        assert!(String::from_utf8_lossy(&output.stderr).contains(marker));
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
