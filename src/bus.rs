@@ -404,6 +404,18 @@ impl Bus {
         Ok(())
     }
 
+    pub fn set_nvic_frequency(&mut self, target: &str, frequency: u32) -> Result<(), String> {
+        self.validate_nvic_name(target)?;
+        if frequency == 0 {
+            return Err("NVIC Frequency must be positive".into());
+        }
+        self.systick
+            .as_mut()
+            .ok_or("NVIC Frequency requires a SysTick counter")?
+            .set_frequency(frequency);
+        Ok(())
+    }
+
     pub fn set_nvic_clocked(&mut self, target: &str, clocked: bool) -> Result<(), String> {
         self.validate_nvic_name(target)?;
         self.systick

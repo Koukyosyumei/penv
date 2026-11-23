@@ -55,6 +55,7 @@ enum Action {
     NvicGpio(String, u8, bool),
     NvicPending(String, u32),
     NvicClocked(String, bool),
+    NvicFrequency(String, u32),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
@@ -212,6 +213,10 @@ pub fn run(
             Action::NvicPending(target, exception) => machine
                 .bus
                 .pend_nvic_exception(target, *exception)
+                .map(|()| None),
+            Action::NvicFrequency(target, frequency) => machine
+                .bus
+                .set_nvic_frequency(target, *frequency)
                 .map(|()| None),
             Action::NvicClocked(target, clocked) => machine
                 .bus
@@ -766,6 +771,10 @@ fn execute(
         [device, state @ ("Press" | "Release")] => Some(Action::Button(
             resolve(device)?.to_owned(),
             *state == "Press",
+        )),
+        [target, "Frequency", value] => Some(Action::NvicFrequency(
+            resolve(target)?.to_owned(),
+            crate::parse_address(resolve(value)?)?,
         )),
         [target, "Clocked", value] => Some(Action::NvicClocked(
             resolve(target)?.to_owned(),

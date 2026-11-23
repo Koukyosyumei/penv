@@ -173,6 +173,77 @@ fn upstream_stm32f072_console_echo_replies_after_uart_prompt() {
 }
 
 #[test]
+fn renode_resc_systick_counts_at_100_hz_for_both_write_orders() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-systick-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    systickFrequency: 48000000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let mut image = vec![0; 0x20];
+    image[..4].copy_from_slice(&0x800u32.to_le_bytes());
+    image[4..8].copy_from_slice(&0x21u32.to_le_bytes());
+    // The idle core leaves the SysTick observations to the monitor.
+    image.extend_from_slice(&0xbf30u16.to_le_bytes()); // wfi
+    image.extend_from_slice(&0xe7fdu16.to_le_bytes()); // b 0x20
+    fs::write(directory.join("firmware.bin"), image).unwrap();
+    let path = directory.join("boot.resc");
+    let run = |commands: &str, limit: &str| {
+        fs::write(&path, format!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n{commands}"
+        )).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", limit, "--script"])
+            .arg(&path)
+            .output()
+            .unwrap()
+    };
+    let reload = "sysbus WriteDoubleWord 0xe000e014 10";
+    let current = "sysbus WriteDoubleWord 0xe000e018 0";
+    for (first, second) in [(current, reload), (reload, current)] {
+        let result = run(
+            &format!(
+                "nvic Frequency 100\nsysbus WriteDoubleWord 0xe000e010 0\n{first}\n{second}\n{}",
+                concat!(
+                    "sysbus WriteDoubleWord 0xe000e010 5\n",
+                    "sysbus ReadDoubleWord 0xe000e018\n",
+                    "emulation RunFor \"0.09\"\nsysbus ReadDoubleWord 0xe000e018\n",
+                    "emulation RunFor \"0.01\"\nsysbus ReadDoubleWord 0xe000e018\n",
+                    "emulation RunFor \"0.01\"\nsysbus ReadDoubleWord 0xe000e018\n",
+                ),
+            ),
+            "11000000",
+        );
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            result.stdout,
+            b"0x0000000a\n0x00000001\n0x0000000a\n0x00000009\n"
+        );
+    }
+    for (commands, diagnostic) in [
+        ("nvic Frequency 0\n", "NVIC Frequency must be positive"),
+        ("other Frequency 100\n", "unknown Cortex-M NVIC"),
+    ] {
+        let result = run(commands, "1");
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(diagnostic),
+            "{result:?}"
+        );
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_cortex_m_evaluates_condition_codes() {
     let directory =
         std::env::temp_dir().join(format!("penv-resc-condition-{}", std::process::id()));

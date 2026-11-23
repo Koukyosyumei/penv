@@ -382,7 +382,7 @@ def classify_robot(name, case, body, parameter):
             return OUT, "STM32F4 / Cortex-M4", "Uses BASEPRI=0x50 and GetPriorityBoost; Armv6-M has PRIMASK"
         if "WFE" in case:
             return PASS, V6, "renode_wfe_wakes_on_new_pending_irq_only_with_sevonpend; same SCR, GPIO IRQ5, WFE/STR and before/after memory; CLI adds a RESC-level observation"
-        return PARTIAL, V6, "renode_systick_counts_and_reloads_for_both_cvr_write_orders; explicit ticks replace 100 Hz RunFor timing checks"
+        return PASS, V6, "renode_resc_systick_counts_at_100_hz_for_both_write_orders; same NVIC Frequency, register writes, RunFor intervals and four CVR observations"
     if name == "arm-cortex-m-signals":
         if "DWT" in case or "Clocked State" in case:
             return PARTIAL, F072, "renode_systick_external_clock_gate_survives_reset and upstream Blinky clock variant; original RA8M1/SAMD51 CPU and DWT checkpoints absent"

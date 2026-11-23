@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 22 | 40 | 51 | 239 |
+| Renode Robot | 113 | 24 | 38 | 51 | 239 |
 | Renode Infrastructure NUnit | 134 | 35 | 0 | 99 | 9 |
-| 合計 | **247** | **57** | **40** | **150** | **248** |
+| 合計 | **247** | **59** | **38** | **150** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植40件と未達150件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植38件と未達150件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -237,4 +237,16 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-precise-verification
 ```sh
 cargo test --locked renode_resc_cortex_m_evaluates_condition_codes
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-conditions-verification
+```
+
+
+## RESC の NVIC Frequency と SysTick
+
+固定 Renode の `arm-cortex-m-interrupts.robot` の SysTick 2ケースを、通常の RESC で移植した。Cortex-M0 の WFI ループを使い、`nvic Frequency 100`、CSR の無効化、CVR=0 と RVR=10 の両順序、CSR=5 を上流と揃えた。CVR は有効化直後と、続けて `RunFor "0.09"`、`RunFor "0.01"`、`RunFor "0.01"` を実行した直後に読み、いずれも `10 → 1 → 10 → 9` となることを検査した。CPU が WFI に入っても仮想時間上の SysTick は進む。周波数の範囲は既存の penv SysTick と同じ正の32ビット整数。
+
+共通機能のうち、CPU pause/halt の上流ケースは壁時計経過中の自律実行と同期量子の観測が必要なため、この同期 RESC 実装では未達に残した。DWT と組み合わせるクロック状態のケースも部分移植のまま。
+
+```sh
+cargo test --locked renode_resc_systick
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systick-resc-verification
 ```
