@@ -872,7 +872,7 @@ fn parse_content(
         }
         if line.starts_with(char::is_whitespace) {
             let mut attribute = text.to_owned();
-            let init = matches!(text, "init:" | "init add:");
+            let init = script_header(text).is_some();
             if init || inline_model(text).is_some() {
                 let indent = line.len() - line.trim_start().len();
                 while let Some((_, nested)) = lines.peek() {
@@ -1265,16 +1265,15 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             .body
             .retain(|(_, text)| !scalar_property(text).is_some_and(|key| replaced.contains(key)));
         for (line, attribute) in block.body {
-            if let Some((header, commands)) = init_commands(&attribute) {
-                let existing = target
-                    .body
-                    .iter()
-                    .position(|(_, text)| init_commands(text).is_some());
-                let mut section = String::from("init:");
+            if let Some((phase, append, commands)) = script_commands(&attribute) {
+                let existing = target.body.iter().position(|(_, text)| {
+                    script_commands(text).is_some_and(|(existing, _, _)| existing == phase)
+                });
+                let mut section = String::from(phase.header());
                 if let Some(index) = existing {
                     let (_, previous) = target.body.remove(index);
-                    if header == "init add:" {
-                        for command in init_commands(&previous).unwrap().1 {
+                    if append {
+                        for command in script_commands(&previous).unwrap().2 {
                             section.push('\n');
                             section.push_str(command);
                         }
@@ -1734,7 +1733,7 @@ fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
     let attributes: Vec<_> = entry
         .body
         .iter()
-        .filter(|(_, attribute)| init_commands(attribute).is_none())
+        .filter(|(_, attribute)| script_commands(attribute).is_none())
         .collect();
     for (_, attribute) in &attributes {
         if let Some((_, value)) = attribute.split_once(':')
@@ -1768,7 +1767,7 @@ fn build_entries(
     f4_repl_timing: bool,
     check_only: bool,
 ) -> Result<Machine, String> {
-    build_entries_with_init(
+    build_entries_with_scripts(
         path,
         entries,
         f4_repl_timing,
@@ -1777,12 +1776,12 @@ fn build_entries(
     )
 }
 
-fn build_entries_with_init(
+fn build_entries_with_scripts(
     path: &Path,
     entries: &[Entry],
     f4_repl_timing: bool,
     check_only: bool,
-    mut execute_init: impl FnMut(&Entry, &[&str], &mut Machine) -> Result<(), String>,
+    mut handle_script: impl FnMut(&Entry, ScriptPhase, &[&str], &mut Machine) -> Result<(), String>,
 ) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
     machine.bus.f4_repl_timing = f4_repl_timing;
@@ -1807,13 +1806,13 @@ fn build_entries_with_init(
                 let [(_, attribute)] = entry.body.as_slice() else {
                     return Err(entry.error("expected a single sysbus init section"));
                 };
-                let Some(("init:", commands)) = init_commands(attribute) else {
+                let Some((ScriptPhase::Init, false, commands)) = script_commands(attribute) else {
                     return Err(entry.error("expected sysbus init"));
                 };
                 if entry.registration.is_some() {
                     return Err(entry.error("expected sysbus init"));
                 }
-                execute_init(entry, &commands, &mut machine)?;
+                handle_script(entry, ScriptPhase::Init, &commands, &mut machine)?;
             }
             "Miscellaneous.BitBanding" => {
                 let properties = keys(entry, &["peripheralBase"])?;
@@ -1871,8 +1870,8 @@ fn build_entries_with_init(
                         .map_err(|error| entry.error(&error))?;
                 }
                 for (_, attribute) in &entry.body {
-                    if let Some((_, commands)) = init_commands(attribute) {
-                        execute_init(entry, &commands, &mut machine)?;
+                    if let Some((phase, _, commands)) = script_commands(attribute) {
+                        handle_script(entry, phase, &commands, &mut machine)?;
                     }
                 }
             }
@@ -2772,11 +2771,34 @@ fn json_string(value: &str) -> String {
     output
 }
 
-fn init_commands(attribute: &str) -> Option<(&str, Vec<&str>)> {
-    let (header, text) = attribute.split_once('\n').unwrap_or((attribute, ""));
-    if !matches!(header, "init:" | "init add:") {
-        return None;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScriptPhase {
+    Init,
+    Reset,
+}
+
+impl ScriptPhase {
+    fn header(self) -> &'static str {
+        match self {
+            Self::Init => "init:",
+            Self::Reset => "reset:",
+        }
     }
+}
+
+fn script_header(header: &str) -> Option<(ScriptPhase, bool)> {
+    match header {
+        "init:" => Some((ScriptPhase::Init, false)),
+        "init add:" => Some((ScriptPhase::Init, true)),
+        "reset:" => Some((ScriptPhase::Reset, false)),
+        "reset add:" => Some((ScriptPhase::Reset, true)),
+        _ => None,
+    }
+}
+
+fn script_commands(attribute: &str) -> Option<(ScriptPhase, bool, Vec<&str>)> {
+    let (header, text) = attribute.split_once('\n').unwrap_or((attribute, ""));
+    let (phase, append) = script_header(header)?;
     let mut commands = Vec::new();
     let mut start = 0;
     for end in unquoted_delimiters(text, &['\n', ';'])
@@ -2789,15 +2811,16 @@ fn init_commands(attribute: &str) -> Option<(&str, Vec<&str>)> {
         }
         start = end + 1;
     }
-    Some((header, commands))
+    Some((phase, append, commands))
 }
 
 fn configure_bus_init(
     entry: &Entry,
+    phase: ScriptPhase,
     commands: &[&str],
     machine: &mut Machine,
 ) -> Result<(), String> {
-    if entry.name != "sysbus" {
+    if phase != ScriptPhase::Init || entry.name != "sysbus" {
         return Err(entry.error("unsupported peripheral init command"));
     }
     for command in commands {

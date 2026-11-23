@@ -1134,8 +1134,9 @@ fn assert_init_syntax(source: &str, expected: &[&str]) {
     let [(_, attribute)] = entry.body.as_slice() else {
         panic!("expected one init attribute")
     };
-    let (header, commands) = init_commands(attribute).unwrap();
-    assert_eq!(header, "init:");
+    let (phase, append, commands) = script_commands(attribute).unwrap();
+    assert_eq!(phase, ScriptPhase::Init);
+    assert!(!append);
     assert_eq!(commands, expected);
 }
 
@@ -1495,15 +1496,16 @@ fn renode_empty_keyword_using_parameter() {
     assert!(error.contains("SyntaxError:"), "{error}");
 }
 
-fn assert_merged_init(source: &str, expected: &[&str]) {
+fn assert_dispatched_script(source: &str, expected_phase: ScriptPhase, expected: &[&str]) {
     let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
     let mut calls = Vec::new();
-    build_entries_with_init(
+    build_entries_with_scripts(
         Path::new("<platform string>"),
         &entries,
         false,
         true,
-        |entry, commands, _| {
+        |entry, phase, commands, _| {
+            assert_eq!(phase, expected_phase);
             assert_eq!(entry.name, entries[0].name);
             calls.push(
                 commands
@@ -1520,16 +1522,18 @@ fn assert_merged_init(source: &str, expected: &[&str]) {
 
 #[test]
 fn renode_init_merge_replace() {
-    assert_merged_init(
+    assert_dispatched_script(
         "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>\n    init:\n        Increment 1\n\nperi:\n    init:\n        Increment 2\n        Increment 3",
+        ScriptPhase::Init,
         &["Increment 2", "Increment 3"],
     );
 }
 
 #[test]
 fn renode_init_merge_append() {
-    assert_merged_init(
+    assert_dispatched_script(
         "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    init:\n        Increment 1\n\nperi:\n    init add:\n        Increment 2\n        Increment 3",
+        ScriptPhase::Init,
         &["Increment 1", "Increment 2", "Increment 3"],
     );
 }
@@ -1559,8 +1563,27 @@ sysbus:
 
 #[test]
 fn renode_init_merge_sysbus_dispatch() {
-    assert_merged_init(
+    assert_dispatched_script(
         "\nsysbus:\n    init:\n        WriteByte 0 1",
+        ScriptPhase::Init,
         &["WriteByte 0 1"],
+    );
+}
+
+#[test]
+fn renode_reset_dispatch_replace() {
+    assert_dispatched_script(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>\n    reset:\n        Increment 1\n\nperi:\n    reset:\n        Increment 2\n        Increment 3",
+        ScriptPhase::Reset,
+        &["Increment 2", "Increment 3"],
+    );
+}
+
+#[test]
+fn renode_reset_dispatch_append() {
+    assert_dispatched_script(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    reset:\n        Increment 1\n\nperi:\n    reset add:\n        Increment 2\n        Increment 3",
+        ScriptPhase::Reset,
+        &["Increment 1", "Increment 2", "Increment 3"],
     );
 }
