@@ -88,9 +88,28 @@ struct Region {
     bytes: Vec<u8>,
 }
 
+struct BytePeripheral {
+    base: u32,
+    bytes: Vec<u8>,
+}
+
+impl BytePeripheral {
+    fn offset(&self, address: u32) -> Option<usize> {
+        let offset = address.checked_sub(self.base)? as usize;
+        (offset < self.bytes.len()).then_some(offset)
+    }
+}
+
+struct ByteSpan {
+    start: u32,
+    offsets: std::ops::Range<usize>,
+    peripheral: bool,
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    byte_peripherals: Vec<BytePeripheral>,
     faulting_regions: Vec<(u32, Option<u32>, bool, bool)>,
     constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
@@ -1223,6 +1242,10 @@ impl Bus {
                 let base = u64::from(peripheral.base);
                 start < base + u64::from(peripheral.size) && base < end
             })
+            || self.byte_peripherals.iter().any(|device| {
+                let base = u64::from(device.base);
+                start < base + device.bytes.len() as u64 && base < end
+            })
             || self.regions.iter().any(|region| {
                 region.bases().any(|base| {
                     let other = u64::from(base);
@@ -1625,48 +1648,89 @@ impl Bus {
         )
     }
 
-    fn memory_spans(
-        &self,
-        address: u32,
-        size: usize,
-    ) -> Result<Vec<(u32, std::ops::Range<usize>)>, BusError> {
+    pub fn map_byte_peripheral(&mut self, base: u32, size: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(size);
+        if size == 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping byte peripheral at {base:#010x}"
+            ));
+        }
+        self.byte_peripherals.push(BytePeripheral {
+            base,
+            bytes: vec![0; size as usize],
+        });
+        Ok(())
+    }
+
+    fn byte_spans(&self, address: u32, size: usize) -> Result<Vec<ByteSpan>, BusError> {
         let start = u64::from(address);
         let end = start
             .checked_add(size as u64)
             .filter(|&end| end <= 1 << 32)
             .ok_or(BusError::Unmapped(address, size))?;
         let mut spans = Vec::new();
+        let mut add = |base: u32, size: usize, peripheral| {
+            let base = u64::from(base);
+            let lo = start.max(base);
+            let hi = end.min(base + size as u64);
+            if lo < hi {
+                spans.push(ByteSpan {
+                    start: lo as u32,
+                    offsets: (lo - start) as usize..(hi - start) as usize,
+                    peripheral,
+                });
+            }
+        };
         for region in &self.regions {
-            for base in region.bases().map(u64::from) {
-                let lo = start.max(base);
-                let hi = end.min(base + region.bytes.len() as u64);
-                if lo < hi {
-                    spans.push((lo as u32, (lo - start) as usize..(hi - start) as usize));
-                }
+            for base in region.bases() {
+                add(base, region.bytes.len(), false);
             }
         }
+        for device in &self.byte_peripherals {
+            add(device.base, device.bytes.len(), true);
+        }
         // Two mappings can share a backing. Apply writes in address order.
-        spans.sort_by_key(|(address, _)| *address);
+        spans.sort_by_key(|span| span.start);
         Ok(spans)
     }
 
-    pub fn write_mapped_bytes(&mut self, address: u32, input: &[u8]) -> Result<(), BusError> {
-        for (start, bytes) in self.memory_spans(address, input.len())? {
-            self.memory(start, bytes.len())?
-                .copy_from_slice(&input[bytes]);
+    pub fn write_bytes(&mut self, address: u32, input: &[u8]) -> Result<(), BusError> {
+        for span in self.byte_spans(address, input.len())? {
+            let bytes = &input[span.offsets];
+            if span.peripheral {
+                for (offset, &byte) in bytes.iter().enumerate() {
+                    self.write(
+                        span.start + offset as u32,
+                        1,
+                        u32::from(byte),
+                        &mut io::sink(),
+                    )?;
+                }
+            } else {
+                self.memory(span.start, bytes.len())?.copy_from_slice(bytes);
+            }
         }
         Ok(())
     }
 
     #[cfg(test)]
-    fn read_mapped_bytes(&mut self, address: u32, size: usize) -> Result<Vec<u8>, BusError> {
+    fn read_bytes(&mut self, address: u32, size: usize) -> Result<Vec<u8>, BusError> {
+        let spans = self.byte_spans(address, size)?;
         let mut output = vec![0; size];
-        for (start, bytes) in self.memory_spans(address, size)? {
-            let memory = EthernetDma {
-                regions: &mut self.regions,
-                reservations: &mut self.reservations,
-            };
-            output[bytes.clone()].copy_from_slice(memory.read(start, bytes.len()).unwrap());
+        for span in spans {
+            let bytes = &mut output[span.offsets];
+            if span.peripheral {
+                for (offset, byte) in bytes.iter_mut().enumerate() {
+                    *byte = self.read::<1>(span.start + offset as u32)? as u8;
+                }
+            } else {
+                let memory = EthernetDma {
+                    regions: &mut self.regions,
+                    reservations: &mut self.reservations,
+                };
+                bytes.copy_from_slice(memory.read(span.start, bytes.len()).unwrap());
+            }
         }
         Ok(output)
     }
@@ -1772,6 +1836,14 @@ impl Bus {
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         if let Some(address) = self.faulting_address(address, N, false) {
             return Err(BusError::Unmapped(address, N));
+        }
+        if N == 1
+            && let Some(value) = self
+                .byte_peripherals
+                .iter()
+                .find_map(|device| device.offset(address).map(|offset| device.bytes[offset]))
+        {
+            return Ok(u32::from(value));
         }
         if N == 4
             && let Some(system) = &self.f4_system
@@ -2175,6 +2247,16 @@ impl Bus {
     ) -> Result<(), BusError> {
         if let Some(address) = self.faulting_address(address, width, true) {
             return Err(BusError::Unmapped(address, width));
+        }
+        if width == 1
+            && let Some(byte) = self.byte_peripherals.iter_mut().find_map(|device| {
+                device
+                    .offset(address)
+                    .map(|offset| &mut device.bytes[offset])
+            })
+        {
+            *byte = value as u8;
+            return Ok(());
         }
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
@@ -2863,61 +2945,82 @@ mod mapped_byte_tests {
     #[test]
     fn renode_mapped_bytes_write_fits_inside_segment() {
         let mut bus = aliased_segment();
-        bus.write_mapped_bytes(4, &BYTES).unwrap();
-        assert_eq!(bus.read_mapped_bytes(4, 8).unwrap(), BYTES);
-        assert_eq!(bus.read_mapped_bytes(ALIAS + 4, 8).unwrap(), BYTES);
+        bus.write_bytes(4, &BYTES).unwrap();
+        assert_eq!(bus.read_bytes(4, 8).unwrap(), BYTES);
+        assert_eq!(bus.read_bytes(ALIAS + 4, 8).unwrap(), BYTES);
     }
 
     #[test]
     fn renode_mapped_bytes_partial_write_at_beginning() {
         let mut bus = aliased_segment();
-        bus.write_mapped_bytes(10, &BYTES).unwrap();
-        assert_eq!(
-            bus.read_mapped_bytes(10, 8).unwrap(),
-            [0, 1, 2, 3, 4, 5, 0, 0]
-        );
+        bus.write_bytes(10, &BYTES).unwrap();
+        assert_eq!(bus.read_bytes(10, 8).unwrap(), [0, 1, 2, 3, 4, 5, 0, 0]);
     }
 
     #[test]
     fn renode_mapped_bytes_partial_write_at_end() {
         let mut bus = aliased_segment();
-        bus.write_mapped_bytes(ALIAS - 4, &BYTES).unwrap();
+        bus.write_bytes(ALIAS - 4, &BYTES).unwrap();
         assert_eq!(
-            bus.read_mapped_bytes(ALIAS - 4, 8).unwrap(),
+            bus.read_bytes(ALIAS - 4, 8).unwrap(),
             [0, 0, 0, 0, 4, 5, 6, 7]
         );
-        assert_eq!(bus.read_mapped_bytes(0, 4).unwrap(), [4, 5, 6, 7]);
+        assert_eq!(bus.read_bytes(0, 4).unwrap(), [4, 5, 6, 7]);
     }
 
     #[test]
     fn renode_mapped_bytes_write_to_hole() {
         let mut bus = aliased_segment();
-        bus.write_mapped_bytes(100, &BYTES).unwrap();
-        assert_eq!(bus.read_mapped_bytes(100, 8).unwrap(), [0; 8]);
+        bus.write_bytes(100, &BYTES).unwrap();
+        assert_eq!(bus.read_bytes(100, 8).unwrap(), [0; 8]);
     }
 
     #[test]
     fn renode_mapped_bytes_write_overlaps_both_ends() {
         let mut bus = aliased_segment();
         let input = (0..32).collect::<Vec<_>>();
-        bus.write_mapped_bytes(ALIAS - 4, &input).unwrap();
+        bus.write_bytes(ALIAS - 4, &input).unwrap();
         let expected = [&[0; 4][..], &input[4..20], &[0; 12]].concat();
-        assert_eq!(bus.read_mapped_bytes(ALIAS - 4, 32).unwrap(), expected);
+        assert_eq!(bus.read_bytes(ALIAS - 4, 32).unwrap(), expected);
     }
 
     #[test]
     fn renode_mapped_bytes_reads_both_memory_segments() {
+        check_mixed_transfer(true, true);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_reads_memory_then_peripheral() {
+        check_mixed_transfer(true, false);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_reads_peripheral_then_memory() {
+        check_mixed_transfer(false, true);
+    }
+
+    #[test]
+    fn renode_mapped_bytes_reads_both_peripherals() {
+        check_mixed_transfer(false, false);
+    }
+
+    fn check_mixed_transfer(first_memory: bool, second_memory: bool) {
         let mut bus = Bus::default();
-        bus.map_ram(50, 100).unwrap();
-        bus.map_ram(200, 100).unwrap();
+        for (base, memory) in [(50, first_memory), (200, second_memory)] {
+            if memory {
+                bus.map_ram(base, 100).unwrap();
+            } else {
+                bus.map_byte_peripheral(base, 100).unwrap();
+            }
+        }
         let input = (0..350)
             .map(|value| (value % 255) as u8)
             .collect::<Vec<_>>();
-        bus.write_mapped_bytes(0, &input).unwrap();
+        bus.write_bytes(0, &input).unwrap();
         let mut expected = vec![0; 350];
         for span in [50..150, 200..300] {
             expected[span.clone()].copy_from_slice(&input[span]);
         }
-        assert_eq!(bus.read_mapped_bytes(0, 350).unwrap(), expected);
+        assert_eq!(bus.read_bytes(0, 350).unwrap(), expected);
     }
 }

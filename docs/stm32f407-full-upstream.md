@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 43 | 0 | 174 | 7 |
-| **合計** | **730** | **121** | **0** | **609** | **244** |
+| Infrastructure | 217 | 46 | 0 | 171 | 7 |
+| **合計** | **730** | **124** | **0** | **606** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 609 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 606 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -645,12 +645,11 @@ HardFault の `CFSR=0x8200` と `BFAR=0x1000` を検査して UART に `OK` を�
 2 アドレスに登録した 16 バイトの同一 RAM を使い、区間内、片端、両端、未登録区間への
 書き込みを検査します。2 つの独立した RAM を使う `ShouldReadBytes` の
 `true; true` は、350 バイトのうち登録区間だけに値が残り、隙間が 0 になることを
-確認します。バイト周辺機器を含む残り 3 構成には、バルク転送中の周辺機器コールバックが
-必要です。隣接領域を横断する `FindBytes` も別件に残ります。
+確認します。バイト周辺機器を含む残り 3 構成の結果は次節に記載します。
 
 REPL は同一メモリーへの複数の `sysbus` 登録を受け付けます。`Report` または
 `DoNotReport` を明示したスクリプトの `LoadBinary` では、対象データのうち
-RAM と重なる部分を各マッピングへ書き込みます。追加 ELF は、ロード開始前半の
+登録済みの RAM とバイト周辺機器へ書き込みます。追加 ELF は、ロード開始前半の
 未登録区間が 0、後半の 4 バイトがエイリアスと主アドレスの双方で
 `0x07060504` になることを検査し、UART に `OK` を出します。
 
@@ -670,3 +669,34 @@ cargo test renode_mapped_bytes
     echo "$?" >"$work/freertos.status"
 ) &
 ```
+
+## SystemBus の RAM・バイト周辺機器混在転送
+
+固定 Infrastructure の `SystemBusTests.cs` の `ShouldReadBytes` で残っていた
+`true; false`、`false; true`、`false; false` の 3 構成を移植しました。
+C# のモックはバイト単位でアクセスする `Mocks.BytePeripheral` に対応させています。
+バスは転送範囲を登録区間ごとに処理し、RAM へは区間転送し、バイト周辺機器へは
+個別のバイト読み書きを行います。上流と同じ 50・200 番地の 100 バイト区間に対し、
+350 バイトを入力し、全バイトを検査します。読出しの隙間は 0 です。
+隣接領域と検索バッファー境界をまたぐ `FindBytes` は別件に残ります。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-mixed-bytes
+mkdir -p "$work"
+cargo test renode_mapped_bytes
+(
+    tests/cortex-m4-mapped-bytes.sh "$work/elf" >"$work/mixed-elf.log" 2>&1
+    echo "$?" >"$work/mixed-elf.status"
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+ELF スクリプトでは、既存のメモリーエイリアスに加え、RAM とバイト周辺機器の
+混在 REPL を `LoadBinary` で初期化します。ELF が `LDRB` で 350 バイトすべてを
+検査し、UART に `OK` を出力します。台帳は Rust の 3 構成を合格として数えます。

@@ -407,6 +407,14 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
+            "Mocks.BytePeripheral" => {
+                keys(entry, &[])?;
+                let (base, size) = entry.bus_range()?;
+                machine
+                    .bus
+                    .map_byte_peripheral(base, size)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Mocks.BusFaultingPeripheral" => {
                 let properties = keys(entry, &["FaultOffset"])?;
                 let offset = properties

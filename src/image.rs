@@ -41,7 +41,7 @@ pub fn load_script_binary(
     }
     machine
         .bus
-        .write_mapped_bytes(address, &bytes)
+        .write_bytes(address, &bytes)
         .map_err(|error| error.to_string())
 }
 
