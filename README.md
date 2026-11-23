@@ -1212,3 +1212,19 @@ target/release/penv check-platform "$e/local.repl" --platform-root ../renode
 ```
 
 `cargo test` 134件、固定 STM32H7 REPL 7構成、構文診断3件、Zephyr Blinky・Button ELF が通過しました。ケース別の結果は上記の `cases.tsv` に保存しました。台帳は対象786件のうち等価合格128件、部分検証10件、未達648件です。実行時のローカルスコープは、ファイル別の名前空間と、型付き参照および追記先の解決が必要です。
+
+### backlog-network-02c4dcdab82b-1
+
+REPL の字下げ属性で、スカラーのキーと値からなる辞書を解析します。固定上流の7ケースを個別の Rust テストとして移植し、同じバイナリで実行しました。空辞書、項目順、引用符付きキーと数値トークン、末尾セミコロンを照合しました。閉じ波括弧、区切り、コロンの誤りは上流が照合する診断文字列で確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 141件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-dictionaries.5HgKaeRf` に保存しました。対象786件のうち等価合格135件、部分検証10件、未達641件です。入れ子の辞書・リスト・オブジェクトを辞書値に使う構文、波括弧付き属性ブロック内の辞書、辞書のモデルへの受け渡しは残っています。

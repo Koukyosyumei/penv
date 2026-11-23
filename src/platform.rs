@@ -381,6 +381,61 @@ pub(crate) fn quoted_value(text: &str) -> Result<String, &'static str> {
     Ok(value)
 }
 
+fn dictionary_value(value: &str) -> Result<Vec<(&str, &str)>, String> {
+    fn unexpected(input: &str) -> String {
+        input.chars().next().map_or_else(
+            || "Unexpected end of input in dictionary".into(),
+            |character| format!("unexpected '{character}' in dictionary"),
+        )
+    }
+
+    fn token(input: &str) -> Result<(&str, &str), String> {
+        if input.starts_with('"') {
+            let (_, tail) = quoted_prefix(input).map_err(str::to_owned)?;
+            return Ok((&input[..input.len() - tail.len()], tail.trim_start()));
+        }
+        let end = if input.starts_with('<') {
+            input.find('>').map_or(0, |index| index + 1)
+        } else {
+            input
+                .find(|c: char| c.is_whitespace() || ":;,}\"{[".contains(c))
+                .unwrap_or(input.len())
+        };
+        if end == 0 {
+            return Err(unexpected(input));
+        }
+        Ok((&input[..end], input[end..].trim_start()))
+    }
+
+    let mut input = value
+        .strip_prefix('{')
+        .ok_or_else(|| unexpected(value))?
+        .trim_start();
+    let mut items = Vec::new();
+    loop {
+        if let Some(tail) = input.strip_prefix('}') {
+            if tail.trim().is_empty() {
+                return Ok(items);
+            }
+            return Err(unexpected(tail.trim_start()));
+        }
+        let (key, tail) = token(input)?;
+        let value = tail
+            .strip_prefix(':')
+            .ok_or_else(|| unexpected(tail))?
+            .trim_start();
+        let (value, tail) = token(value)?;
+        items.push((key, value));
+        if let Some(rest) = tail.strip_prefix(';') {
+            input = rest.trim_start();
+        } else if tail.starts_with('}') {
+            input = tail;
+        } else {
+            return Err(unexpected(tail));
+        }
+    }
+}
+
 fn using_path(line: &str) -> Result<String, &'static str> {
     let invalid = "expected using \"path.repl\"";
     let (path, tail) = quoted_prefix(line.trim()).map_err(|_| invalid)?;
@@ -487,11 +542,30 @@ fn parse_text(
             continue;
         }
         if line.starts_with(char::is_whitespace) {
+            let mut property = text.to_owned();
+            if let Some((_, value)) = text.split_once(':')
+                && value.trim_start().starts_with('{')
+            {
+                let mut depth = brace_depth(value);
+                while depth > 0 {
+                    let Some((index, raw)) = lines.next() else {
+                        break;
+                    };
+                    let continuation = comments
+                        .line(raw)
+                        .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                    depth += brace_depth(&continuation);
+                    property.push(' ');
+                    property.push_str(continuation.trim());
+                }
+                let (_, value) = property.split_once(':').unwrap();
+                dictionary_value(value.trim()).map_err(|detail| error(&detail))?;
+            }
             current
                 .as_mut()
                 .ok_or_else(|| error("property has no declaration"))?
                 .body
-                .push((source, text.into()));
+                .push((source, property));
             continue;
         }
         if let Some(mut entry) = current.take() {
@@ -2408,6 +2482,86 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    fn dictionary_fixture(value: &str) -> Result<Vec<Entry>, String> {
+        parse(&format!("\ndevice: Something\n    dict: {value}"))
+    }
+
+    fn assert_dictionary(value: &str, expected: &[(&str, &str)]) {
+        let entries = dictionary_fixture(value).unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        let [(_, property)] = entry.body.as_slice() else {
+            panic!("expected one attribute")
+        };
+        let (_, value) = property.split_once(':').unwrap();
+        let pairs = dictionary_value(value.trim()).unwrap();
+        let decoded = pairs
+            .iter()
+            .map(|(key, value)| (quoted_value(key).unwrap(), *value))
+            .collect::<Vec<_>>();
+        assert!(
+            decoded
+                .iter()
+                .map(|(key, value)| (key.as_str(), *value))
+                .eq(expected.iter().copied())
+        );
+    }
+
+    #[test]
+    fn upstream_parse_empty_dict() {
+        assert_dictionary("{}", &[]);
+    }
+
+    #[test]
+    fn upstream_parse_simple_dict() {
+        assert_dictionary(r#"{"key0": 0; "key1": 1}"#, &[("key0", "0"), ("key1", "1")]);
+    }
+
+    #[test]
+    fn upstream_parse_dict_with_trailing_separator() {
+        assert_dictionary(
+            r#"{"key0": 0; "key1": 1;}"#,
+            &[("key0", "0"), ("key1", "1")],
+        );
+    }
+
+    #[test]
+    fn upstream_reject_dict_with_missing_closing_brace() {
+        assert!(
+            dictionary_fixture(r#"{"key0": 0; "key1": 1"#)
+                .unwrap_err()
+                .contains("Unexpected end of input")
+        );
+    }
+
+    #[test]
+    fn upstream_reject_dict_with_comma() {
+        assert!(
+            dictionary_fixture(r#"{"key0": 0, "key1": 1}"#)
+                .unwrap_err()
+                .contains("unexpected ','")
+        );
+    }
+
+    #[test]
+    fn upstream_reject_dict_with_missing_separator() {
+        assert!(
+            dictionary_fixture(r#"{"key0": 0 "key1": 1}"#)
+                .unwrap_err()
+                .contains("unexpected '\"'")
+        );
+    }
+
+    #[test]
+    fn upstream_reject_dict_with_missing_colon() {
+        assert!(
+            dictionary_fixture(r#"{"key0" 0, "key1": 1}"#)
+                .unwrap_err()
+                .contains("unexpected '0'")
+        );
     }
 
     #[test]

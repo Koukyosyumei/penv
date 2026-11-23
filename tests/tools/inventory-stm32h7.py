@@ -326,6 +326,13 @@ def triage(row):
     elif suite == 'ParserTests.cs' and name == 'ShouldParseEntryWithMultiplexedMultiIrqEntries':
         status, reason = 'PASS', '固定入力で送信元展開、全宛先の順序、宛先ごとの全端点と範囲グループ境界を照合。src/platform.rs'
     elif suite == 'ParserTests.cs' and name in {
+        'ShouldParseEmptyDict',
+        'ShouldParseSimpleDict',
+        'ShouldParseDictWithTrailingSeparator',
+        'ShouldNotParseDictWithMissingClosingBrace',
+        'ShouldNotParseDictWithComma',
+        'ShouldNotParseDictWithMissingSeparator',
+        'ShouldNotParseDictWithMissingColon',
         'ShouldParseEmptyFile',
         'ShouldParseSimpleEntry',
         'ShouldParseTwoEntries',
