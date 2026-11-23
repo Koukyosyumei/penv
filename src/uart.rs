@@ -151,7 +151,9 @@ impl UartLineMatch {
     }
 
     fn receive(&mut self, byte: u8) {
-        if self.matched {
+        // TerminalTester text mode discards NUL and, for LF-delimited
+        // lines, CR before matching. Raw output and other watchers keep them.
+        if self.matched || byte == 0 || (self.end == b'\n' && byte == b'\r') {
             return;
         }
         if byte == self.end {
@@ -221,6 +223,32 @@ impl UartHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_waits_ignore_nul_and_treat_cr_according_to_the_line_mode() {
+        let mut history = UartHistory::default();
+        for &byte in b"re\0a\rdy\r\nanswer\0:tail" {
+            history.receive(byte);
+        }
+        history.begin_wait("ready", UartWaitMode::Lf);
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("answer:", UartWaitMode::Prompt);
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("tail", UartWaitMode::Prompt);
+        assert!(!history.matched());
+
+        history.begin_wait("ready", UartWaitMode::Cr);
+        for &byte in b"rea\rdy\0\r" {
+            history.receive(byte);
+        }
+        assert!(!history.matched());
+        for &byte in b"rea\0dy\r" {
+            history.receive(byte);
+        }
+        assert!(history.matched());
+    }
 
     #[test]
     fn prompt_prefers_finished_lines_and_consumes_the_buffered_unfinished_line() {

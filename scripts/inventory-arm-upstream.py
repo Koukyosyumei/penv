@@ -68,7 +68,7 @@ OUT = "out of scope"
 
 F072_PORTS = {
     "Should Run Zephyr Hello Sample": (PASS, "hello_world_boots_elf_and_hex (ELF); USART1 Hello World"),
-    "Should Run Zephyr Console Echo Sample": (PARTIAL, "console_echo_accepts_resc_uart_input; same banner and Echo working?, but CRLF/full-line wait vs TerminalTester CR/unfinished-line echo"),
+    "Should Run Zephyr Console Echo Sample": (PASS, "console_echo_accepts_resc_uart_input; USART1 LF banner, Echo working? + CR, unfinished-line reply and two 8 s wait bounds"),
     "Should Run Zephyr Blinky Sample": (PASS, "blinky_alternates_led_states; six ordered LED states with 1 s waits"),
     "Should Run Zephyr Button Sample": (PARTIAL, "button_updates_led_and_reports_press; 0.3 s guest-time press vs Robot wall-clock Sleep"),
     "Should Read ADC": (PASS, "adc_waits_for_uart_between_voltage_changes; channel 1 at 0.6 V and 1.2 V, readings 745 and 1489"),
@@ -281,9 +281,13 @@ def classify_robot(name, case, body, parameter):
     if name == "ArrayMemory":
         return OPEN, V6, "Synthetic Cortex-M0+ REPL with ArrayMemory and 96b_neonkey ELF; retain save/clear/load and UART contract"
     if name == "STM32_UART":
+        if case == "Should Preserve Character Order When Baud Rate Becomes Zero":
+            return PARTIAL, F072, "renode_stm32_usart_preserves_receive_order_when_brr_becomes_zero verifies RDR=0x12 then 0x34; no pending serial frame to flush when BRR changes"
+        if case == "Should Drop Queued Character When Receiver Is Disabled":
+            return OPEN, F072, "Probe with UE|RE, BRR=0x10 and byte 0x12 observes RXNE=1 immediately and after clearing RE; upstream drops the still-in-flight byte"
         if case == "Should Drop Characters When UART Or Receiver Disabled":
             return PARTIAL, F072, "STM32F7_USART receive gating port; classic UART SR/DR/CR1 differ and 10 us pacing is unverified"
-        return OPEN, F072, "Shared 16 MHz STM32 UART RX frame behavior; translate classic SR/DR/CR1 stimulus to F072 ISR/RDR/CR1"
+        return OPEN, F072, "Shared 16 MHz STM32 UART RX frame behavior; penv raises RXNE immediately and has no timed IDLE, so the fixed 9+1 us frame/idle checks are unmet"
     if name == "stm32f4-erase":
         return PARTIAL, F072, "renode_stm32_flash_erase_modes_preserve_the_expected_ranges; F4 fixture uses 0x40023cxx, SER/SNB and sector 11, F0 uses page/bank erase"
     if name == "arm-cortex-m-bus-fault":

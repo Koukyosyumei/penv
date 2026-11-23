@@ -43,7 +43,7 @@ enum Action {
     NvicClocked(String, bool),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
-    WaitForUart(Option<String>, String, UartWaitMode),
+    WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     WriteUartLine(String, String, &'static [u8]),
 }
 
@@ -127,14 +127,14 @@ pub fn run(
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
                 .map(|()| None),
-            Action::WaitForUart(target, pattern, end) => {
+            Action::WaitForUart(target, pattern, end, timeout) => {
                 let start = machine.elapsed_steps();
                 wait_for_uart(
                     machine,
                     target.as_deref(),
                     pattern,
                     *end,
-                    budget,
+                    timeout.map_or(budget, |timeout| timeout.min(budget)),
                     &mut output,
                 )
                 .and_then(|(stop, count)| {
@@ -371,7 +371,7 @@ fn execute(
     let action = match words.as_slice() {
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
-            let expected = format!("expected {command} [USART] \"literal text\"");
+            let expected = format!("expected {command} [USART] \"literal text\" [timeout=seconds]");
             let (target, line) = if args.starts_with('"') {
                 (None, args)
             } else {
@@ -380,9 +380,23 @@ fn execute(
                     .ok_or_else(|| expected.clone())?;
                 (Some(resolve(target)?.to_owned()), line.trim_start())
             };
-            let (pattern, ending) = quoted_argument(line)
+            let (pattern, options) = quoted_argument(line)
                 .filter(|(pattern, _)| !pattern.is_empty())
                 .ok_or(expected)?;
+            let (ending, timeout) = match options.rsplit_once(char::is_whitespace) {
+                Some((ending, timeout)) => (ending.trim_end(), timeout),
+                None if options.starts_with("timeout=") => ("", options),
+                None => (options, ""),
+            };
+            let timeout = if timeout.is_empty() {
+                None
+            } else {
+                Some(duration_steps(
+                    timeout
+                        .strip_prefix("timeout=")
+                        .ok_or("expected UART timeout=seconds")?,
+                )?)
+            };
             let end = match (*command, ending) {
                 ("waitForUartPrompt", "") => UartWaitMode::Prompt,
                 ("waitForUartPrompt", _) => {
@@ -392,7 +406,12 @@ fn execute(
                 (_, "CR") => UartWaitMode::Cr,
                 _ => return Err("expected waitForUart ending LF or CR".into()),
             };
-            Some(Action::WaitForUart(target, pattern.to_owned(), end))
+            Some(Action::WaitForUart(
+                target,
+                pattern.to_owned(),
+                end,
+                timeout,
+            ))
         }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();

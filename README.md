@@ -222,7 +222,7 @@ UART の選択方法と待機の残課題は、下の Console Echo の節に記�
 
 上流の `Should Run Zephyr Console Echo Sample` を、上流 REPL と公開 ELF を使う `tests/fixtures/stm32f072-echo.resc` に転記しました。変更前のログで最初に失敗した操作は 5 行目の `sysbus.usart1 WriteLine "Echo working?"` でした。
 
-`WriteLine` は REPL 名で STM32 USART を選択し、Renode の既定と同じ CR を付けて受信 FIFO に入力します。この回帰では `waitForUart` の対象を `sysbus.usart1` に指定して入力案内を待ち、`sysbus.usart1 WriteLine "Echo working?" CRLF` を実行します。その後、受信割り込みを処理したファームウェアが返す `Echo working?` を同じ USART で待ちます。CLI で入力ステップを指定せずにシナリオを再現できます。
+`WriteLine` は REPL 名で STM32 USART を選択し、Renode の既定と同じ CR を付けて受信 FIFO に入力します。この回帰では `waitForUart` の対象を `sysbus.usart1` に指定して入力案内を待ち、`sysbus.usart1 WriteLine "Echo working?"` で CR を送ります。その後、同じ USART の `waitForUartPrompt` で返答を待ちます。両方の待機に上流と同じ `timeout=8s` を指定します。CLI で入力ステップを指定せずにシナリオを再現できます。
 
 ```sh
 assets=$(mktemp -d)
@@ -236,7 +236,7 @@ PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
 
 `waitForUart sysbus.usart1 "期待文字列"` は、指定した USART が送信した LF または CRLF 終端の行だけを照合します。標準出力にはすべての UART 出力が流れます。USART を省略した従来の形式は、その標準出力を照合します。
 
-`WriteLine "文字列"` の後ろに `CR`、`LF`、`CRLF`、`None` を指定できます。省略と `true` は CR、`false` は行終端なしです。Console Echo の公開 ELF で明示的な CRLF を、ADC の公開 ELF で USART を指定した `Booting Zephyr` → `745` → `1489` の待機を確認しました。両 ELF を用意済みの場合は、上のテスト名を `upstream_stm32f072` にすると両方を実行できます。通常の `cargo test` は 50 件成功し、別ポートからの同一文字列と行終端引数の全指定を検査します。
+`WriteLine "文字列"` の後ろに `CR`、`LF`、`CRLF`、`None` を指定できます。省略と `true` は CR、`false` は行終端なしです。Console Echo の公開 ELF で既定の CR と補助テストの明示的な CRLF を、ADC の公開 ELF で USART を指定した `Booting Zephyr` → `745` → `1489` の待機を確認しました。両 ELF を用意済みの場合は、上のテスト名を `upstream_stm32f072` にすると両方を実行できます。通常の `cargo test` は 50 件成功し、別ポートからの同一文字列と行終端引数の全指定を検査します。
 
 #### CR で終端する UART 出力の待機
 

@@ -160,6 +160,19 @@ mod tests {
     }
 
     #[test]
+    fn renode_stm32_usart_preserves_receive_order_when_brr_becomes_zero() {
+        let mut uart = Stm32Usart::new("uart".into(), 0, None, false);
+        uart.write(0, 4, UE | RE, |_| Ok(())).unwrap();
+        uart.write(0x0c, 4, 0x10, |_| Ok(())).unwrap();
+        uart.queue_input([0x12]);
+        uart.write(0x0c, 4, 0, |_| Ok(())).unwrap();
+        uart.queue_input([0x34]);
+        assert_eq!(uart.read(0x24, 4), 0x12);
+        assert_eq!(uart.read(0x24, 4), 0x34);
+        assert_eq!(uart.read(0x1c, 4) & RXNE, 0);
+    }
+
+    #[test]
     fn receive_irq_and_transmit_follow_control_and_status_registers() {
         let mut uart = Stm32Usart::new("uart".into(), 0, Some(Stm32Irq::Nvic(3)), false);
         let mut output = Vec::new();

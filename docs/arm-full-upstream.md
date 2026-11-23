@@ -14,13 +14,13 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 7 | 37 | 69 | 239 |
+| Renode Robot | 113 | 8 | 37 | 68 | 239 |
 | Renode Infrastructure NUnit | 134 | 2 | 0 | 132 | 9 |
-| 合計 | **247** | **9** | **37** | **201** | **248** |
+| 合計 | **247** | **10** | **37** | **200** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
-- `equivalent pass` は適用構成で上流と同じ主要刺激・観測を実行できたケース。UART 出力が合格しても、Console Echo の CR／未完了行の待機と Button のホスト側待ち時間には差があるため `partial` とした。M55 の Fault 状態レジスタ、F4 のフラッシュ消去範囲や TIM2 のファームウェア観測を省いた移植も部分扱い。
+- `equivalent pass` は適用構成で上流と同じ主要刺激・観測を実行できたケース。Button はホスト側待ち時間の差を残しているため `partial` とした。Console Echo は CR と未完了行の待機を揃えた。M55 の Fault 状態レジスタ、F4 のフラッシュ消去範囲や TIM2 のファームウェア観測を省いた移植も部分扱い。
 - `unmet` は対象のまま、等価な回帰がない項目。独立した BusFault の優先度や置換不能な前提を必要とするケースは `out of scope`、同じ `LDR`/`STR` と保存フレームを HardFault で再現できるケースは未達に残した。上流の `Ignore` 属性付き NUnit ケースは対象外。
 - 集計はこの台帳に含まれる固定リビジョンの候補に対するもの。NUnit/Robot ランナーの上流全件実行ではなく、penv の Rust・CLI テストと実イメージによる等価性監査の結果。
 
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植37件と未達201件が残る。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植37件と未達200件が残る。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -94,4 +94,27 @@ Cortex-M55 の CFSR/HFSR/BFAR、BusFault 有効化、ITSTATE、TrustZone、FP �
 cargo test --locked stacking_fault
 cargo test --locked unstack_fault
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-stack-fault-evidence
+```
+
+
+## Console Echo の等価性
+
+固定上流の `tests/platforms/STM32F072b.robot` の `Should Run Zephyr Console Echo Sample`、`src/Renode/RobotFrameworkEngine/UartKeywords.cs`、Infrastructure の `TerminalTester.cs` を照合した。公開 ELF は `stm32f072b_disco--zephyr-echo.elf-s_544096-541b7b153ff0a9b30489bd1cc34e693c0ac8b9ea`。
+
+| 上流の操作 | penv の RESC |
+| --- | --- |
+| USART1 の入力案内を完了行の部分一致で待つ | `waitForUart sysbus.usart1 "Start typing characters to see them echoed back" timeout=8s` |
+| `Write Line To Uart` が送る `Echo working?` + CR | `sysbus.usart1 WriteLine "Echo working?"`。末尾は既定の `0d` |
+| `waitForEcho=true` が完了行または未完了行を部分一致で待つ | `waitForUartPrompt sysbus.usart1 "Echo working?" timeout=8s`。出力が `?` で終わり、後続の CRLF まで進めないことを公開 ELF 回帰で検査 |
+
+上流と同様に、LF 終端のテキスト照合では CR と NUL を無視する。生の標準出力には両方を残す。8秒は上流の既定仮想時間で、penv では待機ごとの上限と全体の `--max-steps` の残量の小さい方を使う。RESC の各待機は同期的に進むため、Robot 側のホスト並行実行のスケジューリングは再現対象に含めていない。補助の CRLF・完了行回帰と ADC 回帰も維持した。
+
+同じ USART では BRR を `0x10` から `0` に変えたとき、`0x12` と `0x34` の順に RDR で読めることを確認した。受信フレームを待たず RXNE が立つため、上流の送信途中キューを排出する観測は部分移植。追加プローブでは `0x12` 投入直後も RE 解除後も RXNE が1で、RE 解除前の飛行中バイトを破棄するケースは未達。ボーレート、パリティ込みのフレーム時間、IDLE の発生と取り消しも未達。上流の複数 TerminalTester ID、バイナリモード、正規表現は別の残件。
+
+```sh
+# verify-stm32f072.sh で取得済みの assets を使用
+PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS=/path/to/evidence/assets \
+    cargo test --locked --test cli upstream_stm32f072_console_echo -- --ignored
+cargo test --locked text_waits_ignore_nul
+cargo test --locked renode_stm32_usart
 ```

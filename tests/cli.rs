@@ -132,16 +132,14 @@ fn upstream_stm32f072_adc_waits_for_uart_between_voltage_changes() {
 #[test]
 #[ignore = "requires the upstream Renode tree and the public STM32F072 Console Echo ELF"]
 fn upstream_stm32f072_console_echo_accepts_resc_uart_input() {
-    let completed = run_upstream_stm32f072_script("stm32f072-echo.resc", "3000000");
+    let completed = run_upstream_stm32f072_script("stm32f072-echo.resc", "1600000000");
     assert!(completed.status.success(), "{completed:?}");
-    let uart = String::from_utf8(completed.stdout).unwrap();
-    let mut lines = uart.lines();
     assert!(
-        lines.any(|line| line == "Start typing characters to see them echoed back"),
-        "{uart}"
+        completed
+            .stdout
+            .ends_with(b"Start typing characters to see them echoed back\r\nEcho working?"),
+        "{completed:?}"
     );
-    assert_eq!(lines.next(), Some("Echo working?"), "{uart}");
-    assert_eq!(lines.next(), None, "{uart}");
 }
 
 #[test]
@@ -255,6 +253,18 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         "emulation RunFor \"0.00000005s\"\nwaitForUartPrompt sysbus.usart1 \"A\"",
         "5",
     );
+    let timed_out = run(
+        "waitForUartPrompt sysbus.usart1 \"A\" timeout=0.00000004s",
+        "10",
+    );
+    let timed_cr = run(
+        "waitForUart sysbus.usart1 \"A\" CR timeout=0.00000007s",
+        "10",
+    );
+    let buffered_poll = run(
+        "emulation RunFor \"0.00000007s\"\nwaitForUart sysbus.usart1 \"A\" CR timeout=0s",
+        "10",
+    );
     let merged = run("waitForUart \"A\" CR", "10");
     let default = run("waitForUart sysbus.usart1 \"A\"", "10");
     let backlog = "emulation RunFor \"0.00000007s\"\nwaitForUart sysbus.usart1 \"A\" CR";
@@ -265,7 +275,14 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         "7",
     );
     fs::remove_dir_all(directory).unwrap();
-    for result in [selected, merged, buffered, independent] {
+    for result in [
+        selected,
+        merged,
+        buffered,
+        independent,
+        timed_cr,
+        buffered_poll,
+    ] {
         assert!(result.status.success(), "{result:?}");
         assert_eq!(result.stdout, b"A\r");
         assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete"));
@@ -275,6 +292,9 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         assert_eq!(result.stdout, b"A");
         assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete, 5 instructions"));
     }
+    assert_eq!(timed_out.status.code(), Some(1), "{timed_out:?}");
+    assert!(timed_out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&timed_out.stderr).contains("(Limit)"));
     assert_eq!(default.status.code(), Some(1), "{default:?}");
     assert!(String::from_utf8_lossy(&default.stderr).contains("(Ebreak)"));
     assert_eq!(consumed.status.code(), Some(1), "{consumed:?}");
