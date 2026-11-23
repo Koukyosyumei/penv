@@ -99,6 +99,37 @@ fn renode_prelexer_handle_initial_indent() {
         prelex(
             "\n    first line\n    second line\n        first indented\n        second indented\n    third line"
         ),
-        Err("WrongIndent: First line with text cannot be indented.")
+        Err("WrongIndent: First line with text cannot be indented.".into())
     );
+}
+
+#[test]
+fn renode_multiline_unclosed_multiple_multiline_quoted_strings() {
+    let error = prelex("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline\nstring'''\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline\nstring'''\ncpu3: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline\nstring").unwrap_err();
+    assert!(error.starts_with("SyntaxError:"));
+    assert_eq!(error.lines().nth(1), Some("At 11:17:"));
+}
+
+#[test]
+fn renode_multiline_unclosed_multiline_quoted_string_between_quoted_strings() {
+    let error = prelex("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline\nstring'''\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline\nstring\ncpu3: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nmultiline'''\nstring").unwrap_err();
+    assert!(error.starts_with("SyntaxError:"));
+    assert_eq!(error.lines().nth(1), Some("At 12:9:"));
+}
+
+#[test]
+fn renode_multiline_multiple_multiline_string_signs_in_one_line() {
+    let error = prelex("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is \\''' ''' ''' '''\nnot a single line '''").unwrap_err();
+    assert!(error.starts_with("SyntaxError:"));
+    assert_eq!(error.lines().nth(1), Some("At 3:37:"));
+}
+
+#[test]
+fn renode_multiline_unclosed_multiline_string() {
+    let error = prelex(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is ",
+    )
+    .unwrap_err();
+    assert!(error.starts_with("SyntaxError:"));
+    assert_eq!(error.lines().nth(1), Some("At 3:17:"));
 }

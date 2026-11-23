@@ -260,6 +260,7 @@ mod range_tests {
 
 #[derive(Default)]
 struct ReplComments {
+    grouped_strings: bool,
     braces: i32,
     in_block: bool,
 }
@@ -283,6 +284,15 @@ impl ReplComments {
         }
         while cursor < line.len() {
             match line.as_bytes()[cursor] {
+                b'\'' if self.grouped_strings && line[cursor..].starts_with("'''") => {
+                    cursor = line[cursor + 3..]
+                        .match_indices("'''")
+                        .map(|(offset, _)| cursor + 3 + offset)
+                        .find(|&offset| !repl_is_escaped(&line, offset))
+                        .ok_or("Unterminated multiline string.")?
+                        + 3;
+                    continue;
+                }
                 b'"' => {
                     cursor += 1;
                     loop {
@@ -333,11 +343,66 @@ impl ReplComments {
     }
 }
 
-pub fn prelex(source: &str) -> Result<Vec<String>, &'static str> {
+fn multiline_repl_lines(source: &str) -> Result<Vec<String>, String> {
+    let syntax = |line, column, message| format!("SyntaxError: {message}\nAt {line}:{column}:");
+    let mut lines = Vec::new();
+    let mut pending: Option<(usize, usize, String)> = None;
+    for (index, line) in source.split('\n').enumerate() {
+        let delimiters: Vec<_> = line
+            .match_indices("'''")
+            .map(|(offset, _)| offset)
+            .filter(|&offset| !repl_is_escaped(line, offset))
+            .collect();
+        if let Some((_, _, text)) = &mut pending {
+            text.push('\n');
+            text.push_str(line);
+            if !delimiters.is_empty() {
+                lines.push(pending.take().unwrap().2);
+            }
+        } else {
+            match delimiters.as_slice() {
+                [] | [_, _] => lines.push(line.to_owned()),
+                [offset] => {
+                    pending = Some((
+                        index + 1,
+                        line[..*offset].encode_utf16().count(),
+                        line.to_owned(),
+                    ))
+                }
+                [_, _, offset, ..] => {
+                    return Err(syntax(
+                        index + 1,
+                        line[..*offset].encode_utf16().count(),
+                        "The start of one multiline string cannot be on the same line as the end of another",
+                    ));
+                }
+            }
+        }
+    }
+    if let Some((line, column, _)) = pending {
+        return Err(syntax(line, column, "Unclosed multiline string"));
+    }
+    Ok(lines)
+}
+
+fn repl_is_escaped(line: &str, offset: usize) -> bool {
+    line.as_bytes()[..offset]
+        .iter()
+        .rev()
+        .take_while(|&&byte| byte == b'\\')
+        .count()
+        % 2
+        != 0
+}
+
+pub fn prelex(source: &str) -> Result<Vec<String>, String> {
     let source = source.replace('\r', "");
-    let mut comments = ReplComments::default();
-    let mut lines: Vec<_> = source
-        .split('\n')
+    let mut comments = ReplComments {
+        grouped_strings: true,
+        ..Default::default()
+    };
+    let mut lines: Vec<_> = multiline_repl_lines(&source)?
+        .iter()
         .map(|line| comments.line(line))
         .collect::<Result<_, _>>()?;
     let mut nonempty = lines
@@ -348,7 +413,7 @@ pub fn prelex(source: &str) -> Result<Vec<String>, &'static str> {
         return Ok(lines);
     };
     if repl_indent(&lines[first])? != 0 {
-        return Err("WrongIndent: First line with text cannot be indented.");
+        return Err("WrongIndent: First line with text cannot be indented.".into());
     }
 
     let indices: Vec<_> = std::iter::once(first).chain(nonempty).collect();
