@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use crate::{
@@ -15,7 +16,19 @@ use crate::{
     stm32h7_gpio_platform, stm32h7_rtc_platform,
 };
 
-type Properties = Vec<(usize, String)>;
+type Properties = Vec<(SourceLine, String)>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct SourceLine {
+    path: Rc<Path>,
+    line: usize,
+}
+
+impl std::fmt::Display for SourceLine {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}:{}", self.path.display(), self.line)
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct Entry {
@@ -91,7 +104,10 @@ fn unquoted_delimiters<'a>(
     })
 }
 
-fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &'static str> {
+fn inline_body<'a>(
+    declaration: &'a str,
+    source: &SourceLine,
+) -> Result<(&'a str, Properties), &'static str> {
     let mut braces = unquoted_delimiters(declaration, &['{', '}']);
     let Some((begin, '{')) = braces.next() else {
         return if unquoted_delimiters(declaration, &['}']).next().is_some() {
@@ -119,7 +135,7 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
     {
         let item = text[start..end].trim();
         if !item.is_empty() {
-            body.push((lineno, item.into()));
+            body.push((source.clone(), item.into()));
         }
         start = end + 1;
     }
@@ -142,6 +158,7 @@ fn parse(
         ));
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+    let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
     let mut lines = content.lines().enumerate();
@@ -149,6 +166,10 @@ fn parse(
         let line = without_comment(raw);
         let text = line.trim();
         let lineno = index + 1;
+        let source = SourceLine {
+            path: Rc::clone(&source_path),
+            line: lineno,
+        };
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
         if text.is_empty() {
             continue;
@@ -179,7 +200,7 @@ fn parse(
                 property.push('\n');
                 property.push_str(raw);
             }
-            entry.body.push((lineno, property));
+            entry.body.push((source, property));
             continue;
         }
         if line.starts_with(char::is_whitespace) {
@@ -187,7 +208,7 @@ fn parse(
                 .as_mut()
                 .ok_or_else(|| error("property has no declaration"))?
                 .body
-                .push((lineno, text.into()));
+                .push((source, text.into()));
             continue;
         }
         entries.extend(current.take());
@@ -214,7 +235,7 @@ fn parse(
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
-        let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
+        let (declaration, body) = inline_body(declaration, &source).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
@@ -253,6 +274,57 @@ fn brace_depth(text: &str) -> i32 {
         .sum()
 }
 
+fn property_key(text: &str) -> Option<&str> {
+    let (key, value) = text.split_once(':')?;
+    let key = key.trim();
+    (!value.trim().is_empty()
+        && !key.is_empty()
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then_some(key)
+}
+
+fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut definitions: Vec<Entry> = Vec::new();
+    let mut names: HashMap<String, usize> = HashMap::new();
+    for entry in entries {
+        if entry.model.is_empty()
+            && entry.registration.is_none()
+            && let Some(&index) = names.get(&entry.name)
+        {
+            let body = &mut definitions[index].body;
+            // Replace a property from an earlier entry. Preserve duplicates within an
+            // entry for the individual peripheral's existing validation.
+            let mut replaced = HashSet::new();
+            for (_, text) in &entry.body {
+                if let Some(key) = property_key(text)
+                    && replaced.insert(key)
+                {
+                    let mut previous = body
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, property))| property_key(property) == Some(key));
+                    if let Some((index, _)) = previous.next()
+                        && previous.next().is_none()
+                    {
+                        body.remove(index);
+                    }
+                }
+            }
+            let insertion = body
+                .iter()
+                .position(|(_, text)| text == "init:")
+                .unwrap_or(body.len());
+            body.splice(insertion..insertion, entry.body);
+        } else {
+            if !entry.model.is_empty() {
+                names.entry(entry.name.clone()).or_insert(definitions.len());
+            }
+            definitions.push(entry);
+        }
+    }
+    definitions
+}
+
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
@@ -261,6 +333,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut HashSet::new(),
         &mut entries,
     )?;
+    let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
@@ -278,6 +351,16 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     for entry in &entries {
         if !names.insert(&entry.name) {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
+        }
+        if entry.model.is_empty() {
+            let detail = if entry.name == "sysbus" {
+                "built-in sysbus overrides are unsupported"
+            } else if entry.registration.is_some() {
+                "REPL registration overrides are unsupported"
+            } else {
+                "REPL overlay target has no earlier declaration"
+            };
+            return Err(entry.error(detail));
         }
         match entry.model.as_str() {
             "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
@@ -334,13 +417,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .map_ram(address, size as usize)
                     .map_err(|e| entry.error(&e))?;
                 for (line, command) in commands {
-                    let error = |detail: &str| {
-                        format!(
-                            "{}:{line}: {}: {detail}",
-                            entry.source.display(),
-                            entry.name
-                        )
-                    };
+                    let error = |detail: &str| format!("{line}: {}: {detail}", entry.name);
                     let (offset, width, value) =
                         memory_init(command, address).map_err(|e| error(&e))?;
                     if offset
@@ -1142,12 +1219,7 @@ fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)
                 .split_once(':')
                 .map(|(key, value)| (key.trim(), value.trim()));
             pair.filter(|(key, _)| allowed.contains(key) && seen.insert(*key))
-                .ok_or_else(|| {
-                    format!(
-                        "{}:{line}: unknown or duplicate property {text:?}",
-                        entry.source.display()
-                    )
-                })
+                .ok_or_else(|| format!("{line}: unknown or duplicate property {text:?}"))
         })
         .collect()
 }
@@ -1155,6 +1227,75 @@ fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_overlays_merge_includes_and_keep_duplicate_diagnostics() {
+        let directory = std::env::temp_dir().join(format!("penv-overlay-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let base = directory.join("base.repl");
+        let overlay = directory.join("overlay.repl");
+        fs::write(
+            &base,
+            r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m7"
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+exti: IRQControllers.STM32H7_EXTI @ sysbus 0x58000000
+    0 -> nvic@6
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 4
+"#,
+        )
+        .unwrap();
+        let valid = r#"using "base.repl"
+exti:
+    1 -> nvic@7
+ram: { size: 16 }
+ram:
+    size: 32
+"#;
+        fs::write(&overlay, valid).unwrap();
+        let mut machine = load(&overlay, None).unwrap();
+        assert_eq!(machine.bus.read_ram::<4>(0x2000_001c).unwrap(), 0);
+        assert!(machine.bus.read_ram::<4>(0x2000_0020).is_err());
+        machine
+            .bus
+            .write(0x5800_0080, 4, 3, &mut std::io::sink())
+            .unwrap();
+        machine
+            .bus
+            .write(0x5800_0008, 4, 3, &mut std::io::sink())
+            .unwrap();
+        machine
+            .bus
+            .sample_nvic(&crate::nvic::ActiveExceptions::default());
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_e200).unwrap(),
+            (1 << 6) | (1 << 7)
+        );
+
+        for (addition, expected) in [
+            (
+                "ram: Memory.MappedMemory @ sysbus 0x20001000\n    size: 16\n",
+                "duplicate declarations and overrides are unsupported",
+            ),
+            (
+                "missing:\n    size: 4\n",
+                "REPL overlay target has no earlier declaration",
+            ),
+            (
+                "nvic:\n    systickFrequency: 1\n    systickFrequency: 2\n",
+                "unsupported or duplicate NVIC property",
+            ),
+        ] {
+            fs::write(&overlay, format!("{valid}{addition}")).unwrap();
+            let error = load(&overlay, None).err().unwrap();
+            assert!(error.contains(expected), "{error}");
+        }
+        fs::remove_file(&base).unwrap();
+        fs::remove_file(&overlay).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn memory_init_loads_system_words_and_rejects_cross_region_writes() {

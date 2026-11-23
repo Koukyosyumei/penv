@@ -25,7 +25,7 @@ awk -v RS='' -v ORS='\n\n' '$1 == "cpu:" || $1 == "nvic:" {
 }' "$cpu" > "$work/boot.repl"
 cat >> "$work/boot.repl" <<'REPL'
 usart2: UART.STM32F7_USART @ sysbus 0x40004400
-    frequency: 200000000
+    frequency: 125000000
     IRQ -> exti@27
 
 dbgmcu: Python.PythonPeripheral @ sysbus 0x5c001000
@@ -51,7 +51,8 @@ awk -v RS='' -v ORS='\n\n' '
 ' "$cpu" >> "$work/boot.repl"
 # The reference REPL leaves HSEM IRQ unconnected. Route it for the notification check.
 awk -v RS='' -v ORS='\n\n' '$1 == "hsem:" { print $0 "\n    IRQ -> nvic@125" }' "$cpu" >> "$work/boot.repl"
-awk -v RS='' -v ORS='\n\n' '$1 == "watchdog:" { sub(/frequency: [0-9_]+/, "frequency: 32000"); print }'     "$cpu" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 == "watchdog:" {print}' "$cpu" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 ~ /^(usart2|watchdog|rcc):$/' "$board" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$work/boot.repl"
 awk '$1 == "veml7700:" {print}' "$board" >> "$work/boot.repl"
 printf '    Illuminance: 500\n' >> "$work/boot.repl"
