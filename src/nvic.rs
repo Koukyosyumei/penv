@@ -13,6 +13,8 @@ const CPACR: u32 = BASE + 0xd88;
 const AIRCR: u32 = BASE + 0xd0c;
 const SCR: u32 = BASE + 0xd10;
 const CCR: u32 = BASE + 0xd14;
+const BFHFNMIGN: u32 = 1 << 8;
+const STKALIGN: u32 = 1 << 9;
 const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
@@ -56,6 +58,7 @@ pub struct Nvic {
     fpccr: u32,
     demcr: u32,
     div_zero_trap: bool,
+    ignore_negative_priority_bus_fault: bool,
     unalign_trap: bool,
     mpu: Mpu,
     priority_mask: u8,
@@ -81,6 +84,7 @@ impl Nvic {
             fpccr: 0xc000_0000,
             demcr: 0,
             div_zero_trap: false,
+            ignore_negative_priority_bus_fault: false,
             unalign_trap: false,
             mpu: Mpu::default(),
             priority_mask,
@@ -142,6 +146,10 @@ impl Nvic {
             0x5 => privileged,
             _ => false,
         }
+    }
+
+    pub fn ignores_negative_priority_bus_fault(&self) -> bool {
+        self.ignore_negative_priority_bus_fault
     }
 
     pub fn bus_fault_enabled(&self) -> bool {
@@ -247,7 +255,8 @@ impl Nvic {
             (DEMCR, 4) if self.cortex_m4 => self.demcr,
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => return self.mpu.read(address - MPU_TYPE),
             (CCR, 4) if self.cortex_m4 => {
-                (1 << 9)
+                STKALIGN
+                    | (u32::from(self.ignore_negative_priority_bus_fault) << 8)
                     | (u32::from(self.div_zero_trap) << 4)
                     | (u32::from(self.unalign_trap) << 3)
             }
@@ -304,7 +313,8 @@ impl Nvic {
             (CPACR, 4) if self.cortex_m4 => self.cpacr = value & 0x00f0_0000,
             (FPCCR, 4) if self.cortex_m4 => self.fpccr = value & 0xc000_0000,
             (DEMCR, 4) if self.cortex_m4 => self.demcr = value,
-            (CCR, 4) if self.cortex_m4 && value & !0x18 == 1 << 9 => {
+            (CCR, 4) if self.cortex_m4 && value & !(STKALIGN | BFHFNMIGN | 0x18) == 0 => {
+                self.ignore_negative_priority_bus_fault = value & BFHFNMIGN != 0;
                 self.div_zero_trap = value & 0x10 != 0;
                 self.unalign_trap = value & 8 != 0
             }

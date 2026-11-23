@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 77 | 4 | 109 |
+| 監査した共有・混成 Robot | 190 | 78 | 5 | 107 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **94** | **4** | **123** |
+| 合計 | **221** | **95** | **5** | **121** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -183,10 +183,18 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
 
-BusFault の適用対象31ケースのうち10件が合格し、21件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
+BusFault の適用対象31ケースのうち11件が合格、1件が部分移植、19件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
 
 ### 未マップのデータアクセス
 
 `arm-cortex-m-bus-fault.robot:336–343` を移植した。`nrf52840-bus-fault-upstream.sh` の `unmapped.elf` は、元の命令列とアドレス `0x200000` を使い、RESC で `sysbus UnhandledAccessBehaviour ThrowException` を指定する。ハンドラ PC、SP、R1/R2、その保存値、保存 PC、CFSR・BFAR・HFSR を照合する。同じ ELF を設定なしでも実行し、従来の未マップエラーを確認する。今回のコマンド対応は Cortex-M4 の未マップデータアクセスを対象とする。命令フェッチの例外化と、RENODE のタグに対するポリシーは別途対応が必要。
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/unmapped-bus-fault.105kBUr7/` の `cargo-test`、`elf`、`shell` に保存した。
+
+### 例外ハンドラ内の同期データ BusFault
+
+`arm-cortex-m-bus-fault.robot:1212–1228` に合わせ、`CCR.BFHFNMIGN` を設定した場合、HardFault/NMI 内のデータ BusFault は SCB に記録して命令実行を継続する。生成した `ignored-in-hardfault.elf` で、Thread モードから HardFault に昇格した際の R1 保存値、ハンドラの再アクセス後の R1 と CFSR・BFAR・HFSR を照合した。BFHFNMIGN の適用範囲はデータアクセスであり、命令フェッチ・例外スタック処理は別経路。
+
+同スイートの352–368行は、`nested-handler.elf` で同優先度の BusFault から HardFault へ昇格すること、保存 PC、R1/R2 と SCB の期待値を照合した。上流 monitor の1回の `cpu Step` で二つの fault を観測する条件は未検証のため、部分移植として記録した。
+
+上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-shell.sh` で再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/handler-bus-fault.9Ii3pGU8/` の `cargo-test`、`elf`、`shell` に保存した。

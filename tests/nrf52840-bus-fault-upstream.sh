@@ -177,3 +177,86 @@ status=0
     >"$out/unmapped-default.log" 2>&1 || status=$?
 [ "$status" -eq 1 ]
 grep -Fq 'pc=0x00000200: unmapped RAM access at 0x00200000 (4 bytes)' "$out/unmapped-default.log"
+
+# Robot 352-368 and 1212-1228. In both modes the first handler access
+# repeats the original fault, with the original side-effect sentinel in R1.
+for name in nested-handler ignored-in-hardfault; do
+    case "$name" in
+        nested-handler) register=0xe000ed24; value=0x20000 ;;
+        ignored-in-hardfault) register=0xe000ed14; value=0x100 ;;
+    esac
+    cat >"$out/$name.s" <<ASM
+.syntax unified
+.thumb
+.global reset
+.word 0x1000, reset, 0, hardfault, 0, busfault
+.thumb_func
+reset:
+    ldr r3, =$register
+    ldr r4, =$value
+    str r4, [r3]
+    ldr r0, =0x100000
+    movs r1, #0x11
+    ldr r2, =0xa5a5a5a5
+    b faulting
+    .ltorg
+    .org 0x200
+faulting:
+    ldr r2, [r0]
+    movs r1, #0x22
+    b .
+    .org 0x300
+.thumb_func
+busfault:
+    ldr r2, [r0]
+    movs r1, #0x22
+    b .
+    .org 0x340
+.thumb_func
+hardfault:
+ASM
+    if [ "$name" = ignored-in-hardfault ]; then
+        cat >>"$out/$name.s" <<'ASM'
+    ldr r2, [r0]
+    movs r1, #0x22
+    cmp r1, #0x22
+    bne failed
+    ldr r4, [sp, #4]
+    cmp r4, #0x11
+    bne failed
+ASM
+    else
+        cat >>"$out/$name.s" <<'ASM'
+    cmp r1, #0x11
+    bne failed
+    ldr r3, =0xa5a5a5a5
+    cmp r2, r3
+    bne failed
+    ldr r3, =0xfd8
+    ldr r4, [r3]
+    cmp.w r4, #0x300
+    bne failed
+ASM
+    fi
+    cat >>"$out/$name.s" <<'ASM'
+    ldr r3, =0xe000ed28
+    ldr r4, [r3]
+    movw r5, #0x8200
+    cmp r4, r5
+    bne failed
+    ldr r4, [r3, #4]
+    cmp.w r4, #0x40000000
+    bne failed
+    ldr r4, [r3, #16]
+    cmp r4, r0
+    bne failed
+    bkpt 0
+failed:
+    b .
+ASM
+    clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/$name.s" -o "$out/$name.o"
+    ld.lld -N -Ttext=0 --entry=reset "$out/$name.o" -o "$out/$name.elf"
+    "$penv" run --platform "$out/bus-fault.repl" --max-steps 100 "$out/$name.elf" \
+        >"$out/$name.log" 2>&1
+    printf '%s: all fault checks passed\n' "$name"
+done

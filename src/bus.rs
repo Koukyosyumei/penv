@@ -110,6 +110,7 @@ pub struct Bus {
     regions: Vec<Region>,
     faulting_peripherals: Vec<FaultingPeripheral>,
     thumb_data_fault: Option<u32>,
+    pub thumb_negative_priority: bool,
     pub fault_on_unmapped_thumb_data: bool,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
@@ -1540,7 +1541,7 @@ impl Bus {
             return Ok(u32::from_le_bytes(value));
         }
         self.read::<N>(address)
-            .map_err(|error| self.thumb_data_error(error))
+            .or_else(|error| self.thumb_data_error(error))
     }
 
     pub fn thumb_write(
@@ -1559,21 +1560,31 @@ impl Bus {
             return Ok(());
         }
         self.write(address, width, value, uart)
-            .map_err(|error| self.thumb_data_error(error))
+            .or_else(|error| self.thumb_data_error(error))
     }
 
-    fn thumb_data_error(&mut self, error: BusError) -> String {
-        match error {
-            BusError::SlaveFault(address) => self.thumb_data_fault = Some(address),
+    fn thumb_data_error<T: Default>(&mut self, error: BusError) -> Result<T, String> {
+        let address = match error {
+            BusError::SlaveFault(address) => address,
             BusError::Unmapped(address, width)
                 if self.fault_on_unmapped_thumb_data
                     && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>
             {
-                self.thumb_data_fault = Some(address);
+                address
             }
-            _ => {}
+            _ => return Err(error.to_string()),
+        };
+        if self.thumb_negative_priority
+            && let Some(nvic) = self
+                .nvic
+                .as_mut()
+                .filter(|nvic| nvic.ignores_negative_priority_bus_fault())
+        {
+            nvic.record_precise_bus_fault(address, false);
+            return Ok(T::default());
         }
-        error.to_string()
+        self.thumb_data_fault = Some(address);
+        Err(error.to_string())
     }
 
     pub fn take_thumb_data_fault(&mut self) -> Option<u32> {

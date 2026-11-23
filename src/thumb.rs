@@ -9,6 +9,8 @@ use crate::{
     systick::{NMI, PENDSV, SYSTICK},
 };
 
+const HARD_FAULT: u8 = 3;
+
 #[derive(Clone, Copy, Default, PartialEq)]
 enum Sleep {
     #[default]
@@ -290,7 +292,6 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<u32, String> {
-        const HARD_FAULT: u8 = 3;
         let nvic = bus.nvic.as_mut().ok_or("Cortex-M fault requires an NVIC")?;
         let priority = nvic.priority(exception);
         let enabled = if bus_address.is_some() {
@@ -625,7 +626,9 @@ impl Thumb {
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
         let original_itstate = self.itstate;
+        bus.thumb_negative_priority = matches!(self.active_exception, NMI | HARD_FAULT);
         let result = self.step_instruction(pc, r, bus, output);
+        bus.thumb_negative_priority = false;
         if let Some(address) = bus.take_thumb_data_fault() {
             const BUS_FAULT: u8 = 5;
             self.itstate = original_itstate;
