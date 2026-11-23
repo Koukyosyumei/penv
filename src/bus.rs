@@ -7,6 +7,7 @@ use std::{
 use crate::{
     clint::Clint,
     constant_mmio::ConstantMmio,
+    designware_usb::DesignWareUsb,
     dwt::Dwt,
     ethernet::Controller,
     murax::{Gpio, Timer},
@@ -33,6 +34,7 @@ use crate::{
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
     stm32h7_rtc::Stm32Rtc,
+    stm32h7_sdmmc::Sdmmc,
     stm32h7_spi::Spi,
     stm32h7_timer::Timer as H7Timer,
     systick::SysTick,
@@ -116,6 +118,9 @@ pub struct Bus {
     h7_fdcan: Vec<Fdcan>,
     h7_dma2d: Vec<Dma2d>,
     h7_hsem: Option<Hsem>,
+    h7_sdmmc: Vec<Sdmmc>,
+    designware_usb: Vec<DesignWareUsb>,
+    tags: Vec<(std::ops::RangeInclusive<u32>, u32)>,
     h7_ltdc: Option<Ltdc>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
@@ -380,6 +385,31 @@ impl Bus {
         })
     }
 
+    pub fn map_designware_usb(&mut self, device: DesignWareUsb) -> Result<(), String> {
+        self.check_peripheral_range(device.base, DesignWareUsb::SIZE)?;
+        self.designware_usb.push(device);
+        Ok(())
+    }
+
+    pub fn tag(&mut self, range: std::ops::RangeInclusive<u32>, value: u32) {
+        self.tags.push((range, value));
+    }
+
+    fn tag_value(&self, address: u32, width: usize) -> Option<u32> {
+        let end = address.checked_add(width as u32 - 1)?;
+        self.tags
+            .iter()
+            .rev()
+            .find(|(range, _)| range.contains(&address) && range.contains(&end))
+            .map(|(_, value)| value & (u32::MAX >> (32 - width * 8)))
+    }
+
+    pub fn map_h7_sdmmc(&mut self, device: Sdmmc) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Sdmmc::SIZE)?;
+        self.h7_sdmmc.push(device);
+        Ok(())
+    }
+
     pub fn map_h7_hsem(&mut self, device: Hsem) -> Result<(), String> {
         if self.h7_hsem.is_some() {
             return Err("only one STM32H7 HSEM is supported".into());
@@ -468,6 +498,12 @@ impl Bus {
             device.reset();
         }
         for device in &mut self.h7_crc {
+            device.reset();
+        }
+        for device in &mut self.designware_usb {
+            device.reset();
+        }
+        for device in &mut self.h7_sdmmc {
             device.reset();
         }
         if let Some(device) = &mut self.h7_hsem {
@@ -665,6 +701,16 @@ impl Bus {
                 .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
                 .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
                 .chain(self.h7_ltdc.iter().map(|device| (device.base, Ltdc::SIZE)))
+                .chain(
+                    self.h7_sdmmc
+                        .iter()
+                        .map(|device| (device.base, Sdmmc::SIZE)),
+                )
+                .chain(
+                    self.designware_usb
+                        .iter()
+                        .map(|usb| (usb.base, DesignWareUsb::SIZE)),
+                )
                 .chain(self.h7_hsem.iter().map(|device| (device.base, Hsem::SIZE)))
                 .chain(
                     self.h7_dma2d
@@ -871,6 +917,7 @@ impl Bus {
                 .iter()
                 .filter(|rng| rng_clocked(control, rng))
                 .filter_map(Rng::interrupt)
+                .chain(self.h7_sdmmc.iter().filter_map(Sdmmc::interrupt))
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
                 .chain(
                     self.h7_ltdc
@@ -1468,7 +1515,25 @@ impl Bus {
                 0
             });
         }
-        self.read_ram::<N>(address)
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self.h7_sdmmc.iter().find(|device| device.contains(address))
+        {
+            return Ok(device.read(address));
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self
+                .designware_usb
+                .iter()
+                .find(|device| device.contains(address))
+        {
+            return Ok(device.read(address));
+        }
+        match self.read_ram::<N>(address) {
+            Err(error @ BusError::Unmapped(..)) => self.tag_value(address, N).ok_or(error),
+            result => result,
+        }
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
@@ -1925,8 +1990,34 @@ impl Bus {
             }
             return Ok(());
         }
-        self.guest_memory(address, width)?
-            .copy_from_slice(&value.to_le_bytes()[..width]);
+        if width == 4
+            && let Some(device) = self
+                .h7_sdmmc
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(device) = self
+                .designware_usb
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
+            return Ok(());
+        }
+        match self.guest_memory(address, width) {
+            Ok(memory) => memory.copy_from_slice(&value.to_le_bytes()[..width]),
+            Err(error) => {
+                if !matches!(error, BusError::Unmapped(..))
+                    || self.tag_value(address, width).is_none()
+                {
+                    return Err(error);
+                }
+            }
+        }
         Ok(())
     }
 }

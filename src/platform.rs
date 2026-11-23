@@ -325,6 +325,45 @@ fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
     definitions
 }
 
+fn configure_sysbus_tags(entry: &Entry, bus: &mut crate::bus::Bus) -> Result<(), String> {
+    let Some(((_, init), commands)) = entry.body.split_first() else {
+        return Err(entry.error("expected sysbus init"));
+    };
+    if init != "init:" || entry.registration.is_some() {
+        return Err(entry.error("expected sysbus init"));
+    }
+    for (source, command) in commands {
+        let invalid =
+            || format!("{source}: expected Tag <start, end> \"name\" [value] [silent=True]");
+        let (range, description) = command
+            .strip_prefix("Tag <")
+            .and_then(|text| text.split_once('>'))
+            .ok_or_else(invalid)?;
+        let (start, end) = range.split_once(',').ok_or_else(invalid)?;
+        let start = number(start.trim()).map_err(|e| format!("{source}: {e}"))?;
+        let end = number(end.trim()).map_err(|e| format!("{source}: {e}"))?;
+        if start > end {
+            return Err(invalid());
+        }
+        let (_, arguments) = description
+            .trim()
+            .strip_prefix('"')
+            .and_then(|text| text.split_once('"'))
+            .ok_or_else(invalid)?;
+        let mut arguments: Vec<_> = arguments.split_whitespace().collect();
+        if matches!(arguments.last(), Some(&"silent=True" | &"silent=False")) {
+            arguments.pop();
+        }
+        let value = match arguments.as_slice() {
+            [] => 0,
+            [value] => number(value).map_err(|e| format!("{source}: {e}"))?,
+            _ => return Err(invalid()),
+        };
+        bus.tag(start..=end, value);
+    }
+    Ok(())
+}
+
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
@@ -353,9 +392,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
         if entry.model.is_empty() {
-            let detail = if entry.name == "sysbus" {
-                "built-in sysbus overrides are unsupported"
-            } else if entry.registration.is_some() {
+            if entry.name == "sysbus" {
+                configure_sysbus_tags(entry, &mut machine.bus)?;
+                continue;
+            }
+            let detail = if entry.registration.is_some() {
                 "REPL registration overrides are unsupported"
             } else {
                 "REPL overlay target has no earlier declaration"

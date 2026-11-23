@@ -1,4 +1,5 @@
 use crate::{
+    designware_usb::DesignWareUsb,
     machine::Machine,
     nvic::IRQ_LINES,
     platform::{Entry, irq_index, number},
@@ -13,6 +14,7 @@ use crate::{
     stm32h7_ltdc::Ltdc,
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
+    stm32h7_sdmmc::Sdmmc,
     stm32h7_timer::Timer,
     veml7700::Veml7700,
 };
@@ -35,7 +37,12 @@ pub fn is_device(model: &str) -> bool {
     has_regions(model)
         || matches!(
             model,
-            Qspi::FLASH | Fdcan::MODEL | Veml7700::MODEL | Iwdg::MODEL
+            Qspi::FLASH
+                | Fdcan::MODEL
+                | Veml7700::MODEL
+                | Iwdg::MODEL
+                | Sdmmc::MODEL
+                | DesignWareUsb::MODEL
         )
 }
 
@@ -67,6 +74,32 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
+    for entry in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), Sdmmc::MODEL | DesignWareUsb::MODEL))
+    {
+        let base = entry
+            .sysbus()?
+            .ok_or_else(|| entry.error("missing peripheral address"))?;
+        let irq = match entry.body.as_slice() {
+            [] => None,
+            [(_, text)] => {
+                let (pin, target, line) = wire(text).map_err(|e| entry.error(e))?;
+                if !matches!(pin, "" | "IRQ") || !nvic.is_some_and(|nvic| nvic.name == target) {
+                    return Err(entry.error("expected IRQ connected to NVIC"));
+                }
+                Some(irq_index(line, IRQ_LINES as u32).map_err(|e| entry.error(&e))?)
+            }
+            _ => return Err(entry.error("expected at most one IRQ")),
+        };
+        if entry.model == Sdmmc::MODEL {
+            machine.bus.map_h7_sdmmc(Sdmmc::new(base, irq))
+        } else {
+            machine.bus.map_designware_usb(DesignWareUsb::new(base))
+        }
+        .map_err(|e| entry.error(&e))?;
+    }
+
     for entry in entries.iter().filter(|entry| entry.model == Hsem::MODEL) {
         let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
         if !matches!(alias, None | Some("HSEM")) {

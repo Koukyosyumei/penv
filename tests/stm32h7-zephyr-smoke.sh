@@ -36,19 +36,13 @@ if request.Offset == 0:
     request.Value = 0x20030450
 '''
 
-canCc: Python.PythonPeripheral @ sysbus 0x4000a804
-    size: 4
-    initable: false
-    script: '''
-if request.Offset == 0:
-    request.Value = 4
-'''
 
 REPL
 awk -v RS='' -v ORS='\n\n' '
-    $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|system_flash_ro|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|ltdc|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|lptimer[1-5]|crc|fdcan[12]|canMessageRAM):$/ &&
+    $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|system_flash_ro|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|ltdc|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|sdmmc|usb[12]|lptimer[1-5]|crc|fdcan[12]|canMessageRAM):$/ &&
     $2 ~ /[A-Z]/ {print}
 ' "$cpu" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 == "sysbus:" {print}' "$cpu" >> "$work/boot.repl"
 # The reference REPL leaves HSEM IRQ unconnected. Route it for the notification check.
 awk -v RS='' -v ORS='\n\n' '$1 == "hsem:" { print $0 "\n    IRQ -> nvic@125" }' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 == "watchdog:" {print}' "$cpu" >> "$work/boot.repl"
@@ -121,5 +115,27 @@ actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/hsem-uart.log"
 if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
     cat "$work/hsem-penv.log" >&2
     cat "$work/hsem-uart.log" >&2
+    exit 1
+fi
+
+# Check no-card command timeout, masking, and write-one-to-clear through the guest.
+events=()
+step=1000000
+for command in '0x52007000 32 3' '0x5200703c 32 4' '0x5200700c 32 0x1108' \
+    '0x52007034 32' '0xe000e204 32' '0x52007038 32 4' '0xe000e284 32 0x20000' \
+    '0x52007034 32' '0xe000e204 32' '0x4000a804 32' '0x40040040 32'; do
+    printf 'devmem %s\r' "$command" > "$work/sdmmc-$step.txt"
+    events+=(--uart-event "$step:$work/sdmmc-$step.txt")
+    step=$((step + 150000))
+done
+status=0
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
+    "${events[@]}" > "$work/sdmmc-uart.log" 2> "$work/sdmmc-penv.log" || status=$?
+expected=$(printf '%s\n' 0x4 0x20000 0x0 0x0 0x4 0x4f54310a)
+actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/sdmmc-uart.log")
+if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
+    cat "$work/sdmmc-penv.log" >&2
+    cat "$work/sdmmc-uart.log" >&2
     exit 1
 fi

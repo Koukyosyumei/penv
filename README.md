@@ -330,3 +330,21 @@ target/release/penv run --script ../renode/scripts/single-node/stm32h7_renode_re
 ```
 
 診断構成は上流ボードの `usart2:`、`watchdog:`、`rcc:` の追記を使い、公開 ELF で Shell、VEML7700、ウォッチドッグの再起動、HSEM 通知を再確認しました。単体テストでは、インクルードをまたぐプロパティの上書きと EXTI 配線の追加を確認しています。未変更の上流 RESC の次の停止箇所は `SD.STM32HSDMMC` です。上流の timer/GPIO 代替機能配線は REPL に取り込まれますが、代替機能の実行と未対応のタイマー種別は今後の対応です。
+
+### STM32H7 の SDMMC、USB、sysbus タグ
+
+`SD.STM32HSDMMC` はカードなしで発行されたコマンドに `CTIMEOUT` を返し、割り込みマスクとクリアを NVIC IRQ 49 に反映します。`USB.DesignWare_USB_OTG` はホスト未接続時のコア識別、アイドル状態、構成レジスターを提供します。REPL の `sysbus: init: Tag` は未マップアクセスの読み戻し値を設定します。範囲が重なる場合は後のタグが優先され、通常の RAM と MMIO はタグより優先されます。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+target/release/penv run \
+    --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```
+
+公開 Zephyr の診断構成で Shell、VEML7700 の 499 lux、IWDG の再起動、HSEM 通知を確認しました。ゲストの `devmem` では SDMMC の `CTIMEOUT=0x4` と NVIC 保留 `0x20000` がクリア後にともに 0 になり、CCFG タグは `0x4`、タグと重なる USB の実レジスターは `0x4f54310a` を返しました。
+
+未変更の RESC は `platforms/cpus/stm32h753.repl:3` の `Miscellaneous.Crypto.STM32H7_CRYPTO` で停止します。SD カード接続、転送と IDMA、上流 `STM32SDMMC.robot` の ext2 マウント、USB ホスト接続とパケット転送は残件です。上流の専用 STM32H747I display ELF は、USART1 と SDRAM を追加した診断構成で従来の HSEM アクセスを通過し、`HAL_DSI_Init` の `pc=0x08004576` で `0x50000430` の未マップアクセスに到達しました。
