@@ -44,6 +44,8 @@ pub struct Nvic {
     ccr: u32,
     cpacr: u32,
     fault_enables: u32,
+    cfsr: u32,
+    hfsr: u32,
     mpu: Option<Mpu>,
     cache_selector: u32,
     pub uart_irq: Option<u8>,
@@ -109,6 +111,8 @@ impl Nvic {
             ccr: 1 << 9,
             cpacr: 0,
             fault_enables: 0,
+            cfsr: 0,
+            hfsr: 0,
             mpu: None,
             cache_selector: 0,
             uart_irq,
@@ -175,6 +179,20 @@ impl Nvic {
         if high && usize::from(line) < IRQ_LINES && !active.contains(16 + line) {
             self.pending[usize::from(line / 32)] |= 1 << (line % 32);
         }
+    }
+
+    pub fn record_undefined_instruction(&mut self, usage_fault_allowed: bool) -> u8 {
+        self.cfsr |= 1 << 16;
+        if usage_fault_allowed && self.fault_enables & (1 << 18) != 0 {
+            6
+        } else {
+            self.force_hard_fault()
+        }
+    }
+
+    pub fn force_hard_fault(&mut self) -> u8 {
+        self.hfsr |= 1 << 30;
+        3
     }
 
     pub fn priority(&self, exception: u8) -> u8 {
@@ -255,8 +273,11 @@ impl Nvic {
             if address == BASE + 0xd24 {
                 return Some(self.fault_enables);
             }
-            if matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
-                return Some(0);
+            if address == BASE + 0xd28 {
+                return Some(self.cfsr);
+            }
+            if address == BASE + 0xd2c {
+                return Some(self.hfsr);
             }
             if address == CPACR {
                 return Some(self.cpacr);
@@ -321,7 +342,12 @@ impl Nvic {
             self.fault_enables = value & (7 << 16);
             return true;
         }
-        if width == 4 && matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
+        if width == 4 && address == BASE + 0xd28 {
+            self.cfsr &= !value;
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd2c {
+            self.hfsr &= !value;
             return true;
         }
         if width == 4 && address == CPACR {

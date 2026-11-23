@@ -706,3 +706,26 @@ target/release/penv run --script "$logs/case.resc" --platform-root ../renode \
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-uart-line.m4RnjA3M` にあります。ADC DMA・暗号サンプルは `ztest/`、長文の対照は `paced-after/` です。台帳は対象 789 件のうち等価合格 15 件、部分検証 16 件、未達 758 件です。
+
+### backlog-network-160de3171208-1
+
+Cortex-M の 16 ビット `UDF` を同期例外として処理し、命令アドレスを例外フレームに保存します。UsageFault が有効で優先度が許せば UsageFault に入り、それ以外では HardFault に昇格します。CFSR.UNDEFINSTR と HFSR.FORCED の記録とクリア、およびハンドラー内の SVC の優先度判定を実装しました。
+
+未変更の Nucleo REPL と `nucleo_h753zi.robot` の公開割り込み ELF で `test_arm_esf_collection` が合格しました。後続 `test_arm_interrupt` は期待した reason 2 が処理されず失敗し、`test_arm_user_interrupt` は PC `0x08001c0c` から Thumb 状態を選ばないアドレス 0 に分岐して停止します。UART と停止理由を記録し、Robot ケース全体は部分検証としました。
+
+共通 SysTick モデルを上流の即時リロードと周期に合わせ、`arm-cortex-m-interrupts.robot` のリロード設定順が異なる 2 ケースを移植しました。各テストは上流と同じ 100 Hz、RELOAD 10、同じ CSR・RVR・CVR 書き込み順を使い、0/90/100/110 ms 時点の CVR が 10/1/10/9 になることを確認します。汎用タイマーの検証なので F4 のボード固有機器への刺激はありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test upstream_count_down_with_reload
+cargo build --release
+e=~/.local/state/penv-dispatch/evidence/h7-usagefault.F5wFPNUj
+target/release/penv run --script "$e/interrupt.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --uart-log-dir "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+ログと終了状態は上記の証拠ディレクトリに保存しています。割り込み ELF の最終ログは `final/` にあります。台帳は対象 789 件のうち等価合格 17 件、部分検証 17 件、未達 755 件です。

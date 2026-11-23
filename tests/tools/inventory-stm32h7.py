@@ -186,7 +186,7 @@ for file, kind in robot.items():
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Hear Loopback CAN Messages':
             note = '同一 ELF は初期化を完了。最初の Counter received: 0 が 8 仮想秒以内に出ない。FDCAN の送信・FIFO ループバック未実装'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Interrupt Test':
-            note = '同一 ELF の test_arm_esf_collection 中、0x0800c460 で Thumb 0xde5a の未対応により停止'
+            status, note = 'PARTIAL', '同一 ELF で test_arm_esf_collection が PASS。test_arm_interrupt は reason 2 の検証で FAIL、test_arm_user_interrupt は 0x08001c0c で Thumb 状態を持たない 0 への分岐で停止'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Blink Led':
             status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3。UART 一致で停止し、GreenLED の変化を 8 仮想秒観測、点灯・消灯各 1 秒 ±5%。tests/stm32h7-nucleo-led-robot.sh'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should See Button Press':
@@ -276,7 +276,10 @@ def triage(row):
     elif suite == 'sysbus.robot' and name == 'Symbols Should Be Dynamically Loaded and Unloaded On Request':
         status, reason = 'OUT', '固定 STM32L072/STM32L07 ELF と main=0x08007644 が観測点'
     elif suite == 'arm-cortex-m-interrupts.robot':
-        status, reason = 'OPEN', 'F4 REPL はフィクスチャ。観測対象は H7 と共通の WFE/BASEPRI/SysTick 契約で、専用 ELF なし'
+        if name in {'Should Count Down SysTick With Reload Set Before Reset', 'Should Count Down SysTick With Reload Set After Reset'}:
+            status, reason = 'PASS', '共通 SysTick モデルで上流と同じ 100 Hz・RELOAD=10・レジスター書込み順と 0/90/100/110 ms の CVR=10/1/10/9 を照合。src/systick.rs'
+        else:
+            status, reason = 'OPEN', 'F4 REPL はフィクスチャ。観測対象は H7 と共通の WFE/BASEPRI 契約で、専用 ELF なし'
     elif suite == 'arm-dsp-examples-cortex-m4.robot':
         status, reason = 'OPEN', '汎用 Cortex-M4F と TrivialUart の CMSIS-DSP ELF。STM32H747 の副コアに適用'
     elif suite == 'arm-ge-flag.robot':

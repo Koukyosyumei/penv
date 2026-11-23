@@ -247,6 +247,15 @@ impl Thumb {
         true
     }
 
+    fn can_take_sync_exception(&self, exception: u8, nvic: &crate::nvic::Nvic) -> bool {
+        let priority = nvic.priority(exception);
+        !self.interrupts_masked
+            && !self.faultmask
+            && (self.basepri == 0 || priority < self.basepri)
+            && (self.active_exception == 0
+                || (self.active_exception > 3 && priority < nvic.priority(self.active_exception)))
+    }
+
     fn exception_entry(
         &mut self,
         exception: u8,
@@ -779,10 +788,34 @@ impl Thumb {
                     next = architectural_pc.wrapping_add(((inst as i8 as i32) * 2) as u32);
                 }
             }
-            0xdf00..=0xdfff if self.active_exception == 0 && !self.interrupts_masked => {
+            0xde00..=0xdeff if self.thumb2 => {
+                let nvic = bus.nvic.as_mut().ok_or_else(unsupported)?;
+                let usage_fault_allowed = self.can_take_sync_exception(6, nvic);
+                let exception = nvic.record_undefined_instruction(usage_fault_allowed);
+                if exception == 3 && (self.faultmask || matches!(self.active_exception, 2 | 3)) {
+                    return Err("Cortex-M lockup on undefined instruction".into());
+                }
+                next = self.exception_entry(exception, *pc, r, bus)?;
+            }
+            0xdf00..=0xdfff
+                if bus.nvic.is_none()
+                    && self.active_exception == 0
+                    && !self.interrupts_masked
+                    && !self.faultmask =>
+            {
                 next = self.exception_entry(11, next, r, bus)?;
             }
-            0xdf00..=0xdfff => return Err("Cortex-M SVC escalation is unsupported".into()),
+            0xdf00..=0xdfff => {
+                let nvic = bus.nvic.as_mut().ok_or("Cortex-M SVC requires NVIC")?;
+                if self.can_take_sync_exception(11, nvic) {
+                    next = self.exception_entry(11, next, r, bus)?;
+                } else if self.faultmask || matches!(self.active_exception, 2 | 3) {
+                    return Err("Cortex-M lockup on escalated SVC".into());
+                } else {
+                    let exception = nvic.force_hard_fault();
+                    next = self.exception_entry(exception, *pc, r, bus)?;
+                }
+            }
             0xe000..=0xe7ff => {
                 let offset = (((inst << 21) as i32) >> 20) as u32;
                 next = architectural_pc.wrapping_add(offset);
@@ -879,6 +912,45 @@ impl Thumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn udf_stacks_faulting_pc_and_sets_clearable_fault_status() {
+        for (enabled, vector) in [(false, 3u32), (true, 6)] {
+            let mut bus = Bus::default();
+            bus.map_ram(0, 0x400).unwrap();
+            bus.map_nvic(0xf0, None).unwrap();
+            bus.memory(vector * 4, 4)
+                .unwrap()
+                .copy_from_slice(&0x201u32.to_le_bytes());
+            bus.memory(0x80, 2)
+                .unwrap()
+                .copy_from_slice(&0xde5au16.to_le_bytes());
+            let mut output = std::io::sink();
+            if enabled {
+                bus.write(0xe000ed24, 4, 1 << 18, &mut output).unwrap();
+            }
+            let mut thumb = Thumb::new(Some(0));
+            thumb.thumb2 = true;
+            let mut registers = [0; 32];
+            registers[13] = 0x400;
+            let mut pc = 0x80;
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap();
+            assert_eq!(pc, 0x200);
+            assert_eq!(u32::from(thumb.active_exception), vector);
+            assert_eq!(bus.read_ram::<4>(registers[13] + 24).unwrap(), 0x80);
+            assert_eq!(bus.read::<4>(0xe000ed28).unwrap(), 1 << 16);
+            assert_eq!(
+                bus.read::<4>(0xe000ed2c).unwrap(),
+                u32::from(!enabled) << 30
+            );
+            bus.write(0xe000ed28, 4, 1 << 16, &mut output).unwrap();
+            bus.write(0xe000ed2c, 4, 1 << 30, &mut output).unwrap();
+            assert_eq!(bus.read::<4>(0xe000ed28).unwrap(), 0);
+            assert_eq!(bus.read::<4>(0xe000ed2c).unwrap(), 0);
+        }
+    }
 
     #[test]
     fn vtor_relocates_exception_vectors_without_resetting_the_cpu() {

@@ -65,25 +65,20 @@ impl SysTick {
         if cycles == 0 {
             return;
         }
-        let until_zero = if self.current != 0 {
-            self.current
-        } else if self.reload != 0 {
-            self.reload + 1
-        } else {
+        if self.current == 0 {
             return;
-        };
-        if cycles < until_zero {
-            self.current = until_zero - cycles;
-        } else {
-            self.count_flag = true;
-            self.pending |= self.control & 2 != 0;
-            let remainder = (cycles - until_zero) % (self.reload + 1);
-            self.current = if remainder == 0 {
-                0
-            } else {
-                self.reload + 1 - remainder
-            };
         }
+        if cycles < self.current {
+            self.current -= cycles;
+            return;
+        }
+        self.count_flag = true;
+        self.pending |= self.control & 2 != 0;
+        self.current = if self.reload == 0 {
+            0
+        } else {
+            self.reload - (cycles - self.current) % self.reload
+        };
     }
 
     pub fn pending(&self, exception: u8) -> bool {
@@ -115,10 +110,21 @@ impl SysTick {
 
     pub fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
-            CSR => self.control = value & 3, // Processor clock is the only source.
-            RELOAD => self.reload = value & 0xff_ffff,
+            CSR => {
+                if self.control & 1 == 0 && value & 1 != 0 && self.current == 0 {
+                    self.current = self.reload;
+                }
+                self.control = value & 3; // Processor clock is the only source.
+            }
+            RELOAD => {
+                self.reload = value & 0xff_ffff;
+                if self.control & 1 != 0 && self.current == 0 {
+                    self.current = self.reload;
+                }
+            }
             CURRENT => {
-                self.current = 0;
+                self.current = self.reload;
+                self.phase = 0;
                 self.count_flag = false;
             }
             CALIBRATION => {}
@@ -146,17 +152,48 @@ impl SysTick {
 mod tests {
     use super::*;
 
+    fn check_upstream_reload_order(reload_before_clear: bool) {
+        let mut timer = SysTick::default();
+        timer.set_frequency(100);
+        timer.write(CSR, 0);
+        if reload_before_clear {
+            timer.write(RELOAD, 10);
+            timer.write(CURRENT, 0);
+        } else {
+            timer.write(CURRENT, 0);
+            timer.write(RELOAD, 10);
+        }
+        timer.write(CSR, 5);
+        assert_eq!(timer.read(CURRENT), Some(10));
+        for (milliseconds, expected) in [(90, 1), (10, 10), (10, 9)] {
+            for _ in 0..milliseconds * (VIRTUAL_STEPS_PER_SECOND / 1000) {
+                timer.tick();
+            }
+            assert_eq!(timer.read(CURRENT), Some(expected));
+        }
+    }
+
+    #[test]
+    fn upstream_count_down_with_reload_set_before_reset() {
+        check_upstream_reload_order(false);
+    }
+
+    #[test]
+    fn upstream_count_down_with_reload_set_after_reset() {
+        check_upstream_reload_order(true);
+    }
+
     #[test]
     fn advances_fractional_clock_and_preserves_reload_phase_after_wrap() {
         let mut timer = SysTick::default();
         timer.set_frequency(2_500_000);
         timer.write(RELOAD, 3);
         timer.write(CSR, 3);
-        timer.tick(); // 2 cycles, down to 2.
-        assert_eq!(timer.read(CURRENT), Some(2));
+        timer.tick(); // 2 cycles, down to 1.
+        assert_eq!(timer.read(CURRENT), Some(1));
         assert!(!timer.pending(SYSTICK));
-        timer.tick(); // 3 cycles, two to reach 0 and one to reload.
-        assert_eq!(timer.read(CURRENT), Some(3));
+        timer.tick(); // 3 cycles, one to reach 0 and two after the reload.
+        assert_eq!(timer.read(CURRENT), Some(1));
         assert!(timer.pending(SYSTICK));
         assert_eq!(timer.read(CSR), Some(0x10007));
         assert_eq!(timer.read(CSR), Some(7));
