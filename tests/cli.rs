@@ -872,3 +872,61 @@ cpu PC 0x80000000
         [&[0xf7, 1, 0xf7, 0xc0, 0x40, 0xff], &sector[..], &[0x23, 0]].concat()
     );
 }
+
+#[test]
+fn rv64_renode_elf_load_preserves_offsets_across_unmapped_ram() {
+    let directory = std::env::temp_dir().join(format!("penv-elf-ranges-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let elf = directory.join("ranges.elf");
+    let platform = directory.join("ranges.repl");
+    fs::write(
+        &platform,
+        r#"cpu: CPU.RiscV64 @ sysbus
+    cpuType: "rv64i"
+first: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x10
+second: Memory.MappedMemory @ sysbus 0x80000020
+    size: 0x4
+"#,
+    )
+    .unwrap();
+    let mut image = [0u8; 120 + 36];
+    image[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    image[16..18].copy_from_slice(&2u16.to_le_bytes());
+    image[18..20].copy_from_slice(&243u16.to_le_bytes());
+    image[20..24].copy_from_slice(&1u32.to_le_bytes());
+    image[24..32].copy_from_slice(&0x8000_0000u64.to_le_bytes());
+    image[32..40].copy_from_slice(&64u64.to_le_bytes());
+    image[52..54].copy_from_slice(&64u16.to_le_bytes());
+    image[54..56].copy_from_slice(&56u16.to_le_bytes());
+    image[56..58].copy_from_slice(&1u16.to_le_bytes());
+    image[64..68].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+    image[68..72].copy_from_slice(&5u32.to_le_bytes()); // executable
+    image[72..80].copy_from_slice(&120u64.to_le_bytes());
+    image[80..88].copy_from_slice(&0x8000_0000u64.to_le_bytes());
+    image[88..96].copy_from_slice(&0x8000_0000u64.to_le_bytes());
+    image[96..104].copy_from_slice(&36u64.to_le_bytes());
+    image[104..112].copy_from_slice(&40u64.to_le_bytes());
+    image[120..124].copy_from_slice(&0x0200_006fu32.to_le_bytes()); // j +32
+    image[152..156].copy_from_slice(&0x0010_0073u32.to_le_bytes()); // ebreak
+    fs::write(&elf, image).unwrap();
+
+    let invoke = |options: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--platform"])
+            .arg(&platform)
+            .args(options)
+            .arg(&elf)
+            .output()
+            .unwrap()
+    };
+    let strict = invoke(&[]);
+    let compatible = invoke(&["--renode-elf-load"]);
+    fs::remove_dir_all(directory).unwrap();
+    assert!(!strict.status.success());
+    assert!(String::from_utf8_lossy(&strict.stderr).contains("unmapped ELF64 segment"));
+    assert!(compatible.status.success(), "{compatible:?}");
+    let warnings = String::from_utf8_lossy(&compatible.stderr);
+    assert!(warnings.contains("0x0000000080000010..0x0000000080000020"));
+    assert!(warnings.contains("0x0000000080000024..0x0000000080000028"));
+}

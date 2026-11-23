@@ -584,6 +584,17 @@ impl Bus {
         None
     }
 
+    pub(crate) fn mapped_ram_ranges64(&self) -> impl Iterator<Item = std::ops::Range<u64>> + '_ {
+        self.regions
+            .iter()
+            .map(|region| region.base..region.base + region.mapped as u64)
+            .chain(
+                self.aliases
+                    .iter()
+                    .map(|alias| alias.base..alias.base + alias.length as u64),
+            )
+    }
+
     pub fn ram64(&self, address: u64, width: usize) -> Option<&[u8]> {
         let (index, offset) = self.ram_location64(address, width)?;
         Some(&self.regions[index].bytes[offset..offset + width])

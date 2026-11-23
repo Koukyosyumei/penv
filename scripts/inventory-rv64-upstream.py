@@ -246,6 +246,8 @@ def disposition(path, name, context):
         for text, test in register_cases.items():
             if text in name:
                 return "pass", test
+        if "MMIO" in name and name.startswith(("Amocas.d ", "Amocas.q ")):
+            return "partial", "Renode passes; Rust checks the same values at the MMIO address using RAM backing"
         return "pending", "ArrayMemory MMIO semantics"
     if path.name == "riscv-ebreak.robot":
         return "out", "Fixture loads an RV32 VexRiscv ELF and LiteX UART"
@@ -375,7 +377,8 @@ def main():
                             for value in sorted(values):
                                 parameter = Path(value).relative_to(directory) if arch else value
                                 emit((label, relative, no, name, parameter, "pending",
-                                                 "Upstream executable parameter; equivalence unverified"))
+                                                 ("Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv"
+                                                  if arch else "Upstream executable parameter; equivalence unverified")))
                             continue
                     parameter_source = selector
                 elif (suite_template or any(line.lstrip().startswith("[Template]") for line in body)) and not any(

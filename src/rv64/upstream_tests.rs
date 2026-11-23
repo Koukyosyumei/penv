@@ -387,7 +387,15 @@ fn amocas_q_traps_on_odd_register_pairs() {
 
 #[test]
 fn amocas_page_spanning_ram_matches_and_mismatches() {
-    let address = u64::from(RAM_BASE) + 0x4000_0000 - 1;
+    assert_amocas_matches_and_mismatches(u64::from(RAM_BASE) + 0x4000_0000 - 1, 4);
+}
+
+#[test]
+fn amocas_array_memory_matches_and_mismatches() {
+    assert_amocas_matches_and_mismatches(0x1_0000_1000, 8);
+}
+
+fn assert_amocas_matches_and_mismatches(address: u64, minimum_width: usize) {
     for (width, expected, wrong, replacement) in [
         (4, 0xbeef_d00d, 0x1234, 0xbeef_babe),
         (
@@ -403,8 +411,10 @@ fn amocas_page_spanning_ram_matches_and_mismatches() {
             0x216b_00b5_d0d0_caca_1eef_f00d_babe_dead,
         ),
     ] {
-        assert_amocas_at(address, width, expected, replacement, true);
-        assert_amocas_at(address, width, wrong, replacement, false);
+        if width >= minimum_width {
+            assert_amocas_at(address, width, expected, replacement, true);
+            assert_amocas_at(address, width, wrong, replacement, false);
+        }
     }
 }
 

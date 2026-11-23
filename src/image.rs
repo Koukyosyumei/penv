@@ -54,7 +54,15 @@ pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Res
     Ok(())
 }
 
-pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), String> {
+pub fn load(
+    machine: &mut Machine,
+    mut file: File,
+    raw: bool,
+    renode_elf_load: bool,
+) -> Result<(), String> {
+    if raw && renode_elf_load {
+        return Err("--renode-elf-load requires an RV64 ELF".into());
+    }
     if raw {
         return load_binary(machine, file, u64::from(machine.raw_load_address()));
     }
@@ -64,7 +72,10 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
     file.read_exact(&mut header)
         .map_err(|e| format!("ELF header: {e}"))?;
     if header[..7] == *b"\x7fELF\x02\x01\x01" {
-        return crate::image64::load(machine, file, length);
+        return crate::image64::load(machine, file, length, renode_elf_load);
+    }
+    if renode_elf_load {
+        return Err("--renode-elf-load requires an RV64 ELF".into());
     }
     if machine.primary.rv64.is_some() {
         return Err("RV64 requires a little-endian RISC-V ELF64 executable".into());

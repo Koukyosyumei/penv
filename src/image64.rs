@@ -9,7 +9,12 @@ use crate::{
     rv64::{Isa, Rv64},
 };
 
-pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), String> {
+pub fn load(
+    machine: &mut Machine,
+    mut file: File,
+    length: u64,
+    renode_load: bool,
+) -> Result<(), String> {
     let mut header = [0; 64];
     read_at(&mut file, 0, &mut header)?;
     if header[..7] != *b"\x7fELF\x02\x01\x01"
@@ -63,6 +68,7 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
     let mut physical_entry = None;
     let mut ambiguous_entry = false;
     let mut segments = Vec::new();
+    let mut skipped = Vec::new();
     if !entry.is_multiple_of(minimum) {
         return Err(format!("misaligned ELF64 entry {entry:#018x}"));
     }
@@ -85,19 +91,51 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         if memory_size == 0 {
             continue;
         }
-        let size = usize::try_from(memory_size).map_err(|_| "ELF64 segment exceeds host limits")?;
-        let (backing, start) = machine
-            .bus
-            .ram_location64(address, size)
-            .ok_or_else(|| format!("unmapped ELF64 segment at {address:#018x} ({size} bytes)"))?;
-        segments.push(Segment {
-            offset,
-            address,
-            file_size: file_size as usize,
-            size,
-            backing,
-            start,
-        });
+        let end = address
+            .checked_add(memory_size)
+            .ok_or("ELF64 segment address overflow")?;
+        let mut ranges = Vec::new();
+        if renode_load {
+            ranges.extend(machine.bus.mapped_ram_ranges64().filter_map(|range| {
+                let begin = range.start.max(address);
+                let limit = range.end.min(end);
+                (begin < limit).then_some(begin..limit)
+            }));
+            ranges.sort_unstable_by_key(|range| range.start);
+        } else {
+            ranges.push(address..end);
+        }
+        let mut previous = address;
+        for range in ranges {
+            if previous < range.start {
+                skipped.push(previous..range.start);
+            }
+            previous = range.end;
+            let size = usize::try_from(range.end - range.start)
+                .map_err(|_| "ELF64 segment exceeds host limits")?;
+            let (backing, start) =
+                machine
+                    .bus
+                    .ram_location64(range.start, size)
+                    .ok_or_else(|| {
+                        format!(
+                            "unmapped ELF64 segment at {:#018x} ({size} bytes)",
+                            range.start
+                        )
+                    })?;
+            let delta = range.start - address;
+            segments.push(Segment {
+                offset: offset + delta.min(file_size),
+                address: range.start,
+                file_size: file_size.saturating_sub(delta).min(size as u64) as usize,
+                size,
+                backing,
+                start,
+            });
+        }
+        if previous < end {
+            skipped.push(previous..end);
+        }
         if word(&segment, 4) & 1 == 0 {
             continue;
         }
@@ -106,14 +144,17 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
                 .checked_sub(base)
                 .filter(|&delta| file_range(delta, minimum, file_size))
         };
-        if contains_entry(address).is_some() {
+        if contains_entry(address).is_some() && entry_location.is_some() {
             linked_entry = Some(entry);
         }
         if let Some(delta) = contains_entry(virtual_address) {
-            if entry_location == Some((backing, start + delta as usize)) {
+            let candidate = address + delta;
+            let Some(location) = machine.bus.ram_location64(candidate, minimum as usize) else {
+                continue;
+            };
+            if entry_location == Some(location) {
                 linked_entry = Some(entry);
             }
-            let candidate = address + delta;
             if physical_entry.is_some_and(|old| old != candidate) {
                 ambiguous_entry = true;
             }
@@ -129,6 +170,12 @@ pub fn load(machine: &mut Machine, mut file: File, length: u64) -> Result<(), St
         (None, None) => return Err("ELF64 entry is outside executable file-backed segments".into()),
     };
 
+    for range in skipped {
+        eprintln!(
+            "penv: skipped unmapped ELF64 range {:#018x}..{:#018x}",
+            range.start, range.end
+        );
+    }
     let mut initialized: Vec<(usize, Range<usize>)> = Vec::new();
     for segment in segments {
         let destination = machine

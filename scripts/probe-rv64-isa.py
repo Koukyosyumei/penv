@@ -76,8 +76,9 @@ def main():
             status, log = "missing-symbol", symbol.stderr
         else:
             watch = "--robot-tohost" if args.act else "--tohost"
+            load = ["--renode-elf-load"] if args.robot_isa else []
             proc = subprocess.run(
-                [args.penv, "run", "--platform", platform, watch, f"0x{match[1]}",
+                [args.penv, "run", "--platform", platform, *load, watch, f"0x{match[1]}",
                  "--max-steps", "2000000", elf],
                 capture_output=True, text=True, errors="replace",
             )

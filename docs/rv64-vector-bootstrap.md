@@ -2,6 +2,8 @@
 
 固定 Renode の `tests/unit-tests/riscv-arch-tests.robot:54` が設定する `rv64gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp` を Penv で構築できるようにしました。RAM 1 MiB、NS16550、ロード後の CPU ローカル 4 KiB `tohost` 監視は、従来の固定構成ランナーを使います。結果は [ELF 別の照合台帳](rv64-act-prepare.tsv) に記録します。
 
+後続のロード境界互換モードと再実行結果は [RV64 固定 ACT の ELF ロード境界](rv64-act-loader.md) を参照してください。以下の数値は互換モード追加前の結果です。
+
 ## 実装範囲
 
 固定セレクターの 242 ELF は、D、F、I、M、Zaamo、Zalrsc、Zca、Zcd、Zifencei、Sm と Sm 署名生成用の ELF でした。最終 ELF の逆アセンブルにはベクトル構成命令や下記のベクトルデータ命令がなく、Sm は特権 CSR の署名を比較します。ベクトル命令そのものは Renode の `tests/unit-tests/riscv-vector-csr.robot` を出典として検証しました。

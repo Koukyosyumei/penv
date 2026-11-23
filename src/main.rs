@@ -73,6 +73,7 @@ Options:
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RISC-V harts at the image entry (1–8)
   --tohost ADDRESS   Watch an RV64 test completion word in RAM
+  --renode-elf-load  Load the mapped RAM portions of RV64 ELF segments
   --robot-tohost ADDRESS   Install a 4 KiB single-hart Renode-style watcher
   --max-steps N      Stop after N execution steps (default: 10000000)
   --stats            Print execution statistics to stderr
@@ -136,6 +137,7 @@ fn run() -> Result<ExitCode, String> {
     let mut rv64 = false;
     let mut stats = false;
     let mut tohost = None;
+    let mut renode_elf_load = false;
     let mut positional = false;
     let mut ram_mib = None;
     let mut harts = None;
@@ -291,6 +293,7 @@ fn run() -> Result<ExitCode, String> {
                         .map_err(|_| "RAM size exceeds host limits")?,
                 ));
             }
+            Some("--renode-elf-load") => renode_elf_load = true,
             Some(option @ ("--tohost" | "--robot-tohost")) => {
                 let value = args.next().ok_or("--tohost requires an address")?;
                 let value = value.to_str().ok_or("invalid tohost address")?;
@@ -469,7 +472,8 @@ fn run() -> Result<ExitCode, String> {
         }
         if let Some(path) = path.as_deref() {
             let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            image::load(&mut machine, file, raw).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load(&mut machine, file, raw, renode_elf_load)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         if let Some(value) = mtvec {
             if let Some(cpu) = &mut machine.primary.rv64 {
