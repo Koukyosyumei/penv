@@ -32,7 +32,7 @@ mod sync_action;
 mod systick;
 mod thumb;
 pub mod time_handle;
-mod time_source;
+pub mod time_source;
 mod uart;
 
 use std::{

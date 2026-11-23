@@ -386,7 +386,7 @@ mod tests {
     fn renode_time_handle_rejects_grant_after_break() {
         let mut handle = running();
         handle.report_break(0).unwrap();
-        handle.wait().unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, INTERVAL))));
         assert!(handle.grant(INTERVAL).is_err());
     }
 

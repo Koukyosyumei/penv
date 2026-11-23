@@ -1,3 +1,5 @@
+pub mod grants;
+
 /// A serial clock domain with an initial sync point and complete quantum grants.
 #[derive(Default)]
 pub struct TimeSource<const QUANTUM: u64> {

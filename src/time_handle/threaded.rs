@@ -13,6 +13,30 @@ pub struct ThreadedTimeHandle {
 }
 
 impl ThreadedTimeHandle {
+    pub fn elapsed(&self) -> u64 {
+        self.progress().0
+    }
+
+    pub fn progress(&self) -> (u64, bool) {
+        let state = self.state.lock().unwrap();
+        (state.elapsed(), state.is_ready_for_grant())
+    }
+
+    pub(crate) fn grant_batch(sinks: &[Self], ticks: u64) -> Result<(), &'static str> {
+        let mut states: Vec<_> = sinks
+            .iter()
+            .map(|sink| sink.state.lock().unwrap())
+            .collect();
+        if states.is_empty() || states.iter().any(|state| !state.is_ready_for_grant()) {
+            return Err("time group has no sinks or a sink is still waiting for completion");
+        }
+        for (state, sink) in states.iter_mut().zip(sinks) {
+            state.grant(ticks)?;
+            sink.changed.notify_all();
+        }
+        Ok(())
+    }
+
     pub fn update<T>(&self, operation: impl FnOnce(&mut TimeHandle) -> T) -> T {
         let mut state = self.state.lock().unwrap();
         let result = operation(&mut state);
