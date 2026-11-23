@@ -1806,3 +1806,24 @@ python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$repr
 固定40件はすべて CPU 作成時に終了1でした。標準構成は指定のベクトル拡張が利用不可で、Andes 構成は V と各ベンダー拡張が利用不可でした。既存の非ベクトル構成49件と Rust テスト91件は通過しました。同じバイナリで、既存の診断 REPL を使ったベクトル初期化 ELF の UART マーカーと固定 ACT `Sm-00.elf` の完了も確認しました。この実行はベクトルデータ演算を検証しません。
 
 標準ベクトル実行基盤と CPU 型への接続は共有担当への依頼 `riscv-vector-construction-b31f0d7.md` で追跡します。Andes 命令本体は引き続き対象です。台帳の40件は CPU 作成で未達、上流等価合格は累計174件です。生成 REPL、ケース別 JSON、ACT とその他の終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-b31f0d7-whdYNS/` に保存しました。
+
+### 固定ベースライン修正向け RV32 ベクトル転送
+
+固定 SHA `2cfdb6fdcf4e2b7534e4800b626afd3589d0cd72` の分類で、同一原因の892件は ACT 510、ISA 290、メモリー48、Andes 32、特権9、PMP 3です。いずれも固定ベースラインで初期設定から先に進んでいません。
+
+RV32 独立モジュール `src/rv32_vector.rs` は、Andes Robot の `Set Vector Register` と `Vector Should Contain` が使う標準 unit-stride `vle/vse` の EEW=SEW、LMUL=1、8/16/32ビット転送を実装します。マスクが無効な要素はメモリーに触れず、転送中のフォルトは完了済み要素を保持して `vstart` を更新します。既存の設定 CSR は診断時の VLEN 1024 を維持し、独立モジュールでは Robot 用の VLEN 128 も選べます。未実装の符号化ではメモリーアクセス前に違法を返します。
+
+```bash
+cargo test --locked --test rv32_vector_slice
+cargo test --locked
+cargo build --locked --release
+work=/tmp/penv-full-riscv
+sm="$work/act/work/spike-rv32-max/elfs/priv/Sm/Sm-00.elf"
+for binary in /home/ec2-user/Dev/penv-baseline-2cfdb6fdcf4e/target/release/penv target/release/penv; do
+  "$binary" run --platform "$work/act-upstream.repl" --max-steps 1 "$sm"
+done
+```
+
+独立テスト4件を含む Rust テスト95件は通過しました。固定構成の `Sm-00.elf` は両バイナリで CPU 作成時に終了1です。候補側では未実装拡張として V が示されます。設定を変えた別診断では、担当候補の既存ブートストラップ経路で `Sm-00.elf` の完了と診断 ELF の UART マーカーを確認しました。新しい転送モジュールは共有 CPU へ接続前です。
+
+共有担当への接続手順は `riscv-vector-slice-repair-2cfdb6f.md` に記録しました。標準 V 全体、Andes 固有命令、および固定構成の等価合格は残っています。892行の分類と短い前後比較は `~/.local/state/penv-dispatch/evidence/riscv/repair-2cfdb6f-Ihhigv/` に保存しました。

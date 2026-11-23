@@ -4,6 +4,7 @@ const VILL: u32 = 1 << 31;
 
 #[derive(Clone)]
 pub struct VectorBootstrap {
+    vlen: u32,
     start: u32,
     control: u32,
     length: u32,
@@ -12,16 +13,21 @@ pub struct VectorBootstrap {
 
 impl Default for VectorBootstrap {
     fn default() -> Self {
+        Self::with_vlen(VLEN)
+    }
+}
+
+impl VectorBootstrap {
+    pub(crate) fn with_vlen(vlen: u32) -> Self {
         Self {
+            vlen,
             start: 0,
             control: 0,
             length: 0,
             kind: VILL,
         }
     }
-}
 
-impl VectorBootstrap {
     pub fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
             0x008 => self.start,
@@ -30,14 +36,14 @@ impl VectorBootstrap {
             0x00f => self.control,
             0xc20 => self.length,
             0xc21 => self.kind,
-            0xc22 => VLEN / 8,
+            0xc22 => self.vlen / 8,
             _ => return None,
         })
     }
 
     pub fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
-            0x008 => self.start = value & (VLEN - 1),
+            0x008 => self.start = value & (self.vlen - 1),
             0x009 => self.control = (self.control & !1) | (value & 1),
             0x00a => self.control = (self.control & 1) | ((value & 3) << 1),
             0x00f => self.control = value & 7,
@@ -62,7 +68,8 @@ impl VectorBootstrap {
             (false, 0, false) => u32::MAX,
             _ => avl,
         };
-        if let Some(maximum) = vlmax(kind).filter(|&max| !preserve || vlmax(self.kind) == Some(max))
+        if let Some(maximum) = vlmax(kind, self.vlen)
+            .filter(|&max| !preserve || vlmax(self.kind, self.vlen) == Some(max))
         {
             self.kind = kind;
             self.length = requested.min(maximum);
@@ -75,14 +82,14 @@ impl VectorBootstrap {
     }
 }
 
-fn vlmax(kind: u32) -> Option<u32> {
+fn vlmax(kind: u32, vlen: u32) -> Option<u32> {
     let sew = 8 << ((kind >> 3) & 7);
     if kind & !0xff != 0 || sew > 64 {
         return None;
     }
     let bits = match kind & 7 {
-        scale @ 0..=3 => VLEN << scale,
-        scale @ 5..=7 if sew <= (64 >> (8 - scale)) => VLEN >> (8 - scale),
+        scale @ 0..=3 => vlen << scale,
+        scale @ 5..=7 if sew <= (64 >> (8 - scale)) => vlen >> (8 - scale),
         _ => return None,
     };
     Some(bits / sew)
