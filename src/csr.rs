@@ -326,6 +326,10 @@ impl Csr {
         self.vector_bootstrap = Some(VectorBootstrap::default());
     }
 
+    pub fn vector_configured(&self) -> bool {
+        self.vector_bootstrap.is_some()
+    }
+
     pub fn configure_vector(&mut self, insn: u32, avl: u32, kind: u32) -> Option<u32> {
         if self.status & VS == 0 {
             return None;

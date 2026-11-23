@@ -608,3 +608,19 @@ target/release/penv run --platform "$evidence/rv32e.repl" \
 上流等価合格は累計 100 件です。V と Andes 拡張を要求する構成ケースは残っています。
 
 REPL、再現 ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-10f222a-HmbHR9/` に保存しました。
+
+### RV32 の無効化された V 命令の診断
+
+固定 `riscv-unit-tests.robot` の `Should Exit Translation Block After Invalid Instruction And Report Single Error` を移植しました。変更前は不正命令トラップに入るものの、上流が要求する診断が出ませんでした。V が無効な RV32 で OP-V 命令に到達すると、PC と命令語を含む Renode 形式の診断を出して既存の不正命令トラップに入ります。
+
+検証器は固定 Robot から命令語と書き込み位置を抽出し、同じ REPL で開始 PC から連続実行します。上流の 1 MIPS・10 µs の実行窓は 10 ステップで再現します。診断は最初の 0x2008 で 1 回出力され、後続の 0x2018 と 0x2020 では出力されませんでした。翻訳ブロックや仮想時刻の挙動はこの検証の観測対象に含まれません。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-vector-diagnostic.py target/release/penv ../renode "$evidence/robot-rerun"
+```
+
+Rust テスト 82 件、公開特権 ELF 22 件、virt の UART・CLINT・PLIC、ベクトル初期化 ELF が通過しました。上流等価合格は累計 101 件です。ベクトル命令本体と、翻訳ブロックの境界をログで検査するタイマーケースは残っています。
+
+変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-74b8d15-XZOEpw/` に保存しました。
