@@ -679,12 +679,20 @@ impl Hart {
             self.reset_cortex_m(bus)?;
         }
         if let Some(thumb) = self.thumb.as_mut() {
-            bus.advance_nrf_audio()
-                .and_then(|()| bus.advance_nrf_ppi(output))
-                .and_then(|()| bus.advance_stm32_dma(output))
-                .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
+            let clock_ticks = bus.nrf_clock_ticks();
+            for _ in 0..clock_ticks {
+                bus.advance_nrf_audio()
+                    .and_then(|()| bus.advance_nrf_ppi(output))
+                    .and_then(|()| bus.advance_stm32_dma(output))
+                    .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
+                thumb.clock_interrupts(bus);
+            }
+            if clock_ticks != 1 && bus.reset_cortex_m_if_requested(false) {
+                self.reset_cortex_m(bus)?;
+                return Ok(Step::Trap);
+            }
             if thumb
-                .service_interrupts(&mut self.pc, &mut self.registers, bus)
+                .dispatch_interrupts(&mut self.pc, &mut self.registers, bus)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?
             {
                 return Ok(Step::Trap);

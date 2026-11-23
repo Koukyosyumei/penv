@@ -380,6 +380,7 @@ fn run() -> Result<ExitCode, String> {
     }
     let mut named_analyzers = Vec::new();
     let mut uart_irqs = Vec::new();
+    let mut performance_in_mips = None;
     if let Some(script) = script {
         if platform_path.is_some() || raw || hex {
             return Err("--script cannot be combined with --platform, --raw, or --hex".into());
@@ -411,6 +412,7 @@ fn run() -> Result<ExitCode, String> {
         boot_pcs = boot.boot_pcs;
         named_analyzers = boot.named_analyzers;
         uart_irqs = boot.uart_irqs;
+        performance_in_mips = boot.performance_in_mips;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -435,6 +437,12 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if let Some(mips) = performance_in_mips {
+        if ble_peer.is_some() && mips != 100 {
+            return Err("non-default PerformanceInMips requires a single nRF52840 node".into());
+        }
+        machine.bus.set_nrf_cpu_mips(mips)?;
+    }
     for name in named_analyzers {
         if !machine.bus.has_nrf_uart(&name) {
             return Err(format!("unsupported UART analyzer target {name:?}"));

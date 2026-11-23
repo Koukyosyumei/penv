@@ -14,6 +14,7 @@ pub struct Boot {
     pub mask: Option<u32>,
     pub named_analyzers: Vec<String>,
     pub uart_irqs: Vec<UartIrq>,
+    pub performance_in_mips: Option<u32>,
 }
 
 pub enum UartIrq {
@@ -154,6 +155,15 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
+        }
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.platform.is_some() => {
+            boot.performance_in_mips = Some(
+                resolve(value)?
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|&mips| mips > 0)
+                    .ok_or("PerformanceInMips requires a positive integer")?,
+            );
         }
         ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
             // UART output is already connected to stdout.

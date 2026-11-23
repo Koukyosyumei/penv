@@ -1386,6 +1386,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cpu_rate_sets_virtual_time_without_retiming_nrf_clocks() {
+        let mut bus = Bus::default();
+        bus.map_nrf_peripheral(Peripheral::watchdog(0x4001_0000, 16, "wdt".into()))
+            .unwrap();
+        assert_eq!(bus.nrf_clock_ticks(), 1);
+        bus.set_nrf_cpu_mips(1).unwrap();
+        assert_eq!(bus.nrf_clock_ticks(), 100);
+        bus.set_nrf_cpu_mips(3).unwrap();
+        assert_eq!([(); 3].map(|()| bus.nrf_clock_ticks()), [33, 33, 34]);
+        assert!(bus.set_nrf_cpu_mips(0).is_err());
+    }
+
+    #[test]
     fn easy_dma_transfers_and_signals_uart1_on_the_second_nvic_bank() {
         let mut bus = Bus::default();
         let ram = 0x2000_0000;

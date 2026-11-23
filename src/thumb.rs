@@ -415,16 +415,30 @@ impl Thumb {
         }
     }
 
+    pub fn clock_interrupts(&mut self, bus: &mut Bus) {
+        bus.sample_nvic(self.active_exceptions, self.sleeping());
+        if let Some(timer) = bus.systick.as_mut() {
+            timer.tick();
+        }
+    }
+
+    #[cfg(test)]
     pub fn service_interrupts(
         &mut self,
         pc: &mut u32,
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<bool, String> {
-        bus.sample_nvic(self.active_exceptions, self.sleeping());
-        if let Some(timer) = bus.systick.as_mut() {
-            timer.tick();
-        }
+        self.clock_interrupts(bus);
+        self.dispatch_interrupts(pc, r, bus)
+    }
+
+    pub fn dispatch_interrupts(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Result<bool, String> {
         let pending = bus.nvic.as_ref().map_or(0, Nvic::pending_exceptions)
             | bus
                 .systick

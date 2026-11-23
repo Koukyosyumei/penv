@@ -29,7 +29,7 @@ use crate::{
     uart::{LiteXUart, MuraxUart},
 };
 
-// Cortex-M peripheral time advances by 10 ns per execution step.
+// Cortex-M peripheral clocks use a 10 ns time quantum.
 pub(crate) const CORTEX_M_STEP_HZ: u64 = 100_000_000;
 
 pub const RAM_BASE: u32 = 0x8000_0000;
@@ -83,6 +83,8 @@ pub struct Bus {
     regions: Vec<Region>,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
+    nrf_cpu_hz: Option<u64>,
+    nrf_clock_remainder: u64,
     reservations: [Option<(u32, usize)>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     trivial_uart: Option<u32>,
@@ -150,6 +152,27 @@ impl Region {
 }
 
 impl Bus {
+    pub fn set_nrf_cpu_mips(&mut self, mips: u32) -> Result<(), String> {
+        if mips == 0 {
+            return Err("PerformanceInMips requires a positive integer".into());
+        }
+        if self.nrf_peripherals.is_empty() {
+            return Err("PerformanceInMips requires an nRF52840 platform".into());
+        }
+        self.nrf_cpu_hz = Some(u64::from(mips) * 1_000_000);
+        self.nrf_clock_remainder = 0;
+        Ok(())
+    }
+
+    pub fn nrf_clock_ticks(&mut self) -> u64 {
+        let Some(hz) = self.nrf_cpu_hz else {
+            return 1;
+        };
+        // Accumulate clock fractions across instruction slots and system resets.
+        let elapsed = self.nrf_clock_remainder + CORTEX_M_STEP_HZ;
+        self.nrf_clock_remainder = elapsed % hz;
+        elapsed / hz
+    }
     pub fn new(size: usize) -> Result<Self, String> {
         let mut bus = Self {
             uart_tx: Some(UART_TX),

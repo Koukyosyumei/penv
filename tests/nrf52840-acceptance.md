@@ -5,8 +5,8 @@
 | 上流ケース／対象機能 | ログ（成果物ディレクトリからの相対パス） | 判定 |
 | --- | --- | --- |
 | Should Run ZephyrRTOS Shell On UART / On UARTE | `audio/shell-uart.log`、`audio/shell-uarte.log` | それぞれリセット前後に `demo ping` が応答 |
-| Should Restart After Watchdog Timeout | `audio/watchdog.log` | 給餌終了後に再起動 |
-| Should Run Task Watchdog Subsystem | `audio/task-watchdog.log` | コールバックとリセットが 2 回発生し、3 回目の起動に到達 |
+| Should Restart After Watchdog Timeout | `audio/watchdog.log` | CPU 1 MIPS で上流の起動行が 2 回 |
+| Should Run Task Watchdog Subsystem | `audio/task-watchdog.log` | 上流と同じ順序で UART 20 行を照合。各待機は仮想 8 秒 |
 | Should Handle I2C / SPI | `audio/i2c-*.log`、`audio/spi-*.log` | 各バスで 0.00、1.00、2.83、5.20 g。軸入力ごとに別の起動 |
 | Should Echo I2S Audio | `audio/i2s.log`、`audio/i2s-{input,output}.pcm` | 上流の 32 バイトの PCM が完全一致 |
 | Should Detect Yes Pattern | `audio/speech.log` | 上流 PCM で実 ELF が `Heard yes` を表示 |
@@ -25,7 +25,7 @@ cargo build --release --locked
 tests/nrf52840-acceptance.sh target/release/penv ../renode /tmp/nrf52840-acceptance
 ```
 
-ELF のコンパイルに `clang` と `ld.lld`、公開素材の取得・確認に `curl` と `sha1sum` が必要です。各グループの終了コードとログを保存します。上流素材の SHA-1 は各スクリプトで照合します。
+ELF のコンパイルに `clang` と `ld.lld`、公開素材の取得・確認に `curl` と `sha1sum`、Watchdog の UART 照合に `python3` が必要です。各グループの終了コードとログを保存します。上流素材の SHA-1 は各スクリプトで照合します。
 
 ## 残課題
 

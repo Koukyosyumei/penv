@@ -21,8 +21,8 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 221 Should Detect Yes Pattern | micro_speech ELF、`audio_yes_1s.s16le.pcm` | `Heard yes`。既存回帰 |
 | 232 Should Run Zephyr's kernel.interrupt Test | Zephyr kernel.interrupt ELF | `PROJECT EXECUTION SUCCESSFUL`。既存回帰 |
 | 240 Should Run Zephyr's cmsis_dps.transform.rq15 Test | CMSIS transform_rq15 ELF | `PROJECT EXECUTION SUCCESSFUL`。追加回帰 |
-| 249 Should Restart After Watchdog Timeout | Zephyr WDT ELF、上流 monitor で CPU を 1 MIPS に設定 | 起動行が 2 回。既存回帰は標準のステップ時刻を使用。実行条件差は要照合 |
-| 262 Should Run Task Watchdog Subsystem | task_wdt ELF | スレッドとコールバックを含む指定行の系列を 2 周。既存回帰は起動・コールバック・リセットの部分一致。現行ログでは `Control thread getting stuck...` とコールバックの間の指定行が欠落 |
+| 249 Should Restart After Watchdog Timeout | Zephyr WDT ELF、上流 monitor で CPU を 1 MIPS に設定 | 元の RESC コマンドで 1 MIPS を設定し、元の ELF の起動行を 2 回照合 |
+| 262 Should Run Task Watchdog Subsystem | task_wdt ELF | 既定 100 MIPS と元の ELF。Robot と同じ 20 件の順次 UART 照合。各待機は仮想 8 秒 |
 | 291 Should Run Bluetooth sample | HR central/peripheral 各 ELF、2 台、同じ RF 媒体、global quantum 10 µs | 起動、初期化、アドレス C0:00:AA:BB:CC:DD へ接続、購読、通知。起動行と期待アドレスの判定を追加。現在の BLE 再検証を参照 |
 | 332 Should Run Bluetooth Hci Uart Sample | `scripts/multi-node/nrf52840-ble-hci-uart-zephyr.resc` の 4 台。UART1 HCI ペア 2 本、BLE 媒体、controller 先行 1 s、quantum 10 µs | Zephyr 3.6.0 の両 host 起動・接続・購読・通知。元の 3 ELF を 4 台で起動し、UART1 で HCI フレーム、RADIO で接続・購読・通知を確認。CLI で同じ接続を構成。上流の 10 µs 量子条件は照合待ち |
 | 355 Should Return The Chip Id With I2C | MicroPython ELF、BME280 @ twi0 0x76、`readfrom_mem(0x76, 0xD0, 1)` | `ID: 0x60` と上流指定の 3 診断が出ないこと。追加回帰 |
@@ -85,9 +85,17 @@ tests/nrf52840-sensors-upstream.sh target/release/penv ../renode /tmp/nrf52-sens
 tests/nrf52840-hci-upstream.sh target/release/penv ../renode /tmp/nrf52-hci
 tests/nrf52840-nano33-upstream.sh target/release/penv ../renode /tmp/nrf52-nano33
 tests/nrf52840-monitor-upstream.sh target/release/penv ../renode /tmp/nrf52-monitor
-tests/nrf52840-task-wdt-upstream.sh /tmp/nrf52-acceptance/audio/task-watchdog.log
+tests/nrf52840-watchdogs-upstream.sh target/release/penv ../renode /tmp/nrf52-watchdogs
 ```
 
 追加テストの ELF は公開ファイルの SHA-1 を照合する。Alarm の `--uart-steps` は仮想ステップを表示し、100,000,000 ステップを仮想 1 秒として判定する。全件ランナーと全件合格ログは未完成。
 
 Nano 33 BLE は未変更の上流 REPL を使用する。ArduCAM の 4 画像は最後のスコア行と差分の閾値、LSM9DS1 の 2 入力は起動後の認識行が必要。スコアや認識行を欠く実行はランナーが失敗として報告する。上表の画像スコアは SPI の CS 判定を追加する前のログに基づく。追加後は `person_image_0.jpg` でキャプチャからデコードまで確認し、4 画像のスコア再確認は残る。
+
+## Watchdog の時刻と UART 判定
+
+`PerformanceInMips` は単一 nRF52840 ノードの RESC ブート設定で指定する。既定は 100 MIPS。1 MIPS では CPU の 1 実行スロットが仮想 1 µs となり、周辺回路には同じ仮想時間を進める。Watchdog は周辺の 32.768 kHz 低周波クロックで進む。非既定の速度を複数ノードで使う構成は未対応。
+
+固定上流の `UartKeywords.cs` と `TerminalTester.cs` は、既定で次の一致行までを消費する。UART の探索は再起動後の行にも続く。Renode 1.17.0 で固定チェックアウトの Robot 本文を実行したところ、両ケースが通った。Task Watchdog の実ログでは `Control thread getting stuck...` の直後にコールバックとリセットが出る。その後の起動で次の生存ログを照合し、さらに続くコールバックを照合する。回帰ではファームウェアの実出力をこの順序で照合する。
+
+`nrf52840-watchdogs-upstream.sh` は上流 ELF の SHA-1 を照合し、各マーカーを前回一致から仮想 8 秒以内に探す。改行済みの UART 行を使う。時刻は penv の `--uart-steps` が付ける各行の出力開始スロットを秒に換算する。最後に一致した行で停止し、UART と一致時刻を保存する。
