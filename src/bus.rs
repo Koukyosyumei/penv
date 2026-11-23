@@ -1054,6 +1054,38 @@ impl Bus {
         }
     }
 
+    pub(crate) fn attach_sd_file(
+        &mut self,
+        name: &str,
+        path: &Path,
+        capacity: u64,
+    ) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        if let Some(controller) = self
+            .rv64_devices
+            .mpfs_sd
+            .iter_mut()
+            .find(|sd| sd.name == name)
+        {
+            return controller
+                .attach(path, capacity)
+                .map_err(|error| format!("{}: {error}", path.display()));
+        }
+        if let Some(controller) = self.h7_sdmmc.iter_mut().find(|sd| sd.name == name) {
+            return controller.attach_file(path, capacity);
+        }
+        let file = std::fs::File::open(path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                format!("Could not find image file '{}'", path.display())
+            } else {
+                format!("{}: {error}", path.display())
+            }
+        })?;
+        let card =
+            Card::new(file, capacity).map_err(|error| format!("{}: {error}", path.display()))?;
+        self.attach_litex_sd(name, card)
+    }
+
     pub fn map_h7_sdmmc(&mut self, device: Sdmmc) -> Result<(), String> {
         self.check_peripheral_range(device.base, Sdmmc::SIZE)?;
         self.h7_sdmmc.push(device);

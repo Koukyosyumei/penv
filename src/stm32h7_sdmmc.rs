@@ -15,6 +15,7 @@ const START_COMMAND: u32 = 1 << 12;
 
 pub struct Sdmmc {
     pub base: u32,
+    pub name: String,
     pub irq: Option<u8>,
     registers: [u32; 24],
     status: u32,
@@ -31,6 +32,7 @@ impl Sdmmc {
     pub fn new(base: u32, irq: Option<u8>) -> Self {
         Self {
             base,
+            name: String::new(),
             irq,
             registers: [0; 24],
             status: 0,
@@ -43,8 +45,10 @@ impl Sdmmc {
 
     pub fn reset(&mut self) {
         let image = self.image.take();
+        let name = std::mem::take(&mut self.name);
         *self = Self::new(self.base, self.irq);
         self.image = image;
+        self.name = name;
     }
 
     pub fn attach(&mut self, image: Vec<u8>) -> Result<(), String> {
@@ -52,6 +56,41 @@ impl Sdmmc {
             return Err("SDHC image size must be a nonzero multiple of 512 KiB".into());
         }
         self.image = Some(image);
+        Ok(())
+    }
+
+    pub(crate) fn attach_file(&mut self, path: &std::path::Path, size: u64) -> Result<(), String> {
+        use std::io::Read;
+
+        if path.as_os_str().is_empty() {
+            return Err("No image file provided.".into());
+        }
+        let file = std::fs::File::open(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                format!("Could not find image file '{}'", path.display())
+            } else {
+                format!("{}: {error}", path.display())
+            }
+        })?;
+        if size == 0 {
+            return Err("SD image size must be nonzero".into());
+        }
+        let size =
+            usize::try_from(size).map_err(|_| "SD image capacity exceeds host address space")?;
+        let capacity = size
+            .div_ceil(CAPACITY_UNIT)
+            .checked_mul(CAPACITY_UNIT)
+            .ok_or("SD image capacity exceeds host address space")?;
+        let mut image = Vec::new();
+        image
+            .try_reserve_exact(capacity)
+            .map_err(|_| "cannot allocate SD image")?;
+        file.take(size as u64)
+            .read_to_end(&mut image)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        image.resize(capacity, 0);
+        self.attach(image)?;
+        self.reset();
         Ok(())
     }
 

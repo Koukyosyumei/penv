@@ -693,6 +693,7 @@ fn run() -> Result<ExitCode, String> {
     let mut run_steps = None;
     let mut post_run = Vec::new();
     let mut sd_cards = Vec::new();
+    let mut sd_setup_only = false;
     let mut mpfs_buttons = Vec::new();
     let mut halt_hooks = Vec::new();
     let mut virtual_mips = None;
@@ -769,6 +770,7 @@ fn run() -> Result<ExitCode, String> {
                 common
             }
         };
+        sd_setup_only = boot.is_sd_setup_only() && boot.image.is_none() && boot.binaries.is_empty();
         if let Some(server) = boot.network.into_tftp()? {
             let file = server.file.resolve(root, asset_dir.as_deref())?;
             let data = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -797,10 +799,7 @@ fn run() -> Result<ExitCode, String> {
             let path = value.resolve(root, asset_dir.as_deref())?;
             binaries.push((path, u64::from(address)));
         }
-        for (value, controller, capacity) in boot.sd_cards {
-            let path = value.resolve(root, asset_dir.as_deref())?;
-            sd_cards.push((path, controller, capacity));
-        }
+        sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
         for (cpu, symbol, target, value) in boot.halt_hooks {
             let file = monitor::Asset::new(&value, script).resolve(root, asset_dir.as_deref())?;
@@ -827,11 +826,12 @@ fn run() -> Result<ExitCode, String> {
     let has_firmware = path.is_some() || !binaries.is_empty();
     let setup_only = max_steps == Some(0) && !memory_setup.is_empty();
     let static_memory_script = monitor::is_static_memory_script(&runtime);
-    if max_steps == Some(0) && !setup_only && !static_memory_script {
+    if max_steps == Some(0) && !setup_only && !static_memory_script && !sd_setup_only {
         return Err("--max-steps requires a positive integer outside memory setup".into());
     }
-    let memory_only =
-        !has_firmware && platform_path.is_some() && (setup_only || static_memory_script);
+    let memory_only = !has_firmware
+        && platform_path.is_some()
+        && (setup_only || static_memory_script || sd_setup_only);
     if !has_firmware && !memory_only {
         return Err("missing firmware image; see run --help".into());
     }
@@ -955,24 +955,14 @@ fn run() -> Result<ExitCode, String> {
         for (source, pc, target) in &halt_hooks {
             machine.halt_on_pc(source, *pc, target)?;
         }
-        for (path, name, capacity) in &sd_cards {
-            if let Some(controller) = machine
-                .bus
-                .rv64_devices
-                .mpfs_sd
-                .iter_mut()
-                .find(|sd| sd.name == *name)
-            {
-                controller
-                    .attach(path, *capacity)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
-            } else {
-                let file =
-                    File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-                let card = litex_sd::Card::new(file, *capacity)
-                    .map_err(|error| format!("{}: {error}", path.display()))?;
-                machine.bus.attach_litex_sd(name, card)?;
-            }
+        for attachment in &sd_cards {
+            attachment.apply(
+                &mut machine.bus,
+                platform_root
+                    .as_deref()
+                    .unwrap_or(std::path::Path::new(".")),
+                asset_dir.as_deref(),
+            )?;
         }
         if rv64 {
             machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));
@@ -1123,7 +1113,7 @@ fn run() -> Result<ExitCode, String> {
         machine.arm_litex_uart_action(trigger.fired.clone(), &name, action)?;
         uart_triggers.push(trigger);
     }
-    if setup_only && !static_memory_script {
+    if sd_setup_only || (setup_only && !static_memory_script) {
         return Ok(ExitCode::SUCCESS);
     }
     for action in &post_run {

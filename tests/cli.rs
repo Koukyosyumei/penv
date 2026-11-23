@@ -1688,3 +1688,61 @@ sysbus ReadByte 0x20
     }
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn renode_resc_sd_card_file_cases_use_the_named_controller() {
+    let directory = std::env::temp_dir().join(format!("penv-sd-file-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m7"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x4000
+sdmmc: SD.STM32HSDMMC @ sysbus 0x52007000
+second: SD.STM32HSDMMC @ sysbus 0x5200a000
+"#,
+    )
+    .unwrap();
+    fs::write(directory.join("card input.img"), [1, 2, 3, 4]).unwrap();
+    let script = directory.join("sd.resc");
+    for (file, expected) in [
+        (r#""card input.img""#, None),
+        (r#"@"card input.img""#, None),
+        (
+            r#""/doesntexist""#,
+            Some("Could not find image file '/doesntexist'"),
+        ),
+        (r#""""#, Some("No image file provided")),
+    ] {
+        for network in [false, true] {
+            let mut body = format!(
+                "mach create \"board\"\nmachine LoadPlatformDescription @board.repl\nmachine SdCardFromFile {file} sysbus.second 0x1000 false\n"
+            );
+            if network {
+                body.push_str("mach create \"other\"\nmachine LoadPlatformDescription @board.repl\nmachine SdCardFromFile \"card input.img\" sdmmc 0x1000\n");
+            }
+            fs::write(&script, body).unwrap();
+            let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+                .args(["run", "--script"])
+                .arg(&script)
+                .output()
+                .unwrap();
+            assert_eq!(result.status.success(), expected.is_none(), "{result:?}");
+            if let Some(error) = expected {
+                assert!(
+                    String::from_utf8_lossy(&result.stderr).contains(error),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        fs::read(directory.join("card input.img")).unwrap(),
+        [1, 2, 3, 4]
+    );
+    fs::remove_dir_all(directory).unwrap();
+}

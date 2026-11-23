@@ -38,7 +38,7 @@ pub struct Boot {
     pub halt_hooks: Vec<(String, String, String, String)>,
     symbols: Vec<String>,
     hooks: HashMap<String, String>,
-    pub sd_cards: Vec<(Asset, String, u64)>,
+    pub sd_cards: Vec<SdAttachment>,
     started: bool,
 }
 
@@ -366,6 +366,60 @@ pub enum PostRun {
     DisposePcm(String),
 }
 
+pub(crate) struct SdAttachment {
+    file: Asset,
+    controller: String,
+    capacity: u64,
+}
+
+impl SdAttachment {
+    pub(crate) fn parse<'a>(
+        args: &[&'a str],
+        resolve: impl Fn(&'a str) -> Result<&'a str, String>,
+        script: &Path,
+    ) -> Result<Self, String> {
+        let (file, controller, capacity) = match args {
+            [file, controller, capacity]
+            | [
+                file,
+                controller,
+                capacity,
+                "False" | "false" | "persistent=false" | "persistent=False",
+            ] => (*file, *controller, *capacity),
+            _ => return Err("expected SdCardFromFile path controller capacity [false]".into()),
+        };
+        let value = unquote(resolve(file)?);
+        let value = unquote(value.strip_prefix('@').unwrap_or(value));
+        let file = Asset::new(value, script);
+        let controller = unquote(resolve(controller)?);
+        let capacity = crate::parse_address64(resolve(capacity)?)?;
+        Ok(Self {
+            file,
+            controller: controller.to_owned(),
+            capacity,
+        })
+    }
+
+    pub(crate) fn apply(
+        &self,
+        bus: &mut crate::bus::Bus,
+        root: &Path,
+        assets: Option<&Path>,
+    ) -> Result<(), String> {
+        if self.file.value.is_empty() {
+            return Err("No image file provided.".into());
+        }
+        let path = self.file.resolve(root, assets)?;
+        bus.attach_sd_file(&self.controller, &path, self.capacity)
+    }
+}
+
+impl Boot {
+    pub(crate) fn is_sd_setup_only(&self) -> bool {
+        !self.sd_cards.is_empty() && self.runtime.is_empty() && !self.started
+    }
+}
+
 #[derive(Debug)]
 pub struct Asset {
     value: String,
@@ -482,7 +536,8 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
         || boot.platform.is_none()
         || (boot.image.is_none()
             && boot.binaries.is_empty()
-            && !is_static_memory_script(&boot.runtime))
+            && !is_static_memory_script(&boot.runtime)
+            && !boot.is_sd_setup_only())
     {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
@@ -884,22 +939,9 @@ fn execute(
                 .ok_or("expected @platform-path")?;
             boot.platform = Some(local_path(&path_value(file), script, root));
         }
-        ["machine", "SdCardFromFile", value, controller, capacity]
-        | [
-            "machine",
-            "SdCardFromFile",
-            value,
-            controller,
-            capacity,
-            "False" | "false",
-        ] if boot.platform.is_some() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @SD-image-path")?;
-            let controller = controller.strip_prefix("sysbus.").unwrap_or(controller);
-            let capacity = crate::parse_address64(resolve(capacity)?)?;
+        ["machine", "SdCardFromFile", args @ ..] if boot.platform.is_some() => {
             boot.sd_cards
-                .push((Asset::new(file, script), controller.to_string(), capacity));
+                .push(SdAttachment::parse(args, resolve, script)?);
         }
         ["sysbus", "LoadELF", value, options @ ..]
             if boot.platform.is_some() && boot.image.is_none() && options.len() <= 1 =>

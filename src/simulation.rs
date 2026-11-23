@@ -27,6 +27,10 @@ pub enum Connection {
 
 pub enum Action {
     Activate(usize),
+    AttachSdFile {
+        node: usize,
+        attachment: crate::monitor::SdAttachment,
+    },
     CreateSwitch(String),
     Connect {
         operation: Connection,
@@ -84,6 +88,7 @@ pub fn run(
     stats: bool,
     uart_log_dir: Option<&Path>,
 ) -> Result<ExitCode, String> {
+    let sd_setup_only = plan.is_sd_setup_only();
     let mut simulation = Simulation::default();
     let mut pending = plan.nodes.into_iter();
     let mut output = LineWriter::new(io::stdout().lock());
@@ -93,7 +98,8 @@ pub fn run(
             match action {
                 Action::Activate(id) => {
                     debug_assert_eq!(id, simulation.nodes.len());
-                    let mut node = Node::boot(pending.next().unwrap(), root, assets)?;
+                    let mut node =
+                        Node::boot(pending.next().unwrap(), root, assets, sd_setup_only)?;
                     if let Some(directory) = uart_log_dir {
                         let path = directory.join(format!("{id}.uart.log"));
                         node.uart_log = Some(BufWriter::new(
@@ -105,6 +111,16 @@ pub fn run(
                         ));
                     }
                     simulation.nodes.push(node);
+                }
+                Action::AttachSdFile { node, attachment } => {
+                    let node = &mut simulation.nodes[node];
+                    attachment
+                        .apply(
+                            &mut node.machine.bus,
+                            root.unwrap_or(Path::new(".")),
+                            assets,
+                        )
+                        .map_err(|error| format!("{}: {error}", node.name))?;
                 }
                 Action::CreateSwitch(name) => simulation.create_switch(name)?,
                 Action::Connect {
@@ -174,7 +190,7 @@ pub fn run(
                 }
             }
         }
-        if ran {
+        if ran || sd_setup_only {
             Ok(false)
         } else {
             simulation.advance(Run::Remaining, limit, &mut output)
@@ -212,7 +228,12 @@ pub fn run(
 }
 
 impl Node {
-    fn boot(node: NodeBoot, root: Option<&Path>, assets: Option<&Path>) -> Result<Self, String> {
+    fn boot(
+        node: NodeBoot,
+        root: Option<&Path>,
+        assets: Option<&Path>,
+        sd_setup_only: bool,
+    ) -> Result<Self, String> {
         let NodeBoot { name, boot, source } = node;
         let mut machine = network_repl::load(&boot.platform.unwrap(), root)?;
         if let Some(mips) = boot.mips {
@@ -256,9 +277,11 @@ impl Node {
                 .map_err(|error| error.to_string())?;
         }
         zephyr_boot::configure(&mut machine, &boot.zephyr, image_path.as_deref())?;
-        machine
-            .validate_entry()
-            .map_err(|e| format!("{name}: {e}"))?;
+        if !sd_setup_only {
+            machine
+                .validate_entry()
+                .map_err(|e| format!("{name}: {e}"))?;
+        }
         Ok(Self {
             name,
             switch_by_nic: vec![None; machine.bus.ethernet.len()],

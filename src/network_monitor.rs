@@ -29,9 +29,10 @@ impl Plan {
         if plan.nodes.is_empty() {
             return Err(format!("{}: expected machine creation", path.display()));
         }
+        let sd_setup_only = plan.is_sd_setup_only();
         for node in &plan.nodes {
             if node.boot.platform.is_none()
-                || (node.boot.image.is_none() && node.boot.binaries.is_empty())
+                || (node.boot.image.is_none() && node.boot.binaries.is_empty() && !sd_setup_only)
             {
                 return Err(format!(
                     "{}: machine {:?} requires a platform and firmware",
@@ -45,6 +46,21 @@ impl Plan {
 
     pub fn is_single_boot(&self) -> bool {
         self.nodes.len() == 1 && self.actions.len() == 1
+    }
+
+    pub(crate) fn is_sd_setup_only(&self) -> bool {
+        self.nodes
+            .iter()
+            .all(|node| node.boot.image.is_none() && node.boot.binaries.is_empty())
+            && self.nodes.iter().enumerate().all(|(id, _)| {
+                self.actions.iter().any(
+                    |action| matches!(action, Action::AttachSdFile { node, .. } if *node == id),
+                )
+            })
+            && self
+                .actions
+                .iter()
+                .all(|action| matches!(action, Action::Activate(_) | Action::AttachSdFile { .. }))
     }
 
     fn command(
@@ -139,6 +155,15 @@ impl Plan {
                     name,
                     pressed: *verb == "Press",
                 });
+            }
+            ["machine", "SdCardFromFile", args @ ..] => {
+                let node = self.monitor_node()?;
+                let attachment = crate::monitor::SdAttachment::parse(
+                    args,
+                    |value| monitor::resolve(vars, value),
+                    source,
+                )?;
+                self.actions.push(Action::AttachSdFile { node, attachment });
             }
             ["sysbus", "FindBytes", ..] => {
                 let node = self.monitor_node()?;

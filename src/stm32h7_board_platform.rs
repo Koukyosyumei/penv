@@ -99,7 +99,9 @@ pub fn configure(
             _ => return Err(entry.error("expected at most one IRQ")),
         };
         if entry.model == Sdmmc::MODEL {
-            machine.bus.map_h7_sdmmc(Sdmmc::new(base, irq))
+            let mut device = Sdmmc::new(base, irq);
+            device.name.clone_from(&entry.name);
+            machine.bus.map_h7_sdmmc(device)
         } else {
             machine.bus.map_designware_usb(DesignWareUsb::new(base))
         }

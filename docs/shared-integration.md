@@ -60,3 +60,11 @@ RV32 `fdacacf` と `885d642` を共有実行経路に取り込み、同じ照合
 通常・複数機・nRF の REPL ローダーが引用符内の区切りと行コメントを共通処理する。引用符内のセミコロンや波括弧、`@https://` の URI を保持する。引用符の復号は `using` と STM32H7 の SampleCsv に適用した。STM32F407 `5de13f0` の三つの入力について、共有復号器で元の期待値を確認した。MockCPU 全体の構築と複数行属性の汎用読み込みは残件。
 
 `cargo test --locked` でユニット214件とCLI22件が通過し、固定公開 STM32F072 Hello World の ELF と HEX の UART 行も確認した。結果は `~/.local/state/penv-dispatch/evidence/integration/shared-repl-syntax-2cfdb6f/`。
+
+## STM32H7 の SdCardFromFile
+
+`03830d3` のファイル接続を単機・複数機の共通 RESC 入口に取り込んだ。引用付きのローカルパスと既存の `@asset` を受け付け、REPL に登録した名前で H7 SDMMC を選ぶ。空パス、存在しないパス、ファームウェアを実行せず接続だけを行う構成をテストした。従来の MPFS と LiteX は同じ Bus の接続入口を通る。
+
+`cargo test --locked` のユニット214件とCLI23件が通過。公開 STM32H747 ファイルシステム ELF と ext2 イメージでは、RESC と従来の `--sd-image` の両方で `Disk mounted.` と `[DIR ] lost+found` を確認した。ログと再現は `~/.local/state/penv-dispatch/evidence/integration/shared-network-sd-card-03830d3/`。
+
+H7 SDHC イメージはゲスト内のメモリで扱う。固定 Robot のアドレスなし単独 SDMMC と元ファイルへの永続書き戻しは残件。固定 H743 REPL は SD 接続前の TIM17 RCC 登録で止まるため、SD の入力3件はアドレス付き最小 H7 構成で検証した。
