@@ -2,7 +2,7 @@
 
 Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac7c563095c5410258ecc1b1a6b841a013db85`、tlib は `c04522a9c886ba743c77a86b0c879103a2ef46d0`。[ケースとソース行の索引](nrf52840-full-upstream-index.tsv) を併記する。共有ケースの調査には、固定版の Renode UI、dts2repl、models-analyzer も別ディレクトリへ取得した。Renode の作業ツリーとサブモジュールは読み取り専用で参照した。
 
-`nrf52-ready` は従来の範囲の結果。全件ゲートは本台帳の未実装・部分移植・調査中の行を含む全ケースの等価な合格証拠が揃ってから作成する。
+`nrf52-ready` は従来の範囲の結果。全件ゲートは本台帳の対象ケースすべてについて上流等価の合格証拠が揃ってから作成する。
 
 ## 機種固有スイート
 
@@ -57,23 +57,35 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-ge-flag.robot` は同じ Armv7E-M 命令列を Cortex-M4 で実行し、R4 の期待値 6 件を確認。usub8 という名前の行も、上流本文が実際に実行する ssub8 を使用。
 - `tests/unit-tests/it-status.robot` は元の Cortex-M4 命令列と判定を Rust に移植し、条件コード、IT 状態とシフト、命令の条件実行、NMI 復帰、IT ブロック内フラグ更新の 6 ケースが合格。NMI は上流の monitor 注入と同じ例外番号を ICSR でペンドする。保存・復元と block begin/end hook の 3 ケースは未移植。
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
-- `tests/unit-tests/page-access-via-io.robot` の Cortex-M4 ケースは対象。monitor 操作とパラメータを照合中。
-- `tests/unit-tests/python-engine.robot` の nRF RADIO は RISC-V fixture 内の単体部品。`tests/external-control/external-control.robot` の nRF SPI も RISC-V fixture。ボードとしては別構成。共有 API・部品テストとしての適用性は調査中。
-- Infrastructure の `src/Emulator/Main/Tests/UnitTests/GPIOTests.cs` と `GPIODetachingTests.cs` は汎用 GPIO 接続モデル用の NUnit。nRF モデル名を直接指定する fixture は PeripheralsTests、UnitTests、MonitorTests からは見つかっていない。共有 GPIO 操作の適用性と未分類 NUnit の調査は継続。
-- dts2repl の `ci/load_repls_with_diffs.robot` / `Should Load Repls` は外部生成の REPL 一覧をパラメータとして読み込む。固定 Git リビジョンのソースだけでは nRF52840 の入力行を確定できず、台帳化は未完了。
+- `page-access-via-io.robot` は固定 Cortex-M4 のページ単位 I/O 切替。monitor 操作とアクセスログの回帰が未達。
+- `python-engine.robot` の nRF RADIO 構文エラーと `external-control.robot` の nRF SPI 転送は Cortex-M4 へ移植できる。RISC-V カスタム命令による CPU abort は固定の別 ISA を必要とする。
+- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。NUnit の等価な実行は未達。
 
-## 調査範囲と未分類
+## 固定構成の集計
 
-- Renode の `tests` では、nRF52840・nRF52・Nano 33 BLE の直接参照と、Cortex-M・Armv7-M・Thumb-2 の共有フィクスチャを検索した。直接参照の 13 ファイルを記録し、機種固有の 17 ケースは上流の行と入力で照合した。
-- 汎用テストは関連が確認できたスイートと適用性の判定待ちを含む。共有 Robot/NUnit の調査には未分類があり、上流 Robot のテンプレート展開と NUnit のパラメータ照合も残る。
-- `arm-semihosting.robot` の ELF、引数、入力、出力条件はパラメータ単位で展開し、Cortex-A フィクスチャを区別した。対応するモニター・API と残る共有ケースの等価判定は未完了。
-- Armv8-M TrustZone と MVE の機種固有スイートは、その命令・セキュリティ状態を前提にするため対象外。別の Cortex-M をフィクスチャに使う共有ケースは、命令や入出力の適用性を個別に確認する。
+監査結果は TSV の `scope` と `result` に記録した。 `in` は対象で、`pass` は上流等価の合格、`partial` は部分移植または最終モデルで等価性の証拠が不足、`unmet` は対象だが上流等価の合格証拠がない状態。 `out` は固定構成上の対象外で、`parameter` に別構成、`applicability` に該当する命令・レジスタ・ELF・周辺機器などの根拠を記録した。
+
+| 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
+|---|---:|---:|---:|---:|
+| `tests/platforms/NRF52840.robot` | 17 | 15 | 2 | 0 |
+| 監査した共有・混成 Robot | 190 | 41 | 4 | 145 |
+| Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
+| 合計 | **221** | **56** | **6** | **159** |
+
+固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
+
+- CMSIS-NN の127 URLは、`hello_world` と `micro_speech` の同 SHA-1 別名を統合すると125構成。Cortex-M85 DSP 用 ELF と合わせて137個の異なる ELF の SHA-1 と逆アセンブルを確認した。固定 ELF には MVE 命令、またはリセット時の `MSPLIM` / `PSPLIM` 設定がある。別ケースや別 UART 構成で使う同一 ELF は独立に扱う。
+- semihosting の22 ELF は EABI 属性が Armv8.1-M でも、Cortex-M4 指定の逆アセンブルで未知命令が出なかった。固定の Thumb BKPT とホスト ABI のテストを対象に残し、実行による等価判定は未達とした。
+- Cortex-M55 の BusFault はTrustZone を用いない Armv7-M でも成立する例外のケースを対象に残した。Secure stack integrity、NVIC のバンク化状態、MVE といった追加機能を要求するパラメータは対象外にした。
+- dts2repl の `Should Load Repls` は1件の `dynamic/unexpanded` 行として保持した。固定 gitlink は Dashboard の `LATEST_SIM`、`LATEST_SIM_RENODE`、`replkit.tar.xz`、`*.repl.diff` 一覧を固定しない。参照 CI 実行の不変アーティファクトが必要なため、件数は固定分母に含めていない。221件はこの台帳で確定した固定構成の分母。
 
 ## 再現
 
 ```sh
 cargo test --locked
 cargo build --release --locked
+awk -F '\t' 'NR > 1 { count[$9]++ } END { for (result in count) print result, count[result] }' \
+    tests/nrf52840-full-upstream-index.tsv
 tests/nrf52840-acceptance.sh target/release/penv ../renode /tmp/nrf52-acceptance
 tests/nrf52840-board-extra.sh target/release/penv ../renode /tmp/nrf52-board-extra
 tests/nrf52840-dsp-upstream.sh target/release/penv ../renode /tmp/nrf52-dsp
@@ -88,7 +100,7 @@ tests/nrf52840-monitor-upstream.sh target/release/penv ../renode /tmp/nrf52-moni
 tests/nrf52840-watchdogs-upstream.sh target/release/penv ../renode /tmp/nrf52-watchdogs
 ```
 
-追加テストの ELF は公開ファイルの SHA-1 を照合する。Alarm の `--uart-steps` は仮想ステップを表示し、100,000,000 ステップを仮想 1 秒として判定する。全件ランナーと全件合格ログは未完成。
+追加テストの ELF は公開ファイルの SHA-1 を照合する。Alarm の `--uart-steps` は仮想ステップを表示し、100,000,000 ステップを仮想 1 秒として判定する。全件ランナーと全件合格ログは未完成。監査時は Zephyr UARTE Shell のリセット前後の応答と、Q15 の `PROJECT EXECUTION SUCCESSFUL` を元の ELF で再確認した。Q15 は `nrf52840-board-extra.sh` と同じ 45,000,000 ステップ上限を使用した。
 
 Nano 33 BLE は未変更の上流 REPL を使用する。ArduCAM の 4 画像は最後のスコア行と差分の閾値、LSM9DS1 の 2 入力は起動後の認識行が必要。スコアや認識行を欠く実行はランナーが失敗として報告する。上表の画像スコアは SPI の CS 判定を追加する前のログに基づく。追加後は `person_image_0.jpg` でキャプチャからデコードまで確認し、4 画像のスコア再確認は残る。
 
