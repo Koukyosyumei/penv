@@ -292,14 +292,13 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
             }
             continue;
         }
-        let (name, selector) = target
-            .trim()
-            .split_once('#')
-            .ok_or("missing SYSCFG port selector")?;
+        let (name, selector) = crate::platform::irq_receiver(target)?;
         if !syscfg.is_some_and(|syscfg| syscfg.name == name) {
             return Err("expected GPIO routed through SYSCFG".into());
         }
-        let selector = irq_index(selector, 16)?;
+        let selector = selector
+            .filter(|&index| index < 16)
+            .ok_or("expected SYSCFG port selector from 0 to 15")? as u8;
         if port.syscfg_port.is_some_and(|port| port != selector) {
             return Err("GPIO must use one SYSCFG port selector".into());
         }

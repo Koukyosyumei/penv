@@ -1591,6 +1591,17 @@ fn irq_destinations(text: &str) -> impl Iterator<Item = Result<(&str, &str), &'s
         .map(crate::stm32h7_board_platform::wire_destination)
 }
 
+pub(crate) fn irq_receiver(target: &str) -> Result<(&str, Option<u32>), String> {
+    let Some((name, index)) = target.split_once('#') else {
+        return Ok((target.trim(), None));
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("missing local IRQ receiver name".into());
+    }
+    Ok((name, Some(number(index.trim())?)))
+}
+
 fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
     let expected = format!("IRQ->{cpu}@{line}");
     match entry.body.as_slice() {
@@ -2353,6 +2364,64 @@ uart:
             let entries = parse(source).unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
+        }
+    }
+
+    #[test]
+    fn upstream_simple_irq_receivers() {
+        let fixtures: &[(&str, &[&str], &[&[(&str, Option<u32>, u8)]])] = &[
+            (
+                "\nuart:\n    1 -> pic@2\n    IRQ -> pic@3\n    -> pic@4",
+                &["1", "IRQ", ""],
+                &[
+                    &[("pic", None, 2)],
+                    &[("pic", None, 3)],
+                    &[("pic", None, 4)],
+                ],
+            ),
+            (
+                "\nuart:\n    1 -> pic@2 | pic1@3\n    -> pic2@4 | pic3@5\n    IRQ -> pic4@6 | pic5@7 | pic6@8 | pic7@9",
+                &["1", "", "IRQ"],
+                &[
+                    &[("pic", None, 2), ("pic1", None, 3)],
+                    &[("pic2", None, 4), ("pic3", None, 5)],
+                    &[
+                        ("pic4", None, 6),
+                        ("pic5", None, 7),
+                        ("pic6", None, 8),
+                        ("pic7", None, 9),
+                    ],
+                ],
+            ),
+            (
+                "\nuart:\n    1 -> something#3@2",
+                &["1"],
+                &[&[("something", Some(3), 2)]],
+            ),
+        ];
+        for &(source, expected_sources, expected_targets) in fixtures {
+            let entries = parse(source).unwrap();
+            assert_eq!(entries.len(), 1);
+            let body = &entries[0].body;
+            assert_eq!(body.len(), expected_sources.len());
+            for ((_, wire), (expected_source, expected_targets)) in body
+                .iter()
+                .zip(expected_sources.iter().zip(expected_targets))
+            {
+                let (from, to) = wire.split_once("->").unwrap();
+                assert_eq!(from.trim(), *expected_source);
+                if from.trim() == "1" {
+                    assert_eq!(irq_list(from, 256).unwrap(), [1]);
+                }
+                let targets = irq_destinations(to)
+                    .map(|target| {
+                        let (receiver, pins) = target.unwrap();
+                        let (name, index) = irq_receiver(receiver).unwrap();
+                        (name, index, irq_index(pins, 256).unwrap())
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(&targets, expected_targets);
+            }
         }
     }
 
