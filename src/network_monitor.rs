@@ -116,6 +116,28 @@ impl Plan {
                     resolve(*switch)?,
                 )?;
             }
+            [sensor, "FeedIlluminanceSamplesFromRESD", file] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let value = resolve(*file)?;
+                let value = value.strip_prefix('@').ok_or("expected @RESD path")?;
+                let file = monitor::asset_path(value.trim_matches('"'), source, root, None)?;
+                self.actions.push(Action::IlluminanceFeed {
+                    node,
+                    sensor: (*sensor).into(),
+                    file,
+                });
+            }
+            [sensor, "Illuminance", value] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let value = resolve(*value)?
+                    .parse()
+                    .map_err(|_| "invalid illuminance")?;
+                self.actions.push(Action::Illuminance {
+                    node,
+                    sensor: (*sensor).into(),
+                    value,
+                });
+            }
             [sensor, "FeedSamplesFromCsv", file] if sensor.starts_with("sysbus.") => {
                 let node = self.monitor_node()?;
                 let value = resolve(*file)?;

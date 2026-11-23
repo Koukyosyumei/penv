@@ -171,8 +171,13 @@ for file, kind in robot.items():
             status, note = 'PARTIAL', 'ボタン対照・ゼロ行・仮想フレームは実 ELF で確認。元の構成と Robot 操作の等価性の確定待ち'
         elif file.endswith('IIS2MDC.robot'):
             status, note = 'PARTIAL', '同一 ELF・全サンプル。RESD の代わりに CSV を供給'
-        elif file.endswith('VEML7700.robot') and name == 'Should Work From Zephyr Shell':
-            status, note = 'PARTIAL', '参照デモ Shell で両照度を確認。上流の同一 ELF と実行時変更が未確認'
+        elif file.endswith('VEML7700.robot'):
+            if name in {'Should Read Illuminance', 'Should Work After Errata Driver Update'}:
+                status, note = 'PASS', '固定上流 ELF・Nucleo REPL と同じ als 登録。照度変更を挟んで USART3 の期待値を照合。tests/stm32h7-veml7700-robot.sh'
+            elif name in {'Should Read Samples From RESD', 'Should Read Samples From Timestamped RESD'}:
+                status, note = 'PASS', '同一 ELF・上流 CSV と csv2resd による同じ RESD を供給。USART3 で 0/499/12000/12000 を順に照合。tests/stm32h7-veml7700-robot.sh'
+            elif name == 'Should Work From Zephyr Shell':
+                status, note = 'PARTIAL', '同一上流 ELF の USART3 プロンプト後に 500 lx と上流コマンドを送信。8 仮想秒以内にセンサー応答が出ない'
         elif name == 'Should Talk Over Ethernet':
             status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL・仮想スイッチ。10 仮想秒で成功カウンター 0x2c とサーバーの応答 10 回を確認。クライアント UART の比較行と Robot の順序条件が未達'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Have Ethernet as Link Up in CubeMX':

@@ -45,6 +45,16 @@ pub enum Action {
         name: String,
         event: crate::ft5336::PointerEvent,
     },
+    IlluminanceFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+    },
+    Illuminance {
+        node: usize,
+        sensor: String,
+        value: f64,
+    },
     ImuFeed {
         node: usize,
         sensor: String,
@@ -188,6 +198,22 @@ pub fn run(
                         .machine
                         .bus
                         .touch_input(&name, event)?;
+                }
+                Action::IlluminanceFeed { node, sensor, file } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_illuminance(&sensor, &file)?;
+                }
+                Action::Illuminance {
+                    node,
+                    sensor,
+                    value,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .set_illuminance(&sensor, value)?;
                 }
                 Action::ImuFeed { node, sensor, file } => {
                     simulation.nodes[node]

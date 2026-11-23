@@ -464,7 +464,10 @@ pub fn configure(
         };
         bus.attach(
             u16::from(address),
-            Target::Light(Veml7700::new(illuminance)),
+            Target::Light(
+                format!("sysbus.{parent}.{}", entry.name),
+                Veml7700::new(illuminance),
+            ),
         )
         .map_err(|e| entry.error(e))?;
     }

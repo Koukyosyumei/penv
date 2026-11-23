@@ -764,3 +764,28 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 未変更 Nucleo REPL と公開 Zephyr ELF で ADC DMA、暗号サンプル、Blinky、Button の回帰が通過しました。アセンブリ照合、実行ログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ge.aGNitIHh` にあります。台帳は対象 789 件のうち等価合格 25 件、部分検証 17 件、未達 747 件です。
+
+### backlog-network-1d617f3607ae-1
+
+上流 `VEML7700.robot` のポーリング 4 ケースを移植しました。Nucleo の未変更上流 REPL に、Robot と同じ `als: Sensors.VEML7700 @ i2c1 0x10` を追加します。モニターからの名前付き照度変更を実装し、公開 Zephyr 4.2 と 4.4 ELF で同じ設定値と USART3 の出力を比較しました。4.2 は `0 → 499 → 29 → 10000`、4.4 は `0 → 499` です。
+
+固定上流の CSV を上流の `csv2resd.py` で定周期・タイムスタンプ付き RESD に変換し、それぞれを同じ公開 Zephyr 4.2 ELF に供給しました。センサーは仮想時刻に対応するサンプルを読み、終了後は最後の値を保持します。両ケースで `0 → 499 → 12000 → 12000` を確認しました。実装対象は RESD v1 の照度チャンネル 0 の単一ブロックです。
+
+上流 VEML7700 Shell ELF は USART3 のプロンプトまで起動しました。500 lx を設定して上流コマンドを送った後、8 仮想秒以内にセンサー応答を観測できず、このケースは部分検証のままです。参照ボードの Zephyr Shell と上流 REPL ロード 7 構成は回帰確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-veml7700-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-veml.QF6dq3bd
+target/release/penv run --script "$e/shell-wait/case.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 17000000
+```
+
+RESD、UART、終了状態は `~/.local/state/penv-dispatch/evidence/h7-veml.QF6dq3bd` に保存しました。台帳は対象 789 件のうち等価合格 29 件、部分検証 17 件、未達 743 件です。

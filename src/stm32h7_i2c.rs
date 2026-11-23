@@ -19,7 +19,7 @@ const START: u32 = 1 << 13;
 const STOP: u32 = 1 << 14;
 
 pub enum Target {
-    Light(Veml7700),
+    Light(String, Veml7700),
     Magnetometer(Iis2mdc),
     Temperature(Tmp108),
     Pressure(Lps25hb),
@@ -30,7 +30,7 @@ pub enum Target {
 impl Target {
     fn stop(&mut self) {
         match self {
-            Self::Light(sensor) => sensor.stop(),
+            Self::Light(_, sensor) => sensor.stop(),
             Self::Temperature(sensor) => sensor.stop(),
             Self::Pressure(sensor) => sensor.stop(),
             Self::Magnetometer(_) | Self::Imu(..) | Self::Touch(..) => {}
@@ -53,6 +53,7 @@ pub struct I2c {
     position: usize,
     reading: bool,
     preloaded: Option<u8>,
+    step: u64,
 }
 
 impl I2c {
@@ -73,6 +74,7 @@ impl I2c {
             position: 0,
             reading: false,
             preloaded: None,
+            step: 0,
         }
     }
 
@@ -87,6 +89,15 @@ impl I2c {
         }
         self.targets.push((address, target));
         Ok(())
+    }
+
+    pub fn find_light(&mut self, name: &str) -> Option<&mut Veml7700> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Light(path, sensor) if path == name => Some(sensor),
+                _ => None,
+            })
     }
 
     pub fn find_imu(&mut self, name: &str) -> Option<&mut Lsm6dso> {
@@ -111,6 +122,7 @@ impl I2c {
         &mut self,
         step: u64,
     ) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+        self.step = step;
         self.targets
             .iter_mut()
             .filter_map(move |(_, target)| match target {
@@ -153,7 +165,7 @@ impl I2c {
                         .get(self.position)
                         .copied()
                         .unwrap_or(0xff),
-                    Some(Target::Light(_) | Target::Temperature(_)) if self.position < 2 => {
+                    Some(Target::Light(..) | Target::Temperature(_)) if self.position < 2 => {
                         self.data[self.position]
                     }
                     _ => 0xff,
@@ -244,7 +256,9 @@ impl I2c {
             self.status |= BUSY;
             if self.reading {
                 let bytes = match &mut self.targets[target].1 {
-                    Target::Light(sensor) => Some(sensor.read()),
+                    Target::Light(_, sensor) => Some(sensor.read(self.step.saturating_mul(
+                        1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND),
+                    ))),
                     Target::Temperature(sensor) => Some(sensor.read()),
                     Target::Magnetometer(_)
                     | Target::Pressure(_)
@@ -292,7 +306,7 @@ impl I2c {
         {
             match &mut self.targets[target].1 {
                 Target::Touch(_, device) if self.position != 0 => device.select(self.data[0]),
-                Target::Light(sensor) if (1..=3).contains(&self.position) => {
+                Target::Light(_, sensor) if (1..=3).contains(&self.position) => {
                     sensor.write(&self.data[..self.position])
                 }
                 Target::Temperature(sensor) if self.position <= self.data.len() => {
@@ -367,7 +381,7 @@ mod tests {
     fn sensor_register_read_uses_reload_repeated_start_and_event_irq() {
         let mut i2c = I2c::new(0, None);
         i2c.event = Some(Stm32Irq::Nvic(31));
-        i2c.attach(0x10, Target::Light(Veml7700::new(500.0)))
+        i2c.attach(0x10, Target::Light("als".into(), Veml7700::new(500.0)))
             .unwrap();
         i2c.write(0, PE | TXIS | RXNE | TC | STOPPED);
 

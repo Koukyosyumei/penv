@@ -691,6 +691,22 @@ impl Bus {
             .ok_or_else(|| format!("unknown LSM6DSO sensor {name:?}"))
     }
 
+    pub fn feed_illuminance(&mut self, name: &str, path: &std::path::Path) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_light(name))
+            .ok_or_else(|| format!("unknown illuminance sensor {name:?}"))?
+            .feed_illuminance(path)
+    }
+
+    pub fn set_illuminance(&mut self, name: &str, value: f64) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_light(name))
+            .ok_or_else(|| format!("unknown illuminance sensor {name:?}"))?
+            .set_illuminance(value)
+    }
+
     pub fn touch_input(
         &mut self,
         name: &str,
