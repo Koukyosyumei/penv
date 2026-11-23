@@ -1068,3 +1068,21 @@ target/release/penv run --script "$e/init.resc" --platform-root ../renode
 ```
 
 ログと終了状態は上記に保存しました。`cargo test` 121件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格101件、部分検証10件、未達675件です。波括弧内の init、`init add`、汎用モニターコマンドの実行は今回の検証範囲外です。
+
+### backlog-network-39a4f746e4d8-1
+
+REPL の `using` で、引用符付きパスのエスケープと末尾のセミコロン列を解析します。固定上流 `ParserTests.cs` の5件を同じ入力と期待パス列で移植しました。STM32H743 では、バックスラッシュを名前に含む追記ファイルを読み込み、GPIO の設定値 `0x55555555` を MMIO から読み戻しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-using-syntax.FiABTsvM
+target/release/penv run --script "$e/include.resc" --platform-root ../renode
+```
+
+上記にログと終了状態を保存しました。`cargo test` 122件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。対象786件のうち等価合格106件、部分検証10件、未達670件です。宣言と混在する `using` の専用ケース、一般プロパティ文字列のエスケープ、型付き参照と `local` スコープの検証は残っています。

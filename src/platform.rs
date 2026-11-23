@@ -359,6 +359,33 @@ fn parse(
     result
 }
 
+fn using_path(line: &str) -> Result<String, &'static str> {
+    let invalid = "expected using \"path.repl\"";
+    let mut path = String::new();
+    let argument = line.trim().strip_prefix('"').ok_or(invalid)?;
+    let mut characters = argument.char_indices();
+    while let Some((index, character)) = characters.next() {
+        match character {
+            '"' if !path.is_empty() => {
+                if argument[index + 1..]
+                    .chars()
+                    .all(|c| c == ';' || c.is_whitespace())
+                {
+                    return Ok(path);
+                }
+                return Err(invalid);
+            }
+            '"' => return Err(invalid),
+            '\\' => match characters.next() {
+                Some((_, escaped @ ('"' | '\\'))) => path.push(escaped),
+                _ => return Err(invalid),
+            },
+            character => path.push(character),
+        }
+    }
+    Err(invalid)
+}
+
 fn resolve_using(argument: &str, include_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
     let path = Path::new(argument);
     let explicit_relative = matches!(
@@ -468,20 +495,12 @@ fn parse_text(
             definitions.push(entry);
         }
         if let Some(include) = text.strip_prefix("using ") {
-            let include = include.trim();
-            let filename = include
-                .strip_suffix(';')
-                .unwrap_or(include)
-                .trim_end()
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-                .filter(|s| !s.is_empty() && !s.contains('"'))
-                .ok_or_else(|| error("expected using \"path.repl\""))?;
-            if !seen_usings.insert(filename.to_owned()) {
+            let filename = using_path(include).map_err(error)?;
+            let include_path = resolve_using(&filename, include_dir, root)
+                .map_err(|detail| error(&detail.to_string()))?;
+            if !seen_usings.insert(filename.clone()) {
                 return Err(error("Duplicate using entry."));
             }
-            let include_path = resolve_using(filename, include_dir, root)
-                .map_err(|detail| error(&detail.to_string()))?;
             match parse(&include_path, root, visiting, entries) {
                 Err(_) if matches!(include_path.try_exists(), Ok(false)) => {
                     return Err(error(&format!("Using '{filename}' does not exist")));
@@ -2118,6 +2137,38 @@ mod inline_attribute_cases {
             &mut entries,
         )?;
         Ok(entries)
+    }
+
+    #[test]
+    fn upstream_using_paths() {
+        for (source, expected) in [
+            (
+                "\nusing \"file.pl8\"\nusing \"other_file.pl8\"",
+                &["file.pl8", "other_file.pl8"][..],
+            ),
+            (
+                "\nusing \"file.pl8\";\nusing \"other_file.pl8\"",
+                &["file.pl8", "other_file.pl8"],
+            ),
+            ("\nusing \"file.pl8\"", &["file.pl8"]),
+            ("\nusing \"file.pl8\";", &["file.pl8"]),
+            (
+                "\nusing \"first.pl8\";\nusing \"second.pl8\";\nusing \"third.pl8\";",
+                &["first.pl8", "second.pl8", "third.pl8"],
+            ),
+        ] {
+            let paths = source
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(|line| using_path(line.strip_prefix("using ").unwrap()).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(paths, expected);
+        }
+        assert_eq!(
+            using_path(r#""directory\\name.repl"; ;"#).unwrap(),
+            r"directory\name.repl"
+        );
+        assert!(using_path(r#""file.pl8" unexpected"#).is_err());
     }
 
     #[test]

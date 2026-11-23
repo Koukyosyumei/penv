@@ -1062,11 +1062,11 @@ renode	tests/unit-tests/RenodeTests/PlatformDescription/MergeAndCreationTests.cs
 renode	tests/unit-tests/RenodeTests/PlatformDescription/MergeAndCreationTests.cs	1672-1673	ShouldHandleDictOfUnorderedReferencesAsKeys	[Test] public void ShouldHandleDictOfUnorderedReferencesAsKeys()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/MergeAndCreationTests.cs	1696-1697	ShouldFailOnDuplicateDictKeys	[Test] public void ShouldFailOnDuplicateDictKeys()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	24-25	ShouldParseEmptyFile	[Test] public void ShouldParseEmptyFile()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
-renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	33-34	ShouldParseUsingEntry	[Test] public void ShouldParseUsingEntry()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
-renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	48-49	ShouldParseUsingEntry2	[Test] public void ShouldParseUsingEntry2()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
-renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	63-64	ShouldParseUsingEntry3	[Test] public void ShouldParseUsingEntry3()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
-renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	77-78	ShouldParseUsingEntry4	[Test] public void ShouldParseUsingEntry4()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
-renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	91-92	ShouldParseUsingEntry5	[Test] public void ShouldParseUsingEntry5()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
+renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	33-34	ShouldParseUsingEntry	[Test] public void ShouldParseUsingEntry()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
+renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	48-49	ShouldParseUsingEntry2	[Test] public void ShouldParseUsingEntry2()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
+renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	63-64	ShouldParseUsingEntry3	[Test] public void ShouldParseUsingEntry3()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
+renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	77-78	ShouldParseUsingEntry4	[Test] public void ShouldParseUsingEntry4()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
+renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	91-92	ShouldParseUsingEntry5	[Test] public void ShouldParseUsingEntry5()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
 renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	107-108	ShouldParseSimpleEntry	[Test] public void ShouldParseSimpleEntry()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	120-121	ShouldParseEntryWithSimpleRegistrationInfo	[Test] public void ShouldParseEntryWithSimpleRegistrationInfo()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
 renode	tests/unit-tests/RenodeTests/PlatformDescription/ParserTests.cs	135-136	ShouldParseEntryWithRangeRegistrationPoint	[Test] public void ShouldParseEntryWithRangeRegistrationPoint()	PASS	固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs
