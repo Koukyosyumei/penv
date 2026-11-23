@@ -31,6 +31,106 @@ nunit = {
         'LimitTimerTests','ComparingTimerTests','TimeSourceTests','SystemBusTests','MultiCPUTests'
     )},
 }
+def fixed_robot_fixture(lines, body):
+    """Collect fixed fixture inputs referenced by a case and its local keywords."""
+    variables = {}
+    keywords = {}
+    section = ''
+    name = None
+    for line in lines:
+        if line.startswith('***'):
+            section = line.strip('* ').lower()
+            name = None
+        elif section == 'variables':
+            match = re.match(r'([$@&]\{[^}]+\})=?\s{2,}(.*)', line)
+            if match:
+                name, value = match.groups()
+                variables[name] = [value]
+            elif name and line.startswith('...'):
+                variables[name].append(line[3:].strip())
+        elif section == 'keywords':
+            if line and not line[0].isspace() and not line.startswith('#'):
+                name = line.strip()
+                keywords[name] = []
+            elif name and line.strip() and not line.lstrip().startswith('#'):
+                keywords[name].append(line.strip())
+
+    records = list(body)
+    seen = set()
+    for line in records:
+        cells = re.split(r'\s{2,}|\t+', line)
+        for cell in cells[:2]:
+            if cell in keywords and cell not in seen:
+                records.extend(keywords[cell])
+                seen.add(cell)
+    values = []
+    seen.clear()
+    for line in records:
+        for key in re.findall(r'[$@&]\{[^}]+\}', line):
+            if key in variables and key not in seen:
+                records.extend(variables[key])
+                # Retain fixed file paths and scalar bindings, not entire inline programs.
+                value = variables[key][0]
+                if not value.startswith(('SEPARATOR=', 'Catenate', 'REGEXP:')):
+                    values.append(f'{key}={value}')
+                seen.add(key)
+        if re.match(r'Execute Command\s+(machine LoadPlatformDescription @|sysbus LoadELF |include @)', line):
+            values.append(line)
+    return ' | '.join(dict.fromkeys(values))
+
+
+def platform_variants():
+    """Expand the Robot template for the Linux x64 host used by penv/network."""
+    suite = renode / 'tests/unit-tests/platform_descriptions.robot'
+    text = suite.read_text()
+    # The conditional blacklist keeps all three KVM fixtures on Linux x64.
+    condition = "'{system}' ${eq} 'Linux' and '{arch}' ${eq} 'x64'"
+    if text.count(condition) != 3:
+        raise ValueError('review changed platform fixture host conditions')
+    block = text.split('@{blacklist}=', 1)[1].split('*** Keywords ***', 1)[0]
+    excluded = {
+        path.replace('${/}', '/')
+        for path in re.findall(r'\$\{platforms_path\}\$\{/\}(\S+\.repl)', block)
+    }
+    root = renode / 'platforms'
+    files = sorted(path for path in root.rglob('*.repl') if path.relative_to(root).as_posix() not in excluded)
+
+    def inherits_h7(path, visited):
+        path = path.resolve()
+        if path == (root / 'cpus/stm32h7.repl').resolve():
+            return True
+        if path in visited or not path.is_file():
+            return False
+        visited.add(path)
+        for include in re.findall(r'^\s*using\s+"([^"]+)"', path.read_text(), re.M):
+            target = path.parent / include if include.startswith('.') else renode / include
+            if inherits_h7(target, visited):
+                return True
+        return False
+
+    for path in files:
+        configuration = path.relative_to(renode).as_posix()
+        if inherits_h7(path, set()):
+            yield configuration, 'OPEN', '固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承'
+        else:
+            yield configuration, 'OUT', f'テンプレートが {configuration} 自体のロードを要求。STM32H7 REPL 継承なし'
+
+
+def deduplicate(entries):
+    """Keep the upstream case identity distinct from its execution configuration."""
+    seen = {}
+    for row in entries:
+        repo, source, span, case, bindings, status, reason = row
+        key = repo, source, case, bindings
+        decision = status, reason
+        if key in seen:
+            if seen[key] != decision:
+                raise ValueError(f'conflicting entries for {key!r}')
+            continue
+        seen[key] = decision
+        yield row
+
+
 rows = []
 for file, kind in robot.items():
     lines = (renode/file).read_text().splitlines()
@@ -48,7 +148,9 @@ for file, kind in robot.items():
         elif kind == 'Zynq':
             status, note = 'OUT', 'Zynq-7000、GIC と Linux の固定ゲスト・配線を要求。STM32H7 の EQoS は nucleo_h753zi.robot で対象化'
         elif kind == 'NPCX':
-            status, note = 'OUT', 'NPCX9 の EC ファームウェアとボード配線が対象'
+            status, note = 'OUT', {
+                'Should Run TMP108': 'NPCX9M6F EVB の Zephyr ELF と SMBus0 上の TMP108 を固定',
+            }.get(name, 'NPCX9 REPL の EC ファームウェアとボード配線を固定')
         elif file.endswith('STM32SDMMC.robot') and 'STM32F' in name:
             status, note = 'OUT', 'STM32F746G ELF と F7 コントローラーを固定'
         elif file.endswith('STM32SDMMC.robot'):
@@ -61,7 +163,13 @@ for file, kind in robot.items():
             status, note = 'PARTIAL', '参照デモ Shell で両照度を確認。上流の同一 ELF と実行時変更が未確認'
         elif name == 'Should Talk Over Ethernet':
             status, note = 'PARTIAL', '同一 ELF。成功カウンターの照合まで確認。上流 UART 期待値と供給条件が未一致'
-        rows.append(('renode',file,f'{start+1}-{stop}',name,' | '.join(settings+props) or 'ケース本文・キーワード参照',status,note))
+        if file.endswith('/platform_descriptions.robot') and name == 'Should Load Repls':
+            for configuration, decision, reason in platform_variants():
+                rows.append(('renode', file, f'{start+1}-{stop}', name, configuration, decision, reason))
+            continue
+        fixture = fixed_robot_fixture(lines, body)
+        bindings = ' | '.join(settings + props + ([fixture] if fixture else []))
+        rows.append(('renode', file, f'{start+1}-{stop}', name, bindings or 'ケース本文・キーワード参照', status, note))
 for file in sorted((infra/'packetnet/Test').rglob('*.cs')):
     if re.search(r'\[Test(?:\]|,|Case\()',file.read_text(encoding='utf-8-sig')):
         name=file.relative_to(infra).as_posix()
@@ -98,6 +206,12 @@ for file,kind in nunit.items():
             status,note='REVIEW','共有 NUnit 契約の適用性とパラメータの確認待ち'
         else:
             status,note='OPEN','上流 NUnit と等価な実行記録なし'
+        ranges = re.findall(r'\[Range\((\d+),\s*(\d+)\)\]\s+int\s+(\w+)', args)
+        if ranges:
+            for combination in itertools.product(*(range(int(first), int(last) + 1) for first, last, _ in ranges)):
+                binding = ', '.join(f'{key}={value}' for (_, _, key), value in zip(ranges, combination))
+                rows.append((repository, source, f'{i+1}-{k+1}', name.group(1), binding, status, note))
+            continue
         param = re.findall(r'\[Values\(([^()]*)\)\]\s+\w+\s+(\w+)', args)
         if param:
             for combination in itertools.product(*(spec.split(',') for spec, _ in param)):
@@ -108,7 +222,28 @@ for file,kind in nunit.items():
 def triage(row):
     repo, source, span, name, bindings, status, reason = row
     suite = pathlib.PurePosixPath(source).name
-    if suite == 'MCAN.robot' and name in {
+    if suite == 'arm-cortex-m-fpu.robot':
+        if name == 'Should Pass Context Stacking Preservation Test v7-M':
+            status, reason = 'OPEN', '固定 Cortex-M4 の v7-M/FP コンテキスト。STM32H747 の M4 側に移植可能'
+        elif name == 'Should Pass Zephyr FPU Sharing Generic Tests':
+            status, reason = 'OUT', 'NXP K6xF 固定 REPL、UART0 と K6xF 用 Zephyr ELF を要求'
+        elif name == 'Should Pass Context Stacking Preservation Test v8-M with TrustZone':
+            status, reason = 'OUT', 'Cortex-M33/v8-M TrustZone と専用のスタック検証 ELF を要求'
+        else:
+            status, reason = 'OUT', 'Prepare Trivial Platform が Cortex-M33 と v8-M 用 NOCP アセンブリをロード'
+    elif source == 'tests/unit-tests/InterruptHooks/arm-m.robot':
+        status, reason = 'OUT', 'STM32F746G Discovery 専用 ELF と固定 GPIOI11 のボタン刺激を要求'
+    elif suite == 'sysbus.robot' and name == 'Symbols Should Be Dynamically Loaded and Unloaded On Request':
+        status, reason = 'OUT', '固定 STM32L072/STM32L07 ELF と main=0x08007644 が観測点'
+    elif suite == 'arm-cortex-m-interrupts.robot':
+        status, reason = 'OPEN', 'F4 REPL はフィクスチャ。観測対象は H7 と共通の WFE/BASEPRI/SysTick 契約で、専用 ELF なし'
+    elif suite == 'arm-dsp-examples-cortex-m4.robot':
+        status, reason = 'OPEN', '汎用 Cortex-M4F と TrivialUart の CMSIS-DSP ELF。STM32H747 の副コアに適用'
+    elif suite == 'arm-ge-flag.robot':
+        status, reason = 'OPEN', '固定 Cortex-M7 の GE フラグ。H7 主コアの命令セットに適用'
+    elif suite == 'MultiCPUTests.cs':
+        status, reason = 'OPEN', '汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持'
+    elif suite == 'MCAN.robot' and name in {
         'Should Boot Linux And Login With MCAN',
         'Should Handle CAN Messages Issued Through CAN Utils Tools',
     }:
@@ -126,9 +261,7 @@ def triage(row):
             'Should Work After Errata Driver Update': '同一 v4.4 ELF の UART 期待値を確認。元のプラットフォーム構成と操作順の等価性は未確定',
         }[name]
     elif status == 'REVIEW':
-        if suite == 'arm-cortex-m-fpu.robot' and name != 'Should Pass Context Stacking Preservation Test v7-M':
-            status, reason = 'OUT', 'FPU 共有は NXP K6xF 固定。残りのスタック・NOCP ケースは v8-M/M33 固定'
-        elif suite == 'monitor-tests.robot' and name == 'Should Fail to Find Unix-only Method on Windows':
+        if suite == 'monitor-tests.robot' and name == 'Should Fail to Find Unix-only Method on Windows':
             status, reason = 'OUT', 'Windows 固有のメソッド探索。対象の検証ホストは Unix'
         elif repo == 'packetnet' and suite in {'PPPPacketTest.cs', 'PPPoEPPPTest.cs', 'LinuxCookedCaptureTest.cs'}:
             status, reason = 'OUT', 'PPP セッションまたは Linux cooked キャプチャ形式固有。対象スイッチは生の Ethernet フレームを入出力'
@@ -150,4 +283,4 @@ def triage(row):
 with arguments.output.open('w', encoding='utf-8', newline='') as f:
     out=csv.writer(f,delimiter='\t',lineterminator='\n')
     out.writerow(('repository','source','lines','case','parameter_bindings','status','evidence_or_reason'))
-    out.writerows(map(triage, rows))
+    out.writerows(deduplicate(map(triage, rows)))

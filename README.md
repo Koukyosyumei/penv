@@ -511,3 +511,21 @@ target/release/penv run \
 公開参照 ELF の Shell で TIM17 の ARR を読み、クロック停止中と APB1LENR の同ビットを有効にした場合の両方で 0 を確認しました。APB2ENR を有効にすると ARR は `0xffff` を返し、ゲストが書いた `0x42` も読み出せました。EGR で発行した更新イベントで SR の UIF と NVIC IRQ 118 の保留を読み出し、APB2RSTR でリセット後に ARR が初期値へ戻り、IRQ が再保留されないことを確認しました。ログは `tim17-uart.log` と `tim17-penv.log` です。TIM15 と TIM16 は同じバンクへの宣言取り込みまで確認しました。
 
 未変更の上流 RESC は TIM15・TIM16・TIM17 を通過し、`platforms/cpus/stm32h7.repl:305` の `timer8: unsupported STM32 timer RCC alias TIM8` で停止します。TIM8 の APB2 結合と複数 IRQ ルートは残件です。このゲスト検証は診断スモークのため、上流ケース台帳の等価合格数には算入しません。
+
+### scope-audit-network
+
+固定版から現台帳を再生成し、**対象 785 実行構成**を確定しました。適用外 426 構成を含む総数は 1,211 です。機種固有の Nucleo H753ZI は 25 ケースすべて対象です。
+
+| 判定 | 実行構成数 |
+| --- | ---: |
+| 上流等価の合格 | 0 |
+| 部分移植 | 15 |
+| 未達 | 770 |
+| 適用外 | 426 |
+| 判定待ち | 0 |
+
+Robot の `Should Load Repls` は Linux x64 のブラックリスト条件で 225 構成に展開しました。実際の `using` を追跡すると、STM32H7 の Cortex-M7 ベースを継承するのは、参照・Discovery・Nucleo の 3 ボードと CPU の 4 定義です。残る 218 行には、ケースが要求する個別 REPL と STM32H7 継承がないことを記録しました。NUnit `ShouldGuardPeripheralReads` は `cpuCount=1,2,3,4` をそれぞれ含めます。汎用 ICPU のモック台数で、実機のコア数は条件に含まれません。
+
+固定 STM32F746G のボタン割り込みと STM32L072 ELF のシンボルケースは、必要なボード・ファームウェア・観測点を記録して適用外としました。一方、F4 の REPL を足場にした共通 Cortex-M の WFE・BASEPRI・SysTick と、Cortex-M4F の CMSIS-DSP は H7 に移植可能なため対象です。繰り返し指定とテスト本文のループは、同一構成での回数・刺激・順序として判定条件に残します。同一リポジトリ・ファイル・ケース・構成の重複だけを除くよう生成器を更新し、今回の生成結果には重複がありませんでした。
+
+再生成には `full-upstream-network` 節の固定アーカイブ取得と `inventory-stm32h7.py` の手順を使います。`cargo test` と Shell・I/O・表示/SD・LSM6DSO の診断スモークを実行しました。固定上流との差分を残す部分移植は等価合格数に含まれません。対象ケースの実装・等価検証は残っています。
