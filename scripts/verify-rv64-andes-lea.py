@@ -73,6 +73,103 @@ def verify_bits(args, platform, tests, step):
     verify(args, platform, case, commands, expected)
 
 
+def verify_quad_mac(args, tests, step):
+    platform = args.logs / "andestar-quad-mac.repl"
+    write_platform(platform, "rv64gc_v_xandesvqmac", "    vectorRegisterLength: 128\n")
+
+    def execute(word):
+        return ["--write-memory", f"0x2000:4:{word:#x}", *step]
+
+    def configure(sew):
+        return execute(0xc0000000 | sew << 23 | 1 << 15 | 7 << 12 | 5 << 7 | 0x57)
+
+    case = "Should Truncate Quad MAC Scalars On RV64"
+    if '.insn r 0x57, 4, 123, a2, s0, a0' not in tests[case]:
+        raise RuntimeError(f"unexpected fixed Robot instruction for {case}")
+    commands = ["--set-mstatus", "cpu:0x2200", "--write-memory", "0x4000:1:0xff",
+                "--write-memory", "0x4004:4:0", "--set-gpr", "cpu@x10:0x4000",
+                *configure(0), *execute(1 << 25 | 10 << 15 | 10 << 7 | 0x07),
+                "--set-gpr", "cpu@x10:0x4004",
+                *configure(2), *execute(1 << 25 | 10 << 15 | 6 << 12 | 12 << 7 | 0x07),
+                *configure(0), "--set-gpr", "cpu@x8:0x12345678ffffff80",
+                *execute(123 << 25 | 10 << 20 | 8 << 15 | 4 << 12 | 12 << 7 | 0x57),
+                "--read-register-now", "cpu@vstart", *configure(2),
+                "--set-gpr", "cpu@x10:0x5000",
+                *execute(1 << 25 | 10 << 15 | 6 << 12 | 12 << 7 | 0x27),
+                "--read-memory-now", "0x5000:4"]
+    expected = [("pc", 0x2004)] * 6 + [("vstart", 0)] + [("pc", 0x2004)] * 2
+    verify(args, platform, case, commands, expected,
+           ["penv: memory sysbus@0x0000000000005000:4 = 0x0000000000000080"])
+
+    case = "Should Advertise Quad MAC Configuration Registers"
+    rows = [line.split()[3:] for line in tests[case].split("Reset Emulation", 1)[1].splitlines()
+            if line.split()[:3] == ["Check", "CSR", "Bits"]]
+    commands = ["--set-mstatus", "cpu:0x2200"]
+    expected = []
+    for csr, mask, value in rows:
+        commands += [*execute(int(csr, 0) << 20 | 2 << 12 | 12 << 7 | 0x73),
+                     "--read-register-now", "cpu@x12"]
+        # Expect the additional fixed VECCFG, CCTL and HSP bits in mmsc_cfg.
+        extra = (1 << 36 | 0x10020) if int(csr, 0) == 0xfc2 else 0
+        assert extra & int(mask, 0) == 0
+        expected += [("pc", 0x2004), ("x12", int(value, 0) | extra)]
+    verify(args, platform, f"{case} (RV64 portion)", commands, expected)
+
+    # Reuse the RV32 arithmetic inputs as supplemental RV64 coverage.
+    for case, body in tests.items():
+        if not case.startswith("Should Execute VQMACC"):
+            continue
+        commands = ["--set-mstatus", "cpu:0x2200"]
+        expected = []
+        memory = []
+
+        def instruction(word):
+            commands.extend(execute(word))
+            expected.append(("pc", 0x2004))
+
+        def config(width, length):
+            sew = {1: 0, 2: 1, 4: 2, 8: 3}[width]
+            instruction(0xc0000000 | sew << 23 | length << 15 | 7 << 12 | 5 << 7 | 0x57)
+
+        def vector_memory(register, width, address, opcode):
+            function = {1: 0, 2: 5, 4: 6, 8: 7}[width]
+            commands.extend(("--set-gpr", f"cpu@x10:{address:#x}"))
+            instruction(1 << 25 | 10 << 15 | function << 12 | register << 7 | opcode)
+
+        def seed(register, width, values):
+            for lane, value in enumerate(values):
+                commands.extend(("--write-memory", f"{0x4000 + lane * width:#x}:{width}:{value:#x}"))
+            config(width, len(values))
+            vector_memory(register, width, 0x4000, 0x07)
+
+        rows = [cells[3:] for line in body.splitlines()
+                if (cells := line.split())[:3] == ["Check", "Quad", "MAC"]]
+        if len(rows) != 3:
+            raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+        for row, (function, form, width, first, second, acc, result, *masked) in enumerate(rows):
+            width = int(width) // 8
+            first, second, acc, result = (int(value, 0) for value in (first, second, acc, result))
+            seed(0, 1, [1])
+            seed(8, width, [first, first])
+            seed(10, width, [second, second])
+            seed(12, width * 4, [acc, 0x12345678 if masked else acc])
+            config(width, 2)
+            commands.extend(("--set-gpr", f"cpu@x8:{0x12340000 | first:#x}"))
+            instruction(int(function) << 26 | int(not masked) << 25 | 10 << 20 | 8 << 15
+                        | (4 if form == "vx" else 0) << 12 | 12 << 7 | 0x57)
+            commands.extend(("--read-register-now", "cpu@vstart"))
+            expected.append(("vstart", 0))
+            config(width * 4, 2)
+            result_base = 0x5000 + row * 0x20
+            vector_memory(12, width * 4, result_base, 0x27)
+            for lane, value in enumerate([result, 0x12345678 if masked else result]):
+                address = result_base + lane * width * 4
+                commands.extend(("--read-memory-now", f"{address:#x}:{width * 4}"))
+                memory.append(f"penv: memory sysbus@{address:#018x}:{width * 4} = {value:#018x}")
+        verify(args, platform, f"{case} (supplemental RV64)", commands, expected, memory)
+
+
+
 def verify_vector_bfloat16(args, tests, step):
     platform = args.logs / "andestar-vector-bfloat16.repl"
     write_platform(platform, "rv64gc_v_xandesvbfhcvt", "    vectorRegisterLength: 128\n")
@@ -244,6 +341,7 @@ def main():
     verify_byte_search(args, platform, tests, step)
     verify_scalar_bfloat16(args, tests, step)
     verify_vector_bfloat16(args, tests, step)
+    verify_quad_mac(args, tests, step)
 
     base = args.logs / "base.repl"
     write_platform(base, "rv64imac")

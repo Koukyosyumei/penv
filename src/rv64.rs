@@ -45,6 +45,7 @@ pub struct Isa {
     xandesperf: bool,
     xandesbfhcvt: bool,
     xandesvbfhcvt: bool,
+    xandesvqmac: bool,
     pub cas: bool,
     pub smepmp: bool,
     bitmanip: bitmanip::Extensions,
@@ -97,6 +98,10 @@ impl Isa {
                     isa.xandesvbfhcvt = true;
                     isa.vector = true;
                 }
+                "xandesvqmac" => {
+                    isa.xandesvqmac = true;
+                    isa.vector = true;
+                }
                 extension if isa.bitmanip.enable(extension) => {}
                 _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
             }
@@ -130,6 +135,7 @@ impl Isa {
         xandesperf: false,
         xandesbfhcvt: false,
         xandesvbfhcvt: false,
+        xandesvqmac: false,
         cas: false,
         smepmp: false,
         bitmanip: bitmanip::Extensions::NONE,
@@ -179,6 +185,7 @@ impl Rv64 {
         let mut privilege = Privilege::default();
         privilege.zicboz = isa.zicboz;
         privilege.andes_bfloat16 = isa.xandesbfhcvt || isa.xandesvbfhcvt;
+        privilege.andes_quad_mac = isa.xandesvqmac;
         privilege.vector = isa.vector.then(Box::<vector::VectorState>::default);
         Self {
             hart_id: 0,
@@ -644,6 +651,10 @@ impl Rv64 {
                     _ => return Err(illegal),
                 };
                 Some(self.privilege.configure_vector(kind, avl).ok_or(illegal)?)
+            }
+            0x57 if self.isa.xandesvqmac && instruction >> 26 >= 60 => {
+                self.andes_quad_mac(fields, lhs)?;
+                None
             }
             0x57 => {
                 self.privilege

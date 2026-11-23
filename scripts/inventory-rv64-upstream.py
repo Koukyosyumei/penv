@@ -367,6 +367,11 @@ def disposition(path, name, context):
         return "pass", "Fixed XAndesBFHCVT operands, boxed F5, FFLAGS and next PC verified (rv64-andes-bf16.md)"
     if path.name == "riscv-andestar-v5.robot" and name == "Should Convert Vector BF16 On RV64":
         return "pass", "Fixed vector BF16 data, flags, vstart and configuration CSR checks verified (rv64-andes-vector.md)"
+    if path.name == "riscv-andestar-v5.robot":
+        if name == "Should Truncate Quad MAC Scalars On RV64":
+            return "pass", "Fixed RV64 Quad MAC scalar, vector output, vstart and PC verified (rv64-andes-qmac.md)"
+        if name == "Should Advertise Quad MAC Configuration Registers":
+            return "partial", "RV64 configuration CSR checks verified; fixed case also executes RV32 checks (rv64-andes-qmac.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

@@ -232,6 +232,71 @@ impl Rv64 {
         Ok(())
     }
 
+    pub(super) fn andes_quad_mac(&mut self, inst: Instruction, scalar: u64) -> Result<(), Fault> {
+        let illegal = || Fault::new(2, u64::from(inst.0));
+        if self.privilege.status & VS == 0 {
+            return Err(illegal());
+        }
+        let is_scalar = inst.funct3() == 4;
+        let (signed_first, signed_second) = match (inst.0 >> 26, inst.funct3()) {
+            (60, 0 | 4) => (false, false),
+            (61, 0 | 4) => (true, true),
+            (62, 4) => (false, true),
+            (63, 0 | 4) => (true, false),
+            _ => return Err(illegal()),
+        };
+        let vector = self.privilege.vector.as_mut().ok_or_else(illegal)?;
+        let unmasked = inst.0 & (1 << 25) != 0;
+        if vector.kind == VILL || vector.sew_log_bytes() > 1 || (!unmasked && inst.rd() == 0) {
+            return Err(illegal());
+        }
+        let width = 1 << vector.sew_log_bytes();
+        let lmul = vector.log_multiplier();
+        let dst = vector.group(inst.rd(), lmul + 2).ok_or_else(illegal)?;
+        let check_source = |register| {
+            let src = vector.group(register, lmul).ok_or_else(illegal)?;
+            if src.end <= dst.start || dst.end <= src.start || (lmul >= 0 && src.end == dst.end) {
+                Ok(())
+            } else {
+                Err(illegal())
+            }
+        };
+        check_source(inst.rs2())?;
+        if !is_scalar {
+            check_source(inst.rs1())?;
+        }
+        let mask = (1 << (width * 8)) - 1;
+        let extend = |value: u64, signed| {
+            if signed {
+                super::sign(value, width as u32 * 8)
+            } else {
+                value & mask
+            }
+        };
+        for lane in vector.start as usize..vector.length as usize {
+            if !unmasked && vector.registers[lane / 8] & (1 << (lane % 8)) == 0 {
+                continue;
+            }
+            let first = if is_scalar {
+                scalar
+            } else {
+                vector.element(inst.rs1(), lane, width) as u64
+            };
+            let second = vector.element(inst.rs2(), lane, width) as u64;
+            let product = extend(first, signed_first).wrapping_mul(extend(second, signed_second));
+            let accumulator = vector.element(inst.rd(), lane, width * 4) as u64;
+            vector.set_element(
+                inst.rd(),
+                lane,
+                width * 4,
+                accumulator.wrapping_add(product),
+            );
+        }
+        vector.start = 0;
+        self.privilege.status |= VS;
+        Ok(())
+    }
+
     pub(super) fn vector_unit_stride(
         &mut self,
         inst: Instruction,

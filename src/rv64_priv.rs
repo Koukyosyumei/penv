@@ -127,6 +127,7 @@ pub struct Privilege {
     pub fcsr: u8,
     pub(crate) vector: Option<Box<VectorState>>,
     pub(crate) andes_bfloat16: bool,
+    pub(crate) andes_quad_mac: bool,
     machine: Trap,
     supervisor: Trap,
     medeleg: u64,
@@ -366,10 +367,17 @@ impl Privilege {
             0x310 => return None,
             0x320 => self.inhibit,
             0x344 => self.pending(),
-            0xfc2 if self.andes_bfloat16 => {
-                (1 << 32) | (u64::from(self.vector.is_some()) << 36) | 0x10020
+            0xfc2 if self.andes_bfloat16 || self.andes_quad_mac => {
+                (u64::from(self.andes_bfloat16) << 32)
+                    | (u64::from(self.vector.is_some()) << 36)
+                    | (u64::from(self.andes_quad_mac) << 52)
+                    | 0x10020
             }
-            0xfc7 if self.andes_bfloat16 => {
+            0xfc3 | 0xfcb if self.andes_bfloat16 || self.andes_quad_mac => 0,
+            0xfca if self.andes_bfloat16 || self.andes_quad_mac => {
+                u64::from(self.andes_quad_mac) << 35
+            }
+            0xfc7 if self.andes_bfloat16 || self.andes_quad_mac => {
                 if self.vector.is_none() || misa & (1 << 5) == 0 {
                     0
                 } else if misa & (1 << 3) != 0 {
