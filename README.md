@@ -1915,3 +1915,9 @@ PENV_ASSET_DIR=/tmp/penv-h7-assets bash tests/stm32h7-ptp-clock-robot.sh "$(mkte
 ```
 
 `cargo test` 241件が通過しました。STM32H7 と LiteX の双方向フレーム交換を含みます。PTP 時計ケースは部分検証、送信2件は未達です。残件は仮想時刻接続、TX 記述子の時刻書き戻し、Sync/Follow_Up のフレームと時刻差、SMMUv3 バイパス構成です。公開 ELF のハッシュ、UART、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ptp.P7JnxuwT` に保存しました。台帳は対象786件のうち等価合格203件、部分検証19件、未達564件です。
+
+PTP 送信側では、通常 TX 記述子で TTSE を要求し、MAC でタイムスタンプを有効にすると、DMA が秒・サブ秒と TTSS を書き戻すようにしました。MMIO 経由でキャプチャ、未要求、無効、コンテキスト記述子の各条件を確認しました。個別再現は `cargo test ptp_tx_descriptor` です。
+
+同じ公開 ELF と上記手順で再実行すると、UART に Sync 送信ログが出ました。時計は 7.48 仮想秒後も `25.000000000` でした。TX の上流2件は、共有仮想時刻の接続、実フレームの Sync/Follow_Up 順序とタイムスタンプの照合、SMMUv3 ケースの実行が残っています。`cargo test` 243件と公開 IS25WP ELF が通過しました。
+
+結果と終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/h7-ptp-tx.jduubeFl` に保存しました。

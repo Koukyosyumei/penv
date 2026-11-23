@@ -349,7 +349,7 @@ def triage(row):
             status = 'PARTIAL'
             reason = '固定 ELF・未変更 Nucleo REPL で初期化 UART・プロンプト・25.00 を照合。7.48仮想秒後も25.000000000。MAC 時計の単体検証済み、共有仮想時刻接続待ち。tests/stm32h7-ptp-clock-robot.sh'
         else:
-            reason = '同一 ELF で初期化行と Sync 送信を示す UART を観測。送信記述子のタイムスタンプと Sync/Follow_Up のパケット観測が残る。'
+            reason = '同一 ELF で初期化と Sync 送信の UART を観測。TX 記述子の TTSE/TTSS と秒・サブ秒の書き戻しは DMA MMIO テスト済み。共有仮想時刻接続と Sync/Follow_Up のパケット観測が残る。'
             if 'SMMUv3' in name:
                 reason += '固定 SMMUv3 バイパス構成は未実行。'
     elif suite == 'nucleo_h753zi.robot' and name == 'Should Read and Write IS25WP Flash':

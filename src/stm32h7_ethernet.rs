@@ -27,6 +27,8 @@ const SECONDS: usize = 0xb08;
 const SUBSECONDS: usize = 0xb0c;
 const SECONDS_UPDATE: usize = 0xb10;
 const SUBSECONDS_UPDATE: usize = 0xb14;
+const TX_TIMESTAMP_ENABLE: u32 = 1 << 30;
+const TX_TIMESTAMP_CAPTURED: u32 = 1 << 17;
 const TS_ENABLE: u32 = 1;
 const TS_INIT: u32 = 1 << 2;
 const TS_UPDATE: u32 = 1 << 3;
@@ -72,6 +74,15 @@ impl TimestampClock {
                 ((u128::from(self.counter) + u128::from(delta)) % u128::from(period)) as u64;
         }
         self.enabled &= control & TS_ENABLE != 0;
+    }
+
+    fn snapshot(&self, control: u32, increment: u32) -> (u32, u32) {
+        let rollover = Self::rollover(control);
+        let increment = u64::from((increment >> 16) & 0xff).max(1);
+        (
+            (self.counter / rollover) as u32,
+            ((self.counter % rollover) / increment * increment) as u32,
+        )
     }
 
     fn advance(&mut self, control: u32, elapsed_ns: u64) {
@@ -242,12 +253,13 @@ impl Stm32h7Ethernet {
             (Region::Registers, 0x120) => 0x0000_0104,
             (Region::Registers, 0x124 | 0x128) => 0,
             (Region::Registers, SECONDS | SUBSECONDS) => {
-                let rollover = TimestampClock::rollover(r.mac[TIMESTAMP_CONTROL / 4]);
+                let (seconds, subseconds) = self
+                    .timestamp
+                    .snapshot(r.mac[TIMESTAMP_CONTROL / 4], r.mac[SUBSECOND_INCREMENT / 4]);
                 if offset == SECONDS {
-                    (self.timestamp.counter / rollover) as u32
+                    seconds
                 } else {
-                    let increment = u64::from((r.mac[SUBSECOND_INCREMENT / 4] >> 16) & 0xff).max(1);
-                    ((self.timestamp.counter % rollover) / increment * increment) as u32
+                    subseconds
                 }
             }
             (Region::Registers, _) => bank_read(&r.mac, offset),
@@ -429,7 +441,19 @@ impl Stm32h7Ethernet {
                 }
             }
             let writeback = (flags & (FIRST | LAST | CONTEXT)) | (u32::from(failed) << 15);
-            if !dma.write_descriptor(address, [first, second, control, writeback]) {
+            let timestamp_control = r.mac[TIMESTAMP_CONTROL / 4];
+            let words = if flags & CONTEXT == 0
+                && control & TX_TIMESTAMP_ENABLE != 0
+                && timestamp_control & TS_ENABLE != 0
+            {
+                let (seconds, subseconds) = self
+                    .timestamp
+                    .snapshot(timestamp_control, r.mac[SUBSECOND_INCREMENT / 4]);
+                [subseconds, seconds, 0, writeback | TX_TIMESTAMP_CAPTURED]
+            } else {
+                [first, second, control, writeback]
+            };
+            if !dma.write_descriptor(address, words) {
                 r.status |= BUS_ERROR;
                 break;
             }
@@ -574,6 +598,84 @@ fn bank_write(bank: &mut [u32], offset: usize, value: u32) {
 #[cfg(test)]
 mod timestamp_tests {
     use super::*;
+
+    fn transmit_descriptor(timestamp_enabled: bool, request: bool, context: bool) -> [u32; 4] {
+        use crate::{
+            bus::{Bus, RAM_BASE},
+            ethernet::Controller,
+        };
+
+        const MAC: u32 = 0x4002_8000;
+        const DMA: u32 = MAC + 0x1000;
+        const BUFFER: u32 = RAM_BASE + 0x100;
+        let mut bus = Bus::new(0x1000).unwrap();
+        bus.map_ethernet(Controller::Stm32h7(Stm32h7Ethernet::new(
+            "eth".into(),
+            vec![
+                Mapping {
+                    base: MAC,
+                    size: MAC_SIZE,
+                    region: Region::Registers,
+                },
+                Mapping {
+                    base: DMA,
+                    size: 0x400,
+                    region: Region::Dma,
+                },
+            ],
+            None,
+        )))
+        .unwrap();
+        let write =
+            |bus: &mut Bus, addr, value| bus.write(addr, 4, value, &mut std::io::sink()).unwrap();
+        let flags = OWN | if context { CONTEXT } else { FIRST | LAST };
+        let control = 60 | if request { TX_TIMESTAMP_ENABLE } else { 0 };
+        for (address, value) in [
+            (RAM_BASE, BUFFER),
+            (RAM_BASE + 4, 0),
+            (RAM_BASE + 8, control),
+            (RAM_BASE + 12, flags),
+            (MAC + SECONDS_UPDATE as u32, 25),
+            (MAC + SUBSECONDS_UPDATE as u32, 480_000_003),
+            (MAC + SUBSECOND_INCREMENT as u32, 8 << 16),
+            (
+                MAC + TIMESTAMP_CONTROL as u32,
+                TS_DIGITAL_ROLLOVER | TS_INIT | u32::from(timestamp_enabled),
+            ),
+            (MAC, 2),
+            (DMA + 0x114, RAM_BASE),
+            (DMA + 0x104, 1),
+            (DMA + 0x120, RAM_BASE),
+        ] {
+            write(&mut bus, address, value);
+        }
+        std::array::from_fn(|index| bus.read::<4>(RAM_BASE + index as u32 * 4).unwrap())
+    }
+
+    #[test]
+    fn ptp_tx_descriptor_captures_enabled_timestamp() {
+        assert_eq!(
+            transmit_descriptor(true, true, false),
+            [480_000_000, 25, 0, FIRST | LAST | TX_TIMESTAMP_CAPTURED]
+        );
+    }
+
+    #[test]
+    fn ptp_tx_descriptor_ignores_disabled_unrequested_and_context_timestamps() {
+        const BUFFER: u32 = crate::bus::RAM_BASE + 0x100;
+        assert_eq!(
+            transmit_descriptor(false, true, false),
+            [BUFFER, 0, 60 | TX_TIMESTAMP_ENABLE, FIRST | LAST]
+        );
+        assert_eq!(
+            transmit_descriptor(true, false, false),
+            [BUFFER, 0, 60, FIRST | LAST]
+        );
+        assert_eq!(
+            transmit_descriptor(true, true, true),
+            [BUFFER, 0, 60 | TX_TIMESTAMP_ENABLE, CONTEXT]
+        );
+    }
 
     #[test]
     fn ptp_clock_elapsed_time_and_disable() {
