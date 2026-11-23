@@ -123,38 +123,50 @@ printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
 printf 'debug cas buttons read\r' > "$artifacts/arty-buttons.input"
 printf 'debug cas buttons clear\r' > "$artifacts/arty-clear.input"
 printf 'mdio_status\r' > "$artifacts/arty-mdio.input"
-arty_led_events=()
-step=84000000
-for mask in 0 1 3 7 15 0; do
-    if (( step > 84000000 )); then
-        printf 'debug cas leds %s\r' "$mask" > "$artifacts/arty-leds-$mask.input"
-        arty_led_events+=(--uart-event "$((step - 1000000)):$artifacts/arty-leds-$mask.input")
-    fi
+arty_events=(--litex-phy-event 0:eth.phy:0x0)
+step=70000000
+for part in switch button; do
+    input=$artifacts/arty-switches.input
+    if [[ $part == button ]]; then input=$artifacts/arty-buttons.input; fi
+    arty_events+=(--uart-event "$step:$input")
+    for pin in 0 1 2 3; do
+        arty_events+=(--litex-button-event "$((step + 1000000)):cas.$part$pin:Toggle")
+        step=$((step + 2000000))
+        arty_events+=(--uart-event "$step:$input")
+    done
+    for pin in 0 1 2 3; do
+        arty_events+=(--litex-button-event "$((step + 1000000)):cas.$part$pin:Toggle")
+    done
+    step=$((step + 2000000))
+    arty_events+=(--uart-event "$step:$input")
+    step=$((step + 2000000))
+done
+arty_events+=(--uart-event "$step:$artifacts/arty-clear.input")
+step=$((step + 2000000))
+arty_events+=(--uart-event "$step:$artifacts/arty-buttons.input")
+
+step=$((step + 1000000))
+for pin in 0 1 2 3; do
+    arty_events+=(--litex-led-assert "$step:sysbus.cas.led$pin:off")
+done
+step=$((step + 1000000))
+for mask in 1 3 7 15 0; do
+    printf 'debug cas leds %s\r' "$mask" > "$artifacts/arty-leds-$mask.input"
+    arty_events+=(--uart-event "$step:$artifacts/arty-leds-$mask.input")
     for pin in 0 1 2 3; do
         state=off
         if (( mask & (1 << pin) )); then
             state=on
         fi
-        arty_led_events+=(--litex-led-assert "$step:sysbus.cas.led$pin:$state")
+        arty_events+=(--litex-led-assert "$((step + 1000000)):sysbus.cas.led$pin:$state")
     done
     step=$((step + 2000000))
 done
-run_to_step_limit litex-arty "$arty" --max-steps 100000000 \
-    --litex-phy-event 0:eth.phy:0x0 \
-    --litex-phy-event 97000000:sysbus.eth.phy:0x4400 \
-    --uart-event "98000000:$artifacts/arty-mdio.input" \
-    --uart-event "70000000:$artifacts/arty-switches.input" \
-    --litex-button-event 71000000:cas.switch0:Toggle \
-    --uart-event "72000000:$artifacts/arty-switches.input" \
-    --litex-button-event 73000000:cas.button0:Press \
-    --uart-event "74000000:$artifacts/arty-buttons.input" \
-    --litex-button-event 75000000:cas.button0:Release \
-    --uart-event "76000000:$artifacts/arty-buttons.input" \
-    --uart-event "78000000:$artifacts/arty-clear.input" \
-    --uart-event "80000000:$artifacts/arty-buttons.input" \
-    "${arty_led_events[@]}"
+arty_events+=(--litex-phy-event "$step:sysbus.eth.phy:0x4400")
+arty_events+=(--uart-event "$((step + 1000000)):$artifacts/arty-mdio.input")
+run_to_step_limit litex-arty "$arty" --max-steps "$((step + 3000000))" "${arty_events[@]}"
 rg -aq '^H2U ' "$artifacts/litex-arty.uart.log"
-diff -u <(printf '0\n1\n1 1\n0 1\n0 0\n') <(
+diff -u <(printf '0\n1\n3\n7\nF\n0\n0 0\n1 1\n3 3\n7 7\nF F\n0 F\n0 0\n') <(
     tr -d '\r' < "$artifacts/litex-arty.uart.log" |
         awk '/>debug cas (switches|buttons read)$/ { if (getline) print }'
 )
