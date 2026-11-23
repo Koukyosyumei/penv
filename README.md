@@ -1032,3 +1032,21 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 `cargo test` は119件が通過し、STM32H7 と LiteX の双方向フレーム交換も含みます。固定 STM32H7 REPL 7構成、構文診断3件、公開 Nucleo Zephyr の Blinky・Button ELF も通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-registration.iw73Tr6H` にあります。
 
 台帳は対象786件のうち等価合格95件、部分検証10件、未達681件です。登録値の完全な型別構文検証、単一登録の範囲・文字列の専用ケース、型付き参照と `local` スコープのケースは残っています。
+
+### backlog-network-aa7e424888f6-1
+
+単一登録と登録リストで登録先・登録値の解析を共有しました。固定上流 `ParserTests.cs` の3件を同じ入力で実行し、宣言名、型なし宣言、登録先、登録値なし・範囲・文字列の各期待値を照合しました。メモリーのマッピングも同じ範囲解析を使い、従来の `+サイズ` と絶対終端の両方を受け付けます。STM32H743 に絶対終端で追加した 4 KiB の RAM では、末尾ワード `0x50000ffc` に書いた `0x12345678` を読み戻しました。最初の試行は既存の SRAM バンクと重複したため、空き領域に移して再検証しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-single-registration.PjfmFq83
+target/release/penv run --script "$e/range.resc" --platform-root ../renode
+```
+
+上記ディレクトリにログと終了状態を保存しました。`cargo test` 120件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Nucleo Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格98件、部分検証10件、未達678件です。その他の登録値の型別検証、型付き参照、`local` スコープは残っています。

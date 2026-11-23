@@ -178,7 +178,68 @@ fn unquoted_delimiters<'a>(
     })
 }
 
-fn registration_points(list: &str) -> Result<Vec<(&str, Option<&str>)>, &'static str> {
+#[derive(Debug, PartialEq, Eq)]
+enum RegistrationValue<'a> {
+    Range { base: u64, size: u64 },
+    String(&'a str),
+    Other(&'a str),
+}
+
+fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>), &'static str> {
+    let mut chars = item.char_indices();
+    if !chars.next().is_some_and(|(_, c)| c.is_alphabetic()) {
+        return Err("expected a register reference");
+    }
+    let end = chars
+        .find(|&(_, c)| !c.is_alphanumeric() && c != '_')
+        .map_or(item.len(), |(index, _)| index);
+    let (register, value) = item.split_at(end);
+    let value = value.trim();
+    let point = match value.as_bytes().first() {
+        None => None,
+        Some(b'<') => {
+            let (begin, end) = value[1..]
+                .strip_suffix('>')
+                .and_then(|range| range.split_once(','))
+                .ok_or("invalid registration range")?;
+            let base = range_number(begin.trim())?;
+            let end = end.trim();
+            let size = if let Some(length) = end.strip_prefix('+') {
+                let length = range_number(length.trim())?;
+                base.checked_add(length)
+                    .ok_or("registration range overflow")?;
+                length
+            } else {
+                range_number(end)?
+                    .checked_sub(base)
+                    .ok_or("reversed registration range")?
+            };
+            Some(RegistrationValue::Range { base, size })
+        }
+        Some(b'"') => {
+            let content = value[1..]
+                .strip_suffix('"')
+                .ok_or("invalid quoted registration")?;
+            Some(RegistrationValue::String(content))
+        }
+        Some(_) if value.len() < item.len() - end => Some(RegistrationValue::Other(value)),
+        Some(_) => return Err("expected a registration point after register reference"),
+    };
+    Ok((register, point))
+}
+
+fn range_number(value: &str) -> Result<u64, &'static str> {
+    let value = value.replace('_', "");
+    match value.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => value.parse(),
+    }
+    .map_err(|_| "invalid registration range number")
+}
+
+fn registration_points(
+    list: &str,
+) -> Result<Vec<(&str, Option<RegistrationValue<'_>>)>, &'static str> {
     let mut points = Vec::new();
     let mut depth = 0;
     let mut start = 0;
@@ -193,16 +254,7 @@ fn registration_points(list: &str) -> Result<Vec<(&str, Option<&str>)>, &'static
                 if item.is_empty() && end == list.len() && !points.is_empty() {
                     break;
                 }
-                let register_end = item.find(char::is_whitespace).unwrap_or(item.len());
-                let (register, value) = item.split_at(register_end);
-                let mut chars = register.chars();
-                if !chars.next().is_some_and(char::is_alphabetic)
-                    || !chars.all(|c| c.is_alphanumeric() || c == '_')
-                {
-                    return Err("expected a register reference");
-                }
-                let value = value.trim();
-                points.push((register, (!value.is_empty()).then_some(value)));
+                points.push(registration_point(item)?);
                 start = end + 1;
             }
             _ => {}
@@ -448,16 +500,22 @@ fn parse_text(
         };
         let (declaration, body) = inline_body(declaration, &source).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
-            Some((model, registration)) => (
-                model.trim(),
-                Some(
-                    registration
-                        .lines()
-                        .map(str::trim)
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                ),
-            ),
+            Some((model, registration)) => {
+                let registration = registration.trim();
+                if !registration.starts_with('{') {
+                    registration_point(registration).map_err(error)?;
+                }
+                (
+                    model.trim(),
+                    Some(
+                        registration
+                            .lines()
+                            .map(str::trim)
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    ),
+                )
+            }
             None => (declaration.trim(), None),
         };
         current = Some(Entry {
@@ -689,23 +747,19 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
                 }
                 .ok_or_else(|| entry.error("expected one memory size property before init"))?;
                 let size = number(size).map_err(|e| entry.error(&e))?;
-                let address = if let Some(range) = entry
+                let address = if let Some((
+                    "sysbus",
+                    Some(RegistrationValue::Range { base, size: length }),
+                )) = entry
                     .registration
                     .as_deref()
-                    .and_then(|registration| registration.strip_prefix("sysbus <"))
-                    .and_then(|range| range.strip_suffix('>'))
+                    .and_then(|registration| registration_point(registration).ok())
                 {
-                    let (address, length) = range
-                        .split_once(',')
-                        .ok_or_else(|| entry.error("invalid memory range"))?;
-                    let length = length
-                        .trim()
-                        .strip_prefix('+')
-                        .ok_or_else(|| entry.error("expected +size in memory range"))?;
-                    if number(length).map_err(|e| entry.error(&e))? != size {
+                    if length != u64::from(size) {
                         return Err(entry.error("memory range size disagrees with size property"));
                     }
-                    number(address.trim()).map_err(|e| entry.error(&e))?
+                    u32::try_from(base)
+                        .map_err(|_| entry.error("memory base exceeds 32-bit address space"))?
                 } else {
                     entry.address()?
                 };
@@ -2045,6 +2099,34 @@ mod inline_attribute_cases {
     }
 
     #[test]
+    fn upstream_single_registration_points() {
+        for (source, point) in [
+            ("\nuart: @ sysbus", None),
+            (
+                "\nuart: @ sysbus <0x2000A000, +0x1000>",
+                Some(RegistrationValue::Range {
+                    base: 0x2000a000,
+                    size: 0x1000,
+                }),
+            ),
+            (
+                "\nuart: @ sysbus \"something\"",
+                Some(RegistrationValue::String("something")),
+            ),
+        ] {
+            let entries = parse(source).unwrap();
+            assert_eq!(entries.len(), 1);
+            let entry = &entries[0];
+            assert_eq!(entry.name, "uart");
+            assert!(entry.model.is_empty());
+            assert_eq!(
+                registration_point(entry.registration.as_deref().unwrap()).unwrap(),
+                ("sysbus", point)
+            );
+        }
+    }
+
+    #[test]
     fn upstream_registration_lists() {
         for source in [
             "\nuart: @{ sysbus 0x100 }",
@@ -2062,7 +2144,10 @@ mod inline_attribute_cases {
         let list = entry.registration.as_deref().unwrap();
         assert_eq!(
             registration_points(&list[1..list.len() - 1]).unwrap(),
-            [("sysbus", Some("0x100")), ("sysbus", Some("0x200"))]
+            [
+                ("sysbus", Some(RegistrationValue::Other("0x100"))),
+                ("sysbus", Some(RegistrationValue::Other("0x200")))
+            ]
         );
 
         for source in [
