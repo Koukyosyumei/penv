@@ -237,6 +237,18 @@ impl Bus {
             .any(|device| device.ppi_task_supported(address))
     }
 
+    pub fn advance_nrf_i2s(&mut self) -> Result<(), BusError> {
+        for index in 0..self.nrf_peripherals.len() {
+            if self.nrf_peripherals[index].i2s_transfer_due() {
+                let mut device = self.nrf_peripherals.remove(index);
+                let result = device.complete_i2s(self);
+                self.nrf_peripherals.insert(index, device);
+                result?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn advance_nrf_ppi(&mut self, output: &mut impl Write) -> Result<(), BusError> {
         let mut events = Vec::new();
         for device in &mut self.nrf_peripherals {

@@ -33,6 +33,7 @@ pub(super) fn map_peripheral(
     let uart = entry.model == "UART.NRF52840_UART";
     let mut irq = None;
     let mut easy_dma = None;
+    let mut loopback = None;
     let mut channels = None;
     let mut ports = [None; 2];
     for (_, item) in &entry.body {
@@ -44,6 +45,16 @@ pub(super) fn map_peripheral(
                 return Err(entry.error("expected one IRQ connection to NVIC"));
             }
             irq = Some(number(line.trim()).map_err(|e| entry.error(&e))?);
+        } else if entry.model == "Sound.NRF52840_I2S"
+            && loopback.is_none()
+            && let Some(("loopback", value)) = item.split_once(':')
+        {
+            loopback = Some(
+                value
+                    .trim()
+                    .parse::<bool>()
+                    .map_err(|_| entry.error("invalid loopback property"))?,
+            );
         } else if (uart || entry.model == "SPI.NRF52840_SPI")
             && easy_dma.is_none()
             && let Some(("easyDMA", value)) = item.split_once(':')
@@ -100,6 +111,8 @@ pub(super) fn map_peripheral(
     }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
+    } else if entry.model == "Sound.NRF52840_I2S" {
+        Peripheral::i2s(base, irq as u8, name, loopback.unwrap_or(false))
     } else if entry.model == "Timers.NRF52840_Timer" {
         let channels = channels.ok_or_else(|| entry.error("missing numberOfEvents"))?;
         Peripheral::timer(base, irq as u8, name, channels)

@@ -92,7 +92,7 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ### nRF52840 の段階検証
 
-nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4と、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
+nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4、I²S マスターと、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 
 RTC と Watchdog は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。Watchdog は有効な全リロード要求の受理でカウンターを再ロードします。タイムアウト割り込みを有効にした場合は 2 LFCLK サイクル後にリセットします。UART の TX は即時に転送され、CLI 入力は最初に宣言した UART が受信を開始していれば SRAM に転送されます。
 
@@ -111,12 +111,12 @@ target/release/penv run --script "$resc" --platform-root ../renode \
   --asset-dir "$assets" --max-steps 100000
 ```
 
-未変更のスクリプトは、以前停止していた上流 REPL 60 行目の TIMER0 と後続の TIMER1–4 宣言を通過し、80 行目の `i2s: unsupported platform model "Sound.NRF52840_I2S"` で終了コード 1 を返します。I²S、PDM、RADIO、RNG、ECB、EGU のモデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
+未変更のスクリプトは、以前停止していた上流 REPL 80 行目の I²S 宣言を通過し、83 行目の `pdm: unsupported platform model "Sound.NRF52840_PDM"` で終了コード 1 を返します。PDM、RADIO、RNG、ECB、EGU のモデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
 
 実機ファームウェアの検証では、実装済みの宣言を明示的に選んだ一時 REPL を使用します。`sysbus` の FICR/UICR タグは初期化コードの読み出しに使います。SVD の指定は診断用メタデータとして受理します。
 
 ```sh
-awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
+awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
   ../renode/platforms/cpus/nrf52840.repl > "$assets/boot.repl"
 printf 'help\r' > "$assets/help.txt"
 target/release/penv run --platform "$assets/boot.repl" \
@@ -143,7 +143,7 @@ target/release/penv run --platform "$assets/boot.repl" \
   --max-steps 130000000 "$assets/watchdog.elf"
 ```
 
-`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・I²S 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモードです。REPL の NVIC IRQ 3/4 に接続し、アドレス NACK、受信・送信・停止・一時停止イベントと割り込み、繰り返し START、受信時の BB_STOP/BB_SUSPEND に対応します。`Memory.GenericI2cEeprom @ twi1 0x50` のように EEPROM を接続できます。TWIM EasyDMA、スレーブモード、ピン波形とバス速度の再現は未実装です。
 
@@ -171,6 +171,15 @@ tests/nrf52840-timer.sh target/release/penv ../renode
 ```
 
 ベアメタル ARM ELF が TIMER0 の比較イベントで IRQ 8 を受け、同じイベントが PPI で TIMER3 の COUNT を駆動します。TIMER3 の第 6 比較チャネルで IRQ 26 を受け、両方のカウンターを CAPTURE して UART に `TIMER OK` を出力します。Shell のリセット回帰にも TIMER0–4 を含めます。
+
+I²S はマスターの START/STOP、RXPTRUPD/TXPTRUPD/STOPPED イベント、NVIC IRQ 37 とプログラマブル PPI に対応します。EasyDMA は `RXTXD.MAXCNT` を 32 ビットワード数として扱い、開始時と次のバッファへの切り替え時にポインターをラッチします。転送間隔は MCK、LRCK 比、サンプル幅、チャネル数から計算します。入力未接続時は SRAM に無音を書き込み、TX は読み出したデータを破棄します。`loopback: true` を指定した検証構成では、TX から RX へパック済みワードをコピーします。
+
+```sh
+# clang と ld.lld が必要
+tests/nrf52840-i2s.sh target/release/penv ../renode
+```
+
+ベアメタル ARM ELF は IRQ 37 で次のバッファを設定し、2 組のワード転送とバッファ境界、STOPPED を検証して `I2S OK` を出力します。スレーブモード、外部 PCM ファイル入出力、ピン波形は未実装です。上流の `Should Echo I2S Audio` が参照する `nrf52840--nordic_snippets_i2s_master.elf`（SHA-1 `98d5e53081cf7d76d30a183978a03b3e00beaf53`）も試しましたが、現行 ELF ローダーが hard-float ABI を拒否するため、上流サンプルの PCM 比較には未到達です。
 
 ## 現在の実装範囲
 

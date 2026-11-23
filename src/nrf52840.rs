@@ -1,3 +1,6 @@
+mod i2s;
+use i2s::I2s;
+
 mod timer;
 use timer::Timer;
 
@@ -34,6 +37,7 @@ enum Device {
     Uarte(Uarte),
     Rtc(Rtc),
     Timer(Timer),
+    I2s(I2s),
     Twi(Twi),
     Spi(Spi),
     Watchdog(Watchdog),
@@ -113,6 +117,29 @@ impl Peripheral {
         }
     }
 
+    pub fn i2s(base: u32, irq: u8, name: String, loopback: bool) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::I2s(I2s::new(loopback)),
+        }
+    }
+
+    pub fn i2s_transfer_due(&mut self) -> bool {
+        match &mut self.device {
+            Device::I2s(i2s) => i2s.tick(),
+            _ => false,
+        }
+    }
+
+    pub fn complete_i2s(&mut self, bus: &mut Bus) -> Result<(), BusError> {
+        match &mut self.device {
+            Device::I2s(i2s) => i2s.complete(bus),
+            _ => Ok(()),
+        }
+    }
+
     pub fn timer(base: u32, irq: u8, name: String, channels: usize) -> Self {
         Self {
             base,
@@ -184,6 +211,7 @@ impl Peripheral {
                 Device::Twi(_) => Twi::event(address - self.base).is_some(),
                 Device::Spi(_) => address - self.base == 0x108,
                 Device::Timer(timer) => timer.event(address - self.base),
+                Device::I2s(_) => I2s::event(address - self.base).is_some(),
                 _ => false,
             }
     }
@@ -194,6 +222,7 @@ impl Peripheral {
                 Device::Uarte(_) => matches!(address - self.base, 0 | 4 | 8 | 12),
                 Device::Twi(_) => Twi::is_task(address - self.base),
                 Device::Timer(timer) => timer.task(address - self.base),
+                Device::I2s(_) => matches!(address - self.base, 0 | 4),
                 Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
                 _ => false,
             }
@@ -205,6 +234,7 @@ impl Peripheral {
             Device::Twi(twi) => std::mem::take(&mut twi.raised),
             Device::Spi(spi) => std::mem::take(&mut spi.raised),
             Device::Timer(timer) => std::mem::take(&mut timer.raised),
+            Device::I2s(i2s) => std::mem::take(&mut i2s.raised),
             _ => return,
         };
         while raised != 0 {
@@ -317,6 +347,7 @@ impl Peripheral {
             Device::Twi(twi) => twi.reset(),
             Device::Spi(spi) => spi.reset(),
             Device::Timer(timer) => timer.reset(),
+            Device::I2s(i2s) => i2s.reset(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -347,6 +378,7 @@ impl Peripheral {
             Device::Twi(twi) => twi.pending(),
             Device::Spi(spi) => spi.pending(),
             Device::Timer(timer) => timer.pending(),
+            Device::I2s(i2s) => i2s.pending(),
         }
     }
 
@@ -372,6 +404,7 @@ impl Peripheral {
             Device::Twi(twi) => twi.read(offset),
             Device::Spi(spi) => spi.read(offset),
             Device::Timer(timer) => timer.read(offset),
+            Device::I2s(i2s) => i2s.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -417,6 +450,7 @@ impl Peripheral {
             Device::Twi(twi) => twi.write(offset, value),
             Device::Spi(spi) => spi.write(offset, value),
             Device::Timer(timer) => timer.write(offset, value),
+            Device::I2s(i2s) => i2s.write(offset, value),
         };
         if supported {
             Ok(())
@@ -470,19 +504,19 @@ impl Clock {
     }
 }
 
+fn dma_address(address: u32, length: usize) -> Result<u32, BusError> {
+    const RAM_BASE: u32 = 0x2000_0000;
+    const RAM_END: u32 = 0x2004_0000;
+    if address < RAM_BASE || u64::from(address) + length as u64 > u64::from(RAM_END) {
+        return Err(BusError::Unmapped(address, length));
+    }
+    Ok(address)
+}
+
 impl Uarte {
     fn raise(&mut self, events: u32) {
         self.events |= events;
         self.raised |= events;
-    }
-
-    fn dma_address(address: u32, length: usize) -> Result<u32, BusError> {
-        const RAM_BASE: u32 = 0x2000_0000;
-        const RAM_END: u32 = 0x2004_0000;
-        if address < RAM_BASE || u64::from(address) + length as u64 > u64::from(RAM_END) {
-            return Err(BusError::Unmapped(address, length));
-        }
-        Ok(address)
     }
 
     const RX_READY: u32 = 1 << 2;
@@ -539,7 +573,7 @@ impl Uarte {
             0x008 if trigger => {
                 if self.tx_count != 0 {
                     let length = self.tx_count as usize;
-                    let address = Self::dma_address(self.tx_pointer, length)?;
+                    let address = dma_address(self.tx_pointer, length)?;
                     let bytes = bus.memory_slice(address, length)?;
                     output.write_all(bytes).map_err(BusError::Output)?;
                 }
@@ -586,7 +620,7 @@ impl Uarte {
             let target = pointer
                 .checked_add(self.rx_amount)
                 .ok_or(BusError::Unmapped(pointer, length))?;
-            let target = Self::dma_address(target, length)?;
+            let target = dma_address(target, length)?;
             for (destination, byte) in bus
                 .memory(target, length)?
                 .iter_mut()

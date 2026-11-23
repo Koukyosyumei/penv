@@ -483,7 +483,8 @@ impl Hart {
             self.reset_cortex_m(bus)?;
         }
         if let Some(thumb) = self.thumb.as_mut() {
-            bus.advance_nrf_ppi(output)
+            bus.advance_nrf_i2s()
+                .and_then(|()| bus.advance_nrf_ppi(output))
                 .and_then(|()| bus.advance_stm32_dma(output))
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
             if thumb
