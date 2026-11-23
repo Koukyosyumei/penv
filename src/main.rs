@@ -28,6 +28,7 @@ mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod vector_bootstrap;
 
 use std::{
     env,

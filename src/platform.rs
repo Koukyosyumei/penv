@@ -896,6 +896,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "pmpEntryCount",
                 "builtInIrqController",
                 "allowUnalignedAccesses",
+                "vectorBootstrap",
             ],
         )? {
             match (key, value) {
@@ -968,6 +969,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     if entry.model == "CPU.VexRiscv" => {}
                 ("allowUnalignedAccesses", "true" | "false" | "True" | "False")
                     if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") => {}
+                ("vectorBootstrap", "true") if entry.model == "CPU.RiscV32" => {}
                 ("pmpEntryCount", "0") => pmp = 0,
                 ("pmpEntryCount", "16") => pmp = 16,
                 ("pmpEntryCount", "64") => pmp = 64,
@@ -1055,6 +1057,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             if smepmp {
                 hart.enable_smepmp();
             }
+        }
+        if split_rv32_init(entry).0.iter().any(|(_, text)| {
+            text.split_once(':').is_some_and(|(key, value)| {
+                key.trim() == "vectorBootstrap" && value.trim() == "true"
+            })
+        }) {
+            hart.enable_vector_bootstrap();
         }
         if let Some(commands) = split_rv32_init(entry).1 {
             let [(_, command)] = commands else {

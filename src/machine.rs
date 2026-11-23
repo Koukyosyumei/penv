@@ -474,6 +474,10 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
+    pub fn enable_vector_bootstrap(&mut self) {
+        self.csr.enable_vector_bootstrap();
+    }
+
     pub fn enable_floating(&mut self, double: bool, half: bool) {
         self.csr.f_extension = true;
         self.csr.d_extension = double;
@@ -980,6 +984,7 @@ impl Hart {
             0x0f if funct3 <= 1 => None,
             // Renode VexRiscv accepts the custom whole-data-cache flush.
             0x0f if insn == 0x0000_500f && self.csr.vex => None,
+            0x57 if funct3 == 7 => Some(self.csr.configure_vector(insn, a, b).ok_or_else(illegal)?),
             0x73 if insn == 0x0000_0073 => {
                 return Ok(self.environment_trap(self.csr.ecall_cause(), Stop::Ecall));
             }

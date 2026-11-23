@@ -1,6 +1,7 @@
 use crate::{
     clint::{SOFTWARE, TIMER},
     pmp::Pmp,
+    vector_bootstrap::VectorBootstrap,
 };
 
 const MIE: u32 = 1 << 3;
@@ -22,6 +23,7 @@ const SUM: u32 = 1 << 18;
 const MXR: u32 = 1 << 19;
 const TVM: u32 = 1 << 20;
 const TSR: u32 = 1 << 22;
+const VS: u32 = 3 << 9;
 const FS: u32 = 3 << 13;
 const SD: u32 = 1 << 31;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
@@ -100,6 +102,7 @@ pub struct Csr {
     pub f_extension: bool,
     pub d_extension: bool,
     pub fcsr: u8,
+    vector_bootstrap: Option<VectorBootstrap>,
     counters: Counters,
     user_supported: bool,
     pmp: Option<Box<Pmp>>,
@@ -135,6 +138,7 @@ impl Default for Csr {
             f_extension: false,
             d_extension: false,
             fcsr: 0,
+            vector_bootstrap: None,
             counters: Counters::default(),
             user_supported: false,
             pmp: None,
@@ -281,12 +285,34 @@ impl Csr {
         self.status |= FS;
     }
 
-    fn floating_status_mask(&self) -> u32 {
-        if self.f_extension { FS } else { 0 }
+    pub fn enable_vector_bootstrap(&mut self) {
+        self.vector_bootstrap = Some(VectorBootstrap::default());
+    }
+
+    pub fn configure_vector(&mut self, insn: u32, avl: u32, kind: u32) -> Option<u32> {
+        if self.status & VS == 0 {
+            return None;
+        }
+        let length = self.vector_bootstrap.as_mut()?.configure(insn, avl, kind)?;
+        self.status |= VS;
+        Some(length)
+    }
+
+    fn extension_status_mask(&self) -> u32 {
+        (if self.f_extension { FS } else { 0 })
+            | (if self.vector_bootstrap.is_some() {
+                VS
+            } else {
+                0
+            })
     }
 
     fn status_summary(&self) -> u32 {
-        if self.status & FS == FS { SD } else { 0 }
+        if self.status & FS == FS || self.status & VS == VS {
+            SD
+        } else {
+            0
+        }
     }
 
     pub fn access(&mut self, instruction: u32, register_value: u32) -> Result<u32, String> {
@@ -330,11 +356,14 @@ impl Csr {
 
     fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
+            0x008..=0x00a | 0x00f | 0xc20..=0xc22 if self.status & VS != 0 => {
+                return self.vector_bootstrap.as_ref()?.read(address);
+            }
             0x001 if self.floating_enabled() => u32::from(self.fcsr & 31),
             0x002 if self.floating_enabled() => u32::from(self.fcsr >> 5),
             0x003 if self.floating_enabled() => u32::from(self.fcsr),
             0x100 if self.supervisor.is_some() => {
-                self.status & (SSTATUS | FS) | self.status_summary()
+                self.status & (SSTATUS | self.extension_status_mask()) | self.status_summary()
             }
             0x104 => self.interrupt_enable & self.supervisor.as_ref()?.interrupt_delegation,
             0x144 => self.pending_interrupts() & self.supervisor.as_ref()?.interrupt_delegation,
@@ -404,6 +433,15 @@ impl Csr {
 
     fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
+            0x008..=0x00a | 0x00f
+                if self.status & VS != 0
+                    && self
+                        .vector_bootstrap
+                        .as_mut()
+                        .is_some_and(|state| state.write(address, value)) =>
+            {
+                self.status |= VS;
+            }
             0x001..=0x003 if self.floating_enabled() => {
                 let value = value as u8;
                 self.fcsr = match address {
@@ -414,7 +452,7 @@ impl Csr {
                 self.floating_dirty();
             }
             0x100 if self.supervisor.is_some() => {
-                let mask = SSTATUS | self.floating_status_mask();
+                let mask = SSTATUS | self.extension_status_mask();
                 self.status = (self.status & !mask) | (value & mask);
             }
             0x104 if let Some(supervisor) = self.supervisor.as_ref() => {
@@ -465,7 +503,7 @@ impl Csr {
                     | ((privilege as u32) << 11)
                     | mprv
                     | supervisor
-                    | (value & self.floating_status_mask());
+                    | (value & self.extension_status_mask());
             }
             0x304 => {
                 let supervisor_mask = if self.supervisor.is_some() {
@@ -702,6 +740,30 @@ fn vector_target(vector: u32, cause: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vector_bootstrap_gates_csrs_and_does_not_advertise_v() {
+        let mut csr = Csr::default();
+        csr.enable_supervisor_mode();
+        assert!(csr.write(0x300, VS));
+        assert_eq!(csr.read(0x300).unwrap() & (VS | SD), 0);
+
+        csr.enable_vector_bootstrap();
+        assert_eq!(csr.read(0xc22), None);
+        assert!(!csr.write(0x00f, 7));
+        assert_eq!(csr.read(0x301).unwrap() & (1 << 21), 0);
+        assert!(csr.write(0x100, 1 << 9));
+        assert_eq!(csr.read(0xc22), Some(128));
+        assert_eq!(csr.read(0x100).unwrap() & SD, 0);
+        assert!(!csr.write(0xc22, 1));
+        assert!(csr.write(0x00f, u32::MAX));
+        assert_eq!(csr.read(0x009), Some(1));
+        assert_eq!(csr.read(0x00a), Some(3));
+        assert_eq!(csr.read(0x300).unwrap() & (VS | SD), VS | SD);
+        assert!(csr.write(0x100, 0));
+        assert_eq!(csr.read(0x00f), None);
+        assert_eq!(csr.configure_vector(0x0000_70d7, 0, 0), None);
+    }
 
     #[test]
     fn floating_csrs_follow_fs_and_share_rounding_and_flags() {

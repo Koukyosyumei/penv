@@ -322,3 +322,45 @@ done
 ```
 
 公開特権 ISA は両方の初期化で各 22/22 が通過しました。RV32 Smepmp 検証 ELF も両構成で許可領域の読み書きと例外 `5/7/1` を再確認しました。
+
+## RV32 ベクトル初期化
+
+固定 ACT の `tests/env/utils.h` の `RVTEST_V_ENABLE` は、`mstatus.VS` を Initial にして `vlenb` を読みます。`test_setup.h` は `RVTEST_VECTOR` を指定したテストでこのマクロを呼びます。今回の固定 ELF 群で確認した先頭の要求は、`Sm-00.S` が test 35 以降で行う `mstatus.VS` の読み戻しです。`UV.S` は U モードへ入り M モードへ戻りますが、ベクトル演算の本体は上流ソース上でスタブです。固定 ELF 群の結果からデータ演算を検証したとは判定できません。
+
+標準 RV32 の診断 REPL に `vectorBootstrap: true` を追加しました。固定 Spike ACT プロファイルに合わせた VLEN 1024、ELEN 64 で、`mstatus/sstatus.VS` と SD、`vstart/vxsat/vxrm/vcsr/vl/vtype/vlenb`、`vsetvli/vsetivli/vsetvl` を実装しています。このオプションは `misa.V` を設定しません。通常の CPU 型の V は引き続き作成時に拒否されます。[RISC-V V 仕様](https://docs.riscv.org/reference/isa/unpriv/v-st-ext)
+
+| 検証 | 結果 |
+| --- | --- |
+| 固定 `Sm-00.elf`、Sail 初期値とベクトル診断、RAM 1 MiB | 署名と `tohost=0` を確認 |
+| 固定 `UV.elf`、同じ構成 | `0x02004000` へのアクセスが未マップ |
+| 固定 `UV.elf`、CLINT を追加 | `tohost=0`。ベクトル演算の検査なし |
+| 上流最大構成、Sm と UV を抜き取り | 0/2、V により CPU 作成時に拒否 |
+| 検証 ELF | ACT の初期化列、CSR、3 種の `vset*`、不正 `vtype` を確認。オプションを外すと `vlenb` で違法 CSR |
+
+```bash
+cargo test --locked
+cargo build --locked --release
+# smepmp-sail-init.repl は上段で生成済み
+sed '/cpuType:/a\    vectorBootstrap: true' "$work/smepmp-sail-init.repl" > "$work/vector-init.repl"
+"$work/tools/bin/riscv64-unknown-elf-gcc" -march=rv32gcv -mabi=ilp32 -nostdlib \
+  -Wl,-T,scripts/firmware/rv32-virt.ld scripts/firmware/rv32-vector-bootstrap.S -o "$work/vector.elf"
+status=0
+target/release/penv run --platform "$work/vector-init.repl" --max-steps 1000 "$work/vector.elf" \
+  > "$work/vector.uart" || status=$?
+test "$status" -eq 2
+grep -Fx 'rv32-vector-bootstrap: VS, vlenb, vsetvl and vector CSRs OK' "$work/vector.uart"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --max-steps 10000000 --platform "$work/vector-init.repl" --artifacts "$work/vector-sm" \
+  "$work"/act/work/spike-rv32-max/elfs/priv/Sm/Sm-00.elf
+sed '/cpuType:/a\    timeProvider: clint' "$work/vector-init.repl" > "$work/vector-clint.repl"
+cat >> "$work/vector-clint.repl" <<'REPL'
+clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x02000000
+    [0, 1] -> cpu@[3, 7]
+    frequency: 10000000
+REPL
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --max-steps 10000000 --platform "$work/vector-clint.repl" --artifacts "$work/vector-uv" \
+  "$work"/act/work/spike-rv32-max/elfs/priv/UV/UV.elf
+```
+
+ベクトルレジスター、演算・ロード／ストア、上流のベクトル演算ケースの生成・検証が残ります。二つの診断結果を台帳へ記録し、上流最大構成の合格には算入していません。
