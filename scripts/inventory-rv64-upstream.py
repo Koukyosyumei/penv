@@ -223,6 +223,14 @@ def infrastructure_fixture(source, line):
 def disposition(path, name, context):
     if path.name in BOARD:
         return "partial", "Existing CLI run; exact Robot semantics require audit"
+    if path.name == "per-core-registration.robot":
+        if name in {
+            "Get Same Read From Common Memory",
+            "Values Written By One Core Should Not Be Visible By The Other One",
+        }:
+            return "pass", "Fixed REPL, public ELF and ordered UART assertions verified by verify-rv64-per-core.py"
+        if name == "Cluster Memory Should Only Be Visible To Cluster":
+            return "partial", "Scoped backing and cluster visibility checked in Rust; Monitor operations remain"
     if path.name == "offset-bus-registrations.robot":
         if name in {
             "Cpu Should Read From Correct Offset From Mapped Memory",

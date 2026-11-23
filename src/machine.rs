@@ -166,6 +166,9 @@ impl Machine {
             .map(|id| {
                 let mut hart = self.primary.clone();
                 hart.csr.hart_id = id;
+                if let Some(cpu) = &mut hart.rv64 {
+                    cpu.hart_id = id;
+                }
                 hart.name = None;
                 hart
             })

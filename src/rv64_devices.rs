@@ -182,7 +182,12 @@ impl Devices {
         }
     }
 
+    #[cfg(test)]
     pub fn read(&mut self, address: u32, width: usize) -> Option<u32> {
+        self.read_for_hart(0, address, width)
+    }
+
+    pub fn read_for_hart(&mut self, hart: usize, address: u32, width: usize) -> Option<u32> {
         if width == 4
             && let Some(value) = self
                 .starlight_reset_pin
@@ -191,7 +196,9 @@ impl Devices {
         {
             return Some(value);
         }
-        if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
+        if let Some(uart) = self.uarts.iter_mut().find(|uart| {
+            uart.contains(address) && (uart.harts == 0 || uart.harts & (1 << hart) != 0)
+        }) {
             return uart.read(address, width);
         }
         if width == 4
@@ -286,8 +293,20 @@ impl Devices {
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
 
+    #[cfg(test)]
     pub fn write(
         &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+        output: &mut impl Write,
+    ) -> Option<io::Result<()>> {
+        self.write_for_hart(0, address, width, value, output)
+    }
+
+    pub fn write_for_hart(
+        &mut self,
+        hart: usize,
         address: u32,
         width: usize,
         value: u32,
@@ -302,7 +321,9 @@ impl Devices {
             self.reset_requested |= reset;
             return Some(Ok(()));
         }
-        if let Some(uart) = self.uarts.iter_mut().find(|uart| uart.contains(address)) {
+        if let Some(uart) = self.uarts.iter_mut().find(|uart| {
+            uart.contains(address) && (uart.harts == 0 || uart.harts & (1 << hart) != 0)
+        }) {
             return uart.write(address, width, value, output);
         }
         if width == 4
@@ -407,6 +428,7 @@ enum UartKind {
 }
 
 pub struct Uart {
+    pub(crate) harts: u64,
     name: String,
     pub base: u32,
     source: usize,
@@ -435,6 +457,7 @@ impl Uart {
             UartKind::Ns16550(Ns16550::new(base, source as u32, wide))
         };
         Self {
+            harts: 0,
             name,
             base,
             source,

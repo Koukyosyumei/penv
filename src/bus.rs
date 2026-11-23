@@ -73,7 +73,7 @@ pub(crate) struct Reservation64 {
 struct RamAlias {
     backing: usize,
     offset: usize,
-    cpu_only: bool,
+    harts: u64,
     base: u64,
     length: usize,
 }
@@ -186,15 +186,17 @@ impl Bus {
         base: u64,
         length: usize,
         offset: usize,
-        cpu_only: bool,
+        harts: u64,
     ) -> Result<(), String> {
-        if cpu_only {
+        if harts != 0 {
             let end = base
                 .checked_add(length as u64)
                 .ok_or("RAM range overflow")?;
             if length == 0
                 || self.aliases.iter().any(|alias| {
-                    alias.cpu_only && base < alias.base + alias.length as u64 && alias.base < end
+                    alias.harts & harts != 0
+                        && base < alias.base + alias.length as u64
+                        && alias.base < end
                 })
             {
                 return Err("empty or overlapping CPU-scoped RAM range".into());
@@ -211,7 +213,7 @@ impl Bus {
         self.aliases.push(RamAlias {
             backing,
             offset,
-            cpu_only,
+            harts,
             base,
             length,
         });
@@ -556,15 +558,25 @@ impl Bus {
     }
 
     pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {
-        self.ram_write64(address, width, false)
+        self.ram_write64(address, width, None)
     }
 
-    pub(crate) fn cpu_memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {
-        self.ram_write64(address, width, true)
+    pub(crate) fn cpu_memory64(
+        &mut self,
+        hart: usize,
+        address: u64,
+        width: usize,
+    ) -> Option<&mut [u8]> {
+        self.ram_write64(address, width, Some(hart))
     }
 
-    fn ram_write64(&mut self, address: u64, width: usize, cpu: bool) -> Option<&mut [u8]> {
-        let (backing, offset) = self.ram_location(address, width, cpu)?;
+    fn ram_write64(
+        &mut self,
+        address: u64,
+        width: usize,
+        hart: Option<usize>,
+    ) -> Option<&mut [u8]> {
+        let (backing, offset) = self.ram_location(address, width, hart)?;
         let region = &mut self.regions[backing];
         if width != 0 {
             for reservation in &mut self.rv64_reservations {
@@ -591,11 +603,17 @@ impl Bus {
     }
 
     pub fn reserve64(&mut self, hart: usize, guest: u64, address: u64, width: usize) {
-        self.rv64_reservations[hart] = self.reservation_key64(guest, address, width);
+        self.rv64_reservations[hart] = self.reservation_key64(hart, guest, address, width);
     }
 
-    fn reservation_key64(&self, guest: u64, address: u64, width: usize) -> Option<Reservation64> {
-        let (backing, offset) = self.ram_location(address, width, true)?;
+    fn reservation_key64(
+        &self,
+        hart: usize,
+        guest: u64,
+        address: u64,
+        width: usize,
+    ) -> Option<Reservation64> {
+        let (backing, offset) = self.ram_location(address, width, Some(hart))?;
         Some(Reservation64 {
             guest,
             backing,
@@ -606,12 +624,14 @@ impl Bus {
 
     pub(crate) fn matches_reservation64(
         &self,
+        hart: usize,
         reserved: Option<Reservation64>,
         guest: u64,
         address: u64,
         width: usize,
     ) -> bool {
-        let Some((reserved, current)) = reserved.zip(self.reservation_key64(guest, address, width))
+        let Some((reserved, current)) =
+            reserved.zip(self.reservation_key64(hart, guest, address, width))
         else {
             return false;
         };
@@ -629,18 +649,25 @@ impl Bus {
     }
 
     pub(crate) fn has_cpu_ram_alias(&self) -> bool {
-        self.aliases.iter().any(|alias| alias.cpu_only)
+        self.aliases.iter().any(|alias| alias.harts != 0)
     }
 
     pub fn ram_location64(&self, address: u64, width: usize) -> Option<(usize, usize)> {
-        self.ram_location(address, width, false)
+        self.ram_location(address, width, None)
     }
 
-    fn ram_location(&self, address: u64, width: usize, cpu: bool) -> Option<(usize, usize)> {
-        if cpu {
+    fn ram_location(
+        &self,
+        address: u64,
+        width: usize,
+        hart: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        if let Some(hart) = hart {
             let end = address.checked_add(width as u64)?;
             if let Some(alias) = self.aliases.iter().find(|alias| {
-                alias.cpu_only && address < alias.base + alias.length as u64 && alias.base < end
+                alias.harts & (1 << hart) != 0
+                    && address < alias.base + alias.length as u64
+                    && alias.base < end
             }) {
                 let offset = address.checked_sub(alias.base)?;
                 return (end <= alias.base + alias.length as u64)
@@ -653,7 +680,7 @@ impl Bus {
             }
         }
         for alias in &self.aliases {
-            if !alias.cpu_only
+            if alias.harts == 0
                 && let Some(offset) = address.checked_sub(alias.base)
                 && offset <= alias.length as u64
                 && width as u64 <= alias.length as u64 - offset
@@ -671,7 +698,7 @@ impl Bus {
             .chain(
                 self.aliases
                     .iter()
-                    .filter(|alias| !alias.cpu_only)
+                    .filter(|alias| alias.harts == 0)
                     .map(|alias| alias.base..alias.base + alias.length as u64),
             )
     }
@@ -681,8 +708,8 @@ impl Bus {
         Some(&self.regions[index].bytes[offset..offset + width])
     }
 
-    pub(crate) fn cpu_ram64(&self, address: u64, width: usize) -> Option<&[u8]> {
-        let (index, offset) = self.ram_location(address, width, true)?;
+    pub(crate) fn cpu_ram64(&self, hart: usize, address: u64, width: usize) -> Option<&[u8]> {
+        let (index, offset) = self.ram_location(address, width, Some(hart))?;
         Some(&self.regions[index].bytes[offset..offset + width])
     }
 

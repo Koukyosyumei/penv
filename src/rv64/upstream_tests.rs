@@ -872,7 +872,7 @@ fn renode_lrsc_preserves_same_hart_reservation_across_store_and_width_change() {
         run_straight_line(&mut cpu, &mut bus, &[lr, 0x0005_01a3, sc]); // sb zero, 3(a0)
         assert_eq!(cpu.registers[A3], u64::from(!compatible));
         let expected = if compatible { cpu.registers[A1] } else { 0 };
-        assert_eq!(ram_read(&bus, cpu.registers[A0], 8), Some(expected));
+        assert_eq!(ram_read(&bus, None, cpu.registers[A0], 8), Some(expected));
     }
 }
 
@@ -895,7 +895,7 @@ fn renode_unmapped_data_does_not_relax_other_access_checks() {
 fn offset_ram_window_keeps_backing_and_cpu_context() {
     let mut bus = Bus::new(4096).unwrap();
     let memory = bus.map_ram_backing64(0x9000_0000, 0x5000, 0x5000).unwrap();
-    bus.map_alias64(memory, 0x9100_0000, 0x1000, 0x4000, true)
+    bus.map_alias64(memory, 0x9100_0000, 0x1000, 0x4000, 1)
         .unwrap();
     let cpu = Rv64::new(Isa::parse("rv64g").unwrap());
     for (width, test_word) in [
@@ -921,13 +921,35 @@ fn offset_ram_window_keeps_backing_and_cpu_context() {
     }
     let shadowed = bus.map_ram_backing64(0x9300_0000, 0x1000, 0x1000).unwrap();
     assert_ne!(memory, shadowed);
-    bus.map_alias64(memory, 0x9300_0000, 0x1000, 0x4000, true)
+    bus.map_alias64(memory, 0x9300_0000, 0x1000, 0x4000, 1)
         .unwrap();
     assert_eq!(bus.ram64(0x9300_0000, 1), Some(&[0][..]));
-    assert_eq!(bus.cpu_ram64(0x9300_0000, 1), Some(&[0xbe][..]));
-    assert!(bus.cpu_ram64(0x9100_1000, 1).is_none());
+    assert_eq!(bus.cpu_ram64(0, 0x9300_0000, 1), Some(&[0xbe][..]));
+    assert!(bus.cpu_ram64(0, 0x9100_1000, 1).is_none());
     assert!(
-        bus.map_alias64(memory, 0x9200_0000, 0x1001, 0x4000, false)
+        bus.map_alias64(memory, 0x9200_0000, 0x1001, 0x4000, 0)
             .is_err()
     );
+}
+
+#[test]
+fn per_hart_ram_windows_have_independent_backings() {
+    let mut bus = Bus::new(4096).unwrap();
+    let first = bus.map_ram_backing64(0x2010000, 4096, 4096).unwrap();
+    let second = bus.map_ram_backing64(0x2020000, 4096, 4096).unwrap();
+    let address = 0x3000000;
+    bus.map_alias64(first, address, 4096, 0, 1).unwrap();
+    bus.map_alias64(second, address, 4096, 0, (1 << 1) | (1 << 2))
+        .unwrap();
+    assert!(
+        bus.map_alias64(second, address, 4096, 0, 1 | (1 << 3))
+            .is_err()
+    );
+    bus.cpu_memory64(0, address, 1).unwrap()[0] = 0xb0;
+    bus.cpu_memory64(1, address, 1).unwrap()[0] = 0xba;
+    assert_eq!(bus.cpu_ram64(2, address, 1).unwrap(), &[0xba]);
+    assert_eq!(bus.ram64(0x2010000, 1).unwrap(), &[0xb0]);
+    assert_eq!(bus.ram64(0x2020000, 1).unwrap(), &[0xba]);
+    assert!(bus.cpu_ram64(3, address, 1).is_none());
+    assert!(bus.ram64(address, 1).is_none());
 }
