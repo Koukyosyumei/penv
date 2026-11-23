@@ -535,3 +535,49 @@ fn distinguishes_rv32_act_console_packets_from_tohost_completion() {
     }
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn ns16550_can_echo_without_an_interrupt_controller() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-polled-ns16550-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("board.repl");
+    let raw = directory.join("echo.bin");
+    let input = directory.join("input");
+    fs::write(
+        &board,
+        "cpu: CPU.RiscV32 @ sysbus
+    cpuType: \"rv32imac_zba_zbb_zbc_zbs\"
+mem: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.NS16550 @ sysbus 0x10000000
+",
+    )
+    .unwrap();
+    let program = [
+        0x1000_02b7u32, // lui t0, 0x10000
+        0x0002_c303,    // lbu t1, 0(t0)
+        0x0062_8023,    // sb t1, 0(t0)
+        0x0010_0073,    // ebreak
+    ];
+    fs::write(
+        &raw,
+        program
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    fs::write(&input, b"Q").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--platform"])
+        .arg(&board)
+        .arg("--uart-input")
+        .arg(&input)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"Q");
+}

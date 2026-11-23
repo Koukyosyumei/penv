@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    bitmanip::BitManip,
     bus::Bus,
     litex::{Gpio, GpioMode, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
@@ -874,7 +875,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             _ => None,
         };
         let mut zicond = false;
-        let mut zbs = false;
+        let mut bitmanip = BitManip::default();
         let mut id = 0;
         let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
             16
@@ -898,11 +899,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     let architecture = value.trim_matches('"').to_ascii_lowercase();
                     let mut base = architecture.as_str();
                     zicond = false;
-                    zbs = false;
+                    bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
-                            "zbs" if !zbs => zbs = true,
+                            "zba" if !bitmanip.zba => bitmanip.zba = true,
+                            "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
+                            "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
+                            "zbs" if !bitmanip.zbs => bitmanip.zbs = true,
                             _ => break,
                         }
                         base = prefix;
@@ -922,7 +926,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                             Some((true, false, true))
                         }
                         "rv32imcu_zicsr_zifencei" if ibex => Some((true, false, true)),
-                        _ => return Err(entry.error(&format!("unsupported CPU type {value}"))),
+                        _ => return Err(entry.error(&unsupported_rv32_isa(value, &architecture))),
                     };
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
@@ -950,7 +954,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             {
                 let (multiply, atomic, compressed) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
-                (multiply, atomic, compressed, zicond, zbs)
+                (multiply, atomic, compressed, zicond, bitmanip)
             },
             pmp,
         ));
@@ -968,7 +972,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         ));
     }
     machine.configure_harts(configs.len());
-    for &(id, entry, (multiply, atomic, compressed, zicond, zbs), pmp) in &configs {
+    for &(id, entry, (multiply, atomic, compressed, zicond, bitmanip), pmp) in &configs {
         let hart = machine.hart_mut(id);
         hart.name = Some(entry.name.clone());
         let unaligned = entry
@@ -983,7 +987,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic, compressed);
         hart.set_zicond(zicond);
-        hart.set_zbs(zbs);
+        hart.set_bitmanip(bitmanip);
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
             "CPU.IbexRiscV32" => hart.enable_ibex(),
@@ -1231,8 +1235,6 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_litex_uart_with_timing(entry.addresses()?, irq, timing)
                 .map_err(|e| entry.error(&e))?;
         } else {
-            let (plic, sources) =
-                plic_config.ok_or_else(|| entry.error("NS16550 requires a PLIC"))?;
             let mut source = None;
             let mut wide = None;
             for (_, line) in &entry.body {
@@ -1240,7 +1242,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     .split_once("->")
                     .filter(|(pin, _)| pin.trim() == "IRQ")
                     .and_then(|(_, target)| target.trim().split_once('@'))
-                    .filter(|(name, _)| name.trim() == plic.name)
+                    .filter(|(name, _)| {
+                        plic_config.is_some_and(|(plic, _)| name.trim() == plic.name)
+                    })
                     && source.is_none()
                 {
                     source = Some(number(target.1.trim()).map_err(|e| entry.error(&e))?);
@@ -1258,9 +1262,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("unsupported NS16550 property or wiring"));
                 }
             }
-            let source = source
-                .filter(|source| (1..=sources).contains(source))
-                .ok_or_else(|| entry.error("expected a valid NS16550 IRQ connection to PLIC"))?;
+            if let Some(source) = source
+                && !plic_config.is_some_and(|(_, sources)| (1..=sources).contains(&source))
+            {
+                return Err(entry.error("expected a valid NS16550 IRQ connection to PLIC"));
+            }
             machine
                 .bus
                 .map_ns16550(entry.address()?, source, wide.unwrap_or(false))
@@ -1892,7 +1898,40 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
     Ok(())
 }
 
-type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool, bool, bool), usize);
+fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
+    let mut parts = architecture.split('_');
+    let base = parts.next().and_then(|part| part.strip_prefix("rv32"));
+    let mut missing = Vec::new();
+    if let Some(base) = base {
+        for letter in base.chars() {
+            match letter {
+                'i' | 'm' | 'a' | 'c' => {}
+                'g' => missing.extend(["F", "D"]),
+                'f' => missing.push("F"),
+                'd' => missing.push("D"),
+                'v' => missing.push("V"),
+                _ => return format!("unsupported CPU type {value}"),
+            }
+        }
+        missing.extend(parts.filter(|extension| {
+            !matches!(
+                *extension,
+                "zicsr" | "zifencei" | "zicond" | "zba" | "zbb" | "zbc" | "zbs"
+            )
+        }));
+    }
+    missing.dedup();
+    if missing.is_empty() {
+        format!("unsupported CPU type {value}")
+    } else {
+        format!(
+            "unsupported CPU type {value}; unavailable extensions: {}",
+            missing.join(", ")
+        )
+    }
+}
+
+type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool, bool, BitManip), usize);
 
 fn uses_vex_irq(entry: &Entry) -> bool {
     entry.model == "CPU.VexRiscv"

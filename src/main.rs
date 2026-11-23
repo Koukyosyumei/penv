@@ -1,3 +1,4 @@
+mod bitmanip;
 mod bus;
 mod clint;
 mod compressed;

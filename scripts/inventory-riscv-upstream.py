@@ -17,6 +17,7 @@ REVISIONS = {
     "infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85",
     "ui": "5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f",
 }
+MAX_ISA_BLOCKER = "upstream CPU creation requires F, D, V, Zfh, Zacas, Smepmp"
 BOARD_REGRESSION = {
     "Arty_LiteX_VexRiscv.robot",
     "LiteX_Linux_VexRiscv.robot",
@@ -79,9 +80,15 @@ def robot_cases(root, isa, act):
                                "missing-input", "upstream discovery found zero instances")
                     for value in sorted(values):
                         portable = str(Path(value).relative_to(directory)) if "Arch" in case.name else value
+                        bitmanip_checked = (
+                            re.match(r"rv32uzb[abcs]-[pv]-", portable) if key == "TESTS_32"
+                            else re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zb[abcs]/[^/]+\.elf", portable)
+                        )
+                        basis = MAX_ISA_BLOCKER
+                        if bitmanip_checked:
+                            basis += "; reduced-ISA bitmanip diagnostic passed"
                         yield ("Renode", name, case.lineno, case.name, portable, "target",
-                               "blocked-cpu", "upstream ISA CPU type rejected; virt diagnostic available"
-                               if key == "TESTS_32" else "upstream ACT CPU type rejected; virt diagnostic available")
+                               "blocked-cpu", basis)
                     continue
                 status = "outside" if case_scope == "outside" else "pending"
                 if path.name == "LiteX_VexRiscv_I2S.robot" and case.name == "Should Echo Audio":

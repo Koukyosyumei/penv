@@ -451,7 +451,12 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_ns16550(&mut self, base: u32, source: u32, wide: bool) -> Result<(), String> {
+    pub fn map_ns16550(
+        &mut self,
+        base: u32,
+        source: Option<u32>,
+        wide: bool,
+    ) -> Result<(), String> {
         let uart = Ns16550::new(base, source, wide);
         let start = u64::from(base);
         let end = start + uart.size();
@@ -1001,9 +1006,10 @@ impl Bus {
 
     pub fn tick_plic(&mut self) -> u32 {
         if let Some(uart) = self.ns16550.as_ref()
+            && let Some(source) = uart.source
             && let Some(plic) = self.plic.as_mut()
         {
-            plic.set_line(uart.source, uart.interrupt_pending());
+            plic.set_line(source, uart.interrupt_pending());
         }
         self.plic.as_ref().map_or(0, Plic::irq_outputs)
     }

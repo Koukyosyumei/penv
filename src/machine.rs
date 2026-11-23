@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, io::Write, path::PathBuf};
 
 use crate::{
+    bitmanip::BitManip,
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
     litex_panel::ButtonAction,
@@ -40,7 +41,7 @@ pub struct Hart {
     thumb: Option<Thumb>,
     unaligned_accesses: bool,
     zicond: bool,
-    zbs: bool,
+    bitmanip: BitManip,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -130,18 +131,6 @@ fn sign(value: u32, bits: u32) -> u32 {
     (((value << (32 - bits)) as i32) >> (32 - bits)) as u32
 }
 
-fn single_bit_operation(funct3: u32, funct7: u32, value: u32, index: u32) -> Option<u32> {
-    let index = index & 31;
-    let mask = 1 << index;
-    Some(match (funct3, funct7) {
-        (1, 0x14) => value | mask,
-        (1, 0x24) => value & !mask,
-        (1, 0x34) => value ^ mask,
-        (5, 0x24) => (value >> index) & 1,
-        _ => return None,
-    })
-}
-
 fn multiply_divide(operation: u32, lhs: u32, rhs: u32) -> u32 {
     let signed_lhs = lhs as i32;
     let signed_rhs = rhs as i32;
@@ -178,7 +167,7 @@ impl Machine {
                 thumb: None,
                 unaligned_accesses: false,
                 zicond: false,
-                zbs: false,
+                bitmanip: BitManip::default(),
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -477,8 +466,8 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
-    pub fn set_zbs(&mut self, enabled: bool) {
-        self.zbs = enabled;
+    pub fn set_bitmanip(&mut self, extensions: BitManip) {
+        self.bitmanip = extensions;
     }
 
     pub fn set_zicond(&mut self, enabled: bool) {
@@ -842,10 +831,10 @@ impl Hart {
                 5 if funct7 == 0x20 => ((a as i32) >> (imm & 31)) as u32,
                 6 => a | imm,
                 7 => a & imm,
-                _ if self.zbs => {
-                    single_bit_operation(funct3, funct7, a, imm).ok_or_else(illegal)?
-                }
-                _ => return Err(illegal()),
+                _ => self
+                    .bitmanip
+                    .immediate(funct3, funct7, a, imm)
+                    .ok_or_else(illegal)?,
             }),
             0x33 => Some(match (funct3, funct7) {
                 (_, 1) if self.csr.m_extension => multiply_divide(funct3, a, b),
@@ -873,8 +862,10 @@ impl Hart {
                 (5, 0x20) => ((a as i32) >> (b & 31)) as u32,
                 (6, 0) => a | b,
                 (7, 0) => a & b,
-                _ if self.zbs => single_bit_operation(funct3, funct7, a, b).ok_or_else(illegal)?,
-                _ => return Err(illegal()),
+                _ => self
+                    .bitmanip
+                    .register(funct3, funct7, a, b, (insn >> 20) & 31)
+                    .ok_or_else(illegal)?,
             }),
             0x2f if funct3 == 2 && self.csr.a_extension => {
                 let operation = insn >> 27;
@@ -1248,7 +1239,7 @@ mod tests {
         let mut machine = Machine::without_default_ram();
         machine.bus.map_ram(RAM_BASE, 8).unwrap();
         machine.bus.map_plic(PLIC, 52, &[EXTERNAL], true).unwrap();
-        machine.bus.map_ns16550(UART, 3, false).unwrap();
+        machine.bus.map_ns16550(UART, Some(3), false).unwrap();
         machine.primary.set_mtvec(HANDLER);
         machine.primary.csr.access(0x3040_9073, EXTERNAL).unwrap();
         machine.primary.csr.access(0x3000_9073, 1 << 3).unwrap();
