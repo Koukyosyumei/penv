@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 510 | 297 | 0 | 213 | 240 |
+| Renode | 510 | 299 | 0 | 211 | 240 |
 | Infrastructure | 217 | 50 | 0 | 167 | 7 |
-| **合計** | **727** | **347** | **0** | **380** | **247** |
+| **合計** | **727** | **349** | **0** | **378** | **247** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 380 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 378 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -1363,3 +1363,14 @@ STM32 CAN に適用します。未知モデルの能力と複数宛先の検証�
 範囲検証手順で `work=target/stm32f407-repl-creation-cycles` を使い、最後に
 `run using tests/stm32f407-repl-using.sh` を加えます。
 `cargo-test.log` の `renode_dependency_` 4 行がケース別結果です。
+
+### REPL の生成時例外
+
+固定上流の 2 件を移植しました。`platform check` で未登録の
+`MockPeripheralWithDependency` のコンストラクターを処理し、
+トップレベルとインラインオブジェクトのどちらでも元の入力が
+`ConstructionException` を返すことを確認します。
+一般のモデル生成、プロパティ設定と登録時の例外は残課題です。
+
+範囲検証手順で `work=target/stm32f407-repl-construction-errors` を使います。
+`cargo-test.log` の `renode_construction_exception_` 2 行がケース別結果です。

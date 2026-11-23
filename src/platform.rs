@@ -1441,6 +1441,32 @@ fn validate_dependency_constructor(
     Ok(())
 }
 
+fn construct_dependency(entry: &Entry) -> Result<(), String> {
+    let mut throw_exception = false;
+    for (line, statement) in &entry.body {
+        let Some((key, value)) = statement.split_once(':') else {
+            continue;
+        };
+        match key.trim() {
+            "other" if inline_model(statement) == Some(MOCK_DEPENDENCY) => {
+                let child = inline_entry(entry, *line, statement, MOCK_DEPENDENCY);
+                construct_dependency(&child)?;
+            }
+            "throwException" => {
+                let Some(ScalarValue::Boolean(value)) = scalar_value(value) else {
+                    return Err(entry.error("NoCtor: throwException requires a boolean"));
+                };
+                throw_exception = value;
+            }
+            _ => {}
+        }
+    }
+    if throw_exception {
+        return Err(entry.error("ConstructionException: Fake exception"));
+    }
+    Ok(())
+}
+
 const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 
 fn validate_mock_cpu_properties(
@@ -1937,6 +1963,9 @@ fn build_entries_with_scripts(
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
+            MOCK_DEPENDENCY if check_only && entry.registration.is_none() => {
+                construct_dependency(entry)?;
+            }
             MOCK_CPU if check_only && entry.registration.is_none() => {
                 // This upstream fixture has no execution role when unregistered.
                 keys(entry, &["OtherCpu", "Placeholder", "EnumValue"])?;
@@ -2166,7 +2195,7 @@ fn build_entries_with_scripts(
             entry.name == "sysbus"
                 || matches!(
                     entry.model.as_str(),
-                    EMPTY_PERIPHERAL | MOCK_EXTERNAL | MOCK_CPU
+                    EMPTY_PERIPHERAL | MOCK_EXTERNAL | MOCK_CPU | MOCK_DEPENDENCY
                 )
         })
     {

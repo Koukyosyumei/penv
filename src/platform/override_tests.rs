@@ -1749,3 +1749,19 @@ fn renode_dependency_missing() {
     let error = check_string("\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: nonExististing", None).unwrap_err();
     assert!(error.contains("MissingReference:"), "{error}");
 }
+
+#[test]
+fn renode_construction_exception_from_entry() {
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    throwException: true";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("ConstructionException:"), "{error}");
+    assert!(error.contains("Fake exception"), "{error}");
+}
+
+#[test]
+fn renode_construction_exception_from_inline_object() {
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n        throwException: true";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("ConstructionException:"), "{error}");
+    assert!(error.contains("Fake exception"), "{error}");
+}
