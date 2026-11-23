@@ -36,11 +36,10 @@ run_case() {
         mv "$cache/$file.part" "$cache/$file"
     fi
     printf '%s  %s\n' "${file##*-}" "$cache/$file" | sha1sum --check
-    if [ "$platform" = arguments ]; then
-        set -- --script "$out/arguments.resc" "$@"
-    else
-        set -- --platform "$out/$platform.repl" "$@"
-    fi
+    case "$platform" in
+        *.resc) set -- --script "$out/$platform" "$@" ;;
+        *) set -- --platform "$out/$platform.repl" "$@" ;;
+    esac
     "$penv" run "$@" --max-steps 100000 "$cache/$file" \
         >"$out/$label.stdout" 2>"$out/$label.stderr"
     cat "$out/$label.stdout" "$out/$label.stderr"
@@ -128,5 +127,33 @@ cpu.semihosting ProgramArguments "hello world"
 RESC
 run_case NO-ARGV NO-ARGV console "$application" 0
 for operation in GET-CMDLINE ARGV; do
-    run_case "$operation" "$operation" arguments "$application" 0
+    run_case "$operation" "$operation" arguments.resc "$application" 0
 done
+
+for operation in OPEN CLOSE ERRNO REMOVE READ SEEK FLEN ISTTY ISERROR; do
+    work=$(mktemp -d "$out/$operation.XXXXXXXX")
+    cat >"$out/$operation.resc" <<RESC
+mach create
+machine LoadPlatformDescription @console.repl
+sysbus LoadELF @firmware.elf
+cpu.semihosting WorkingDirectory @${work##*/}
+RESC
+    run_case "$operation" "$operation" "$operation.resc" "$application" 0
+done
+
+for label in TMPNAM TMPNAM-custom; do
+    work=$(mktemp -d "$out/$label.XXXXXXXX")
+    mkdir "$work/semi"
+    cat >"$out/$label.resc" <<RESC
+mach create
+machine LoadPlatformDescription @console.repl
+sysbus LoadELF @firmware.elf
+cpu.semihosting WorkingDirectory @${work##*/}/semi
+RESC
+    if [ "$label" = TMPNAM-custom ]; then
+        echo 'cpu.semihosting TemporaryFilesDirectory "my-temp"' >>"$out/$label.resc"
+    fi
+    run_case TMPNAM "$label" "$label.resc" "$application" 0
+done
+grep -Eq '^cpu.semihosting: SYS_TMPNAM: Created temporary files directory at: .*/semi/my-temp$' \
+    "$out/TMPNAM-custom.stderr"

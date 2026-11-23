@@ -383,6 +383,8 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_irqs = Vec::new();
     let mut performance_in_mips = None;
     let mut semihosting_arguments = None;
+    let mut semihosting_directory = None;
+    let mut semihosting_temporary_directory = None;
     if let Some(script) = script {
         if platform_path.is_some() || raw || hex {
             return Err("--script cannot be combined with --platform, --raw, or --hex".into());
@@ -416,6 +418,8 @@ fn run() -> Result<ExitCode, String> {
         uart_irqs = boot.uart_irqs;
         performance_in_mips = boot.performance_in_mips;
         semihosting_arguments = boot.semihosting_arguments;
+        semihosting_directory = boot.semihosting_directory;
+        semihosting_temporary_directory = boot.semihosting_temporary_directory;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -447,6 +451,22 @@ fn run() -> Result<ExitCode, String> {
             .as_mut()
             .ok_or("ProgramArguments requires a semihosting handler")?;
         handler.program_arguments = arguments;
+    }
+    if let Some(directory) = semihosting_directory {
+        let handler = machine
+            .bus
+            .semihosting
+            .as_mut()
+            .ok_or("WorkingDirectory requires a semihosting handler")?;
+        handler.working_directory = Some(directory);
+    }
+    if let Some(directory) = semihosting_temporary_directory {
+        let handler = machine
+            .bus
+            .semihosting
+            .as_mut()
+            .ok_or("TemporaryFilesDirectory requires a semihosting handler")?;
+        handler.temporary_files_directory = Some(directory);
     }
     if let Some(mips) = performance_in_mips {
         if ble_peer.is_some() && mips != 100 {

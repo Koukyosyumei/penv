@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 61 | 4 | 125 |
+| 監査した共有・混成 Robot | 190 | 72 | 4 | 114 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **78** | **4** | **139** |
+| 合計 | **221** | **89** | **4** | **128** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -167,4 +167,12 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 今回の `cargo-test`、`elf`、`shell` のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting-input.SGkGZfKh/` に保存した。
 
-同スイートの対象25構成は14件が合格し、残る11件はホスト作業ディレクトリ内のファイル操作、一時ファイル、操作別エラー判定を必要とする。阻害点は TSV の `verification` 欄を参照。
+同スイートの残る11構成は下記のファイル操作の回帰で扱う。
+
+### semihosting のファイル操作と一時ディレクトリ
+
+上記のスクリプトに固定 ELF の11構成を追加した。各実行は個別の作業ディレクトリを RESC の `cpu.semihosting WorkingDirectory` で指定する。OPEN、CLOSE、ERRNO、REMOVE、READ、SEEK、FLEN、ISTTY、ISERROR、TMPNAM の既定と指定ディレクトリの各構成で、上流の終了理由とコード 0 を照合した。指定構成では `TemporaryFilesDirectory "my-temp"` と、上流と同じ `/semi/my-temp` の作成ログも照合した。上記と同じコマンドで再現できる。
+
+ホスト側で明示的に作成した作業ディレクトリを使う。ゲストが指定できるのは、直下の通常ファイルと semihosting の一時ディレクトリ直下の通常ファイル。生成する一時ディレクトリ名の接尾辞はホスト側で割り当てる。上流の固定ケースは接尾辞を判定しない。
+
+今回のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting-files.H1B886nQ/` の `cargo-test.log`、`elf.log`、`shell.log` と対応する `cargo-test.final.status`、`elf.final.status`、`shell.status` に保存した。semihosting の対象25構成はすべて合格した。台帳全体には別スイートの未達128件と部分移植4件が残る。

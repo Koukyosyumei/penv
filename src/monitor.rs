@@ -16,6 +16,8 @@ pub struct Boot {
     pub uart_irqs: Vec<UartIrq>,
     pub performance_in_mips: Option<u32>,
     pub semihosting_arguments: Option<String>,
+    pub semihosting_directory: Option<PathBuf>,
+    pub semihosting_temporary_directory: Option<String>,
 }
 
 pub enum UartIrq {
@@ -156,6 +158,34 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
+        }
+        [
+            "cpu.semihosting" | "sysbus.cpu.semihosting",
+            "TemporaryFilesDirectory",
+            value,
+        ] if boot.platform.is_some() => {
+            let name = resolve(value)?.trim_matches('"');
+            if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '"']) {
+                return Err("expected a single temporary directory name".into());
+            }
+            boot.semihosting_temporary_directory = Some(name.to_owned());
+        }
+        [
+            "cpu.semihosting" | "sysbus.cpu.semihosting",
+            "WorkingDirectory",
+            value,
+        ] if boot.platform.is_some() => {
+            let directory = resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @directory")?;
+            let directory = script.parent().unwrap_or(Path::new(".")).join(directory);
+            let directory = directory
+                .canonicalize()
+                .map_err(|error| format!("{}: {error}", directory.display()))?;
+            if !directory.is_dir() {
+                return Err(format!("{} is not a directory", directory.display()));
+            }
+            boot.semihosting_directory = Some(directory);
         }
         [
             "cpu.semihosting" | "sysbus.cpu.semihosting",
