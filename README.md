@@ -746,3 +746,21 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test upstream_wfe` と `cargo test upstream_basepri` で個別に再現できます。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-wfe.Vp3mSKus` に保存しました。台帳は対象 789 件のうち等価合格 19 件、部分検証 17 件、未達 753 件です。Nucleo の公開割り込み ELF の後続サブテストには、前記の例外理由とユーザーモード分岐の未達が残っています。
+
+### backlog-network-1d4470862620-1
+
+上流 `tests/unit-tests/arm-ge-flag.robot` の固定 Cortex-M7 ケース 6 件を移植しました。Thumb-2 の符号付き・符号なし並列加減算で、各 8/16 ビット演算の結果と GE ビットを更新し、`SEL` が GE に従ってバイトを選択します。APSR の GE を読み出し・書き込みと例外フレームに反映します。命令実装とテストは担当ローカルの nRF52 作業ツリーにある共通部分を参照しました。
+
+各テストは上流と同じ 10 命令を実行し、R4 を照合します。固定上流のアセンブリを Cortex-M7 向けに再アセンブルし、6 件それぞれの 40 バイトと R4 の期待値が移植版と一致することを確認しました。タイトルが `usub8` のケースでは、固定上流本文どおり `ssub8` を実行しています。このケースが符号なしバイト減算のカバレッジを与えるわけではありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test thumb::ge_upstream
+cargo build --release
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+未変更 Nucleo REPL と公開 Zephyr ELF で ADC DMA、暗号サンプル、Blinky、Button の回帰が通過しました。アセンブリ照合、実行ログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ge.aGNitIHh` にあります。台帳は対象 789 件のうち等価合格 25 件、部分検証 17 件、未達 747 件です。

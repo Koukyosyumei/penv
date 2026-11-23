@@ -285,7 +285,9 @@ def triage(row):
     elif suite == 'arm-dsp-examples-cortex-m4.robot':
         status, reason = 'OPEN', '汎用 Cortex-M4F と TrivialUart の CMSIS-DSP ELF。STM32H747 の副コアに適用'
     elif suite == 'arm-ge-flag.robot':
-        status, reason = 'OPEN', '固定 Cortex-M7 の GE フラグ。H7 主コアの命令セットに適用'
+        status, reason = 'PASS', '固定 Cortex-M7 と同じ 10 命令と R4 の期待値を照合。src/thumb/ge_upstream.rs'
+        if '(usub8)' in name:
+            reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
     elif suite == 'MultiCPUTests.cs':
         status, reason = 'OPEN', '汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持'
     elif suite == 'MCAN.robot' and name in {

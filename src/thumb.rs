@@ -22,6 +22,7 @@ pub struct Thumb {
     zero: bool,
     carry: bool,
     overflow: bool,
+    greater_equal: u32,
     active_exception: u8,
     active_exceptions: ActiveExceptions,
     interrupts_masked: bool,
@@ -167,6 +168,7 @@ impl Thumb {
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
             | (u32::from(self.overflow) << 28)
+            | (self.greater_equal << 16)
     }
 
     fn set_apsr(&mut self, value: u32) {
@@ -174,6 +176,7 @@ impl Thumb {
         self.zero = value & (1 << 30) != 0;
         self.carry = value & (1 << 29) != 0;
         self.overflow = value & (1 << 28) != 0;
+        self.greater_equal = if self.thumb2 { (value >> 16) & 15 } else { 0 };
     }
 
     fn uses_psp(&self) -> bool {
@@ -894,6 +897,20 @@ impl Thumb {
                             }
                             r[register] = self.system_read(sysm, r).ok_or_else(unsupported)?;
                         }
+                        (0xf380..=0xf38f, 0x8400..=0x8403 | 0x8800..=0x8803 | 0x8c00..=0x8c03) => {
+                            let register = (inst & 15) as usize;
+                            if matches!(register, 13 | 15) || (!self.thumb2 && low & 0x400 != 0) {
+                                return Err(unsupported());
+                            }
+                            let mut mask = 0;
+                            if low & 0x800 != 0 {
+                                mask |= 0xf000_0000;
+                            }
+                            if low & 0x400 != 0 {
+                                mask |= 0x000f_0000;
+                            }
+                            self.set_apsr((self.apsr() & !mask) | (r[register] & mask));
+                        }
                         (0xf380..=0xf38f, 0x8800..=0x88ff) => {
                             let register = (inst & 15) as usize;
                             if matches!(register, 13 | 15)
@@ -1333,3 +1350,6 @@ mod tests {
         assert_eq!(thumb.active_exception, 0);
     }
 }
+
+#[cfg(test)]
+mod ge_upstream;
