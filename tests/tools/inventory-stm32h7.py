@@ -321,6 +321,15 @@ def triage(row):
         if '(usub8)' in name:
             reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
     elif suite == 'LimitTimerTests.cs' and name in {
+        'ShouldHandleMicrosecondPrecisionTimerEvents',
+        'ShouldHandleSubMicrosecondPrecisionTimerEvents',
+        'ShouldNotFireAlarmWhenInterruptsAreDisabled',
+        'ShouldFireAlarmWhenInterruptsAreEnabled',
+    }:
+        status, reason = 'PASS', '同じ周波数と仮想時間で下降周期を ARR=limit−1 に対応させ、CNT+1、更新イベント数、IRQマスクを照合。src/stm32h7_timer.rs'
+    elif suite == 'LimitTimerTests.cs' and name == 'ShouldSwitchDirectionProperly':
+        status, reason = 'OPEN', '上流は方向変更後に値ゼロへ到達した時点で通知。STM32 TIM の下降更新はゼロからのアンダーフローで発火するため、汎用 LimitTimer の方向変更セマンティクスが必要'
+    elif suite == 'LimitTimerTests.cs' and name in {
         'ShouldBeAscending',
         'ShouldBeDescending',
         'ShouldNotExceedLimitAscending',

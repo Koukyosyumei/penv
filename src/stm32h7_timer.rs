@@ -314,14 +314,15 @@ impl Timer {
         self.advance_steps(1);
     }
 
-    fn advance_steps(&mut self, steps: u32) {
+    fn advance_steps(&mut self, steps: u32) -> u64 {
         if self.registers[0] & CEN == 0 || self.active_arr == 0 {
-            return;
+            return 0;
         }
         let step_hz = u64::from(VIRTUAL_STEPS_PER_SECOND);
         self.phase += u64::from(self.frequency) * u64::from(steps);
         let cycles = self.phase / step_hz;
         self.phase %= step_hz;
+        let mut notifications = 0;
         for _ in 0..cycles {
             if self.divider < self.active_psc {
                 self.divider += 1;
@@ -339,6 +340,7 @@ impl Timer {
                 self.counter = if down { self.active_arr } else { 0 };
                 if self.registers[0] & UDIS == 0 {
                     self.registers[4] |= 1;
+                    notifications += u64::from(self.registers[3] & 1);
                     if self.registers[0] & OPM != 0 {
                         self.registers[0] &= !CEN;
                         break;
@@ -359,6 +361,7 @@ impl Timer {
                 }
             }
         }
+        notifications
     }
 }
 
@@ -380,6 +383,46 @@ mod limit_timer_cases {
 
     fn advance_seconds(timer: &mut Timer, seconds: u32) {
         timer.advance_steps(seconds * VIRTUAL_STEPS_PER_SECOND);
+    }
+
+    fn periodic_downcounter(frequency: u32, period: u32, events_enabled: bool) -> Timer {
+        let mut timer = enabled_timer(frequency, period - 1, true);
+        timer
+            .route(TimerOutput::Update, Stm32Irq::Nvic(28))
+            .unwrap();
+        timer.write(0x0c, u32::from(events_enabled));
+        timer
+    }
+
+    fn assert_precision(frequency: u32, microseconds: u32) {
+        let mut timer = periodic_downcounter(frequency, 4, true);
+        assert_eq!(timer.advance_steps(microseconds), 2);
+        // LimitTimer counts 4..1, while STM32 counts 3..0 for this period.
+        assert_eq!(timer.read(CNT) + 1, 2);
+    }
+
+    #[test]
+    fn upstream_microsecond_precision_events() {
+        assert_precision(1_000_000, 10);
+    }
+
+    #[test]
+    fn upstream_submicrosecond_precision_events() {
+        assert_precision(10_000_000, 1);
+    }
+
+    #[test]
+    fn upstream_alarm_disabled() {
+        let mut timer = periodic_downcounter(1, 10, false);
+        assert_eq!(timer.advance_steps(11 * VIRTUAL_STEPS_PER_SECOND), 0);
+        assert_eq!(timer.interrupts().count(), 0);
+    }
+
+    #[test]
+    fn upstream_alarm_enabled() {
+        let mut timer = periodic_downcounter(1, 10, true);
+        assert_eq!(timer.advance_steps(10 * VIRTUAL_STEPS_PER_SECOND), 1);
+        assert_eq!(timer.interrupts().count(), 1);
     }
 
     #[test]

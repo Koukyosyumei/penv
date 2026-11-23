@@ -1562,3 +1562,23 @@ bash tests/stm32h7-tim8-smoke.sh "$base" timer8
 ```
 
 `cargo test` 207件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果、ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-counter.HiJSBsgZ` にあります。台帳は対象786件のうち等価合格187件、部分検証17件、未達582件です。
+
+### backlog-network-9ee4c5869953-1
+
+STM32 TIM の仮想ステップ処理で、割り込み許可中の更新イベント回数を確認できます。固定上流 `LimitTimerTests.cs` の4件を同じバイナリで実行し、1 MHz で 10 µs と 10 MHz で 1 µs の両方で2イベントと現在値2、1 Hz では割り込み許可の有無に応じた通知を照合しました。上流の下降周期は STM32 の `ARR=limit−1`、現在値は `CNT+1` に対応させています。方向切替ケースは上流がゼロ到達、STM32 TIM がゼロからのアンダーフローで通知するため、汎用 LimitTimer の方向変更セマンティクスが必要です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+`cargo test` 211件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 の3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-events.6PIr5DnN` に保存しました。対象786件のうち等価合格191件、部分検証17件、未達578件です。
