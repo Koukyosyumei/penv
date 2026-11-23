@@ -92,7 +92,7 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ### nRF52840 の段階検証
 
-nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNGと、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
+nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNG、ECBと、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 
 RTC と Watchdog は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。Watchdog は有効な全リロード要求の受理でカウンターを再ロードします。タイムアウト割り込みを有効にした場合は 2 LFCLK サイクル後にリセットします。UART の TX は即時に転送され、CLI 入力は最初に宣言した UART が受信を開始していれば SRAM に転送されます。
 
@@ -111,12 +111,12 @@ target/release/penv run --script "$resc" --platform-root ../renode \
   --asset-dir "$assets" --max-steps 100000
 ```
 
-未変更のスクリプトは、以前停止していた上流 REPL 89 行目の RNG 宣言を通過し、92 行目の `ecb: unsupported platform model "Miscellaneous.NRF52840_ECB"` で終了コード 1 を返します。ECB と EGU のモデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
+未変更のスクリプトは、以前停止していた上流 REPL 92 行目の ECB 宣言を通過し、95 行目の `egu0: unsupported platform model "Miscellaneous.NRF52840_EGU"` で終了コード 1 を返します。EGU モデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
 
 実機ファームウェアの検証では、実装済みの宣言を明示的に選んだ一時 REPL を使用します。`sysbus` の FICR/UICR タグは初期化コードの読み出しに使います。SVD の指定は診断用メタデータとして受理します。
 
 ```sh
-awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|rng|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
+awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|rng|ecb|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
   ../renode/platforms/cpus/nrf52840.repl > "$assets/boot.repl"
 printf 'help\r' > "$assets/help.txt"
 target/release/penv run --platform "$assets/boot.repl" \
@@ -143,7 +143,7 @@ target/release/penv run --platform "$assets/boot.repl" \
   --max-steps 130000000 "$assets/watchdog.elf"
 ```
 
-`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・I²S・PDM・RADIO・RNG 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・I²S・PDM・RADIO・RNG・ECB 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモードです。REPL の NVIC IRQ 3/4 に接続し、アドレス NACK、受信・送信・停止・一時停止イベントと割り込み、繰り返し START、受信時の BB_STOP/BB_SUSPEND に対応します。`Memory.GenericI2cEeprom @ twi1 0x50` のように EEPROM を接続できます。TWIM EasyDMA、スレーブモード、ピン波形とバス速度の再現は未実装です。
 
@@ -221,6 +221,17 @@ tests/nrf52840-rng.sh target/release/penv ../renode
 ```
 
 検証 ELF は最初の値が準備される前の STOP、連続して生成される 2 値と IRQ 13、INTENCLR でマスクした VALRDY、再有効化時の保留割り込み、VALRDY_STOP を確認して `RNG OK` を出力します。Zephyr Shell のリセット回帰にも RNG を含めます。
+
+ECB は `ECBDATAPTR` で指定した SRAM 内の 48 バイトを、16 バイトの鍵、平文、暗号文の順に扱います。START で 1 ブロックの AES-128 暗号化を完了し、ENDECB をラッチします。領域外アクセスでは暗号文を書き込まず、ERRORECB をラッチします。両イベントは NVIC IRQ 14 とプログラマブル PPI に接続できます。転送は同期的に完了するため、STOP で中断できる処理やハードウェアの暗号化レイテンシーはモデル化していません。
+
+```sh
+# clang と ld.lld が必要
+tests/nrf52840-ecb.sh target/release/penv ../renode
+tests/nrf52840-rng.sh target/release/penv ../renode
+tests/nrf52840-shell.sh target/release/penv ../renode "$elf"
+```
+
+検証 ELF は公開の AES-128 ECB ベクトル 2 ブロックをゲスト内で照合し、鍵・平文とバッファ外が保持されること、ENDECB、割り込みのマスクと再有効化、領域外バッファでの ERRORECB を確認して `ECB OK` を出力します。[NIST SP 800-38A F.1.1](https://nvlpubs.nist.gov/nistpubs/legacy/sp/nistspecialpublication800-38a.pdf)
 
 ## 現在の実装範囲
 
