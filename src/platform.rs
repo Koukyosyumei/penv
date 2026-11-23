@@ -1416,10 +1416,10 @@ fn validate_entry_irq_shape(entry: &Entry) -> Result<(), String> {
             vec![IrqEndpoint::Named("")]
         };
         if explicit
-            && !destination.contains('|')
-            && let Some((_, pins)) = destination.split_once('@')
-            && let Ok(pins) = irq_endpoints(pins, 256)
-            && sources.len() != pins.len()
+            && let Ok(destinations) = irq_destinations(destination)
+            && destinations
+                .iter()
+                .any(|target| target.groups.iter().map(Vec::len).sum::<usize>() != sources.len())
         {
             return Err(entry.error("WrongIrqArity: IRQ source and destination counts differ"));
         }
@@ -3017,6 +3017,54 @@ fn irq_range(value: &str, count: u32) -> Result<impl Iterator<Item = u8>, String
             start - offset
         }
     }))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct IrqDestination<'a> {
+    name: &'a str,
+    local: Option<u32>,
+    groups: Vec<Vec<u8>>,
+}
+
+fn irq_destinations(text: &str) -> Result<Vec<IrqDestination<'_>>, String> {
+    text.split('|')
+        .map(|destination| {
+            let (receiver, pins) = destination
+                .split_once('@')
+                .ok_or("expected IRQ receiver pins")?;
+            let receiver = receiver.trim();
+            let (name, local) = match receiver.split_once('#') {
+                Some((name, local)) => (name.trim_end(), Some(number(local.trim())?)),
+                None => (receiver, None),
+            };
+            if !is_repl_identifier(name) {
+                return Err("expected IRQ receiver identifier".into());
+            }
+            let pins = pins.trim();
+            let list = pins
+                .strip_prefix('[')
+                .and_then(|pins| pins.strip_suffix(']'));
+            if list.is_none() && pins.contains(',') {
+                return Err("expected brackets around IRQ list".into());
+            }
+            let groups = list
+                .unwrap_or(pins)
+                .split(',')
+                .map(|pin| {
+                    if pin.contains('-') {
+                        Ok(irq_range(pin, 256)?.collect())
+                    } else {
+                        irq_index(pin, 256).map(|pin| vec![pin])
+                    }
+                })
+                .collect::<Result<_, String>>()?;
+            Ok(IrqDestination {
+                name,
+                local,
+                groups,
+            })
+        })
+        .collect()
 }
 
 fn irq_endpoints(value: &str, count: u32) -> Result<Vec<IrqEndpoint<'_>>, String> {

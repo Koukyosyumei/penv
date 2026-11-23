@@ -1018,3 +1018,113 @@ fn attribute_syntax(source: &str) -> Result<Entry, String> {
     assert_eq!(entries.len(), 1);
     Ok(entries.pop().unwrap())
 }
+
+type ExpectedIrq<'a> = (&'a [IrqEndpoint<'a>], &'a [IrqDestination<'a>]);
+
+fn assert_irq_syntax(source: &str, expected: &[ExpectedIrq<'_>]) {
+    let entry = attribute_syntax(source).unwrap();
+    assert_eq!(entry.body.len(), expected.len());
+    for ((_, text), (sources, destinations)) in entry.body.iter().zip(expected) {
+        let (source, destination) = text.split_once("->").unwrap();
+        let actual = if source.trim().is_empty() {
+            None
+        } else {
+            Some(irq_endpoints(source, 256).unwrap())
+        };
+        assert_eq!(actual.as_deref(), (!sources.is_empty()).then_some(*sources));
+        assert_eq!(irq_destinations(destination).unwrap(), *destinations);
+    }
+}
+
+fn irq_destination<'a>(name: &'a str, local: Option<u32>, groups: &[&[u8]]) -> IrqDestination<'a> {
+    IrqDestination {
+        name,
+        local,
+        groups: groups.iter().map(|group| group.to_vec()).collect(),
+    }
+}
+
+#[test]
+fn renode_irq_syntax_simple() {
+    use IrqEndpoint::{Named, Number};
+    assert_irq_syntax(
+        "\nuart:\n    1 -> pic@2\n    IRQ -> pic@3\n    -> pic@4",
+        &[
+            (&[Number(1)], &[irq_destination("pic", None, &[&[2]])]),
+            (&[Named("IRQ")], &[irq_destination("pic", None, &[&[3]])]),
+            (&[], &[irq_destination("pic", None, &[&[4]])]),
+        ],
+    );
+}
+
+#[test]
+fn renode_irq_syntax_simple_multiplexed() {
+    use IrqEndpoint::{Named, Number};
+    assert_irq_syntax(
+        "\nuart:\n    1 -> pic@2 | pic1@3\n    -> pic2@4 | pic3@5\n    IRQ -> pic4@6 | pic5@7 | pic6@8 | pic7@9",
+        &[
+            (
+                &[Number(1)],
+                &[
+                    irq_destination("pic", None, &[&[2]]),
+                    irq_destination("pic1", None, &[&[3]]),
+                ],
+            ),
+            (
+                &[],
+                &[
+                    irq_destination("pic2", None, &[&[4]]),
+                    irq_destination("pic3", None, &[&[5]]),
+                ],
+            ),
+            (
+                &[Named("IRQ")],
+                &[
+                    irq_destination("pic4", None, &[&[6]]),
+                    irq_destination("pic5", None, &[&[7]]),
+                    irq_destination("pic6", None, &[&[8]]),
+                    irq_destination("pic7", None, &[&[9]]),
+                ],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn renode_irq_syntax_multiplexed_groups() {
+    use IrqEndpoint::{Named, Number};
+    assert_irq_syntax(
+        "\nuart:\n    [1-2, IRQ] -> pic0@[4-6] | pic1@[7-8, 9] | pic2@[10, 11, 12]",
+        &[(
+            &[Number(1), Number(2), Named("IRQ")],
+            &[
+                irq_destination("pic0", None, &[&[4, 5, 6]]),
+                irq_destination("pic1", None, &[&[7, 8], &[9]]),
+                irq_destination("pic2", None, &[&[10], &[11], &[12]]),
+            ],
+        )],
+    );
+}
+
+#[test]
+fn renode_irq_syntax_multi_irq() {
+    use IrqEndpoint::{Named, Number};
+    assert_irq_syntax(
+        "\nuart:\n    [1-3, IRQ] -> pic @ [2-5]",
+        &[(
+            &[Number(1), Number(2), Number(3), Named("IRQ")],
+            &[irq_destination("pic", None, &[&[2, 3, 4, 5]])],
+        )],
+    );
+}
+
+#[test]
+fn renode_irq_syntax_local_receiver() {
+    assert_irq_syntax(
+        "\nuart:\n    1 -> something#3@2",
+        &[(
+            &[IrqEndpoint::Number(1)],
+            &[irq_destination("something", Some(3), &[&[2]])],
+        )],
+    );
+}
