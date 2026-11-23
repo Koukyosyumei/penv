@@ -1790,3 +1790,19 @@ cargo test --locked
 固定 ISA と V だけを除いた ISA は、この共有コミットではどちらも CPU 作成時に拒否されました。ゲスト命令を実行しない `rv32imac` 診断構成では29/29件が通過し、Byte を `0x42` から `0x43` に変更した負例は比較で拒否されました。同じバイナリで公開 Arty ELF の5件が通過し、担当ブランチの Rust テストも91件が通過しました。
 
 台帳の29件は部分移植です。固定 ISA、モニター自身のシンボル解決・比較・エラー応答、実行中の監視とタイムアウトは残っています。上流等価合格は累計174件です。ケース別 JSONL、生成 RESC、負例と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-f89310c-zmfE2z/` に保存しました。
+
+### 固定 RV32 ベクトル構成の一括再現
+
+`riscv-isa-string.robot` の V 指定1件、`riscv-extensions.robot` の V・Zvfh・Zve 指定7件、`riscv-andestar-v5.robot` の RV32 ベクトル32件を一括で確認しました。前二者の期待値は CPU 作成成功です。Andes の32件では、テスト本体を実行する前の CPU 作成だけを確認しました。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$repro/fixed" --vector
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$repro/scalar" --valid
+```
+
+固定40件はすべて CPU 作成時に終了1でした。標準構成は指定のベクトル拡張が利用不可で、Andes 構成は V と各ベンダー拡張が利用不可でした。既存の非ベクトル構成49件と Rust テスト91件は通過しました。同じバイナリで、既存の診断 REPL を使ったベクトル初期化 ELF の UART マーカーと固定 ACT `Sm-00.elf` の完了も確認しました。この実行はベクトルデータ演算を検証しません。
+
+標準ベクトル実行基盤と CPU 型への接続は共有担当への依頼 `riscv-vector-construction-b31f0d7.md` で追跡します。Andes 命令本体は引き続き対象です。台帳の40件は CPU 作成で未達、上流等価合格は累計174件です。生成 REPL、ケース別 JSON、ACT とその他の終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-b31f0d7-whdYNS/` に保存しました。

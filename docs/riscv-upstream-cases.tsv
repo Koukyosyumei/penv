@@ -1913,40 +1913,40 @@ Renode	tests/unit-tests/riscv-andestar-v5.robot	458	Should Handle Scalar BF16 Na
 Renode	tests/unit-tests/riscv-andestar-v5.robot	463	Should Round Scalar BF16 In Every Rounding Mode		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
 Renode	tests/unit-tests/riscv-andestar-v5.robot	475	Should Reject Scalar BF16 With Floating Point Disabled		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
 Renode	tests/unit-tests/riscv-andestar-v5.robot	480	Should Reject Reserved BF16 Rounding Modes		target	ported	fixed RV32 scalar BF16 inputs; PC, full NaN boxing, FFLAGS and illegal traps checked
-Renode	tests/unit-tests/riscv-andestar-v5.robot	489	Should Widen Vector BF16		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvbfhcvt
-Renode	tests/unit-tests/riscv-andestar-v5.robot	498	Should Narrow Vector BF16		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvbfhcvt
+Renode	tests/unit-tests/riscv-andestar-v5.robot	489	Should Widen Vector BF16		target	blocked-cpu	fixed rv32gc_v_xandesvbfhcvt rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	498	Should Narrow Vector BF16		target	blocked-cpu	fixed rv32gc_v_xandesvbfhcvt rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-andestar-v5.robot	504	Should Convert Vector BF16 On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: xandesvbfhcvt  bits=64
-Renode	tests/unit-tests/riscv-andestar-v5.robot	511	Should Restart Int4 Byte Loads At An Odd Element		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsintload
-Renode	tests/unit-tests/riscv-andestar-v5.robot	521	Should Execute VLN8.V		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsintload
-Renode	tests/unit-tests/riscv-andestar-v5.robot	528	Should Execute VLNU8.V		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsintload
-Renode	tests/unit-tests/riscv-andestar-v5.robot	535	Should Mask Packed FP16 Exceptions And Preserve Tail Elements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvpackfph
-Renode	tests/unit-tests/riscv-andestar-v5.robot	547	Should Execute VFPMADT		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvpackfph
-Renode	tests/unit-tests/riscv-andestar-v5.robot	553	Should Preserve Packed FP16 Zero Signs		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvpackfph
-Renode	tests/unit-tests/riscv-andestar-v5.robot	560	Should Execute VFPMADB		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvpackfph
-Renode	tests/unit-tests/riscv-andestar-v5.robot	566	Should Execute VD4DOTS.VV		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvdot
-Renode	tests/unit-tests/riscv-andestar-v5.robot	573	Should Execute VD4DOTSU.VV		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvdot
-Renode	tests/unit-tests/riscv-andestar-v5.robot	580	Should Execute VD4DOTU.VV		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvdot
-Renode	tests/unit-tests/riscv-andestar-v5.robot	587	Should Convert And Extend Both Nibbles Of Packed Bytes		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	600	Should Execute VFWCVT.F.N.V		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	606	Should Execute VFWCVT.F.NU.V		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	612	Should Execute VFWCVT.F.B.V		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	618	Should Execute VFWCVT.F.BU.V		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	624	Should Extend Nibbles With VZEXT.VF2		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	630	Should Extend Nibbles With VSEXT.VF2		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	636	Should Extend Nibbles With VZEXT.VF4		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	642	Should Extend Nibbles With VSEXT.VF4		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	648	Should Extend Nibbles With VZEXT.VF8		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	654	Should Extend Nibbles With VSEXT.VF8		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
-Renode	tests/unit-tests/riscv-andestar-v5.robot	660	Should Execute VLE4		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvsinth
+Renode	tests/unit-tests/riscv-andestar-v5.robot	511	Should Restart Int4 Byte Loads At An Odd Element		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	521	Should Execute VLN8.V		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	528	Should Execute VLNU8.V		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	535	Should Mask Packed FP16 Exceptions And Preserve Tail Elements		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	547	Should Execute VFPMADT		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	553	Should Preserve Packed FP16 Zero Signs		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	560	Should Execute VFPMADB		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	566	Should Execute VD4DOTS.VV		target	blocked-cpu	fixed rv32gc_v_xandesvdot rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	573	Should Execute VD4DOTSU.VV		target	blocked-cpu	fixed rv32gc_v_xandesvdot rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	580	Should Execute VD4DOTU.VV		target	blocked-cpu	fixed rv32gc_v_xandesvdot rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	587	Should Convert And Extend Both Nibbles Of Packed Bytes		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	600	Should Execute VFWCVT.F.N.V		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	606	Should Execute VFWCVT.F.NU.V		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	612	Should Execute VFWCVT.F.B.V		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	618	Should Execute VFWCVT.F.BU.V		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	624	Should Extend Nibbles With VZEXT.VF2		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	630	Should Extend Nibbles With VSEXT.VF2		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	636	Should Extend Nibbles With VZEXT.VF4		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	642	Should Extend Nibbles With VSEXT.VF4		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	648	Should Extend Nibbles With VZEXT.VF8		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	654	Should Extend Nibbles With VSEXT.VF8		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	660	Should Execute VLE4		target	blocked-cpu	fixed rv32gc_v_xandesvsinth rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-andestar-v5.robot	667	Should Truncate Quad MAC Scalars On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: xandesvqmac  bits=64
-Renode	tests/unit-tests/riscv-andestar-v5.robot	677	Should Advertise Quad MAC Configuration Registers		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	687	Should Execute VQMACCU VV		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	693	Should Execute VQMACCU VX		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	699	Should Execute VQMACC VV		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	705	Should Execute VQMACC VX		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	711	Should Execute VQMACCUS VX		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	717	Should Execute VQMACCSU VV		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
-Renode	tests/unit-tests/riscv-andestar-v5.robot	723	Should Execute VQMACCSU VX		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: xandesvqmac
+Renode	tests/unit-tests/riscv-andestar-v5.robot	677	Should Advertise Quad MAC Configuration Registers		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	687	Should Execute VQMACCU VV		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	693	Should Execute VQMACCU VX		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	699	Should Execute VQMACC VV		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	705	Should Execute VQMACC VX		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	711	Should Execute VQMACCUS VX		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	717	Should Execute VQMACCSU VV		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	723	Should Execute VQMACCSU VX		target	blocked-cpu	fixed rv32gc_v_xandesvqmac rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/build/priv/ExceptionsS/ExceptionsS.sig.elf	target	blocked-cpu	upstream CPU creation requires V; fixed-format and ACT packet watchers reach tohost=0 in diagnostic ISA
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/build/priv/ExceptionsSm/ExceptionsSm.sig.elf	target	blocked-cpu	upstream CPU creation requires V; fixed-format and ACT packet watchers reach tohost=0 in diagnostic ISA
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/build/priv/ExceptionsU/ExceptionsU.sig.elf	target	blocked-cpu	upstream CPU creation requires V; fixed-format and ACT packet watchers reach tohost=0 in diagnostic ISA
@@ -2478,13 +2478,13 @@ Renode	tests/unit-tests/riscv-custom-instructions.robot	187	Should Register Cust
 Renode	tests/unit-tests/riscv-ebreak.robot	13	Should Generate Ebreak		target	ported	fixed VexRiscv rv32gc/timeProvider, RAM, LiteX UART and ELF; six ordered UART lines matched
 Renode	tests/unit-tests/riscv-extensions.robot	19	Should Create CPUs With Supported ISAs	RV32I_Smepmp	target	ported	fixed CPU-only RV32I_Smepmp fixture constructs without RAM or firmware
 Renode	tests/unit-tests/riscv-extensions.robot	20	Should Create CPUs With Supported ISAs	RV32I_Sscofpmf	target	ported	fixed CPU-only RV32I_Sscofpmf fixture constructs without RAM or firmware
-Renode	tests/unit-tests/riscv-extensions.robot	21	Should Create CPUs With Supported ISAs	RV32I_V	target	blocked-cpu	fixed CPU-only fixture requires unsupported V
-Renode	tests/unit-tests/riscv-extensions.robot	22	Should Create CPUs With Supported ISAs	RV32I_Zvfh	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zvfh
-Renode	tests/unit-tests/riscv-extensions.robot	23	Should Create CPUs With Supported ISAs	RV32I_Zve32x	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve32x
-Renode	tests/unit-tests/riscv-extensions.robot	24	Should Create CPUs With Supported ISAs	RV32I_Zve32f	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve32f
-Renode	tests/unit-tests/riscv-extensions.robot	25	Should Create CPUs With Supported ISAs	RV32I_Zve64x	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve64x
-Renode	tests/unit-tests/riscv-extensions.robot	26	Should Create CPUs With Supported ISAs	RV32I_Zve64f	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve64f
-Renode	tests/unit-tests/riscv-extensions.robot	27	Should Create CPUs With Supported ISAs	RV32I_Zve64d	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve64d
+Renode	tests/unit-tests/riscv-extensions.robot	21	Should Create CPUs With Supported ISAs	RV32I_V	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension V; vector construction batch
+Renode	tests/unit-tests/riscv-extensions.robot	22	Should Create CPUs With Supported ISAs	RV32I_Zvfh	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension Zvfh; vector construction batch
+Renode	tests/unit-tests/riscv-extensions.robot	23	Should Create CPUs With Supported ISAs	RV32I_Zve32x	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension Zve32x; vector construction batch
+Renode	tests/unit-tests/riscv-extensions.robot	24	Should Create CPUs With Supported ISAs	RV32I_Zve32f	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension Zve32f; vector construction batch
+Renode	tests/unit-tests/riscv-extensions.robot	25	Should Create CPUs With Supported ISAs	RV32I_Zve64x	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension Zve64x; vector construction batch
+Renode	tests/unit-tests/riscv-extensions.robot	26	Should Create CPUs With Supported ISAs	RV32I_Zve64f	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension Zve64f; vector construction batch
+Renode	tests/unit-tests/riscv-extensions.robot	27	Should Create CPUs With Supported ISAs	RV32I_Zve64d	target	blocked-cpu	fixed CPU-only construction rejected with unavailable extension Zve64d; vector construction batch
 Renode	tests/unit-tests/riscv-extensions.robot	29	Should Fail On Unsupported ISA	RV32GC_invalid_ISA	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-external-pmp.robot	106	Should Access All 32-Bit Config Registers From Monitor		target	ported	fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked
 Renode	tests/unit-tests/riscv-external-pmp.robot	109	Should Access All 64-Bit Config Registers From Monitor		outside	outside	Create RV 64 Machine selects CPU.RiscV64 and RiscVExternalPMP
@@ -2513,7 +2513,7 @@ Renode	tests/unit-tests/riscv-isa-string.robot	28	Should Parse All Valid ISA Str
 Renode	tests/unit-tests/riscv-isa-string.robot	29	Should Parse All Valid ISA Strings	rv32gc_xandes	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	30	Should Parse All Valid ISA Strings	RV32GC_Xandes	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	31	Should Parse All Valid ISA Strings	RV32GC_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
-Renode	tests/unit-tests/riscv-isa-string.robot	32	Should Parse All Valid ISA Strings	RV32G_V	target	pending	construction requires V
+Renode	tests/unit-tests/riscv-isa-string.robot	32	Should Parse All Valid ISA Strings	RV32G_V	target	blocked-cpu	fixed RV32G_V construction rejected with unavailable extension v; vector construction batch
 Renode	tests/unit-tests/riscv-isa-string.robot	33	Should Parse All Valid ISA Strings	rv32ia_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	34	Should Parse All Valid ISA Strings	RV32IM	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware
 Renode	tests/unit-tests/riscv-isa-string.robot	35	Should Parse All Valid ISA Strings	RV32IMAC	target	ported	fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware

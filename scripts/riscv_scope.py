@@ -72,7 +72,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
     if filename == "riscv-extensions.robot" and re.fullmatch(
         r"RV32I_(?:V|Zvfh|Zve32[xf]|Zve64[xfd])", parameter
     ):
-        return "target", "blocked-cpu", f"fixed CPU-only fixture requires unsupported {parameter.split('_', 1)[1]}"
+        return "target", "blocked-cpu", f"fixed CPU-only construction rejected with unavailable extension {parameter.split('_', 1)[1]}; vector construction batch"
     if (filename, case) in {
         ("riscv-isa-string.robot", "Should Throw Construction Exception"),
         ("riscv-extensions.robot", "Should Fail On Unsupported ISA"),
@@ -81,7 +81,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
     if filename == "riscv-isa-string.robot" and case == "Should Parse All Valid ISA Strings":
         if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*(?:_xandes)?", parameter.lower()):
             return "target", "ported", "fixed ISA spelling constructs CPU.RiscV32 without RAM or firmware"
-        return "target", "pending", "construction requires V"
+        return "target", "blocked-cpu", "fixed RV32G_V construction rejected with unavailable extension v; vector construction batch"
     if filename in {"riscv-isa-string.robot", "riscv-extensions.robot"} and parameter.lower().startswith("rv32"):
         return "target", status, "CPU.RiscV32 construction keyword; " + (basis or "fixed ISA argument")
     if filename == "pmp.robot":
@@ -163,6 +163,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 "Should Execute FLMISM",
             }:
                 return "target", "ported", "fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF"
+            if bits == "32" and "Create Vector Machine" in selection[0]:
+                return "target", "blocked-cpu", f"fixed rv32gc_v_{arguments.strip()} rejected at CPU construction; vector body unexecuted"
             scope, status = ("target", "pending") if bits == "32" else ("outside", "outside")
             return scope, status, f"Create Machine keyword uses CPU.RiscV{bits}; parameters: {arguments.strip() or 'fixture defaults'}"
     if filename == "riscv-amocas.robot":
