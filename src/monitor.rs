@@ -19,6 +19,8 @@ pub struct Boot {
     pub report_unmapped_data: bool,
     pub pend_hard_fault: bool,
     pub thumb_trace: Option<crate::thumb::trace::TraceConfig>,
+    pub ram_access_logs: Vec<String>,
+    pub ram_io_pages: Vec<(u32, bool)>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
     pub opcode_queries: Vec<String>,
@@ -205,6 +207,21 @@ fn execute(
                 return Err("multiple execution tracers are unsupported".into());
             }
             boot.thumb_trace = Some(crate::thumb::trace::TraceConfig::new(path, format, binary)?);
+        }
+        [
+            "sysbus",
+            command @ ("SetPageAccessViaIo" | "ClearPageAccessViaIo"),
+            address,
+        ] if boot.platform.is_some() => {
+            boot.ram_io_pages.push((
+                crate::parse_address(resolve(address)?)?,
+                *command == "SetPageAccessViaIo",
+            ));
+        }
+        ["sysbus", "LogPeripheralAccess", name] if boot.platform.is_some() => {
+            let name = resolve(name)?;
+            boot.ram_access_logs
+                .push(name.strip_prefix("sysbus.").unwrap_or(name).into());
         }
         ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {
             boot.fault_on_unmapped_data = true;

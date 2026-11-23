@@ -88,6 +88,20 @@ impl Thumb {
         self.vectors.unwrap_or(0)
     }
 
+    pub fn patch_monitor_pc(
+        &mut self,
+        address: u32,
+        cpu: &str,
+        output: &mut impl Write,
+    ) -> Result<u32, String> {
+        if address & 1 == 0 {
+            writeln!(output, "{cpu}: Patching PC {address:#x} for Thumb mode.")
+                .map_err(|error| error.to_string())?;
+        }
+        self.invalid_thumb_state = false;
+        Ok(address & !1)
+    }
+
     pub fn infer_vector_base(&mut self, base: u32) {
         self.vectors.get_or_insert(base);
     }
@@ -904,8 +918,10 @@ impl Thumb {
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
         bus.thumb_unprivileged = self.active_exception == 0 && self.thread_unprivileged;
+        let address = *pc;
         let result = self.step_with_bus_context(pc, r, bus, output);
         bus.thumb_unprivileged = false;
+        bus.write_ram_io_logs(address, output)?;
         result
     }
 

@@ -409,6 +409,8 @@ fn run() -> Result<ExitCode, String> {
     let mut report_unmapped_data = false;
     let mut pend_hard_fault = false;
     let mut thumb_trace = None;
+    let mut ram_access_logs = Vec::new();
+    let mut ram_io_pages = Vec::new();
     let mut opcode_counters = Vec::new();
     let mut opcode_counting = None;
     let mut opcode_queries = Vec::new();
@@ -452,6 +454,8 @@ fn run() -> Result<ExitCode, String> {
         report_unmapped_data = boot.report_unmapped_data;
         pend_hard_fault = boot.pend_hard_fault;
         thumb_trace = boot.thumb_trace;
+        ram_access_logs = boot.ram_access_logs;
+        ram_io_pages = boot.ram_io_pages;
         opcode_counters = boot.opcode_counters;
         opcode_counting = boot.opcode_counting;
         opcode_queries = boot.opcode_queries;
@@ -612,10 +616,17 @@ fn run() -> Result<ExitCode, String> {
         }
         machine.configure_harts(count);
     }
-    for (cpu, address) in boot_pcs {
-        machine.set_named_entry(&cpu, address)?;
+    if !machine.is_cortex_m() {
+        for (cpu, address) in &boot_pcs {
+            machine.set_named_entry(cpu, *address)?;
+        }
     }
     machine.validate_entry()?;
+    if machine.is_cortex_m() {
+        for (cpu, address) in boot_pcs {
+            machine.set_cortex_m_monitor_pc(&cpu, address, &mut io::stderr().lock())?;
+        }
+    }
 
     if !opcode_counters.is_empty()
         || opcode_counting.is_some()
@@ -637,6 +648,17 @@ fn run() -> Result<ExitCode, String> {
         }
         for name in &opcode_queries {
             machine.bus.thumb_opcodes.get(name)?;
+        }
+    }
+    if !ram_access_logs.is_empty() || !ram_io_pages.is_empty() {
+        if !machine.has_cortex_m4() || ble_peer.is_some() {
+            return Err("RAM I/O logging requires a single Cortex-M4 machine".into());
+        }
+        for name in ram_access_logs {
+            machine.bus.log_ram_access(&name)?;
+        }
+        for (address, enabled) in ram_io_pages {
+            machine.bus.set_page_access_via_io(address, enabled);
         }
     }
     if let Some(config) = thumb_trace {

@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 117 | 5 | 68 |
+| 監査した共有・混成 Robot | 190 | 118 | 5 | 67 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **134** | **5** | **82** |
+| 合計 | **221** | **135** | **5** | **81** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -365,3 +365,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/trivial-peripheral.5zdZpD0O/` の `cargo-test`、`elf.final`、`bus-fault`、`shell` に保存した。バス分離の reader 群は、固定フィクスチャの複数 initiator、状態付きバスアクセス、アドレスの重複登録を必要とする。阻害点は台帳に記録した。
+
+### RAM ページの I/O 読み出し観測
+
+`page-access-via-io.robot:76–125` を移植した。上流の PC 補正ログ、固定3ページ、`ldr r0, [r1]`、9段階の切り替え順を保持し、27回の読み出しでログが出る場合と出ない場合を照合した。現行 CPU は RAM をバス経由で読み出すため、ページの設定により、その読み出しを I/O としてログに記録する。RESC では開始前の設定・解除に対応し、生成 ELF で最終段階のログを確認した。実行中の対話型 monitor と書き込みログは範囲外。
+
+```sh
+cargo test
+tests/nrf52840-page-access-io-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/page-access-io"
+tests/nrf52840-conditional-vtor-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/conditional-vtor"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/page-access-io.MGmulTNi/` の `cargo-test.verified`、`elf.verified`、`vtor`、`shell.verified` に保存した。

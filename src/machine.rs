@@ -202,6 +202,24 @@ impl Machine {
         Ok(())
     }
 
+    pub fn set_cortex_m_monitor_pc(
+        &mut self,
+        name: &str,
+        entry: u32,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        if self.primary.name.as_deref() != Some(name) {
+            return Err(format!("unknown CPU {name:?}"));
+        }
+        let thumb = self
+            .primary
+            .thumb
+            .as_mut()
+            .ok_or("expected a Cortex-M CPU")?;
+        self.primary.pc = thumb.patch_monitor_pc(entry, name, output)?;
+        Ok(())
+    }
+
     pub fn set_entry(&mut self, entry: u32) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             hart.pc = entry;
@@ -920,6 +938,71 @@ mod tests {
             .thumb_write(dhcsr, 4, u32::MAX, &mut out)
             .unwrap();
         assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_sets_and_clears_page_access_via_io() {
+        const PC: u32 = 0x800000;
+        const PAGES: [u32; 3] = [0x31000000, 0x32000000, 0x33000000];
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(PC, 0x40000).unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(PC), true);
+        machine
+            .bus
+            .write(PC, 2, 0x6808, &mut std::io::sink())
+            .unwrap();
+        for (index, page) in PAGES.into_iter().enumerate() {
+            let name = format!("test_mem{}", index + 1);
+            machine.bus.map_named_ram(&name, page, 0x1000).unwrap();
+            machine.bus.log_ram_access(&name).unwrap();
+        }
+        machine.primary.name = Some("cpu".into());
+        let mut setup = Vec::new();
+        machine
+            .set_cortex_m_monitor_pc("cpu", PC, &mut setup)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(setup).unwrap(),
+            "cpu: Patching PC 0x800000 for Thumb mode.\n"
+        );
+        let phases: &[(&[(usize, bool)], u8)] = &[
+            (&[], 0),
+            (&[(0, true)], 1),
+            (&[(1, true)], 3),
+            (&[(2, true)], 7),
+            (&[(0, false)], 6),
+            (&[(1, false)], 4),
+            (&[(2, false)], 0),
+            (&[(1, true)], 2),
+            (&[(0, true), (1, false), (2, true)], 5),
+        ];
+        for (changes, expected_pages) in phases {
+            for &(index, enabled) in *changes {
+                machine.bus.set_page_access_via_io(PAGES[index], enabled);
+            }
+            for (index, page) in PAGES.into_iter().enumerate() {
+                machine.primary.registers[1] = page;
+                machine
+                    .set_cortex_m_monitor_pc("cpu", PC, &mut std::io::sink())
+                    .unwrap();
+                let mut output = Vec::new();
+                assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+                assert_eq!(machine.primary.registers[0], 0);
+                if expected_pages & (1 << index) == 0 {
+                    assert!(output.is_empty());
+                } else {
+                    assert_eq!(
+                        String::from_utf8(output).unwrap(),
+                        format!(
+                            "test_mem{}: [cpu: 0x800000] ReadUInt32 from 0x0 (unknown), returned 0x0\n",
+                            index + 1
+                        )
+                    );
+                }
+            }
+        }
     }
 
     #[test]

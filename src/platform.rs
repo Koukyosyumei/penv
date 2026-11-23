@@ -433,7 +433,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 } else {
                     machine
                         .bus
-                        .map_ram(entry.address()?, size)
+                        .map_named_ram(&entry.name, entry.address()?, size)
                         .map_err(|e| entry.error(&e))?;
                 }
                 ram = true;

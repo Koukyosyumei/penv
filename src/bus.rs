@@ -1,5 +1,6 @@
 use std::{
     alloc::{Layout, alloc_zeroed},
+    collections::BTreeSet,
     fmt,
     io::{self, Write},
 };
@@ -81,6 +82,8 @@ struct Region {
     bytes: Vec<u8>,
     aliases: Vec<u32>,
     privileged: bool,
+    name: Option<String>,
+    log_access: bool,
 }
 
 const FAULTING_PERIPHERAL_SIZE: usize = 0x1000;
@@ -109,6 +112,13 @@ impl FaultingPeripheral {
     }
 }
 
+struct RamIoRead {
+    name: String,
+    offset: usize,
+    width: usize,
+    value: u32,
+}
+
 #[derive(Default)]
 pub struct Bus {
     pub thumb_trace: Option<crate::thumb::trace::Trace>,
@@ -116,6 +126,8 @@ pub struct Bus {
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
     pub semihosting: Option<crate::semihosting::Semihosting>,
     regions: Vec<Region>,
+    ram_io_pages: BTreeSet<u32>,
+    ram_io_logs: Vec<RamIoRead>,
     faulting_peripherals: Vec<FaultingPeripheral>,
     thumb_data_fault: Option<u32>,
     pub thumb_negative_priority: bool,
@@ -181,6 +193,8 @@ impl Region {
             bytes,
             aliases: Vec::new(),
             privileged: false,
+            name: None,
+            log_access: false,
         })
     }
 
@@ -304,6 +318,67 @@ impl Bus {
     pub fn map_privileged_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
         self.map_ram(base, size)?;
         self.regions.last_mut().unwrap().privileged = true;
+        Ok(())
+    }
+
+    pub fn map_named_ram(&mut self, name: &str, base: u32, size: usize) -> Result<(), String> {
+        self.map_ram(base, size)?;
+        self.regions.last_mut().unwrap().name = Some(name.into());
+        Ok(())
+    }
+
+    pub fn log_ram_access(&mut self, name: &str) -> Result<(), String> {
+        let region = self
+            .regions
+            .iter_mut()
+            .find(|region| region.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("no named RAM peripheral {name:?}"))?;
+        region.log_access = true;
+        Ok(())
+    }
+
+    pub fn set_page_access_via_io(&mut self, address: u32, enabled: bool) {
+        let page = address & !0xfff;
+        if enabled {
+            self.ram_io_pages.insert(page);
+        } else {
+            self.ram_io_pages.remove(&page);
+        }
+    }
+
+    fn log_ram_io_read(&mut self, address: u32, width: usize, value: u32) {
+        if self.ram_io_pages.contains(&(address & !0xfff))
+            && let Some((name, offset)) = self.regions.iter().find_map(|region| {
+                if !region.log_access {
+                    return None;
+                }
+                Some((region.name.as_deref()?, region.offset(address, width)?))
+            })
+        {
+            self.ram_io_logs.push(RamIoRead {
+                name: name.into(),
+                offset,
+                width,
+                value,
+            });
+        }
+    }
+
+    pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
+        for RamIoRead {
+            name,
+            offset,
+            width,
+            value,
+        } in self.ram_io_logs.drain(..)
+        {
+            writeln!(
+                output,
+                "{name}: [cpu: {pc:#x}] ReadUInt{} from {offset:#x} (unknown), returned {value:#x}",
+                width * 8
+            )
+            .map_err(|error| format!("RAM I/O log: {error}"))?;
+        }
         Ok(())
     }
 
@@ -1620,16 +1695,19 @@ impl Bus {
         {
             return Ok(0);
         }
-        if address as usize & (N - 1) != 0
+        let value = if address as usize & (N - 1) != 0
             && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
             && let Ok(slice) = self.memory_slice(address, N)
         {
             let mut value = [0; 4];
             value[..N].copy_from_slice(slice);
-            return Ok(u32::from_le_bytes(value));
-        }
-        self.read::<N>(address)
-            .or_else(|error| self.thumb_data_error(error, false))
+            u32::from_le_bytes(value)
+        } else {
+            self.read::<N>(address)
+                .or_else(|error| self.thumb_data_error(error, false))?
+        };
+        self.log_ram_io_read(address, N, value);
+        Ok(value)
     }
 
     pub fn thumb_write(
