@@ -9,7 +9,7 @@ const SPIE: u64 = 1 << 5;
 const MPIE: u64 = 1 << 7;
 const SPP: u64 = 1 << 8;
 const MPP: u64 = 3 << 11;
-const VS: u64 = 3 << 9;
+pub(crate) const VS: u64 = 3 << 9;
 pub const FS: u64 = 3 << 13;
 const MPRV: u64 = 1 << 17;
 pub const SUM: u64 = 1 << 18;
@@ -126,6 +126,7 @@ pub struct Privilege {
     pub bpm: Option<u64>,
     pub fcsr: u8,
     pub(crate) vector: Option<Box<VectorState>>,
+    pub(crate) andes_bfloat16: bool,
     machine: Trap,
     supervisor: Trap,
     medeleg: u64,
@@ -298,6 +299,7 @@ impl Privilege {
 
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         Some(match name {
+            "vstart" => return self.vector.as_ref()?.read(0x008),
             "mstatus" => self.status,
             "mepc" => self.machine.epc,
             "mcause" => self.machine.cause,
@@ -364,6 +366,18 @@ impl Privilege {
             0x310 => return None,
             0x320 => self.inhibit,
             0x344 => self.pending(),
+            0xfc2 if self.andes_bfloat16 => {
+                (1 << 32) | (u64::from(self.vector.is_some()) << 36) | 0x10020
+            }
+            0xfc7 if self.andes_bfloat16 => {
+                if self.vector.is_none() || misa & (1 << 5) == 0 {
+                    0
+                } else if misa & (1 << 3) != 0 {
+                    3 << 16
+                } else {
+                    2 << 16
+                }
+            }
             0x747 => u64::from(self.pmp.as_ref()?.mseccfg?),
             0x7c0 => self.bpm?,
             0xb00 => self.cycle,

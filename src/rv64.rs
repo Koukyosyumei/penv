@@ -44,6 +44,7 @@ pub struct Isa {
     zicboz: bool,
     xandesperf: bool,
     xandesbfhcvt: bool,
+    xandesvbfhcvt: bool,
     pub cas: bool,
     pub smepmp: bool,
     bitmanip: bitmanip::Extensions,
@@ -92,6 +93,10 @@ impl Isa {
                     isa.xandesbfhcvt = true;
                     isa.single = true;
                 }
+                "xandesvbfhcvt" => {
+                    isa.xandesvbfhcvt = true;
+                    isa.vector = true;
+                }
                 extension if isa.bitmanip.enable(extension) => {}
                 _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
             }
@@ -124,6 +129,7 @@ impl Isa {
         zicboz: false,
         xandesperf: false,
         xandesbfhcvt: false,
+        xandesvbfhcvt: false,
         cas: false,
         smepmp: false,
         bitmanip: bitmanip::Extensions::NONE,
@@ -172,6 +178,7 @@ impl Rv64 {
     pub fn new(isa: Isa) -> Self {
         let mut privilege = Privilege::default();
         privilege.zicboz = isa.zicboz;
+        privilege.andes_bfloat16 = isa.xandesbfhcvt || isa.xandesvbfhcvt;
         privilege.vector = isa.vector.then(Box::<vector::VectorState>::default);
         Self {
             hart_id: 0,
@@ -570,6 +577,10 @@ impl Rv64 {
                     })
                 }
             }
+            0x5b if self.isa.xandesvbfhcvt && instruction & 0xfe0f_707f == 0x0000_405b => {
+                self.andes_vector_bfloat16(fields, instruction & (1 << 15) != 0)?;
+                None
+            }
             0x5b if self.isa.xandesbfhcvt && instruction & 0xfe0f_707f == 0x0001_405b => {
                 self.andes_scalar_bfloat16(fields, instruction & (1 << 15) != 0)?
             }
@@ -608,6 +619,10 @@ impl Rv64 {
                 None
             }
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
+            0x07 | 0x27 if self.isa.vector && matches!(fields.funct3(), 0 | 5..=7) => {
+                self.vector_unit_stride(fields, lhs, bus, output)?;
+                None
+            }
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
                 self.floating_instruction(fields, bus, output)?
             }

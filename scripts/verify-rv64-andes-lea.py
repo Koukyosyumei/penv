@@ -18,7 +18,7 @@ CASES = {
 }
 
 
-def verify(args, platform, label, commands, expected):
+def verify(args, platform, label, commands, expected, memory=()):
     result = subprocess.run(
         [args.penv, "run", "--platform", platform, "--max-steps", "0", *commands],
         capture_output=True, text=True, timeout=30,
@@ -28,18 +28,19 @@ def verify(args, platform, label, commands, expected):
     observed = [(name, int(value, 16)) for name, value in re.findall(
         r"^penv: register cpu@(\w+) = (0x[0-9a-f]+)$", result.stderr, re.M
     )]
-    if result.returncode or result.stdout or observed != expected:
+    if (result.returncode or result.stdout or observed != expected
+            or any(line not in result.stderr for line in memory)):
         args.failures.append(label)
         print(f"FAIL {label}: expected {expected!r}, got {result.stderr}")
         return
     print(f"PASS {label}")
 
 
-def write_platform(path, isa):
+def write_platform(path, isa, properties=""):
     path.write_text(f"""cpu: CPU.RiscV64 @ sysbus
     cpuType: "{isa}"
     timeProvider: empty
-mem: Memory.MappedMemory @ sysbus 0x0
+{properties}mem: Memory.MappedMemory @ sysbus 0x0
     size: 0x100000
 """)
 
@@ -70,6 +71,54 @@ def verify_bits(args, platform, tests, step):
                      *step, "--read-register-now", "cpu@x12"]
         expected += [("pc", 0x2004), ("x12", int(rd, 16))]
     verify(args, platform, case, commands, expected)
+
+
+def verify_vector_bfloat16(args, tests, step):
+    platform = args.logs / "andestar-vector-bfloat16.repl"
+    write_platform(platform, "rv64gc_v_xandesvbfhcvt", "    vectorRegisterLength: 128\n")
+    case = "Should Convert Vector BF16 On RV64"
+    commands = ["--set-mstatus", "cpu:0x2200"]
+    expected = []
+    memory = []
+
+    def execute(word):
+        commands.extend(("--write-memory", f"0x2000:4:{word:#x}", *step))
+        expected.append(("pc", 0x2004))
+
+    def configure(width):
+        sew = {16: 1, 32: 2}[width]
+        execute(0xc0000000 | sew << 23 | 1 << 15 | 7 << 12 | 5 << 7 | 0x57)
+
+    for csr, mask, value in [line.split()[3:] for line in tests[case].splitlines()
+                             if line.split()[:3] == ["Check", "CSR", "Bits"]]:
+        execute(int(csr, 0) << 20 | 2 << 12 | 12 << 7 | 0x73)
+        # The fixed default cache/stack bits are the only additional set bits.
+        expected.append(("x12", int(value, 0) | (0x10020 if int(mask, 0) == 0x1100000000 else 0)))
+        commands.extend(("--read-register-now", "cpu@x12"))
+
+    rows = [line.split()[3:] for line in tests[case].splitlines()
+            if line.split()[:3] == ["Check", "Vector", "Unary"]]
+    if len(rows) != 2:
+        raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+    for mnemonic, sew, source_width, target_width, source, value, *flags in rows:
+        source_width, target_width = int(source_width), int(target_width)
+        commands.extend(("--write-memory", f"0x4000:{source_width // 8}:{source}",
+                         "--set-gpr", "cpu@x10:0x4000"))
+        configure(source_width)
+        execute(1 << 25 | 10 << 15 | {16: 5, 32: 6}[source_width] << 12 | 8 << 7 | 0x07)
+        configure(int(sew))
+        execute(0x00305073)
+        function = {"nds.vfwcvt.s.bf16": 0, "nds.vfncvt.bf16.s": 1}[mnemonic]
+        execute(8 << 20 | function << 15 | 4 << 12 | 12 << 7 | 0x5b)
+        commands.extend(("--read-register-now", "cpu@fflags", "--read-register-now", "cpu@vstart",
+                         "--set-gpr", "cpu@x10:0x5000",
+                         "--write-memory", f"0x5000:{target_width // 8}:0xffff"))
+        expected.extend((("fflags", int(flags[0]) if flags else 0), ("vstart", 0)))
+        configure(target_width)
+        execute(1 << 25 | 10 << 15 | {16: 5, 32: 6}[target_width] << 12 | 12 << 7 | 0x27)
+        commands.extend(("--read-memory-now", f"0x5000:{target_width // 8}"))
+        memory.append(f"penv: memory sysbus@{0x5000:#018x}:{target_width // 8} = {int(value, 0):#018x}")
+    verify(args, platform, case, commands, expected, memory)
 
 
 def verify_scalar_bfloat16(args, tests, step):
@@ -194,6 +243,7 @@ def main():
     verify_gp(args, platform, tests, step)
     verify_byte_search(args, platform, tests, step)
     verify_scalar_bfloat16(args, tests, step)
+    verify_vector_bfloat16(args, tests, step)
 
     base = args.logs / "base.repl"
     write_platform(base, "rv64imac")

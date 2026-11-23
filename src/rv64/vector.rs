@@ -141,3 +141,143 @@ impl VectorState {
         Some(())
     }
 }
+
+use super::{Fault, Instruction, Rv64};
+use crate::{
+    bus::Bus,
+    rv64_float::{Format, Rounding},
+    rv64_priv::{FS, VS},
+};
+use std::{io::Write, ops::Range};
+
+impl VectorState {
+    fn sew_log_bytes(&self) -> u32 {
+        ((self.kind >> 3) & 7) as u32
+    }
+
+    fn log_multiplier(&self) -> i32 {
+        let encoding = (self.kind & 7) as i32;
+        if encoding >= 4 {
+            encoding - 8
+        } else {
+            encoding
+        }
+    }
+
+    fn group(&self, register: usize, multiplier: i32) -> Option<Range<usize>> {
+        if !(-3..=3).contains(&multiplier) {
+            return None;
+        }
+        let registers = 1 << multiplier.max(0);
+        if register % registers != 0 || register + registers > 32 {
+            return None;
+        }
+        let bytes = (self.bits / 8) as usize;
+        let start = register * bytes;
+        let length = (bytes << multiplier.max(0)) >> (-multiplier).max(0);
+        Some(start..start + length)
+    }
+}
+
+impl Rv64 {
+    pub(super) fn andes_vector_bfloat16(
+        &mut self,
+        inst: Instruction,
+        narrow: bool,
+    ) -> Result<(), Fault> {
+        let illegal = || Fault::new(2, u64::from(inst.0));
+        if !self.isa.single || self.privilege.status & VS == 0 || self.privilege.status & FS == 0 {
+            return Err(illegal());
+        }
+        let vector = self.privilege.vector.as_mut().ok_or_else(illegal)?;
+        if vector.kind == VILL || vector.sew_log_bytes() != 1 {
+            return Err(illegal());
+        }
+        let lmul = vector.log_multiplier();
+        let (source, destination, rounding) = if narrow {
+            (
+                Format::Single,
+                Format::BFloat16,
+                Rounding::decode(7, self.privilege.fcsr).ok_or_else(illegal)?,
+            )
+        } else {
+            (Format::BFloat16, Format::Single, Rounding::NearestEven)
+        };
+        let src = vector
+            .group(inst.rs2(), lmul + i32::from(narrow))
+            .ok_or_else(illegal)?;
+        let dst = vector
+            .group(inst.rd(), lmul + i32::from(!narrow))
+            .ok_or_else(illegal)?;
+        if src.start < dst.end
+            && dst.start < src.end
+            && !(if narrow {
+                src.start == dst.start
+            } else {
+                lmul >= 0 && src.end == dst.end
+            })
+        {
+            return Err(illegal());
+        }
+        let mut flags = 0;
+        for lane in vector.start as usize..vector.length as usize {
+            let bits = vector.element(inst.rs2(), lane, source.width()) as u64;
+            let converted = destination.convert(source.decode(source.boxed(bits)), rounding);
+            flags |= converted.flags;
+            vector.set_element(inst.rd(), lane, destination.width(), converted.bits);
+        }
+        vector.start = 0;
+        self.privilege.fcsr |= flags;
+        self.privilege.status |= VS | FS;
+        Ok(())
+    }
+
+    pub(super) fn vector_unit_stride(
+        &mut self,
+        inst: Instruction,
+        base: u64,
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<(), Fault> {
+        let illegal = || Fault::new(2, u64::from(inst.0));
+        if self.privilege.status & VS == 0 || inst.0 >> 25 != 1 || inst.rs2() != 0 {
+            return Err(illegal());
+        }
+        let vector = self.privilege.vector.as_ref().ok_or_else(illegal)?;
+        if vector.kind == VILL {
+            return Err(illegal());
+        }
+        let log_width: u32 = match inst.funct3() {
+            0 => 0,
+            kind => kind - 4,
+        };
+        let width = 1usize << log_width;
+        let register = inst.rd();
+        let multiplier = vector.log_multiplier() + log_width as i32 - vector.sew_log_bytes() as i32;
+        vector.group(register, multiplier).ok_or_else(illegal)?;
+        for lane in vector.start as usize..vector.length as usize {
+            let address = base.wrapping_add((lane * width) as u64);
+            self.privilege.vector.as_mut().expect("vector state").start = lane as u64;
+            self.privilege.status |= VS;
+            if inst.opcode() == 0x07 {
+                let value = self.load(bus, address, width)?;
+                self.privilege
+                    .vector
+                    .as_mut()
+                    .expect("vector state")
+                    .set_element(register, lane, width, value);
+            } else {
+                let value = self
+                    .privilege
+                    .vector
+                    .as_ref()
+                    .expect("vector state")
+                    .element(register, lane, width);
+                self.store(bus, address, width, value as u64, output)?;
+            }
+        }
+        self.privilege.vector.as_mut().expect("vector state").start = 0;
+        self.privilege.status |= VS;
+        Ok(())
+    }
+}
