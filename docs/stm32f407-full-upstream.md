@@ -1,12 +1,45 @@
 # STM32F407 Discovery 上流ケース台帳
 
-[ケース台帳](stm32f407-upstream-cases.tsv) は固定した上流から拾った候補を含む初版です。
-`repository`、ファイル、行、ケース名、確認済みパラメーターを保持します。Robot の
-テンプレートやキーワード内で展開されるパラメーター、NUnit の動的ソース、
-共有スイートの機種適用判定には未確定の行があります。`review` はこの確認を必要とする行です。
-`ported-pass` は移植した観測条件を通過したケース、`partial` は上流と観測条件に
-差があるケース、`pending` は対象の移植待ち、`not-applicable` は機種・環境上の理由が
-記録されているケースです。候補行数から全対象ケース数や全件通過を判断することはできません。
+[ケース台帳](stm32f407-upstream-cases.tsv) は固定上流のリポジトリ、ファイル、ソース行、
+ケース名、パラメーター、フィクスチャ、判定根拠または証拠を記録します。
+
+| 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
+|---|---:|---:|---:|---:|---:|
+| Renode | 513 | 34 | 7 | 472 | 237 |
+| Infrastructure | 217 | 1 | 0 | 216 | 7 |
+| **合計** | **730** | **35** | **7** | **688** | **244** |
+
+分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
+保持する親行 1 件（`expanded`）には実行件数を割り当てません。
+`ported-pass` は既存の等価検証、`partial` は観測条件または検査項目に差がある移植、
+`pending` は等価検証がまだない対象ケースです。
+今回の回帰で実行した FreeRTOS と Contiki のローカルスモークは、この集計に追加していません。
+
+## 適用・展開の監査
+
+- 実フィクスチャからボード、CPU、ISA、実行に必要な配線を確認しました。F429 の
+  名前を持つネットワーク ELF 2 本は実際には Discovery REPL 2 台と仮想スイッチで
+  動くため、TCP と両 UART を検査する 1 構成として残しました。ADC の外付け
+  AD4011 は、上流オーバーレイが F407 SPI1 に接続する 4 ケースを対象としました。
+- 単一 CPU の排他アクセス、Thumb DSP、セミホスティング、MPU、UART テスター、
+  診断やパーサー、バス、タイマー、GPIO、DMA、CRC の共有テストを残しました。
+  合成メモリーやモックはフィクスチャの一部です。異機種の CPU を使うケースでも、
+  同じ刺激と観測を M4F で検査できるものは対象です。固定された TrustZone の別名、
+  MVE 命令、A/R プロファイル固有命令、複数コアの同一バス上の隔離などを
+  必要とする場合は、台帳行に別構成と対象外の理由を記載しました。
+- Robot の独立した入力組は展開しました。例として Cortex-M の LLVM 往復は
+  4 命令、セミホスティングの一括実行は 22 組に分かれます。状態を共有する
+  検査手順は 1 構成に保持しました。NUnit は DMA の 3×3×4×4、SystemBus の
+  2×2、REPL 数値パーサーの 3・8・4 の組を個別行にしています。
+- `Should Load Repls` は固定上流の列挙とブラックリストを照合しました。
+  CPU、Discovery、Discovery kit の 3 REPL が対象です。
+  `stm32f4_discovery-additional_gpios.repl` と `stm32f4_discovery-bb.repl` は
+  上流の単独ロードの列挙から除かれ、kit の `using` で読まれます。
+  F412/F429 SoC の各変種には対象外の根拠を記載しました。列挙に含まれる
+  その他の REPL は F407 をロードしない別のボードまたは SoC の構成です。
+- Robot の継続行 `...` をケースとして拾った 32 行と、同じ BXNS / TrustZone
+  構成の重複を除きました。異なる上流ファイルのケースや異なるパラメーターは、
+  同じ移植ランナーを使う場合でも出典を保持しています。
 
 ## 参照リビジョン
 
@@ -68,14 +101,35 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-共有台帳では、Cortex-M4F に適用される精密 BusFault と NOCP を対象とし、
-TrustZone、MVE、ARMv8-M MPU や例外復帰トークンに依存するパラメーターには対象外理由を付けました。
-`expanded` 行の下には、元のケースに対応する命令別パラメーターがあります。
+部分移植 7 件は、Discovery RTC アラームと FAULTMASK 2 件の CPU 実行速度、
+フラッシュのモードなし消去診断、無効なリセット状態の初期 MSP、WFE/SEVONPEND、
+NVIC BASEPRI のリセット手順に差があります。未達 688 件には、共有フォールト配送、
+UART ビット時間・パリティー、GDB・モニター・スナップショットの操作、
+実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit フィクスチャの等価検証が残ります。
+全件合格ゲートの条件は未達です。
 
-フラッシュ消去はデータ結果を移植済みで、モードなしの消去要求に対する上流ログの検査が残ります。
-共有スイートでは Cortex-M4F の例外フレームアクセス時の Fault 配送、UART ビット時間・パリティー、
-別ボードの FPU/DSP 公開 ELF の適用判定と実行、NUnit の残りのパラメーター展開が残ります。
-既存の FreeRTOS および Contiki の起動スモークは継続しますが、共有ケースの代替合格には数えません。
+### 適用監査時の再検証
+
+`target/stm32f407-scope-audit/` に回帰ログを保存しました。
+`cargo test` は 76 件が通過しました。`faults.log` は Cortex-M4F ELF 16 件の
+UART 判定を、`freertos.log` と `fpu.log` は未変更 Discovery 定義での TIM2 キュー、
+UART エコー、CAN ループバック、IWDG 再起動と FPU コンテキスト判定を記録しています。
+`contiki.log` には `Contiki 3.x started.` と `UDP server started`、
+`zephyr.log` には `Hello World! stm32f4_disco`、
+`upstream-fpu.log` には公開 ELF の `Test succeeded` が出ました。
+Contiki、Zephyr、公開 Cortex-M4 ELF の起動は上記のスモークの同名手順を個別に再実行しました。
+PWM など今回再実行していない既存合格は台帳の既存証拠を参照します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+work=target/stm32f407-scope-audit
+mkdir -p "$work"
+cargo test >"$work/cargo-test.log" 2>&1
+tests/cortex-m4f-faults.sh "$work/faults" >"$work/faults.log" 2>&1
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream >"$work/freertos.log" 2>&1
+tests/stm32f407-freertos-smoke.sh "$work/fpu" --fpu >"$work/fpu.log" 2>&1
+```
 
 ### Cortex-M4F の精密 BusFault と NOCP
 
