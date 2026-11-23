@@ -351,6 +351,11 @@ def disposition(path, name, context):
         r"Should (?:Execute LEA [BHWD] ZE|Preserve Full Width LEA [HWD]) On RV64", name
     ):
         return "pass", "Fixed XAndesPerf LEA operands, destination and next PC verified (rv64-andes-lea.md)"
+    if path.name == "riscv-andestar-v5.robot" and name in {
+        "Should Test RV64 Bits Above Thirty One",
+        "Should Extract And Insert Full Width Bit Fields On RV64",
+    }:
+        return "pass", "Fixed XAndesPerf bit operands, registers and branch PCs verified (rv64-andes-bits.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

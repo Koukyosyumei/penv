@@ -541,6 +541,20 @@ impl Rv64 {
                     .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs))
                     .ok_or(illegal)?,
             ),
+            0x5b if self.isa.xandesperf && matches!(fields.funct3(), 2 | 3) => {
+                Some(andes_bit_field(instruction, lhs, fields.funct3() == 3))
+            }
+            0x5b if self.isa.xandesperf && fields.funct3() == 7 => {
+                let bit = fields.rs2() | ((instruction as usize >> 7) & 1) << 5;
+                let test_set = instruction & (1 << 30) != 0;
+                if (lhs & (1u64 << bit) != 0) == test_set {
+                    let offset = ((instruction >> 31) << 10)
+                        | ((instruction >> 20) & 0x3e0)
+                        | ((instruction >> 7) & 0x1e);
+                    next = self.align_target(self.pc.wrapping_add(sign(u64::from(offset), 11)))?;
+                }
+                None
+            }
             0x5b if self.isa.xandesperf && fields.funct3() == 0 => {
                 let (index, shift) = match instruction >> 25 {
                     op @ 5..=7 => (rhs, op - 4),
@@ -1008,6 +1022,21 @@ pub(crate) fn ram_read(bus: &Bus, hart: Option<usize>, address: u64, width: usiz
         None => bus.ram64(address, width)?,
     });
     Some(u64::from_le_bytes(bytes))
+}
+
+fn andes_bit_field(instruction: u32, source: u64, signed: bool) -> u64 {
+    let msb = instruction >> 26;
+    let lsb = (instruction >> 20) & 63;
+    let (shift_in, shift_out, width) = if msb == 0 {
+        (0, lsb, 1)
+    } else if msb < lsb {
+        (0, msb, lsb - msb + 1)
+    } else {
+        (lsb, 0, msb - lsb + 1)
+    };
+    let field = (source >> shift_in) & (u64::MAX >> (64 - width));
+    let field = if signed { sign(field, width) } else { field };
+    field << shift_out
 }
 
 fn sign(value: u64, width: u32) -> u64 {

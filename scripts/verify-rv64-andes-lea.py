@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the fixed RV64 AndeStar LEA Robot operands through the Penv monitor CLI."""
+"""Run fixed RV64 AndeStar LEA and bit operation cases through the Penv CLI."""
 
 import argparse
 from pathlib import Path
@@ -42,6 +42,43 @@ mem: Memory.MappedMemory @ sysbus 0x0
 """)
 
 
+def verify_bits(args, platform, tests, step):
+    case = "Should Test RV64 Bits Above Thirty One"
+    commands = []
+    expected = []
+    for mnemonic, source, bit, offset, pc in fixture_rows(tests[case], "Check Immediate Branch", 4):
+        bit = int(bit)
+        offset = int(offset) & 0x7ff
+        function = {"nds.bbc": 0, "nds.bbs": 1}[mnemonic]
+        word = ((offset & 0x400) << 21 | function << 30 | (offset & 0x3e0) << 20
+                | (bit & 31) << 20 | 10 << 15 | 7 << 12 | (offset & 0x1e) << 7
+                | (bit >> 5) << 7 | 0x5b)
+        commands += ["--write-memory", f"0x2000:4:{word:#x}", "--set-gpr", f"cpu@x10:{source}",
+                     *step, "--read-register-now", "cpu@x10"]
+        expected += [("pc", int(pc, 16)), ("x10", int(source, 16))]
+    verify(args, platform, case, commands, expected)
+
+    case = "Should Extract And Insert Full Width Bit Fields On RV64"
+    commands = []
+    expected = []
+    for mnemonic, source, msb, lsb, rd in fixture_rows(tests[case], "Check Bit Field", 6):
+        function = {"nds.bfoz": 2, "nds.bfos": 3}[mnemonic]
+        word = int(msb) << 26 | int(lsb) << 20 | 10 << 15 | function << 12 | 12 << 7 | 0x5b
+        commands += ["--write-memory", f"0x2000:4:{word:#x}", "--set-gpr", f"cpu@x10:{source}",
+                     *step, "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 16))]
+    verify(args, platform, case, commands, expected)
+
+
+def fixture_rows(body, keyword, count):
+    prefix = keyword.split()
+    rows = [cells[len(prefix):] for line in body.splitlines()
+            if (cells := line.split())[:len(prefix)] == prefix]
+    if "Create Machine                  bits=64" not in body or len(rows) != count:
+        raise RuntimeError(f"unexpected fixed Robot fixture for {keyword}")
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("robot", type=Path)
@@ -70,6 +107,8 @@ def main():
                          *step, "--read-register-now", "cpu@x12"]
             expected += [("pc", 0x2004), ("x12", int(rd, 16))]
         verify(args, platform, case, commands, expected)
+
+    verify_bits(args, platform, tests, step)
 
     base = args.logs / "base.repl"
     write_platform(base, "rv64imac")
