@@ -31,7 +31,7 @@ mod sv32;
 mod sync_action;
 mod systick;
 mod thumb;
-mod time_handle;
+pub mod time_handle;
 mod time_source;
 mod uart;
 

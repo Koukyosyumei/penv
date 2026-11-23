@@ -317,6 +317,11 @@ def classify_nunit(name, case, attrs, parameter):
             "SecondWaitShouldReturnEmptyIntervalOnBlockingHandle": (PASS, "second_wait_after_break_returns_zero"),
             "WaitShouldNotBlockAfterBreak": (PASS, "wait_returns_after_break_grant_first"),
             "WaitShouldNotBlockAfterBreak2": (PARTIAL, "wait_returns_after_break_request_first"),
+            "ShouldNotAllowToGrantTimeToBlockedHandle": (PASS, "rejects_grant_after_break"),
+            "RequestAfterBreakShouldBlockWaitingForUnblock": (PARTIAL, "request_after_break_waits_for_unblock"),
+            "ShouldUnblockHandle": (PARTIAL, "unblocks_zero_remaining_grant"),
+            "ContinueShouldFinishWaiting": (PARTIAL, "continue_after_unblock_reports_resumed_grant"),
+            "BreakingShouldFinishWaiting3": (PARTIAL, "break_after_unblock_reports_resumed_grant"),
         })
         if case in checks:
             status, check = checks[case]

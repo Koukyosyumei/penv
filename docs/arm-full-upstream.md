@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 61 | 41 | 11 | 239 |
-| Renode Infrastructure NUnit | 134 | 81 | 11 | 42 | 9 |
-| 合計 | **247** | **142** | **52** | **53** | **248** |
+| Renode Infrastructure NUnit | 134 | 82 | 15 | 37 | 9 |
+| 合計 | **247** | **143** | **56** | **48** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -470,9 +470,20 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-handle-verification
 
 固定 Infrastructure の `TimeHandleTests.cs` から Break と順序検証の14件を追加した。同じ1000 tick の付与を使い、Break が使った時間を初回の待機で返し、2回目の待機でゼロを返すことを確認した。順序違反11件は上流のデバッグ時アサーションに相当する Rust のエラーを検証する。これらと即時の待機2件を等価合格、先行する別スレッドの待機が必要な1件を部分移植とした。
 
-通常の `RunFor` と `cpu Step` では、量子を使い切らず停止した場合に Break として実経過を計上する。次の RESC コマンドは、新しい実行区間として未使用の継続予算を使う。残った量子を同じハンドルで Unblock して再取得する Renode の非同期経路は別の残件。
+通常の `RunFor` と `cpu Step` では、量子を使い切らず停止した場合に Break として実経過を計上する。次の RESC コマンドは、新しい実行区間として未使用の継続予算を使う。残った量子を同じハンドルで Unblock する操作は次節に記録する。
 
 ```sh
 cargo test --locked renode_time_handle
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-break-verification
+```
+
+## TimeHandle の Unblock と残余量子
+
+Break の報告後、消費時間は最初の Wait に渡し、残った量子はハンドルに保持する。受信側が再要求してから Unblock すると、その残余だけを再提示する。次の完了または中断の報告に再開フラグを付け、一度の Wait で消費する。固定上流と同じ1000 tick の再提示と、全量消費時の0 tick を検証した。補助回帰では750 tick を消費し、残る250 tick だけを再取得する。
+
+ブロック中の新規付与の拒否を等価合格とし、実スレッドの待機と解除を含む4件を部分移植に更新した。ここでの Unblock は直列ハンドルの API。RESC の `RunFor` 区間をまたぐ実行は、従来の明示的な Resume と新しい実行予算を使う。無効化、破棄、ラッチ、並行スレッドの待機・解除は残件。
+
+```sh
+cargo test --locked renode_time_handle
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-unblock-verification
 ```
