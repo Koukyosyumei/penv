@@ -56,6 +56,7 @@ mod stm32h7_timer;
 mod sv32;
 mod systick;
 mod thumb;
+mod tmp108;
 mod uart;
 mod veml7700;
 mod zephyr_boot;

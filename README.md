@@ -425,3 +425,30 @@ Ethernet の第 3 スクリプトは、`--uart-log-dir` でノード作成順に
 | PWM 波形 | STM32H7 参照 ELF の起動後、TIM3 CH1 を 10 ms 周期・25% に設定。GPIOB4 AF2 の入力を 2.4・2.6・9.9・10.1 ms に読み、高・低・低・高を照合。`io-run/pwm/waveform.log`。 |
 
 Ethernet はハッシュ固定の ELF 内の成功カウンターを合格判定に使います。クライアント UART の比較成功行は未確認です。IIS2MDC の入力形式は元の CSV で、RESD コンテナーの読込みは残件です。LTDC はフレーム境界をモデル化しており、画素クロック単位の走査や他の FIFO アンダーラン条件は残件です。PWM 波形はエッジ整列のアップカウントと検証した配線の範囲です。未変更の上流参照 RESC 自体は引き続き TMP108 未対応で停止します。
+
+### full-upstream-network
+
+[上流ケース台帳](tests/stm32h7-full-upstream.tsv) は固定 Renode とサブモジュールの初回棚卸しです。Nucleo H753ZI の機種固有 Robot スイートは全 25 ケースを含みます。各行はリポジトリ、ファイル、行範囲、ケース名、パラメータ参照、判定、判定根拠を記録します。共有 NUnit の DMA 転送マトリクスは、入出力の格納先とアクセス幅の全組み合わせを個別行に展開しました。
+
+- Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`
+- Infrastructure `09ac7c563095c5410258ecc1b1a6b841a013db85`
+- Infrastructure の tlib `c04522a9c886ba743c77a86b0c879103a2ef46d0`
+- Packet.Net `20e0f2fe40743fed4e6a81bb8fe9523c257f168b`
+- UI `5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f`
+
+984 行のうち、適用範囲の確認待ち `REVIEW` が 704、未達 `OPEN` が 82、部分移植 `PARTIAL` が 7、適用外の根拠を確認した `OUT` が 191 です。初回台帳は完全な適用性判定やパラメータ展開を終えていません。機種固有の未実装・失敗・ビルド依存を除外理由にはしていません。上流と等価な合格はまだ記録していません。既存の `network-ready` は診断スモークのゲートです。全上流ケース用の `network-full-upstream-ready` は未作成です。
+
+固定の Infrastructure と Packet.Net は作業ディレクトリの外で展開し、`../renode` は読み取り専用の参照にしました。tlib と UI の固定アーカイブに Robot/NUnit のテストファイルは見つかりませんでした。対象 NUnit プロジェクトは .NET 10 を指定しており、今回の環境では `dotnet` と Renode/Robot ランナーを検出できませんでした。直接実行の確認は残件です。
+
+```bash
+scan=$(mktemp -d)
+curl -fsSL https://codeload.github.com/renode/renode-infrastructure/tar.gz/09ac7c563095c5410258ecc1b1a6b841a013db85 |
+    tar -xz -C "$scan" --strip-components=1
+mkdir "$scan/packetnet"
+curl -fsSL https://codeload.github.com/antmicro/Packet.Net/tar.gz/20e0f2fe40743fed4e6a81bb8fe9523c257f168b |
+    tar -xz -C "$scan/packetnet" --strip-components=1
+python3 tests/tools/inventory-stm32h7.py ../renode "$scan" "$scan/inventory.tsv"
+cmp tests/stm32h7-full-upstream.tsv "$scan/inventory.tsv"
+```
+
+TMP108 は固定温度、ビッグエンディアンの温度・閾値、ワンショットからの復帰を実装しました。診断 Shell で `sensor get tmp108@48 ambient_temp` が `23.500000` を返します。時系列入力、比較器と IRQ は残件です。未変更の上流参照 RESC は TMP108 を通過し、`platforms/boards/stm32h7_renode_reference_board.repl:52` の `Sensors.LPS25HB` で停止します。実行コマンドは前節のスモーク 3 本と、SDMMC・USB・sysbus タグ節の未変更 RESC 用コマンドを使います。

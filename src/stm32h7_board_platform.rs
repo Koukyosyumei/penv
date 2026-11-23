@@ -19,6 +19,7 @@ use crate::{
     stm32h7_rng::Rng,
     stm32h7_sdmmc::Sdmmc,
     stm32h7_timer::Timer,
+    tmp108::Tmp108,
     veml7700::Veml7700,
 };
 
@@ -44,6 +45,7 @@ pub fn is_device(model: &str) -> bool {
                 | Fdcan::MODEL
                 | Veml7700::MODEL
                 | Iis2mdc::MODEL
+                | Tmp108::MODEL
                 | Iwdg::MODEL
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
@@ -301,10 +303,12 @@ pub fn configure(
         let i2c = parse_i2c(entry, entries, nvic, exti, exti_lines).map_err(|e| entry.error(&e))?;
         buses.push((entry, i2c));
     }
-    for entry in entries
-        .iter()
-        .filter(|entry| matches!(entry.model.as_str(), Veml7700::MODEL | Iis2mdc::MODEL))
-    {
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry.model.as_str(),
+            Veml7700::MODEL | Iis2mdc::MODEL | Tmp108::MODEL
+        )
+    }) {
         let (parent, address) = entry
             .registration
             .as_deref()
@@ -315,6 +319,23 @@ pub fn configure(
             .iter_mut()
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Tmp108::MODEL {
+            let celsius = match entry.body.as_slice() {
+                [] => 0.0,
+                [(_, text)] => text
+                    .strip_prefix("Temperature:")
+                    .and_then(|value| value.trim().parse::<f64>().ok())
+                    .filter(|value| (-128.0..=127.9375).contains(value))
+                    .ok_or_else(|| entry.error("expected TMP108 Temperature in sensor range"))?,
+                _ => return Err(entry.error("unsupported TMP108 properties")),
+            };
+            bus.attach(
+                u16::from(address),
+                Target::Temperature(Tmp108::new(celsius)),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
         if entry.model == Iis2mdc::MODEL {
             let mut values = [None; 3];
             let mut sample_csv = None;

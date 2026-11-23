@@ -1,4 +1,4 @@
-use crate::{iis2mdc::Iis2mdc, stm32_uart::Stm32Irq, veml7700::Veml7700};
+use crate::{iis2mdc::Iis2mdc, stm32_uart::Stm32Irq, tmp108::Tmp108, veml7700::Veml7700};
 
 pub const I2C: &str = "I2C.STM32F7_I2C";
 
@@ -19,6 +19,17 @@ const STOP: u32 = 1 << 14;
 pub enum Target {
     Light(Veml7700),
     Magnetometer(Iis2mdc),
+    Temperature(Tmp108),
+}
+
+impl Target {
+    fn stop(&mut self) {
+        match self {
+            Self::Light(sensor) => sensor.stop(),
+            Self::Temperature(sensor) => sensor.stop(),
+            Self::Magnetometer(_) => {}
+        }
+    }
 }
 
 /// STM32F7 master register interface.
@@ -80,7 +91,7 @@ impl I2c {
             .iter_mut()
             .filter_map(move |(_, target)| match target {
                 Target::Magnetometer(sensor) => sensor.tick(step),
-                Target::Light(_) => None,
+                _ => None,
             })
     }
 
@@ -109,7 +120,9 @@ impl I2c {
                 }
                 let value = match self.active.map(|target| &mut self.targets[target].1) {
                     Some(Target::Magnetometer(sensor)) => sensor.read_byte(),
-                    Some(Target::Light(_)) if self.position < 2 => self.data[self.position],
+                    Some(Target::Light(_) | Target::Temperature(_)) if self.position < 2 => {
+                        self.data[self.position]
+                    }
                     _ => 0xff,
                 };
                 self.position += 1;
@@ -189,19 +202,22 @@ impl I2c {
         if selected != self.active
             && let Some(old) = self.active
         {
-            if let Target::Light(sensor) = &mut self.targets[old].1 {
-                sensor.stop();
-            }
+            self.targets[old].1.stop();
         }
         self.active = selected;
         self.position = 0;
         self.reading = control & READ != 0;
         if let Some(target) = selected {
             self.status |= BUSY;
-            if self.reading
-                && let Target::Light(sensor) = &mut self.targets[target].1
-            {
-                self.data[..2].copy_from_slice(&sensor.read());
+            if self.reading {
+                let bytes = match &mut self.targets[target].1 {
+                    Target::Light(sensor) => Some(sensor.read()),
+                    Target::Temperature(sensor) => Some(sensor.read()),
+                    Target::Magnetometer(_) => None,
+                };
+                if let Some(bytes) = bytes {
+                    self.data[..2].copy_from_slice(&bytes);
+                }
             }
             self.load_count();
         } else {
@@ -242,6 +258,9 @@ impl I2c {
                 Target::Light(sensor) if (1..=3).contains(&self.position) => {
                     sensor.write(&self.data[..self.position])
                 }
+                Target::Temperature(sensor) if self.position <= self.data.len() => {
+                    sensor.write(&self.data[..self.position])
+                }
                 Target::Magnetometer(sensor) if self.position <= self.data.len() => {
                     sensor.write(&self.data[..self.position])
                 }
@@ -252,10 +271,8 @@ impl I2c {
 
     fn stop(&mut self) {
         self.finish_write();
-        if let Some(target) = self.active.take()
-            && let Target::Light(sensor) = &mut self.targets[target].1
-        {
-            sensor.stop();
+        if let Some(target) = self.active.take() {
+            self.targets[target].1.stop();
         }
         self.remaining = 0;
         self.position = 0;
@@ -268,6 +285,26 @@ impl I2c {
 mod tests {
     use super::*;
     use crate::{bus::Bus, nvic::ActiveExceptions, stm32h7_net_control::NetworkControl};
+
+    #[test]
+    fn tmp108_reads_signed_temperature_and_threshold_in_big_endian_order() {
+        let mut i2c = I2c::new(0, None);
+        i2c.attach(0x48, Target::Temperature(Tmp108::new(-12.5)))
+            .unwrap();
+        i2c.write(0, PE);
+        let address = 0x48 << 1;
+        let read_word = |i2c: &mut I2c| {
+            i2c.write(4, address | START | READ | AUTOEND | (2 << 16));
+            u16::from_be_bytes([i2c.read(0x24) as u8, i2c.read(0x24) as u8])
+        };
+        assert_eq!(read_word(&mut i2c), 0xf380);
+        i2c.write(4, address | START | (3 << 16));
+        for value in [2, 0x12, 0x3f] {
+            i2c.write(0x28, value);
+        }
+        assert_eq!(read_word(&mut i2c), 0x1230);
+        assert_eq!(read_word(&mut i2c), 0xf380);
+    }
 
     #[test]
     fn preloaded_txdr_is_consumed_once_when_starting_write() {
