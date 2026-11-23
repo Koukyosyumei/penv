@@ -2,6 +2,8 @@
 
 RV64 REPL の `vectorRegisterLength` を実装しました。固定 tlib の設定範囲に合わせて 64～65,536 ビットの2の累乗を受け付けます。V を有効にした CPU の既定値は512ビットです。指定した長さがレジスターバッキング、`vlenb`、`vstart` の書き込みマスク、`vl` の上限に反映されます。
 
+後続の [RV64 Zcb 対応](rv64-zcb.md) で、固定 ISA による VSTART ケースの照合が完了しました。
+
 ## ケース対応と残課題
 
 - 固定 Renode の `riscv-vector-csr.robot:197` が合格しました。Penv の ELF は同じ VLEN 256 で全ビットを `vstart` に書いて `0xff` を確認し、`vlenb=32`、`vl=64`（e8/m2）、`vsetvli` 後の `vstart=0` も確認しました。Penv 側の REPL は未実装の `Zcb` を除いたため、元ケースは部分移植です。実行中の Monitor からの VLEN 変更も残っています。

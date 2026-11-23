@@ -36,6 +36,7 @@ pub struct Isa {
     pub double: bool,
     half: bool,
     vector: bool,
+    zcb: bool,
     zicboz: bool,
     pub cas: bool,
     pub smepmp: bool,
@@ -74,6 +75,7 @@ impl Isa {
             match extension {
                 "zicsr" | "zifencei" => {}
                 "c" => isa.compressed = true,
+                "zcb" => isa.zcb = true,
                 "v" => isa.vector = true,
                 "zacas" if isa.atomic => isa.cas = true,
                 "smepmp" => isa.smepmp = true,
@@ -82,6 +84,9 @@ impl Isa {
                 extension if isa.bitmanip.enable(extension) => {}
                 _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
             }
+        }
+        if isa.zcb && !isa.compressed {
+            return Err("RV64 Zcb requires the compressed base instructions (C)".into());
         }
         Ok(isa)
     }
@@ -104,6 +109,7 @@ impl Isa {
         double: false,
         half: false,
         vector: false,
+        zcb: false,
         zicboz: false,
         cas: false,
         smepmp: false,
@@ -242,7 +248,7 @@ impl Rv64 {
 
         let result = self.fetch(bus).and_then(|(instruction, length)| {
             let decoded = if length == 2 {
-                crate::compressed::expand_rv64(instruction)
+                crate::compressed::expand_rv64(instruction, self.isa.zcb)
                     .ok_or_else(|| Fault::new(2, u64::from(instruction)))?
             } else {
                 instruction

@@ -1032,3 +1032,72 @@ fn vlen_caps_vstart_and_vector_length_for_configured_registers() {
         assert!(VectorState::new(bits).is_err());
     }
 }
+
+#[test]
+fn renode_vector_csr_masks_aliases_and_vs_off_traps() {
+    const ISA: &str = "rv64imafd_zicsr_zifencei_c_v_zba_zbb_zbc_zbs_zfh_zacas_zcb";
+    for (write, reads) in [
+        (0x00a, &[(0x00a, 3), (0x00f, 6)][..]),
+        (0x009, &[(0x009, 1), (0x00f, 1)][..]),
+        (0x00f, &[(0x00f, 7), (0x009, 1), (0x00a, 3)][..]),
+    ] {
+        for enabled in [false, true] {
+            let mut cpu = Rv64::new(Isa::parse(ISA).unwrap());
+            let mut bus = Bus::default();
+            bus.map_ram64(0x1000, 0x40000).unwrap();
+            cpu.pc = 0x2000;
+            cpu.privilege.set_vector(0x1010);
+            assert!(
+                cpu.privilege
+                    .write(0x300, if enabled { 0x600 } else { 0 }, cpu.misa())
+            );
+            let mut code = vec![0x557du16 as u8, (0x557du16 >> 8) as u8]; // c.li a0, -1
+            code.extend(write_csr(write, A0).to_le_bytes());
+            bus.memory64(0x2000, code.len())
+                .unwrap()
+                .copy_from_slice(&code);
+            assert!(matches!(
+                cpu.step(&mut bus, 0, 1, &mut Vec::new()).unwrap(),
+                Step::Retired
+            ));
+            let write_step = cpu.step(&mut bus, 0, 2, &mut Vec::new()).unwrap();
+            if enabled {
+                assert!(matches!(write_step, Step::Retired));
+                for &(csr, expected) in reads {
+                    assert_eq!(cpu.privilege.read(csr, cpu.misa(), !1), Some(expected));
+                }
+            } else {
+                assert!(matches!(write_step, Step::Trap));
+                assert_eq!(cpu.pc, 0x1010);
+                assert_eq!(cpu.privilege.read(0x342, cpu.misa(), !1), Some(2));
+            }
+        }
+    }
+}
+
+#[test]
+fn zcb_is_gated_by_c_and_existing_instruction_dependencies() {
+    assert!(Isa::parse("rv64i_zcb").is_err());
+    for (isa, opcode) in [
+        ("rv64ic", 0x8000u16),  // c.lbu without Zcb
+        ("rv64ic_zcb", 0x9c41), // c.mul without M
+        ("rv64ic_zcb", 0x9c65), // c.sext.b without Zbb
+        ("rv64ic_zcb", 0x9c71), // c.zext.w without Zba
+    ] {
+        let mut cpu = Rv64::new(Isa::parse(isa).unwrap());
+        let mut bus = Bus::new(4096).unwrap();
+        bus.memory(RAM_BASE, 2)
+            .unwrap()
+            .copy_from_slice(&opcode.to_le_bytes());
+        cpu.privilege.set_vector(u64::from(RAM_BASE) + 0x100);
+        assert!(matches!(
+            cpu.step(&mut bus, 0, 1, &mut Vec::new()).unwrap(),
+            Step::Trap
+        ));
+        assert_eq!(cpu.privilege.read(0x342, cpu.misa(), !1), Some(2));
+        assert_eq!(
+            cpu.privilege.read(0x343, cpu.misa(), !1),
+            Some(u64::from(opcode))
+        );
+    }
+}

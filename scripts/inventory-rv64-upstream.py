@@ -306,13 +306,20 @@ def disposition(path, name, context):
         "Should Handle SLLI.UW Properly",
     }:
         return "pass", "Fixed CPU, PC, instruction bytes and all stepwise a0 assertions checked"
-    if path.name == "riscv-vector-csr.robot" and name == "Should Leave Enough VSTART Bits For Largest Possible Value":
-        return "partial", "VLEN=256 and VSTART checked with ELF; upstream Zcb configuration remains unsupported"
     if path.name == "riscv-vector-csr.robot" and name in {
+        "Should Trap On VXRM Write When MSTATUS.VS Is Zero",
+        "Should Trap On VXSAT Write When MSTATUS.VS Is Zero",
+        "Should Trap On VCSR Write When MSTATUS.VS Is Zero",
+        "Should Keep VXRM Upper Bits As Zero",
+        "Should Keep VXSAT Upper Bits As Zero",
         "Should Keep VCSR Upper Bits As Zero",
+        "Should Reflect VXSAT In VCSR",
+        "Should Reflect VXRM In VCSR",
+        "Should Reflect VCSR In VXSAT And VXRM",
         "Should Reflect VSADD.VV Saturation In VCSR",
+        "Should Leave Enough VSTART Bits For Largest Possible Value",
     }:
-        return "partial", "Fixed Renode verified; Penv Rust/ELF port uses a different harness (rv64-vector-bootstrap.md)"
+        return "pass", "Fixed CPU ISA including Zcb; CSR, trap and ELF assertions verified (rv64-zcb.md)"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(
