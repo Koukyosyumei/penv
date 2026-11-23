@@ -18,8 +18,9 @@ def verify(penv, renode, assets, artifacts):
     command = [
         str(penv), "run", "--script", str(renode / "scripts/single-node/litex_nexys_video_vexriscv_linux.resc"),
         "--platform-root", str(renode), "--asset-dir", str(assets), "--litex-uart-stdio",
-        "--max-steps", "1100000000", "--wait-for-frame", f"1:{full}",
-        "--wait-for-frame-roi", f"1:0:0:75:80:{roi}",
+        "--max-steps", "2000000000", "--frame-waits-after-uart", "500000000:cat /etc/motd > /dev/tty0",
+        "--wait-for-frame", f"0:{full}",
+        "--wait-for-frame-roi", f"0:0:0:75:80:{roi}",
         "--framebuffer-out", str(artifacts / "nexys-video-motd.ppm"),
     ]
     with live_uart(command, artifacts, "nexys-video", wait_for_exit=True) as (expect, send):

@@ -50,7 +50,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
     if filename == "Nexys_Video_LiteX_VexRiscv.robot" and case in {
         "Frame Buffer Test", "Frame Buffer with ROI Test",
     }:
-        return "target", "partial", "fixed firmware, live UART and both reference PNGs matched in order; per-wait five-second deadline remains"
+        return "target", "ported", "fixed firmware and live UART; sequential reference PNG waits with separate five-virtual-second deadlines"
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:

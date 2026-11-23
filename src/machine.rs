@@ -1,7 +1,9 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, VecDeque},
     io::Write,
     path::PathBuf,
+    rc::Rc,
 };
 
 use crate::{
@@ -27,6 +29,9 @@ pub struct Machine {
     elapsed_steps: u64,
     inputs: VecDeque<(u64, Input)>,
     queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
+    frame_wait_trigger: Option<Rc<Cell<bool>>>,
+    frame_wait_budget: Option<u64>,
+    frame_wait_deadline: Option<u64>,
     intermediate_frame_matches: Vec<u64>,
 }
 
@@ -216,6 +221,9 @@ impl Machine {
             elapsed_steps: 0,
             inputs: VecDeque::new(),
             queued_frame_waits: VecDeque::new(),
+            frame_wait_trigger: None,
+            frame_wait_budget: None,
+            frame_wait_deadline: None,
             intermediate_frame_matches: Vec::new(),
         }
     }
@@ -390,6 +398,11 @@ impl Machine {
         Ok(())
     }
 
+    pub fn arm_frame_waits(&mut self, trigger: Rc<Cell<bool>>, budget: u64) {
+        self.frame_wait_trigger = Some(trigger);
+        self.frame_wait_budget = Some(budget);
+    }
+
     pub fn schedule_frame_wait(
         &mut self,
         step: u64,
@@ -399,10 +412,11 @@ impl Machine {
             return Err("framebuffer wait requires a LiteX framebuffer".into());
         }
         let reference = Box::new(reference);
-        if self
-            .inputs
-            .iter()
-            .any(|(_, input)| matches!(input, Input::FrameWait(_)))
+        if self.frame_wait_trigger.is_some()
+            || self
+                .inputs
+                .iter()
+                .any(|(_, input)| matches!(input, Input::FrameWait(_)))
         {
             self.queued_frame_waits.push_back((step, reference));
         } else {
@@ -416,6 +430,9 @@ impl Machine {
     }
 
     pub fn verify_required_events_completed(&self) -> Result<(), String> {
+        if self.frame_wait_trigger.is_some() {
+            return Err("execution ended before the framebuffer UART trigger".into());
+        }
         for (step, input) in &self.inputs {
             let event = match input {
                 Input::LedAssertion { name, .. } => format!("LED assertion for {name:?}"),
@@ -443,6 +460,21 @@ impl Machine {
         let mut retired = 0;
         for _ in 0..limit {
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            if self
+                .frame_wait_trigger
+                .as_ref()
+                .is_some_and(|trigger| trigger.get())
+            {
+                self.frame_wait_trigger = None;
+                let (_, reference) = self
+                    .queued_frame_waits
+                    .pop_front()
+                    .ok_or("framebuffer trigger has no reference frame")?;
+                self.frame_wait_deadline = self
+                    .frame_wait_budget
+                    .map(|budget| self.elapsed_steps.saturating_add(budget));
+                self.schedule_input(self.elapsed_steps, Input::FrameWait(reference));
+            }
             while self
                 .inputs
                 .front()
@@ -469,6 +501,9 @@ impl Machine {
                                 return Ok((Stop::FrameMatched(self.elapsed_steps), retired));
                             };
                             self.intermediate_frame_matches.push(self.elapsed_steps);
+                            self.frame_wait_deadline = self
+                                .frame_wait_budget
+                                .map(|budget| self.elapsed_steps.saturating_add(budget));
                             self.schedule_input(
                                 step.max(self.elapsed_steps),
                                 Input::FrameWait(reference),
@@ -478,6 +513,14 @@ impl Machine {
                             let next = self.elapsed_steps.checked_add(FRAME_POLL_STEPS).ok_or(
                                 "step counter exhausted before the reference frame matched",
                             )?;
+                            let next = if let Some(deadline) = self.frame_wait_deadline {
+                                if self.elapsed_steps >= deadline {
+                                    return Err("framebuffer wait timed out before the reference frame matched".into());
+                                }
+                                next.min(deadline)
+                            } else {
+                                next
+                            };
                             self.schedule_input(next, Input::FrameWait(reference));
                         }
                     }

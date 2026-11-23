@@ -32,11 +32,13 @@ mod uart;
 mod vector_bootstrap;
 
 use std::{
+    cell::Cell,
     env,
     fs::{self, File},
     io::{self, LineWriter, Read, Write},
     path::PathBuf,
     process::ExitCode,
+    rc::Rc,
     sync::mpsc,
     thread,
     time::Instant,
@@ -54,6 +56,7 @@ Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
   --wait-for-frame STEP:PATH  Stop when the LiteX framebuffer matches a PNG or P6 RGB PPM
   --wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH  Wait for identical RGB pixels in a region
+  --frame-waits-after-uart STEPS:TEXT  Start queued waits on UART text and give each STEPS
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
@@ -144,6 +147,7 @@ fn run() -> Result<ExitCode, String> {
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
     let mut frame_waits = Vec::new();
+    let mut frame_wait_trigger = None;
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
     let mut path = None;
@@ -266,6 +270,29 @@ fn run() -> Result<ExitCode, String> {
                     framebuffer_events.push(event);
                 } else {
                     frame_waits.push((event.0, event.1, None));
+                }
+            }
+            Some("--frame-waits-after-uart") => {
+                const FORMAT: &str =
+                    "--frame-waits-after-uart requires positive STEPS and nonempty TEXT";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let (steps, text) = value
+                    .split_once(':')
+                    .filter(|(_, text)| !text.is_empty())
+                    .ok_or(FORMAT)?;
+                let steps = steps
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|steps| *steps != 0)
+                    .ok_or(FORMAT)?;
+                if frame_wait_trigger
+                    .replace((steps, text.as_bytes().to_vec()))
+                    .is_some()
+                {
+                    return Err("--frame-waits-after-uart may only be specified once".into());
                 }
             }
             Some("--wait-for-frame-roi") => {
@@ -641,6 +668,20 @@ fn run() -> Result<ExitCode, String> {
     for (step, path) in framebuffer_events {
         machine.schedule_framebuffer_capture(step, path)?;
     }
+    let frame_wait_trigger = if let Some((budget, text)) = frame_wait_trigger {
+        if frame_waits.is_empty() || frame_waits.iter().any(|(step, _, _)| *step != 0) {
+            return Err("--frame-waits-after-uart requires frame waits with step 0".into());
+        }
+        let fired = Rc::new(Cell::new(false));
+        machine.arm_frame_waits(Rc::clone(&fired), budget);
+        Some(UartTrigger {
+            text,
+            suffix: Vec::new(),
+            fired,
+        })
+    } else {
+        None
+    };
     for (step, path, region) in frame_waits {
         let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         let reference = litex_video::ReferenceFrame::parse(data)
@@ -718,6 +759,7 @@ fn run() -> Result<ExitCode, String> {
     let mut output = UartOutput {
         writer: LineWriter::new(io::stdout().lock()),
         immediate: litex_uart_stdio,
+        trigger: frame_wait_trigger,
     };
     let start = Instant::now();
     let limit = match (max_steps, run_steps) {
@@ -727,10 +769,10 @@ fn run() -> Result<ExitCode, String> {
     let result = machine.run(limit, &mut output);
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
-    let (stop, steps) = result?;
     for step in machine.intermediate_frame_matches() {
         eprintln!("penv: framebuffer matched at step {step}");
     }
+    let (stop, steps) = result?;
     machine.verify_required_events_completed()?;
     let completed_run_for = stop == Stop::Limit && run_steps == Some(limit);
     if completed_run_for {
@@ -790,14 +832,35 @@ fn run() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+struct UartTrigger {
+    text: Vec<u8>,
+    suffix: Vec<u8>,
+    fired: Rc<Cell<bool>>,
+}
+
 struct UartOutput<W: Write> {
     writer: LineWriter<W>,
     immediate: bool,
+    trigger: Option<UartTrigger>,
 }
 
 impl<W: Write> Write for UartOutput<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.writer.write(bytes)?;
+        if let Some(trigger) = &mut self.trigger {
+            trigger.suffix.extend_from_slice(&bytes[..written]);
+            if trigger
+                .suffix
+                .windows(trigger.text.len())
+                .any(|part| part == trigger.text)
+            {
+                trigger.fired.set(true);
+                self.trigger = None;
+            } else {
+                let discard = trigger.suffix.len().saturating_sub(trigger.text.len() - 1);
+                trigger.suffix.drain(..discard);
+            }
+        }
         if self.immediate {
             self.writer.flush()?;
         }

@@ -1414,3 +1414,18 @@ sha256sum "$repro/nexys-video-motd.ppm"
 固定 Robot の待機は開始ごとに 5 仮想秒です。今回の検証は起動からの共通ステップ上限を使い、全面待機を先に登録します。各待機の開始と期限を再現する作業が残るため、台帳は部分移植のままです。既存のステップ指定による一致・不一致回帰は共通スクリプトに残しました。
 
 公開アセット 4 個の SHA-1 は上流の指定と一致しました。同じ release バイナリで全面と領域が順に一致し、最終 PPM の SHA-256 は既存の上流参照由来の値と一致しました。最初の検証は同一ステップの二つの一致を拒んだため、検証側を修正して再実行しました。Rust テストは 88/88 件、上流等価合格は累計 163 件です。ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-4619106-v9dQ5P/` に保存しました。
+
+### Nexys Video の待機ごとの期限
+
+`--frame-waits-after-uart STEPS:TEXT` で UART 出力中の指定文字列を起点に、ステップ 0 で指定したフレーム待機列を開始できます。Nexys Video の検証では MOTD コマンドのエコーを起点にし、全面と領域にそれぞれ 5 仮想秒を割り当てます。全面の一致後に領域の期限を起算します。ポーリングは最大 10 仮想ミリ秒間隔で、期限のステップでも比較します。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro"
+```
+
+固定 BIOS・SD イメージと参照 PNG の実行で 2 ケースが通過しました。補助 ELF では全面不一致による期限切れ、全面一致からの領域不一致による期限切れ、両方の一致を確認しました。全面一致はステップ 16 で、実行上限 20 では領域待機中の終了、実行上限 26 では領域の期限切れを報告しました。Rust テストは 88/88 件です。台帳の上流等価合格は累計 165 件です。残る LiteX ケースと最大 ISA 構成は未達です。検証ログ、補助 ELF とソース、終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-6fbc043-ORtFS5/` に保存しました。

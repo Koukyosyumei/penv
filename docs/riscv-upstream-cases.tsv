@@ -575,8 +575,8 @@ Renode	tests/platforms/LiteX/LiteX_VexRiscv_SMP.robot	20	Should Run OpenSBI		tar
 Renode	tests/platforms/LiteX/LiteX_VexRiscv_SMP.robot	32	Should Boot Linux		target	ported	fixed SMP images and four startup PCs; ordered boot, prompt-driven login and four cpuinfo entries checked
 Renode	tests/platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot	14	Should Boot		target	ported	fixed BIOS and SPI SD image; ordered live UART waits and booted-image dependency checked
 Renode	tests/platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot	29	Should List Readme File		target	ported	fixed BIOS and SPI SD image; ordered live UART waits and booted-image dependency checked
-Renode	tests/platforms/LiteX/Nexys_Video_LiteX_VexRiscv.robot	2	Frame Buffer Test		target	partial	fixed firmware, live UART and both reference PNGs matched in order; per-wait five-second deadline remains
-Renode	tests/platforms/LiteX/Nexys_Video_LiteX_VexRiscv.robot	33	Frame Buffer with ROI Test		target	partial	fixed firmware, live UART and both reference PNGs matched in order; per-wait five-second deadline remains
+Renode	tests/platforms/LiteX/Nexys_Video_LiteX_VexRiscv.robot	2	Frame Buffer Test		target	ported	fixed firmware and live UART; sequential reference PNG waits with separate five-virtual-second deadlines
+Renode	tests/platforms/LiteX/Nexys_Video_LiteX_VexRiscv.robot	33	Frame Buffer with ROI Test		target	ported	fixed firmware and live UART; sequential reference PNG waits with separate five-virtual-second deadlines
 Renode	tests/platforms/MAX32650.robot	14	Should return temperature from TMP103 over I2C		review-shared	pending	-
 Renode	tests/platforms/MPC5567.robot	13	Should Boot Redboot		review-shared	pending	-
 Renode	tests/platforms/MPC5567.robot	24	Should Print Version		review-shared	pending	-
