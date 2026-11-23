@@ -1975,3 +1975,164 @@ fn renode_empty_binding_reference() {
         Some(&FixtureValue::NullPeripheralReference)
     );
 }
+
+#[test]
+fn renode_collection_fixture_int_empty() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntList: []",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_list.as_deref() == Some(&[]));
+}
+
+#[test]
+fn renode_collection_fixture_ints() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntList: [2, 1, 37]",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_list.as_deref() == Some(&[2, 1, 37]));
+}
+
+#[test]
+fn renode_collection_fixture_array() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntArray: [1, 2, 34]",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_array.as_deref() == Some(&[1, 2, 34]));
+}
+
+#[test]
+fn renode_collection_fixture_strings() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockStringList: [\"a\", \"b\", \"c\"]",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.string_list.as_ref().unwrap() == &["a", "b", "c"]);
+}
+
+#[test]
+fn renode_collection_fixture_bad_list() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntList: [1, \"b\", 3]",
+    );
+    assert!(result.err().unwrap().contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_collection_fixture_bad_array() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntArray: [1, \"b\", 3]",
+    );
+    assert!(result.err().unwrap().contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_collection_fixture_replace() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntList: [1, 2, 3]\n\nmockPeripheral:\n    mockIntList: [4, 5]",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_list.as_deref() == Some(&[4, 5]));
+}
+
+#[test]
+fn renode_collection_fixture_null_list() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntList: empty",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_list.is_none());
+}
+
+#[test]
+fn renode_collection_fixture_null_array() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntArray: empty",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_array.is_none());
+}
+
+#[test]
+fn renode_collection_fixture_empty_dict() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntStringDict: {}",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_string_dict.as_ref().unwrap().is_empty());
+}
+
+#[test]
+fn renode_collection_fixture_null_dict() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntStringDict: empty",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(values.int_string_dict.is_none());
+}
+
+#[test]
+fn renode_collection_fixture_dict() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>\n    mockIntStringDict: {0: \"zero\" ; 1: \"one\" }",
+    );
+    let machine = result.unwrap();
+    let Some(FixtureValue::Collections(values)) =
+        machine.bus.fixture_value("sysbus.mockPeripheral")
+    else {
+        panic!("expected registered fixture collection values");
+    };
+    assert!(
+        values
+            .int_string_dict
+            .as_ref()
+            .is_some_and(|dict| dict.len() == 2 && dict[&0] == "zero" && dict[&1] == "one")
+    );
+}

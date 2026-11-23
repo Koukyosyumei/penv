@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    bus::FixtureValue,
+    bus::{FixtureCollections, FixtureValue},
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
@@ -1938,6 +1938,75 @@ fn bind_scalar_fixture(entry: &Entry) -> Result<FixtureValue, String> {
     bound.ok_or_else(|| entry.error("NoCtor: incompatible scalar constructor argument"))
 }
 
+const MOCK_COLLECTION: &str =
+    "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes";
+
+fn bind_fixture_collections(entry: &Entry) -> Result<FixtureValue, String> {
+    let mut bound = FixtureCollections::default();
+    let integer = |value| match value {
+        ScalarValue::Number(number) => number.parse::<i32>().ok(),
+        _ => None,
+    };
+    let string = |value| match value {
+        ScalarValue::Text(text) => Some(text),
+        _ => None,
+    };
+    let properties = keys(
+        entry,
+        &[
+            "mockIntList",
+            "mockIntArray",
+            "mockStringList",
+            "mockIntStringDict",
+        ],
+    )?;
+    if properties.is_empty() {
+        return Err(entry.error("AmbiguousCtor: collection constructor requires an argument"));
+    }
+    for (key, text) in properties {
+        if text == "empty" {
+            continue;
+        }
+        let mismatch = || entry.error(&format!("TypeMismatch: incompatible element of {key}"));
+        match (key, scalar_value(text)) {
+            ("mockIntList" | "mockIntArray", Some(ScalarValue::List(items))) => {
+                let items = items
+                    .into_iter()
+                    .map(integer)
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(mismatch)?;
+                if key == "mockIntList" {
+                    bound.int_list = Some(items);
+                } else {
+                    bound.int_array = Some(items);
+                }
+            }
+            ("mockStringList", Some(ScalarValue::List(items))) => {
+                bound.string_list = Some(
+                    items
+                        .into_iter()
+                        .map(string)
+                        .collect::<Option<_>>()
+                        .ok_or_else(mismatch)?,
+                );
+            }
+            ("mockIntStringDict", Some(ScalarValue::Dictionary(items))) => {
+                let mut map = HashMap::new();
+                for (key, value) in items {
+                    let key = integer(key).ok_or_else(mismatch)?;
+                    let value = string(value).ok_or_else(mismatch)?;
+                    if map.insert(key, value).is_some() {
+                        return Err(entry.error("duplicate collection dictionary key"));
+                    }
+                }
+                bound.int_string_dict = Some(map);
+            }
+            _ => return Err(mismatch()),
+        }
+    }
+    Ok(FixtureValue::Collections(bound))
+}
+
 const MOCK_ENUM: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute";
 
 fn bind_fixture_enums(entry: &Entry) -> Result<[u8; 2], String> {
@@ -2111,12 +2180,14 @@ fn build_entries_with_scripts(
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
-            MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL | MOCK_RANGE | MOCK_OBJECT
-            | MOCK_REFERENCE
+            MOCK_COLLECTION | MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL | MOCK_RANGE
+            | MOCK_OBJECT | MOCK_REFERENCE
                 if check_only =>
             {
                 let value = if entry.model == MOCK_ENUM {
                     FixtureValue::Enums(bind_fixture_enums(entry)?)
+                } else if entry.model == MOCK_COLLECTION {
+                    bind_fixture_collections(entry)?
                 } else {
                     bind_scalar_fixture(entry)?
                 };
@@ -2388,6 +2459,7 @@ fn build_entries_with_scripts(
                         | MOCK_CPU
                         | MOCK_DEPENDENCY
                         | MOCK_ENUM
+                        | MOCK_COLLECTION
                         | MOCK_INTEGER
                         | MOCK_STRING
                         | MOCK_BOOL

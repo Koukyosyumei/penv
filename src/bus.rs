@@ -141,6 +141,15 @@ pub(crate) enum FixtureValue {
     Range(u64, u64),
     NullObject,
     NullPeripheralReference,
+    Collections(FixtureCollections),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct FixtureCollections {
+    pub int_list: Option<Vec<i32>>,
+    pub int_array: Option<Vec<i32>>,
+    pub string_list: Option<Vec<String>>,
+    pub int_string_dict: Option<HashMap<i32, String>>,
 }
 
 #[derive(Default)]
