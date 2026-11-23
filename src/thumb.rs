@@ -78,8 +78,8 @@ impl Thumb {
         let base = self.vector_base();
         let vector = base.checked_add(4).ok_or("reset vector address overflow")?;
         let words = bus
-            .read_cortex_m_reset_word(vector)
-            .and_then(|target| bus.read_cortex_m_reset_word(base).map(|sp| (sp, target)));
+            .read_cortex_m_vector_word(vector)
+            .and_then(|target| bus.read_cortex_m_vector_word(base).map(|sp| (sp, target)));
         let (sp, target) = match words {
             Ok(words) => words,
             Err(BusError::SlaveFault(_)) if self.thumb2 => return Ok(None),
@@ -341,20 +341,37 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<u32, String> {
-        let vector = bus
+        let vector_base = bus
             .nvic
             .as_ref()
             .and_then(|nvic| nvic.vector_base())
-            .unwrap_or_else(|| self.vector_base())
-            .checked_add(u32::from(exception) * 4)
-            .ok_or("exception vector address overflow")?;
-        let handler = bus
-            .read_ram::<4>(vector)
-            .map_err(|error| error.to_string())?;
-        if handler & 1 == 0 {
-            return Err(format!(
-                "exception {exception} vector {handler:#010x} does not select Thumb state"
-            ));
+            .unwrap_or_else(|| self.vector_base());
+        let read_handler = |bus: &Bus, exception: u8| {
+            let vector = vector_base
+                .checked_add(u32::from(exception) * 4)
+                .ok_or("exception vector address overflow")?;
+            match bus.read_cortex_m_vector_word(vector) {
+                Ok(handler) if handler & 1 != 0 => Ok(Some(handler & !1)),
+                Ok(handler) => Err(format!(
+                    "exception {exception} vector {handler:#010x} does not select Thumb state"
+                )),
+                Err(BusError::SlaveFault(_)) if self.thumb2 => Ok(None),
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        let mut handler = read_handler(bus, exception)?;
+        let mut exception = exception;
+        if handler.is_none() {
+            if let Some(nvic) = bus.nvic.as_mut() {
+                nvic.record_exception_vector_fault();
+            }
+            if !matches!(exception, NMI | HARD_FAULT)
+                && !matches!(self.active_exception, NMI | HARD_FAULT)
+                && !self.faultmask
+            {
+                exception = HARD_FAULT;
+                handler = read_handler(bus, exception)?;
+            }
         }
         let sp = r[13];
         let frame_size = if self.fp_active { 104 } else { 32 };
@@ -403,13 +420,18 @@ impl Thumb {
         bus.clear_reservation(0);
         self.active_exceptions |= 1 << exception;
         self.active_exception = exception;
-        if exception == HARD_FAULT
-            && let Some(nvic) = bus.nvic.as_mut()
-        {
-            nvic.set_hard_fault_active(true);
-        }
         self.itstate = 0;
-        Ok(handler & !1)
+        if let Some(nvic) = bus.nvic.as_mut() {
+            nvic.set_active_exceptions(self.active_exceptions);
+        }
+        if handler.is_none() || exception == NMI {
+            self.locked_up = handler.is_none();
+            self.sleep = Sleep::Running;
+            if let Some(nvic) = bus.nvic.as_mut() {
+                nvic.lockup = self.locked_up;
+            }
+        }
+        Ok(handler.unwrap_or(LOCKUP_PC))
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
@@ -469,13 +491,11 @@ impl Thumb {
             }
             self.set_apsr(xpsr);
             self.itstate = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
-            if self.active_exception == HARD_FAULT
-                && let Some(nvic) = bus.nvic.as_mut()
-            {
-                nvic.set_hard_fault_active(false);
-            }
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
+            if let Some(nvic) = bus.nvic.as_mut() {
+                nvic.set_active_exceptions(remaining);
+            }
             self.signal_event();
             return Ok(pc & !1);
         }
@@ -542,10 +562,6 @@ impl Thumb {
         if pending & (1 << NMI) != 0 && self.active_exception != NMI {
             *pc = self.exception_entry(NMI, *pc, r, bus)?;
             self.sleep = Sleep::Running;
-            self.locked_up = false;
-            if let Some(nvic) = bus.nvic.as_mut() {
-                nvic.lockup = false;
-            }
             bus.systick.as_mut().unwrap().acknowledge(NMI);
             self.pending &= !(1 << NMI);
             return Ok(true);
@@ -591,12 +607,14 @@ impl Thumb {
                 return Ok(false);
             }
             *pc = self.exception_entry(exception, *pc, r, bus)?;
-            if matches!(exception, PENDSV | SYSTICK) {
-                bus.systick.as_mut().unwrap().acknowledge(exception);
-            } else {
-                bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
+            if self.active_exception == exception {
+                if matches!(exception, PENDSV | SYSTICK) {
+                    bus.systick.as_mut().unwrap().acknowledge(exception);
+                } else {
+                    bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
+                }
+                self.pending &= !(1 << exception);
             }
-            self.pending &= !(1 << exception);
             return Ok(true);
         }
         Ok(false)

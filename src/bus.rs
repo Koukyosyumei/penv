@@ -1615,7 +1615,7 @@ impl Bus {
         })())
     }
 
-    pub fn read_cortex_m_reset_word(&self, address: u32) -> Result<u32, BusError> {
+    pub fn read_cortex_m_vector_word(&self, address: u32) -> Result<u32, BusError> {
         self.read_faulting_peripheral::<4>(address)
             .unwrap_or_else(|| self.read_ram::<4>(address))
     }

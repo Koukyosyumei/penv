@@ -20,6 +20,7 @@ const ENABLE: u32 = BASE + 0x100;
 const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
+const IABR: u32 = BASE + 0x300;
 const PRIORITY: u32 = BASE + 0x400;
 const SHPR1: u32 = BASE + 0xd18;
 const SHCSR: u32 = BASE + 0xd24;
@@ -53,6 +54,7 @@ pub struct Nvic {
     system_priority: [u8; 12],
     fault_enables: u32,
     hard_fault_active: bool,
+    active: u128,
     pub lockup: bool,
     cfsr: u32,
     hfsr: u32,
@@ -81,6 +83,7 @@ impl Nvic {
             system_priority: [0; 12],
             fault_enables: 0,
             hard_fault_active: false,
+            active: 0,
             lockup: false,
             cfsr: 0,
             hfsr: 0,
@@ -163,13 +166,18 @@ impl Nvic {
     }
 
     pub fn record_reset_vector_fault(&mut self) {
-        self.hfsr |= 1 << 1; // VECTTBL
+        self.record_exception_vector_fault();
         self.hard_fault_active = true;
         self.lockup = true;
     }
 
-    pub fn set_hard_fault_active(&mut self, active: bool) {
-        self.hard_fault_active = active;
+    pub fn record_exception_vector_fault(&mut self) {
+        self.hfsr |= 1 << 1; // VECTTBL
+    }
+
+    pub fn set_active_exceptions(&mut self, active: u128) {
+        self.active = active;
+        self.hard_fault_active = active & (1 << 3) != 0;
     }
 
     pub fn bus_fault_enabled(&self) -> bool {
@@ -282,7 +290,9 @@ impl Nvic {
                     | (u32::from(self.unalign_trap) << 3)
             }
             (SHCSR, 4) if self.cortex_m4 => {
-                self.fault_enables | (u32::from(self.hard_fault_active) << 2)
+                self.fault_enables
+                    | (u32::from(self.hard_fault_active) << 2)
+                    | (u32::from(self.active & (1 << 2) != 0) << 5)
             }
             (CFSR..=CFSR_END, 1 | 2 | 4) if self.cortex_m4 && address + width as u32 <= HFSR => {
                 let mask = u32::MAX >> (32 - width * 8);
@@ -292,6 +302,8 @@ impl Nvic {
             (BFAR, 4) if self.cortex_m4 => self.bfar,
             (SCR, 4) => self.sleep_control,
             (VTOR, 4) => self.vector_base.unwrap_or(0),
+            (IABR, 4) if self.cortex_m4 => (self.active >> 16) as u32,
+            (address, 4) if self.cortex_m4 && address == IABR + 4 => (self.active >> 48) as u32,
             (ENABLE | DISABLE, 4) => self.enabled as u32,
             (SET_PENDING | CLEAR_PENDING, 4) => self.pending as u32,
             (ENABLE_HIGH | DISABLE_HIGH, 4) if self.cortex_m4 => (self.enabled >> 32) as u32,

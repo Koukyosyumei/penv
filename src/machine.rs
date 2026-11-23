@@ -446,7 +446,7 @@ impl Hart {
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
             nvic.lockup = false;
-            nvic.set_hard_fault_active(false);
+            nvic.set_active_exceptions(0);
         }
         self.registers.fill(0);
         if let Some((sp, pc)) = reset_context {
@@ -880,6 +880,81 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exception_vector_fault_machine(offset: Option<usize>) -> Machine {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, offset)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut out = std::io::sink();
+        for (address, value) in [(0, 0x1000), (4, 0x201)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for address in [0x200, 0x340] {
+            machine.bus.write(address, 2, 0xe7fe, &mut out).unwrap();
+        }
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+        machine
+    }
+
+    #[test]
+    fn upstream_external_irq_vector_bus_fault_selects_hard_fault() {
+        let mut machine = exception_vector_fault_machine(Some(0x40));
+        let mut out = std::io::sink();
+        machine.bus.write(0x10000c, 4, 0x341, &mut out).unwrap();
+        machine.bus.write(0xe000_e100, 4, 1, &mut out).unwrap();
+        machine.bus.write(0xe000_e200, 4, 1, &mut out).unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (false, 0, 3)
+        );
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+        assert_eq!(machine.bus.read::<4>(0xe000_e300).unwrap() & 1, 0);
+    }
+
+    #[test]
+    fn upstream_nmi_vector_bus_fault_locks_up() {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(machine.primary.registers[14], 0xffff_fff9); // Armv7-M thread/MSP.
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 2)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 1 << 5);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        machine.bus.write(0xe000_ed2c, 4, 2, &mut out).unwrap();
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+    }
 
     fn check_reset_bus_fault(offset: usize) {
         let mut machine = Machine::new(0x1000).unwrap();
