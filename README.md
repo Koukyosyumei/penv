@@ -357,6 +357,10 @@ target/release/penv run --script "$fire_probe" --platform-root ../renode \
 
 HSS がペイロード登録後に `0x2000100c` を読み出すため、PolarFire のウォッチドッグの設定・ステータス、リフレッシュウィンドウ、IRQ とリセット要求を実装しました。前節と同じ公開素材とコマンドで、実行中の OpenSBI v1.2、U-Boot 2023.07.02、`Model: BeagleBoard BeagleV-Fire` を UART で確認しました。U-Boot は MMC 列挙中の `0x200082fe` の 16 ビット読み出しでロードアクセス例外になります。[Renode MPFS_Watchdog](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Timers/MPFS_Watchdog.cs)
 
+#### Fire の U-Boot MMC 列挙
+
+MPFS SD ホストに 8・16・32 ビットのレジスターアクセス、ホストクロックとソフトリセットを追加しました。公開イメージで前節の手順を `--max-steps 650000000` まで実行し、U-Boot の `MMC: mmc@20008000: 0` とシリアル入出力の初期化を確認しました。次は `Net:` に続く Cadence GEM の `0x20110294` への読み出しでロードアクセス例外になります。これは Design Configuration 6 です。Linux 起動は未到達です。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。

@@ -24,6 +24,9 @@ pub struct Controller {
     card: Option<Card>,
     sd_selected: bool,
     phy_settings: u32,
+    host_control: u32,
+    clock_control: u32,
+    host_control2: u32,
     block_size_count: u32,
     argument: u32,
     command_mode: u32,
@@ -68,6 +71,9 @@ impl Controller {
             card: None,
             sd_selected: true,
             phy_settings: 0,
+            host_control: 0,
+            clock_control: 2,
+            host_control2: 0,
             block_size_count: 0,
             argument: 0,
             command_mode: 0,
@@ -136,13 +142,22 @@ impl Controller {
         (self.irq, self.status & self.signal_enable != 0)
     }
 
-    pub fn read(&mut self, address: u32, width: usize) -> Option<u32> {
+    fn access(&self, address: u32, width: usize) -> Option<(u32, u32, u32)> {
         let offset = address.checked_sub(self.base)?;
-        if width != 4 {
+        if !matches!(width, 1 | 2 | 4)
+            || !(offset as usize).is_multiple_of(width)
+            || u64::from(offset) >= Self::SIZE
+        {
             return None;
         }
-        Some(match offset {
-            0x000 | 0x004 | 0x018 | 0x228 | 0x23c => 0,
+        let shift = (offset & 3) * 8;
+        let mask = (u32::MAX >> (32 - width * 8)) << shift;
+        Some((offset, shift, mask))
+    }
+
+    pub fn read(&mut self, address: u32, width: usize) -> Option<u32> {
+        let (offset, shift, mask) = self.access(address, width)?;
+        let word = match offset & !3 {
             0x010 => self.phy_settings,
             0x240 => 0x1740_0184, // Clock, voltage and 64-bit SDMA capabilities
             0x200 | 0x258 => self.dma_address as u32,
@@ -161,45 +176,77 @@ impl Controller {
                         0
                     }
             }
-            0x22c => 1 << 1, // Internal clock stable
+            0x228 => self.host_control,
+            0x22c => self.clock_control,
             0x230 => self.status | (u32::from(self.status >> 16 != 0) << 15),
             0x234 => self.status_enable,
             0x238 => self.signal_enable,
-            _ => return None,
-        })
+            0x23c => self.host_control2,
+            // Renode returns zero for unhandled register offsets.
+            _ => 0,
+        };
+        Some((word & mask) >> shift)
     }
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> Option<()> {
-        match (address.checked_sub(self.base)?, width) {
-            // These offsets have no active fields in the upstream controller.
-            (0x000 | 0x004 | 0x018 | 0x228 | 0x22c | 0x23c | 0x240, 4) => {}
-            (0x010, 4) => {
+        let (offset, shift, mask) = self.access(address, width)?;
+        let value = (value << shift) & mask;
+        let update = |word: u32| (word & !mask) | value;
+        match offset & !3 {
+            0x010 => {
+                let value = update(self.phy_settings);
                 let acknowledge = u32::from(value & (3 << 24) != 0) << 26;
                 self.phy_settings = (value & 0x0000_ff3f) | acknowledge;
             }
-            (0x200 | 0x258, 4) => {
-                self.dma_address = self.dma_address & 0xffff_ffff_0000_0000 | u64::from(value);
+            0x200 | 0x258 => {
+                self.dma_address = self.dma_address & 0xffff_ffff_0000_0000
+                    | u64::from(update(self.dma_address as u32));
             }
-            (0x25c, 4) => {
-                self.dma_address = u64::from(value) << 32 | u64::from(self.dma_address as u32)
+            0x25c => {
+                let address_high = update((self.dma_address >> 32) as u32);
+                self.dma_address =
+                    u64::from(address_high) << 32 | u64::from(self.dma_address as u32);
             }
-            (0x204, 4) => self.block_size_count = value,
-            (0x208, 4) => self.argument = value,
-            (0x20c, 4) => {
-                self.command_mode = value;
-                self.command();
+            0x204 => self.block_size_count = update(self.block_size_count),
+            0x208 => self.argument = update(self.argument),
+            0x20c => {
+                self.command_mode = update(self.command_mode);
+                if mask & 0xff00_0000 != 0 {
+                    self.command();
+                }
             }
-            (0x20c, 2) => self.command_mode = (self.command_mode & 0xffff_0000) | value,
-            (0x20e, 2) => {
-                self.command_mode = (self.command_mode & 0xffff) | (value << 16);
-                self.command();
-            }
-            (0x230, 4) => self.status &= !value,
-            (0x234, 4) => self.status_enable = value,
-            (0x238, 4) => self.signal_enable = value,
-            _ => return None,
+            0x228 => self.host_control = update(self.host_control),
+            0x22c => self.write_clock_control(update(self.clock_control)),
+            0x230 => self.status &= !value,
+            0x234 => self.status_enable = update(self.status_enable),
+            0x238 => self.signal_enable = update(self.signal_enable),
+            0x23c => self.host_control2 = update(self.host_control2),
+            _ => {}
         }
         Some(())
+    }
+
+    fn write_clock_control(&mut self, value: u32) {
+        // The internal clock is stable and all requested reset lines complete
+        // synchronously. Resetting the host leaves the card attached.
+        self.clock_control = (value & 0x00ff_ffff) | 2;
+        if value & (1 << 24) != 0 {
+            self.clock_control = 2;
+            self.host_control = 0;
+            self.host_control2 = 0;
+            self.block_size_count = 0;
+            self.argument = 0;
+            self.command_mode = 0;
+            self.response.fill(0);
+            self.status = 0;
+            self.status_enable = 0;
+            self.signal_enable = 0;
+            self.dma_address = 0;
+        }
+        if value & (5 << 24) != 0 {
+            self.transfer_size = 0;
+            self.dma_read = None;
+        }
     }
 
     fn command(&mut self) {
@@ -493,6 +540,23 @@ mod tests {
         assert_eq!(sd.write(sd.base + 0x10, 4, 0x0000_1234), Some(()));
         assert_eq!(sd.read(sd.base + 0x10, 4), Some(0x0000_1234));
         assert_eq!(sd.read(sd.base + 0x240, 4), Some(0x1740_0184));
+    }
+
+    #[test]
+    fn sdhci_byte_and_halfword_accesses_preserve_adjacent_fields() {
+        let mut sd = Controller::new("mmc".into(), 0x2000_8000, 88);
+        let base = sd.base;
+        assert_eq!(sd.read(base + 0x2fe, 2), Some(0));
+        assert_eq!(sd.read(base + 0x22d, 2), None);
+        sd.write(base + 0x228, 1, 0x21).unwrap();
+        sd.write(base + 0x229, 1, 0x0f).unwrap();
+        assert_eq!(sd.read(base + 0x228, 2), Some(0x0f21));
+        sd.write(base + 0x22c, 2, 5).unwrap();
+        sd.write(base + 0x22e, 1, 0xe).unwrap();
+        assert_eq!(sd.read(base + 0x22c, 4), Some(0x000e_0007));
+        sd.write(base + 0x22f, 1, 1).unwrap();
+        assert_eq!(sd.read(base + 0x22c, 4), Some(2));
+        assert_eq!(sd.read(base + 0x228, 2), Some(0));
     }
 
     #[test]
