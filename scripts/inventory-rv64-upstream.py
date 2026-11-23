@@ -229,6 +229,13 @@ def disposition(path, name, context):
             "Values Written By One Core Should Not Be Visible By The Other One",
         }:
             return "pass", "Fixed REPL, public ELF and ordered UART assertions verified by verify-rv64-per-core.py"
+        if name in {
+            "Write Values Using Sysbus",
+            "Write Values Using Sysbus With Context",
+            "Handle Being Simultaneously Registered On The Main Bus",
+            "Read Values Using Sysbus Context",
+        }:
+            return "pass", "Fixed REPL and ELF with matching contextual or global memory and UART assertions"
         if name == "Cluster Memory Should Only Be Visible To Cluster":
             return "partial", "Scoped backing and cluster visibility checked in Rust; Monitor operations remain"
     if path.name == "offset-bus-registrations.robot":

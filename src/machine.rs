@@ -188,6 +188,16 @@ impl Machine {
         }
     }
 
+    pub(crate) fn rv64_hart_by_name(&self, name: &str) -> Result<usize, String> {
+        std::iter::once(&self.primary)
+            .chain(&self.secondary)
+            .enumerate()
+            .find_map(|(id, hart)| {
+                (hart.name.as_deref() == Some(name) && hart.rv64.is_some()).then_some(id)
+            })
+            .ok_or_else(|| format!("unknown named RV64 CPU {name:?}"))
+    }
+
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
         let hart = std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)

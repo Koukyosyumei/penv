@@ -57,7 +57,8 @@ Options:
   --rv64             Run a raw image on an RV64IM CPU
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
-  --load-binary BASE:PATH  Load a flat companion image into RAM (repeatable)
+  --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
+  --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
   --dtb BASE:PATH    Load an RV64 boot DTB and pass its address in a1
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
@@ -148,6 +149,7 @@ fn run() -> Result<ExitCode, String> {
     let mut max_steps = 10_000_000;
     let mut extra_ram = Vec::new();
     let mut companion_images = Vec::new();
+    let mut memory_reads = Vec::new();
     let mut dtb = None;
     let mut clint = None;
     let mut mtvec = None;
@@ -266,8 +268,12 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
-            Some(option @ ("--load-binary" | "--dtb")) => {
-                let error = || format!("{option} requires BASE:PATH");
+            Some(option @ ("--load-binary" | "--read-memory" | "--dtb")) => {
+                let error = || match option {
+                    "--load-binary" => "--load-binary requires [CPU@]BASE:PATH",
+                    "--read-memory" => "--read-memory requires [CPU@]BASE:WIDTH",
+                    _ => "--dtb requires BASE:PATH",
+                };
                 let value = args
                     .next()
                     .and_then(|value| value.into_string().ok())
@@ -276,11 +282,30 @@ fn run() -> Result<ExitCode, String> {
                     .split_once(':')
                     .filter(|(_, path)| !path.is_empty())
                     .ok_or_else(error)?;
-                let image = (PathBuf::from(path), parse_address64(base)?);
+                if option == "--dtb" {
+                    if dtb
+                        .replace((PathBuf::from(path), parse_address64(base)?))
+                        .is_some()
+                    {
+                        return Err("--dtb may only be specified once".into());
+                    }
+                    continue;
+                }
+                let (cpu, base) = match base.split_once('@') {
+                    Some((cpu, base)) if !cpu.is_empty() => (Some(cpu.to_owned()), base),
+                    Some(_) => return Err(error().into()),
+                    None => (None, base),
+                };
+                let address = parse_address64(base)?;
                 if option == "--load-binary" {
-                    companion_images.push(image);
-                } else if dtb.replace(image).is_some() {
-                    return Err("--dtb may only be specified once".into());
+                    companion_images.push((PathBuf::from(path), address, cpu));
+                } else {
+                    let width = path
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|width| matches!(width, 1 | 2 | 4 | 8))
+                        .ok_or("--read-memory width must be 1, 2, 4 or 8 bytes")?;
+                    memory_reads.push((cpu, address, width));
                 }
             }
             Some("--map-ram") => {
@@ -490,10 +515,24 @@ fn run() -> Result<ExitCode, String> {
                     .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
             }
         }
-        for (path, address) in binaries.iter().chain(&companion_images) {
+        for (path, address) in &binaries {
             let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             image::load_binary(&mut machine, file, *address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        for (path, address, cpu) in &companion_images {
+            let hart = cpu
+                .as_deref()
+                .map(|cpu| machine.rv64_hart_by_name(cpu))
+                .transpose()?;
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load_binary_in_context(&mut machine, file, *address, hart)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        for (cpu, _, _) in &memory_reads {
+            if let Some(cpu) = cpu {
+                machine.rv64_hart_by_name(cpu)?;
+            }
         }
         if let Some(count) = harts {
             if count != 1 && machine.is_cortex_m() {
@@ -566,6 +605,16 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.program_counter()
         );
+    }
+    for (cpu, address, width) in memory_reads {
+        let hart = cpu
+            .as_deref()
+            .map(|cpu| machine.rv64_hart_by_name(cpu))
+            .transpose()?;
+        let value = rv64::ram_read(&machine.bus, hart, address, width)
+            .ok_or_else(|| format!("unmapped RAM read at {address:#018x} ({width} bytes)"))?;
+        let context = cpu.as_deref().unwrap_or("sysbus");
+        eprintln!("penv: memory {context}@{address:#018x}:{width} = {value:#018x}");
     }
     if let Stop::TestExit(code) = stop {
         eprintln!("penv: TEST FINISHED");

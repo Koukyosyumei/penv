@@ -12,16 +12,26 @@ struct ArmSegment {
     physical_address: u32,
 }
 
-pub fn load_binary(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {
+pub fn load_binary(machine: &mut Machine, file: File, address: u64) -> Result<(), String> {
+    load_binary_in_context(machine, file, address, None)
+}
+
+pub fn load_binary_in_context(
+    machine: &mut Machine,
+    mut file: File,
+    address: u64,
+    hart: Option<usize>,
+) -> Result<(), String> {
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     if length == 0 {
         return Err("empty raw image".into());
     }
     let size = usize::try_from(length).map_err(|_| "raw image too large")?;
-    let memory = machine
-        .bus
-        .memory64(address, size)
-        .ok_or_else(|| format!("unmapped RAM access at {address:#010x} ({size} bytes)"))?;
+    let memory = match hart {
+        Some(hart) => machine.bus.cpu_memory64(hart, address, size),
+        None => machine.bus.memory64(address, size),
+    }
+    .ok_or_else(|| format!("unmapped RAM access at {address:#010x} ({size} bytes)"))?;
     file.read_exact(memory).map_err(|error| error.to_string())
 }
 
