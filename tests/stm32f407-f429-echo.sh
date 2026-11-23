@@ -35,15 +35,25 @@ RESC
 
 status=0
 "$penv" run --script "$work/boot.resc" --platform-root "$renode" \
-    --max-steps "${PENV_ECHO_ROUNDS:-1000000}" --stats \
+    --max-steps "${PENV_ECHO_ROUNDS:-5000000}" --stats \
     > "$work/uart.log" 2> "$work/run.log" || status=$?
 printf '%s\n' "$status" > "$work/run.status"
 
-# Check the first Robot expectation. The CLI currently combines node UART
-# output; the complete case still needs per-node timed terminal assertions.
-if ! grep -qF 'Initializing network' "$work/uart.log"; then
-    printf '%s\n' 'BLOCKED: Initializing network was absent from the combined UART log'
-    cat "$work/run.log"
+# The shared stdout can interleave bytes from both UARTs. Check observable
+# TCP progress here; Robot equivalence requires per-node timed assertions.
+if [[ "$status" != 2 ]] || ! grep -qF 'simulation round limit reached' "$work/run.log"; then
+    cat "$work/run.log" >&2
     exit 1
 fi
-printf '%s\n' 'PARTIAL: Initializing network observed; per-node Robot expectations pending'
+for marker in 'Initializing network' 'Run echo server' 'Run echo client' 'Accepted connection'; do
+    if ! grep -aqF "$marker" "$work/uart.log"; then
+        printf 'BLOCKED: %s was absent from the combined UART log\n' "$marker" >&2
+        exit 1
+    fi
+done
+matches=$(grep -acE 'IPv4 TCP: Received and compared [0-9]+ bytes, all ok' "$work/uart.log" || :)
+if [[ "$matches" == 0 ]]; then
+    printf '%s\n' 'BLOCKED: no intact TCP compare line in combined UART' >&2
+    exit 1
+fi
+printf 'PARTIAL: TCP connection and %s intact TCP compare lines; per-node Robot assertions pending\n' "$matches"

@@ -3524,7 +3524,7 @@ fn configure_bus_init(
             && !path.chars().any(char::is_whitespace)
         {
             if path == "https://dl.antmicro.com/projects/renode/svd/STM32F40x.svd.gz" {
-                map_f40x_otg_svd_defaults(machine).map_err(|e| entry.error(&e))?;
+                map_f40x_svd_defaults(machine).map_err(|e| entry.error(&e))?;
             }
             continue;
         }
@@ -3565,7 +3565,14 @@ fn configure_bus_init(
     Ok(())
 }
 
-fn map_f40x_otg_svd_defaults(machine: &mut Machine) -> Result<(), String> {
+fn map_f40x_svd_defaults(machine: &mut Machine) -> Result<(), String> {
+    // USART6 is absent from the F407 REPL, but ApplySVD supplies register
+    // tags. Zephyr on the F429 initializes this secondary USART while
+    // the Robot suite observes the modeled USART3.
+    machine
+        .bus
+        .map_bus_tag(0x4001_1400, 0x4001_1403, 0x00c0_0000)?;
+    machine.bus.map_bus_tag(0x4001_1404, 0x4001_141b, 0)?;
     // Unmodeled OTG FS registers accessed during CubeMX host initialization.
     // The REPL supplies an explicit USB:RESET tag for the global reset window.
     const BASE: u32 = 0x5000_0000;
