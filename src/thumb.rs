@@ -32,6 +32,13 @@ pub(crate) struct ThumbBoundary {
     pub exception_depth: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DebugStep {
+    Retired,
+    Sleeping,
+    Breakpoint,
+}
+
 #[derive(Clone, Default)]
 pub struct Thumb {
     vectors: Option<u32>,
@@ -598,6 +605,34 @@ impl Thumb {
         Ok(())
     }
 
+    pub(crate) fn debug_vfp_registers(&self) -> (&[u32; 32], u32) {
+        (&self.fp, self.fpscr)
+    }
+
+    pub(crate) fn debug_step(
+        &mut self,
+        pc: &mut u32,
+        registers: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+        enter_debug_mode: bool,
+    ) -> Result<DebugStep, String> {
+        if !self.clocked() {
+            return Ok(DebugStep::Sleeping);
+        }
+        if self.sleeping() {
+            if !enter_debug_mode || self.sleep != Sleep::Interrupt {
+                return Ok(DebugStep::Sleeping);
+            }
+            self.sleep = Sleep::Running;
+        }
+        if self.step(pc, registers, bus, output)? {
+            Ok(DebugStep::Retired)
+        } else {
+            Ok(DebugStep::Breakpoint)
+        }
+    }
+
     pub fn step(
         &mut self,
         pc: &mut u32,
@@ -1156,6 +1191,50 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn debug_step_wfi_respects_debug_mode() {
+        for enabled in [false, true] {
+            let mut bus = Bus::default();
+            let mut out = std::io::sink();
+            bus.map_ram(0, 0x1000).unwrap();
+            bus.write(0x10, 2, 0xbf30, &mut out).unwrap();
+            bus.write(0x12, 2, 0xbf00, &mut out).unwrap();
+            let mut thumb = Thumb::default();
+            let mut registers = [0; 32];
+            let mut pc = 0x10;
+            assert_eq!(
+                thumb
+                    .debug_step(&mut pc, &mut registers, &mut bus, &mut out, enabled)
+                    .unwrap(),
+                DebugStep::Retired
+            );
+            assert_eq!(pc, 0x12);
+            let stop = thumb
+                .debug_step(&mut pc, &mut registers, &mut bus, &mut out, enabled)
+                .unwrap();
+            if enabled {
+                assert_eq!((stop, pc), (DebugStep::Retired, 0x14));
+            } else {
+                assert_eq!((stop, pc), (DebugStep::Sleeping, 0x12));
+                assert!(thumb.sleeping());
+            }
+        }
+    }
+
+    #[test]
+    fn debug_vfp_readback_preserves_scalar_register_number_and_bits() {
+        let mut thumb = Thumb::default();
+        for (i, register) in thumb.fp.iter_mut().enumerate() {
+            *register = (100.0 + i as f32).to_bits();
+        }
+        thumb.fpscr = 0x6000_0000;
+        let (registers, fpscr) = thumb.debug_vfp_registers();
+        for (i, &register) in registers.iter().enumerate() {
+            assert_eq!(f32::from_bits(register), 100.0 + i as f32);
+        }
+        assert_eq!(fpscr, 0x6000_0000);
     }
 
     // Instructions from the ELF in tlib/arm/thumb2-data-processing-instr.robot.
