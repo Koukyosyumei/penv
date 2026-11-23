@@ -1466,3 +1466,31 @@ fn renode_description_mixed_line_endings() {
     .unwrap();
     assert_eq!(entries.len(), 3);
 }
+
+#[test]
+fn renode_empty_keyword_type() {
+    let error = check_string(
+        "\nmockPeripheral: empty @ sysbus <0, 1>\n    value: 0",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("SyntaxError:"), "{error}");
+}
+
+#[test]
+fn renode_empty_keyword_registration_destination() {
+    let error = check_string("\nmockPeripheral:  Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ empty <0, 1>\n    value: 0", None).unwrap_err();
+    assert!(error.contains("SyntaxError:"), "{error}");
+}
+
+#[test]
+fn renode_empty_keyword_parameter_name() {
+    let error = check_string("\nmockPeripheral:  Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>\n    empty: 0", None).unwrap_err();
+    assert!(error.contains("SyntaxError:"), "{error}");
+}
+
+#[test]
+fn renode_empty_keyword_using_parameter() {
+    let error = check_string("using empty", None).unwrap_err();
+    assert!(error.contains("SyntaxError:"), "{error}");
+}

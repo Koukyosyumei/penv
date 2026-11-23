@@ -962,6 +962,20 @@ fn parse_content(
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
         };
+        if model == "empty" {
+            return Err(error(
+                "SyntaxError: reserved keyword empty cannot name a type",
+            ));
+        }
+        if registration
+            .as_deref()
+            .and_then(|text| text.split_whitespace().next())
+            == Some("empty")
+        {
+            return Err(error(
+                "SyntaxError: reserved keyword empty cannot name a registration destination",
+            ));
+        }
         if let Some(registration) = &mut registration
             && registration.starts_with('{')
         {
@@ -1056,7 +1070,7 @@ fn parse_using_statement(statement: &str) -> Result<Option<String>, &'static str
     quoted_string(argument)
         .filter(|path| !path.is_empty())
         .map(Some)
-        .ok_or("expected using \"path.repl\"")
+        .ok_or("SyntaxError: expected using \"path.repl\"")
 }
 
 fn read_multiline_property<'a>(
@@ -1617,6 +1631,10 @@ fn validate_entry_attributes(entry: &Entry) -> Result<(), String> {
     let mut properties = HashSet::new();
     let mut init = false;
     for (_, text) in &entry.body {
+        if scalar_property(text) == Some("empty") {
+            return Err(entry.error("SyntaxError: reserved keyword empty cannot name an attribute"));
+        }
+
         if text
             .lines()
             .next()
