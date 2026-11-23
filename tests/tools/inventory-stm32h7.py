@@ -394,6 +394,16 @@ def triage(row):
     }:
         status, reason = 'PASS', '固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs'
     elif suite == 'PreLexerTests.cs' and name in {
+        'ShouldProcessSimpleFile',
+        'ShouldProcessDoubleDedent',
+        'ShouldProcessDoubleDedentAtTheEndOfFile',
+        'ShouldProcessTwoLinesWithNoIndent',
+        'ShouldProcessTwoLinesWithNoIndentAndSeparation',
+        'ShouldHandleEmptyLinesAtTheEndOfSource',
+        'ShouldNotProcessIndentInBraces',
+    }:
+        status, reason = 'PARTIAL', '固定入力と出力は共有字下げ判定を使うテスト用レンダラーで照合済み。EOF・空行・明示波括弧の全境界を本番パーサーの経路で観測する仕組みが未実装'
+    elif suite == 'PreLexerTests.cs' and name in {
         'ShouldProcessEmptyFile',
         'ShouldHandleTextOnTheFirstLine',
         'ShouldHandleInitialIndent',

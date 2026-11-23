@@ -651,6 +651,24 @@ fn resolve_using(argument: &str, include_dir: &Path, root: &Path) -> std::io::Re
     Ok(resolved)
 }
 
+enum IndentBoundary {
+    Open,
+    Sibling,
+    Close,
+}
+
+fn indentation(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+fn indent_boundary(from: usize, to: usize) -> IndentBoundary {
+    match from.cmp(&to) {
+        std::cmp::Ordering::Less => IndentBoundary::Open,
+        std::cmp::Ordering::Equal => IndentBoundary::Sibling,
+        std::cmp::Ordering::Greater => IndentBoundary::Close,
+    }
+}
+
 fn parse_text(
     content: &str,
     path: &Path,
@@ -681,17 +699,19 @@ fn parse_text(
         if text.is_empty() {
             continue;
         }
-        let indentation = line.len() - line.trim_start().len();
-        if init_indent.is_some_and(|indent| indentation > indent) {
+        let indent = indentation(&line);
+        if init_indent
+            .is_some_and(|parent| matches!(indent_boundary(parent, indent), IndentBoundary::Open))
+        {
             init.push((source, text.into()));
             continue;
         }
         init_indent = None;
-        if text == "init:" && indentation != 0 {
+        if text == "init:" && indent != 0 {
             if current.is_none() || !init.is_empty() {
                 return Err(error("expected a single init section in a declaration"));
             }
-            init_indent = Some(indentation);
+            init_indent = Some(indent);
             init.push((source, text.into()));
             continue;
         }
@@ -741,7 +761,11 @@ fn parse_text(
             {
                 property.push_str(" {");
                 while lines.peek().is_some_and(|(_, raw)| {
-                    !raw.trim().is_empty() && raw.len() - raw.trim_start().len() > indentation
+                    raw.trim().is_empty()
+                        || matches!(
+                            indent_boundary(indent, indentation(raw)),
+                            IndentBoundary::Open
+                        )
                 }) {
                     let (index, raw) = lines.next().unwrap();
                     let continuation = comments
@@ -2441,6 +2465,98 @@ mod comment_cases {
     fn lines(source: &str) -> Result<Vec<String>, &'static str> {
         let mut comments = ReplComments::default();
         source.lines().map(|line| comments.line(line)).collect()
+    }
+
+    // Render the implicit boundaries used by the parser in the format of
+    // the fixed upstream prelexer fixtures.
+    fn render_boundaries(source: &str) -> String {
+        let mut lexer = ReplComments::default();
+        let lines = source
+            .split('\n')
+            .map(|raw| {
+                let line = lexer.first_line(raw).unwrap();
+                (line, lexer.braces)
+            })
+            .collect::<Vec<_>>();
+        let mut rendered = Vec::new();
+        let mut from = 0;
+        for (index, (line, braces)) in lines.iter().enumerate() {
+            let mut line = line.clone();
+            if !line.trim().is_empty() {
+                let next = lines[index + 1..]
+                    .iter()
+                    .find(|(line, _)| !line.trim().is_empty());
+                if *braces <= 0 {
+                    let to = next.map_or(0, |(line, _)| indentation(line) / 4);
+                    match indent_boundary(from, to) {
+                        IndentBoundary::Open => line.extend(std::iter::repeat_n('{', to - from)),
+                        IndentBoundary::Close => {
+                            line.extend(std::iter::repeat_n('}', from - to));
+                            if next.is_some() {
+                                line.push(';');
+                            }
+                        }
+                        IndentBoundary::Sibling if next.is_some() => line.push(';'),
+                        IndentBoundary::Sibling => {}
+                    }
+                    from = to;
+                }
+            }
+            rendered.push(line);
+        }
+        rendered.join("\n")
+    }
+
+    #[test]
+    fn upstream_process_simple_file() {
+        assert_eq!(
+            render_boundaries(
+                "first line\nsecond line\n    first indented\n    second indented\nthird line"
+            ),
+            "first line;\nsecond line{\n    first indented;\n    second indented};\nthird line"
+        );
+    }
+
+    #[test]
+    fn upstream_process_double_dedent() {
+        assert_eq!(
+            render_boundaries(
+                "first line\nsecond line\n    first indented\n    second indented\n\nthird line"
+            ),
+            "first line;\nsecond line{\n    first indented;\n    second indented};\n\nthird line"
+        );
+    }
+
+    #[test]
+    fn upstream_process_double_dedent_at_eof() {
+        assert_eq!(
+            render_boundaries("first line\nsecond line\n    first indented"),
+            "first line;\nsecond line{\n    first indented}"
+        );
+    }
+
+    #[test]
+    fn upstream_process_two_lines_no_indent() {
+        assert_eq!(render_boundaries("\nline1\nline2"), "\nline1;\nline2");
+    }
+
+    #[test]
+    fn upstream_process_two_lines_with_separation() {
+        assert_eq!(render_boundaries("\nline1\n\nline2"), "\nline1;\n\nline2");
+    }
+
+    #[test]
+    fn upstream_handle_empty_lines_at_eof() {
+        assert_eq!(
+            render_boundaries("\nline1\nline2\n\n"),
+            "\nline1;\nline2\n\n"
+        );
+    }
+
+    #[test]
+    fn upstream_preserve_indent_in_braces() {
+        let source = "\nline1 { \n    line2 }";
+        assert_eq!(render_boundaries(source), source);
     }
 
     #[test]

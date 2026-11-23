@@ -1310,3 +1310,21 @@ target/release/penv check-platform "$e/initial-indent.repl" --platform-root ../r
 ```
 
 最後のコマンドは構文エラーで終了します。`cargo test` 162件、固定 STM32H7 REPL 7構成、既存の構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格155件、部分検証10件、未達621件です。段階的な字下げと EOF での境界ケースは、上流が文字列に挿入する区切りと現行パーサーが内部で扱う属性境界の対応を検証する処理が必要です。
+
+### backlog-network-131f440804a5-1
+
+REPL の字下げ境界判定を `init:` と字下げ付きオブジェクト属性で共有し、オブジェクト属性間の空行を許容しました。固定上流 `PreLexerTests.cs` の残り7件を個別テストとして移植しました。初回は明示波括弧の終端でテスト用レンダラーが閉じ波括弧を一つ余分に生成したため、有効な字下げレベルを保持するよう修正しました。
+
+7件とも上流出力と一致しました。テスト用レンダラーは実装と字下げ判定を共有しますが、EOF、空行、明示波括弧が混在する境界を本番パーサーからすべて観測する仕組みが残るため、台帳では部分検証です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 169件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、初回失敗と再実行のログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-indent-boundaries.Mupqb4ab` に保存しました。対象786件のうち等価合格155件、部分検証17件、未達614件です。
