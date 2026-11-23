@@ -23,10 +23,16 @@ pub struct Boot {
     pub platform: Option<PathBuf>,
     pub image: Option<Asset>,
     pub use_virtual_elf_addresses: bool,
-    pub trap_vectors: Vec<(TrapVector, Option<u32>)>,
+    pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
     started: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CpuRegisterCommand {
+    TrapVector(TrapVector, Option<u32>),
+    Integer(u32, Option<u32>),
 }
 
 pub enum PostRun {
@@ -442,7 +448,19 @@ fn execute(
                 .first()
                 .map(|value| crate::parse_address(resolve(value)?))
                 .transpose()?;
-            boot.trap_vectors.push((register, value));
+            boot.cpu_registers
+                .push(CpuRegisterCommand::TrapVector(register, value));
+        }
+        ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.platform.is_some() => {
+            let index = crate::parse_address(unquote(resolve(index)?))?;
+            boot.cpu_registers
+                .push(CpuRegisterCommand::Integer(index, None));
+        }
+        ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.platform.is_some() => {
+            let index = crate::parse_address(unquote(resolve(index)?))?;
+            let value = crate::parse_address(resolve(value)?)?;
+            boot.cpu_registers
+                .push(CpuRegisterCommand::Integer(index, Some(value)));
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
@@ -622,8 +640,11 @@ mod tests {
             Some("firmware file.elf")
         );
         assert_eq!(
-            boot.trap_vectors,
-            [(TrapVector::Machine, Some(0x8000_0020))]
+            boot.cpu_registers,
+            [CpuRegisterCommand::TrapVector(
+                TrapVector::Machine,
+                Some(0x8000_0020)
+            )]
         );
         assert_eq!(boot.mask, Some(u32::MAX));
         fs::write(&script, content.replace("MTVEC", "unknown")).unwrap();

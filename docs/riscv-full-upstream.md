@@ -497,3 +497,22 @@ bash scripts/validate-riscv-upstream.sh "$(realpath target/release/penv)" \
 LB の再現 ELF は変更後、1 命令をリタイアして期待 PC 0x2004 に到達しました。テスト 79 件、公開 M/S 特権 ELF 22 件とアライメント済みの ISA ELF 120 件、virt の UART・CLINT・PLIC プローブが通過しました。実ファームウェア回帰スクリプトも完走し、LiteX 単一ハート・SMP Linux、Minerva の UART からのロードと実行、I²S の PCM バイト一致を確認しました。上流等価合格は累計 71 件です。Renode の未マップアクセス診断ログ、モニターの x0・ResetVector、無効命令のログ、V と Zcb が必要な固定特権フィクスチャは残っています。
 
 再現用 ELF、ソース、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-f146f92-5wB6Ke/` に保存しました。
+
+### RV32 のモニター経由の整数レジスター操作
+
+起動 RESC の `cpu SetRegister INDEX VALUE` と `cpu GetRegister INDEX` で、RV32 の整数レジスター 0–31 を操作できます。MTVEC/STVEC と整数レジスターの操作は記述順に適用します。固定 `riscv-unit-tests.robot` の `Should Fail On Setting X0 register` は、同じハートに対し値 1 の書き込みが読み取り専用エラーになり、直後の x0 読み戻しが 0 であることを Rust のマシンテストで確認しました。
+
+起動 CLI はコマンドエラーで終了するため、同一マシンでのエラー後の読み戻しは Rust テストで確認し、CLI ではエラーと正常系を個別に検証しました。正常系では a1 を 2、0 の順に書き換え、読み戻しを確認してからプローブ ELF を実行し、完了コード 0 を確認しました。固定の x0 ケースには ELF ロードがありません。CLI 検証では、起動 RESC が要求する ELF を添えています。
+
+```bash
+cargo test --locked upstream_rv32_monitor_rejects_writes_to_x0
+cargo test --locked
+cargo build --locked --release
+target/release/penv run --script "$evidence/x0.resc"  # 終了コード 1
+target/release/penv run --script "$evidence/readback.resc" --tohost 0x3000 --max-steps 10
+python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$evidence/interrupt-mode-rerun"
+```
+
+テスト 80 件、割り込みモード 12 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC プローブが通過しました。上流等価合格は累計 72 件です。ResetVector ケースには、CPU Reset と PC 読み戻しを同一マシン上で順に実行する仕組みが残っています。数値の整数レジスター以外の `GetRegister`/`SetRegister`、実行中の対話操作は今回の対象外です。
+
+再現用 RESC、ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-b16e5bb-duiIqa/` に保存しました。

@@ -2949,7 +2949,7 @@ Renode	tests/unit-tests/riscv-unit-tests.robot	243	Should Handle SW		target	port
 Renode	tests/unit-tests/riscv-unit-tests.robot	256	Should Fail SW		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
 Renode	tests/unit-tests/riscv-unit-tests.robot	272	Should Handle SD		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	285	Should Fail SD		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-unit-tests.robot	301	Should Fail On Setting X0 register		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-unit-tests.robot	301	Should Fail On Setting X0 register		target	ported	fixed RV32 fixture; monitor write of 1 rejects as read-only and same hart reads back 0
 Renode	tests/unit-tests/riscv-unit-tests.robot	309	Should Set MEPC on Illegal Instruction		target	ported	fixed rv32gc_Zfh fixture; opcode, step count, and all PC/CSR assertions checked
 Renode	tests/unit-tests/riscv-unit-tests.robot	333	Should Clear MTVAL On EBREAK And ECALL		target	ported	fixed rv32gc_Zfh fixture; opcode, step count, and all PC/CSR assertions checked
 Renode	tests/unit-tests/riscv-unit-tests.robot	352	Should Set MEPC on Illegal CSR access		target	ported	fixed rv32gc_Zfh fixture; opcode, step count, and all PC/CSR assertions checked
@@ -2957,7 +2957,7 @@ Renode	tests/unit-tests/riscv-unit-tests.robot	377	Should Set MEPC on Non-Existi
 Renode	tests/unit-tests/riscv-unit-tests.robot	401	Should Keep MEPC First Bit As Zero		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	411	Should Allow SRET In Machine Mode		target	ported	fixed rv32gc_Zfh fixture; opcode, step count, and all PC/CSR assertions checked
 Renode	tests/unit-tests/riscv-unit-tests.robot	427	Should Exit Translation Block After Invalid Instruction And Report Single Error		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	450	Should Properly Handle ResetVector After Creation And After Reset 32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-unit-tests.robot	450	Should Properly Handle ResetVector After Creation And After Reset 32		target	pending	requires ordered monitor ResetVector, PC readback and CPU Reset on one machine
 Renode	tests/unit-tests/riscv-unit-tests.robot	454	Should Properly Handle ResetVector After Creation And After Reset 64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	458	Should Set Flag On Single Precision Floating Point Division By Zero		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	483	Should Set Flag On Half Precision Floating Point Division By Zero		outside	outside	case passes bitness=64 to its CPU fixture

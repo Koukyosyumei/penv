@@ -408,7 +408,7 @@ fn run() -> Result<ExitCode, String> {
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
     let mut post_run = Vec::new();
-    let mut trap_vectors = Vec::new();
+    let mut cpu_registers = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -430,7 +430,7 @@ fn run() -> Result<ExitCode, String> {
         }
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
-        trap_vectors = boot.trap_vectors;
+        cpu_registers = boot.cpu_registers;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         if path.is_some() && boot.image.is_none() {
@@ -530,9 +530,18 @@ fn run() -> Result<ExitCode, String> {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         machine.schedule_uart_input(step, bytes)?;
     }
-    for (register, value) in trap_vectors {
-        if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
-            eprintln!("{} {readback:#x}", register.name());
+    for command in cpu_registers {
+        match command {
+            monitor::CpuRegisterCommand::TrapVector(register, value) => {
+                if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
+                    eprintln!("{} {readback:#x}", register.name());
+                }
+            }
+            monitor::CpuRegisterCommand::Integer(index, value) => {
+                if let Some(readback) = machine.primary.monitor_integer_register(index, value)? {
+                    eprintln!("{readback:#x}");
+                }
+            }
         }
     }
     if let Some(value) = mtvec {

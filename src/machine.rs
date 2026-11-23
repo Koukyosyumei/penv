@@ -640,6 +640,28 @@ impl Hart {
         self.csr.configure_interrupt_mode(mode);
     }
 
+    pub fn monitor_integer_register(
+        &mut self,
+        index: u32,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        if self.thumb.is_some() {
+            return Err("RISC-V register command requires a RISC-V CPU".into());
+        }
+        let register = self
+            .registers
+            .get_mut(index as usize)
+            .ok_or_else(|| format!("Wrong register index: {index}"))?;
+        match value {
+            Some(_) if index == 0 => Err("The 'X0' register is read-only.".into()),
+            Some(value) => {
+                *register = value;
+                Ok(None)
+            }
+            None => Ok(Some(*register)),
+        }
+    }
+
     pub fn monitor_trap_vector(
         &mut self,
         register: crate::csr::TrapVector,
@@ -1217,6 +1239,28 @@ mod tests {
             machine.primary.registers[6],
             (3 << 11) | (1 << 7) | (1 << 3)
         );
+    }
+
+    #[test]
+    fn upstream_rv32_monitor_rejects_writes_to_x0() {
+        let directory = std::env::temp_dir().join(format!("penv-rv32-x0-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }
+cpu: CPU.RiscV32 @ sysbus { timeProvider: clint; cpuType: "rv32gc_Zfh" }
+mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None).unwrap();
+        machine.set_entry(0x2000);
+        let hart = &mut machine.primary;
+        let error = hart.monitor_integer_register(0, Some(1)).unwrap_err();
+        assert!(error.contains("register is read-only"), "{error}");
+        assert_eq!(hart.monitor_integer_register(0, None).unwrap(), Some(0));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
