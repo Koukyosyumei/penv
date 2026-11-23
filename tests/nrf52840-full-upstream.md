@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 112 | 5 | 73 |
+| 監査した共有・混成 Robot | 190 | 113 | 5 | 72 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **129** | **5** | **87** |
+| 合計 | **221** | **130** | **5** | **86** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -326,3 +326,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-trace.DU40efTQ/` の `cargo-test`、`trace`、`opcode`、`shell` に保存した。現行 RESC は起動からの単一トレースを実行終了時に閉じる。対話中の有効・無効切り替えと他の形式は残る。
+
+### TrustZone 無効時の条件付きベクタテーブル
+
+`bus-isolation.robot:204–206` を Cortex-M4 に移植した。元の RAM 条件、アドレス、ベクタ値、リセットハンドラ命令を使用する。上流 monitor の VTOR 指定とベクタ書き込みは REPL と ELF に移し、初期 SP `0x20100` と PC `0x20200` を照合した。単一 Cortex-M4 の NVIC は既存の sysbus 登録で接続する。非特権の CPU 命令取得・データアクセスで条件付き RAM が拒否されることも検証した。対応する条件は上流のこのフィクスチャが使う組み合わせ。任意の条件式、複数 initiator と登録時の条件エラーは残る。
+
+```sh
+cargo test
+tests/nrf52840-conditional-vtor-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/conditional-vtor"
+tests/nrf52840-bus-fault-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/bus-fault"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/conditional-vtor.tfNCYjT8/` の `cargo-test.final`、`elf`、`bus-fault`、`shell` に保存した。

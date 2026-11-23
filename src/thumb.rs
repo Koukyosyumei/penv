@@ -903,6 +903,19 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
+        bus.thumb_unprivileged = self.active_exception == 0 && self.thread_unprivileged;
+        let result = self.step_with_bus_context(pc, r, bus, output);
+        bus.thumb_unprivileged = false;
+        result
+    }
+
+    fn step_with_bus_context(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<ThumbStep, String> {
         if self.locked_up {
             return Ok(ThumbStep::Fault);
         }

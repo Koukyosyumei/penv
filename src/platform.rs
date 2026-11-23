@@ -64,6 +64,47 @@ impl Entry {
     }
 }
 
+fn privileged_bus_point(entry: &Entry) -> Result<Option<u32>, String> {
+    let Some(registration) = entry
+        .registration
+        .as_deref()
+        .and_then(|value| value.strip_prefix("sysbus new Bus.BusPointRegistration"))
+    else {
+        return Ok(None);
+    };
+    let fields = registration
+        .trim()
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+        .ok_or_else(|| entry.error("expected a bus point registration body"))?;
+    let mut address = None;
+    let mut condition = false;
+    for field in fields
+        .split(';')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        match field
+            .split_once(':')
+            .map(|(key, value)| (key.trim(), value.trim()))
+        {
+            Some(("address", value)) if address.is_none() => {
+                address = Some(number(value).map_err(|e| entry.error(&e))?)
+            }
+            Some(("condition", value))
+                if !condition && value == r#""privileged && cpuSecure && attributionSecure""# =>
+            {
+                condition = true
+            }
+            _ => return Err(entry.error("unsupported or duplicate Cortex-M4 bus point property")),
+        }
+    }
+    address
+        .filter(|_| condition)
+        .map(Some)
+        .ok_or_else(|| entry.error("expected address and privileged non-TrustZone condition"))
+}
+
 fn number(value: &str) -> Result<u32, String> {
     let digits = value.replace('_', "");
     match digits.strip_prefix("0x") {
@@ -99,7 +140,7 @@ fn unquoted_delimiters<'a>(
 
 fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &'static str> {
     let mut braces = unquoted_delimiters(declaration, &['{', '}']);
-    let Some((begin, '{')) = braces.next() else {
+    let Some((mut begin, '{')) = braces.next() else {
         return if unquoted_delimiters(declaration, &['}']).next().is_some() {
             Err("unexpected closing brace")
         } else {
@@ -109,6 +150,19 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
     // A brace immediately after @ begins a registration expression.
     if declaration[..begin].trim_end().ends_with('@') {
         return Ok((declaration, Vec::new()));
+    }
+    if declaration[..begin]
+        .trim_end()
+        .ends_with("sysbus new Bus.BusPointRegistration")
+    {
+        let Some((_, '}')) = braces.next() else {
+            return Err("expected closing brace for bus point registration");
+        };
+        match braces.next() {
+            Some((offset, '{')) => begin = offset,
+            None => return Ok((declaration, Vec::new())),
+            _ => return Err("unexpected brace after bus point registration"),
+        }
     }
     let Some((end, '}')) = braces.next() else {
         return Err("expected a closing brace for inline properties");
@@ -316,7 +370,12 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
                 let size = number(size).map_err(|e| entry.error(&e))? as usize;
-                if cortex_m4
+                if cortex_m4 && let Some(base) = privileged_bus_point(entry)? {
+                    machine
+                        .bus
+                        .map_privileged_ram(base, size)
+                        .map_err(|e| entry.error(&e))?;
+                } else if cortex_m4
                     && entry
                         .registration
                         .as_ref()
@@ -520,11 +579,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 "cpuType",
                 "vectorTableOffset",
                 "InitVectorTableOffset",
+                "enableTrustZone",
                 "nvic",
             ],
         )? {
             match key {
                 "cpuType" => cpu_type = Some(value),
+                "enableTrustZone" if value == "false" => {}
+                "enableTrustZone" => return Err(entry.error("TrustZone is unsupported")),
                 "nvic" if nvic.is_some_and(|controller| controller.name == value) => {}
                 "nvic" => return Err(entry.error("unknown NVIC reference")),
                 "vectorTableOffset" | "InitVectorTableOffset" if vectors.is_none() => {

@@ -922,6 +922,36 @@ mod tests {
         assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
     }
 
+    #[test]
+    fn upstream_vtor_reads_privileged_vectors_without_trustzone() {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_privileged_ram(0x10000, 0x1000).unwrap();
+        machine.bus.map_ram(0x20000, 0x1000).unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0x10000), true);
+        let mut output = std::io::sink();
+        machine.bus.write(0x10000, 4, 0x20100, &mut output).unwrap();
+        machine.bus.write(0x10004, 4, 0x20201, &mut output).unwrap();
+        machine.bus.write(0x20200, 2, 0xe7fe, &mut output).unwrap();
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, 0x20200);
+        assert_eq!(machine.primary.registers[13], 0x20100);
+
+        machine.bus.thumb_unprivileged = true;
+        assert!(
+            machine
+                .bus
+                .thumb_read::<4>(0x10000)
+                .unwrap_err()
+                .contains("registration denied")
+        );
+        assert!(machine.bus.thumb_write(0x10004, 4, 0, &mut output).is_err());
+        assert!(machine.bus.thumb_fetch(0x10000).is_err());
+        assert_eq!(machine.bus.read::<4>(0x10004).unwrap(), 0x20201);
+    }
+
     fn check_lazy_fp_fault(original_hard_fault: bool) {
         let mut machine = exception_vector_fault_machine(None);
         let mut out = std::io::sink();

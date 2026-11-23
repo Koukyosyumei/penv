@@ -78,6 +78,7 @@ struct Region {
     base: u32,
     bytes: Vec<u8>,
     aliases: Vec<u32>,
+    privileged: bool,
 }
 
 const FAULTING_PERIPHERAL_SIZE: usize = 0x1000;
@@ -116,6 +117,7 @@ pub struct Bus {
     faulting_peripherals: Vec<FaultingPeripheral>,
     thumb_data_fault: Option<u32>,
     pub thumb_negative_priority: bool,
+    pub thumb_unprivileged: bool,
     pub fault_on_unmapped_thumb_data: bool,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
@@ -174,6 +176,7 @@ impl Region {
             base,
             bytes,
             aliases: Vec::new(),
+            privileged: false,
         })
     }
 
@@ -271,6 +274,12 @@ impl Bus {
             ));
         }
         self.regions.push(Region::new(base, size)?);
+        Ok(())
+    }
+
+    pub fn map_privileged_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
+        self.map_ram(base, size)?;
+        self.regions.last_mut().unwrap().privileged = true;
         Ok(())
     }
 
@@ -1550,13 +1559,33 @@ impl Bus {
         Ok(())
     }
 
+    fn check_thumb_bus_context(&self, address: u32, width: usize) -> Result<(), String> {
+        if self.thumb_unprivileged
+            && self.regions.iter().any(|region| {
+                region.privileged
+                    && (0..width).any(|offset| {
+                        region
+                            .offset(address.wrapping_add(offset as u32), 1)
+                            .is_some()
+                    })
+            })
+        {
+            return Err(format!(
+                "Cortex-M bus registration denied access at {address:#010x}"
+            ));
+        }
+        Ok(())
+    }
+
     pub fn thumb_fetch(&self, address: u32) -> Result<u32, String> {
+        self.check_thumb_bus_context(address, 2)?;
         self.check_thumb_access(address, 2, false, true)?;
         self.read_ram::<2>(address)
             .map_err(|error| error.to_string())
     }
 
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
+        self.check_thumb_bus_context(address, N)?;
         self.check_thumb_access(address, N, false, false)?;
         if N == 4
             && address == crate::nvic::DHCSR
@@ -1583,6 +1612,7 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), String> {
+        self.check_thumb_bus_context(address, width)?;
         self.check_thumb_access(address, width, true, false)?;
         if address as usize & (width - 1) != 0
             && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
