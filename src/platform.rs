@@ -1731,7 +1731,12 @@ const MOCK_EXTERNAL: &str = "Antmicro.Renode.UnitTests.Mocks.MockExternal";
 const EMPTY_PERIPHERAL: &str = "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
 
 fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
-    for (_, attribute) in &entry.body {
+    let attributes: Vec<_> = entry
+        .body
+        .iter()
+        .filter(|(_, attribute)| init_commands(attribute).is_none())
+        .collect();
+    for (_, attribute) in &attributes {
         if let Some((_, value)) = attribute.split_once(':')
             && let Some(model) = value.trim().strip_prefix("new ")
             && is_repl_identifier(model.trim())
@@ -1739,11 +1744,11 @@ fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
             return Err(entry.error(&format!("TypeNotResolved: {model:?}")));
         }
     }
-    if entry.body.is_empty() {
+    if attributes.is_empty() {
         return Ok(());
     }
     // The fixed model has both (double value) and (int value, bool enabled = false).
-    if let [(_, attribute)] = entry.body.as_slice()
+    if let [(_, attribute)] = attributes.as_slice()
         && let Some((key, value)) = attribute.split_once(':')
         && key.trim() == "value"
         && number_token(value).is_some_and(|value| value.parse::<i32>().is_ok())
@@ -1762,6 +1767,22 @@ fn build_entries(
     entries: &[Entry],
     f4_repl_timing: bool,
     check_only: bool,
+) -> Result<Machine, String> {
+    build_entries_with_init(
+        path,
+        entries,
+        f4_repl_timing,
+        check_only,
+        configure_bus_init,
+    )
+}
+
+fn build_entries_with_init(
+    path: &Path,
+    entries: &[Entry],
+    f4_repl_timing: bool,
+    check_only: bool,
+    mut execute_init: impl FnMut(&Entry, &[&str], &mut Machine) -> Result<(), String>,
 ) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
     machine.bus.f4_repl_timing = f4_repl_timing;
@@ -1782,7 +1803,18 @@ fn build_entries(
     let mut timer = None;
     for entry in entries {
         match entry.model.as_str() {
-            "" if entry.name == "sysbus" => configure_bus_init(entry, &mut machine)?,
+            "" if entry.name == "sysbus" => {
+                let [(_, attribute)] = entry.body.as_slice() else {
+                    return Err(entry.error("expected a single sysbus init section"));
+                };
+                let Some(("init:", commands)) = init_commands(attribute) else {
+                    return Err(entry.error("expected sysbus init"));
+                };
+                if entry.registration.is_some() {
+                    return Err(entry.error("expected sysbus init"));
+                }
+                execute_init(entry, &commands, &mut machine)?;
+            }
             "Miscellaneous.BitBanding" => {
                 let properties = keys(entry, &["peripheralBase"])?;
                 let [(_, target)] = properties.as_slice() else {
@@ -1831,14 +1863,18 @@ fn build_entries(
             }
             EMPTY_PERIPHERAL => {
                 validate_empty_peripheral_constructor(entry)?;
-                if matches!(entry.registration.as_deref(), None | Some("none")) {
-                    continue;
+                if !matches!(entry.registration.as_deref(), None | Some("none")) {
+                    let (base, size) = entry.bus_range()?;
+                    machine
+                        .bus
+                        .map_constant_mmio(ConstantMmio::zeroed(base, size))
+                        .map_err(|error| entry.error(&error))?;
                 }
-                let (base, size) = entry.bus_range()?;
-                machine
-                    .bus
-                    .map_constant_mmio(ConstantMmio::zeroed(base, size))
-                    .map_err(|error| entry.error(&error))?;
+                for (_, attribute) in &entry.body {
+                    if let Some((_, commands)) = init_commands(attribute) {
+                        execute_init(entry, &commands, &mut machine)?;
+                    }
+                }
             }
             "Mocks.DoubleWordPeripheral" => {
                 if entry.registration.as_deref() == Some("none") {
@@ -2034,10 +2070,11 @@ fn build_entries(
     }
     if check_only
         && entries.iter().all(|entry| {
-            matches!(
-                entry.model.as_str(),
-                EMPTY_PERIPHERAL | MOCK_EXTERNAL | MOCK_CPU
-            )
+            entry.name == "sysbus"
+                || matches!(
+                    entry.model.as_str(),
+                    EMPTY_PERIPHERAL | MOCK_EXTERNAL | MOCK_CPU
+                )
         })
     {
         return Ok(machine);
@@ -2755,15 +2792,13 @@ fn init_commands(attribute: &str) -> Option<(&str, Vec<&str>)> {
     Some((header, commands))
 }
 
-fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String> {
-    let [(_, attribute)] = entry.body.as_slice() else {
-        return Err(entry.error("expected a single sysbus init section"));
-    };
-    let Some(("init:", commands)) = init_commands(attribute) else {
-        return Err(entry.error("expected sysbus init"));
-    };
-    if entry.registration.is_some() {
-        return Err(entry.error("expected sysbus init"));
+fn configure_bus_init(
+    entry: &Entry,
+    commands: &[&str],
+    machine: &mut Machine,
+) -> Result<(), String> {
+    if entry.name != "sysbus" {
+        return Err(entry.error("unsupported peripheral init command"));
     }
     for command in commands {
         if let Some(mode) = command.strip_prefix("UnhandledAccessBehaviour ") {

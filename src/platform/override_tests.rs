@@ -1497,13 +1497,25 @@ fn renode_empty_keyword_using_parameter() {
 
 fn assert_merged_init(source: &str, expected: &[&str]) {
     let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
-    let [entry] = entries.as_slice() else {
-        panic!("expected one peripheral")
-    };
-    let [(_, section)] = entry.body.as_slice() else {
-        panic!("expected one merged init section")
-    };
-    assert_eq!(init_commands(section).unwrap().1, expected);
+    let mut calls = Vec::new();
+    build_entries_with_init(
+        Path::new("<platform string>"),
+        &entries,
+        false,
+        true,
+        |entry, commands, _| {
+            assert_eq!(entry.name, entries[0].name);
+            calls.push(
+                commands
+                    .iter()
+                    .map(|command| (*command).to_owned())
+                    .collect::<Vec<_>>(),
+            );
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, [expected]);
 }
 
 #[test]
@@ -1543,4 +1555,12 @@ sysbus:
     let mut machine = load_entries(Path::new("<platform string>"), &entries, false).unwrap();
     assert_eq!(machine.bus.read::<4>(0x1000).unwrap(), 0x22);
     assert_eq!(machine.bus.read::<4>(0x2000).unwrap(), 0x33);
+}
+
+#[test]
+fn renode_init_merge_sysbus_dispatch() {
+    assert_merged_init(
+        "\nsysbus:\n    init:\n        WriteByte 0 1",
+        &["WriteByte 0 1"],
+    );
 }
