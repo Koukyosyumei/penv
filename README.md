@@ -1677,3 +1677,20 @@ bash tests/stm32h7-display-sd-smoke.sh ~/.local/state/penv-dispatch/evidence/h7-
 ```
 
 `cargo test` 220件、固定 STM32H7 REPL 7構成、構文診断3件、Zephyr Blinky・Button・表示・SD の実 ELF が通過しました。証拠は `~/.local/state/penv-dispatch/evidence/h7-sd-file.5coRI4Lq` にあります。台帳は等価合格202件、部分検証18件、未達566件です。GPIO の中継ケースには同一ノードの受信・再送信を表す接続モデルが必要です。
+
+### 担当変更後の独立検証
+
+共有の SD ファイル装着は `network-sd-card-03830d3.md` で ARM 担当に引き渡しました。STM32H753ZI では別に長文 UART と GCM の公開 ELF を再現しました。長文 UART は固定手順で2回のプロンプト照合を通過し、追加の0.7仮想秒で `RX ring buffer full` を再現したため部分検証のままです。GCM のポーリング版と割り込み版は、両方の ELF が EABI5 hard-float として読み込み段階で拒否されました。共有の ELF 対応は `network-h7-hardfloat-03830d3.md` で ARM 担当に依頼し、CRYP の GCM 処理と LED 判定は機種固有の残件として台帳に保持しています。
+
+```bash
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+bash tests/stm32h7-nucleo-uart-line.sh "$(mktemp -d)"
+u=~/.local/state/penv-dispatch/evidence/h7-uart-independent.szDKA2I0
+g=~/.local/state/penv-dispatch/evidence/h7-gcm-baseline.zrPeub83
+target/release/penv run --script "$u/extended/case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 18000000
+for test in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$g/$test.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+各証拠ディレクトリにケースのログと終了状態を保存しました。拡張 UART と両 GCM は終了状態1です。

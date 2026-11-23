@@ -320,6 +320,11 @@ def triage(row):
         status, reason = 'PASS', '固定 Cortex-M7 と同じ 10 命令と R4 の期待値を照合。src/thumb/ge_upstream.rs'
         if '(usub8)' in name:
             reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
+    elif suite == 'nucleo_h753zi.robot' and name in {
+        'Should Encrypt And Decrypt Data in AES GCM Mode',
+        'Should Encrypt And Decrypt Data in AES GCM Mode With Interrupts',
+    }:
+        status, reason = 'OPEN', '固定公開 ELF は EABI5 hard-float。共有 ELF ローダーが拒否するため ARM 担当に依頼済み。STM32H7 CRYP と LED の検証は残る'
     elif suite == 'SDCard.robot' and name in {
         'Should Be Able To Load Existing File',
         'Should Fail At Loading Nonexistent File',
