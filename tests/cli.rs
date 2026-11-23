@@ -398,6 +398,21 @@ sysbus ReadByte 0xabcd1234
 
 #[test]
 #[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
+fn upstream_stm32f072_uart_binary_waits_for_adjacent_output() {
+    let result = run_upstream_stm32f072_script("stm32f072-uart-binary.resc", "1000000");
+    assert!(result.status.success(), "{result:?}");
+    let output = String::from_utf8(result.stdout).unwrap();
+    assert!(
+        output.contains(
+            "Hello World![0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21]"
+        ),
+        "{output:?}"
+    );
+    assert!(output.contains(" stm32f072b_disco\r\n[0x20, 0x73, 0x74, 0x6d, 0x33, 0x32, 0x66, 0x30, 0x37, 0x32, 0x62, 0x5f, 0x64, 0x69, 0x73, 0x63, 0x6f, 0x0d, 0x0a]"), "{output:?}");
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
 fn upstream_stm32f072_uart_tester_id_overrides_default() {
     let result = run_upstream_stm32f072_script("stm32f072-uart-testers.resc", "1000000");
     assert!(result.status.success(), "{result:?}");
@@ -451,7 +466,7 @@ uart1: UART.STM32F7_USART @ sysbus 0x40004400
     for byte in b"ZEPHYR\r\n" {
         writeln!(output, "sysbus WriteByte 0x40013828 {byte}").unwrap();
     }
-    let run = |setup: &str, selection: &str| {
+    let run = |setup: &str, output: &str, selection: &str| {
         let script = directory.join("boot.resc");
         fs::write(&script, format!("{boot}{setup}{output}{selection}")).unwrap();
         Command::new(env!("CARGO_BIN_EXE_penv"))
@@ -497,7 +512,7 @@ uart1: UART.STM32F7_USART @ sysbus 0x40004400
             Some("There is more than one tester available"),
         ),
     ] {
-        let result = run(setup, &selection);
+        let result = run(setup, &output, &selection);
         if let Some(error) = error {
             assert_eq!(result.status.code(), Some(1), "{result:?}");
             assert!(
@@ -509,6 +524,88 @@ uart1: UART.STM32F7_USART @ sysbus 0x40004400
             assert!(result.stdout.ends_with(b"ZEPHYR\r\n"), "{result:?}");
         }
     }
+    let binary = "CreateTerminalTester sysbus.uart0 binaryMode=true defaultPauseEmulation=true\n";
+    let stream = |data: &[u8]| {
+        let mut commands = String::from("sysbus WriteDoubleWord 0x40013800 9\n");
+        for byte in data {
+            writeln!(commands, "sysbus WriteByte 0x40013828 {byte}").unwrap();
+        }
+        commands
+    };
+    let banner = stream(b"ZEPHYR OS\r\n****\r\nshell");
+    let spanning = run(
+        binary,
+        &banner,
+        "WaitForBytesOnUart \"2a 2a 2a 2a 0d 0a 73 68\"",
+    );
+    assert!(spanning.status.success(), "{spanning:?}");
+    assert!(
+        spanning
+            .stdout
+            .ends_with(b"[0x2a, 0x2a, 0x2a, 0x2a, 0x0d, 0x0a, 0x73, 0x68]\n")
+    );
+    let adjacent = run(
+        binary,
+        &banner,
+        concat!(
+            "WaitForBytesOnUart \"5a4550485952\"\n",
+            "WaitForBytesOnUart \"20 4f 53\" matchStart=true timeout=0\n",
+            "WaitForBytesOnUart \"2a2a2a2a0d0a7368\" timeout=0\n",
+            "WaitForBytesOnUart \"656c6c\" matchStart=true timeout=0",
+        ),
+    );
+    assert!(adjacent.status.success(), "{adjacent:?}");
+    assert!(adjacent.stdout.ends_with(b"[0x65, 0x6c, 0x6c]\n"));
+    for (setup, command, message) in [
+        (
+            first,
+            "WaitForBytesOnUart \"59 52 20 4f 53\" timeout=1",
+            "Attempt to wait for bytes on a tester configured in text mode",
+        ),
+        (
+            binary,
+            "WaitForLineOnUart \"ZEPHYR\" timeout=1",
+            "Attempt to wait for text on a tester configured in binary mode",
+        ),
+        (
+            binary,
+            "WaitForBytesOnUart \"5a4550485952\"\nWaitForBytesOnUart \"52 20 4f 53\" timeout=0",
+            "Terminal tester failed!",
+        ),
+        (
+            binary,
+            "WaitForBytesOnUart \"5a4550485952\"\nWaitForBytesOnUart \"4f 53\" matchStart=true timeout=0",
+            "Terminal tester failed!",
+        ),
+    ] {
+        let result = run(setup, &banner, command);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(message),
+            "{result:?}"
+        );
+    }
+    let all: Vec<u8> = (0..=255).collect();
+    let hex = all
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let list = all
+        .iter()
+        .map(|byte| format!("0x{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let result = run(
+        binary,
+        &stream(&all),
+        &format!("WaitForBytesOnUart \"{hex}\" matchStart=true"),
+    );
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(
+        result.stdout,
+        [b"0\n", all.as_slice(), format!("[{list}]\n").as_bytes()].concat()
+    );
+
     fs::remove_dir_all(directory).unwrap();
 }
 

@@ -25,7 +25,7 @@ use crate::{
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
-    uart::{LiteXUart, MuraxUart, UartHistory, UartWaitMode},
+    uart::{BinaryUartHistory, LiteXUart, MuraxUart, UartHistory, UartWaitMode},
 };
 
 // Cortex-M peripheral time advances by 10 ns per execution step.
@@ -98,6 +98,34 @@ pub enum UartWatch {
     Tester(usize),
 }
 
+enum TesterHistory {
+    Text(UartHistory),
+    Binary(BinaryUartHistory),
+}
+
+impl TesterHistory {
+    fn receive(&mut self, byte: u8) {
+        match self {
+            Self::Text(history) => history.receive(byte),
+            Self::Binary(history) => history.receive(byte),
+        }
+    }
+
+    fn matched(&self) -> bool {
+        match self {
+            Self::Text(history) => history.matched(),
+            Self::Binary(history) => history.matched(),
+        }
+    }
+
+    fn finish_wait(&mut self) {
+        match self {
+            Self::Text(history) => history.finish_wait(),
+            Self::Binary(history) => history.finish_wait(),
+        }
+    }
+}
+
 struct Region {
     base: u32,
     bytes: Vec<u8>,
@@ -121,7 +149,7 @@ pub struct Bus {
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
     stm32_uart_history: Vec<Option<UartHistory>>,
-    uart_testers: Vec<(usize, UartHistory)>,
+    uart_testers: Vec<(usize, TesterHistory)>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -1128,7 +1156,7 @@ impl Bus {
         }
     }
 
-    pub fn create_uart_tester(&mut self, target: &str) -> Result<usize, String> {
+    pub fn create_uart_tester(&mut self, target: &str, binary: bool) -> Result<usize, String> {
         let port = self
             .stm32_usart_index(target)
             .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))?;
@@ -1140,7 +1168,12 @@ impl Bus {
             return Ok(id);
         }
         let id = self.uart_testers.len();
-        self.uart_testers.push((port, UartHistory::default()));
+        let history = if binary {
+            TesterHistory::Binary(BinaryUartHistory::default())
+        } else {
+            TesterHistory::Text(UartHistory::default())
+        };
+        self.uart_testers.push((port, history));
         Ok(id)
     }
 
@@ -1156,11 +1189,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn watch_uart_tester(
-        &mut self,
-        id: Option<usize>,
-        pattern: &str,
-    ) -> Result<UartWatch, String> {
+    fn uart_tester(&mut self, id: Option<usize>) -> Result<(usize, &mut TesterHistory), String> {
         let id = match id.or(self.default_uart_tester) {
             Some(id) => id,
             None if self.uart_testers.len() == 1 => 0,
@@ -1171,7 +1200,31 @@ impl Bus {
             .uart_testers
             .get_mut(id)
             .ok_or_else(|| format!("Tester for given ID={id} was not found."))?;
+        Ok((id, history))
+    }
+
+    pub fn watch_uart_tester(
+        &mut self,
+        id: Option<usize>,
+        pattern: &str,
+    ) -> Result<UartWatch, String> {
+        let (id, TesterHistory::Text(history)) = self.uart_tester(id)? else {
+            return Err("Attempt to wait for text on a tester configured in binary mode.".into());
+        };
         history.begin_wait(pattern, UartWaitMode::Lf);
+        Ok(UartWatch::Tester(id))
+    }
+
+    pub fn watch_uart_bytes(
+        &mut self,
+        id: Option<usize>,
+        pattern: &[u8],
+        match_start: bool,
+    ) -> Result<UartWatch, String> {
+        let (id, TesterHistory::Binary(history)) = self.uart_tester(id)? else {
+            return Err("Attempt to wait for bytes on a tester configured in text mode.".into());
+        };
+        history.begin_wait(pattern, match_start);
         Ok(UartWatch::Tester(id))
     }
 
@@ -2120,8 +2173,8 @@ mod tests {
             bus.write(base + 0x28, 1, u32::from(*byte), &mut output)
                 .unwrap();
         }
-        assert_eq!(bus.create_uart_tester("usart1").unwrap(), 0);
-        assert_eq!(bus.create_uart_tester("sysbus.usart1").unwrap(), 0);
+        assert_eq!(bus.create_uart_tester("usart1", false).unwrap(), 0);
+        assert_eq!(bus.create_uart_tester("sysbus.usart1", false).unwrap(), 0);
         let watch = bus.watch_uart_tester(None, "before").unwrap();
         assert!(!bus.stm32_uart_matched(watch));
         bus.finish_stm32_uart_watch(watch);

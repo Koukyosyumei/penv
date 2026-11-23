@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 33 | 38 | 42 | 239 |
+| Renode Robot | 113 | 39 | 38 | 36 | 239 |
 | Renode Infrastructure NUnit | 134 | 35 | 0 | 99 | 9 |
-| 合計 | **247** | **68** | **38** | **141** | **248** |
+| 合計 | **247** | **74** | **38** | **135** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植38件と未達141件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植38件と未達135件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -258,9 +258,24 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systick-resc-verification
 
 選択・エラー検証の上流9ケースで、FE310 フィクスチャの `ZEPHYR` 出力を F072 型の2 USART の片側に注入して同じ選択条件を再現した。公開 Hello World ELF では、USART2 を既定にして明示 ID が USART1 の起動出力に一致すること、明示 ID を省略すると USART2 が1秒でタイムアウトすることを検査した。
 
-バイナリモード、正規表現、失敗文字列の登録、複数マシンや STM32F7_USART 以外へのテスター接続は残件。
+バイナリモードは下記を参照。正規表現、失敗文字列の登録、複数マシンや STM32F7_USART 以外へのテスター接続は残件。
 
 ```sh
 cargo test --locked uart_tester
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-testers-verification
+```
+
+
+## UART テスターのバイナリ待機
+
+固定 Renode の `uart-tester.robot` 97–162行と、Infrastructure の `TerminalTester.cs` のバイナリモードを参照した。`CreateTerminalTester sysbus.usart1 binaryMode=true` で生バイト履歴を作り、`WaitForBytesOnUart "2a 2a 2a 2a 0d 0a 73 68" matchStart=true timeout=0` で照合する。ID とタイムアウトの選択はテキスト待機と共通。成功時に一致バイト列を16進リストで返す。履歴の上限は既存の UART 履歴と同じ64 KiB。同期 RESC の待機は一致時点で終了するため、上流フィクスチャの `defaultPauseEmulation=true` も受け付ける。
+
+テキストとバイナリの不一致2ケース、CRLF をまたぐ一致、隣接パターン、先頭一致、`00`–`ff` の全256値の計6ケースを、STM32 USART に固定上流と同じバイト列を送って検証した。失敗時のカーソル維持は即時照合と履歴の Rust テストで検証した。FE310 のシェルと TrivialUart の代わりにこの注入経路を用いる。公開 F072 Hello World ELF でも `Hello World!` の直後から残りの文字列と CRLF を先頭一致で照合した。
+
+バイナリ正規表現のキャプチャ、失敗文字列の登録、他の UART モデルへのテスター接続は未達。
+
+```sh
+cargo test --locked renode_binary_uart_history
+cargo test --locked renode_resc_uart_testers
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-binary-verification
 ```

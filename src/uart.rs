@@ -170,7 +170,7 @@ impl UartLineMatch {
     }
 }
 
-const UART_HISTORY_BYTES: usize = 64 * 1024;
+pub const UART_HISTORY_BYTES: usize = 64 * 1024;
 
 #[derive(Default)]
 pub struct UartHistory {
@@ -220,9 +220,109 @@ impl UartHistory {
     }
 }
 
+#[derive(Default)]
+pub struct BinaryUartHistory {
+    unread: VecDeque<u8>,
+    wait: Option<BinaryWait>,
+}
+
+struct BinaryWait {
+    pattern: Vec<u8>,
+    match_start: bool,
+    start_retained: bool,
+    matched: bool,
+}
+
+impl BinaryUartHistory {
+    pub fn begin_wait(&mut self, pattern: &[u8], match_start: bool) {
+        let last = self.unread.len().checked_sub(pattern.len());
+        let offset = last.and_then(|last| {
+            (0..=if match_start { 0 } else { last }).find(|&offset| {
+                self.unread
+                    .iter()
+                    .skip(offset)
+                    .take(pattern.len())
+                    .eq(pattern)
+            })
+        });
+        if let Some(offset) = offset {
+            self.unread.drain(..offset + pattern.len());
+        }
+        self.wait = Some(BinaryWait {
+            pattern: pattern.to_vec(),
+            match_start,
+            start_retained: true,
+            matched: offset.is_some(),
+        });
+    }
+
+    pub fn receive(&mut self, byte: u8) {
+        if self.unread.len() == UART_HISTORY_BYTES {
+            self.unread.pop_front();
+            if let Some(wait) = &mut self.wait {
+                wait.start_retained = false;
+            }
+        }
+        self.unread.push_back(byte);
+        if let Some(wait) = &mut self.wait
+            && !wait.matched
+            && self.unread.len() >= wait.pattern.len()
+            && (!wait.match_start
+                || (wait.start_retained && self.unread.len() == wait.pattern.len()))
+            && self
+                .unread
+                .iter()
+                .rev()
+                .zip(wait.pattern.iter().rev())
+                .all(|(left, right)| left == right)
+        {
+            wait.matched = true;
+            self.unread.clear();
+        }
+    }
+
+    pub fn matched(&self) -> bool {
+        self.wait.as_ref().is_some_and(|wait| wait.matched)
+    }
+
+    pub fn finish_wait(&mut self) {
+        self.wait = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_binary_uart_history_keeps_exact_cursor_after_matches_and_timeouts() {
+        let mut history = BinaryUartHistory::default();
+        for &byte in b"ZEPHYR OS\r\n****\r\nshell" {
+            history.receive(byte);
+        }
+        for (pattern, anchored, matched) in [
+            (&b"ZEPHYR"[..], false, true),
+            (&b"R OS"[..], false, false),
+            (&b"OS"[..], true, false),
+            (&b" OS"[..], true, true),
+            (&b"****\r\nsh"[..], false, true),
+            (&b"ell"[..], true, true),
+        ] {
+            history.begin_wait(pattern, anchored);
+            assert_eq!(history.matched(), matched, "{pattern:?}");
+            history.finish_wait();
+        }
+
+        history.begin_wait(b"\0\xff", true);
+        history.receive(0);
+        assert!(!history.matched());
+        history.receive(0xff);
+        assert!(history.matched());
+        history.receive(b'A');
+        history.finish_wait();
+        history.begin_wait(b"A", true);
+        assert!(history.matched());
+    }
 
     #[test]
     fn text_waits_ignore_nul_and_treat_cr_according_to_the_line_mode() {

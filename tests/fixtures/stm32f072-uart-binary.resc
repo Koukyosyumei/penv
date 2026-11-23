@@ -1,0 +1,6 @@
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f072b_discovery.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/stm32f072b_disco--zephyr-hello_world.elf-s_451704-a4d8c888e36c324dcc1dfde33bac33fc6ed3ed1b
+CreateTerminalTester sysbus.usart1 binaryMode=true defaultPauseEmulation=true
+WaitForBytesOnUart "48 65 6c 6c 6f 20 57 6f 72 6c 64 21"
+WaitForBytesOnUart "20 73 74 6d 33 32 66 30 37 32 62 5f 64 69 73 63 6f 0d 0a" matchStart=true

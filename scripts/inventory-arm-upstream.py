@@ -467,6 +467,18 @@ def classify_robot(name, case, body, parameter):
         }
         if case in selectors:
             return PASS, F072, "renode_resc_uart_testers_follow_identity_and_default_selection; same tester creation/selection, ZEPHYR line and error contract with synthetic USART stream; one-second wrong-port wait also exercised by public F072 ELF"
+        byte_cases = {
+            "Should Not Allow Waiting For Byte String On A Tester Not Created In Binary Mode",
+            "Should Not Allow Waiting For Text String On A Tester Created In Binary Mode",
+            "Should Allow Waiting For Byte String Spanning Lines",
+            "Should Allow Waiting For Immediately Adjacent Byte Strings",
+            "Should Allow Waiting For Byte String At Start",
+            "Should Allow Waiting For Byte String Containing All Byte Values",
+        }
+        if case in byte_cases:
+            return PASS, F072, "renode_resc_uart_testers_follow_identity_and_default_selection and renode_binary_uart_history_keeps_exact_cursor_after_matches_and_timeouts; upstream literal bytes and cursor/mode contract over STM32 USART"
+        if "As Regex" in case:
+            return OPEN, COMMON, "Requires binary-mode regex matching with capture groups and exact match-end consumption; literal byte patterns now supported"
         if "Create Trivial Machine" in body:
             fixture = "TrivialUart with injected 0x00..0xff"
         elif "Create Tock Machine" in body:

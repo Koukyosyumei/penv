@@ -66,6 +66,7 @@ upstream_stm32f072_console_echo_replies_after_uart_prompt
 upstream_stm32f072_cpuwait_defers_elf_boot_until_released
 upstream_stm32f072_crc_firmware_passes_840_cases
 upstream_stm32f072_hello_world_boots_elf_and_hex
+upstream_stm32f072_uart_binary_waits_for_adjacent_output
 upstream_stm32f072_uart_tester_id_overrides_default
 CASES
 sed -En 's/^test (upstream_stm32f072_[^ ]+) \.\.\. ok$/\1/p' "$evidence/stm32f072.log" |
@@ -75,4 +76,4 @@ test "$(git rev-parse HEAD)" = "$commit"
 test "$(git -C "$renode_root" rev-parse HEAD)" = "$renode_pin"
 git diff --quiet HEAD --
 git -C "$renode_root" diff --quiet HEAD --
-printf 'PASS %s: cargo test and 10 STM32F072 firmware tests (13 scenarios)\n' "$commit"
+printf 'PASS %s: cargo test and 11 STM32F072 firmware tests (14 scenarios)\n' "$commit"

@@ -59,9 +59,10 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String),
+    CreateUartTester(String, bool),
     DefaultUartTester(Option<usize>),
     WaitForTester(Option<usize>, String, u64),
+    WaitForBytes(Option<usize>, Vec<u8>, bool, u64),
     WriteUartLine(String, String, &'static [u8]),
 }
 
@@ -229,13 +230,35 @@ pub fn run(
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
                 .map(|()| None),
-            Action::CreateUartTester(target) => machine
+            Action::CreateUartTester(target, binary) => machine
                 .bus
-                .create_uart_tester(target)
+                .create_uart_tester(target, *binary)
                 .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
                 .map(|()| None),
             Action::DefaultUartTester(id) => {
                 machine.bus.set_default_uart_tester(*id).map(|()| None)
+            }
+            Action::WaitForBytes(id, pattern, match_start, timeout) => {
+                let start = machine.elapsed_steps();
+                machine
+                    .bus
+                    .watch_uart_bytes(*id, pattern, *match_start)
+                    .and_then(|watch| {
+                        run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
+                    })
+                    .and_then(|(stop, count)| {
+                        retired += count;
+                        budget -= machine.elapsed_steps().wrapping_sub(start);
+                        if stop == Stop::OutputMatch {
+                            write_hex_list(pattern.iter(), 2, output.output)
+                                .map_err(|error| error.to_string())
+                                .map(|()| None)
+                        } else {
+                            Err(format!(
+                                "Terminal tester failed! Byte pattern was not received ({stop:?})"
+                            ))
+                        }
+                    })
             }
             Action::WaitForTester(id, pattern, timeout) => {
                 let start = machine.elapsed_steps();
@@ -534,8 +557,25 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
-        ["CreateTerminalTester", target] => {
-            Some(Action::CreateUartTester(resolve(target)?.to_owned()))
+        ["CreateTerminalTester", target, options @ ..] => {
+            let mut binary = None;
+            for option in options {
+                match option.split_once('=') {
+                    Some(("binaryMode", value)) if binary.is_none() => {
+                        binary = Some(parse_tester_bool(resolve(value)?)?);
+                    }
+                    Some(("defaultPauseEmulation", "true" | "True")) => {}
+                    _ => {
+                        return Err(format!(
+                            "unsupported or duplicate UART tester option {option:?}"
+                        ));
+                    }
+                }
+            }
+            Some(Action::CreateUartTester(
+                resolve(target)?.to_owned(),
+                binary.unwrap_or(false),
+            ))
         }
         ["SetDefaultTester", id] => {
             let id = resolve(id)?;
@@ -545,6 +585,17 @@ fn execute(
                     .transpose()?,
             ))
         }
+        ["WaitForBytesOnUart", ..] => {
+            let args = text["WaitForBytesOnUart".len()..].trim_start();
+            let (hex, options) = quoted_argument(args)
+                .ok_or("expected WaitForBytesOnUart \"hex bytes\" [testerId=number] [timeout=seconds] [matchStart=true]")?;
+            let pattern = hex_pattern(hex)?;
+            if pattern.is_empty() || pattern.len() > crate::uart::UART_HISTORY_BYTES {
+                return Err("UART byte pattern must contain 1 to 65536 bytes".into());
+            }
+            let (id, timeout, match_start) = tester_wait_options(options, resolve, true)?;
+            Some(Action::WaitForBytes(id, pattern, match_start, timeout))
+        }
         ["WaitForLineOnUart", ..] => {
             let (pattern, options) = quoted_argument(
                 text["WaitForLineOnUart".len()..].trim_start(),
@@ -553,28 +604,8 @@ fn execute(
             .ok_or(
                 "expected WaitForLineOnUart \"literal text\" [testerId=number] [timeout=seconds]",
             )?;
-            let mut id = None;
-            let mut timeout = None;
-            for option in options.split_whitespace() {
-                match option.split_once('=') {
-                    Some(("testerId", value)) if id.is_none() => {
-                        id = Some(crate::parse_address(resolve(value)?)? as usize);
-                    }
-                    Some(("timeout", value)) if timeout.is_none() => {
-                        timeout = Some(duration_steps(resolve(value)?)?);
-                    }
-                    _ => {
-                        return Err(format!(
-                            "unsupported or duplicate UART tester option {option:?}"
-                        ));
-                    }
-                }
-            }
-            Some(Action::WaitForTester(
-                id,
-                pattern.to_owned(),
-                timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
-            ))
+            let (id, timeout, _) = tester_wait_options(options, resolve, false)?;
+            Some(Action::WaitForTester(id, pattern.to_owned(), timeout))
         }
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
@@ -964,6 +995,46 @@ fn execute(
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn parse_tester_bool(value: &str) -> Result<bool, String> {
+    value
+        .to_ascii_lowercase()
+        .parse()
+        .map_err(|_| format!("expected true or false, got {value:?}"))
+}
+
+fn tester_wait_options<'a>(
+    options: &'a str,
+    resolve: impl Fn(&'a str) -> Result<&'a str, String>,
+    binary: bool,
+) -> Result<(Option<usize>, u64, bool), String> {
+    let mut id = None;
+    let mut timeout = None;
+    let mut match_start = None;
+    for option in options.split_whitespace() {
+        match option.split_once('=') {
+            Some(("testerId", value)) if id.is_none() => {
+                id = Some(crate::parse_address(resolve(value)?)? as usize);
+            }
+            Some(("timeout", value)) if timeout.is_none() => {
+                timeout = Some(duration_steps(resolve(value)?)?);
+            }
+            Some(("matchStart", value)) if binary && match_start.is_none() => {
+                match_start = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            _ => {
+                return Err(format!(
+                    "unsupported or duplicate UART tester option {option:?}"
+                ));
+            }
+        }
+    }
+    Ok((
+        id,
+        timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
+        match_start.unwrap_or(false),
+    ))
 }
 
 fn byte_list<'a>(
