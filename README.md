@@ -1086,3 +1086,27 @@ target/release/penv run --script "$e/include.resc" --platform-root ../renode
 ```
 
 上記にログと終了状態を保存しました。`cargo test` 122件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。対象786件のうち等価合格106件、部分検証10件、未達670件です。宣言と混在する `using` の専用ケース、一般プロパティ文字列のエスケープ、型付き参照と `local` スコープの検証は残っています。
+
+### backlog-network-13672a4487f3-1
+
+REPL の引用符付き文字列のデコーダーを `using`、登録値、IIS2MDC の `SampleCsv` で共有しました。固定上流 `ParserTests.cs` の2件を同じ入力で移植し、属性内のエスケープ済み引用符・連続バックスラッシュの復号値と、引用符付き値に続く属性の個数を照合しました。実 STM32H753 REPL でバックスラッシュを含む名前の CSV をセンサーに読み込ませました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-repl-quoted-values.VK7sb1IJ
+target/release/penv check-platform "$e/sensor.repl" --platform-root ../renode
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"
+```
+
+対象786件のうち等価合格108件、部分検証10件、未達668件です。その他のモデル固有プロパティへの文字列デコーダーの適用、複数行文字列、型付き参照は残っています。
+
+`cargo test` 123件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button と IIS2MDC polling・trigger ELF が通過しました。ログと終了状態は上記の証拠ディレクトリに保存しました。センサーの初回実行はシステム Python に `construct` がなく停止し、依存導入済みの仮想環境で再実行しました。

@@ -181,7 +181,7 @@ fn unquoted_delimiters<'a>(
 #[derive(Debug, PartialEq, Eq)]
 enum RegistrationValue<'a> {
     Range { base: u64, size: u64 },
-    String(&'a str),
+    String(String),
     Other(&'a str),
 }
 
@@ -216,12 +216,7 @@ fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>
             };
             Some(RegistrationValue::Range { base, size })
         }
-        Some(b'"') => {
-            let content = value[1..]
-                .strip_suffix('"')
-                .ok_or("invalid quoted registration")?;
-            Some(RegistrationValue::String(content))
-        }
+        Some(b'"') => Some(RegistrationValue::String(quoted_value(value)?)),
         Some(_) if value.len() < item.len() - end => Some(RegistrationValue::Other(value)),
         Some(_) => return Err("expected a registration point after register reference"),
     };
@@ -359,31 +354,39 @@ fn parse(
     result
 }
 
-fn using_path(line: &str) -> Result<String, &'static str> {
-    let invalid = "expected using \"path.repl\"";
-    let mut path = String::new();
-    let argument = line.trim().strip_prefix('"').ok_or(invalid)?;
-    let mut characters = argument.char_indices();
+fn quoted_prefix(text: &str) -> Result<(String, &str), &'static str> {
+    let invalid = "expected a quoted string";
+    let mut value = String::new();
+    let input = text.strip_prefix('"').ok_or(invalid)?;
+    let mut characters = input.char_indices();
     while let Some((index, character)) = characters.next() {
         match character {
-            '"' if !path.is_empty() => {
-                if argument[index + 1..]
-                    .chars()
-                    .all(|c| c == ';' || c.is_whitespace())
-                {
-                    return Ok(path);
-                }
-                return Err(invalid);
-            }
-            '"' => return Err(invalid),
+            '"' => return Ok((value, &input[index + 1..])),
             '\\' => match characters.next() {
-                Some((_, escaped @ ('"' | '\\'))) => path.push(escaped),
-                _ => return Err(invalid),
+                Some((_, escaped @ ('"' | '\\'))) => value.push(escaped),
+                _ => return Err("invalid escape in quoted string"),
             },
-            character => path.push(character),
+            character => value.push(character),
         }
     }
     Err(invalid)
+}
+
+pub(crate) fn quoted_value(text: &str) -> Result<String, &'static str> {
+    let (value, tail) = quoted_prefix(text)?;
+    if !tail.trim().is_empty() {
+        return Err("unexpected text after quoted string");
+    }
+    Ok(value)
+}
+
+fn using_path(line: &str) -> Result<String, &'static str> {
+    let invalid = "expected using \"path.repl\"";
+    let (path, tail) = quoted_prefix(line.trim()).map_err(|_| invalid)?;
+    if path.is_empty() || !tail.chars().all(|c| c == ';' || c.is_whitespace()) {
+        return Err(invalid);
+    }
+    Ok(path)
 }
 
 fn resolve_using(argument: &str, include_dir: &Path, root: &Path) -> std::io::Result<PathBuf> {
@@ -2140,6 +2143,40 @@ mod inline_attribute_cases {
     }
 
     #[test]
+    fn upstream_quoted_properties() {
+        let source = r#"
+uart:
+    string: "\\escaped backslash: \\, two in a row: \\\\, before quote: \\\", and one at the end: \\"
+"#;
+        let entries = parse(source).unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.name, "uart");
+        assert!(entry.model.is_empty());
+        let [(_, property)] = entry.body.as_slice() else {
+            panic!("expected one attribute");
+        };
+        let (name, value) = property.split_once(':').unwrap();
+        assert_eq!(name, "string");
+        assert_eq!(
+            quoted_value(value.trim()).unwrap(),
+            r#"\escaped backslash: \, two in a row: \\, before quote: \", and one at the end: \"#
+        );
+
+        let entries =
+            parse("\nuart:\n    friendlyName: \"some name\"\n    size: 0x1000\n").unwrap();
+        assert_eq!(entries.len(), 1);
+        let [(_, friendly_name), (_, size)] = entries[0].body.as_slice() else {
+            panic!("expected two attributes");
+        };
+        assert_eq!(
+            quoted_value(friendly_name.split_once(':').unwrap().1.trim()).unwrap(),
+            "some name"
+        );
+        assert_eq!(size, "size: 0x1000");
+    }
+
+    #[test]
     fn upstream_using_paths() {
         for (source, expected) in [
             (
@@ -2213,7 +2250,7 @@ mod inline_attribute_cases {
             ),
             (
                 "\nuart: @ sysbus \"something\"",
-                Some(RegistrationValue::String("something")),
+                Some(RegistrationValue::String("something".into())),
             ),
         ] {
             let entries = parse(source).unwrap();

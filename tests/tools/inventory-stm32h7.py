@@ -324,6 +324,8 @@ def triage(row):
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
     elif suite == 'ParserTests.cs' and name in {
+        'ShouldParseStringWithEscapedBackslashes',
+        'ShouldParseEntryWithTwoAttributes',
         'ShouldParseUsingEntry',
         'ShouldParseUsingEntry2',
         'ShouldParseUsingEntry3',

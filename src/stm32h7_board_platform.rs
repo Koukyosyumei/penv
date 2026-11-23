@@ -444,7 +444,12 @@ pub fn configure(
                     .ok_or_else(|| entry.error("expected IIS2MDC magnetic field property"))?;
                 let axis = match key.trim() {
                     "SampleCsv" if sample_csv.is_none() => {
-                        sample_csv = Some(value.trim().trim_matches('"'));
+                        let value = value.trim();
+                        sample_csv = Some(if value.starts_with('"') {
+                            crate::platform::quoted_value(value).map_err(|e| entry.error(e))?
+                        } else {
+                            value.to_owned()
+                        });
                         continue;
                     }
                     "MagneticFluxDensityX" => 0,
@@ -463,7 +468,7 @@ pub fn configure(
             let field = values.map(|value| value.unwrap_or(0));
             let mut sensor = Iis2mdc::new(field);
             if let Some(path) = sample_csv {
-                sensor.load_samples(path).map_err(|e| entry.error(&e))?;
+                sensor.load_samples(&path).map_err(|e| entry.error(&e))?;
             }
             if let Some((base, pin)) = route {
                 sensor.set_route(base, pin);
