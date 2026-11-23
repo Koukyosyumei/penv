@@ -923,3 +923,25 @@ python3 scripts/validate-rv32-andes-bfloat.py target/release/penv ../renode "$ev
 Rust テスト 87 件、既存 Andes BF16 6 ケース、固定 Zfh ACT ELF 53 件は通過しました。固定 Robot の最大構成では V の未対応で 6 件とも CPU 作成が止まり、その構成には Zfbfmin の指定もありません。台帳では各結果を記録し、上流等価合格は累計 155 件です。
 
 REPL、補助 ELF とソース、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-d810a17-9FrFR7/` に保存しました。
+
+### RV32 Zbkc の単独構成
+
+RV32 の `Zbkc` 指定で CLMUL と CLMULH を実行できるようにしました。キャリーなし積の演算は既存の Zbc 実装を共有します。CLMULR は Zbc が有効な場合に実行できます。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zbkc.repl" --artifacts "$evidence/zbkc-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zbkc/*.elf
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 -nostdlib -fuse-ld=lld \
+  -Wl,-T,scripts/firmware/rv32-virt.ld "$evidence/gating.S" -o "$evidence/gating.elf"
+target/release/penv run --platform "$evidence/zbkc.repl" \
+  --tohost 0x80001000 --max-steps 100 "$evidence/gating.elf"
+```
+
+固定 ACT ELF 2 件は変更前に Zbkc の CPU 作成で停止し、変更後は `rv32ic_zbkc` と、固定最大 ISA から V だけを除いた構成の両方で通過しました。補助 ELF は Zbkc 単独での CLMUL の結果と、CLMULR の不正命令例外の MCAUSE・MEPC・MTVAL を確認しました。Rust テスト 87 件、公開 Zbc ELF 6 件、virt の UART・CLINT・PLIC も通過しました。
+
+固定 Robot の構成で再試行した 2 件は V の未対応で CPU 作成時に停止しました。縮小構成での通過を台帳に追記し、上流等価合格は累計 155 件です。
+
+REPL、実 ELF、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-e9d37fc-GWxf6L/` に保存しました。

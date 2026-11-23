@@ -3,6 +3,7 @@ pub struct BitManip {
     pub zba: bool,
     pub zbb: bool,
     pub zbc: bool,
+    pub zbkc: bool,
     pub zbs: bool,
     pub zbkb: bool,
     pub zbkx: bool,
@@ -80,7 +81,7 @@ impl BitManip {
             (7, 0x05) if self.zbb => a.max(b),
             (2, 0x14) if self.zbkx => permute(a, b, 4),
             (4, 0x14) if self.zbkx => permute(a, b, 8),
-            (1..=3, 0x05) if self.zbc => {
+            (1..=3, 0x05) if self.zbc || (self.zbkc && funct3 != 2) => {
                 let mut product = 0;
                 for index in 0..32 {
                     if b & (1 << index) != 0 {

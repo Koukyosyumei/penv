@@ -2221,8 +2221,8 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkb/Zbkb-unzip-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkb/Zbkb-xnor-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkb/Zbkb-zip-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkc/Zbkc-clmul-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkc/Zbkc-clmulh-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkc/Zbkc-clmul-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed both standalone Zbkc and fixed ISA with V omitted
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkc/Zbkc-clmulh-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed both standalone Zbkc and fixed ISA with V omitted
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkx/Zbkx-xperm4-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkx/Zbkx-xperm8-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbs/Zbs-bclr-00.elf	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
