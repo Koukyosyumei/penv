@@ -261,7 +261,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | 対象 | 上流の出典とケース | penv のテストと検証範囲 |
 | --- | --- | --- |
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
-| RV32 カウンタ | `unit-tests/riscv-priv.robot` の MCYCLE / MINSTRET の増加・停止・書き込み確定境界（RV32 各 3 ケース） | `scripts/firmware/rv32-counters.S` で 6 ケースを実 ELF 化 |
+| RV32 カウンタ | `unit-tests/riscv-priv.robot` の MCYCLE / MINSTRET の増加・停止・書き込み確定境界（RV32 各 3 ケース）と `Should Fail On Counter Access`（RV64） | `scripts/firmware/rv32-counters.S` で 6 ケースと、RV32 U モードのアクセス拒否・再許可を実 ELF 化 |
 | LiteX Linux 入出力 | `platforms/LiteX/LiteX_Linux_VexRiscv.robot` の起動・LED・ボタン・SPI・I²C | Robot と同じ REPL と起動ファイルで、GPIO、SPI 受信列、I²C 列挙、温度値の変化を検証 |
 | Nexys4DDR | `platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot` の `Should Boot` / `Should List Readme File` | 上流 BIOS と FAT16 で、ブート中断、`spisdcardboot`、ディレクトリ列挙を検証 |
 | LiteX TFTP | `network-server/NetworkServer.robot` の `Download File Over TFTP` | 同じ BIOS と MicroPython を上流の TFTP デモ RESC で使い、ブート中断後の `netboot`、転送バイト数、UART の `2 + 3` → `5` を検証 |
@@ -393,7 +393,7 @@ target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
 ```
 
-RV32 ELF は 6 ケース通過の行を出力し、待機ループのステップ上限で終了コード 2 になります。Tock の検証は最初の `D1` を待つ上流と同様に、先行する `D2` を許容します。対象のケースはいずれも既存実装で通過しました。
+RV32 ELF は 6 ケース通過と U モード権限検査通過の 2 行を出力し、待機ループのステップ上限で終了コード 2 になります。権限検査は M→S→U と遷移し、M モード CSR へのアクセスと無効化された `instret` 読み出しで違法命令トラップを確認します。その後、M モードで `mcounteren.IR` を有効化して U モードの `instret` 読み出しが通ることを確認します。Tock の検証は最初の `D1` を待つ上流と同様に、先行する `D2` を許容します。対象のケースはいずれも既存実装で通過しました。
 
 ### LiteX の SD rootfs と FAT16 の再現
 
