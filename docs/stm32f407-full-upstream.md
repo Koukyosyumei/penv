@@ -1832,3 +1832,25 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
 診断 RESC は `$work/AssembleBlock.resc`、`$work/DisassembleBlock.resc`、
 `$work/SetPageAccessViaIo.resc` です。`penv run --script PATH --max-steps 1`
 で各コマンドの拒否を再現できます。共有経路は ARM 担当に引き渡しました。
+
+### REPL の IRQ 取り消し・再配線
+
+固定 `MergeAndCreationTests.cs:768–865` の5件から元の REPL を抽出し、
+同じ penv バイナリで一括事前検査しました。4件では `MockIrqSender`、
+範囲指定の1件では `MockGPIOByNumberConnectorPeripheral` が型解決で停止します。
+取り消し後の接続数、受信先オブジェクト、IRQ 番号は未検証です。
+
+```sh
+work=target/stm32f407-irq-merge
+mkdir -p "$work"
+cargo build --release
+python3 tests/stm32f407-irq-merge-preflight.py "$work" > "$work/cases.tsv"
+cargo test > "$work/cargo.log" 2>&1
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+別群の `InterruptHooks/arm-m.robot:8` は、元の F746G Discovery 構成を
+`target/release/penv platform check --file ../renode/platforms/boards/stm32f7_discovery-bb.repl --platform-root ../renode`
+で検査すると `Video.STM32LTDC` の型解決で停止します。
+UART・GPIO の実ファームウェア検証やフックの始点と終点の照合は残っています。
+実測は `$work/interrupt-hooks.log` です。両群とも未達です。
