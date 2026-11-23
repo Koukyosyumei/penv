@@ -26,3 +26,13 @@ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo test --locked renode_repl
 ```
 
 対象テストのログは `~/.local/state/penv-dispatch/evidence/integration/shared-repl-duplicate-ca7e82f/focused.log`。既存 6 担当の回帰は `scripts/verify-release.sh` を使う。
+
+## 起動前のメモリ保存
+
+ARM `0737753` の Save/Clear/Load を統合版の Bus に接続した。単一 Cortex-M の実行前に RAM/ArrayMemory の内容とベクターテーブル基点を復元する。マップと入力を読み切ってからメモリを置き換え、既存の CPU 型と CPU 設定を保持する。切り詰められた保存ファイルと実行後の保存を CLI テストで確認した。
+
+```sh
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo test --locked --test cli -- --skip upstream_stm32f072
+```
+
+CLI 20 件と公開 STM32F072 Hello World ELF の Save、Clear、Load、mach set 0 後の UART 完了行を確認した。ログと RESC は `~/.local/state/penv-dispatch/evidence/integration/shared-boot-snapshot-b023006/`。固定 Neonkey の旧 USART と REPL の PerformanceInMips、実行中の ITSTATE と周辺機器の保存は残件。

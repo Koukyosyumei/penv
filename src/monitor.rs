@@ -50,6 +50,10 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    SaveMemory(PathBuf),
+    ClearMemory,
+    LoadMemory(PathBuf),
+    SelectMachineZero,
     FindBytes(FindBytes),
     Button(String, bool),
     ButtonPulse(String),
@@ -106,8 +110,26 @@ pub fn run(
         }
     }
     let mut retired = 0;
+    let mut cleared = false;
     for command in commands {
+        if cleared && !matches!(command.action, Action::LoadMemory(_)) {
+            return Err(format!(
+                "{}:{}: Load a boot snapshot after Clear",
+                command.source.display(),
+                command.line
+            ));
+        }
         let result = match &command.action {
+            Action::SaveMemory(path) => machine.save_memory_snapshot(path).map(|()| None),
+            Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
+                cleared = true;
+                None
+            }),
+            Action::LoadMemory(path) => machine.load_memory_snapshot(path).map(|()| {
+                cleared = false;
+                None
+            }),
+            Action::SelectMachineZero => Ok(None),
             Action::FindBytes(search) => search
                 .write_matches(&machine.bus, "", output.output)
                 .map(|()| None),
@@ -570,6 +592,22 @@ fn execute(
     }
     let resolve = |value| resolve(variables, value);
     let action = match words {
+        [verb @ ("Save" | "Load"), path] => {
+            let path = resolve(path)?
+                .strip_prefix('@')
+                .ok_or("expected @snapshot-path")?;
+            let path = script
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(unquote(path));
+            Some(if *verb == "Save" {
+                Action::SaveMemory(path)
+            } else {
+                Action::LoadMemory(path)
+            })
+        }
+        ["Clear"] => Some(Action::ClearMemory),
+        ["mach" | "machine", "set", "0"] => Some(Action::SelectMachineZero),
         ["sysbus", "FindBytes", ..] => Some(Action::FindBytes(FindBytes::parse(text, resolve)?)),
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();

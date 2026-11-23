@@ -1507,3 +1507,61 @@ fn renode_repl_reports_duplicate_attribute_before_overlays() {
     }
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn renode_resc_preboot_snapshot_restores_array_memory_and_vector_table() {
+    let directory = std::env::temp_dir().join(format!("penv-boot-snapshot-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("snapshot.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+flash: Memory.ArrayMemory @ sysbus 0x08000000
+    size: 0x80000
+ram: Memory.ArrayMemory @ sysbus 0x20000000
+    size: 0x20000
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("boot.bin"),
+        [0, 8, 0, 0x20, 9, 0, 0, 8, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("snapshot.resc");
+    let run = |actions: &str| {
+        fs::write(
+            &script,
+            format!("mach create\nmachine LoadPlatformDescription @snapshot.repl\nsysbus LoadBinary @boot.bin 0x08000000\ncpu VectorTableOffset 0x08000000\n{actions}"),
+        ).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1000", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let restored = run(
+        "Save @test.save\nClear\nLoad @test.save\nmach set 0\nsysbus FindBytes \"fe e7\"\nemulation RunFor \"0.000001\"\n",
+    );
+    assert!(restored.status.success(), "{restored:?}");
+    assert_eq!(restored.stdout, b"[0x08000008]\n");
+
+    let late = run("emulation RunFor \"0.000001\"\nSave @late.save\n");
+    assert_eq!(late.status.code(), Some(1), "{late:?}");
+    assert!(String::from_utf8_lossy(&late.stderr).contains("before execution"));
+    assert!(!directory.join("late.save").exists());
+
+    fs::OpenOptions::new()
+        .write(true)
+        .open(directory.join("test.save"))
+        .unwrap()
+        .set_len(20)
+        .unwrap();
+    let truncated = run("Clear\nLoad @test.save\n");
+    assert_eq!(truncated.status.code(), Some(1), "{truncated:?}");
+    assert!(String::from_utf8_lossy(&truncated.stderr).contains("test.save"));
+    fs::remove_dir_all(directory).unwrap();
+}
