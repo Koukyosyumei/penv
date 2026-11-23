@@ -814,14 +814,12 @@ impl Thumb {
                         "unaligned multiple-register transfer at {address:#010x}"
                     ));
                 }
-                bus.check_thumb_access(address, count as usize * 4, !load, false)?;
                 let selected = (0..8).filter(|register| registers & (1 << register) != 0);
                 if load {
                     let mut values = *r;
                     for (index, register) in selected.enumerate() {
-                        values[register] = bus
-                            .read_ram::<4>(address.wrapping_add(index as u32 * 4))
-                            .map_err(|error| error.to_string())?;
+                        values[register] =
+                            bus.thumb_read::<4>(address.wrapping_add(index as u32 * 4))?;
                     }
                     *r = values;
                 } else {
@@ -830,11 +828,13 @@ impl Thumb {
                     {
                         return Err(unsupported());
                     }
-                    let memory = bus
-                        .guest_memory(address, count as usize * 4)
-                        .map_err(|error| error.to_string())?;
-                    for (word, register) in memory.as_chunks_mut::<4>().0.iter_mut().zip(selected) {
-                        *word = r[register].to_le_bytes();
+                    for (index, register) in selected.enumerate() {
+                        bus.thumb_write(
+                            address.wrapping_add(index as u32 * 4),
+                            4,
+                            r[register],
+                            output,
+                        )?;
                     }
                 }
                 if !load || registers & (1 << base_register) == 0 {
