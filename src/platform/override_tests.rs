@@ -136,3 +136,89 @@ fn renode_override_4() {
         "set by B second",
     );
 }
+
+fn mock_registrations(source: &str) -> HashSet<String> {
+    let mut entries = Vec::new();
+    let path = Path::new("<platform string>");
+    parse_content(
+        path,
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )
+    .unwrap();
+    let entries = merge_declarations(entries).unwrap();
+
+    // Model the fixed upstream NullRegister and MockCPU fixtures. Named
+    // registration parents are instantiated before registering the CPU.
+    let mut names = HashSet::new();
+    for parent in entries
+        .iter()
+        .filter(|entry| entry.model == "Antmicro.Renode.UnitTests.Mocks.NullRegister")
+    {
+        let expected = if parent.name == "register2" {
+            (100, 100)
+        } else {
+            (0, 100)
+        };
+        assert_eq!(parent.bus_range().unwrap(), expected);
+        names.insert(format!("sysbus.{}", parent.name));
+    }
+    let cpu = entries.iter().find(|entry| entry.name == "cpu").unwrap();
+    assert_eq!(cpu.model, "Antmicro.Renode.UnitTests.Mocks.MockCPU");
+    let target = cpu.registration.as_deref().unwrap();
+    if target != "none" {
+        let path = format!("sysbus.{target}");
+        assert!(names.contains(&path));
+        names.insert(format!("{path}.{}", cpu.name));
+    }
+    names
+}
+
+#[test]
+fn renode_registration_updates_target() {
+    let names = mock_registrations(
+        "\nregister1: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>\nregister2: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus new Antmicro.Renode.Peripherals.Bus.BusRangeRegistration { range: <100, +100> }\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register1\ncpu: @register2",
+    );
+    assert!(names.contains("sysbus.register2.cpu"));
+    assert!(!names.contains("sysbus.register1.cpu"));
+}
+
+#[test]
+fn renode_registration_cancels_target() {
+    let names = mock_registrations(
+        "\nregister: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register\ncpu: @none",
+    );
+    assert!(!names.contains("sysbus.register.cpu"));
+}
+
+#[test]
+fn renode_registration_updates_production_bus_mapping() {
+    let source = r#"
+mem: Memory.MappedMemory @ sysbus 0 { size: 0x1000 }
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+moved: Mocks.DoubleWordPeripheral @ sysbus <0x1000, +0x100> { value: 0x666 }
+moved: @sysbus <0x2000, +0x100>
+gone: Mocks.DoubleWordPeripheral @ sysbus <0x3000, +0x100> { value: 0x667 }
+gone: @none
+"#;
+    let path = Path::new("<platform string>");
+    let mut entries = Vec::new();
+    parse_content(
+        path,
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )
+    .unwrap();
+    let mut machine = load_entries(path, &merge_declarations(entries).unwrap(), false).unwrap();
+    assert_eq!(machine.bus.read::<4>(0x2000).unwrap(), 0x666);
+    for address in [0x1000, 0x3000] {
+        assert!(machine.bus.read::<4>(address).is_err());
+    }
+}

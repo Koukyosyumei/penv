@@ -66,6 +66,16 @@ impl Entry {
             .as_deref()
             .and_then(|text| text.strip_prefix("sysbus "))
             .ok_or_else(|| self.error("expected sysbus range"))?;
+        let range = if let Some(body) = range.strip_prefix(TYPED_BUS_RANGE) {
+            body.trim()
+                .strip_prefix('{')
+                .and_then(|text| text.trim_end().strip_suffix('}'))
+                .and_then(|text| text.trim().strip_prefix("range:"))
+                .map(str::trim)
+                .ok_or_else(|| self.error("expected typed sysbus range"))?
+        } else {
+            range
+        };
         let (base, size) = parse_bus_range(range).map_err(|e| self.error(&e))?;
         let out_of_bounds = |_| self.error("sysbus range exceeds 32-bit bounds");
         Ok((
@@ -207,6 +217,8 @@ mod scalar_tests {
         );
     }
 }
+
+const TYPED_BUS_RANGE: &str = "new Antmicro.Renode.Peripherals.Bus.BusRangeRegistration";
 
 fn parse_bus_range(value: &str) -> Result<(u64, u64), String> {
     let invalid = || format!("invalid sysbus range {value:?}");
@@ -558,9 +570,11 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
         };
     };
     // A brace immediately after @ begins a registration expression.
-    if declaration[..begin].trim_end().ends_with('@') {
+    let prefix = declaration[..begin].trim_end();
+    if prefix.ends_with('@') || prefix.ends_with(TYPED_BUS_RANGE) {
         return Ok((declaration, Vec::new()));
     }
+
     let Some((end, '}')) = braces.next() else {
         return Err("expected a closing brace for inline properties");
     };
@@ -885,9 +899,6 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut blocks = Vec::new();
     for mut entry in entries {
         if entry.model.is_empty() && entry.name != "sysbus" {
-            if entry.registration.is_some() {
-                return Err(entry.error("unsupported declaration extension"));
-            }
             blocks.push(entry);
             continue;
         }
@@ -912,6 +923,9 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             .get(&block.name)
             .ok_or_else(|| block.error("extension has no declaration"))?;
         let target = &mut declarations[index];
+        if let Some(registration) = block.registration {
+            target.registration = Some(registration);
+        }
         let replaced: HashSet<_> = block
             .body
             .iter()
@@ -1023,6 +1037,9 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .map_err(|error| entry.error(&error))?;
             }
             "Mocks.DoubleWordPeripheral" => {
+                if entry.registration.as_deref() == Some("none") {
+                    continue;
+                }
                 let props = keys(entry, &["value"])?;
                 let [(_, value)] = props.as_slice() else {
                     return Err(entry.error("expected doubleword value"));
