@@ -1186,3 +1186,26 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 同じ release バイナリで Zfhmin と ZfhminD の固定 ELF 各 6 件が通過しました。Zfhmin に D を加え、ZfhD の形式変換 ELF 2 件でも半精度と倍精度の相互変換を確認しました。同じ構成で Zfh の `fadd.h` は不正命令として拒否されました。Zfh・ZfhD の回帰は 2 MiB RAM の診断構成で 83/83 件が通過しました。最初の 1 MiB 構成では 12 件が ELF のロード時にメモリー範囲外で停止しました。Rust テストは 88/88 件が通過しました。
 
 固定 Robot 構成では V の未対応で対象 12 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。構成別の `results.jsonl`、ケースログ、終了状態を上記の証拠ディレクトリに保存しました。
+
+### RV32 Zaamo・Zalrsc の個別指定
+
+代表の固定 ACT ELF `Zaamo-amoadd.w-00.elf` は `rv32ic_zaamo` の CPU 作成時に停止しました。ISA 名から Zaamo と Zalrsc を個別に有効にし、既存の AMO と LR/SC の実装に接続しました。両方を指定した場合は `misa.A` を立てます。Zacas と Zabha の前提として Zaamo 単独指定も受け付けます。[RISC-V A 拡張仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/a-st-ext.html)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-c97c0da-crvSZ7"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/rv32ic_zaamo_zalrsc.repl" --artifacts "$repro/both" "$elfs"/{Zaamo,Zalrsc}/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/{Zaamo,Zalrsc}/*.elf
+```
+
+同じ release バイナリで Zaamo 単独は 9/9 件、Zalrsc 単独は 1/2 件が通過しました。両拡張を指定した構成と A 構成の結果は各 10/11 件です。Zaamo 単独での LR と Zalrsc 単独での AMO は不正命令になりました。Rust テストは 88 件すべて通過しました。
+
+未達は `Zalrsc-sc.w-00.elf` の test 238 です。同じハートが LR の対象ワードと重なる位置にバイトを書き込むと、penv は予約を無効にして SC の結果を 1 にします。固定署名は 0 を要求します。固定 Renode でこのシーケンスがどう観測されるかは未確認です。固定 Robot 構成は V の未対応で対象 11 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。
+
+先に調べた BF16 の `Zfbfmin-fcvt.s.bf16-00.elf` は test 125 で署名が 0x7e000000 を要求する既知の失敗を再現しました。仕様の標準 NaN と署名の差が残っています。構成別の `results.jsonl`、ケースログ、終了状態を上記の証拠ディレクトリに保存しました。

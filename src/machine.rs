@@ -60,6 +60,8 @@ pub struct Hart {
     zicond: bool,
     zacas: bool,
     zabha: bool,
+    zaamo: bool,
+    zalrsc: bool,
     bitmanip: BitManip,
     pub pc: u32,
     reset_vector: u32,
@@ -201,6 +203,8 @@ impl Machine {
                 zicond: false,
                 zacas: false,
                 zabha: false,
+                zaamo: false,
+                zalrsc: false,
                 bitmanip: BitManip::default(),
                 pc: RAM_BASE,
                 reset_vector: RAM_BASE,
@@ -556,6 +560,11 @@ impl Hart {
         self.csr.m_extension = multiply;
         self.csr.a_extension = atomic;
         self.csr.c_extension = compressed;
+    }
+
+    pub fn set_atomic_subextensions(&mut self, zaamo: bool, zalrsc: bool) {
+        self.zaamo = zaamo;
+        self.zalrsc = zalrsc;
     }
 
     pub fn set_zmmul(&mut self, enabled: bool) {
@@ -1263,16 +1272,22 @@ impl Hart {
                 }
                 Some(sign(previous as u32, (width.min(4) * 8) as u32))
             }
-            0x2f if self.csr.a_extension && (funct3 == 2 || (self.zabha && funct3 < 2)) => {
+            0x2f if funct3 == 2 || (self.zabha && funct3 < 2) => {
                 let width = 1 << funct3;
                 let operand_bits = width as u32 * 8;
                 let b = b & (u32::MAX >> (32 - operand_bits));
                 let operation = insn >> 27;
                 let rs2 = (insn >> 20) & 31;
                 let (access, permissions) = match operation {
-                    2 if width == 4 && rs2 == 0 => (Access::Load, crate::pmp::READ),
-                    3 if width == 4 => (Access::Store, crate::pmp::WRITE),
-                    0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => {
+                    2 if (self.csr.a_extension || self.zalrsc) && width == 4 && rs2 == 0 => {
+                        (Access::Load, crate::pmp::READ)
+                    }
+                    3 if (self.csr.a_extension || self.zalrsc) && width == 4 => {
+                        (Access::Store, crate::pmp::WRITE)
+                    }
+                    0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28
+                        if self.csr.a_extension || self.zaamo =>
+                    {
                         (Access::Store, crate::pmp::READ | crate::pmp::WRITE)
                     }
                     _ => return Err(illegal()),

@@ -919,6 +919,8 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         let mut zacas = false;
         let mut zmmul = false;
         let mut zabha = false;
+        let mut zaamo = false;
+        let mut zalrsc = false;
         let mut smepmp = false;
         let mut sscofpmf = false;
         let mut bitmanip = BitManip::default();
@@ -961,6 +963,8 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     zacas = false;
                     zmmul = false;
                     zabha = false;
+                    zaamo = false;
+                    zalrsc = false;
                     smepmp = false;
                     sscofpmf = false;
                     let mut zfh = false;
@@ -971,6 +975,8 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                         match extension {
                             "zicond" if !zicond => zicond = true,
                             "zmmul" if !zmmul => zmmul = true,
+                            "zaamo" if !zaamo => zaamo = true,
+                            "zalrsc" if !zalrsc => zalrsc = true,
                             "zabha" if !zabha => zabha = true,
                             "zacas" if !zacas => zacas = true,
                             "sscofpmf" if !sscofpmf => sscofpmf = true,
@@ -1126,11 +1132,11 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 if smepmp && pmp == 0 {
                     return Err(entry.error("Smepmp requires internal PMP entries"));
                 }
-                if zacas && !atomic {
-                    return Err(entry.error("Zacas requires the RV32 A extension"));
+                if zacas && !(atomic || zaamo) {
+                    return Err(entry.error("Zacas requires RV32 Zaamo or A"));
                 }
-                if zabha && !atomic {
-                    return Err(entry.error("Zabha requires the RV32 A extension"));
+                if zabha && !(atomic || zaamo) {
+                    return Err(entry.error("Zabha requires RV32 Zaamo or A"));
                 }
                 (
                     (multiply, zmmul),
@@ -1138,7 +1144,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     compressed,
                     embedded,
                     zicond,
-                    (zacas, zabha),
+                    (zacas, zabha, zaamo, zalrsc),
                     (smepmp, sscofpmf),
                     bitmanip,
                     (
@@ -1174,7 +1180,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 compressed,
                 embedded,
                 zicond,
-                (zacas, zabha),
+                (zacas, zabha, zaamo, zalrsc),
                 (smepmp, sscofpmf),
                 bitmanip,
                 ((floating, zfa), (zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round)),
@@ -1197,7 +1203,8 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             })
             .unwrap_or(entry.model == "CPU.IbexRiscV32");
         hart.set_unaligned_accesses(unaligned);
-        hart.set_integer_extensions(multiply, atomic, compressed);
+        hart.set_integer_extensions(multiply, atomic || (zaamo && zalrsc), compressed);
+        hart.set_atomic_subextensions(zaamo, zalrsc);
         hart.set_zmmul(zmmul);
         hart.set_embedded_base(embedded);
         hart.set_zicond(zicond);
@@ -2236,6 +2243,8 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "xandesperf"
                     | "xandesbfhcvt"
                     | "zacas"
+                    | "zaamo"
+                    | "zalrsc"
                     | "zabha"
                     | "zmmul"
                     | "zfa"
@@ -2267,7 +2276,7 @@ type RiscvConfig<'a> = (
         bool,
         bool,
         bool,
-        (bool, bool),
+        (bool, bool, bool, bool),
         (bool, bool),
         BitManip,
         (
