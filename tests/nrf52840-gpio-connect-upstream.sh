@@ -63,3 +63,22 @@ if grep -q '^LED led ' "$out/source-detached.log"; then
     exit 1
 fi
 cat "$out/source-detached.log"
+
+# Verify signal forwarding through the external connector, then remove it.
+for connector_state in bridged connector-removed; do
+    sed 's/sysbus Unregister led/gpio BridgeLed connector led/' "$out/detached.resc" >"$out/$connector_state.resc"
+    if [ "$connector_state" = connector-removed ]; then
+        echo 'gpio RemoveConnector connector' >>"$out/$connector_state.resc"
+    fi
+    status=0
+    "$penv" run --platform-root "$renode" --script "$out/$connector_state.resc" --led-events \
+        --button-event 500000:button:press --button-event 1500000:button:release \
+        --max-steps 3000001 "$elf" >"$out/$connector_state.log" 2>&1 || status=$?
+    [ "$status" -eq 2 ]
+    grep -Fq 'Button pressed' "$out/$connector_state.log"
+    case "$connector_state" in
+        bridged) awk '/^LED led / { events = events " " $3 } END { exit !(events == " on off on") }' "$out/$connector_state.log" ;;
+        connector-removed) if grep -q '^LED led ' "$out/$connector_state.log"; then exit 1; fi ;;
+    esac
+    cat "$out/$connector_state.log"
+done

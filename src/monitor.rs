@@ -23,7 +23,7 @@ pub struct Boot {
     pub ram_io_pages: Vec<(u32, bool)>,
     pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
     pub cpu_control: Vec<CpuControl>,
-    pub unregister_gpio_peripherals: Vec<String>,
+    pub gpio_changes: Vec<GpioChange>,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
@@ -39,6 +39,12 @@ pub enum CpuControl {
     Halt(bool),
     Reset(crate::machine::CpuResetKind),
     ResetLog(String),
+}
+
+pub enum GpioChange {
+    Unregister(String),
+    Bridge(String, String),
+    RemoveConnector(String),
 }
 
 pub enum UartIrq {
@@ -310,8 +316,19 @@ fn execute(
         }
         ["sysbus", "Unregister", value] if boot.platform.is_some() => {
             let name = resolve(value)?;
-            boot.unregister_gpio_peripherals
-                .push(name.strip_prefix("sysbus.").unwrap_or(name).into());
+            boot.gpio_changes.push(GpioChange::Unregister(
+                name.strip_prefix("sysbus.").unwrap_or(name).into(),
+            ));
+        }
+        ["gpio", "BridgeLed", connector, led] if boot.platform.is_some() => {
+            boot.gpio_changes.push(GpioChange::Bridge(
+                resolve(connector)?.into(),
+                resolve(led)?.into(),
+            ));
+        }
+        ["gpio", "RemoveConnector", connector] if boot.platform.is_some() => {
+            boot.gpio_changes
+                .push(GpioChange::RemoveConnector(resolve(connector)?.into()));
         }
         ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {
             boot.fault_on_unmapped_data = true;

@@ -126,6 +126,17 @@ pub enum CpuHook {
     Pause,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NrfGpioReceiver {
+    Led(usize),
+    Connector(usize),
+}
+
+struct NrfGpioConnector {
+    name: String,
+    output: crate::nrf52840::gpio_line::GpioLine<NrfGpioReceiver>,
+}
+
 #[derive(Default)]
 pub struct Bus {
     pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
@@ -159,7 +170,8 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
-    nrf_led_routes: crate::nrf52840::gpio_line::GpioRoutes<usize>,
+    nrf_led_routes: crate::nrf52840::gpio_line::GpioRoutes<NrfGpioReceiver>,
+    nrf_gpio_connectors: Vec<Option<NrfGpioConnector>>,
     nrf_leds: Vec<Option<GpioLed>>,
     gpio_buttons: Vec<GpioButton>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
@@ -469,14 +481,43 @@ impl Bus {
     }
 
     pub fn sample_nrf_gpio_outputs(&mut self, gpio: u32, pins: u32) {
-        for (pin, line) in self.nrf_led_routes.lines(gpio) {
-            for endpoint in line.endpoints() {
-                let led = self.nrf_leds[endpoint.receiver].as_mut().unwrap();
-                led.sample_level(pins & (1 << pin) != 0, self.led_events);
-            }
-        }
+        Self::sample_nrf_led_routes(
+            &self.nrf_led_routes,
+            &self.nrf_gpio_connectors,
+            &mut self.nrf_leds,
+            gpio,
+            pins,
+            self.led_events,
+        );
         for device in &mut self.nrf_peripherals {
             device.release_spi_cs(gpio, pins);
+        }
+    }
+
+    fn sample_nrf_led_routes(
+        routes: &crate::nrf52840::gpio_line::GpioRoutes<NrfGpioReceiver>,
+        connectors: &[Option<NrfGpioConnector>],
+        leds: &mut [Option<GpioLed>],
+        gpio: u32,
+        pins: u32,
+        report: bool,
+    ) {
+        for (pin, line) in routes.lines(gpio) {
+            let high = pins & (1 << pin) != 0;
+            for endpoint in line.endpoints() {
+                match endpoint.receiver {
+                    NrfGpioReceiver::Led(index) => {
+                        leds[index].as_mut().unwrap().sample_level(high, report)
+                    }
+                    NrfGpioReceiver::Connector(index) => {
+                        for endpoint in connectors[index].as_ref().unwrap().output.endpoints() {
+                            if let NrfGpioReceiver::Led(led) = endpoint.receiver {
+                                leds[led].as_mut().unwrap().sample_level(high, report);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1262,7 +1303,7 @@ impl Bus {
         input: u32,
     ) -> Result<(), String> {
         self.nrf_led_routes.line_mut(base, led.pin).connect(
-            self.nrf_leds.len(),
+            NrfGpioReceiver::Led(self.nrf_leds.len()),
             &led.name,
             1,
             input,
@@ -1273,14 +1314,66 @@ impl Bus {
         Ok(())
     }
 
+    pub fn bridge_nrf_led(&mut self, connector: &str, name: &str) -> Result<(), String> {
+        if self
+            .nrf_gpio_connectors
+            .iter()
+            .flatten()
+            .any(|item| item.name == connector)
+        {
+            return Err(format!("duplicate nRF GPIO connector {connector:?}"));
+        }
+        let led = self
+            .nrf_leds
+            .iter()
+            .position(|led| led.as_ref().is_some_and(|led| led.name == name))
+            .ok_or_else(|| format!("unknown nRF GPIO LED {name:?}"))?;
+        let receiver = NrfGpioReceiver::Led(led);
+        let (source, pin) = self
+            .nrf_led_routes
+            .source_of(&receiver)
+            .ok_or_else(|| format!("nRF GPIO LED {name:?} has no direct connection"))?;
+        let mut output = crate::nrf52840::gpio_line::GpioLine::default();
+        output.connect(receiver, name, 1, 0)?;
+        self.nrf_led_routes
+            .unregister_peripheral(None, Some(&receiver));
+        self.nrf_led_routes.line_mut(source, pin).connect(
+            NrfGpioReceiver::Connector(self.nrf_gpio_connectors.len()),
+            connector,
+            1,
+            0,
+        )?;
+        self.nrf_gpio_connectors.push(Some(NrfGpioConnector {
+            name: connector.into(),
+            output,
+        }));
+        Ok(())
+    }
+
+    pub fn remove_nrf_gpio_connector(&mut self, name: &str) -> Result<(), String> {
+        let index = self
+            .nrf_gpio_connectors
+            .iter()
+            .position(|item| item.as_ref().is_some_and(|item| item.name == name))
+            .ok_or_else(|| format!("unknown nRF GPIO connector {name:?}"))?;
+        self.nrf_led_routes
+            .unregister_peripheral(None, Some(&NrfGpioReceiver::Connector(index)));
+        self.nrf_gpio_connectors[index] = None;
+        Ok(())
+    }
+
     pub fn unregister_nrf_gpio_peripheral(&mut self, name: &str) -> Result<(), String> {
         if let Some(receiver) = self
             .nrf_leds
             .iter()
             .position(|led| led.as_ref().is_some_and(|led| led.name == name))
         {
+            let endpoint = NrfGpioReceiver::Led(receiver);
             self.nrf_led_routes
-                .unregister_peripheral(None, Some(&receiver));
+                .unregister_peripheral(None, Some(&endpoint));
+            for connector in self.nrf_gpio_connectors.iter_mut().flatten() {
+                connector.output.disconnect_receiver(&endpoint);
+            }
             self.nrf_leds[receiver] = None;
         } else if let Some(source) = self
             .nrf_peripherals
@@ -1362,12 +1455,14 @@ impl Bus {
         }
         for port in &self.nrf_peripherals {
             if let Some(high) = port.gpio_driven_high() {
-                for (pin, line) in self.nrf_led_routes.lines(port.base) {
-                    for endpoint in line.endpoints() {
-                        let led = self.nrf_leds[endpoint.receiver].as_mut().unwrap();
-                        led.sample_level(high & (1 << pin) != 0, self.led_events);
-                    }
-                }
+                Self::sample_nrf_led_routes(
+                    &self.nrf_led_routes,
+                    &self.nrf_gpio_connectors,
+                    &mut self.nrf_leds,
+                    port.base,
+                    high,
+                    self.led_events,
+                );
             }
         }
     }
@@ -2367,5 +2462,78 @@ impl Bus {
             Err(error) => return Err(error),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod gpio_connector_tests {
+    use super::*;
+
+    fn fixture() -> Bus {
+        let mut bus = Bus::default();
+        bus.map_nrf_peripheral(NrfPeripheral::gpio(0x50000500, "gpio0".into(), 32))
+            .unwrap();
+        bus.add_nrf_gpio_led(0x50000500, GpioLed::new("led".into(), 0, false), 0)
+            .unwrap();
+        bus.bridge_nrf_led("connector", "led").unwrap();
+        assert_eq!(
+            bus.nrf_led_routes
+                .lines(0x50000500)
+                .next()
+                .unwrap()
+                .1
+                .endpoints()
+                .len(),
+            1
+        );
+        assert_eq!(
+            bus.nrf_gpio_connectors[0]
+                .as_ref()
+                .unwrap()
+                .output
+                .endpoints()
+                .len(),
+            1
+        );
+        bus
+    }
+
+    #[test]
+    fn upstream_gpio_external_removal_disconnects_source_endpoint() {
+        let mut bus = fixture();
+        bus.remove_nrf_gpio_connector("connector").unwrap();
+        assert!(
+            bus.nrf_led_routes
+                .lines(0x50000500)
+                .next()
+                .unwrap()
+                .1
+                .endpoints()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn upstream_gpio_source_unregister_preserves_external_destination() {
+        let mut bus = fixture();
+        bus.unregister_nrf_gpio_peripheral("gpio0").unwrap();
+        assert!(
+            bus.nrf_led_routes
+                .lines(0x50000500)
+                .next()
+                .unwrap()
+                .1
+                .endpoints()
+                .is_empty()
+        );
+        assert_eq!(
+            bus.nrf_gpio_connectors[0]
+                .as_ref()
+                .unwrap()
+                .output
+                .endpoints()
+                .len(),
+            1
+        );
     }
 }

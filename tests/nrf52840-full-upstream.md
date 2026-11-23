@@ -59,7 +59,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
 - `page-access-via-io.robot` は固定 Cortex-M4 のページ単位 I/O 切替。monitor 操作とアクセスログの回帰が未達。
 - `python-engine.robot` の nRF RADIO 構文エラーと `external-control.robot` の nRF SPI 転送は Cortex-M4 へ移植できる。RISC-V カスタム命令による CPU abort は固定の別 ISA を必要とする。
-- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースと登録解除・端点管理7ケースの移植は後述。外部コネクタの3ケースは未達。
+- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースと登録解除・端点管理7ケースの移植は後述。外部コネクタの2ケースは後述。別機械の破棄を扱う1ケースは未達。
 
 ## 固定構成の集計
 
@@ -69,8 +69,8 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
 | 監査した共有・混成 Robot | 190 | 138 | 5 | 47 |
-| Infrastructure GPIO NUnit | 14 | 11 | 0 | 3 |
-| 合計 | **221** | **166** | **5** | **50** |
+| Infrastructure GPIO NUnit | 14 | 13 | 0 | 1 |
+| 合計 | **221** | **168** | **5** | **48** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -471,4 +471,10 @@ Infrastructure の `GPIODetachingTests.cs` のうち、番号付き接続の列�
 
 Infrastructure の `GPIODetachingTests.cs` の連鎖解除、共有端点、受信側の同一性の3ケースを Rust に移植した。元の接続順、入力番号、共有経路と重複接続を保持した。中央の機器を取り除いたときはその機器の入出力が外れ、独立経路は残る。同じ端点の再登録は重複させず、照会は元の受信側を返す。nRF52840 の GPIO ポートと LED の登録解除もこの接続管理を使う。
 
-前節のコマンドで再現できる。固定 Zephyr Button ELF の短い回帰は正常配線、LED の登録解除、GPIO ポートの登録解除を照合する。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-lifecycle.MECUTaGX/` の `cargo-test`、`elf`、`shell` に保存した。外部 GPIOConnector の管理、外部削除と機械破棄を含む3ケースは未達。
+前節のコマンドで再現できる。固定 Zephyr Button ELF の短い回帰は正常配線、LED の登録解除、GPIO ポートの登録解除を照合する。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-lifecycle.MECUTaGX/` の `cargo-test`、`elf`、`shell` に保存した。外部 GPIOConnector の削除は次節に記録した。
+
+### 外部 GPIO コネクタの切断
+
+Infrastructure の `GPIODetachingTests.cs` から、外部コネクタの削除と送信元機器の登録解除を移植した。入力・出力とも pin 0 で接続し、外部削除では送信元端点が消えること、送信元の登録解除では送信元端点が消えて受信側端点が残ることを実動作の Bus で照合した。移植用 RESC の `gpio BridgeLed` は既存 LED 配線にコネクタを挿入し、`gpio RemoveConnector` で解除する。既存の短い Zephyr Button 回帰を拡張し、正常転送と解除後の通知停止を検証する。
+
+前節のコマンドで再現できる。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-external.Yv4oC5Gp/` の `cargo-test`、`elf`、`shell` に保存した。別機械上に送信元・受信側を置くケースは、機械ごとの GPIO 所有権と破棄時の通知を実装する必要がある。

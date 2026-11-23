@@ -36,6 +36,11 @@ impl<R: Eq> GpioLine<R> {
         Ok(())
     }
 
+    pub fn disconnect_receiver(&mut self, receiver: &R) {
+        self.endpoints
+            .retain(|endpoint| &endpoint.receiver != receiver);
+    }
+
     pub fn endpoints(&self) -> &[Endpoint<R>] {
         &self.endpoints
     }
@@ -62,6 +67,15 @@ impl<R: Eq> GpioRoutes<R> {
         self.lines
             .range((source, 0)..=(source, u8::MAX))
             .map(|(&(_, pin), line)| (pin, line))
+    }
+
+    pub fn source_of(&self, receiver: &R) -> Option<(u32, u8)> {
+        self.lines.iter().find_map(|(&source, line)| {
+            line.endpoints()
+                .iter()
+                .any(|endpoint| &endpoint.receiver == receiver)
+                .then_some(source)
+        })
     }
 
     pub fn unregister_peripheral(&mut self, source: Option<u32>, receiver: Option<&R>) {
