@@ -1602,3 +1602,22 @@ bash tests/stm32h7-tim8-smoke.sh "$base" timer8
 ```
 
 `cargo test` 212件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 の3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-direction.xwyONkQv` に保存しました。台帳は対象786件のうち等価合格192件、部分検証17件、未達577件です。共通 ComparingTimer の上限を超える比較値の拒否は STM32 TIM の CCR 書き込みと意味が異なるため、別の未達項目です。
+
+### backlog-network-3902aaeb6c9e-1
+
+STM32H7 GPIO からタイマーへの接続で、接続先の保持と入力上限の検証を共通化しました。固定上流 `GPIOTests.cs` の4件を同じバイナリで実行し、接続先と入力番号、未接続の空リスト、入力上限、および不正入力の診断全文を照合しました。上流のモック受信先には5入力、実 STM32H743 の TIM2 には4入力を使用しました。実 REPL に追記した入力2は受理され、入力10は受信先の入力数を示す診断で拒否されました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gpio-endpoints.KfA5tzQp
+target/release/penv check-platform "$e/channel-2.repl" --platform-root ../renode
+target/release/penv check-platform "$e/channel-10.repl" --platform-root ../renode
+```
+
+最後のコマンドは意図した診断で終了します。`cargo test` 216件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格196件、部分検証17件、未達573件です。GPIO の動的切断は残っています。ComparingTimer の上限を超える比較値の拒否は、書き込み可能な STM32 TIM の CCR と契約が異なるため、汎用比較タイマーの経路が必要です。

@@ -610,10 +610,10 @@ infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	178-179	S
 infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	199-200	ShouldDisconnectGPIOEndpointFromRemovedExternal	[Test] public void ShouldDisconnectGPIOEndpointFromRemovedExternal()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
 infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	232-233	ShouldDisconnectGPIOEndpointFromDisposedMachine	[Test] public void ShouldDisconnectGPIOEndpointFromDisposedMachine()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
 infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	275-276	ShouldDisconnectGPIOEndpointFromUnregisteredPeripheral	[Test] public void ShouldDisconnectGPIOEndpointFromUnregisteredPeripheral()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
-infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	20-21	ShouldPropagateConnected	[Test] public void ShouldPropagateConnected()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
-infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	31-32	ShouldBeEmptyWhenNotConnected	[Test] public void ShouldBeEmptyWhenNotConnected()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
-infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	39-40	ShouldConnectBoundGPIOs	[Test] public void ShouldConnectBoundGPIOs()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
-infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	47-48	ShouldThrowOnIllegalInputNo	[Test] public void ShouldThrowOnIllegalInputNo()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
+infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	20-21	ShouldPropagateConnected	[Test] public void ShouldPropagateConnected()	PASS	GPIO 接続の共通経路で、受信先と入力番号、未接続、5入力の境界、および上流と同じ不正入力診断を照合。src/stm32h7_gpio.rs
+infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	31-32	ShouldBeEmptyWhenNotConnected	[Test] public void ShouldBeEmptyWhenNotConnected()	PASS	GPIO 接続の共通経路で、受信先と入力番号、未接続、5入力の境界、および上流と同じ不正入力診断を照合。src/stm32h7_gpio.rs
+infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	39-40	ShouldConnectBoundGPIOs	[Test] public void ShouldConnectBoundGPIOs()	PASS	GPIO 接続の共通経路で、受信先と入力番号、未接続、5入力の境界、および上流と同じ不正入力診断を照合。src/stm32h7_gpio.rs
+infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	47-48	ShouldThrowOnIllegalInputNo	[Test] public void ShouldThrowOnIllegalInputNo()	PASS	GPIO 接続の共通経路で、受信先と入力番号、未接続、5入力の境界、および上流と同じ不正入力診断を照合。src/stm32h7_gpio.rs
 infrastructure	src/Emulator/Main/Tests/UnitTests/StorageTests.cs	28-29	ShouldReadAndWriteLBABackend	[Test, Repeat(10)] public void ShouldReadAndWriteLBABackend()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
 infrastructure	src/Emulator/Main/Tests/UnitTests/PacketTests.cs	30-31	TestLengthCalculation	[Test] public void TestLengthCalculation()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
 infrastructure	src/Emulator/Main/Tests/UnitTests/PacketTests.cs	47-48	TestDecode	[Test] public void TestDecode()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認

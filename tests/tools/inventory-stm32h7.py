@@ -320,6 +320,13 @@ def triage(row):
         status, reason = 'PASS', '固定 Cortex-M7 と同じ 10 命令と R4 の期待値を照合。src/thumb/ge_upstream.rs'
         if '(usub8)' in name:
             reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
+    elif suite == 'GPIOTests.cs' and name in {
+        'ShouldPropagateConnected',
+        'ShouldBeEmptyWhenNotConnected',
+        'ShouldConnectBoundGPIOs',
+        'ShouldThrowOnIllegalInputNo',
+    }:
+        status, reason = 'PASS', 'GPIO 接続の共通経路で、受信先と入力番号、未接続、5入力の境界、および上流と同じ不正入力診断を照合。src/stm32h7_gpio.rs'
     elif suite == 'LimitTimerTests.cs' and name in {
         'ShouldHandleMicrosecondPrecisionTimerEvents',
         'ShouldHandleSubMicrosecondPrecisionTimerEvents',

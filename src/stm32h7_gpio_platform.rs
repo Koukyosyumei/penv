@@ -274,7 +274,7 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
                     .find(|timer| timer.name == name.trim())
                     .ok_or("unknown GPIO timer target")?;
                 let (base, _) = crate::stm32h7_board_platform::registration(timer, entries)?;
-                port.connect_timer_input(pin, base, irq_index(channel, 4)?)?;
+                port.connect_timer_input(pin, base, number(channel.trim())?)?;
             }
             continue;
         }
