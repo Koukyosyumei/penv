@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 58 | 38 | 17 | 239 |
-| Renode Infrastructure NUnit | 134 | 49 | 2 | 83 | 9 |
-| 合計 | **247** | **107** | **40** | **100** | **248** |
+| Renode Infrastructure NUnit | 134 | 51 | 4 | 79 | 9 |
+| 合計 | **247** | **109** | **42** | **96** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -342,10 +342,13 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-cpu-flow-verification
 
 `Miscellaneous.Button` は接続先なしで登録でき、`-> gpioA@2 | gpioB@3` で複数の STM32 GPIO 入力に配線できる。接続先はポートとピンの組で重複を除き、全入力のレベルを更新してから EXTI などへ反映する。CLI 回帰では押下・解放による両ポートの IDR と、16入力ポートの範囲外エラーを確認する。
 
-`GPIODetachingTests.cs` は未達のまま。汎用の番号付き出力を、未接続の出力も含めて列挙する API と、周辺機器や外部接続を登録解除するときに配線を取り除く処理が必要。
+`GPIODetachingTests.cs` のうち、入力1に接続した受信先を登録解除した際に送信元の接続先一覧が空になる2件を等価合格とした。通常の RESC では `sysbus Unregister sysbus.gpioB` または `machine UnregisterFromParent sysbus.gpioB` を使う。STM32 GPIO の MMIO、ボタンと LED の配線、EXTI レベル、タイマーの GPIO 入出力を除去または再評価する。取り除いた子ボタンへの予約済みイベントは、他のボタンに影響しない。
+
+複数の送信元にまたがる選択的な切断と、受信先の重複排除も Rust 回帰で確認した。上流と同じ汎用送信元の複数番号付き出力や送受信を兼ねるデバイスを使う2件は部分移植とした。残りは番号付き出力の列挙、汎用デバイスの連鎖、外部 GPIOConnector とマシンのライフサイクルが必要。
 
 ```sh
 cargo test --locked renode_gpio_endpoint_registration_and_input_bounds
+cargo test --locked renode_gpio_unregister_receiver_detaches_only_its_endpoints
 cargo test --locked renode_resc_gpio_button_fans_out_to_distinct_pins
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-gpio-endpoints-verification
 ```

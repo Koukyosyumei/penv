@@ -1,5 +1,6 @@
 pub struct Stm32Gpio {
     pub base: u32,
+    pub name: Option<String>,
     pub size: u32,
     pub exti_routes: [u32; 16],
     external: u16,
@@ -31,6 +32,7 @@ impl Stm32Gpio {
     pub fn new(base: u32, size: u32, [mode, speed, pull]: [u32; 3], alternate_count: u32) -> Self {
         Self {
             base,
+            name: None,
             size,
             exti_routes: [0; 16],
             external: 0,

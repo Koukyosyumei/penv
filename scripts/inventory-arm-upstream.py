@@ -268,9 +268,18 @@ def classify_nunit(name, case, attrs, parameter):
         if case in checks:
             return PASS, COMMON, "renode_gpio_endpoint_registration_and_input_bounds; " + checks[case]
     if name == "GPIODetachingTests":
+        check = "renode_gpio_unregister_receiver_detaches_only_its_endpoints"
+        if case in {"ShouldDetachConnectionFromGPIOByNumberConnection", "ShoulDisconnectGPIOSenderAttachedToGPIOReceiver"}:
+            return PASS, F072, check + "; unregister receiver on input 1 and observe the sender's empty endpoint list"
+        if case == "ShouldDetachOnlyOneConnectionFromGPIOByNumberConnection":
+            return PARTIAL, F072, check + "; unrelated endpoints survive; upstream uses three numbered outputs on the same device"
+        if case == "ShouldDisconnectEndpointOfUnregisteredPeripheral":
+            return PARTIAL, F072, check + "; multiple senders, duplicate suppression and selective removal; STM32 uses separate sender and receiver devices"
         if case in {"ShouldGetAllGPIOConnections", "ShouldConnectGPIOToReceiverAndReturnTheSameReceiver"}:
             return OPEN, COMMON, "Requires numbered generic sender registration and output enumeration, including outputs with no endpoints"
-        return OPEN, COMMON, "Requires removing incoming and outgoing endpoints on peripheral unregistration or external or machine disposal; STM32 button fan-out uses static REPL topology"
+        if case == "ShouldUnregisterChainedPeripheralsOnBDisconnect":
+            return OPEN, COMMON, "Requires a generic peer that is both receiver and sender in a chained GPIO graph; STM32 removal cleans its concrete routes"
+        return OPEN, COMMON, "Requires external GPIOConnector lifecycle and disposal or unregister callbacks across machine boundaries"
     if name == "LimitTimerTests":
         if case in {"ShouldBeAscending", "ShouldBeDescending"}:
             return PASS, F072, "renode_stm32_limit_timer_monotonic_and_bounded; same 100 Hz, period 100000, and 100 one-second monotonicity checks"

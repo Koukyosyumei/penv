@@ -55,6 +55,10 @@ impl GpioEndpoints {
         Ok(())
     }
 
+    pub fn disconnect_receiver(&mut self, receiver: u32) {
+        self.0.retain(|&(port, _)| port != receiver);
+    }
+
     pub fn as_slice(&self) -> &[(u32, u8)] {
         &self.0
     }

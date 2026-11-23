@@ -158,7 +158,7 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
-    gpio_buttons: Vec<GpioButton>,
+    gpio_buttons: Vec<Option<GpioButton>>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
     stm32_timers: Vec<Stm32Timer>,
@@ -886,7 +886,7 @@ impl Bus {
     }
 
     pub fn add_gpio_button(&mut self, button: GpioButton) {
-        self.gpio_buttons.push(button);
+        self.gpio_buttons.push(Some(button));
         self.set_button(self.gpio_buttons.len() - 1, false);
     }
 
@@ -897,16 +897,17 @@ impl Bus {
     pub fn board_button(&self, name: &str) -> Option<usize> {
         self.gpio_buttons
             .iter()
-            .position(|button| button.name == name)
+            .position(|button| button.as_ref().is_some_and(|button| button.name == name))
     }
 
     pub fn set_named_button(&mut self, target: &str, pressed: bool) -> Result<(), String> {
         let target = target.strip_prefix("sysbus.").unwrap_or(target);
         let index = match target.split_once('.') {
-            Some((parent, name)) => self
-                .gpio_buttons
-                .iter()
-                .position(|button| button.parent.as_deref() == Some(parent) && button.name == name),
+            Some((parent, name)) => self.gpio_buttons.iter().position(|button| {
+                button.as_ref().is_some_and(|button| {
+                    button.parent.as_deref() == Some(parent) && button.name == name
+                })
+            }),
             None => self.board_button(target),
         }
         .ok_or_else(|| format!("unknown STM32 board button {target:?}"))?;
@@ -915,7 +916,9 @@ impl Bus {
     }
 
     pub fn set_button(&mut self, index: usize, pressed: bool) {
-        let button = &self.gpio_buttons[index];
+        let Some(button) = &self.gpio_buttons[index] else {
+            return;
+        };
         for &(base, pin) in button.endpoints.as_slice() {
             if let Some(port) = self.stm32_gpios.iter_mut().find(|port| port.base == base) {
                 port.set_external(pin, pressed ^ button.invert);
@@ -961,6 +964,35 @@ impl Bus {
                 led.sample(port.pins(), self.led_events);
             }
         }
+    }
+
+    pub fn unregister_stm32_gpio(&mut self, target: &str) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        let index = self
+            .stm32_gpios
+            .iter()
+            .position(|port| port.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown STM32 GPIO port {target:?}"))?;
+        let base = self.stm32_gpios.remove(index).base;
+        self.gpio_leds.retain(|(port, _)| *port != base);
+        for slot in &mut self.gpio_buttons {
+            if let Some(button) = slot {
+                if button.parent.as_deref() == Some(name) {
+                    // Scheduled button events refer to the original slot number.
+                    *slot = None;
+                } else {
+                    button.endpoints.disconnect_receiver(base);
+                }
+            }
+        }
+        for timer in &mut self.stm32_timers {
+            timer.gpio_outputs.retain(|(_, pin)| pin.port != base);
+        }
+        // Sample after removing the port, while old capture routes can still
+        // propagate the cleared level to timers.
+        self.refresh_gpio_wiring();
+        self.gpio_timer_inputs.retain(|(port, ..)| *port != base);
+        Ok(())
     }
 
     pub fn map_stm32_gpio(&mut self, gpio: Stm32Gpio) -> Result<(), String> {
@@ -1986,6 +2018,62 @@ impl Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_gpio_unregister_receiver_detaches_only_its_endpoints() {
+        use crate::stm32_gpio_board::GpioEndpoints;
+
+        let mut bus = Bus::default();
+        let receiver = 0x4800_0000;
+        let other = 0x4800_0400;
+        for (address, name) in [(receiver, "receiver"), (other, "other")] {
+            let mut port = Stm32Gpio::new(address, 0x400, [0; 3], 8);
+            port.name = Some(name.into());
+            bus.map_stm32_gpio(port).unwrap();
+        }
+        for (name, pins) in [
+            ("single", &[(receiver, 1)][..]),
+            ("shared", &[(receiver, 1), (other, 2), (other, 2)][..]),
+            ("untouched", &[(other, 3)][..]),
+        ] {
+            let mut endpoints = GpioEndpoints::default();
+            for &(port, pin) in pins {
+                endpoints.connect(port, name, pin, 16).unwrap();
+            }
+            bus.add_gpio_button(GpioButton::new(name.into(), None, endpoints, false));
+        }
+        let mut child = GpioEndpoints::default();
+        child.connect(other, "other", 4, 16).unwrap();
+        bus.add_gpio_button(GpioButton::new(
+            "child".into(),
+            Some("receiver".into()),
+            child,
+            false,
+        ));
+        let endpoints = |bus: &Bus, index: usize| {
+            bus.gpio_buttons[index]
+                .as_ref()
+                .unwrap()
+                .endpoints
+                .as_slice()
+                .to_vec()
+        };
+        assert_eq!(endpoints(&bus, 0), [(receiver, 1)]);
+        assert_eq!(endpoints(&bus, 1), [(receiver, 1), (other, 2)]);
+        bus.unregister_stm32_gpio("sysbus.receiver").unwrap();
+        assert!(endpoints(&bus, 0).is_empty());
+        assert_eq!(endpoints(&bus, 1), [(other, 2)]);
+        assert_eq!(endpoints(&bus, 2), [(other, 3)]);
+        assert!(bus.board_button("child").is_none());
+        bus.set_button(3, true); // a previously scheduled event for the removed child
+        assert!(matches!(
+            bus.read::<4>(receiver + 0x10),
+            Err(BusError::Unmapped(..))
+        ));
+        bus.set_named_button("shared", true).unwrap();
+        bus.set_named_button("untouched", true).unwrap();
+        assert_eq!(bus.read::<4>(other + 0x10).unwrap(), (1 << 2) | (1 << 3));
+    }
 
     #[test]
     fn renode_systembus_unhandled_access_policies() {

@@ -272,7 +272,9 @@ unused: Miscellaneous.Button @ none
         &script,
         "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n\
          unused PressAndRelease\nbutton Press\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
-         button Release\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n",
+         button Release\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
+         sysbus Unregister sysbus.gpioA\nbutton Press\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
+         machine UnregisterFromParent sysbus.gpioB\nbutton Release\nsysbus ReadDoubleWord 0x48000410\n",
     ).unwrap();
     let run = || {
         Command::new(env!("CARGO_BIN_EXE_penv"))
@@ -285,7 +287,7 @@ unused: Miscellaneous.Button @ none
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         output.stdout,
-        b"0x00000004\n0x00000008\n0x00000000\n0x00000000\n"
+        b"0x00000004\n0x00000008\n0x00000000\n0x00000000\n0x00000000\n0x00000008\n0x00000000\n"
     );
     fs::write(&repl, platform.replace("gpioB@3", "gpioB@16")).unwrap();
     let invalid = run();

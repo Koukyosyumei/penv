@@ -1571,6 +1571,7 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
         }
     }
     let mut port = Stm32Gpio::new(base, size, reset, alternate_count);
+    port.name = Some(entry.name.clone());
     if let Some(pins) = inverted_pins {
         let mut remaining = pins
             .strip_prefix('[')

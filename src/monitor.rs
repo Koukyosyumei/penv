@@ -57,6 +57,7 @@ enum Action {
     WriteBytes(u32, Vec<u8>),
     Button(String, bool),
     ButtonPulse(String),
+    UnregisterGpio(String),
     NvicGpio(String, u8, bool),
     NvicPending(String, u32),
     NvicClocked(String, bool),
@@ -253,6 +254,9 @@ pub fn run(
                 .map(|()| None),
             Action::Button(name, pressed) => {
                 machine.bus.set_named_button(name, *pressed).map(|()| None)
+            }
+            Action::UnregisterGpio(target) => {
+                machine.bus.unregister_stm32_gpio(target).map(|()| None)
             }
             Action::ButtonPulse(name) => machine
                 .bus
@@ -1076,6 +1080,9 @@ fn execute(
         }
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
+        }
+        ["sysbus", "Unregister", target] | ["machine" | "mach", "UnregisterFromParent", target] => {
+            Some(Action::UnregisterGpio(resolve(target)?.to_owned()))
         }
         [device, "PressAndRelease"] => Some(Action::ButtonPulse(resolve(device)?.to_owned())),
         [device, state @ ("Press" | "Release")] => Some(Action::Button(
