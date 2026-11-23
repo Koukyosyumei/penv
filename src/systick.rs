@@ -58,13 +58,13 @@ impl SysTick {
 
     fn cycle(&mut self) {
         if self.current == 0 {
+            return;
+        }
+        self.current -= 1;
+        if self.current == 0 {
+            self.count_flag = true;
+            self.pending |= self.control & 2 != 0;
             self.current = self.reload;
-        } else {
-            self.current -= 1;
-            if self.current == 0 {
-                self.count_flag = true;
-                self.pending |= self.control & 2 != 0;
-            }
         }
     }
 
@@ -101,10 +101,22 @@ impl SysTick {
 
     pub fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
-            CSR => self.control = value & 3, // Processor clock is the only source.
-            RELOAD => self.reload = value & 0xff_ffff,
+            CSR => {
+                // Renode starts a zero-valued counter at RELOAD when enabled.
+                if self.control & 1 == 0 && value & 1 != 0 && self.current == 0 {
+                    self.current = self.reload;
+                }
+                self.control = value & 3; // Processor clock is the only source.
+            }
+            RELOAD => {
+                let reload = value & 0xff_ffff;
+                if self.control & 1 != 0 && self.reload == 0 && self.current == 0 {
+                    self.current = reload;
+                }
+                self.reload = reload;
+            }
             CURRENT => {
-                self.current = 0;
+                self.current = self.reload;
                 self.count_flag = false;
             }
             CALIBRATION => {}
@@ -142,15 +154,15 @@ mod tests {
         for _ in 0..3 {
             timer.tick();
         }
-        assert_eq!(timer.read(CURRENT), Some(10));
+        assert_eq!(timer.read(CURRENT), Some(9));
         assert!(timer.write(CSR, 4));
         for _ in 0..8 {
             timer.tick();
         }
-        assert_eq!(timer.read(CURRENT), Some(10));
+        assert_eq!(timer.read(CURRENT), Some(9));
         assert!(timer.write(CSR, 5));
         timer.tick();
-        assert_eq!(timer.read(CURRENT), Some(9));
+        assert_eq!(timer.read(CURRENT), Some(8));
     }
 
     // arm-cortex-m-interrupts.robot, the two SysTick reload/CVR write orders.
@@ -158,41 +170,60 @@ mod tests {
     fn renode_systick_counts_and_reloads_for_both_cvr_write_orders() {
         for writes in [[CURRENT, RELOAD], [RELOAD, CURRENT]] {
             let mut timer = SysTick::default();
-            // Scale the upstream 100 Hz setup to four execution steps per tick.
-            timer.set_frequency((CORTEX_M_STEP_HZ / 4) as u32);
+            const FREQUENCY: u32 = 100;
+            const STEPS_PER_TICK: u64 = CORTEX_M_STEP_HZ / FREQUENCY as u64;
+            timer.set_frequency(FREQUENCY);
             assert!(timer.write(CSR, 0));
             for address in writes {
                 assert!(timer.write(address, if address == RELOAD { 10 } else { 0 }));
             }
-            assert_eq!(timer.read(CURRENT), Some(0));
             assert!(timer.write(CSR, 5));
-            for _ in 0..3 {
-                timer.tick();
-            }
-            assert_eq!(timer.read(CURRENT), Some(0));
-            timer.tick();
             assert_eq!(timer.read(CURRENT), Some(10));
 
-            for _ in 0..36 {
+            for _ in 0..9 * STEPS_PER_TICK {
                 timer.tick();
             }
             assert_eq!(timer.read(CURRENT), Some(1));
             assert_eq!(timer.read(CSR).unwrap() & (1 << 16), 0);
 
-            for _ in 0..4 {
+            for _ in 0..STEPS_PER_TICK {
                 timer.tick();
             }
-            assert_eq!(timer.read(CURRENT), Some(0));
+            assert_eq!(timer.read(CURRENT), Some(10));
             assert_ne!(timer.read(CSR).unwrap() & (1 << 16), 0);
             assert_eq!(timer.read(CSR).unwrap() & (1 << 16), 0);
             assert!(!timer.pending(SYSTICK));
 
-            for (steps, expected) in [(4, 10), (4, 9)] {
-                for _ in 0..steps {
-                    timer.tick();
-                }
-                assert_eq!(timer.read(CURRENT), Some(expected));
+            for _ in 0..STEPS_PER_TICK {
+                timer.tick();
             }
+            assert_eq!(timer.read(CURRENT), Some(9));
         }
+    }
+
+    #[test]
+    fn renode_systick_current_write_reloads_without_pend_and_zero_reload_stops() {
+        let mut timer = SysTick::default();
+        assert!(timer.write(CSR, 3));
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(0));
+        assert!(!timer.pending(SYSTICK));
+
+        assert!(timer.write(RELOAD, 2));
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(1));
+        assert!(timer.write(CURRENT, 0xffff_ffff));
+        assert_eq!(timer.read(CURRENT), Some(2));
+        assert!(!timer.pending(SYSTICK));
+        assert_eq!(timer.read(CSR).unwrap() & (1 << 16), 0);
+
+        assert!(timer.write(RELOAD, 0));
+        timer.tick();
+        timer.tick();
+        assert!(timer.pending(SYSTICK));
+        timer.acknowledge(SYSTICK);
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(0));
+        assert!(!timer.pending(SYSTICK));
     }
 }
