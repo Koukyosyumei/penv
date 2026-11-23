@@ -661,3 +661,20 @@ fn cbo_zero_clears_only_the_selected_block_and_checks_environment_bits() {
         assert_eq!(bus.ram64(base + 64, 1).unwrap(), [0xff]);
     }
 }
+
+#[test]
+fn fma_rounds_to_min_normal_but_still_raises_underflow() {
+    use crate::rv64_float::{Format, Rounding};
+    let f = Format::Single;
+    let decode = |bits| f.decode(f.boxed(bits));
+    let result = f.fused(
+        decode(0x0080_0000),
+        decode(0x32c1_1a50),
+        decode(0x007f_ffff),
+        Rounding::Up,
+    );
+    assert_eq!((result.bits, result.flags), (0x0080_0000, 3));
+
+    let result = f.convert(Format::Double.decode(0x380f_ffff_ffff_ffff), Rounding::Up);
+    assert_eq!((result.bits, result.flags), (0x0080_0000, 1));
+}

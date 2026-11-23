@@ -223,10 +223,19 @@ impl Format {
         };
         let flags = if fraction == Fraction::Zero {
             0
-        } else if normal {
-            NX
+        } else if top < min_exponent {
+            // Detect tininess after rounding to the destination precision
+            // with an unbounded exponent, before rounding to a subnormal grid.
+            let (whole, remainder) = split(significand, top - fraction_bits - exponent);
+            let carries =
+                whole + u128::from(mode.increment(negative, whole, remainder)) == hidden << 1;
+            if top + i32::from(carries) < min_exponent {
+                NX | UF
+            } else {
+                NX
+            }
         } else {
-            NX | UF
+            NX
         };
         ResultBits::flagged(
             self.zero(negative)

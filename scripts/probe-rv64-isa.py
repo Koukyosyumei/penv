@@ -11,6 +11,7 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("isa", type=Path, help="directory of upstream riscv-tests ELF files")
+    parser.add_argument("--act", action="store_true", help="use the fixed Renode ACT ELF selector")
     parser.add_argument("--renode", type=Path, default=Path("../renode"))
     parser.add_argument("--penv", type=Path, default=Path("target/release/penv"))
     parser.add_argument("--logs", type=Path, required=True)
@@ -20,8 +21,11 @@ def main():
     parser.add_argument("--elf", action="append", help="select named ELF parameters for a diagnostic variant")
     args = parser.parse_args()
     args.logs.mkdir(parents=True, exist_ok=True)
-    selector = args.renode / "tests/unit-tests/riscv-isa-tests.py"
-    names = runpy.run_path(str(selector))["get_variables"](str(args.isa))["TESTS_64"]
+    suite, key = ("arch", "TESTS_ARCH_64") if args.act else ("isa", "TESTS_64")
+    selector = args.renode / f"tests/unit-tests/riscv-{suite}-tests.py"
+    names = runpy.run_path(str(selector))["get_variables"](str(args.isa))[key]
+    if args.act:
+        names = [str(Path(name).relative_to(args.isa)) for name in names]
     if not names:
         parser.error("the upstream selector found zero RV64 executable parameters")
     if args.elf:
@@ -34,7 +38,8 @@ def main():
         'cpu: CPU.RiscV64 @ sysbus\n'
         '    cpuType: "rv64gc_zba_zbb_zbc_zbs_zacas_zicond_zbkb_zbkx_zfh_zicboz"\n'
         f'{unaligned}'
-        'mem: Memory.MappedMemory @ sysbus 0x80000000\n'
+        + ('uart: UART.NS16550 @ sysbus 0x10000000\n' if args.act else "")
+        + 'mem: Memory.MappedMemory @ sysbus 0x80000000\n'
         f'    size: {args.ram_size:#x}\n'
     )
 
@@ -53,7 +58,9 @@ def main():
             status = ("diagnostic-pass" if proc.returncode == 0 and
                       "penv: tohost exit code 0\n" in proc.stderr else "diagnostic-fail")
             log = f"process status {proc.returncode}\n{proc.stdout}{proc.stderr}"
-        (args.logs / f"{name}.log").write_text(log)
+        log_file = args.logs / f"{name}.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text(log)
         return name, status
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
