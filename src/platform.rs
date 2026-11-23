@@ -1226,6 +1226,17 @@ fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String
         return Err(entry.error("expected sysbus init"));
     }
     for (_, command) in commands {
+        if let Some(mode) = command.strip_prefix("UnhandledAccessBehaviour ") {
+            use crate::bus::UnhandledAccess;
+            machine.bus.set_unhandled_access(match mode.trim() {
+                "Report" => UnhandledAccess::Report,
+                "DoNotReport" => UnhandledAccess::DoNotReport,
+                "ThrowException" => UnhandledAccess::ThrowException,
+                "ThrowExceptionIfNotTagged" => UnhandledAccess::ThrowExceptionIfNotTagged,
+                _ => return Err(entry.error("unsupported unhandled access mode")),
+            });
+            continue;
+        }
         if let Some(path) = command.strip_prefix("ApplySVD @")
             && !path.is_empty()
             && !path.chars().any(char::is_whitespace)
@@ -1248,9 +1259,25 @@ fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String
             .and_then(|text| text.split_once('"'))
             .ok_or_else(|| entry.error("expected quoted Tag name"))?;
         let parse = |text: &str| number(text.trim()).map_err(|e| entry.error(&e));
+        let mut arguments = value.split_whitespace();
+        let default_value = arguments.next().map(parse).transpose()?.unwrap_or(0);
+        for flag in arguments.by_ref().take(4) {
+            if flag != "false" {
+                return Err(entry.error("unsupported sysbus Tag option"));
+            }
+        }
+        let throws = arguments
+            .next()
+            .map(str::parse::<bool>)
+            .transpose()
+            .map_err(|_| entry.error("invalid sysbus Tag throwException option"))?
+            .unwrap_or(false);
+        if arguments.next().is_some() {
+            return Err(entry.error("too many sysbus Tag options"));
+        }
         machine
             .bus
-            .map_bus_tag(parse(start)?, parse(end)?, parse(value)?)
+            .map_bus_tag_with_fault(parse(start)?, parse(end)?, default_value, throws)
             .map_err(|e| entry.error(&e))?;
     }
     Ok(())

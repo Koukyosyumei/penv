@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 29 | 0 | 188 | 7 |
-| **合計** | **730** | **107** | **0** | **623** | **244** |
+| Infrastructure | 217 | 37 | 0 | 180 | 7 |
+| **合計** | **730** | **115** | **0** | **615** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 623 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 615 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -602,3 +602,39 @@ cargo test renode_gpio
 使います。公開 ELF の SHA-1 を照合し、上流 REPL に PD12→PA6 と PD13→PA7 を
 追加して 2100000 ステップ実行します。期待値は最初の 2 出力が 10±1 度と 20±1 度です。
 この実行の UART と判定結果は `qdec.uart` と `qdec.log` にあります。
+
+## Cortex-M4 の SystemBus 未登録アクセスとタグ
+
+固定 Infrastructure の `SystemBusTests.cs` から、未登録アドレスと範囲タグに関する
+8 件を移植しました。REPL の `sysbus: init:` で `UnhandledAccessBehaviour Report`、
+`DoNotReport`、`ThrowException`、`ThrowExceptionIfNotTagged` を選べます。
+上流の既定モードを検証するケースでは `Report` を明示します。既存プラットフォーム用に
+設定省略時の Penv のアクセス規則を保持しています。
+
+`Tag` の `throwException` はログ抑止時にも有効です。子タグで範囲を分割しても親タグの
+両側に値と例外指定が残ります。上流の `AddressError` は Cortex-M の
+`BusError::Unmapped` として検査します。周辺機器が生成した `CommandError` を
+そのまま再送出する共有ケースと、その他のログモード・タグオプションは残件です。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-unhandled-bus
+mkdir -p "$work"
+cargo test renode_sysbus
+(
+    tests/cortex-m4-sysbus.sh "$work/elf" >"$work/sysbus-elf.log" 2>&1
+    echo "$?" >"$work/sysbus-elf.status"
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/cortex-m4f-faults.sh "$work/faults" >"$work/fault-elf.log" 2>&1
+    echo "$?" >"$work/fault-elf.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+追加 ELF は REPL を読み、未登録アドレスの 0、子タグの `0x42`、親タグで発生した
+HardFault の `CFSR=0x8200` と `BFAR=0x1000` を検査して UART に `OK` を出します。
+この ELF は台帳の分母に加えていません。

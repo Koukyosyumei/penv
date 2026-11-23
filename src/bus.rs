@@ -132,7 +132,8 @@ pub struct Bus {
     h7_fdcan: Vec<Fdcan>,
     stm32_can: Vec<StmCan>,
     bitbands: Vec<(u32, u32, u32)>,
-    bus_tags: Vec<(u32, u32, u32)>,
+    bus_tags: Vec<BusTag>,
+    unhandled_access: UnhandledAccess,
     timer_pins: Vec<TimerPin>,
     gpio_wires: Vec<GpioWire>,
     gpio_leds: Vec<(String, u32, u8)>,
@@ -144,6 +145,24 @@ pub struct Bus {
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub enum UnhandledAccess {
+    #[default]
+    Preserve,
+    Report,
+    DoNotReport,
+    ThrowException,
+    ThrowExceptionIfNotTagged,
+}
+
+#[derive(Clone, Copy)]
+struct BusTag {
+    start: u32,
+    end: u32,
+    value: u32,
+    throws: bool,
 }
 
 struct GpioWire {
@@ -982,19 +1001,81 @@ impl Bus {
         })
     }
 
+    pub fn set_unhandled_access(&mut self, mode: UnhandledAccess) {
+        self.unhandled_access = mode;
+    }
+
     pub fn map_bus_tag(&mut self, start: u32, end: u32, value: u32) -> Result<(), String> {
+        self.map_bus_tag_with_fault(start, end, value, false)
+    }
+
+    pub fn map_bus_tag_with_fault(
+        &mut self,
+        start: u32,
+        end: u32,
+        value: u32,
+        throws: bool,
+    ) -> Result<(), String> {
         if start > end {
             return Err("invalid sysbus Tag range".into());
         }
-        self.bus_tags.push((start, end, value));
+        let mut intersections = self
+            .bus_tags
+            .iter()
+            .enumerate()
+            .filter(|(_, tag)| start <= tag.end && end >= tag.start);
+        if let Some((index, parent)) = intersections.next() {
+            if start < parent.start || end > parent.end || intersections.next().is_some() {
+                return Err("subtag must be completely contained in one existing tag".into());
+            }
+            let parent = self.bus_tags.remove(index);
+            if parent.start < start {
+                self.bus_tags.push(BusTag {
+                    end: start - 1,
+                    ..parent
+                });
+            }
+            if end < parent.end {
+                self.bus_tags.push(BusTag {
+                    start: end + 1,
+                    ..parent
+                });
+            }
+        }
+        self.bus_tags.push(BusTag {
+            start,
+            end,
+            value,
+            throws,
+        });
         Ok(())
     }
 
-    fn bus_tag(&self, address: u32, width: usize) -> Option<u32> {
-        let last = address.checked_add(width as u32 - 1)?;
-        self.bus_tags
-            .iter()
-            .find_map(|&(start, end, value)| (address >= start && last <= end).then_some(value))
+    fn unhandled_value(&self, error: BusError) -> Result<u32, BusError> {
+        let BusError::Unmapped(address, width) = error else {
+            return Err(error);
+        };
+        let tag = self.bus_tags.iter().find(|tag| {
+            address >= tag.start
+                && address
+                    .checked_add(width as u32 - 1)
+                    .is_some_and(|end| end <= tag.end)
+        });
+        if tag.is_some_and(|tag| tag.throws)
+            || matches!(self.unhandled_access, UnhandledAccess::ThrowException)
+        {
+            return Err(error);
+        }
+        if matches!(self.unhandled_access, UnhandledAccess::Report) {
+            eprintln!("sysbus: {error}");
+        }
+        if let Some(tag) = tag {
+            return Ok(tag.value & (u32::MAX >> (32 - width * 8)));
+        }
+        match self.unhandled_access {
+            UnhandledAccess::Report | UnhandledAccess::DoNotReport => Ok(0),
+            _ => Err(error),
+        }
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
@@ -1928,11 +2009,8 @@ impl Bus {
         {
             return Ok(device.read(address));
         }
-        self.read_ram::<N>(address).or_else(|error| {
-            self.bus_tag(address, N)
-                .map(|value| value & (u32::MAX >> (32 - N * 8)))
-                .ok_or(error)
-        })
+        self.read_ram::<N>(address)
+            .or_else(|error| self.unhandled_value(error))
     }
 
     pub fn write_cortex_stack(&mut self, address: u32, value: u32) -> Result<(), BusError> {
@@ -2469,9 +2547,7 @@ impl Bus {
         match self.guest_memory(address, width) {
             Ok(memory) => memory.copy_from_slice(&value.to_le_bytes()[..width]),
             Err(error) => {
-                if self.bus_tag(address, width).is_none() {
-                    return Err(error);
-                }
+                self.unhandled_value(error)?;
             }
         }
         Ok(())
@@ -2597,5 +2673,91 @@ mod gpio_connection_tests {
             "Cannot connect 10th input of Antmicro.Renode.UnitTests.Mocks.MockReceiverConstrained; it has only 5 GPIO inputs."
         );
         assert!(bus.gpio_wires.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod unhandled_bus_tests {
+    use super::*;
+    use std::io::sink;
+
+    const MISSING: u32 = 0xabcd_1234;
+    const TAG: u32 = 0x1000;
+
+    fn bus(mode: UnhandledAccess) -> Bus {
+        let mut bus = Bus::default();
+        bus.set_unhandled_access(mode);
+        bus
+    }
+
+    fn assert_faults(bus: &mut Bus, address: u32) {
+        assert!(matches!(bus.read::<1>(address), Err(BusError::Unmapped(a, 1)) if a == address));
+        assert!(
+            matches!(bus.write(address, 1, 0, &mut sink()), Err(BusError::Unmapped(a, 1)) if a == address)
+        );
+    }
+
+    #[test]
+    fn renode_sysbus_default_returns_zero() {
+        assert_eq!(bus(UnhandledAccess::Report).read::<1>(MISSING).unwrap(), 0);
+    }
+
+    #[test]
+    fn renode_sysbus_throw_mode_faults_on_unhandled_access() {
+        assert_faults(&mut bus(UnhandledAccess::ThrowException), MISSING);
+    }
+
+    #[test]
+    fn renode_sysbus_throw_if_untagged_faults_on_unhandled_access() {
+        assert_faults(
+            &mut bus(UnhandledAccess::ThrowExceptionIfNotTagged),
+            MISSING,
+        );
+    }
+
+    #[test]
+    fn renode_sysbus_throw_if_untagged_allows_tagged_access() {
+        let mut bus = bus(UnhandledAccess::ThrowExceptionIfNotTagged);
+        bus.map_bus_tag(0xabcd_1200, 0xabcd_12ff, 0x42).unwrap();
+        bus.write(MISSING, 1, 0, &mut sink()).unwrap();
+        assert_eq!(bus.read::<1>(MISSING).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn renode_sysbus_tag_forces_address_error() {
+        let mut bus = bus(UnhandledAccess::Report);
+        bus.map_bus_tag_with_fault(TAG, TAG + 0xff, 0, true)
+            .unwrap();
+        assert_faults(&mut bus, TAG);
+    }
+
+    #[test]
+    fn renode_sysbus_tag_supplies_default_value() {
+        let mut bus = bus(UnhandledAccess::Report);
+        bus.map_bus_tag(TAG, TAG + 0xff, 0x42).unwrap();
+        bus.write(TAG, 1, 0, &mut sink()).unwrap();
+        assert_eq!(bus.read::<1>(TAG).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn renode_sysbus_tag_forces_address_error_with_reporting_off() {
+        let mut bus = bus(UnhandledAccess::DoNotReport);
+        bus.map_bus_tag_with_fault(TAG, TAG + 0xff, 0, true)
+            .unwrap();
+        assert_faults(&mut bus, TAG);
+    }
+
+    #[test]
+    fn renode_sysbus_subtag_preserves_fault_policy_on_both_sides() {
+        let mut bus = bus(UnhandledAccess::Report);
+        bus.map_bus_tag_with_fault(TAG, TAG + 0xff, 0, true)
+            .unwrap();
+        bus.map_bus_tag(0x1010, 0x101f, 0).unwrap();
+        for address in [0x1000, 0x10f0] {
+            assert!(
+                matches!(bus.read::<1>(address), Err(BusError::Unmapped(a, 1)) if a == address)
+            );
+        }
+        assert_eq!(bus.read::<1>(0x1010).unwrap(), 0);
     }
 }
