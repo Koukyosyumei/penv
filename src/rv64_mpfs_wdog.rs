@@ -61,7 +61,7 @@ impl Watchdog {
                 Phase::Permitted => self.begin(Phase::Triggered, deadline),
                 Phase::Triggered => {
                     self.deadline = None;
-                    self.reset = true;
+                    self.request_reset();
                 }
             }
         }
@@ -69,6 +69,17 @@ impl Watchdog {
     }
 
     fn begin(&mut self, phase: Phase, now: u64) {
+        if self.phase != phase || self.deadline.is_none() {
+            let name = match phase {
+                Phase::Forbidden => "ForbiddenRegion",
+                Phase::Permitted => "RefreshRegion",
+                Phase::Triggered => "AfterTrigger",
+            };
+            eprintln!(
+                "penv: watchdog {:#010x}: Switching state to {name}.",
+                self.base
+            );
+        }
         self.phase = phase;
         let period = match phase {
             Phase::Forbidden => {
@@ -85,6 +96,16 @@ impl Watchdog {
             }
         };
         self.deadline = Some(now.saturating_add(u64::from(period)));
+    }
+
+    fn request_reset(&mut self) {
+        if !self.reset {
+            eprintln!(
+                "penv: watchdog {:#010x}: Watchdog reset triggered!",
+                self.base
+            );
+        }
+        self.reset = true;
     }
 
     pub fn levels(&self) -> [bool; 2] {
@@ -128,6 +149,9 @@ impl Watchdog {
                 self.begin(Phase::Triggered, self.ticks);
             }
             0 if self.phase != Phase::Triggered && value == REFRESH_KEY => {
+                if self.phase != Phase::Forbidden {
+                    eprintln!("penv: watchdog {:#010x}: Refreshing watchdog.", self.base);
+                }
                 self.begin(Phase::Forbidden, self.ticks);
             }
             4 => self.control = 2 | (value & 0x11),
@@ -136,7 +160,7 @@ impl Watchdog {
             0x10 => self.permit = value & 0xff_ffff,
             0x14 => self.trigger = value & 0xfff,
             0x18 if self.phase == Phase::Triggered && value & 0xffff == RESET_KEY => {
-                self.reset = true;
+                self.request_reset();
             }
             0x18 => self.begin(Phase::Triggered, self.ticks),
             _ => {}
