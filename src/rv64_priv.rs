@@ -17,6 +17,8 @@ pub const MXR: u64 = 1 << 19;
 const TVM: u64 = 1 << 20;
 const TW: u64 = 1 << 21;
 const TSR: u64 = 1 << 22;
+// Fixed Renode tlib clears the defined extension fields and stores the remaining bits.
+const RENODE_MENVCFG_WRITABLE: u64 = !((0x1f << 59) | (3 << 32) | 0xfd);
 const SSTATUS: u64 = SIE | SPIE | SPP | VS | FS | SUM | MXR;
 const MSTATUS: u64 = SSTATUS | MIE | MPIE | MPP | MPRV | TVM | TW | TSR;
 const UXL: u64 = 2 << 32;
@@ -115,6 +117,7 @@ pub struct Privilege {
     pub mode: Mode,
     pub levels: Levels,
     pub zicboz: bool,
+    pub(crate) renode_menvcfg: bool,
     menvcfg: u64,
     senvcfg: u64,
     pub status: u64,
@@ -334,7 +337,7 @@ impl Privilege {
             0x303 => self.mideleg,
             0x304 => self.enable,
             0x306 => self.counter_enable,
-            0x30a if self.zicboz => self.menvcfg,
+            0x30a if self.zicboz || self.renode_menvcfg => self.menvcfg,
             0x310 => return None,
             0x320 => self.inhibit,
             0x344 => self.pending(),
@@ -442,6 +445,12 @@ impl Privilege {
             0x303 => self.mideleg = value & S_INTERRUPTS,
             0x304 => self.enable = value & (M_INTERRUPTS | S_INTERRUPTS | self.platform_interrupts),
             0x306 => self.counter_enable = value & u64::from(u32::MAX),
+            0x30a if self.renode_menvcfg => {
+                if self.levels == Levels::Machine {
+                    return false;
+                }
+                self.menvcfg = value & RENODE_MENVCFG_WRITABLE;
+            }
             0x30a => self.menvcfg = value & (1 << 7),
             0x320 => self.inhibit = value & 5,
             0x344 => self.injected = value & S_INTERRUPTS,

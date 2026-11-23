@@ -1115,3 +1115,63 @@ fn monitor_mstatus_exposes_raw_state_without_guest_csr_read_bits() {
         Some(0x8000_000a_0000_0600)
     );
 }
+
+#[test]
+fn menvcfg_renode_mask_preserves_default_profiles() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gc_zfh").unwrap());
+    let misa = cpu.misa();
+    assert_eq!(cpu.privilege.read(0x30a, misa, !1), None);
+    cpu.privilege.renode_menvcfg = true;
+    assert!(cpu.privilege.write(0x30a, u64::MAX, misa));
+    assert_eq!(
+        cpu.privilege.read(0x30a, misa, !1),
+        Some(0x07ff_fffc_ffff_ff02)
+    );
+    assert!(cpu.privilege.write(0x30a, 0, misa));
+    assert_eq!(cpu.privilege.read(0x30a, misa, !1), Some(0));
+    cpu.privilege.mode = Mode::Supervisor;
+    assert!(!cpu.privilege.write(0x30a, u64::MAX, misa));
+
+    let mut cbo = Rv64::new(Isa::parse("rv64gc_zicboz").unwrap());
+    assert!(cbo.privilege.write(0x30a, u64::MAX, cbo.misa()));
+    assert_eq!(cbo.privilege.read(0x30a, cbo.misa(), !1), Some(0x80));
+}
+
+#[test]
+fn renode_fdiv_single_and_half_set_divide_by_zero_flag() {
+    let mut bus = Bus::default();
+    bus.map_ram64(0x1000, 0x40000).unwrap();
+    for (opcode, zero, one, infinity) in [
+        (
+            0x1800_8153u32,
+            0xffff_ffff_0000_0000,
+            0xffff_ffff_3f80_0000,
+            0xffff_ffff_7f80_0000,
+        ),
+        (
+            0x1c00_8153u32,
+            0xffff_ffff_ffff_0000,
+            0xffff_ffff_ffff_3c00,
+            0xffff_ffff_ffff_7c00,
+        ),
+    ] {
+        let mut cpu = Rv64::new(Isa::parse("rv64gc_zfh").unwrap());
+        cpu.pc = 0x2000;
+        // Fixed tlib enables FS at reset on an F/D machine.
+        cpu.initialize_mstatus(0x2000);
+        cpu.floating[0] = zero;
+        cpu.floating[1] = one;
+        bus.memory64(0x2000, 4)
+            .unwrap()
+            .copy_from_slice(&opcode.to_le_bytes());
+        assert_eq!(cpu.floating[2], 0);
+        assert_eq!(cpu.privilege.fcsr & 8, 0);
+        assert!(matches!(
+            cpu.step(&mut bus, 0, 1, &mut Vec::new()).unwrap(),
+            Step::Retired
+        ));
+        assert_eq!(cpu.pc, 0x2004);
+        assert_eq!(cpu.floating[2], infinity);
+        assert_ne!(cpu.privilege.fcsr & 8, 0);
+    }
+}

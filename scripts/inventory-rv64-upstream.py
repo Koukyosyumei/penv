@@ -331,6 +331,14 @@ def disposition(path, name, context):
         "Should Not Read From Csr When CSRRWI RD Is Zero",
     }:
         return "pass", "Fixed ISA and single-step ELF produced only the expected custom CSR write notification"
+    if path.name == "riscv-unit-tests.robot":
+        if name == "Should Ignore Writes To MENVCFG Bits Of Disabled Or Unsupported Extensions":
+            return "pass", "Fixed Renode mask and three-step ELF register result verified (rv64-menvcfg.md)"
+        if name in {
+            "Should Set Flag On Single Precision Floating Point Division By Zero",
+            "Should Set Flag On Half Precision Floating Point Division By Zero",
+        }:
+            return "partial", "Exact operands/results checked in Rust; initial FS set explicitly to match fixed tlib"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(

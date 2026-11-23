@@ -802,6 +802,7 @@ fn create_cpu(
     };
     cpu.privilege.configure_levels(levels);
     cpu.allow_unaligned = flag(entry, "allowUnalignedAccesses", false)?;
+    cpu.privilege.renode_menvcfg = flag(entry, "renodeMenvcfg", false)?;
     let pmp_count =
         property(entry, "pmpEntryCount").map_or(Ok(64), |value| number(entry, value))?;
     let pmp_bits =
