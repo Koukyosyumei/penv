@@ -36,6 +36,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod repl_syntax;
 mod rv64;
 mod rv64_devices;
 mod rv64_ethernet;

@@ -54,3 +54,9 @@ RV32 `fdacacf` と `885d642` を共有実行経路に取り込み、同じ照合
 単一機の RESC で Byte、Word、DoubleWord、QuadWord の読み書きを受け付ける。1・2・4 バイトの 32 ビット空間内操作は既存の MMIO 経路を通り、8 バイトと 4 GiB 以上はグローバル RAM を使う。静的な読み書きだけのスクリプトはファームウェアなしで実行できる。既存のファームウェアに対する書き込みだけのスクリプトは、設定後も実行を続ける。
 
 固定 `memory-assertions.robot` から RV32 9 件と RV64 3 件の生アドレス操作・比較を再現した。診断用 ISA とホスト側比較を使用。公開 STM32F407 FAULTMASK ELF では TIM3 のレジスタ設定後、4回以上のタイマー割り込み UART 行に到達。ログと再現スクリプトは `~/.local/state/penv-dispatch/evidence/integration/shared-sysbus-scalars-f89b35a/`。
+
+## REPL の引用符と行コメント
+
+通常・複数機・nRF の REPL ローダーが引用符内の区切りと行コメントを共通処理する。引用符内のセミコロンや波括弧、`@https://` の URI を保持する。引用符の復号は `using` と STM32H7 の SampleCsv に適用した。STM32F407 `5de13f0` の三つの入力について、共有復号器で元の期待値を確認した。MockCPU 全体の構築と複数行属性の汎用読み込みは残件。
+
+`cargo test --locked` でユニット214件とCLI22件が通過し、固定公開 STM32F072 Hello World の ELF と HEX の UART 行も確認した。結果は `~/.local/state/penv-dispatch/evidence/integration/shared-repl-syntax-2cfdb6f/`。

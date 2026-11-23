@@ -1,3 +1,5 @@
+use crate::repl_syntax::{quoted_string, unquoted_delimiters, without_comment};
+
 use crate::platform::{property_key, validate_entry_properties};
 
 use std::{
@@ -129,35 +131,6 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
     .map_err(|_| format!("invalid 32-bit number {value:?}"))
 }
 
-fn without_comment(line: &str) -> &str {
-    unquoted_delimiters(line, &['/'])
-        .find(|(index, _)| {
-            let prefix = &line[..*index];
-            line[*index..].starts_with("//")
-                && !prefix.ends_with("@http:")
-                && !prefix.ends_with("@https:")
-        })
-        .map_or(line, |(index, _)| &line[..index])
-}
-
-fn unquoted_delimiters<'a>(
-    text: &'a str,
-    delimiters: &'static [char],
-) -> impl Iterator<Item = (usize, char)> + 'a {
-    let mut quoted = false;
-    let mut escaped = false;
-    text.char_indices().filter(move |&(_, character)| {
-        match character {
-            _ if escaped => escaped = false,
-            '\\' if quoted => escaped = true,
-            '"' => quoted = !quoted,
-            _ if !quoted && delimiters.contains(&character) => return true,
-            _ => {}
-        }
-        false
-    })
-}
-
 fn inline_body<'a>(
     declaration: &'a str,
     source: &SourceLine,
@@ -267,13 +240,10 @@ fn parse(
         }
         entries.extend(current.take());
         if let Some(include) = text.strip_prefix("using ") {
-            let filename = include
-                .trim()
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-                .filter(|s| !s.is_empty() && !s.contains('"'))
+            let filename = quoted_string(include)
+                .filter(|filename| !filename.is_empty())
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            let local = canonical.parent().unwrap().join(filename);
+            let local = canonical.parent().unwrap().join(&filename);
             let include_path = if local.is_file() {
                 local
             } else {
