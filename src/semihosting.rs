@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, io::Write};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    io::Write,
+};
 
 use crate::bus::Bus;
 
@@ -38,12 +41,21 @@ enum Descriptor {
 pub struct Semihosting {
     pub console: bool,
     pub split_error: bool,
+    pub program_arguments: String,
     descriptors: BTreeMap<u32, Descriptor>,
+    input: VecDeque<u8>,
+    errno: u32,
 }
 
 impl Semihosting {
     pub fn reset(&mut self) {
         self.descriptors.clear();
+        self.input.clear();
+        self.errno = 0;
+    }
+
+    pub fn queue_input(&mut self, bytes: Vec<u8>) {
+        self.input.extend(bytes);
     }
 
     pub fn call(
@@ -144,19 +156,40 @@ impl Semihosting {
                 let handle = field(0)?;
                 let address = field(4)?;
                 let length = field(8)?;
-                if let Some(Descriptor::Features(offset)) = self.descriptors.get_mut(&handle) {
-                    let count = (length as usize).min(FEATURES.len() - *offset);
-                    if count != 0 {
-                        bus.memory(address, count)
-                            .map_err(|error| format!("semihosting: {error}"))?
-                            .copy_from_slice(&FEATURES[*offset..*offset + count]);
-                        *offset += count;
+                let descriptor = self.descriptors.get_mut(&handle);
+                let count = match descriptor {
+                    Some(Descriptor::Features(offset)) => {
+                        let count = (length as usize).min(FEATURES.len() - *offset);
+                        if count != 0 {
+                            bus.memory(address, count)
+                                .map_err(|error| format!("semihosting: {error}"))?
+                                .copy_from_slice(&FEATURES[*offset..*offset + count]);
+                            *offset += count;
+                        }
+                        count
                     }
-                    length - count as u32
-                } else {
-                    length
-                }
+                    Some(Descriptor::Console(0..=3 | 6..=7)) => {
+                        let count = (length as usize).min(self.input.len());
+                        if count != 0 {
+                            let destination = bus
+                                .memory(address, count)
+                                .map_err(|error| format!("semihosting: {error}"))?;
+                            for (byte, received) in
+                                destination.iter_mut().zip(self.input.drain(..count))
+                            {
+                                *byte = received;
+                            }
+                        }
+                        count
+                    }
+                    _ => {
+                        self.errno = 9; // EBADF
+                        0
+                    }
+                };
+                length - count as u32
             }
+            0x07 if self.console && argument == 0 => u32::from(self.input.pop_front().unwrap_or(0)),
             0x09 => match self.descriptors.get(&field(0)?) {
                 Some(Descriptor::Console(_)) => 1,
                 Some(Descriptor::Features(_)) => 0,
@@ -166,6 +199,29 @@ impl Semihosting {
                 Some(Descriptor::Features(_)) => FEATURES.len() as u32,
                 _ => unsuccessful,
             },
+            0x13 => self.errno,
+            0x15 => {
+                let address = field(0)?;
+                let capacity = field(4)? as usize;
+                let mut line = String::from("program-name");
+                if !self.program_arguments.is_empty() {
+                    line.push(' ');
+                    line.push_str(&self.program_arguments);
+                }
+                line.push('\0');
+                if line.len() > capacity {
+                    self.errno = 75; // EOVERFLOW
+                    unsuccessful
+                } else {
+                    bus.memory(address, line.len())
+                        .map_err(|error| format!("semihosting: {error}"))?
+                        .copy_from_slice(line.as_bytes());
+                    bus.memory(argument + 4, 4)
+                        .map_err(|error| format!("semihosting: {error}"))?
+                        .copy_from_slice(&(line.len() as u32).to_le_bytes());
+                    0
+                }
+            }
             0x18 | 0x20 => {
                 let (reason, code) = if operation == 0x18 {
                     (argument, None)

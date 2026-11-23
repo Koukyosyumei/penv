@@ -28,6 +28,7 @@ run_case() {
     platform=$3
     reason=$4
     expected_code=$5
+    shift 5
     file=$(awk -v key="\${$key}" '$1 == key {print $2}' "$robot")
     file=${file#*/}
     if [ ! -f "$cache/$file" ]; then
@@ -35,7 +36,12 @@ run_case() {
         mv "$cache/$file.part" "$cache/$file"
     fi
     printf '%s  %s\n' "${file##*-}" "$cache/$file" | sha1sum --check
-    "$penv" run --platform "$out/$platform.repl" --max-steps 100000 "$cache/$file" \
+    if [ "$platform" = arguments ]; then
+        set -- --script "$out/arguments.resc" "$@"
+    else
+        set -- --platform "$out/$platform.repl" "$@"
+    fi
+    "$penv" run "$@" --max-steps 100000 "$cache/$file" \
         >"$out/$label.stdout" 2>"$out/$label.stderr"
     cat "$out/$label.stdout" "$out/$label.stderr"
     line="cpu.semihosting: Program exited with reason $reason"
@@ -107,3 +113,20 @@ ld.lld -T "$out/simple.ld" --entry=start "$out/simple.o" -o "$out/simple.elf"
     >"$out/simple.stdout" 2>"$out/simple.stderr"
 cat "$out/simple.stdout" "$out/simple.stderr"
 grep -Fxq SUCCESS "$out/simple.stdout"
+
+# The upstream TerminalTester.WriteLine appends a carriage return.
+printf 'hello, world\r' >"$out/input.txt"
+for operation in READ-TTY READC; do
+    run_case "$operation" "$operation" console "$application" 0 --uart-input "$out/input.txt"
+done
+
+cat >"$out/arguments.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @console.repl
+sysbus LoadELF @firmware.elf
+cpu.semihosting ProgramArguments "hello world"
+RESC
+run_case NO-ARGV NO-ARGV console "$application" 0
+for operation in GET-CMDLINE ARGV; do
+    run_case "$operation" "$operation" arguments "$application" 0
+done

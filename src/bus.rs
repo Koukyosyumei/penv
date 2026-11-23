@@ -1292,6 +1292,10 @@ impl Bus {
             || self.litex_uart.is_some()
             || !self.stm32_uarts.is_empty()
             || self.nrf_peripherals.iter().any(NrfPeripheral::is_uart)
+            || self
+                .semihosting
+                .as_ref()
+                .is_some_and(|handler| handler.console)
     }
 
     pub fn queue_uart_input(&mut self, bytes: Vec<u8>) -> Result<(), BusError> {
@@ -1309,6 +1313,8 @@ impl Bus {
             let result = device.receive(self);
             self.nrf_peripherals.insert(index, device);
             result?;
+        } else if let Some(handler) = self.semihosting.as_mut().filter(|handler| handler.console) {
+            handler.queue_input(bytes);
         }
         Ok(())
     }

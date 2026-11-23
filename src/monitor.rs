@@ -15,6 +15,7 @@ pub struct Boot {
     pub named_analyzers: Vec<String>,
     pub uart_irqs: Vec<UartIrq>,
     pub performance_in_mips: Option<u32>,
+    pub semihosting_arguments: Option<String>,
 }
 
 pub enum UartIrq {
@@ -155,6 +156,20 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
+        }
+        [
+            "cpu.semihosting" | "sysbus.cpu.semihosting",
+            "ProgramArguments",
+            ..,
+        ] if boot.platform.is_some() => {
+            let (_, value) = text.split_once("ProgramArguments").unwrap();
+            let value = value
+                .trim()
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .filter(|s| !s.contains(['"', '\\']))
+                .ok_or("expected quoted ProgramArguments without escape sequences")?;
+            boot.semihosting_arguments = Some(value.to_owned());
         }
         ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.platform.is_some() => {
             boot.performance_in_mips = Some(

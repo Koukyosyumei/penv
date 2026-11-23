@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 56 | 4 | 130 |
+| 監査した共有・混成 Robot | 190 | 61 | 4 | 125 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **73** | **4** | **144** |
+| 合計 | **221** | **78** | **4** | **139** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -159,4 +159,12 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting.v5bABUKm/` の `cargo-test`、`elf`、`bus-fault`、`shell` に保存した。各最終実行の終了状態は `*.final.status` に記録した。
 
-同スイートの対象25構成中、ファイル操作、エラー状態、入力、起動引数、一時ディレクトリを扱う16構成が未達。各阻害点は TSV の `verification` 欄に記録した。
+同スイートの残課題は下記の入力と引数の回帰に続けて記録した。
+
+### semihosting の入力と起動引数
+
+上記の `nrf52840-semihosting-upstream.sh` に5構成を追加した。READ-TTY と READC は上流 TerminalTester の `WriteLine` と同じ `hello, world\r` を、既存の `--uart-input` から供給する。GET-CMDLINE と ARGV は RESC の `cpu.semihosting ProgramArguments "hello world"` を使う。NO-ARGV は上流の既定プログラム名 `program-name` を使う。各固定 ELF の SHA-1 と `ADP_Stopped_ApplicationExit(0x20026)`、戻りコード 0 を照合した。上記と同じコマンドで再現できる。
+
+今回の `cargo-test`、`elf`、`shell` のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting-input.SGkGZfKh/` に保存した。
+
+同スイートの対象25構成は14件が合格し、残る11件はホスト作業ディレクトリ内のファイル操作、一時ファイル、操作別エラー判定を必要とする。阻害点は TSV の `verification` 欄を参照。

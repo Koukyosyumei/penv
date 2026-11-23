@@ -382,6 +382,7 @@ fn run() -> Result<ExitCode, String> {
     let mut named_analyzers = Vec::new();
     let mut uart_irqs = Vec::new();
     let mut performance_in_mips = None;
+    let mut semihosting_arguments = None;
     if let Some(script) = script {
         if platform_path.is_some() || raw || hex {
             return Err("--script cannot be combined with --platform, --raw, or --hex".into());
@@ -414,6 +415,7 @@ fn run() -> Result<ExitCode, String> {
         named_analyzers = boot.named_analyzers;
         uart_irqs = boot.uart_irqs;
         performance_in_mips = boot.performance_in_mips;
+        semihosting_arguments = boot.semihosting_arguments;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -438,6 +440,14 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if let Some(arguments) = semihosting_arguments {
+        let handler = machine
+            .bus
+            .semihosting
+            .as_mut()
+            .ok_or("ProgramArguments requires a semihosting handler")?;
+        handler.program_arguments = arguments;
+    }
     if let Some(mips) = performance_in_mips {
         if ble_peer.is_some() && mips != 100 {
             return Err("non-default PerformanceInMips requires a single nRF52840 node".into());
