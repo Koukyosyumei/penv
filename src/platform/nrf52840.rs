@@ -45,8 +45,10 @@ pub(super) fn map_peripheral(
                 return Err(entry.error("expected one IRQ connection to NVIC"));
             }
             irq = Some(number(line.trim()).map_err(|e| entry.error(&e))?);
-        } else if entry.model == "Sound.NRF52840_I2S"
-            && loopback.is_none()
+        } else if matches!(
+            entry.model.as_str(),
+            "Sound.NRF52840_I2S" | "Wireless.NRF52840_Radio"
+        ) && loopback.is_none()
             && let Some(("loopback", value)) = item.split_once(':')
         {
             loopback = Some(
@@ -111,6 +113,8 @@ pub(super) fn map_peripheral(
     }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
+    } else if entry.model == "Wireless.NRF52840_Radio" {
+        Peripheral::radio(base, irq as u8, name, loopback.unwrap_or(false))
     } else if entry.model == "Sound.NRF52840_PDM" {
         Peripheral::pdm(base, irq as u8, name)
     } else if entry.model == "Sound.NRF52840_I2S" {
