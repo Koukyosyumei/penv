@@ -1,4 +1,5 @@
 use crate::ft5336::Ft5336;
+use crate::ina228::Ina228;
 use crate::{iis2mdc::Iis2mdc, stm32_uart::Stm32Irq, tmp108::Tmp108, veml7700::Veml7700};
 use crate::{lps25hb::Lps25hb, lsm6dso::Lsm6dso};
 
@@ -20,7 +21,8 @@ const STOP: u32 = 1 << 14;
 
 pub enum Target {
     Light(String, Veml7700),
-    Magnetometer(Iis2mdc),
+    PowerMonitor(String, Box<Ina228>),
+    Magnetometer(String, Iis2mdc),
     Temperature(Tmp108),
     Pressure(String, Lps25hb),
     Imu(String, Box<Lsm6dso>),
@@ -33,7 +35,7 @@ impl Target {
             Self::Light(_, sensor) => sensor.stop(),
             Self::Temperature(sensor) => sensor.stop(),
             Self::Pressure(_, sensor) => sensor.stop(),
-            Self::Magnetometer(_) | Self::Imu(..) | Self::Touch(..) => {}
+            Self::PowerMonitor(..) | Self::Magnetometer(..) | Self::Imu(..) | Self::Touch(..) => {}
         }
     }
 }
@@ -91,6 +93,24 @@ impl I2c {
         Ok(())
     }
 
+    pub fn find_magnetometer(&mut self, name: &str) -> Option<&mut Iis2mdc> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Magnetometer(path, sensor) if path == name => Some(sensor),
+                _ => None,
+            })
+    }
+
+    pub fn find_power_monitor(&mut self, name: &str) -> Option<&mut Ina228> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::PowerMonitor(path, sensor) if path == name => Some(sensor.as_mut()),
+                _ => None,
+            })
+    }
+
     pub fn find_pressure(&mut self, name: &str) -> Option<&mut Lps25hb> {
         self.targets
             .iter_mut()
@@ -135,7 +155,11 @@ impl I2c {
         self.targets
             .iter_mut()
             .filter_map(move |(_, target)| match target {
-                Target::Magnetometer(sensor) => sensor.tick(step),
+                Target::PowerMonitor(_, sensor) => {
+                    sensor.tick(step);
+                    None
+                }
+                Target::Magnetometer(_, sensor) => sensor.tick(step),
                 Target::Imu(_, sensor) => sensor.tick(step),
                 Target::Touch(_, device) => device.tick(),
                 _ => None,
@@ -166,7 +190,8 @@ impl I2c {
                     return 0;
                 }
                 let value = match self.active.map(|target| &mut self.targets[target].1) {
-                    Some(Target::Magnetometer(sensor)) => sensor.read_byte(),
+                    Some(Target::PowerMonitor(_, sensor)) => sensor.read_byte(self.position),
+                    Some(Target::Magnetometer(_, sensor)) => sensor.read_byte(),
                     Some(Target::Pressure(_, sensor)) => sensor.read_byte(),
                     Some(Target::Imu(_, sensor)) => sensor.read_byte(),
                     Some(Target::Touch(_, device)) => device
@@ -268,13 +293,17 @@ impl I2c {
                     1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND),
                 );
                 let bytes = match &mut self.targets[target].1 {
+                    Target::PowerMonitor(_, sensor) => {
+                        sensor.start_read(self.step);
+                        None
+                    }
                     Target::Light(_, sensor) => Some(sensor.read(nanoseconds)),
                     Target::Pressure(_, sensor) => {
                         sensor.start_read(nanoseconds);
                         None
                     }
                     Target::Temperature(sensor) => Some(sensor.read()),
-                    Target::Magnetometer(_) | Target::Imu(..) | Target::Touch(..) => None,
+                    Target::Magnetometer(..) | Target::Imu(..) | Target::Touch(..) => None,
                 };
                 if let Some(bytes) = bytes {
                     self.data[..2].copy_from_slice(&bytes);
@@ -316,6 +345,9 @@ impl I2c {
             && !self.reading
         {
             match &mut self.targets[target].1 {
+                Target::PowerMonitor(_, sensor) if self.position <= self.data.len() => {
+                    sensor.write(&self.data[..self.position], self.step);
+                }
                 Target::Touch(_, device) if self.position != 0 => device.select(self.data[0]),
                 Target::Light(_, sensor) if (1..=3).contains(&self.position) => {
                     sensor.write(&self.data[..self.position])
@@ -329,7 +361,7 @@ impl I2c {
                 Target::Pressure(_, sensor) if self.position <= self.data.len() => {
                     sensor.write(&self.data[..self.position])
                 }
-                Target::Magnetometer(sensor) if self.position <= self.data.len() => {
+                Target::Magnetometer(_, sensor) if self.position <= self.data.len() => {
                     sensor.write(&self.data[..self.position])
                 }
                 _ => {}
@@ -377,8 +409,11 @@ mod tests {
     #[test]
     fn preloaded_txdr_is_consumed_once_when_starting_write() {
         let mut i2c = I2c::new(0, None);
-        i2c.attach(0x1e, Target::Magnetometer(Iis2mdc::new([0; 3])))
-            .unwrap();
+        i2c.attach(
+            0x1e,
+            Target::Magnetometer("magnetometer".into(), Iis2mdc::new([0; 3])),
+        )
+        .unwrap();
         i2c.write(0, PE);
         i2c.write(0x28, 0x4f);
         let address = 0x1e << 1;

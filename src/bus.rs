@@ -691,12 +691,42 @@ impl Bus {
             .ok_or_else(|| format!("unknown LSM6DSO sensor {name:?}"))
     }
 
+    pub fn feed_magnetic(&mut self, name: &str, file: &std::path::Path) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_magnetometer(name))
+            .ok_or_else(|| format!("unknown IIS2MDC sensor {name:?}"))?
+            .feed_resd(file)
+    }
+
+    pub fn feed_ina228(
+        &mut self,
+        name: &str,
+        file: &std::path::Path,
+        input: usize,
+        channel: u16,
+    ) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_power_monitor(name))
+            .ok_or_else(|| format!("unknown INA228 sensor {name:?}"))?
+            .feed(file, input, channel, self.h7_step)
+    }
+
     pub fn feed_pressure(
         &mut self,
         name: &str,
         path: &std::path::Path,
         temperature: bool,
     ) -> Result<(), String> {
+        if temperature
+            && let Some(sensor) = self
+                .h7_i2c
+                .iter_mut()
+                .find_map(|bus| bus.find_power_monitor(name))
+        {
+            return sensor.feed(path, 2, 0, self.h7_step);
+        }
         let nanoseconds = self
             .h7_step
             .saturating_mul(1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND));

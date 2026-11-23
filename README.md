@@ -833,3 +833,26 @@ bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
 ```
 
 検証ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-lsm-resd.YFHMg3EA` にあります。LSM6DSO の最終実行は `final/` です。台帳は対象 789 件のうち等価合格 37 件、部分検証 10 件、未達 742 件です。
+
+### backlog-network-89ddefe9bc0e-1
+
+IIS2MDC の RESD 入力を実装し、固定上流のポーリングとトリガーの 2 ケースが等価合格しました。上流コンバーターは開始 3 秒、2 Hz の 9 ブロックを生成します。共有デコーダーは隣接する定周期ブロックを連結できます。未変更の STM32H753 CPU REPL に上流と同じ I²C1 と GPIOG11 を配線し、同じ ELF で USART2 の全 9 組と各 8 秒の期限を照合しました。
+
+INA228 の I²C 設定・測定レジスター、ADC 周期、電力量と電荷の積算、電圧 2 チャンネルと温度の RESD 入力を実装しました。定周期・タイムスタンプ付きの両ケースで、同じ上流 ELF・RESD・3 秒の行待機期限を使いました。電圧・電流・電力・温度は全行で許容差内でした。電力量と電荷が許容差外のため、両ケースは部分検証です。
+
+INA228 の最初の非ゼロ行は約 2.186 仮想秒で出力され、電力量 330.813184 J、電荷 6.896582 C でした。固定上流の期待値は 288.29 J と 6.01 C です。積算区間を左右する ADC 更新・ゲスト読み出し・リセットの時系列の照合が残っています。許容差を保持しており、INA228 のスクリプトはコード 1 を返します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-ina228-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
+```
+
+ログ、RESD、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ina228.lLR6tsyx` にあります。INA228 の比較結果は `ina-final/*/compare.log` に保存しました。LPS25HB と上流 REPL 7 構成の回帰も通過しました。台帳は対象 789 件のうち等価合格 39 件、部分検証 10 件、未達 740 件です。

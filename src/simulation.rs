@@ -45,6 +45,18 @@ pub enum Action {
         name: String,
         event: crate::ft5336::PointerEvent,
     },
+    MagneticFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+    },
+    VoltageFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+        input: usize,
+        channel: u16,
+    },
     PressureFeed {
         node: usize,
         sensor: String,
@@ -220,6 +232,24 @@ pub fn run(
                         .machine
                         .bus
                         .touch_input(&name, event)?;
+                }
+                Action::MagneticFeed { node, sensor, file } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_magnetic(&sensor, &file)?;
+                }
+                Action::VoltageFeed {
+                    node,
+                    sensor,
+                    file,
+                    input,
+                    channel,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_ina228(&sensor, &file, input, channel)?;
                 }
                 Action::PressureFeed {
                     node,

@@ -118,6 +118,28 @@ impl Plan {
             }
             [
                 sensor,
+                command @ ("FeedShuntVoltageSamplesFromRESD" | "FeedBusVoltageSamplesFromRESD"),
+                file,
+                channel,
+            ] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let path = resolve(*file)?
+                    .strip_prefix('@')
+                    .ok_or("expected @RESD path")?;
+                let file = monitor::asset_path(path.trim_matches('"'), source, root, None)?;
+                let channel = resolve(*channel)?
+                    .parse()
+                    .map_err(|_| "invalid RESD channel")?;
+                self.actions.push(Action::VoltageFeed {
+                    node,
+                    sensor: (*sensor).into(),
+                    file,
+                    input: usize::from(*command == "FeedBusVoltageSamplesFromRESD"),
+                    channel,
+                });
+            }
+            [
+                sensor,
                 command @ ("FeedTemperatureSamplesFromRESD" | "FeedPressureSamplesFromRESD"),
                 file,
             ] if sensor.starts_with("sysbus.") => {
@@ -152,6 +174,18 @@ impl Plan {
                 self.actions.push(Action::ReadPressure {
                     node,
                     sensor: (*sensor).into(),
+                });
+            }
+            [sensor, "FeedMagneticSamplesFromRESD", file] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let path = resolve(*file)?
+                    .strip_prefix('@')
+                    .ok_or("expected @RESD path")?;
+                let file = monitor::asset_path(path.trim_matches('"'), source, root, None)?;
+                self.actions.push(Action::MagneticFeed {
+                    node,
+                    sensor: (*sensor).into(),
+                    file,
                 });
             }
             [sensor, "FeedIlluminanceSamplesFromRESD", file] if sensor.starts_with("sysbus.") => {

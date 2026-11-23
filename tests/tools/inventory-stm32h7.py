@@ -170,7 +170,9 @@ for file, kind in robot.items():
         elif file.endswith('STM32LTDC.robot'):
             status, note = 'PARTIAL', 'ボタン対照・ゼロ行・仮想フレームは実 ELF で確認。元の構成と Robot 操作の等価性の確定待ち'
         elif file.endswith('IIS2MDC.robot'):
-            status, note = 'PARTIAL', '同一 ELF・全サンプル。RESD の代わりに CSV を供給'
+            status, note = 'PASS', '固定 stm32h753 REPL・I2C1 と PG11・同一 ELF。上流 csv2resd の 9 ブロックを供給し、USART2 の9組を同順・各8秒以内に照合'
+        elif file.endswith('INA228.robot'):
+            status, note = 'PARTIAL', '固定 Nucleo REPL・同一 ELF・同じ RESD・3秒期限。電圧・電流・電力・温度は許容差内。電力量と電荷が上流許容差外'
         elif file.endswith('VEML7700.robot'):
             if name in {'Should Read Illuminance', 'Should Work After Errata Driver Update'}:
                 status, note = 'PASS', '固定上流 ELF・Nucleo REPL と同じ als 登録。照度変更を挟んで USART3 の期待値を照合。tests/stm32h7-veml7700-robot.sh'

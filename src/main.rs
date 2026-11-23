@@ -10,6 +10,7 @@ mod ethernet_switch;
 mod ft5336;
 mod iis2mdc;
 mod image;
+mod ina228;
 mod litex_ethernet;
 mod lps25hb;
 mod lsm6dso;

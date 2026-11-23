@@ -60,6 +60,22 @@ impl Iis2mdc {
         Ok(())
     }
 
+    pub fn feed_resd(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let samples = crate::resd::Samples::decode(&bytes, 8, |bytes: [u8; 12]| {
+            let words: &[[u8; 4]; 3] = bytes.as_chunks::<4>().0.try_into().unwrap();
+            words.map(i32::from_le_bytes)
+        })
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+        self.samples = samples
+            .into_points()
+            .into_iter()
+            .map(|(time, field)| (time / 1000, field))
+            .collect();
+        self.next_sample = 0;
+        Ok(())
+    }
+
     pub fn set_route(&mut self, base: u32, pin: u8) {
         self.route = Some((base, pin));
     }

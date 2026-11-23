@@ -1,4 +1,5 @@
 use crate::ft5336::Ft5336;
+use crate::ina228::Ina228;
 use crate::{
     designware_usb::DesignWareUsb,
     iis2mdc::Iis2mdc,
@@ -46,6 +47,7 @@ pub fn is_device(model: &str) -> bool {
             model,
             Qspi::FLASH
                 | Fdcan::MODEL
+                | Ina228::MODEL
                 | Veml7700::MODEL
                 | Iis2mdc::MODEL
                 | Ft5336::MODEL
@@ -317,7 +319,8 @@ pub fn configure(
     for entry in entries.iter().filter(|entry| {
         matches!(
             entry.model.as_str(),
-            Veml7700::MODEL
+            Ina228::MODEL
+                | Veml7700::MODEL
                 | Iis2mdc::MODEL
                 | Tmp108::MODEL
                 | Lps25hb::MODEL
@@ -335,6 +338,20 @@ pub fn configure(
             .iter_mut()
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Ina228::MODEL {
+            if !entry.body.is_empty() {
+                return Err(entry.error("unsupported INA228 properties"));
+            }
+            bus.attach(
+                u16::from(address),
+                Target::PowerMonitor(
+                    format!("sysbus.{parent}.{}", entry.name),
+                    Box::new(Ina228::new()),
+                ),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
         if entry.model == Ft5336::MODEL {
             let device = parse_touch(entry, entries).map_err(|e| entry.error(&e))?;
             bus.attach(
@@ -451,8 +468,11 @@ pub fn configure(
             if let Some((base, pin)) = route {
                 sensor.set_route(base, pin);
             }
-            bus.attach(u16::from(address), Target::Magnetometer(sensor))
-                .map_err(|e| entry.error(e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Magnetometer(format!("sysbus.{parent}.{}", entry.name), sensor),
+            )
+            .map_err(|e| entry.error(e))?;
             continue;
         }
         let illuminance = match entry.body.as_slice() {
