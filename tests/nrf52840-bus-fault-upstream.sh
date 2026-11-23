@@ -421,3 +421,60 @@ status=0
     >"$out/nmi-stacking-lockup.log" 2>&1 || status=$?
 [ "$status" -eq 2 ]
 grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/nmi-stacking-lockup.log"
+
+# Robot 852-908: writes succeed and reads fail at the same stack address.
+sed '/^faultingPeripheral:/a\    FaultOnWrites: false' "$out/bus-fault.repl" >"$out/unstack.repl"
+for fp_instruction in nop 'vmov.f32 s0, s0'; do
+    case "$fp_instruction" in
+        nop) label=unstack-tail; fpca=0 ;;
+        *) label=unstack-tail-fp; fpca=4 ;;
+    esac
+    cat >"$out/$label.s" <<ASM
+.syntax unified
+.thumb
+.global reset
+.word 0x100020, reset, nmi, 0, 0, busfault
+.thumb_func
+reset:
+    ldr r0, =0xe000ed24
+    mov.w r1, #0x20000
+    str r1, [r0]
+    ldr r0, =0xe000ed88
+    mov.w r1, #0xf00000
+    str r1, [r0]
+    ldr r0, =0xe000ed04
+    mov.w r1, #0x80000000
+    str r1, [r0]
+    b .
+.thumb_func
+nmi:
+    $fp_instruction
+    mrs r0, control
+    and r0, #4
+    cmp r0, #$fpca
+    bne failed
+    bx lr
+.thumb_func
+busfault:
+    mov r0, sp
+    cmp.w r0, #0x100000
+    bne failed
+    mrs r0, control
+    tst r0, #4
+    bne failed
+    ldr r0, =0xe000ed28
+    ldr r1, [r0]
+    cmp.w r1, #0x800
+    bne failed
+    ldr r1, [r0, #4]
+    cmp r1, #0
+    bne failed
+    bkpt 0
+failed:
+    b .
+ASM
+    clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/$label.s" -o "$out/$label.o"
+    ld.lld -N -Ttext=0 --entry=reset "$out/$label.o" -o "$out/$label.elf"
+    "$penv" run --platform "$out/unstack.repl" --max-steps 100 "$out/$label.elf" >"$out/$label.log" 2>&1
+    printf '%s: all unstack fault checks passed\n' "$label"
+done

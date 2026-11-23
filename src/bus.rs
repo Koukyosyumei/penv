@@ -85,6 +85,7 @@ const FAULTING_PERIPHERAL_SIZE: usize = 0x1000;
 struct FaultingPeripheral {
     base: u32,
     fault_offset: Option<usize>,
+    fault_on_writes: bool,
     bytes: Box<[u8; FAULTING_PERIPHERAL_SIZE]>,
 }
 
@@ -94,9 +95,10 @@ impl FaultingPeripheral {
         (offset < FAULTING_PERIPHERAL_SIZE).then_some(offset)
     }
 
-    fn check_byte(&self, offset: usize, transaction: u32) -> Result<(), BusError> {
+    fn check_byte(&self, offset: usize, transaction: u32, write: bool) -> Result<(), BusError> {
         if offset >= FAULTING_PERIPHERAL_SIZE
-            || self.fault_offset.is_none_or(|fault| fault == offset)
+            || ((!write || self.fault_on_writes)
+                && self.fault_offset.is_none_or(|fault| fault == offset))
         {
             return Err(BusError::SlaveFault(transaction));
         }
@@ -231,9 +233,20 @@ impl Bus {
         self.faulting_peripherals.push(FaultingPeripheral {
             base,
             fault_offset,
+            fault_on_writes: true,
             bytes: Box::new([0; FAULTING_PERIPHERAL_SIZE]),
         });
         Ok(())
+    }
+
+    pub fn set_mock_fault_on_writes(&mut self, base: u32, enabled: bool) {
+        if let Some(device) = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.base == base)
+        {
+            device.fault_on_writes = enabled;
+        }
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -1608,14 +1621,14 @@ impl Bus {
         Some((|| {
             let mut value = [0; 4];
             for (index, byte) in value[..N].iter_mut().enumerate() {
-                device.check_byte(offset + index, address)?;
+                device.check_byte(offset + index, address, false)?;
                 *byte = device.bytes[offset + index];
             }
             Ok(u32::from_le_bytes(value))
         })())
     }
 
-    pub fn read_cortex_m_vector_word(&self, address: u32) -> Result<u32, BusError> {
+    pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
         self.read_faulting_peripheral::<4>(address)
             .unwrap_or_else(|| self.read_ram::<4>(address))
     }
@@ -1837,7 +1850,7 @@ impl Bus {
         let offset = device.offset(address).unwrap();
         Some((|| {
             for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
-                device.check_byte(offset + index, address)?;
+                device.check_byte(offset + index, address, true)?;
                 device.bytes[offset + index] = *byte;
             }
             Ok(())

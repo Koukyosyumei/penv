@@ -286,15 +286,29 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 semihosting_uarts.push(entry);
             }
             "Mocks.BusFaultingPeripheral" if cortex_m4 => {
-                let fault_offset = keys(entry, &["FaultOffset"])?
-                    .first()
-                    .map(|(_, value)| number(value).map(|offset| offset as usize))
-                    .transpose()
+                let mut fault_offset = None;
+                let mut fault_on_writes = true;
+                for (key, value) in keys(entry, &["FaultOffset", "FaultOnWrites"])? {
+                    match key {
+                        "FaultOffset" => {
+                            fault_offset =
+                                Some(number(value).map_err(|e| entry.error(&e))? as usize)
+                        }
+                        _ => {
+                            fault_on_writes = value
+                                .parse()
+                                .map_err(|_| entry.error("invalid FaultOnWrites boolean"))?
+                        }
+                    }
+                }
+                let address = entry.address()?;
+                machine
+                    .bus
+                    .map_bus_faulting_peripheral(address, fault_offset)
                     .map_err(|e| entry.error(&e))?;
                 machine
                     .bus
-                    .map_bus_faulting_peripheral(entry.address()?, fault_offset)
-                    .map_err(|e| entry.error(&e))?;
+                    .set_mock_fault_on_writes(address, fault_on_writes);
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?

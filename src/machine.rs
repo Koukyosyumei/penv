@@ -881,6 +881,116 @@ impl Hart {
 mod tests {
     use super::*;
 
+    fn unstack_fixture(nmi: &[u32]) -> Machine {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        for (address, value) in [(8, 0x381), (12, 0x341), (20, 0x301)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        machine.bus.write(0x300, 2, 0xe7fe, &mut out).unwrap();
+        for (index, &opcode) in nmi.iter().enumerate() {
+            machine
+                .bus
+                .write(0x380 + index as u32 * 2, 2, opcode, &mut out)
+                .unwrap();
+        }
+        machine
+    }
+
+    #[test]
+    fn upstream_unstack_fault_locks_over_hard_fault() {
+        let mut machine = unstack_fixture(&[0xf44f, 0x1080, 0xf380, 0x8808, 0x4770]);
+        let mut out = std::io::sink();
+        machine.bus.write(0x200, 2, 0x6802, &mut out).unwrap();
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        machine
+            .bus
+            .write(0xe000_ed28, 4, u32::MAX, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(4, &mut out).unwrap(), (Stop::Limit, 2));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0x100020);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 3)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 11);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
+    }
+
+    fn check_unstack_tail_chain(fp: bool) {
+        let mut machine = unstack_fixture(if fp {
+            &[0xeeb0, 0x0a40, 0x4770]
+        } else {
+            &[0xbf00, 0x4770]
+        });
+        let mut out = std::io::sink();
+        machine.bus.set_mock_fault_on_writes(0x100000, false);
+        machine
+            .bus
+            .write(0xe000_ed24, 4, 1 << 17, &mut out)
+            .unwrap();
+        if fp {
+            machine
+                .bus
+                .write(0xe000_ed88, 4, 0xf00000, &mut out)
+                .unwrap();
+        }
+        machine.primary.registers[13] = 0x100020;
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(2, &mut out).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, if fp { 0x384 } else { 0x382 });
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().fp_context_active(),
+            fp
+        );
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x300);
+        assert_eq!(machine.primary.registers[13], 0x100000);
+        assert_eq!(machine.primary.registers[14], 0xffff_fff9);
+        let thumb = machine.primary.thumb.as_ref().unwrap();
+        assert_eq!(thumb.lockup_state(), (false, 0, 5));
+        assert!(!thumb.fp_context_active());
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 11);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_unstack_fault_tail_chains_to_bus_fault() {
+        check_unstack_tail_chain(false);
+    }
+
+    #[test]
+    fn upstream_unstack_fault_tail_chain_clears_fpca() {
+        check_unstack_tail_chain(true);
+    }
+
     fn check_nmi_entry_lockup(vector_fault: bool) {
         let mut machine = exception_vector_fault_machine(None);
         let mut out = std::io::sink();
