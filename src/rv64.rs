@@ -113,7 +113,7 @@ impl Isa {
         Ok(isa)
     }
 
-    pub(crate) fn llvm_decode_features(self) -> String {
+    pub(crate) fn llvm_features(self) -> String {
         [
             (self.multiply, "+m"),
             (self.atomic, "+a"),

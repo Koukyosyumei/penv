@@ -396,6 +396,12 @@ def disposition(path, name, context):
         "Should Handle Disassembly From Invalid Address",
     }:
         return "pass", "Fixed RV64G disassembly encodings, valid decode and error diagnostics verified (rv64-disassembly.md)"
+    if path.name == "llvm-asm-disasm.robot" and re.fullmatch(
+        r"Should Assemble And Disassemble RISCV64(?:IMAC|IMAFDC|GC|GCV)", name
+    ):
+        return "pass", "Fixed RV64 assembly bytes and disassembly mnemonics and operands verified (rv64-assembly.md)"
+    if path.name == "llvm-asm-disasm.robot" and name == "Should Handle Illegal Instruction When Assembling":
+        return "pass", "Fixed malformed mnemonic, operand and disabled V diagnostics verified (rv64-assembly.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"
