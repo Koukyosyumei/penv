@@ -40,6 +40,10 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    SaveMemory(PathBuf),
+    ClearMemory,
+    LoadMemory(PathBuf),
+    SelectMachineZero,
     RecordTo(PathBuf),
     PlayFrom(PathBuf),
     RtcMode(RtcMode),
@@ -170,8 +174,26 @@ pub fn run(
     }
     let mut retired = 0;
     let mut host_terminals = HashMap::new();
+    let mut cleared = false;
     for command in commands {
+        if cleared && !matches!(command.action, Action::LoadMemory(_)) {
+            return Err(format!(
+                "{}:{}: Load a boot snapshot after Clear",
+                script.display(),
+                command.line
+            ));
+        }
         let result = match &command.action {
+            Action::SaveMemory(path) => machine.save_memory_snapshot(path).map(|()| None),
+            Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
+                cleared = true;
+                None
+            }),
+            Action::LoadMemory(path) => machine.load_memory_snapshot(path).map(|()| {
+                cleared = false;
+                None
+            }),
+            Action::SelectMachineZero => Ok(None),
             Action::RecordTo(path) => machine.record_to(path).map(|()| None),
             Action::PlayFrom(path) => machine.play_from(path).map(|()| None),
             Action::RtcMode(mode) => machine.rtc_clock.set_mode(*mode).map(|()| None),
@@ -782,6 +804,19 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
+        [verb @ ("Save" | "Load"), path] => {
+            let path = resolve(path)?
+                .strip_prefix('@')
+                .ok_or("expected @snapshot-path")?;
+            let path = script.parent().unwrap_or_else(|| Path::new(".")).join(path);
+            Some(if *verb == "Save" {
+                Action::SaveMemory(path)
+            } else {
+                Action::LoadMemory(path)
+            })
+        }
+        ["Clear"] => Some(Action::ClearMemory),
+        ["mach" | "machine", "set", "0"] => Some(Action::SelectMachineZero),
         ["machine", verb @ ("RecordTo" | "PlayFrom"), path, mode @ ..] => {
             let path = resolve(path)?
                 .strip_prefix('@')

@@ -243,6 +243,67 @@ ram: Memory.MappedMemory @ sysbus 0
     fs::remove_dir_all(directory).unwrap();
 }
 
+#[test]
+fn renode_resc_array_memory_save_clear_load_restores_boot_state() {
+    let directory = std::env::temp_dir().join(format!("penv-array-save-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+flash: Memory.ArrayMemory @ sysbus 0x08000000
+    size: 0x80000
+sram: Memory.ArrayMemory @ sysbus 0x20000000
+    size: 0x20000
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0, 8, 0, 0x20, 9, 0, 0, 8, 0, 0xbf, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("save.resc");
+    let run = |commands: &str| {
+        fs::write(&script, format!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0x08000000\ncpu VectorTableOffset 0x08000000\n{commands}"
+        )).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "10", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let saved = run(r#"sysbus WriteDoubleWord 0x20000000 0x12345678
+Save @test.save
+sysbus WriteDoubleWord 0x20000000 0x87654321
+Clear
+Load @test.save
+mach set 0
+sysbus ReadDoubleWord 0x20000000
+cpu PC
+cpu Step 1
+cpu PC
+"#);
+    assert!(saved.status.success(), "{saved:?}");
+    assert_eq!(saved.stdout, b"0x12345678\n0x08000008\n0x0800000a\n");
+    let after_run = run("cpu Step 1\nSave @too-late.save\n");
+    assert_eq!(after_run.status.code(), Some(1), "{after_run:?}");
+    assert!(!directory.join("too-late.save").exists());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(directory.join("test.save"))
+        .unwrap()
+        .set_len(20)
+        .unwrap();
+    let truncated = run("Clear\nLoad @test.save\n");
+    assert_eq!(truncated.status.code(), Some(1), "{truncated:?}");
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 #[test]
 fn renode_resc_machine_rtc_modes_share_one_creation_time() {

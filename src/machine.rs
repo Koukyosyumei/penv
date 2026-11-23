@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, io::Write, path::Path};
+use std::{
+    collections::VecDeque,
+    io::{Read, Write},
+    path::Path,
+};
 
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
@@ -320,6 +324,59 @@ impl Machine {
         self.primary.monitor_paused = false;
         self.primary.reset_cortex_m(&mut self.bus);
         Ok(())
+    }
+
+    fn check_memory_snapshot(&self) -> Result<(), String> {
+        if !self.is_cortex_m() || self.elapsed_steps() != 0 {
+            return Err("memory snapshots require a Cortex-M machine before execution".into());
+        }
+        Ok(())
+    }
+
+    pub fn save_memory_snapshot(&self, path: &Path) -> Result<(), String> {
+        self.check_memory_snapshot()?;
+        let save = || -> std::io::Result<()> {
+            let mut file = std::fs::File::create(path)?;
+            file.write_all(b"PENVBOOT\x01")?;
+            file.write_all(&self.raw_load_address().to_le_bytes())?;
+            self.bus.save_memory(&mut file)
+        };
+        save().map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub fn clear_memory_snapshot(&mut self) -> Result<(), String> {
+        self.check_memory_snapshot()?;
+        self.bus.clear_memory();
+        self.reset_cortex_m_machine()
+    }
+
+    pub fn load_memory_snapshot(&mut self, path: &Path) -> Result<(), String> {
+        self.check_memory_snapshot()?;
+        let mut load = || -> std::io::Result<u32> {
+            let mut file = std::fs::File::open(path)?;
+            let mut header = [0; 9];
+            file.read_exact(&mut header)?;
+            if &header != b"PENVBOOT\x01" {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unknown snapshot format",
+                ));
+            }
+            let mut address = [0; 4];
+            file.read_exact(&mut address)?;
+            let address = u32::from_le_bytes(address);
+            if address & 0x7f != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid snapshot vector table address",
+                ));
+            }
+            self.bus.restore_memory(&mut file)?;
+            Ok(address)
+        };
+        let address = load().map_err(|e| format!("{}: {e}", path.display()))?;
+        self.primary.thumb = Some(Thumb::new(Some(address)));
+        self.reset_cortex_m_machine()
     }
 
     pub fn record_to(&mut self, path: &Path) -> Result<(), String> {

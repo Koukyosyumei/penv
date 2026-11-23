@@ -1,7 +1,7 @@
 use std::{
     alloc::{Layout, alloc_zeroed},
     fmt,
-    io::{self, Write},
+    io::{self, Read, Write},
     sync::Arc,
 };
 
@@ -1455,6 +1455,64 @@ impl Bus {
                 "invalid or overlapping Murax peripheral range at {base:#010x}"
             ));
         }
+        Ok(())
+    }
+
+    pub fn save_memory(&self, output: &mut impl Write) -> io::Result<()> {
+        output.write_all(&(self.regions.len() as u64).to_le_bytes())?;
+        for region in &self.regions {
+            output.write_all(&region.base.to_le_bytes())?;
+            output.write_all(&(region.bytes.len() as u64).to_le_bytes())?;
+            output.write_all(&region.bytes)?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_memory(&mut self) {
+        for region in &mut self.regions {
+            region.bytes.fill(0);
+        }
+        self.reservations.fill(None);
+    }
+
+    pub fn restore_memory(&mut self, input: &mut impl Read) -> io::Result<()> {
+        fn read_u64(input: &mut impl Read) -> io::Result<u64> {
+            let mut bytes = [0; 8];
+            input.read_exact(&mut bytes)?;
+            Ok(u64::from_le_bytes(bytes))
+        }
+        let mismatch = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "snapshot memory layout differs from the platform",
+            )
+        };
+        if read_u64(input)? != self.regions.len() as u64 {
+            return Err(mismatch());
+        }
+        let mut contents = Vec::with_capacity(self.regions.len());
+        for region in &self.regions {
+            if read_u64(input)? != region.base || read_u64(input)? != region.bytes.len() as u64 {
+                return Err(mismatch());
+            }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(region.bytes.len())
+                .map_err(io::Error::other)?;
+            bytes.resize(region.bytes.len(), 0);
+            input.read_exact(&mut bytes)?;
+            contents.push(bytes);
+        }
+        if input.read(&mut [0])? != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "trailing snapshot data",
+            ));
+        }
+        for (region, bytes) in self.regions.iter_mut().zip(contents) {
+            region.bytes = bytes;
+        }
+        self.reservations.fill(None);
         Ok(())
     }
 
