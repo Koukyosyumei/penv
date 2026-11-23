@@ -600,3 +600,52 @@ mod comparing_timer_cases {
         assert_eq!(advance(&mut timer, 300), 1);
     }
 }
+
+#[cfg(test)]
+mod rcc_binding_tests {
+    use super::*;
+    use crate::{bus::Bus, stm32h7_net_control::NetworkControl};
+
+    #[test]
+    fn tim17_uses_apb2_clock_divider_gate_and_reset() {
+        const RCC: u32 = 0x5802_4400;
+        const TIM17: u32 = 0x4001_4800;
+        const ARR: u32 = TIM17 + 0x2c;
+        const TIM17_BIT: u32 = 1 << 18;
+        let clock = TimerClock::from_alias("TIM17").unwrap();
+        let mut rcc = NetworkControl::new(RCC, None, None);
+        rcc.write(RCC + 0x1c, (5 << 4) | (6 << 8)).unwrap();
+        assert_eq!(rcc.timer_frequency(clock), Some(16_000_000));
+        assert_eq!(
+            rcc.timer_frequency(TimerClock::Apb1Low(0)),
+            Some(32_000_000)
+        );
+
+        let mut bus = Bus::new(0x1000).unwrap();
+        bus.map_h7_network_control(NetworkControl::new(RCC, None, None))
+            .unwrap();
+        bus.map_h7_timer(Timer::new(
+            "timer17".into(),
+            TIM17,
+            64_000_000,
+            0xffff,
+            Some(clock),
+        ))
+        .unwrap();
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut std::io::sink()).unwrap();
+        };
+        write(&mut bus, RCC + 0xf0, 0);
+        write(&mut bus, RCC + 0xe8, TIM17_BIT);
+        assert_eq!(bus.read::<4>(ARR).unwrap(), 0);
+        write(&mut bus, RCC + 0xf0, TIM17_BIT);
+        assert_eq!(bus.read::<4>(ARR).unwrap(), 0xffff);
+        write(&mut bus, ARR, 0x42);
+        write(&mut bus, RCC + 0x90, TIM17_BIT);
+        assert_eq!(bus.read::<4>(ARR).unwrap(), 0x42);
+        write(&mut bus, RCC + 0x98, TIM17_BIT);
+        assert_eq!(bus.read::<4>(ARR).unwrap(), 0);
+        write(&mut bus, RCC + 0x98, 0);
+        assert_eq!(bus.read::<4>(ARR).unwrap(), 0xffff);
+    }
+}
