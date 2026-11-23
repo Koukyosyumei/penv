@@ -31,6 +31,7 @@ pub(crate) struct Entry {
     pub(crate) model: String,
     pub(crate) registration: Option<String>,
     alias: Option<String>,
+    local: bool,
     pub(crate) body: Properties,
     source: PathBuf,
     line: usize,
@@ -738,6 +739,10 @@ fn parse_content(
             .split_once(':')
             .ok_or_else(|| error("expected a platform declaration"))?;
         let name = name.trim();
+        let (local, name) = match name.strip_prefix("local ") {
+            Some(name) => (true, name.trim_start()),
+            None => (false, name),
+        };
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
@@ -775,6 +780,7 @@ fn parse_content(
             model: model.into(),
             registration,
             alias,
+            local,
             body,
             source: path.into(),
             line: lineno,
@@ -959,6 +965,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             model: String::new(),
             registration: entry.registration.take(),
             alias: None,
+            local: entry.local,
             body: std::mem::take(&mut entry.body),
             source: entry.source.clone(),
             line: entry.line,
@@ -1046,6 +1053,7 @@ fn inline_entry(parent: &Entry, line: usize, statement: &str, model: &str) -> En
         model: model.into(),
         registration: None,
         alias: None,
+        local: parent.local,
         body,
         source: parent.source.clone(),
         line,
@@ -1113,10 +1121,12 @@ fn validate_mock_cpu_properties(
                     validate_mock_cpu_properties(&nested, declared, declarations)?;
                     model
                 } else {
-                    let index = *declared
+                    let target = declared
                         .get(value)
+                        .map(|&index| &declarations[index])
+                        .filter(|target| !target.local || target.source == entry.source)
                         .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
-                    declarations[index].model.as_str()
+                    target.model.as_str()
                 };
                 if is_cpu_model(model) {
                     continue;
@@ -1497,6 +1507,10 @@ fn build_entries(
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
+            MOCK_CPU if check_only && entry.registration.is_none() => {
+                // This upstream fixture has no execution role when unregistered.
+                keys(entry, &["OtherCpu", "Placeholder", "EnumValue"])?;
+            }
             MOCK_EXTERNAL => {
                 keys(entry, &[])?;
                 if !matches!(entry.registration.as_deref(), None | Some("none")) {
@@ -1712,9 +1726,12 @@ fn build_entries(
         }
     }
     if check_only
-        && entries
-            .iter()
-            .all(|entry| matches!(entry.model.as_str(), EMPTY_PERIPHERAL | MOCK_EXTERNAL))
+        && entries.iter().all(|entry| {
+            matches!(
+                entry.model.as_str(),
+                EMPTY_PERIPHERAL | MOCK_EXTERNAL | MOCK_CPU
+            )
+        })
     {
         return Ok(machine);
     }

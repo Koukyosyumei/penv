@@ -621,3 +621,66 @@ fn renode_nested_inline_ambiguous_constructor() {
     let error = check_string("\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n        other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n            other: new Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n                value: 4", None).unwrap_err();
     assert!(error.contains("AmbiguousCtor:"), "{error}");
 }
+
+fn check_reference_imports(source: &str, files: &[(&str, &str)]) -> Result<(), String> {
+    let directory = std::env::temp_dir().join(format!(
+        "penv-reference-imports-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    for &(name, content) in files {
+        fs::write(directory.join(name), content).unwrap();
+    }
+    let result = check_string(source, Some(&directory));
+    fs::remove_dir_all(directory).unwrap();
+    result
+}
+
+#[test]
+fn renode_using_reference_direct() {
+    check_reference_imports(
+        "\nusing \"A\"\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu1",
+        &[("A", "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU")],
+    )
+    .unwrap();
+}
+
+#[test]
+fn renode_using_reference_private() {
+    assert!(
+        check_reference_imports(
+            "\nusing \"A\"\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu1",
+            &[("A", "\nlocal cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU")]
+        )
+        .unwrap_err()
+        .contains("MissingReference:")
+    );
+}
+
+#[test]
+fn renode_using_reference_nested() {
+    check_reference_imports(
+        "\nusing \"A\"\ncpu3: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu2",
+        &[
+            (
+                "A",
+                "\nusing \"B\"\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu1",
+            ),
+            ("B", "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU"),
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn renode_using_reference_reverse() {
+    check_reference_imports(
+        "\nusing \"A\"\notherCpu: Antmicro.Renode.UnitTests.Mocks.MockCPU",
+        &[(
+            "A",
+            "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: otherCpu",
+        )],
+    )
+    .unwrap();
+}
