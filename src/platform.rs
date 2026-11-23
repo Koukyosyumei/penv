@@ -478,36 +478,7 @@ fn list_prefix(input: &str, depth: usize) -> Result<(Vec<ListItem<'_>>, &str), &
                 let (values, tail) = list_prefix(input, depth + 1)?;
                 (ListItem::List(values), tail)
             }
-            Some(b'"') => {
-                let (value, tail) = quoted_prefix(input)?;
-                (ListItem::String(value), tail)
-            }
-            Some(b'<') => {
-                let end = input.find('>').ok_or("expected end of REPL range")? + 1;
-                let (base, size) = range_value(&input[..end])?;
-                (ListItem::Range(base, size), &input[end..])
-            }
-            _ => {
-                let end = input
-                    .find(|c: char| c.is_whitespace() || c == ',' || c == ']')
-                    .unwrap_or(input.len());
-                let (value, tail) = input.split_at(end);
-                let item = if let Some(symbol) = symbolic_value(value) {
-                    ListItem::Symbol(symbol)
-                } else if value.parse::<f64>().is_ok_and(f64::is_finite)
-                    || value
-                        .trim_start_matches(['+', '-'])
-                        .strip_prefix("0x")
-                        .is_some_and(|digits| {
-                            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
-                        })
-                {
-                    ListItem::Number(value)
-                } else {
-                    return Err("expected REPL list value");
-                };
-                (item, tail)
-            }
+            _ => scalar_prefix(input)?,
         };
         items.push(item);
         let tail = tail.trim_start();
@@ -519,6 +490,42 @@ fn list_prefix(input: &str, depth: usize) -> Result<(Vec<ListItem<'_>>, &str), &
             return Err("expected comma or closing bracket in REPL list");
         }
     }
+}
+
+fn scalar_prefix(input: &str) -> Result<(ListItem<'_>, &str), &'static str> {
+    let parsed = match input.as_bytes().first() {
+        Some(b'"') => {
+            let (value, tail) = quoted_prefix(input)?;
+            (ListItem::String(value), tail)
+        }
+        Some(b'<') => {
+            let end = input.find('>').ok_or("expected end of REPL range")? + 1;
+            let (base, size) = range_value(&input[..end])?;
+            (ListItem::Range(base, size), &input[end..])
+        }
+        _ => {
+            let end = input
+                .find(|c: char| c.is_whitespace() || c == ',' || c == ']')
+                .unwrap_or(input.len());
+            let (value, tail) = input.split_at(end);
+            let item = if let Some(symbol) = symbolic_value(value) {
+                ListItem::Symbol(symbol)
+            } else if value.parse::<f64>().is_ok_and(f64::is_finite)
+                || value
+                    .trim_start_matches(['+', '-'])
+                    .strip_prefix("0x")
+                    .is_some_and(|digits| {
+                        !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+                    })
+            {
+                ListItem::Number(value)
+            } else {
+                return Err("expected REPL scalar value");
+            };
+            (item, tail)
+        }
+    };
+    Ok(parsed)
 }
 
 fn dictionary_value(value: &str) -> Result<Vec<(&str, &str)>, String> {
@@ -565,6 +572,12 @@ fn dictionary_value(value: &str) -> Result<Vec<(&str, &str)>, String> {
             .ok_or_else(|| unexpected(tail))?
             .trim_start();
         let (value, tail) = token(value)?;
+        for scalar in [key, value] {
+            let (_, tail) = scalar_prefix(scalar).map_err(str::to_owned)?;
+            if !tail.is_empty() {
+                return Err(unexpected(tail));
+            }
+        }
         items.push((key, value));
         if let Some(rest) = tail.strip_prefix(';') {
             input = rest.trim_start();
@@ -721,8 +734,15 @@ fn parse_text(
                     }
                 }
                 property.push('}');
-                let (_, value) = property.split_once(':').unwrap();
-                object_prefix(value.trim()).map_err(error)?;
+            }
+            if let Some((_, value)) = property.split_once(':')
+                && value.trim().starts_with("new ")
+                && value.contains('{')
+            {
+                let (_, tail) = object_prefix(value.trim()).map_err(error)?;
+                if !tail.trim().is_empty() {
+                    return Err(error("unexpected text after REPL object"));
+                }
             }
             current
                 .as_mut()
@@ -2645,6 +2665,115 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    #[test]
+    fn upstream_parse_entry_with_all_attributes() {
+        let entries = parse(
+            r#"
+uart:
+    model: "ABC666"
+    numberOfBits: 32
+    sleepTime: 0.01
+    friendUart: otherUart
+    range: <0x1000, +0x100>
+"#,
+        )
+        .unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        let attributes = entry
+            .body
+            .iter()
+            .map(|(_, line)| {
+                let (name, value) = line.split_once(':').unwrap();
+                let (value, tail) = scalar_prefix(value.trim()).unwrap();
+                assert!(tail.is_empty());
+                (name, value)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            attributes,
+            [
+                ("model", ListItem::String("ABC666".into())),
+                ("numberOfBits", ListItem::Number("32")),
+                ("sleepTime", ListItem::Number("0.01")),
+                (
+                    "friendUart",
+                    ListItem::Symbol(SymbolicValue::Reference("otherUart"))
+                ),
+                ("range", ListItem::Range(0x1000, 0x100)),
+            ]
+        );
+    }
+
+    #[test]
+    fn upstream_parse_example() {
+        let entries = parse(
+            r#"
+screen: Display@graphicsCard1
+    resolution: new Point { x: 5; y: 6 }
+    refreshMode: Automatic
+    model: "SuperDisplay"
+    -> ic@3
+    init:
+        DrawCircle 20 20
+        DrawCircle 30 40
+
+screen:
+    init:
+        DrawRect 40 50 1
+
+screen:
+    init:
+        base init
+        DrawRect 40 50 1
+
+other: Display @ sysbus <0x0, +0x100> { refreshMode: Automatic; -> ic@3 }
+"#,
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 4);
+    }
+
+    #[test]
+    fn upstream_parse_using_and_entry() {
+        let source = "\nusing \"other_file\"\n\ndevice: SomeDevice";
+        let directory =
+            std::env::temp_dir().join(format!("penv-using-and-entry-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("other_file"), "").unwrap();
+        let mut entries = Vec::new();
+        let parsed = parse_text(
+            source,
+            &directory.join("main.repl"),
+            &directory,
+            &directory,
+            &mut HashSet::new(),
+            &mut entries,
+        );
+        fs::remove_dir_all(&directory).unwrap();
+        parsed.unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        assert_eq!(
+            using_path(
+                source
+                    .lines()
+                    .nth(1)
+                    .unwrap()
+                    .strip_prefix("using ")
+                    .unwrap()
+            )
+            .unwrap(),
+            "other_file"
+        );
+        assert_eq!(
+            (entry.name.as_str(), entry.model.as_str()),
+            ("device", "SomeDevice")
+        );
     }
 
     #[test]

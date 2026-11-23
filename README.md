@@ -1260,3 +1260,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 147件に STM32H7 と LiteX の双方向 Ethernet 回帰を含みます。固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF も通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-objects.NqbMFJGf` に保存しました。対象786件のうち等価合格141件、部分検証10件、未達635件です。入れ子のオブジェクト属性、字下げ属性間の空行、一般の型の実行時インスタンス化は残っています。
+
+### backlog-network-964c2dda4c3b-1
+
+REPL のリストと辞書でスカラー値の解析を共有し、字下げ属性に書いたインラインオブジェクトの構文を検証します。固定上流 `ParserTests.cs` の残り3件を同じバイナリで実行し、型が混在する属性、登録・IRQ・init を含む複合例、`using` と宣言の組み合わせを照合しました。固定 `ParserTests.cs` の台帳66件が等価合格になりました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 150件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-parser-remaining.36hNSlvg` に保存しました。台帳全体は対象786件のうち等価合格144件、部分検証10件、未達632件です。汎用オブジェクトのインスタンス化、型付き参照の解決、ファイル単位のローカルスコープは残っています。
