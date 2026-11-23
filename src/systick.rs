@@ -1,5 +1,6 @@
 use crate::bus::CORTEX_M_STEP_HZ;
 
+pub const NMI: u8 = 2;
 pub const PENDSV: u8 = 14;
 pub const SYSTICK: u8 = 15;
 const CSR: u32 = 0xe000_e010;
@@ -16,6 +17,7 @@ pub struct SysTick {
     count_flag: bool,
     pending: bool,
     pendsv_pending: bool,
+    nmi_pending: bool,
     frequency: Option<u32>,
     phase: u64,
 }
@@ -69,11 +71,14 @@ impl SysTick {
     }
 
     pub fn pending_exceptions(&self) -> u64 {
-        (u64::from(self.pending) << SYSTICK) | (u64::from(self.pendsv_pending) << PENDSV)
+        (u64::from(self.pending) << SYSTICK)
+            | (u64::from(self.pendsv_pending) << PENDSV)
+            | (u64::from(self.nmi_pending) << NMI)
     }
 
     pub fn pending(&self, exception: u8) -> bool {
         match exception {
+            NMI => self.nmi_pending,
             PENDSV => self.pendsv_pending,
             SYSTICK => self.pending,
             _ => false,
@@ -82,6 +87,7 @@ impl SysTick {
 
     pub fn acknowledge(&mut self, exception: u8) {
         match exception {
+            NMI => self.nmi_pending = false,
             PENDSV => self.pendsv_pending = false,
             SYSTICK => self.pending = false,
             _ => unreachable!(),
@@ -94,7 +100,11 @@ impl SysTick {
             RELOAD => self.reload,
             CURRENT => self.current,
             CALIBRATION => 1 << 31, // No separate reference clock.
-            ICSR => (u32::from(self.pending) << 26) | (u32::from(self.pendsv_pending) << 28),
+            ICSR => {
+                (u32::from(self.pending) << 26)
+                    | (u32::from(self.pendsv_pending) << 28)
+                    | (u32::from(self.nmi_pending) << 31)
+            }
             _ => return None,
         })
     }
@@ -121,6 +131,7 @@ impl SysTick {
                 if value & (1 << 28) != 0 {
                     self.pendsv_pending = true;
                 }
+                self.nmi_pending |= value & (1 << 31) != 0;
             }
             _ => return false,
         }

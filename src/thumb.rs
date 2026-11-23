@@ -6,7 +6,7 @@ use std::io::Write;
 use crate::{
     bus::Bus,
     nvic::Nvic,
-    systick::{PENDSV, SYSTICK},
+    systick::{NMI, PENDSV, SYSTICK},
 };
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -159,6 +159,7 @@ impl Thumb {
             4 => self.carry && !self.zero,
             5 => self.negative == self.overflow,
             6 => !self.zero && self.negative == self.overflow,
+            7 => true,
             _ => unreachable!(),
         };
         positive ^ (condition & 1 != 0)
@@ -384,7 +385,9 @@ impl Thumb {
             self.fp_active = extended;
             r[13] = stack.wrapping_add(frame_size as u32 + ((xpsr >> 7) & 4));
             r[14] = lr;
-            self.faultmask = false;
+            if self.active_exception != NMI {
+                self.faultmask = false;
+            }
             self.set_apsr(xpsr);
             self.itstate = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
             self.active_exception = previous as u8;
@@ -433,6 +436,13 @@ impl Thumb {
             self.signal_event();
         }
         self.pending = pending;
+        if pending & (1 << NMI) != 0 && self.active_exception != NMI {
+            *pc = self.exception_entry(NMI, *pc, r, bus)?;
+            self.sleep = Sleep::Running;
+            bus.systick.as_mut().unwrap().acknowledge(NMI);
+            self.pending &= !(1 << NMI);
+            return Ok(true);
+        }
         if self.faultmask || (self.interrupts_masked && self.sleep != Sleep::Interrupt) {
             return Ok(false);
         }
@@ -920,6 +930,9 @@ impl Thumb {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod it_upstream;
 
 #[cfg(test)]
 mod tests {
