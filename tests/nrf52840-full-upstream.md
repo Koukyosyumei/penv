@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 118 | 5 | 67 |
+| 監査した共有・混成 Robot | 190 | 119 | 5 | 66 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **135** | **5** | **81** |
+| 合計 | **221** | **136** | **5** | **80** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -378,3 +378,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/page-access-io.MGmulTNi/` の `cargo-test.verified`、`elf.verified`、`vtor`、`shell.verified` に保存した。
+
+### SP を使う Thumb-2 MOV.W
+
+`arm-cortex-m-mve.robot:1433–1448` の Cortex-M4 にも適用できるケースを移植した。固定の2命令で R0 が `0xFEEDC0D0`、SP が `0xBADCAFF0` になることを、Rust 回帰と生成 ELF で照合した。Rust 回帰は SP 書き込み時に下位2ビットがクリアされることも検証する。
+
+```sh
+cargo test
+tests/nrf52840-mov-sp-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/mov-sp"
+tests/nrf52840-bus-fault-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/bus-fault"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-mov-sp.ZWSzyTci/` の `cargo-test.final`、`elf`、`bus-fault`、`shell` に保存した。ArrayMemory と ITSTATE の保存・復元ケースは、ゲストメモリと CPU 状態を復元する機能が未達。

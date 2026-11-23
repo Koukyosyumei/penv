@@ -285,6 +285,10 @@ impl Thumb {
                     r[rn] = indexed;
                 }
             }
+            // MOV.W with SP shares the shifted-register ORR encoding.
+            0xea4f if low & 0xf0f0 == 0 && (rd == 13 || rm == 13) && rd < 15 && rm < 15 => {
+                r[rd] = if rd == 13 { r[rm] & !3 } else { r[rm] };
+            }
             0xea00..=0xea9f
                 if rt < 8
                     && rm < 15
@@ -756,5 +760,36 @@ mod tests {
             .step(&mut pc, &mut registers, &mut bus, &mut output)
             .unwrap();
         assert_eq!((pc, registers[1]), (12, 0xaa));
+    }
+    #[test]
+    fn upstream_mov_w_transfers_sp_as_an_unshifted_register() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = std::io::sink();
+        for (address, opcode) in [(0, 0xea4f), (2, 0x000d), (4, 0xea4f), (6, 0x0d01)] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        let mut thumb = Thumb::new(Some(0));
+        thumb.thumb2 = true;
+        let mut registers = [0; 32];
+        let mut pc = 0;
+        registers[13] = 0xfeedc0d0;
+        registers[1] = 0xbadcaff0;
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 8);
+        assert_eq!(registers[0], 0xfeedc0d0);
+        assert_eq!(registers[13], 0xbadcaff0);
+
+        pc = 4;
+        registers[1] |= 3;
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(registers[13], 0xbadcaff0);
     }
 }
