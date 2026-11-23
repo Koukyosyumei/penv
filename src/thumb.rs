@@ -28,6 +28,8 @@ pub(crate) struct ThumbBoundary {
     pub phase: InstructionBoundary,
     pub pc: u32,
     pub itstate: u8,
+    pub active_exception: u8,
+    pub exception_depth: u32,
 }
 
 #[derive(Clone, Default)]
@@ -606,6 +608,8 @@ impl Thumb {
             phase: InstructionBoundary::Begin,
             pc: *pc,
             itstate: self.itstate,
+            active_exception: self.active_exception,
+            exception_depth: self.active_exceptions.depth(),
         });
         let retired = self.step_fetched(inst, pc, r, bus, output)?;
         if retired {
@@ -613,6 +617,8 @@ impl Thumb {
                 phase: InstructionBoundary::End,
                 pc: *pc,
                 itstate: self.itstate,
+                active_exception: self.active_exception,
+                exception_depth: self.active_exceptions.depth(),
             });
         }
         Ok(retired)
@@ -1060,7 +1066,9 @@ mod tests {
                 ThumbBoundary {
                     phase: Begin,
                     pc: 0x1000 + (step % 4) as u32 * 2,
-                    itstate: 0
+                    itstate: 0,
+                    active_exception: 0,
+                    exception_depth: 0,
                 }
             );
             assert_eq!(
@@ -1068,7 +1076,9 @@ mod tests {
                 ThumbBoundary {
                     phase: End,
                     pc: 0x1000 + ((step + 1) % 4) as u32 * 2,
-                    itstate: 0
+                    itstate: 0,
+                    active_exception: 0,
+                    exception_depth: 0,
                 }
             );
         }
@@ -1276,6 +1286,48 @@ mod tests {
             (0xffff_fff8, 0x7e0, 16)
         );
         assert_eq!(bus.read_ram::<4>(0x7e0 + 24).unwrap(), 0x20);
+    }
+
+    #[test]
+    fn profiler_boundaries_report_nested_context_depth() {
+        let mut bus = Bus::default();
+        let mut out = std::io::sink();
+        bus.map_ram(0, 0x4000).unwrap();
+        bus.write(0x38, 4, 0x1001, &mut out).unwrap(); // PendSV vector
+        bus.write(0x14, 4, 0x1201, &mut out).unwrap(); // Nested BusFault vector
+        bus.write(0x2000, 2, 0xbf00, &mut out).unwrap();
+        bus.write(0x1000, 2, 0x4770, &mut out).unwrap();
+        bus.write(0x1200, 2, 0x4770, &mut out).unwrap();
+
+        let mut thumb = Thumb::new(Some(0));
+        let mut regs = [0; 32];
+        regs[13] = 0x4000;
+        let mut pc = 0x2000;
+        let mut events = Vec::new();
+        let mut step = |thumb: &mut Thumb, pc: &mut u32, regs: &mut [u32; 32], bus: &mut Bus| {
+            assert!(
+                thumb
+                    .step_with_boundaries(pc, regs, bus, &mut out, |event| events.push(event))
+                    .unwrap()
+            );
+        };
+        step(&mut thumb, &mut pc, &mut regs, &mut bus);
+        pc = thumb
+            .exception_entry(PENDSV, pc, &mut regs, &mut bus)
+            .unwrap();
+        pc = thumb.exception_entry(5, pc, &mut regs, &mut bus).unwrap();
+        step(&mut thumb, &mut pc, &mut regs, &mut bus);
+        step(&mut thumb, &mut pc, &mut regs, &mut bus);
+
+        let contexts: Vec<_> = events
+            .iter()
+            .map(|e| (e.active_exception, e.exception_depth))
+            .collect();
+        assert_eq!(
+            contexts,
+            [(0, 0), (0, 0), (5, 2), (PENDSV, 1), (PENDSV, 1), (0, 0)]
+        );
+        assert_eq!(pc, 0x2002);
     }
 
     #[test]
