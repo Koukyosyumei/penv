@@ -1,14 +1,19 @@
 #!/bin/sh
 # ArduCAMMini2MPPlus.robot and LSM9DS1.robot on the upstream Nano 33 BLE REPL.
 set -eu
-if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 PENV RENODE_ROOT ARTIFACT_DIR" >&2
+if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
+    echo "Usage: $0 PENV RENODE_ROOT ARTIFACT_DIR [CASE]" >&2
     exit 1
 fi
 
 penv=$1
 root=$2
 out=$3
+selected=${4:-all}
+case "$selected" in
+    all|person_image_0|person_image_1|no_person_image_0|no_person_image_1|circle|angle) ;;
+    *) echo "Unknown Nano 33 BLE case: $selected" >&2; exit 1 ;;
+esac
 steps=${PENV_NANO33_MAX_STEPS:-1500000000}
 mkdir -p "$out"
 base=https://dl.antmicro.com/projects/renode
@@ -29,16 +34,22 @@ run() {
     shift
     status=0
     "$penv" run --platform "$board" --platform-root "$root" --max-steps "$steps" "$@" >"$log" 2>&1 || status=$?
+    printf '%s\n' "$status" >"${log%.log}.status"
     cat "$log"
     [ "$status" -eq 0 ] || [ "$status" -eq 2 ]
 }
 
 camera=$out/person-detection.elf
 wand=$out/magic-wand.elf
-fetch nrf52840--tf_person_detection.elf-s_7574264-cf1fccf46719c4a60e0df957a1304f17c5647011 "$camera"
-fetch arduino_nano_33_ble--tf_magic_wand.elf-s_7482772-5722cd8b1dd7b040366cbc259f5175b62aa4496c "$wand"
+case "$selected" in
+    all|*person_image_*) fetch nrf52840--tf_person_detection.elf-s_7574264-cf1fccf46719c4a60e0df957a1304f17c5647011 "$camera" ;;
+esac
+case "$selected" in
+    all|circle|angle) fetch arduino_nano_33_ble--tf_magic_wand.elf-s_7482772-5722cd8b1dd7b040366cbc259f5175b62aa4496c "$wand" ;;
+esac
 failed=0
 while read -r name bytes hash expected; do
+    [ "$selected" = all ] || [ "$selected" = "$name" ] || continue
     image=$out/$name.jpg
     log=$out/$name.log
     fetch "images/$name.jpg-s_$bytes-$hash" "$image"
@@ -83,6 +94,7 @@ CASES
 
 steps=${PENV_NANO33_MAX_STEPS:-400000000}
 while read -r motion marker; do
+    [ "$selected" = all ] || [ "$selected" = "$motion" ] || continue
     log=$out/$motion.log
     if run "$log" --lsm9ds1-samples "$root/tests/peripherals/${motion}_rotated.data" "$wand" &&
         awk -v marker="$marker" '/Magic starts/ { started = 1 } started && index($0, marker) { found = 1; exit } END { exit !found }' "$log"

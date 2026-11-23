@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 138 | 8 | 44 |
+| 監査した共有・混成 Robot | 190 | 142 | 4 | 44 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **169** | **8** | **44** |
+| 合計 | **221** | **173** | **4** | **44** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -103,7 +103,7 @@ tests/nrf52840-watchdogs-upstream.sh target/release/penv ../renode /tmp/nrf52-wa
 
 追加テストの ELF は公開ファイルの SHA-1 を照合する。Alarm の `--uart-steps` は仮想ステップを表示し、100,000,000 ステップを仮想 1 秒として判定する。全件ランナーと全件合格ログは未完成。監査時は Zephyr UARTE Shell のリセット前後の応答と、Q15 の `PROJECT EXECUTION SUCCESSFUL` を元の ELF で再確認した。Q15 は `nrf52840-board-extra.sh` と同じ 45,000,000 ステップ上限を使用した。
 
-Nano 33 BLE は未変更の上流 REPL を使用する。ArduCAM の 4 画像は最後のスコア行と差分の閾値、LSM9DS1 の 2 入力は起動後の認識行が必要。スコアや認識行を欠く実行はランナーが失敗として報告する。上表の画像スコアは SPI の CS 判定を追加する前のログに基づく。追加後は `person_image_0.jpg` でキャプチャからデコードまで確認し、4 画像のスコア再確認は残る。
+Nano 33 BLE は未変更の上流 REPL を使用する。ArduCAM の 4 画像は最後のスコア行と差分の閾値、LSM9DS1 の 2 入力は起動後の認識行が必要。スコアや認識行を欠く実行はランナーが失敗として報告する。上表の差分は SPI の CS 判定付きのモデルでも全4画像で一致した。再検証の UART ログと終了状態は末尾の「Nano 33 BLE の ArduCAM 固定画像」を参照。
 
 ## Watchdog の時刻と UART 判定
 
@@ -518,3 +518,25 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 Cortex-M4 への部分移植では、1 ms ごとに SysTick と DWT の停止・再開・独立動作を照合した。リセットはマシン全体を対象とし、クロックゲートの保持、カウンターのリセット値、CPU 停止中の命令実行数ゼロを確認した。上流の個別リセットと1秒の Shell 実行区間は部分移植に含まない。テスト用 ELF は、同じゲスト命令列から DWT の MMIO 読み値が `Clocked True` で進み、`False` で停止することを検証する。DWT の実装範囲は `CYCCNTENA` と `CYCCNT`。
 
 ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/cortex-clocks.WAC6p7zO` の `atsamd51`、`cargo-test`、`elf`、`systick`、`shell` に保存した。
+
+### Nano 33 BLE の ArduCAM 固定画像
+
+未変更の上流 Nano 33 BLE REPL と SHA-1 を照合した固定の ELF・JPEG を用い、`ArduCAMMini2MPPlus.robot:45-56` の4入力を再検証した。現在の SPI チップセレクト判定を通して、各画像でキャプチャからデコード、分類までの UART 順序と、正例は差分 >100、負例は差分 <−100 を照合した。
+
+| 画像 | Person | No person | 差分 |
+|---|---:|---:|---:|
+| `person_image_0.jpg` | 223 | 92 | +131 |
+| `person_image_1.jpg` | 248 | 41 | +207 |
+| `no_person_image_0.jpg` | 67 | 237 | -170 |
+| `no_person_image_1.jpg` | 59 | 240 | -181 |
+
+```sh
+cargo test --locked
+cargo build --release --locked
+tests/nrf52840-nano33-upstream.sh "$PWD/target/release/penv" ../renode "$ARTIFACT_DIR/nano33"
+tests/nrf52840-shell.sh "$PWD/target/release/penv" ../renode "$SHELL_ELF"
+```
+
+Nano 33 BLE ランナーの第4引数に画像名（拡張子なし）または `circle` / `angle` を渡すと、該当ケースの UART ログとゲスト終了状態を個別に採取できる。全ケースを一括実行するときは第4引数を省略する。
+
+今回のログは `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/nano33-camera.3XmRAEZk` に保存した。`observed.tsv` と `*.observed.status` は、各ケースで上流の UART 判定を満たした時点の結果。観測成立後にゲストを停止したため、外側の固定ステップランナーの終了状態は観測結果と区別する。代表画像は `cases/person_image_0.log`、残る画像と LSM9DS1 の2ケースは `parallel/` 以下。全ケースで同じ release バイナリを使った。分類スコアの再確認待ちは解消した。全体台帳の残件は集計表を参照。
