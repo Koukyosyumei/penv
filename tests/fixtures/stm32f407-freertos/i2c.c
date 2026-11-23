@@ -81,7 +81,7 @@ void i2c1_error_irq(void)
 
 void firmware_i2c_test(void)
 {
-    I2C_CR2 = 16;   /* PCLK1 at the fixture's 16 MHz reset clock. */
+    I2C_CR2 = 16;   /* PCLK1 at the fixture's divided 16 MHz APB1 clock. */
     I2C_CCR = 80;   /* Standard-mode divider for 100 kHz. */
     I2C_TRISE = 17;
     I2C_CR1 = PE;

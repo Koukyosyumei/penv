@@ -14,6 +14,7 @@ use crate::{
     stm32f1_i2c::F1I2c,
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
+    stm32f4_rcc::F4Rcc,
     stm32f4_spi::F4Spi,
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
@@ -306,6 +307,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut stm32_uarts = Vec::new();
     let mut stm32_can = Vec::new();
     let mut watchdogs = Vec::new();
+    let mut f4_rcc = None;
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
@@ -390,6 +392,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.CombinedInput" => combiners.push(entry),
+            F4Rcc::MODEL => {
+                if f4_rcc.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32F4 RCC is supported"));
+                }
+            }
             F4Power::MODEL => {
                 keys(entry, &[])?;
                 machine
@@ -741,6 +748,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_stm32_usart(base, irq, layout)
                 .map_err(|e| uart.error(&e))?;
         }
+        if let Some(rcc) = f4_rcc {
+            configure_f4_rcc(rcc, &entries, &mut machine)?;
+        }
         machine
             .bus
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
@@ -792,6 +802,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(rcc) = f4_rcc {
+        return Err(rcc.error("STM32F4 RCC requires a Cortex-M CPU"));
     }
     if let Some(watchdog) = watchdogs.first() {
         return Err(watchdog.error("IWDG requires a Cortex-M CPU"));
@@ -1040,6 +1053,40 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_f4_rcc(rcc: &Entry, entries: &[Entry], machine: &mut Machine) -> Result<(), String> {
+    let mut rtc = None;
+    let mut timer9 = None;
+    for (_, text) in &rcc.body {
+        if let Some(name) = text.strip_prefix("rtcPeripheral:")
+            && rtc.is_none()
+        {
+            let target = entries
+                .iter()
+                .find(|target| {
+                    target.name == name.trim() && target.model == stm32h7_rtc_platform::RTC
+                })
+                .ok_or_else(|| rcc.error("expected an STM32F4 RTC reference"))?;
+            rtc = Some(target.address()?);
+        } else if let Ok(("Timer9Reset", name, "255")) = crate::stm32h7_board_platform::wire(text)
+            && timer9.is_none()
+        {
+            let target = entries
+                .iter()
+                .find(|target| {
+                    target.name == name && target.model == crate::stm32h7_timer::Timer::MODEL
+                })
+                .ok_or_else(|| rcc.error("expected Timer9Reset connected to an STM32 timer"))?;
+            timer9 = Some(target.address()?);
+        } else {
+            return Err(rcc.error("unsupported or duplicate STM32F4 RCC property or wiring"));
+        }
+    }
+    machine
+        .bus
+        .map_f4_rcc(F4Rcc::new(rcc.address()?, rtc, timer9))
+        .map_err(|error| rcc.error(&error))
 }
 
 fn configure_f1_i2c(

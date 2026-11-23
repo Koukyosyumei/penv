@@ -44,6 +44,10 @@ impl Timer {
         timer
     }
 
+    pub fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = frequency;
+    }
+
     pub fn reset(&mut self) {
         let irq = self.irq;
         *self = Self::new(self.base, self.frequency, self.limit, self.clock);

@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "task.h"
@@ -11,6 +13,16 @@
 #define IWDG_PR   (*(volatile uint16_t *)0x40003004)
 #define IWDG_RLR  (*(volatile uint16_t *)0x40003008)
 #define IWDG_SR   (*(volatile uint16_t *)0x4000300c)
+#define RCC(offset) REG(0x40023800U + (offset))
+#define RCC_CR RCC(0x00)
+#define RCC_PLLCFGR RCC(0x04)
+#define RCC_CFGR RCC(0x08)
+#define RCC_APB2RSTR RCC(0x24)
+#define RCC_AHB1ENR RCC(0x30)
+#define RCC_APB1ENR RCC(0x40)
+#define RCC_APB2ENR RCC(0x44)
+#define RCC_BDCR RCC(0x70)
+#define RCC_CSR RCC(0x74)
 #define PWR_CR    REG(0x40007000)
 #define PWR_CSR   REG(0x40007004)
 #define UART4_SR  REG(0x40004c00)
@@ -51,17 +63,19 @@ static void enable_irq(unsigned irq)
     NVIC_ISER(irq) = 1U << (irq % 32);
 }
 
-static void uart_init(void)
+static uint32_t uart_init(void)
 {
-    REG(0x40023830) = (1U << 21) | (1U << 2);  /* RCC AHB1ENR: DMA1, GPIOC */
+    RCC_AHB1ENR = (1U << 21) | (1U << 2);  /* RCC AHB1ENR: DMA1, GPIOC */
     /* RCC APB1ENR: PWR, CAN1/2, I2C1, UART4, SPI2/3, TIM2 */
-    REG(0x40023840) = (1U << 28) | (3U << 25) | (1U << 21) | (1U << 19) | (3U << 14) | 1U;
-    REG(0x40023844) = 1U << 12;  /* RCC APB2ENR: SPI1 */
-    (void)REG(0x40023844);
+    RCC_APB1ENR = (1U << 28) | (3U << 25) | (1U << 21) | (1U << 19) | (3U << 14) | 1U;
+    RCC_APB2ENR = (1U << 16) | (1U << 12);  /* TIM9, SPI1 */
+    (void)RCC_APB2ENR;
     REG(0x40020824) = 0x8800;    /* GPIOC AFRH: PC10/PC11 AF8 */
     REG(0x40020800) = 0xa00000;  /* GPIOC MODER: PC10/PC11 alternate function */
-    UART4_BRR = 139;             /* HSI 16 MHz, 115200 baud */
+    const uint32_t previous = UART4_CR1;
+    UART4_BRR = 139;             /* PCLK1 16 MHz, 115200 baud */
     UART4_CR1 = (1U << 13) | (1U << 3);  /* UE | TE */
+    return previous;
 }
 
 static void uart_char(char ch)
@@ -138,7 +152,7 @@ static void event_task(void *arg)
     unsigned timer_count = 0;
 
     // Transfer the prescaler, clear UIF from UG, then enable update IRQ.
-    TIM2_PSC = 15999;
+    TIM2_PSC = 31999;
     TIM2_ARR = 3;
     TIM2_EGR = TIM_UPDATE;
     TIM2_SR = 0;
@@ -183,6 +197,57 @@ static void power_test(void)
     PWR_CSR = 0;
     PWR_CR = VOS;
     configASSERT((PWR_CSR & BRE) == 0 && (PWR_CR & DBP) == 0);
+}
+
+static void clock_test(bool restarted)
+{
+    enum { HSEON = 1U << 16, HSERDY = 1U << 17, PLLON = 1U << 24, PLLRDY = 1U << 25,
+           IWDGRSTF = 1U << 29, RMVF = 1U << 24, DBP = 1U << 8, VOS = 1U << 14,
+           LSE_ON = 1, LSE_RDY = 2, RTC_LSE = 1U << 8, RTC_EN = 1U << 15, BDRST = 1U << 16 };
+    configASSERT(((RCC_CSR & IWDGRSTF) != 0) == restarted);
+    RCC_CSR = RMVF;
+    configASSERT((RCC_CSR & 0xfe000000U) == 0);
+    configASSERT((RCC_AHB1ENR & (1U << 21)) != 0 && (RCC_APB1ENR & 1U) != 0);
+
+    RCC_APB2ENR &= ~(1U << 12);
+    configASSERT(REG(0x40013010) == 0); /* Clock-gated SPI1 CRCPR */
+    RCC_APB2ENR |= 1U << 12;
+    configASSERT(REG(0x40013010) == 7);
+
+    REG(0x4001402c) = 123;
+    RCC_APB2RSTR = 1U << 16;
+    configASSERT(REG(0x4001402c) == 0);
+    RCC_APB2RSTR = 0;
+    configASSERT(REG(0x4001402c) == 0xffff);
+
+    RCC_BDCR = LSE_ON | RTC_LSE | RTC_EN;
+    configASSERT(RCC_BDCR == 0); /* PWR DBP is still clear. */
+    PWR_CR = VOS | DBP;
+    (void)PWR_CR;
+    RCC_BDCR = LSE_ON | RTC_LSE | RTC_EN;
+    while ((RCC_BDCR & LSE_RDY) == 0) {
+    }
+    REG(0x40002850) = 0xa1b2c3d4;
+    configASSERT(REG(0x40002850) == 0xa1b2c3d4);
+    RCC_BDCR = BDRST;
+    RCC_BDCR = 0;
+    RCC_BDCR = LSE_ON | RTC_LSE | RTC_EN;
+    configASSERT(REG(0x40002850) == 0);
+    RCC_BDCR = BDRST;
+    RCC_BDCR = 0;
+    PWR_CR = VOS;
+
+    // HSE 8 MHz / 8 x 192 / 6 gives 32 MHz. APB1 and APB2 divide by two.
+    RCC_CR |= HSEON;
+    while ((RCC_CR & HSERDY) == 0) {
+    }
+    RCC_PLLCFGR = 8U | (192U << 6) | (2U << 16) | (1U << 22) | (4U << 24);
+    RCC_CR |= PLLON;
+    while ((RCC_CR & PLLRDY) == 0) {
+    }
+    RCC_CFGR = (4U << 10) | (4U << 13) | 2U;
+    while ((RCC_CFGR & 0x0c) != 8U) {
+    }
 }
 
 struct worker {
@@ -240,21 +305,25 @@ void firmware_main(void)
     /* Check reset state before the firmware writes these peripheral registers. */
     const uint32_t systick = REG(0xe000e010);
     const uint32_t irq_enables = REG(0xe000e100) | REG(0xe000e104) | REG(0xe000e108);
-    const uint32_t uart_control = UART4_CR1;
-    uart_init();
+    const uint32_t clock_state = RCC_CFGR | (RCC_CR & 0x03030000U);
+    const uint32_t clock_gates = RCC_APB1ENR | RCC_APB2ENR;
+    const uint32_t uart_control = uart_init();
     configASSERT((systick & 3) == 0 && irq_enables == 0 && uart_control == 0);
     configASSERT(IWDG_PR == 4 && IWDG_RLR == 0xfff && IWDG_SR == 0);
-    if (watchdog_marker != 0) {
+    configASSERT(clock_state == 0 && clock_gates == 0);
+    const bool restarted = watchdog_marker != 0;
+    if (restarted) {
         configASSERT(watchdog_marker == WATCHDOG_FED);
         watchdog_marker = 0;
         uart_text("IWDG reboot: SRAM retained\n");
     }
     FLASH_ACR = 1;
     configASSERT((FLASH_ACR & 0xf) == 1);
-    FLASH_ACR = 0;  /* Restore zero wait states for HSI 16 MHz. */
     configASSERT((FLASH_CR & (1U << 31)) != 0);
     configASSERT(FLASH_RDP == 0xaa && (FLASH_NWRP & 0xfff) == 0xfff);
     uart_text("STM32F407 FreeRTOS " tskKERNEL_VERSION_NUMBER "\n");
+    clock_test(restarted);
+    uart_text("RCC PLL 32 MHz, RTC and TIM9 OK\n");
     power_test();
     uart_text("PWR ready OK\n");
     firmware_can_test();

@@ -1,7 +1,7 @@
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
-#define configCPU_CLOCK_HZ                     16000000UL
+#define configCPU_CLOCK_HZ                     32000000UL
 #define configTICK_RATE_HZ                     1000
 #define configTICK_TYPE_WIDTH_IN_BITS          TICK_TYPE_WIDTH_32_BITS
 #define configUSE_PREEMPTION                   1

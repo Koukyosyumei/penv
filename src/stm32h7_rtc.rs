@@ -155,6 +155,10 @@ impl Stm32Rtc {
         }
     }
 
+    pub fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = frequency;
+    }
+
     pub fn reset(&mut self) {
         let mut reset = Self::new(self.base, self.frequency, self.errata);
         reset.rcc_bound = self.rcc_bound;

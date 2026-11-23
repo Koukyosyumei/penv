@@ -37,6 +37,14 @@ impl F4Power {
         self.status &= BRE | BRR | SBF;
     }
 
+    pub fn reset_backup_regulator(&mut self) {
+        self.status &= !(BRE | BRR);
+    }
+
+    pub fn backup_unlocked(&self) -> bool {
+        self.control & DBP != 0
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

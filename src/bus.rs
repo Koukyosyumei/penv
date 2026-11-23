@@ -21,6 +21,7 @@ use crate::{
     stm32f1_i2c::F1I2c,
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
+    stm32f4_rcc::F4Rcc,
     stm32f4_spi::F4Spi,
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
@@ -106,6 +107,8 @@ pub struct Bus {
     h7_dma_mux: Vec<DmaMux>,
     f4_flash: Option<F4Flash>,
     f4_power: Option<F4Power>,
+    f4_rcc: Option<F4Rcc>,
+    f4_gated_ranges: Vec<(u32, u32)>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
     h7_rtc: Vec<Stm32Rtc>,
@@ -396,6 +399,82 @@ impl Bus {
         for device in &mut self.stm32_can {
             device.reset();
         }
+        if let Some(rcc) = &mut self.f4_rcc {
+            rcc.watchdog_reset();
+        }
+        self.refresh_f4_clocks();
+    }
+
+    pub fn map_f4_rcc(&mut self, rcc: F4Rcc) -> Result<(), String> {
+        self.check_peripheral_range(rcc.base, F4Rcc::SIZE)?;
+        self.f4_gated_ranges.extend(
+            self.stm32_uarts
+                .iter()
+                .map(|uart| (uart.base, uart.size()))
+                .chain(self.f4_power.iter().map(|pwr| (pwr.base, F4Power::SIZE)))
+                .chain(self.f4_spi.iter().map(|spi| (spi.base, F4Spi::SIZE)))
+                .chain(self.f1_i2c.iter().map(|i2c| (i2c.base, F1I2c::SIZE)))
+                .chain(self.stm32_can.iter().map(|can| (can.base, StmCan::SIZE)))
+                .chain(self.h7_gpio.iter().map(|gpio| (gpio.base, gpio.size)))
+                .chain(
+                    self.h7_timers
+                        .iter()
+                        .map(|timer| (timer.base, H7Timer::SIZE)),
+                )
+                .chain(self.h7_adc_dma.iter().map(|dma| (dma.base, AdcDma::SIZE)))
+                .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE))),
+        );
+        self.f4_rcc = Some(rcc);
+        self.refresh_f4_clocks();
+        Ok(())
+    }
+
+    fn f4_access_blocked(&self, address: u32) -> bool {
+        self.f4_rcc.as_ref().is_some_and(|rcc| {
+            self.f4_gated_ranges
+                .iter()
+                .any(|&(base, size)| address.wrapping_sub(base) < size && !rcc.enabled(base))
+        })
+    }
+
+    fn refresh_f4_clocks(&mut self) {
+        let Some(rcc) = &self.f4_rcc else { return };
+        if let Some(systick) = &mut self.systick {
+            systick.set_frequency(rcc.hclk());
+        }
+        for timer in &mut self.h7_timers {
+            if let Some(frequency) = rcc.timer_frequency(timer.base) {
+                timer.set_frequency(frequency);
+            }
+        }
+        if let Some(rtc) = self.h7_rtc.iter_mut().find(|rtc| rcc.rtc == Some(rtc.base))
+            && let Some(frequency) = rcc.rtc_frequency()
+        {
+            rtc.set_frequency(frequency);
+        }
+    }
+
+    fn write_f4_rcc(&mut self, address: u32, width: usize, value: u32) {
+        let rcc = self.f4_rcc.as_mut().unwrap();
+        let backup_unlocked = self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked);
+        rcc.write(address, width, value, backup_unlocked);
+        if rcc.timer9_in_reset()
+            && let Some(timer) = self
+                .h7_timers
+                .iter_mut()
+                .find(|timer| rcc.timer9 == Some(timer.base))
+        {
+            timer.reset();
+        }
+        if rcc.rtc_in_reset() {
+            if let Some(rtc) = self.h7_rtc.iter_mut().find(|rtc| rcc.rtc == Some(rtc.base)) {
+                rtc.reset();
+            }
+            if let Some(pwr) = &mut self.f4_power {
+                pwr.reset_backup_regulator();
+            }
+        }
+        self.refresh_f4_clocks();
     }
 
     pub fn map_f4_power(&mut self, base: u32) -> Result<(), String> {
@@ -582,12 +661,12 @@ impl Bus {
             reservations: &mut self.reservations,
         };
         for timer in &mut self.h7_timers {
-            if timer_clocked(control, timer) {
+            if timer_clocked(control, timer) && f4_clocked(self.f4_rcc.as_ref(), timer.base) {
                 timer.tick();
             }
         }
         for rtc in &mut self.h7_rtc {
-            if rtc_clocked(control, rtc) {
+            if rtc_clocked(control, rtc) && f4_clocked(self.f4_rcc.as_ref(), rtc.base) {
                 rtc.tick();
             }
         }
@@ -660,6 +739,10 @@ impl Bus {
             || self.litex_uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
+            })
+            || self.f4_rcc.as_ref().is_some_and(|device| {
+                let base = u64::from(device.base);
+                start < base + u64::from(F4Rcc::SIZE) && base < end
             })
             || self.f4_power.as_ref().is_some_and(|device| {
                 let base = u64::from(device.base);
@@ -844,7 +927,7 @@ impl Bus {
             }
             let mut exti_inputs = [0; 3];
             for uart in &self.stm32_uarts {
-                if uart.interrupt_pending() {
+                if f4_clocked(self.f4_rcc.as_ref(), uart.base) && uart.interrupt_pending() {
                     match uart.irq {
                         Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
                         Some(Stm32Irq::Exti(line)) => {
@@ -869,17 +952,30 @@ impl Bus {
                 .chain(
                     self.h7_rtc
                         .iter()
-                        .filter(|device| rtc_clocked(control, device))
+                        .filter(|device| {
+                            rtc_clocked(control, device)
+                                && f4_clocked(self.f4_rcc.as_ref(), device.base)
+                        })
                         .flat_map(Stm32Rtc::interrupts),
                 )
-                .chain(self.f4_spi.iter().filter_map(F4Spi::interrupt))
+                .chain(
+                    self.f4_spi
+                        .iter()
+                        .filter(|spi| f4_clocked(self.f4_rcc.as_ref(), spi.base))
+                        .filter_map(F4Spi::interrupt),
+                )
                 .chain(
                     self.h7_spi
                         .iter()
                         .filter(|spi| spi_clocked(control, spi))
                         .filter_map(Spi::interrupt),
                 )
-                .chain(self.f1_i2c.iter().flat_map(F1I2c::interrupts))
+                .chain(
+                    self.f1_i2c
+                        .iter()
+                        .filter(|i2c| f4_clocked(self.f4_rcc.as_ref(), i2c.base))
+                        .flat_map(F1I2c::interrupts),
+                )
                 .chain(
                     self.h7_i2c
                         .iter()
@@ -889,7 +985,10 @@ impl Bus {
                 .chain(
                     self.h7_timers
                         .iter()
-                        .filter(|timer| timer_clocked(control, timer))
+                        .filter(|timer| {
+                            timer_clocked(control, timer)
+                                && f4_clocked(self.f4_rcc.as_ref(), timer.base)
+                        })
                         .filter_map(H7Timer::interrupt),
                 )
             {
@@ -903,7 +1002,12 @@ impl Bus {
                 .iter()
                 .filter(|rng| rng_clocked(control, rng))
                 .filter_map(Rng::interrupt)
-                .chain(self.stm32_can.iter().flat_map(StmCan::interrupts))
+                .chain(
+                    self.stm32_can
+                        .iter()
+                        .filter(|can| f4_clocked(self.f4_rcc.as_ref(), can.base))
+                        .flat_map(StmCan::interrupts),
+                )
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
                 .chain(
                     self.h7_qspi
@@ -914,7 +1018,10 @@ impl Bus {
                 .chain(
                     self.h7_adc_dma
                         .iter()
-                        .filter(|device| dma_clocked(control, device))
+                        .filter(|device| {
+                            dma_clocked(control, device)
+                                && f4_clocked(self.f4_rcc.as_ref(), device.base)
+                        })
                         .flat_map(AdcDma::interrupts),
                 )
             {
@@ -1041,7 +1148,9 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.litex_uart.as_mut() {
             uart.queue_input(bytes);
-        } else if let Some(uart) = self.stm32_uarts.first_mut() {
+        } else if let Some(uart) = self.stm32_uarts.first_mut()
+            && f4_clocked(self.f4_rcc.as_ref(), uart.base)
+        {
             uart.queue_input(bytes);
         }
     }
@@ -1180,6 +1289,16 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if address as usize & (N - 1) == 0 {
+            if let Some(rcc) = &self.f4_rcc
+                && rcc.contains(address)
+            {
+                return Ok(rcc.read(address, N));
+            }
+            if self.f4_access_blocked(address) {
+                return Ok(0);
+            }
+        }
         if N == 4
             && address & 3 == 0
             && let Some(uart) = self.uart.as_mut()
@@ -1504,6 +1623,17 @@ impl Bus {
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));
         }
+        if self
+            .f4_rcc
+            .as_ref()
+            .is_some_and(|rcc| rcc.contains(address))
+        {
+            self.write_f4_rcc(address, width, value);
+            return Ok(());
+        }
+        if self.f4_access_blocked(address) {
+            return Ok(());
+        }
         if width == 4
             && let Some(device) = self.uart.as_mut()
             && device.contains(address)
@@ -1785,7 +1915,10 @@ impl Bus {
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
-            if rtc_clocked(self.h7_network_control.as_ref(), rtc) {
+            if rtc_clocked(self.h7_network_control.as_ref(), rtc)
+                && (self.f4_rcc.as_ref().and_then(|rcc| rcc.rtc) != Some(rtc.base)
+                    || self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked))
+            {
                 rtc.write(address, value);
             }
             return Ok(());
@@ -1793,6 +1926,7 @@ impl Bus {
         if let Some(spi) = self.f4_spi.iter_mut().find(|spi| spi.contains(address)) {
             spi.write(address, width, value);
             if let Some(target) = spi.dma
+                && f4_clocked(self.f4_rcc.as_ref(), target.base)
                 && let Some(value) = spi.dma_value()
                 && request_h7_stream(
                     target,
@@ -1935,6 +2069,10 @@ fn request_h7_stream(
 
 fn crc_clocked(control: Option<&NetworkControl>, crc: &Stm32Crc) -> bool {
     !crc.rcc_bound || control.is_some_and(NetworkControl::crc_enabled)
+}
+
+fn f4_clocked(rcc: Option<&F4Rcc>, base: u32) -> bool {
+    rcc.is_none_or(|rcc| rcc.enabled(base))
 }
 
 fn timer_clocked(control: Option<&NetworkControl>, timer: &H7Timer) -> bool {

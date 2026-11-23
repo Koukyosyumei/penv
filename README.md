@@ -188,7 +188,8 @@ Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の�
 ボード定義だけを読み込む場合の阻害点は下記の「未変更の上流 REPL」で再現できます。
 FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
 TIM2（`0x40000000`、IRQ 28）、GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
-128 KiB メイン SRAM、SysTick はリセット時の HSI 16 MHz を使用します。
+128 KiB メイン SRAM を使用します。リセット時は HSI 16 MHz で、ファームウェアは
+RCC から SysTick を含む HCLK を 32 MHz に切り替えます。
 ファームウェアは PC10/PC11 の AF8 を設定し、UART4 から 115200 baud 設定で送信します。
 [`stm32f4_discovery.resc`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/stm32f4_discovery.resc)
 [`stm32f4.repl`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/stm32f4.repl)
@@ -225,6 +226,7 @@ target/release/penv run --script "$work/boot.resc" --max-steps 36000 \
 
 ```text
 STM32F407 FreeRTOS V11.1.0
+RCC PLL 32 MHz, RTC and TIM9 OK
 PWR ready OK
 CAN loopback OK
 SPI IRQ and DMA OK
@@ -251,11 +253,11 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 53 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 55 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `de1ac7adac04303e72dd99b5af83bb28ae50c22c2bf8ad0b99a12276a704a617` です。
+  SHA-256 は `aed6d0cde78ab12b70751275cb133d8d113d2e41ec42d4ec0232b977a8e2177e` です。
 
 ### CAN1/CAN2 のローカル検証
 
@@ -284,8 +286,8 @@ CWUF と CSBF は対応する状態フラグをクリアします。
 
 スモークテストの ELF は RCC の PWREN を設定し、DBP の保護、VOSRDY と BRR の
 ポーリング、BRE の解除を確認して `PWR ready OK` を表示します。続いて CAN、IRQ、
-キュー、UART4 の出力を全行照合します。検証用 REPL で PWR の MMIO は常にアクセス可能です。
-RCC のクロックゲートとリセット、RTC・バックアップ SRAM への DBP の伝播、
+キュー、UART4 の出力を全行照合します。PWR の MMIO は RCC の PWREN に従います。
+PWR の個別リセット、バックアップ SRAM への DBP の伝播、
 PVD・WKUP の入力、Stop/Standby 遷移、レギュレーターの安定化時間は残課題です。
 
 ### STM32F407 の SPI
@@ -303,7 +305,7 @@ DR、SR の順に読んでフラグが消えることを検査します。SPI2 �
 DMA1 の完了割り込み後に SRAM に並ぶことを、SPI3 では 16 ビットの `0x12ab` が戻る
 ことを確認します。すべて通過すると `SPI IRQ and DMA OK` を出力します。
 
-SPI は転送を同期完了として扱います。SCK/NSS とビット時間、RCC のクロックゲート、
+SPI は転送を同期完了として扱います。SCK/NSS とビット時間、
 スレーブ、片方向・受信専用モード、CRC 計算、I2S、ループバック以外の SPI 接続先、
 送信 DMA、DMA の CHSEL による要求の選択は残課題です。
 
@@ -325,7 +327,7 @@ NVIC 31/32、I2C2 は 33/34、I2C3 は 72/73 に配線します。旧世代レ�
 [Renode の ZynqMP エコーテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/zynqmp_linux.robot#L143)
 [Renode の Zedboard エコーテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/Zedboard.robot#L291)
 
-SCL/SDA の信号とタイミング、RCC クロックゲート、10 ビットアドレス、スレーブ動作、
+SCL/SDA の信号とタイミング、10 ビットアドレス、スレーブ動作、
 DMA、SMBus、バス仲裁、エコー以外の接続先は残課題です。
 
 ### STM32F407 の IWDG と FreeRTOS の再起動
@@ -361,8 +363,26 @@ target/release/penv run --script "$work/boot.resc" --max-steps 90000 \
     --uart-event "75000:$work/uart-x.txt" --uart-event "81000:$work/uart-yz.txt"
 ```
 
-IWDG の更新待ち状態、フラッシュオプションによる自動起動、デバッグ時停止、RCC の
-リセット原因フラグ、ボード全域のリセットは残課題です。
+IWDG の更新待ち状態、フラッシュオプションによる自動起動、デバッグ時停止、ボード全域のリセットは残課題です。
+
+### STM32F407 の RCC
+
+上流の `Miscellaneous.STM32F4_RCC` を `0x40023800` に登録し、`rtcPeripheral` と
+`Timer9Reset -> timer9@255` を既存の RTC/TIM モデルに接続します。RCC は HSI/HSE と
+主 PLL の選択・レディ状態、AHB/APB 分周、主要周辺機器のクロックゲートを扱います。
+SysTick は HCLK、TIM は対応する APB のタイマー周波数に追従します。RTC は BDCR で
+選んだクロックを使用し、BDRST でバックアップ領域をリセットします。
+[Renode の STM32F4_RCC モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/STM32F4_RCC.cs)
+[RM0090 の RCC 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f407-417-427-437-4x9-4a9-4x7-advanced-arm-based-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF は HSE 8 MHz から PLL で HCLK 32 MHz を生成し、APB1/APB2 を
+16 MHz に設定します。SPI1 のゲート、TIM9 のリセット、DBP による BDCR 保護、
+LSE による RTC の有効化とバックアップレジスターの消去を確認して
+`RCC PLL 32 MHz, RTC and TIM9 OK` を出力します。IWDG 再起動時には HSI とクロックゲートの
+初期状態、`RCC_CSR.IWDGRSTF`、`RMVF` によるフラグ消去を確認してから同じ設定を実行します。
+
+発振器の起動時間、PLL の電気的制約、IWDG による LSI の強制有効化、補助 PLL、RCC IRQ、
+低電力モードのクロック、TIM9 以外の個別周辺機器リセットは残課題です。
 
 ### 未変更の上流 REPL
 
@@ -389,16 +409,14 @@ target/release/penv run --script "$work/upstream.repro.resc" \
     --platform-root ../renode --max-steps 36000
 ```
 
-`10cea9f` では `stm32f4.repl:31` の CAN、`2fb7018` では 47 行目の PWR、
-`ddd976f` では 130 行目の SPI、`9348d9c` では 143 行目の I2C、
-`9bdf9d3` では 165 行目の `Timers.STM32_IndependentWatchdog` で停止しました。
-現在は IWDG の宣言を通過し、`stm32f4.repl:173: rcc: unsupported platform model "Miscellaneous.STM32F4_RCC"`
-で終了コード 1 になります。上流 REPL での ELF 起動には RCC 以降の対応が必要です。
+`d4512ad` では `stm32f4.repl:173` の `Miscellaneous.STM32F4_RCC` で停止しました。
+現在はその宣言を通過し、`stm32f4.repl:254: timer1: duplicate declarations and overrides are unsupported`
+で終了コード 1 になります。上流 REPL での ELF 起動には、タイマーの追加配線宣言以降の
+対応が必要です。
 
 残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
 浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの
 プログラム動作、消去の所要時間と IRQ、RDP の強制、キャッシュ動作は未実装です。
-検証用 REPL では RCC の有効化書き込みを定数応答モデルで受けます。PLL、クロックゲート、
 UART のビット時間や GPIO 信号線の動作は検証範囲外です。
 CAN の通常モードでのノード間通信、CAN ハブ、ビット時間、バス仲裁、ACK やエラーの
-生成、RCC による CAN のクロック制御は残課題です。
+生成は残課題です。
