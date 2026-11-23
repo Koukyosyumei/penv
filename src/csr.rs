@@ -132,6 +132,7 @@ pub struct Csr {
     pub a_extension: bool,
     pub c_extension: bool,
     pub embedded_base: bool,
+    pub sscofpmf: bool,
     status: u32,
     pub f_extension: bool,
     pub d_extension: bool,
@@ -170,6 +171,7 @@ impl Default for Csr {
             a_extension: false,
             c_extension: false,
             embedded_base: false,
+            sscofpmf: false,
             status: MPP,
             f_extension: false,
             d_extension: false,
@@ -433,6 +435,9 @@ impl Csr {
             0x305 => self.vector.unwrap_or(0),
             0x306 => self.counters.machine_enable,
             0x320 => self.counters.inhibit,
+            // Fixed Renode models these HPM event selectors as hardwired zero.
+            0x323..=0x33f => 0,
+            0x723..=0x73f | 0xda0 if self.sscofpmf => 0,
             0xb00 | 0xb80 => counter_half(self.counters.cycle, address & 0x80 != 0),
             0xb02 | 0xb82 => counter_half(self.counters.instret, address & 0x80 != 0),
             0xc00..=0xc02 | 0xc80..=0xc82 if self.counter_accessible(address) => {
@@ -562,6 +567,8 @@ impl Csr {
             0x106 if self.supervisor.is_some() => {
                 self.counters.supervisor_enable = value & COUNTER_ENABLE;
             }
+            0x323..=0x33f => {}
+            0x723..=0x73f if self.sscofpmf => {}
             0x320 => self.counters.inhibit = value & (CYCLE_ENABLE | INSTRET_ENABLE),
             0xb00 | 0xb80 => set_counter_half(&mut self.counters.cycle, value, address & 0x80 != 0),
             0xb02 | 0xb82 => {

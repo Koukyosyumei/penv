@@ -40,10 +40,13 @@ def main():
             for value in values
             if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*", value.lower())
         ]
-        smepmp = re.search(r"(?m)^    (RV32I_Smepmp)\s*$", extensions)
-        if not inputs or smepmp is None:
+        supported = re.findall(r"(?m)^    (RV32I_(?:Smepmp|Sscofpmf))\s*$", extensions)
+        if not inputs or set(supported) != {"RV32I_Smepmp", "RV32I_Sscofpmf"}:
             parser.error("the fixed valid-construction fixtures changed")
-        inputs.append(("riscv-extensions.robot", "Should Create CPUs With Supported ISAs", smepmp[1], None))
+        inputs.extend(
+            ("riscv-extensions.robot", "Should Create CPUs With Supported ISAs", cpu, None)
+            for cpu in supported
+        )
 
     args.output.mkdir(parents=True, exist_ok=False)
     results = []

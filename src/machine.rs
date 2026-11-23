@@ -538,6 +538,10 @@ impl Hart {
         self.bitmanip = extensions;
     }
 
+    pub fn set_sscofpmf(&mut self, enabled: bool) {
+        self.csr.sscofpmf = enabled;
+    }
+
     pub fn set_zacas(&mut self, enabled: bool) {
         self.zacas = enabled;
     }

@@ -678,3 +678,26 @@ python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evid
 上流等価合格は累計 115 件です。同じ構成スイートの残り 8 件は Sscofpmf、V、Zvfh、Zve のいずれかで CPU 作成が止まり、各診断を台帳と `extension-blockers.json` に記録しました。
 
 再現用 REPL、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-12c30a2-oE46Vc/` に保存しました。
+
+### 固定 Renode の RV32 Sscofpmf 構成と CSR
+
+固定 `riscv-extensions.robot` の `RV32I_Sscofpmf` は、変更前に未対応拡張として CPU 作成時に拒否されていました。変更後は CPU のみの固定フィクスチャで構成できます。固定 tlib の `arch/riscv/op_helper.c` に合わせて、`mhpmevent3–31` はゼロを返して書き込みを破棄し、`mhpmevent3h–31h` と読み取り専用の `scountovf` は拡張を有効にした場合だけアクセスできます。イベント計数やオーバーフロー割り込みは、この固定上流にも実装がありません。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/valid-rerun" --valid
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/invalid-rerun"
+for mode in enabled disabled; do
+  flags=()
+  if [[ $mode == enabled ]]; then flags=(-DENABLED); fi
+  riscv64-unknown-elf-gcc -march=rv32i_zicsr -mabi=ilp32 -nostdlib \
+    -Wl,-T,scripts/firmware/rv32-virt.ld "${flags[@]}" scripts/firmware/rv32-sscofpmf.S -o "$evidence/$mode.elf"
+  target/release/penv run --platform "$evidence/$mode.repl" \
+    --tohost 0x80001000 --max-steps 100 "$evidence/$mode.elf"
+done
+```
+
+有効構成 45 件、無効構成 5 件、Rust テスト 84 件、公開 M/S 特権 ELF 22 件、Smepmp の実 ELF が通過しました。Sscofpmf 専用の公開 ELF は取得済みツリーに見つからず、GCC でビルドした有効・無効の 2 プローブで読み戻しと例外を確認しました。台帳の上流等価合格は累計 116 件で、同じ構成スイートにはベクトル系 7 件が残っています。
+
+REPL、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-29543d0-ZFuha5/` に保存しました。

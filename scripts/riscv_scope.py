@@ -37,10 +37,10 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "outside", "outside", other_board
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
-    if filename == "riscv-extensions.robot" and parameter == "RV32I_Smepmp":
-        return "target", "ported", "fixed CPU-only RV32I_Smepmp fixture constructs without RAM or firmware"
+    if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:
+        return "target", "ported", f"fixed CPU-only {parameter} fixture constructs without RAM or firmware"
     if filename == "riscv-extensions.robot" and re.fullmatch(
-        r"RV32I_(?:Sscofpmf|V|Zvfh|Zve32[xf]|Zve64[xfd])", parameter
+        r"RV32I_(?:V|Zvfh|Zve32[xf]|Zve64[xfd])", parameter
     ):
         return "target", "blocked-cpu", f"fixed CPU-only fixture requires unsupported {parameter.split('_', 1)[1]}"
     if (filename, case) in {

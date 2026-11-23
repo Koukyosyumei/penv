@@ -888,6 +888,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         let mut zicond = false;
         let mut zacas = false;
         let mut smepmp = false;
+        let mut sscofpmf = false;
         let mut bitmanip = BitManip::default();
         let mut id = 0;
         let mut privilege_levels = (
@@ -922,12 +923,14 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     zicond = false;
                     zacas = false;
                     smepmp = false;
+                    sscofpmf = false;
                     let mut zfh = false;
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
                             "zacas" if !zacas => zacas = true,
+                            "sscofpmf" if !sscofpmf => sscofpmf = true,
                             "smepmp" if !smepmp => smepmp = true,
                             "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
@@ -1031,7 +1034,14 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     return Err(entry.error("Zacas requires the RV32 A extension"));
                 }
                 (
-                    multiply, atomic, compressed, embedded, zicond, zacas, smepmp, bitmanip,
+                    multiply,
+                    atomic,
+                    compressed,
+                    embedded,
+                    zicond,
+                    zacas,
+                    (smepmp, sscofpmf),
+                    bitmanip,
                     floating,
                 )
             },
@@ -1056,7 +1066,17 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         &(
             id,
             entry,
-            (multiply, atomic, compressed, embedded, zicond, zacas, smepmp, bitmanip, floating),
+            (
+                multiply,
+                atomic,
+                compressed,
+                embedded,
+                zicond,
+                zacas,
+                (smepmp, sscofpmf),
+                bitmanip,
+                floating,
+            ),
             pmp,
             (user, supervisor),
         ),
@@ -1079,6 +1099,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         hart.set_embedded_base(embedded);
         hart.set_zicond(zicond);
         hart.set_zacas(zacas);
+        hart.set_sscofpmf(sscofpmf);
         hart.set_bitmanip(bitmanip);
         if floating.0 {
             hart.enable_floating(floating.1, floating.2);
@@ -2092,6 +2113,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zacas"
                     | "zfh"
                     | "smepmp"
+                    | "sscofpmf"
             )
         }));
     }
@@ -2116,7 +2138,7 @@ type RiscvConfig<'a> = (
         bool,
         bool,
         bool,
-        bool,
+        (bool, bool),
         BitManip,
         (bool, bool, bool),
     ),
