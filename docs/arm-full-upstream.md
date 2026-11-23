@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 61 | 42 | 10 | 239 |
+| Renode Robot | 113 | 63 | 43 | 7 | 239 |
 | Renode Infrastructure NUnit | 134 | 111 | 5 | 18 | 9 |
-| 合計 | **247** | **172** | **47** | **28** | **248** |
+| 合計 | **247** | **174** | **48** | **25** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -567,4 +567,15 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-array-save-verification
 ```sh
 cargo test --locked renode_neonkey
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-neonkey-verification
+```
+
+## Collapsed Stack の出力上限
+
+固定上流 `profiler-trace.robot` の Collapsed Stack 操作を Cortex-M に移植した。`cpu EnableProfilerCollapsedStack "trace.txt" true 100` でファイルを開き、BL・BLX と BX LR・POP PC の戻りを追跡する。フレームはアドレス、重みは退役命令数で出す。上限を超える行は書かず、プロファイラーを解除してゲスト実行を続ける。上限を省略すると通常どおり行を書き続ける。
+
+上流と同じ100バイト、仮想0.001秒で上限制御2件を検証した。連続する3つの呼び出しを1000バイト制限で実行するケースも通過したが、インタープリタでは tlib の翻訳ブロック内の停止を観測できないため部分移植。Perfetto、Trace Event、シンボル名の解決、ネストした例外コンテキストは残件。
+
+```sh
+cargo test --locked renode_resc_collapsed_stack
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-collapsed-profile-verification
 ```

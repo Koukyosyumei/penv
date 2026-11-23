@@ -243,6 +243,91 @@ ram: Memory.MappedMemory @ sysbus 0
     fs::remove_dir_all(directory).unwrap();
 }
 
+fn run_collapsed_stack_profile(
+    fixture: &str,
+    limit: Option<usize>,
+    instructions: &[u16],
+    stack: &str,
+) {
+    let directory = std::env::temp_dir().join(format!(
+        "penv-collapsed-stack-{fixture}-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let mut firmware = vec![0; 0x20];
+    firmware[..8].copy_from_slice(&[0, 8, 0, 0, 0x21, 0, 0, 0]);
+    for instruction in instructions {
+        firmware.extend(instruction.to_le_bytes());
+    }
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("profile.resc");
+    let limit_arg = limit.map_or_else(String::new, |value| value.to_string());
+    fs::write(&script, format!(
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\ncpu EnableProfilerCollapsedStack \"trace.txt\" true {limit_arg}\nemulation RunFor \"0.001\"\n"
+    )).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "100000", "--script"])
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let profile = fs::read_to_string(directory.join("trace.txt")).unwrap();
+    assert!(profile.contains(stack), "{profile}");
+    if let Some(limit) = limit {
+        assert!(profile.len() <= limit);
+        assert_eq!(
+            output.stderr,
+            b"Profiler: Maximum file size exceeded, removing profiler\n"
+        );
+    } else {
+        assert!(profile.len() > 100);
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_collapsed_stack_stops_at_file_limit() {
+    run_collapsed_stack_profile(
+        "bounded",
+        Some(100),
+        &[0xf000, 0xf801, 0xe7fc, 0x4770],
+        "0x00000020;0x00000026",
+    );
+}
+
+#[test]
+fn renode_resc_collapsed_stack_is_unlimited_without_limit() {
+    run_collapsed_stack_profile(
+        "unlimited",
+        None,
+        &[0xf000, 0xf801, 0xe7fc, 0x4770],
+        "0x00000020;0x00000026",
+    );
+}
+
+#[test]
+fn renode_resc_collapsed_stack_disables_during_chained_calls() {
+    run_collapsed_stack_profile(
+        "chained",
+        Some(1000),
+        &[0xf000, 0xf800, 0xf000, 0xf800, 0xf000, 0xf800, 0xe7f8],
+        "0x00000020;0x00000024;0x00000028;0x0000002c",
+    );
+}
+
 #[test]
 fn renode_resc_array_memory_save_clear_load_restores_boot_state() {
     let directory = std::env::temp_dir().join(format!("penv-array-save-{}", std::process::id()));

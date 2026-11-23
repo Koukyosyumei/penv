@@ -40,6 +40,8 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
+    StopProfile(String),
     SaveMemory(PathBuf),
     ClearMemory,
     LoadMemory(PathBuf),
@@ -184,6 +186,14 @@ pub fn run(
             ));
         }
         let result = match &command.action {
+            Action::StartCollapsedProfile(cpu, path, flush, limit) => machine
+                .start_profile(cpu, path, *flush, *limit)
+                .map(|()| None),
+            Action::StopProfile(cpu) => machine
+                .cortex_m_cpu(cpu)
+                .map(|_| ())
+                .and_then(|()| machine.finish_profile())
+                .map(|()| None),
             Action::SaveMemory(path) => machine.save_memory_snapshot(path).map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
                 cleared = true;
@@ -837,6 +847,46 @@ fn execute(
             Some(Action::RtcMode(RtcMode::parse(resolve(mode)?)?))
         }
         ["machine", "RealTimeClockDateTime"] => Some(Action::RtcDateTime),
+        [target, "EnableProfilerCollapsedStack", ..] => {
+            let cpu = resolve(target)?;
+            let args = text
+                .split_once("EnableProfilerCollapsedStack")
+                .unwrap()
+                .1
+                .trim();
+            let (name, options) =
+                quoted_argument(args).ok_or("expected quoted profiler output path")?;
+            let path = script.parent().unwrap_or_else(|| Path::new(".")).join(name);
+            let mut options = options.split_whitespace();
+            let flush = options
+                .next()
+                .map(parse_tester_bool)
+                .transpose()?
+                .unwrap_or(false);
+            let limit = options
+                .next()
+                .map(|value| {
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| "invalid profiler file size limit")
+                })
+                .transpose()?;
+            if options.next().is_some() {
+                return Err("unsupported collapsed stack profiler options".into());
+            }
+            Some(Action::StartCollapsedProfile(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                path,
+                flush,
+                limit,
+            ))
+        }
+        [target, "DisableProfiler"] => {
+            let cpu = resolve(target)?;
+            Some(Action::StopProfile(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+            ))
+        }
         ["emulation", "CreateUartPtyTerminal", ..] => {
             let args = text.split_once("CreateUartPtyTerminal").unwrap().1.trim();
             let (name, args) = quoted_argument(args).ok_or("expected quoted terminal name")?;

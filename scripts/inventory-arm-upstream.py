@@ -576,6 +576,14 @@ def classify_robot(name, case, body, parameter):
             return PARTIAL, V6, "renode_resc_global_array_memory_above_32bit_preserves_guest_writes; same high address, RAM sizes, 0.001s and sequential 32-bit guest writes; Cortex-R8 context registration and JIT invalidation logging remain"
         return OUT, "per-core-registration.repl: RV64 / two CPUs and two clusters", "Assertions depend on per-core or cluster bus aliases, context-specific loads and registration/move rules"
     if name == "profiler-trace":
+        if case == "Should Stop Writing To File Collapsed Stack":
+            return PASS, F072, "renode_resc_collapsed_stack_stops_at_file_limit; same 100-byte cap, 0.001 virtual seconds and nonempty collapsed stacks"
+        if case == "Should Not Limit File Size":
+            return PASS, F072, "renode_resc_collapsed_stack_is_unlimited_without_limit; same 0.001 virtual seconds and output above 100 bytes without a limit"
+        if case == "Should Disable Profiler Inside Translation Block":
+            return PARTIAL, V6, "renode_resc_collapsed_stack_disables_during_chained_calls; three chained BLs, 1000-byte cap and safe completion; no tlib translation block in the interpreter"
+        if "Perfetto" in case or "Trace Event" in case:
+            return OPEN, V6, "Requires the corresponding Perfetto protobuf or Trace Event JSON exporter and format-specific finalization"
         if "PLAT_ARM" in body:
             return PARTIAL, V6, "renode_profiler_fixture_pendsv_dispatches_from_icsr; Cortex-M4 MPU nesting and profiler limit log missing"
         return OPEN, V6, "RV32I fixture uses ordinary calls/loops; trace format and file-size controls are ISA independent"

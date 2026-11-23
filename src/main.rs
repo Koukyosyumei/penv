@@ -1,5 +1,6 @@
 mod bus;
 mod clint;
+mod collapsed_profile;
 mod compressed;
 mod csr;
 mod event_trace;
@@ -452,6 +453,7 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    machine.finish_profile()?;
     if stats {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",

@@ -6,6 +6,7 @@ use std::{
 
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
+    collapsed_profile::CollapsedProfile,
     csr::{Csr, EXTERNAL},
     event_trace::{self, ExternalEvent, Recorder},
     rtc_clock::RtcClock,
@@ -29,6 +30,7 @@ pub struct Machine {
     adc_events: VecDeque<(u64, usize, f64)>,
     recorder: Option<Recorder>,
     replay: VecDeque<(u64, ExternalEvent)>,
+    profile: Option<CollapsedProfile>,
 }
 
 #[derive(Clone)]
@@ -192,6 +194,7 @@ impl Machine {
             adc_events: VecDeque::new(),
             recorder: None,
             replay: VecDeque::new(),
+            profile: None,
         }
     }
 
@@ -460,6 +463,31 @@ impl Machine {
         Ok(())
     }
 
+    pub fn start_profile(
+        &mut self,
+        cpu: &str,
+        path: &Path,
+        flush: bool,
+        limit: Option<u64>,
+    ) -> Result<(), String> {
+        let pc = self.cortex_m_monitor_cpu(cpu)?.pc;
+        if self.profile.is_some() {
+            return Err("CPU already has an active profiler".into());
+        }
+        self.profile = Some(
+            CollapsedProfile::new(path, pc, flush, limit)
+                .map_err(|e| format!("{}: {e}", path.display()))?,
+        );
+        Ok(())
+    }
+
+    pub fn finish_profile(&mut self) -> Result<(), String> {
+        if let Some(profile) = self.profile.take() {
+            profile.finish().map_err(|e| format!("profiler: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_until(limit, output, |_, _| false)
     }
@@ -529,8 +557,31 @@ impl Machine {
                 let (_, channel, volts) = self.adc_events.pop_front().unwrap();
                 self.bus.set_stm32f0_adc_input(channel, volts)?;
             }
+            let pc = hart.pc;
+            let profiled_instruction = if index == 0 && self.profile.is_some() {
+                self.bus.read_ram::<2>(pc).ok().map(|high| {
+                    let low = if (0xf000..=0xf7ff).contains(&high) {
+                        self.bus.read_ram::<2>(pc.wrapping_add(2)).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    (high as u16, low as u16)
+                })
+            } else {
+                None
+            };
             match hart.execute_step(&mut self.bus, elapsed_steps, output)? {
-                Step::Retired => retired += 1,
+                Step::Retired => {
+                    retired += 1;
+                    if index == 0
+                        && let Some(profile) = &mut self.profile
+                        && !profile
+                            .retired(pc, profiled_instruction, hart.pc)
+                            .map_err(|e| format!("profiler: {e}"))?
+                    {
+                        self.profile = None;
+                    }
+                }
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
             }
