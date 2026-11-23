@@ -12,6 +12,7 @@ pub struct Boot {
     pub image: Option<String>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    pub sd_cards: Vec<(String, String, u64)>,
 }
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
@@ -122,6 +123,23 @@ fn execute(
                 .strip_prefix('@')
                 .ok_or("expected @platform-path")?;
             boot.platform = Some(local_path(file, script, root));
+        }
+        ["machine", "SdCardFromFile", value, controller, capacity]
+        | [
+            "machine",
+            "SdCardFromFile",
+            value,
+            controller,
+            capacity,
+            "False" | "false",
+        ] if boot.platform.is_some() => {
+            let file = resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @SD-image-path")?;
+            let controller = controller.strip_prefix("sysbus.").unwrap_or(controller);
+            let capacity = crate::parse_address64(resolve(capacity)?)?;
+            boot.sd_cards
+                .push((file.to_string(), controller.to_string(), capacity));
         }
         ["sysbus", "LoadELF", value] if boot.platform.is_some() && boot.image.is_none() => {
             let file = resolve(value)?

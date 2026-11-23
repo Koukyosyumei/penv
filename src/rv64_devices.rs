@@ -8,6 +8,7 @@ use crate::{
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
     rv64_mpfs::{DdrMock, Sysreg},
+    rv64_mpfs_sd,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
@@ -18,6 +19,7 @@ pub struct Devices {
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
     pub read_only_words: Vec<(u32, u32)>,
+    pub mpfs_sd: Vec<rv64_mpfs_sd::Controller>,
     pub mpfs_ddr: Vec<DdrMock>,
     pub mpfs_sysreg: Option<Sysreg>,
     pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
@@ -130,6 +132,12 @@ impl Devices {
                 plic.line(uart.source, active);
             }
         }
+        if let Some(plic) = &mut self.plic {
+            for sd in &self.mpfs_sd {
+                let (source, pending) = sd.interrupt();
+                plic.line(source, pending);
+            }
+        }
         self.lines[hart] | self.plic.as_ref().map_or(0, |plic| plic.outputs(hart))
     }
 
@@ -186,6 +194,11 @@ impl Devices {
         {
             return Some(*value);
         }
+        for sd in &mut self.mpfs_sd {
+            if let Some(value) = sd.read(address, width) {
+                return Some(value);
+            }
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -235,6 +248,11 @@ impl Devices {
                 .any(|&(word, _)| word == address)
         {
             return Some(Ok(()));
+        }
+        for sd in &mut self.mpfs_sd {
+            if sd.write(address, width, value).is_some() {
+                return Some(Ok(()));
+            }
         }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| {

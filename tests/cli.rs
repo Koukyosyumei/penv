@@ -734,3 +734,103 @@ mac0: Network.CadenceGEM @ { sysbus 0x20110000; sysbus 0x28110000 }
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, [4, 4, 4]);
 }
+
+#[test]
+fn polarfire_resc_reads_a_sector_from_an_attached_sd_image() {
+    use std::io::Read;
+
+    let directory = std::env::temp_dir().join(format!("penv-polarfire-sd-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("polarfire.repl");
+    let raw = directory.join("sd-probe.bin");
+    let script = directory.join("sd-probe.resc");
+    let disk = directory.join("disk.img");
+    fs::write(
+        &board,
+        r#"cpu: CPU.RiscV64 @ sysbus
+    cpuType: "rv64i"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.NS16550 @ sysbus 0x10000000
+mmc: SD.MPFS_SDController @ sysbus 0x20008000
+"#,
+    )
+    .unwrap();
+    let sector = if let Some(path) = std::env::var_os("PENV_FIRE_SD_IMAGE") {
+        let mut sector = [0; 512];
+        fs::File::open(&path)
+            .unwrap()
+            .read_exact(&mut sector)
+            .unwrap();
+        fs::copy(path, &disk).unwrap();
+        sector
+    } else {
+        let sector = std::array::from_fn(|i| (i / 2) as u8);
+        fs::write(&disk, sector).unwrap();
+        sector
+    };
+    fs::write(
+        &script,
+        r#"$image?=@https://example.invalid/disk.img
+mach create
+machine LoadPlatformDescription @polarfire.repl
+machine SdCardFromFile $image mmc 0x100000000
+sysbus LoadBinary @sd-probe.bin 0x80000000
+cpu PC 0x80000000
+"#,
+    )
+    .unwrap();
+    let instructions: [u32; 32] = [
+        0x2000_82b7, // lui t0, 0x20008
+        0x1000_03b7, // lui t2, 0x10000
+        0x2242_ae03, // lw t3, 0x224(t0): present state
+        0x010e_5e13, // srli t3, t3, 16
+        0x01c3_8023, // sb t3, 0(t2)
+        0x2000_0313, // li t1, 512
+        0x2062_a223, // sw t1, 0x204(t0): block size
+        0x0230_0313, // li t1, 0x23
+        0x2262_aa23, // sw t1, 0x234(t0): status enable
+        0x2262_ac23, // sw t1, 0x238(t0): signal enable
+        0x0100_0313, // li t1, 0x10
+        0x2062_9623, // sh t1, 0x20c(t0): read direction, PIO
+        0x0000_1337, // lui t1, 1
+        0x1223_031b, // addiw t1, t1, 0x122
+        0x2062_9723, // sh t1, 0x20e(t0): CMD17, short response and data
+        0x0800_0e93, // li t4, 128
+        0x2202_ae03, // loop: lw t3, 0x220(t0): data port
+        0x01c3_8023, // sb t3, 0(t2)
+        0x008e_5e13, // srli t3, t3, 8
+        0x01c3_8023, // sb t3, 0(t2)
+        0x008e_5e13, // srli t3, t3, 8
+        0x01c3_8023, // sb t3, 0(t2)
+        0x008e_5e13, // srli t3, t3, 8
+        0x01c3_8023, // sb t3, 0(t2)
+        0xfffe_8e93, // addi t4, t4, -1
+        0xfc0e_9ee3, // bnez t4, loop
+        0x2302_ae03, // lw t3, 0x230(t0): interrupt flags
+        0x01c3_8023, // sb t3, 0(t2)
+        0x23c2_a823, // sw t3, 0x230(t0): clear interrupt flags
+        0x2302_ae03, // lw t3, 0x230(t0)
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0010_0073, // ebreak
+    ];
+    fs::write(
+        &raw,
+        instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "2000", "--script"])
+        .arg(script)
+        .arg("--asset-dir")
+        .arg(&directory)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, [&[0xf7], &sector[..], &[0x23, 0]].concat());
+}

@@ -7,6 +7,7 @@ use crate::{
     rv64_devices::{FallbackRange, MpfsCacheWayEnable, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
     rv64_mpfs::{DdrMock, Sysreg},
+    rv64_mpfs_sd,
     rv64_priv::Pmp,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
@@ -220,6 +221,36 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
         machine.bus.rv64_devices.uarts.push(uart);
     }
     for entry in &entries {
+        if entry.model == "SD.MPFS_SDController" && entry.registration.as_deref() != Some("none") {
+            let base = entry.address()?;
+            check_mapping(&machine, entry, base, rv64_mpfs_sd::Controller::SIZE)?;
+            let mut source = 0;
+            for (_, line) in &entry.body {
+                if let Some((output, target)) = line.split_once("->")
+                    && output.trim() == "IRQ"
+                {
+                    let (controller, pin) = endpoint(entry, target)?;
+                    let pin = number(entry, pin)?;
+                    if source != 0
+                        || !plic.is_some_and(|plic| plic.name == controller)
+                        || !(1..=sources).contains(&pin)
+                    {
+                        return Err(entry.error("invalid MPFS SD interrupt route"));
+                    }
+                    source = pin as usize;
+                }
+            }
+            machine
+                .bus
+                .rv64_devices
+                .mpfs_sd
+                .push(rv64_mpfs_sd::Controller::new(
+                    entry.name.clone(),
+                    base,
+                    source,
+                ));
+            continue;
+        }
         if entry.model == "Network.CadenceGEM" && entry.registration.as_deref() != Some("none") {
             map_gem_status(&mut machine, entry)?;
             continue;
@@ -616,6 +647,11 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
             .read_only_words
             .iter()
             .any(|&(address, _)| start < u64::from(address) + 4 && u64::from(address) < end);
+    let overlaps = overlaps
+        || devices.mpfs_sd.iter().any(|device| {
+            start < u64::from(device.base) + rv64_mpfs_sd::Controller::SIZE
+                && u64::from(device.base) < end
+        });
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
     }

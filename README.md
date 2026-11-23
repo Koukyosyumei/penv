@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナーと eMMC 選択まで到達。SD 起動と Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナーと eMMC 選択まで到達。公開 SD イメージの 1 セクター読み出しも確認。SD 起動と Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -274,7 +274,7 @@ rg -o 'https://[^[:space:]]+' "$fire_resc" | while IFS= read -r url; do
     printf '%s  %s\n' "${name##*-}" "$fire_assets/$name" | sha1sum -c - || exit 1
 done
 
-# 上流のスクリプトは 12 行目の SdCardFromFile で停止する。
+# 上流スクリプトの次の未対応 Monitor コマンドを確認する。
 target/release/penv run --script "$fire_resc" --platform-root ../renode \
   --asset-dir "$fire_assets" --max-steps 100000
 
@@ -298,7 +298,7 @@ done
 
 次の例外は L2 キャッシュ設定へのアトミックアクセスです。対象アドレスは上流 REPL の `SilenceRange` に含まれます。現在の Penv はこの範囲の通常ロード／ストアに対応し、`amoswap.d` はそこでストアアクセス例外（原因 7、`mtval=0x02010800`）になります。この段階の Fire の UART 出力は空です。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
 
-上流の `SdCardFromFile $image mmc 0x100000000` は、ファイルを裏付けにした公称容量 4 GiB の SD カードを `mmc` に接続します。永続化は既定で有効です。`mmc` は `0x20008000` にマップされる MPFS SD コントローラーで、PLIC の IRQ 88 と WakeupIRQ 89 に接続されます。Penv の RESC はこのコマンドで停止します。SD カードの接続、コントローラーの SD コマンド・データ転送・割り込み、上流 RESC が使う GPIO ボタンと起動用 Monitor コマンドは残課題です。Fire の OpenSBI、U-Boot、Linux は未到達です。[Renode SDCardExtensions](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/SDCardExtensions.cs) [Renode MPFS_SDController](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/MPFS_SDController.cs)
+上流の `SdCardFromFile $image mmc 0x100000000` は、ファイルを裏付けにした公称容量 4 GiB の SD カードを `mmc` に接続します。永続化は既定で有効です。`mmc` は `0x20008000` にマップされる MPFS SD コントローラーで、PLIC の IRQ 88 と WakeupIRQ 89 に接続されます。Penv の実装範囲と残課題は下の SD イメージ接続の節に記録しています。[Renode SDCardExtensions](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/SDCardExtensions.cs) [Renode MPFS_SDController](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/MPFS_SDController.cs)
 
 今回の `cargo test` は全 64 件が通過しました。CLI テスト `polarfire_sysreg_handles_hss_access_and_register_defaults` は HSS と同じオフセットへの書き込みと、PLL 状態およびクロック・ソフトリセットレジスターの読み戻しを確認します。
 
@@ -315,6 +315,17 @@ done
 Cadence GEM の Network Status は、両方のバスエイリアスで管理インターフェイスの idle ビットを返し、書き込みを無視します。さらに HSS の USB 初期化がアクセスする未定義の 32 ビットオフセット `0x3fc` は上流と同じく 0 を返し、書き込みを破棄します。GEM の送受信と USB 転送は未実装です。[Renode CadenceGEM](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Network/CadenceGEM.cs) [Renode MPFS_USB](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/USB/MPFS_USB.cs)
 
 前節の直接起動を `--max-steps 150000000` で実行すると、UART に HSS の展開成功、バージョン `0.99.36-BVF-0.3.0-2-g3d347fe`、`Attempting to select eMMC` が出ます。その後、e51 の `pc=0x0a0144c8` でファブリックのメディア選択 `0x4fffff00` への書き込みがストアアクセス例外になります。バナー内の OpenSBI 1.2 は HSS に組み込まれたバージョン表示です。ゲストの起動は未到達です。
+
+#### Fire の SD イメージ接続
+
+`SdCardFromFile $image mmc 0x100000000` を MPFS SD コントローラーへの読み出し専用の接続として実装しました。カード容量の検証、Present State の挿入状態、CMD0・CMD8 と単一セクターの CMD17 PIO 読み出し、完了ステータスの W1C を実装しています。容量末尾までのファイルに含まれない領域は 0 を返します。主 IRQ は REPL の PLIC 入力に接続します。書き込みと永続化、DMA、カード初期化のコマンド一式、WakeupIRQ は残課題です。
+
+```sh
+PENV_FIRE_SD_IMAGE="$(find "$fire_assets" -maxdepth 1 -name 'sdcard.img-s_*')" \
+  cargo test --test cli polarfire_resc_reads_a_sector_from_an_attached_sd_image
+```
+
+公開 SD イメージの先頭 512 バイトをゲストの CMD17 と UART 経由で取り出し、ファイルと一致することを確認しました。上流 RESC は `SdCardFromFile` を解析して次の未対応コマンド `SetGlobalQuantum` で停止します。完全な起動にはファブリックの SD/eMMC 選択と GPIO ボタンの配線、残りの SD コマンドとデータ転送、RESC のシンボルロードと CPU フックが必要です。Fire の U-Boot と Buildroot ログインは未到達です。
 
 ## Cortex-M0 / Cortex-M0+
 

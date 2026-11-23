@@ -18,6 +18,7 @@ mod rv64_devices;
 mod rv64_ethernet;
 mod rv64_float;
 mod rv64_mpfs;
+mod rv64_mpfs_sd;
 mod rv64_platform;
 mod rv64_priv;
 mod rv64_starfive;
@@ -318,6 +319,7 @@ fn run() -> Result<ExitCode, String> {
 
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
+    let mut sd_cards = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -348,6 +350,10 @@ fn run() -> Result<ExitCode, String> {
         for (value, address) in boot.binaries {
             let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
             binaries.push((path, u64::from(address)));
+        }
+        for (value, controller, capacity) in boot.sd_cards {
+            let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
+            sd_cards.push((path, controller, capacity));
         }
         boot_pcs = boot.boot_pcs;
     }
@@ -384,6 +390,18 @@ fn run() -> Result<ExitCode, String> {
                 Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
             }
         };
+        for (path, name, capacity) in &sd_cards {
+            let controller = machine
+                .bus
+                .rv64_devices
+                .mpfs_sd
+                .iter_mut()
+                .find(|sd| sd.name == *name)
+                .ok_or_else(|| format!("unknown MPFS SD controller {name:?}"))?;
+            controller
+                .attach(path, *capacity)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+        }
         if rv64 {
             machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));
         }
