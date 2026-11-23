@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 93 | 5 | 92 |
+| 監査した共有・混成 Robot | 190 | 94 | 5 | 91 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **110** | **5** | **106** |
+| 合計 | **221** | **111** | **5** | **105** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -183,7 +183,7 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
 
-BusFault の適用対象31ケースのうち26件が合格、1件が部分移植、4件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
+BusFault の適用対象31ケースのうち27件が合格、1件が部分移植、3件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
 
 ### 未マップのデータアクセス
 
@@ -240,3 +240,9 @@ BusFault の適用対象31ケースのうち26件が合格、1件が部分移植
 `arm-cortex-m-bus-fault.robot:826–908` の3ケースを移植した。NMI の復帰先が HardFault なら、読み出しに失敗したフレームの分だけ SP を進めて lockup に入る。BusFault にテールチェーンする2ケースでは、既存のフレームと EXC_RETURN を保持し、`UNSTKERR` と FPCA の解除を確認した。生成 ELF の `unstack-tail` と `unstack-tail-fp` では、上流 monitor の `FaultOnWrites false` と同じ値を REPL に指定する。Cortex-M4 の LR は Thread/MSP の対応値を使った。
 
 `cargo test` と上記の BusFault ELF・FPU・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/unstack-bus-fault.FJjkkUW4/` の `cargo-test.final`、`elf`、`fpu`、`shell` に保存した。遅延 FP 保存の障害、不正なリセット状態、復帰フレームの整合性エラーが残る。
+
+### 例外復帰時の RETPSR 整合性エラー
+
+`arm-cortex-m-bus-fault.robot:1015–1041` のケースを移植した。HardFault を中断した NMI で保存 xPSR をゼロにする上流の命令列を使い、`INVPC`、フレーム消費後の SP、HardFault の IPSR とアクティブ状態、HFSR、CPU とデバッガの DHCSR を照合した。追加の `retpsr.elf` は HardFault ハンドラから NMI をペンドし、CLI の lockup 到達を確認する。
+
+`cargo test` と上記の BusFault ELF・FPU・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/retpsr.oFDlA7Ct/` の `cargo-test.final`、`elf`、`fpu`、`shell` に保存した。遅延 FP 保存の2ケースと不正な初期 Thumb 状態の1ケースが未達。連続 BusFault の monitor ステップ境界は部分移植。

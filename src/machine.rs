@@ -941,6 +941,51 @@ mod tests {
         assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
     }
 
+    #[test]
+    fn upstream_retpsr_integrity_failure_locks_over_hard_fault() {
+        let mut machine = unstack_fixture(&[0x2000, 0x9007, 0x4770]);
+        let mut out = std::io::sink();
+        for (address, opcode) in [(0x200, 0x6802), (0x202, 0x2122), (0x204, 0xe7fe)] {
+            machine.bus.write(address, 2, opcode, &mut out).unwrap();
+        }
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        machine
+            .bus
+            .write(0xe000_ed28, 4, u32::MAX, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(4, &mut out).unwrap(), (Stop::Limit, 2));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 3)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 18);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
+    }
+
     fn check_unstack_tail_chain(fp: bool) {
         let mut machine = unstack_fixture(if fp {
             &[0xeeb0, 0x0a40, 0x4770]

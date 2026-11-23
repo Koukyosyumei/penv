@@ -478,3 +478,20 @@ ASM
     "$penv" run --platform "$out/unstack.repl" --max-steps 100 "$out/$label.elf" >"$out/$label.log" 2>&1
     printf '%s: all unstack fault checks passed\n' "$label"
 done
+
+# Robot 1015-1041: keep the HardFault/NMI setup, then corrupt RETPSR in NMI.
+sed -e '/^    ldr r0, =0x100020$/,+1d' \
+    -e '/^nmi:$/,$d' "$out/nmi-stacking-lockup.s" >"$out/retpsr.s"
+cat >>"$out/retpsr.s" <<'ASM'
+nmi:
+    movs r0, #0
+    str r0, [sp, #28]
+    bx lr
+ASM
+clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/retpsr.s" -o "$out/retpsr.o"
+ld.lld -N -Ttext=0 --entry=reset "$out/retpsr.o" -o "$out/retpsr.elf"
+status=0
+"$penv" run --platform "$out/bus-fault.repl" --max-steps 100 "$out/retpsr.elf" \
+    >"$out/retpsr.log" 2>&1 || status=$?
+[ "$status" -eq 2 ]
+grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/retpsr.log"

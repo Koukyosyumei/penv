@@ -11,6 +11,7 @@ use crate::{
 
 const HARD_FAULT: u8 = 3;
 const BUS_FAULT: u8 = 5;
+const USAGE_FAULT: u8 = 6;
 pub(crate) const LOCKUP_PC: u32 = 0xefff_fffe;
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -19,6 +20,12 @@ enum Sleep {
     Running,
     Interrupt,
     Event,
+}
+
+#[derive(Clone, Copy)]
+enum ReturnFault {
+    Unstack,
+    InvalidPc,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -47,7 +54,7 @@ pub struct Thumb {
     fp_active: bool,
     active_exception: u8,
     locked_up: bool,
-    unstack_fault_taken: bool,
+    return_fault_taken: bool,
     active_exceptions: u128,
     interrupts_masked: bool,
     sleep: Sleep,
@@ -293,7 +300,6 @@ impl Thumb {
     }
 
     fn no_coprocessor(&mut self, pc: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
-        const USAGE_FAULT: u8 = 6;
         self.synchronous_fault(USAGE_FAULT, None, pc, r, bus)
     }
 
@@ -481,19 +487,20 @@ impl Thumb {
         Ok(handler.unwrap_or(LOCKUP_PC))
     }
 
-    fn unstack_bus_fault(
+    fn exception_return_fault(
         &mut self,
+        fault: ReturnFault,
         target: u32,
         stack: u32,
-        frame_size: usize,
-        remaining: u128,
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<u32, String> {
         let nvic = bus
             .nvic
             .as_mut()
-            .ok_or("unstacking BusFault requires an NVIC")?;
+            .ok_or("exception return fault requires an NVIC")?;
+        let remaining = self.active_exceptions & !(1 << self.active_exception);
+        let frame_size = if target & 0x10 == 0 { 104 } else { 32 };
         if self.active_exception != NMI {
             self.faultmask = false;
         }
@@ -505,24 +512,31 @@ impl Thumb {
                 _ => (u16::from(nvic.priority(exception)) + 2, exception),
             })
             .unwrap_or(0);
-        let priority = nvic.priority(BUS_FAULT);
+        let (derived, enabled) = match fault {
+            ReturnFault::Unstack => (BUS_FAULT, nvic.bus_fault_enabled()),
+            ReturnFault::InvalidPc => (USAGE_FAULT, nvic.usage_fault_enabled()),
+        };
+        let priority = nvic.priority(derived);
         let blocked = matches!(previous, NMI | HARD_FAULT) || self.faultmask;
-        let configurable = nvic.bus_fault_enabled()
+        let configurable = enabled
             && !self.interrupts_masked
             && !blocked
             && (self.basepri == 0 || priority < self.basepri)
             && (previous == 0 || priority < nvic.priority(previous));
-        nvic.record_unstacking_bus_fault(!configurable && !blocked);
+        nvic.record_exception_return_fault(
+            matches!(fault, ReturnFault::InvalidPc),
+            !configurable && !blocked,
+        );
         self.active_exceptions = remaining;
         self.itstate = 0;
         self.sleep = Sleep::Running;
-        self.unstack_fault_taken = true;
+        self.return_fault_taken = true;
         if blocked {
             self.active_exception = previous;
             self.locked_up = true;
             nvic.lockup = true;
             nvic.set_active_exceptions(remaining);
-            let consumed = stack.wrapping_add(frame_size as u32);
+            let consumed = stack.wrapping_add(frame_size);
             if target & 4 != 0 {
                 self.psp = consumed;
             } else {
@@ -531,7 +545,7 @@ impl Thumb {
             return Ok(LOCKUP_PC);
         }
 
-        let exception = if configurable { BUS_FAULT } else { HARD_FAULT };
+        let exception = if configurable { derived } else { HARD_FAULT };
         self.active_exception = exception;
         self.active_exceptions |= 1 << exception;
         self.fp_active = false;
@@ -558,8 +572,13 @@ impl Thumb {
                 match bus.read_cortex_m_ram_or_mock_word(stack.wrapping_add(index as u32 * 4)) {
                     Ok(value) => *word = value,
                     Err(BusError::SlaveFault(_)) if self.thumb2 => {
-                        return self
-                            .unstack_bus_fault(target, stack, frame_size, remaining, r, bus);
+                        return self.exception_return_fault(
+                            ReturnFault::Unstack,
+                            target,
+                            stack,
+                            r,
+                            bus,
+                        );
                     }
                     Err(error) => return Err(error.to_string()),
                 }
@@ -571,6 +590,9 @@ impl Thumb {
             } else {
                 previous != 0 && previous < 80 && remaining & (1 << previous) != 0
             };
+            if !valid_mode && self.thumb2 {
+                return self.exception_return_fault(ReturnFault::InvalidPc, target, stack, r, bus);
+            }
             if xpsr & (1 << 24) == 0 || !valid_mode {
                 return Err(format!(
                     "invalid Cortex-M exception return frame: pc={pc:#x} xpsr={xpsr:#x} target={target:#x}"
@@ -815,7 +837,7 @@ impl Thumb {
             *pc = self.synchronous_fault(BUS_FAULT, Some(address), *pc, r, bus)?;
             return Ok(ThumbStep::Fault);
         }
-        if std::mem::take(&mut self.unstack_fault_taken) && result.is_ok() {
+        if std::mem::take(&mut self.return_fault_taken) && result.is_ok() {
             return Ok(ThumbStep::Fault);
         }
         result

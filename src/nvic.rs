@@ -186,8 +186,8 @@ impl Nvic {
         self.fault_enables & BUSFAULTENA != 0
     }
 
-    pub fn record_unstacking_bus_fault(&mut self, escalate: bool) {
-        self.cfsr |= 1 << 11; // UNSTKERR
+    pub fn record_exception_return_fault(&mut self, invalid_pc: bool, escalate: bool) {
+        self.cfsr |= if invalid_pc { 1 << 18 } else { 1 << 11 }; // INVPC or UNSTKERR
         if escalate {
             self.hfsr |= FORCED;
         }
