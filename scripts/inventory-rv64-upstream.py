@@ -225,6 +225,12 @@ def disposition(path, name, context):
         "Should Boot U-Boot", "Should Boot U-Boot With External PMP",
     }:
         return "pass", "Fixed two-machine StarLight assets and ordered UART boot assertions verified (rv64-starlight-boot.md)"
+    if path.name == "BeagleV-StarLight.robot" and name in {
+        "Should Provide Two Linux Machines With Ethernet Connection",
+        "Should Provide Two Linux Machines With Ethernet Connection With External PMP",
+        "Should Ping", "Should Ping With External PMP", "Should Ping Large Payload",
+    }:
+        return "pass", "Fixed StarLight firmware, UART input and two-guest ping assertions verified (rv64-starlight-network.md)"
     if path.name in BOARD:
         return "partial", "Existing CLI run; exact Robot semantics require audit"
     if path.name == "per-core-registration.robot":

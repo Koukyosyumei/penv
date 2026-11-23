@@ -250,7 +250,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | RV64 virt の Linux 起動（Penv 回帰） | `verify-rv64-virt.py`。OpenSBI v1.6、Linux 5.10.6 の `ttyS0`、UART の root 認証とコマンド出力を確認 |
 | Fire `Should Boot Buildroot From SD Card` | `verify-fire.py` で通過。公開 HSS と SD を元の RESC で起動し、OpenSBI v1.2、U-Boot 2023.07.02、Linux 6.6.35、UART の root ログイン、`uname -m` と `uname -n` を確認。さらにゲストから SD の先頭セクターを読み、公開イメージとの SHA-256 一致を確認 |
 
-StarLight の上流ケースは `verify-starlight.py --upstream-cases` で実行します。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
+StarLight の上流ケースは `verify-starlight.py --upstream-cases` で実行します。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux の追加コマンドと `eth0` IRQ は、同じスクリプトで `--upstream-cases` を省いた診断モードで検証します。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
 `monitor-tests.robot` にも Fire の REPL を使うケースがあります。配列プロパティ設定、`Select` の整形、スカラー型エラーを検証する Monitor ケースなので、UART 起動や RV64 CPU の優先ケースとは別に保留しました。[Renode monitor-tests.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/monitor-tests.robot)
 

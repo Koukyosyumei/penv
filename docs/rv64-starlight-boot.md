@@ -24,4 +24,4 @@ python3 scripts/verify-starlight.py "$assets" --upstream-boot-only --external-pm
 
 ## 残課題
 
-Linux ログインと Ethernet の固定ケースは引き続き部分移植。固定 RV64 メモリ値ケースの負数入力は共有 CLI で拒否されるため、再現手順と既存差分を `rv64-memory-values-73d7174.md` として ARM 担当の共有依頼キューに登録した。
+Linux ログインと Ethernet の固定ケースは [ネットワーク検証の記録](rv64-starlight-network.md) を参照。固定 RV64 メモリ値ケースの負数入力は共有 CLI で拒否されるため、再現手順と既存差分を `rv64-memory-values-73d7174.md` として ARM 担当の共有依頼キューに登録した。
