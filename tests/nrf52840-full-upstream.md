@@ -59,7 +59,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
 - `page-access-via-io.robot` は固定 Cortex-M4 のページ単位 I/O 切替。monitor 操作とアクセスログの回帰が未達。
 - `python-engine.robot` の nRF RADIO 構文エラーと `external-control.robot` の nRF SPI 転送は Cortex-M4 へ移植できる。RISC-V カスタム命令による CPU abort は固定の別 ISA を必要とする。
-- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。NUnit の等価な実行は未達。
+- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースの移植は後述。切断10ケースは未達。
 
 ## 固定構成の集計
 
@@ -69,8 +69,8 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
 | 監査した共有・混成 Robot | 190 | 138 | 5 | 47 |
-| Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **155** | **5** | **61** |
+| Infrastructure GPIO NUnit | 14 | 4 | 0 | 10 |
+| 合計 | **221** | **159** | **5** | **57** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -448,3 +448,15 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 `cpu-pause-halt.robot:221–267, 291–337` の8構成を移植した。元の Thumb ループを実行してから、実行中、halt 中、pause 中、両方の状態のそれぞれで CPU 単体または機械をリセットし、PC、halt/pause、仮想ステップ、命令実行数を照合した。機械リセットでは、上流マクロが出す `Machine resetting` を同期の reset log に移植し、次の `PC moved` より先に出力されることを確認した。待ち時間を延ばすための上流マクロの sleep は、リセット処理が完了するまで実行を再開しない同期処理で置き換えた。CLI は開始前の RESC コマンド順とログ出力を生成 ELF で確認する。
 
 前節と同じコマンドで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/cpu-reset.Tw4qalED/` の `cargo-test`、`elf`、`systick`、`shell` に保存した。Cortex-M の監査対象15構成がすべて合格した。対話型の monitor スケジューラと CPUWAIT 信号の追加状態は今回の範囲外。
+
+### GPIO の接続と入力番号検証
+
+Infrastructure の `GPIOTests.cs` の4ケースを Rust に移植した。空の端点一覧、接続された受信側と入力番号、5入力の受信側に対する入力2の接続、入力10の拒否と診断を同じバイナリで照合した。nRF52840 の LED 配線が同じ接続実装を使う。固定の Zephyr Button ELF を使う短い回帰で LED の on/off/on を確認し、範囲外の LED 入力も拒否されることを確認した。この短い回帰は台帳の既存ボードケースとは別の検証。
+
+```sh
+cargo test
+tests/nrf52840-gpio-connect-upstream.sh "$PWD/target/debug/penv" ../renode "$BUTTON_ELF" "$ARTIFACT_DIR/gpio-connect"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-connect.EdaoxRTz/` の `cargo-test.verified`、`elf.verified`、`shell.verified` に保存した。登録解除・外部機器削除・機械破棄と連動する `GPIODetachingTests.cs` の10ケースが残る。

@@ -159,6 +159,7 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
+    nrf_led_routes: BTreeMap<(u32, u8), crate::nrf52840::gpio_line::GpioLine<usize>>,
     gpio_buttons: Vec<GpioButton>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
@@ -467,9 +468,10 @@ impl Bus {
     }
 
     pub fn sample_nrf_gpio_outputs(&mut self, gpio: u32, pins: u32) {
-        for (base, led) in &mut self.gpio_leds {
-            if *base == gpio {
-                led.sample_level(pins & (1 << led.pin) != 0, self.led_events);
+        for (&(_, pin), line) in self.nrf_led_routes.range((gpio, 0)..=(gpio, u8::MAX)) {
+            for endpoint in line.endpoints() {
+                let (_, led) = &mut self.gpio_leds[endpoint.receiver];
+                led.sample_level(pins & (1 << pin) != 0, self.led_events);
             }
         }
         for device in &mut self.nrf_peripherals {
@@ -1250,6 +1252,22 @@ impl Bus {
     pub fn add_gpio_led(&mut self, base: u32, led: GpioLed) {
         self.gpio_leds.push((base, led));
         self.refresh_gpio_wiring();
+    }
+
+    pub fn add_nrf_gpio_led(
+        &mut self,
+        base: u32,
+        mut led: GpioLed,
+        input: u32,
+    ) -> Result<(), String> {
+        self.nrf_led_routes
+            .entry((base, led.pin))
+            .or_default()
+            .connect(self.gpio_leds.len(), &led.name, 1, input)?;
+        let driven = self.nrf_gpio_driven_high(base);
+        led.sample_level(driven & (1 << led.pin) != 0, self.led_events);
+        self.gpio_leds.push((base, led));
+        Ok(())
     }
 
     pub fn add_gpio_button(&mut self, button: GpioButton) {

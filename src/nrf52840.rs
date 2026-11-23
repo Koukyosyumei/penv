@@ -37,6 +37,7 @@ mod twi;
 use twi::Twi;
 
 mod gpio;
+pub(crate) mod gpio_line;
 mod ppi;
 mod spi;
 use spi::Spi;

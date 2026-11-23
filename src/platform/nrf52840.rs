@@ -703,14 +703,23 @@ pub(super) fn map_gpio_attachment(
     let invert = invert.unwrap_or(false);
     if entry.model == "Miscellaneous.Button" && wired {
         bus.add_gpio_button(GpioButton::new(entry.name.clone(), base, pin as u8, invert));
-    } else if entry.model == "Miscellaneous.LED"
-        && gpio.body.iter().any(|(_, wire)| {
-            wire.split_once("->").is_some_and(|(from, to)| {
-                number(from.trim()) == Ok(pin) && to.trim() == format!("{}@0", entry.name)
+    } else if entry.model == "Miscellaneous.LED" {
+        let input = gpio
+            .body
+            .iter()
+            .find_map(|(_, wire)| {
+                let (from, to) = wire.split_once("->")?;
+                let (receiver, input) = to.trim().split_once('@')?;
+                (number(from.trim()) == Ok(pin) && receiver == entry.name).then_some(input)
             })
-        })
-    {
-        bus.add_gpio_led(base, GpioLed::new(entry.name.clone(), pin as u8, invert));
+            .ok_or_else(|| entry.error("missing nRF52840 GPIO wiring"))?;
+        let input = number(input).map_err(|e| entry.error(&e))?;
+        bus.add_nrf_gpio_led(
+            base,
+            GpioLed::new(entry.name.clone(), pin as u8, invert),
+            input,
+        )
+        .map_err(|e| entry.error(&e))?;
     } else {
         return Err(entry.error("missing nRF52840 GPIO wiring"));
     }
@@ -729,12 +738,14 @@ pub(super) fn map_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Resul
         number(line).map_err(|e| entry.error(&e))?;
         if !entries.iter().any(|child| {
             child.name == target
-                && (child.model == "SPI.SPIMultiplexer"
-                    || (line == "0"
-                        && matches!(
-                            child.model.as_str(),
-                            "Sensors.ADXL372" | "Miscellaneous.LED" | "Sensors.ArduCAMMini2MPPlus"
-                        )))
+                && (matches!(
+                    child.model.as_str(),
+                    "SPI.SPIMultiplexer" | "Miscellaneous.LED"
+                ) || (line == "0"
+                    && matches!(
+                        child.model.as_str(),
+                        "Sensors.ADXL372" | "Sensors.ArduCAMMini2MPPlus"
+                    )))
         }) {
             return Err(entry.error("unsupported GPIO destination"));
         }
