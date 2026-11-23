@@ -687,6 +687,9 @@ fn parse_content(
             if registration_depth < 0 {
                 return Err(error("unexpected closing registration brace"));
             }
+            if registration_depth == 0 {
+                normalize_registration(registration).map_err(error)?;
+            }
             continue;
         }
         if line.starts_with(char::is_whitespace) {
@@ -750,21 +753,20 @@ fn parse_content(
             ),
             None => (declaration, None),
         };
-        let (model, registration) = match declaration.split_once('@') {
+        let (model, mut registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
         };
-        if (crate::network_platform::has_regions(model)
-            || model == F4Flash::MODEL
-            || stm32h7_adc_platform::has_regions(model)
-            || model == stm32h7_gpio_platform::GPIO
-            || model == stm32h7_rtc_platform::RTC
-            || model == crate::stm32h7_spi::SPI
-            || crate::stm32h7_board_platform::has_regions(model))
-            && let Some(registration) = &registration
+        if let Some(registration) = &mut registration
             && registration.starts_with('{')
         {
             registration_depth = brace_depth(registration);
+            if registration_depth < 0 {
+                return Err(error("unexpected closing registration brace"));
+            }
+            if registration_depth == 0 {
+                normalize_registration(registration).map_err(error)?;
+            }
         }
         current = Some(Entry {
             name: name.into(),
@@ -783,6 +785,49 @@ fn parse_content(
             .error("unterminated peripheral registration"));
     }
     entries.extend(current);
+    Ok(())
+}
+
+fn registration_items(registration: &str) -> Result<Vec<&str>, &'static str> {
+    let contents = registration
+        .strip_prefix('{')
+        .and_then(|text| text.strip_suffix('}'))
+        .ok_or("expected braced registration list")?;
+    let mut items = Vec::new();
+    let mut start = 0;
+    let mut depth = 0;
+    for (offset, character) in unquoted_delimiters(contents, &['{', '}', ';']) {
+        match character {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ';' if depth == 0 => {
+                items.push(contents[start..offset].trim());
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = contents[start..].trim();
+    if !last.is_empty() {
+        items.push(last);
+    }
+    if items.is_empty()
+        || items.iter().any(|item| {
+            !item
+                .split_whitespace()
+                .next()
+                .is_some_and(is_repl_identifier)
+        })
+    {
+        return Err("expected identifier at start of registration item");
+    }
+    Ok(items)
+}
+
+fn normalize_registration(registration: &mut String) -> Result<(), &'static str> {
+    if let [single] = registration_items(registration)?.as_slice() {
+        *registration = (*single).to_owned();
+    }
     Ok(())
 }
 

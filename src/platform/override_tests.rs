@@ -742,3 +742,118 @@ fn renode_using_parser_5() {
 fn renode_using_parser_accepts_tab_after_keyword() {
     assert_using_syntax("using\t\"file.pl8\";", &["file.pl8"]);
 }
+
+fn registration_syntax(source: &str) -> Result<Entry, String> {
+    let mut entries = Vec::new();
+    parse_content(
+        Path::new("<platform string>"),
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )?;
+    assert_eq!(entries.len(), 1);
+    let entry = entries.pop().unwrap();
+    assert_eq!(entry.name, "uart");
+    Ok(entry)
+}
+
+#[test]
+fn renode_registration_syntax_parse_simple_entry() {
+    let entry = registration_syntax("\nuart: UART").unwrap();
+    assert_eq!(entry.model, "UART");
+}
+
+#[test]
+fn renode_registration_syntax_parse_entry_with_simple_registration_info() {
+    let entry = registration_syntax("\nuart: @ sysbus").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.registration.as_deref(), Some("sysbus"));
+}
+
+#[test]
+fn renode_registration_syntax_parse_entry_with_range_registration_point() {
+    let entry = registration_syntax("\nuart: @ sysbus <0x2000A000, +0x1000>").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.bus_range().unwrap(), (0x2000a000, 0x1000));
+}
+
+#[test]
+fn renode_registration_syntax_parse_entry_with_string_registration_point() {
+    let entry = registration_syntax("\nuart: @ sysbus \"something\"").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(
+        quoted_string(
+            entry
+                .registration
+                .as_deref()
+                .unwrap()
+                .strip_prefix("sysbus ")
+                .unwrap()
+        )
+        .as_deref(),
+        Some("something")
+    );
+}
+
+#[test]
+fn renode_registration_syntax_parse_single_registration_point_in_braces() {
+    let entry = registration_syntax("\nuart: @{ sysbus 0x100 }").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.address().unwrap(), 0x100);
+}
+
+#[test]
+fn renode_registration_syntax_parse_single_registration_point_in_braces_with_semicolon() {
+    let entry = registration_syntax("\nuart: @{ sysbus 0x100; }").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.address().unwrap(), 0x100);
+}
+
+#[test]
+fn renode_registration_syntax_parse_entry_with_many_registration_points() {
+    let entry = registration_syntax("\nuart: @{ sysbus 0x100;\n         sysbus 0x200}").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(
+        registration_items(entry.registration.as_deref().unwrap()).unwrap(),
+        ["sysbus 0x100", "sysbus 0x200"]
+    );
+}
+
+#[test]
+fn renode_registration_syntax_parse_entry_with_many_registration_points_with_semicolons() {
+    let entry = registration_syntax("\nuart: @{ sysbus 0x100;\n         sysbus 0x200;}").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(
+        registration_items(entry.registration.as_deref().unwrap()).unwrap(),
+        ["sysbus 0x100", "sysbus 0x200"]
+    );
+}
+
+#[test]
+fn renode_registration_syntax_fail_on_non_identifier_registration_point_in_braces() {
+    assert!(registration_syntax("\nuart: @{ _nonIdentifier }").is_err());
+}
+
+#[test]
+fn renode_registration_syntax_fail_on_non_identifier_registration_point_in_braces_with_semicolon() {
+    assert!(registration_syntax("\nuart: @{ _nonIdentifier; }").is_err());
+}
+
+#[test]
+fn renode_registration_syntax_fail_on_non_identifier_registration_point_in_braces_with_leading_semicolon()
+ {
+    assert!(registration_syntax("\nuart: @{ ;_nonIdentifier }").is_err());
+}
+
+#[test]
+fn renode_registration_syntax_fail_on_multiple_registration_points_with_non_identifier_in_braces_with_semicolons()
+ {
+    assert!(
+        registration_syntax(
+            "\nuart: @{\n    sysbus 0x100;\n    sysbus 0x200;\n    _nonIdentifier\n}"
+        )
+        .is_err()
+    );
+}

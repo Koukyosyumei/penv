@@ -14,10 +14,6 @@ const STM32H7_RCC: &str = "Miscellaneous.STM32H7_RCC";
 const STM32_SYSCFG: &str = "Miscellaneous.STM32_SYSCFG";
 const STM32H7_MAC: &str = "Network.SynopsysDWCEthernetQualityOfService";
 
-pub fn has_regions(model: &str) -> bool {
-    is_litex(model) || matches!(model, STM32H7_MAC | STM32_SYSCFG)
-}
-
 fn is_litex(model: &str) -> bool {
     matches!(
         model,
