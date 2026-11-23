@@ -2223,8 +2223,8 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkb/Zbkb-zip-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkc/Zbkc-clmul-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkc/Zbkc-clmulh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkx/Zbkx-xperm4-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkx/Zbkx-xperm8-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkx/Zbkx-xperm4-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbkx/Zbkx-xperm8-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbs/Zbs-bclr-00.elf	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbs/Zbs-bclri-00.elf	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zbs/Zbs-bext-00.elf	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
@@ -2804,10 +2804,10 @@ Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-packh	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-unzip	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-zip	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm4	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm8	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm4	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm8	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm4	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm8	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm4	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm8	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bclr	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bclri	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bext	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed

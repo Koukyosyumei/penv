@@ -5,6 +5,7 @@ pub struct BitManip {
     pub zbc: bool,
     pub zbs: bool,
     pub zbkb: bool,
+    pub zbkx: bool,
     pub zcb: bool,
 }
 
@@ -75,6 +76,8 @@ impl BitManip {
             (5, 0x05) if self.zbb => a.min(b),
             (6, 0x05) if self.zbb => (a as i32).max(b as i32) as u32,
             (7, 0x05) if self.zbb => a.max(b),
+            (2, 0x14) if self.zbkx => permute(a, b, 4),
+            (4, 0x14) if self.zbkx => permute(a, b, 8),
             (1..=3, 0x05) if self.zbc => {
                 let mut product = 0;
                 for index in 0..32 {
@@ -106,4 +109,19 @@ impl BitManip {
             _ => return None,
         })
     }
+}
+
+// Each selector lane chooses an equally sized source lane; out-of-range selectors give zero.
+fn permute(source: u32, selectors: u32, width: u32) -> u32 {
+    let lanes = u32::BITS / width;
+    let mask = (1 << width) - 1;
+    let mut result = 0;
+    for lane in 0..lanes {
+        let shift = lane * width;
+        let selector = (selectors >> shift) & mask;
+        if selector < lanes {
+            result |= ((source >> (selector * width)) & mask) << shift;
+        }
+    }
+    result
 }

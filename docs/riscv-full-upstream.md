@@ -754,3 +754,23 @@ python3 scripts/validate-rv32-external-pmp.py target/release/penv "$evidence/rob
 変更前は外部 PMP モデルが不明として REPL の読み込みが止まりました。変更後は固定 5 ケース、Rust テスト 85 件、公開 M/S 特権 ELF 22 件、Smepmp 実 ELF、virt の UART・CLINT・PLIC が通過しました。上流等価合格は累計 121 件です。外部 PMP の他のエントリー数と、固定最大 ISA 構成は残っています。
 
 再現用 REPL、RESC、ELF とログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-66102ee-Bf2ray/` に保存しました。
+
+### RV32 Zbkx の実装と固定 ELF 診断
+
+RV32 の明示的な `Zbkx` 指定に対応し、XPERM4 と XPERM8 を実装しました。各出力レーンの選択番号が入力のレーン数以上の場合、そのレーンはゼロになります。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/act-zbkx.repl" --artifacts "$evidence/act-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zbkx/*.elf
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$evidence/virt-zbkx.repl" --artifacts "$evidence/isa-rerun" "$work"/isa/rv32uzbkx-[pv]-*
+```
+
+変更前は Zbkx の CPU 作成が失敗しました。変更後は `rv32imac_zbkx` で固定 ACT 2 件と公開 ISA ELF 4 件が完了コード 0 に到達しました。Rust テスト 85 件、既存ビット操作 ELF 74 件、virt の UART・CLINT・PLIC も通過しました。
+
+固定 Robot の最大 ISA では再試行した 6 件が V の未対応で停止し、固定構成の文字列には Zbkx の指定もありません。台帳の各行に縮小構成での通過と固定構成の阻害点を記録しました。上流等価合格は累計 121 件です。
+
+REPL、変更前後のログ、終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-daa6333-x5opTC/` に保存しました。
