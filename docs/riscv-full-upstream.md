@@ -516,3 +516,20 @@ python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$
 テスト 80 件、割り込みモード 12 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC プローブが通過しました。上流等価合格は累計 72 件です。ResetVector ケースには、CPU Reset と PC 読み戻しを同一マシン上で順に実行する仕組みが残っています。数値の整数レジスター以外の `GetRegister`/`SetRegister`、実行中の対話操作は今回の対象外です。
 
 再現用 RESC、ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-b16e5bb-duiIqa/` に保存しました。
+
+### RV32 の ResetVector と CPU Reset
+
+固定 `riscv-unit-tests.robot` の RV32 ResetVector ケースを起動 RESC に移植しました。PC の初期値 0x1000、ResetVector 更新による PC の追従、明示 PC 設定後の追従停止、CPU Reset 後の追従再開を同一マシンで照合します。2 回のリセットを含む PC 読み戻し 8 件がすべて一致しました。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-reset-vector.py target/release/penv "$evidence/robot-rerun"
+target/release/penv run --script "$evidence/firmware.resc" --tohost 0x3000 --max-steps 10
+```
+
+ELF をロードした追加検証では、ResetVector の変更後にも ELF エントリーを保持し、CPU Reset 後は指定エントリーから実行して完了コード 0 に到達しました。Rust テスト 80 件、公開 M/S 特権 ELF 22 件、割り込みモード 12 件、virt の UART・CLINT・PLIC プローブが通過しました。
+
+今回の CPU Reset は起動時の主ハートを REPL 初期状態に戻します。PC、ResetVector、Reset は互いの順序を維持します。ELF のロードと CSR・整数レジスターの起動設定は別フェーズのため、これらをリセットの前後に混在させる一般的なモニター順序や実行中のリセットは未対応です。上流等価合格は累計 73 件です。
+
+再現用 RESC、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-24652b2-DJlsCV/` に保存しました。

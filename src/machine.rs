@@ -48,6 +48,8 @@ pub struct Hart {
     zacas: bool,
     bitmanip: BitManip,
     pub pc: u32,
+    reset_vector: u32,
+    pc_written: bool,
     pub registers: [u32; 32],
 }
 
@@ -177,6 +179,8 @@ impl Machine {
                 zacas: false,
                 bitmanip: BitManip::default(),
                 pc: RAM_BASE,
+                reset_vector: RAM_BASE,
+                pc_written: false,
                 registers: [0; 32],
             },
             secondary: Vec::new(),
@@ -212,18 +216,24 @@ impl Machine {
         }
     }
 
-    pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
+    pub fn monitor_pc(&mut self, name: &str, value: Option<u32>) -> Result<Option<u32>, String> {
         let hart = std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
             .find(|hart| hart.name.as_deref() == Some(name))
             .ok_or_else(|| format!("unknown CPU {name:?}"))?;
-        hart.pc = entry;
-        Ok(())
+        if let Some(value) = value {
+            hart.pc = value;
+            hart.pc_written = true;
+            Ok(None)
+        } else {
+            Ok(Some(hart.pc))
+        }
     }
 
     pub fn set_entry(&mut self, entry: u32) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             hart.pc = entry;
+            hart.pc_written = true;
         }
     }
 
@@ -638,6 +648,40 @@ impl Hart {
 
     pub fn configure_interrupt_mode(&mut self, mode: crate::csr::InterruptMode) {
         self.csr.configure_interrupt_mode(mode);
+    }
+
+    pub fn configure_reset_vector(&mut self, address: u32) {
+        self.reset_vector = address;
+    }
+
+    pub fn initialize_reset_pc(&mut self) {
+        self.pc = self.reset_vector;
+    }
+
+    fn set_reset_vector(&mut self, address: u32) {
+        self.reset_vector = address;
+        if !self.pc_written {
+            self.pc = address;
+        }
+    }
+
+    pub fn monitor_reset_vector(&mut self, address: u32) -> Result<(), String> {
+        if self.thumb.is_some() {
+            return Err("ResetVector requires a RISC-V CPU".into());
+        }
+        self.set_reset_vector(address);
+        Ok(())
+    }
+
+    pub fn monitor_reset(&mut self, initial: &Self) -> Result<(), String> {
+        if self.thumb.is_some() {
+            return Err("CPU Reset requires a RISC-V CPU".into());
+        }
+        let reset_vector = self.reset_vector;
+        *self = initial.clone();
+        self.pc_written = false;
+        self.set_reset_vector(reset_vector);
+        Ok(())
     }
 
     pub fn monitor_integer_register(

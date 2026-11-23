@@ -142,7 +142,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
             if filename == "riscv-unit-tests.robot" and case == "Should Fail On Setting X0 register":
                 return "target", "ported", "fixed RV32 fixture; monitor write of 1 rejects as read-only and same hart reads back 0"
             if filename == "riscv-unit-tests.robot" and case == "Should Properly Handle ResetVector After Creation And After Reset 32":
-                return "target", "pending", "requires ordered monitor ResetVector, PC readback and CPU Reset on one machine"
+                return "target", "ported", "fixed RV32 fixture; ordered ResetVector, explicit PC, two CPU resets and all PC readbacks checked"
             if filename == "riscv-priv.robot":
                 return "target", "blocked-cpu", "pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence"
             return "target", status, "case passes bitness=32 to its CPU fixture; " + (basis or "equivalence pending")

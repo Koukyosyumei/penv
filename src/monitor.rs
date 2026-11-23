@@ -19,7 +19,7 @@ pub struct Boot {
     pub sd_card: Option<(String, Asset, u64)>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
-    pub boot_pcs: Vec<(String, u32)>,
+    pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
     pub image: Option<Asset>,
     pub use_virtual_elf_addresses: bool,
@@ -33,6 +33,13 @@ pub struct Boot {
 pub enum CpuRegisterCommand {
     TrapVector(TrapVector, Option<u32>),
     Integer(u32, Option<u32>),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CpuControl {
+    Pc(String, Option<u32>),
+    ResetVector(u32),
+    Reset,
 }
 
 pub enum PostRun {
@@ -127,7 +134,7 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     let boot = state.boot;
     if !state.machine
         || boot.platform.is_none()
-        || (boot.image.is_none() && boot.binaries.is_empty())
+        || (boot.image.is_none() && boot.binaries.is_empty() && boot.cpu_control.is_empty())
     {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
@@ -428,11 +435,24 @@ fn execute(
             boot.silence_ranges
                 .push((crate::parse_address(start)?, crate::parse_address(size)?));
         }
-        [cpu, "PC", value] if boot.platform.is_some() => {
-            boot.boot_pcs.push((
+        [cpu, "PC", arguments @ ..] if boot.platform.is_some() && arguments.len() <= 1 => {
+            let value = arguments
+                .first()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?;
+            boot.cpu_control.push(CpuControl::Pc(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
-                crate::parse_address(resolve(value)?)?,
+                value,
             ));
+        }
+        ["cpu" | "sysbus.cpu", "ResetVector", value] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::ResetVector(crate::parse_address(resolve(
+                    value,
+                )?)?));
+        }
+        ["cpu" | "sysbus.cpu", "Reset"] if boot.platform.is_some() => {
+            boot.cpu_control.push(CpuControl::Reset);
         }
         [
             "cpu" | "sysbus.cpu",
@@ -603,7 +623,10 @@ mod tests {
         }
         assert_eq!(boot.binaries.len(), 1);
         assert_eq!(boot.binaries[0].1, 0x4000_0000);
-        assert_eq!(boot.boot_pcs, [("cpu_1".into(), 0x4000_0004)]);
+        assert_eq!(
+            boot.cpu_control,
+            [CpuControl::Pc("cpu_1".into(), Some(0x4000_0004))]
+        );
         assert_eq!(
             boot.binaries[0]
                 .0

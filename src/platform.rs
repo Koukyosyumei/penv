@@ -1082,6 +1082,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         if entry.model == "CPU.RiscV32" {
             hart.enable_address_triggers();
+            hart.configure_reset_vector(0x1000);
             if default_vector_mapped {
                 hart.set_mtvec(DEFAULT_MTVEC);
             }

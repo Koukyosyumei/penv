@@ -396,7 +396,7 @@ fn run() -> Result<ExitCode, String> {
     }
 
     let mut binaries = Vec::new();
-    let mut boot_pcs = Vec::new();
+    let mut cpu_control = Vec::new();
     let mut script_elf_addresses = None;
     let mut silence_ranges = Vec::new();
     let mut vex_supervisor_irq_mask = None;
@@ -455,12 +455,13 @@ fn run() -> Result<ExitCode, String> {
         pcm_outputs = boot.pcm_outputs;
         run_steps = boot.run_steps;
         post_run = boot.post_run;
-        boot_pcs = boot.boot_pcs;
+        cpu_control = boot.cpu_control;
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
         video_analyzers = boot.video_analyzers;
     }
-    if path.is_none() && binaries.is_empty() {
+    let inspect_only = path.is_none() && binaries.is_empty() && !cpu_control.is_empty();
+    if path.is_none() && binaries.is_empty() && !inspect_only {
         return Err("missing firmware image; see run --help".into());
     }
     let mut machine = match platform_path {
@@ -530,6 +531,13 @@ fn run() -> Result<ExitCode, String> {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         machine.schedule_uart_input(step, bytes)?;
     }
+    if inspect_only {
+        machine.primary.initialize_reset_pc();
+    }
+    let reset_state = cpu_control
+        .iter()
+        .any(|command| matches!(command, monitor::CpuControl::Reset))
+        .then(|| machine.primary.clone());
     for command in cpu_registers {
         match command {
             monitor::CpuRegisterCommand::TrapVector(register, value) => {
@@ -575,8 +583,23 @@ fn run() -> Result<ExitCode, String> {
         }
         machine.configure_harts(count);
     }
-    for (cpu, address) in boot_pcs {
-        machine.set_named_entry(&cpu, address)?;
+    for command in cpu_control {
+        match command {
+            monitor::CpuControl::Pc(cpu, value) => {
+                if let Some(pc) = machine.monitor_pc(&cpu, value)? {
+                    eprintln!("{pc:#x}");
+                }
+            }
+            monitor::CpuControl::ResetVector(address) => {
+                machine.primary.monitor_reset_vector(address)?
+            }
+            monitor::CpuControl::Reset => machine
+                .primary
+                .monitor_reset(reset_state.as_ref().unwrap())?,
+        }
+    }
+    if inspect_only {
+        return Ok(ExitCode::SUCCESS);
     }
     for (name, action) in buttons {
         machine.bus.set_litex_button(&name, action)?;
