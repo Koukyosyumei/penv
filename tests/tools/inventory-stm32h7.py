@@ -111,7 +111,10 @@ def platform_variants():
     for path in files:
         configuration = path.relative_to(renode).as_posix()
         if inherits_h7(path, set()):
-            yield configuration, 'OPEN', '固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承'
+            reason = '固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承'
+            if configuration in {'platforms/cpus/stm32h7.repl', 'platforms/boards/stm32h7_renode_reference_board.repl'}:
+                reason += '。同じ TIM1 宣言と追記で APB2・IRQ 25/26/27 を実 ELF 検証。未変更参照 RESC は gpioPortK 配線で停止し、REPL 全体のロードは未達'
+            yield configuration, 'OPEN', reason
         else:
             yield configuration, 'OUT', f'テンプレートが {configuration} 自体のロードを要求。STM32H7 REPL 継承なし'
 

@@ -14,7 +14,7 @@ pub enum TimerClock {
 }
 
 impl TimerClock {
-    pub const ALIASES: [(&str, Self); 13] = [
+    pub const ALIASES: [(&str, Self); 14] = [
         ("TIM2", Self::Apb1Low(0)),
         ("TIM3", Self::Apb1Low(1)),
         ("TIM4", Self::Apb1Low(2)),
@@ -24,6 +24,7 @@ impl TimerClock {
         ("TIM12", Self::Apb1Low(6)),
         ("TIM13", Self::Apb1Low(7)),
         ("TIM14", Self::Apb1Low(8)),
+        ("TIM1", Self::Apb2(0)),
         ("TIM8", Self::Apb2(1)),
         ("TIM15", Self::Apb2(16)),
         ("TIM16", Self::Apb2(17)),

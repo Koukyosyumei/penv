@@ -557,3 +557,20 @@ TIM8 スモークは上流の登録と GPIO 出力追記をそのまま診断 RE
 固定モデルでは Break・Commutation の出力は低レベルです。スモークでは APB1L が TIM8 を有効にしないことと、APB2 リセット後に ARR が `0xffff`、DIER が 0 に戻ることも確認します。証拠は `monitor.log`、`0.uart.log`、`boot.resc` です。今回の刺激は固定モデルのソースから導出しました。固定 Renode の直接実行や既存 Robot の等価実行は未確認なので、上流ケース台帳の合格数には加えていません。外部トリガーは `timer8 OnGPIO` を使用し、GPIO ポートからタイマーへの代替入力配線は残件です。
 
 未変更 RESC は TIM8 を通過し、`platforms/cpus/stm32h7.repl:316` の `timer1: unsupported STM32 timer RCC alias TIM1` で停止します。上流 TIM1 は APB2 のビット 0、IRQ 24〜27 と GPIO 代替機能の追記を使用します。
+
+### h7-tim1
+
+TIM1 を APB2ENR/APB2RSTR のビット 0 に結合しました。TIM8 で実装した分離出力を使い、固定上流 REPL の Break → NVIC 24、Update → 25、Trigger/Commutation → 26、CaptureCompare → 27 を読み込みます。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクトリ timer1
+bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクトリ
+```
+
+TIM1 の登録と GPIO 出力追記を固定上流からそのまま取り込み、公開 Zephyr 参照 ELF の起動後に RCC・SR・NVIC ISPR0 を照合しました。APB1LENR の同じビットではゲートが開かず、APB2ENR で ARR が `0xffff` を返しました。Update、TI1 の slave reset trigger、CC1 比較一致はそれぞれ `0x02000000`、`0x04000000`、`0x08000000` を NVIC に保留し、リセットで初期値へ戻りました。固定モデルどおり Break と Commutation の保留は発生しません。TIM8 も同じスモークで回帰確認しました。
+
+未変更の上流 RESC は TIM1 を通過し、`platforms/cpus/stm32h7.repl:100` の `gpioPortK: missing SYSCFG port selector` で停止します。GPIO からタイマーへ向かう代替入力のファンアウトと、ピンの AF 選択に応じた配線が残件です。台帳の `Should Load Repls` に証拠を追記し、REPL 全体のロードが未達のため `OPEN` を維持しました。

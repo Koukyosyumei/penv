@@ -226,7 +226,7 @@ renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	plat
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/stm32f4_discovery.repl	OUT	テンプレートが platforms/boards/stm32f4_discovery.repl 自体のロードを要求。STM32H7 REPL 継承なし
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/stm32f7_discovery-bb.repl	OUT	テンプレートが platforms/boards/stm32f7_discovery-bb.repl 自体のロードを要求。STM32H7 REPL 継承なし
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/stm32h747-disco.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承
-renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/stm32h7_renode_reference_board.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承
+renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/stm32h7_renode_reference_board.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承。同じ TIM1 宣言と追記で APB2・IRQ 25/26/27 を実 ELF 検証。未変更参照 RESC は gpioPortK 配線で停止し、REPL 全体のロードは未達
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/tegra2.repl	OUT	テンプレートが platforms/boards/tegra2.repl 自体のロードを要求。STM32H7 REPL 継承なし
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/tegra3.repl	OUT	テンプレートが platforms/boards/tegra3.repl 自体のロードを要求。STM32H7 REPL 継承なし
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/boards/vegaboard_ri5cy.repl	OUT	テンプレートが platforms/boards/vegaboard_ri5cy.repl 自体のロードを要求。STM32H7 REPL 継承なし
@@ -358,7 +358,7 @@ renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	plat
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32f746.repl	OUT	テンプレートが platforms/cpus/stm32f746.repl 自体のロードを要求。STM32H7 REPL 継承なし
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32f777.repl	OUT	テンプレートが platforms/cpus/stm32f777.repl 自体のロードを要求。STM32H7 REPL 継承なし
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32g0.repl	OUT	テンプレートが platforms/cpus/stm32g0.repl 自体のロードを要求。STM32H7 REPL 継承なし
-renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32h7.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承
+renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32h7.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承。同じ TIM1 宣言と追記で APB2・IRQ 25/26/27 を実 ELF 検証。未変更参照 RESC は gpioPortK 配線で停止し、REPL 全体のロードは未達
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32h743.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32h747.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承
 renode	tests/unit-tests/platform_descriptions.robot	64-70	Should Load Repls	platforms/cpus/stm32h753.repl	OPEN	固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承
