@@ -324,7 +324,7 @@ def triage(row):
         'Should Encrypt And Decrypt Data in AES GCM Mode',
         'Should Encrypt And Decrypt Data in AES GCM Mode With Interrupts',
     }:
-        status, reason = 'OPEN', '担当ローカルは hard-float ELF を拒否。ARM 統合 b023006 では最小構成で両 ELF ロード可。全 H753 の TIM17 と LED テスターが共有阻害点。CRYP は整列と端数ブロックの暗号化・復号・タグを単体検証済み、HAL の CTR 切替は未対応'
+        status, reason = 'OPEN', '担当ローカルは hard-float ELF を拒否。ARM 統合 b023006 では最小構成で両 ELF ロード可。全 H753 の TIM17 と LED テスターが共有阻害点。CRYP は整列と端数ブロックの暗号化・復号・タグを単体検証済み、HAL の CTR 切替も単体検証済み。実 ELF の LED 判定は未達'
     elif suite == 'MCAN.robot' and name == 'Should Run Zephyr CAN Counter Sample In Loopback Mode':
         status, reason = 'OPEN', '固定上流 ELF と H753 REPL で初期化とフィルター登録まで到達。Counter received: 0 で8仮想秒タイムアウト。デバイス単体の送信イベント検証済み、共有 messageRAM 接続待ち'
     elif suite == 'SDCard.robot' and name in {

@@ -1824,3 +1824,26 @@ done
 ```
 
 `cargo test` 231件、固定 STM32H7 REPL 7構成、Zephyr ADC DMA・暗号・Blinky・Button ELF、SD 装着3件が通過しました。ケース別結果、公開 ELF の停止ログと終了状態は上記にあります。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-aee087314a38-1
+
+STM32H7 CRYP が AES-GCM のペイロード処理中に HAL の CTR 切替を受けても、認証状態を保持します。固定上流モデルと同じく、最初の Final ブロックに対して HAL が読み捨てる4ワードを返し、次の長さブロックで有効なタグを返します。7バイトのポーリング暗号化と IRQ 復号を同じバイナリで照合しました。
+
+固定公開 GCM ELF 2本はローカルでは hard-float ABI の読み込みエラーで停止しました。全 H753 構成の共有阻害点は既存の ARM 依頼 `network-h7-gcm-platform-503aa89.md` で追跡しており、LED 判定は未達です。独立した ADC DMA と SD ファイル装着を回帰確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gcm-ctr.S0mDzHKq
+for case in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+`cargo test` 233件、固定 STM32H7 REPL 7構成、Zephyr ADC DMA・暗号・Blinky・Button ELF と SD 装着3件が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。

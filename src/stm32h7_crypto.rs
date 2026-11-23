@@ -15,6 +15,7 @@ struct Gcm {
     tag_mask: u128,
     header: GhashStream,
     payload: GhashStream,
+    discard_next_final_block: bool,
 }
 
 #[derive(Default)]
@@ -171,12 +172,24 @@ impl Crypto {
                     self.output.clear();
                 }
                 self.control = value & 0x000b_83fc;
-                if self.control & ENABLE != 0 && self.mode() == 8 && self.gcm_phase() == 0 {
-                    self.initialize_gcm();
-                    self.control &= !ENABLE;
-                } else if self.mode() == 7 {
-                    // Key preparation completes immediately.
-                    self.control &= !ENABLE;
+                if self.control & ENABLE != 0 {
+                    match (self.mode(), self.gcm_phase()) {
+                        (8, 0) => {
+                            self.initialize_gcm();
+                            self.control &= !ENABLE;
+                        }
+                        (8, _) => {}
+                        (6, 2) if self.gcm.is_some() => {
+                            self.gcm.as_mut().unwrap().discard_next_final_block = true;
+                        }
+                        (mode, _) => {
+                            self.gcm = None;
+                            if mode == 7 {
+                                // Key preparation completes immediately.
+                                self.control &= !ENABLE;
+                            }
+                        }
+                    }
                 }
             }
             8 if self.input.len() < FIFO_DEPTH => self.input.push_back(self.swap(value)),
@@ -233,6 +246,7 @@ impl Crypto {
             tag_mask: u128::from_be_bytes(tag_mask),
             header: GhashStream::default(),
             payload: GhashStream::default(),
+            discard_next_final_block: false,
         });
     }
 
@@ -272,6 +286,12 @@ impl Crypto {
                     state.counter[12..].copy_from_slice(&counter.wrapping_add(1).to_be_bytes());
                     self.push_gcm_output(block);
                 }
+                3 if state.discard_next_final_block => {
+                    // The upstream HAL drains this result before writing lengths.
+                    self.output
+                        .extend([0xdeadbeef, 0xbaadbeef, 0xfeedc0de, 0xdeadc0de]);
+                    state.discard_next_final_block = false;
+                }
                 3 => {
                     if let Some(tag) = state.finish(block) {
                         self.push_gcm_output(tag);
@@ -293,7 +313,7 @@ impl Crypto {
     }
 
     fn process(&mut self) {
-        if self.mode() == 8 {
+        if self.mode() == 8 || (self.mode() == 6 && self.gcm_phase() == 2 && self.gcm.is_some()) {
             if self.control & ENABLE != 0 {
                 self.process_gcm();
             }
@@ -399,6 +419,56 @@ fn xor_block(block: &mut [u8; 16], mask: &[u8; 16]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ctr_workaround_fixture(decrypt: bool, irq: Option<u8>) {
+        let mut crypto = Crypto::new(0, irq);
+        let control = ENABLE | (1 << 19) | (u32::from(decrypt) << 2);
+        crypto.write(0x4c, 2);
+        crypto.write(0x14, 2);
+        crypto.write(0, control);
+        crypto.write(0, ENABLE | (6 << 3) | (2 << 16) | (u32::from(decrypt) << 2));
+        let words = if decrypt {
+            [0x0388dace, 0x60b6a300, 0, 0]
+        } else {
+            [0; 4]
+        };
+        for word in words {
+            crypto.write(8, word);
+        }
+        assert_eq!(crypto.interrupt(), irq);
+        let output: [u32; 4] = std::array::from_fn(|_| crypto.read(0xc));
+        assert_eq!(output[0], if decrypt { 0 } else { 0x0388dace });
+        assert_eq!(output[1] >> 8, if decrypt { 0 } else { 0x60b6a3 });
+        crypto.write(0, control | (3 << 16));
+        for _ in 0..4 {
+            crypto.write(8, u32::MAX);
+        }
+        assert_eq!(crypto.interrupt(), irq);
+        assert_eq!(
+            std::array::from_fn(|_| crypto.read(0xc)),
+            [0xdeadbeef, 0xbaadbeef, 0xfeedc0de, 0xdeadc0de]
+        );
+        assert_eq!(crypto.interrupt(), None);
+        for word in [0, 0, 0, 56] {
+            crypto.write(8, word);
+        }
+        assert_eq!(crypto.interrupt(), irq);
+        assert_eq!(
+            std::array::from_fn(|_| crypto.read(0xc)),
+            [0xf191b0a7, 0x0de636f1, 0x48bed5be, 0xa5b55615]
+        );
+        assert_eq!(crypto.interrupt(), None);
+    }
+
+    #[test]
+    fn aes_gcm_ctr_workaround_polling() {
+        ctr_workaround_fixture(false, None);
+    }
+
+    #[test]
+    fn aes_gcm_ctr_workaround_interrupt() {
+        ctr_workaround_fixture(true, Some(79));
+    }
 
     #[test]
     fn aes_gcm_partial_payload_uses_final_bit_length() {
