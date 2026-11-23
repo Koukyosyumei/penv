@@ -2282,8 +2282,8 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fcvtmod.w.d-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fleq.d-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fleq.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fli.d-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fli.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fli.d-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and diagnostic zfaFli enabled
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fli.s-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and diagnostic zfaFli enabled
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fltq.d-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fltq.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-fmaxm.d-00.elf	target	blocked-cpu	upstream CPU creation requires V
@@ -2297,14 +2297,14 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-froundnx.d-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaD/ZfaD-froundnx.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fleq.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fli.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fli.s-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and diagnostic zfaFli enabled
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fltq.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fmaxm.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fminm.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-fround.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaF/ZfaF-froundnx.s-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fleq.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fli.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fli.h-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and diagnostic zfaFli enabled
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fltq.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fmaxm.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fmaxm.h-01.elf	target	blocked-cpu	upstream CPU creation requires V
@@ -2313,13 +2313,13 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-fround.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfh/ZfaZfh-froundnx.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fleq.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fli.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fli.h-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and diagnostic zfaFli enabled
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fltq.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fmaxm.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fminm.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-fround.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZfhD/ZfaZfhD-froundnx.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZvfh/ZfaZvfh-fli.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfaZvfh/ZfaZvfh-fli.h-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and diagnostic zfaFli enabled; diagnostic uses Zfh in place of Zvfh
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zfbfmin/Zfbfmin-fcvt.bf16.s-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zfbfmin; reduced-ISA Zfbfmin ELF passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zfbfmin/Zfbfmin-fcvt.s.bf16-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zfbfmin; reduced ISA fails pinned bad NaN-boxing signature (expected 0x7e000000)
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zfbfmin/Zfbfmin-flh-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zfbfmin; reduced-ISA Zfbfmin ELF passed

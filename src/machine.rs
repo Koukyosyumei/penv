@@ -49,6 +49,7 @@ pub struct Hart {
     thumb: Option<Thumb>,
     zfh: bool,
     zfbfmin: bool,
+    zfa_fli: bool,
     floating: Option<Box<[u64; 32]>>,
     unaligned_accesses: bool,
     zicond: bool,
@@ -184,6 +185,7 @@ impl Machine {
                 thumb: None,
                 zfh: false,
                 zfbfmin: false,
+                zfa_fli: false,
                 floating: None,
                 unaligned_accesses: false,
                 zicond: false,
@@ -559,6 +561,10 @@ impl Hart {
         self.csr.d_extension = double;
         self.zfh = half;
         self.floating = Some(Box::new([0; 32]));
+    }
+
+    pub fn set_zfa_fli(&mut self, enabled: bool) {
+        self.zfa_fli = enabled;
     }
 
     pub fn set_zfbfmin(&mut self, enabled: bool) {

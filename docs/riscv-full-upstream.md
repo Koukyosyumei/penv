@@ -1057,3 +1057,26 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 同じ release バイナリで、診断構成の固定 ELF は Zihpm と Zicntr が各 2 件完了コード 0 に到達しました。上流の RV32 特権カウンターを移植した既存の実 ELF 回帰 6 件と Rust テスト 88 件も通過しました。固定 Robot 構成は V の未対応で 4 件とも CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。ケースごとのログ、`results.jsonl` と終了状態を上記の証拠ディレクトリに保存しました。
+
+### RV32 Zfa の浮動小数点即値ロード
+
+代表の固定 ACT ELF `ZfaF-fli.s-00.elf` は、V を外した構成で最初の `fli.s` を実行した時点で停止しました。RV32 の `fli.s`、`fli.d`、`fli.h` に対応し、即値のビット列を生成して、既存の NaN ボックス化と浮動小数点レジスター書き込みを適用します。即値ロードは既存の例外フラグを保持します。[RISC-V Zfa 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zfa.html)
+
+`CPU.RiscV32` の診断用 REPL プロパティ `zfaFli: true` でこの命令群を有効にします。Zfa の残りの命令と上流構成での有効化が残っています。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-a68858e-nrSAE3"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/fli.repl" --artifacts "$repro/fli" "$elfs"/Zfa*/*fli*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zfa*/*fli*.elf
+```
+
+同じ release バイナリで診断構成は 6/6 件が完了コード 0 に到達しました。`ZfaZvfh` の ELF も診断構成では通過し、半精度形式の有効化には Zvfh の代わりに Zfh を使っています。固定 Robot 構成は V の未対応で 6/6 件が CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。
+
+Rust テストは 88 件すべて通過しました。固定 F・D・Zfh・ZfhD の ELF 185 件を同じ V なし構成で `zfaFli` の有無だけ切り替えて比較し、ケース別結果は一致しました。両構成で 149 件が通過し、36 件の未達が残ります。上記の証拠ディレクトリに構成別の `results.jsonl`、ケースログ、終了状態を保存しました。

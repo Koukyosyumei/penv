@@ -156,6 +156,33 @@ impl Format {
         ResultBits::flagged(self.nan(), NV)
     }
 
+    pub fn load_immediate(self, index: usize) -> u64 {
+        // For finite constants, the table encodes the unbiased exponent and
+        // the top two fraction bits. Entry 1 depends on the destination format.
+        const EXPONENT: [i32; 30] = [
+            0, 0, -16, -15, -8, -7, -4, -3, -2, -2, -2, -2, -1, -1, -1, -1, 0, 0, 0, 0, 1, 1, 1, 2,
+            3, 4, 7, 8, 15, 16,
+        ];
+        match index {
+            1 => 1 << self.fractional_bits(),
+            30 => self.infinity(false),
+            31 => self.nan(),
+            _ => {
+                let fraction = match index {
+                    8..=22 => (index - 8) % 4,
+                    _ => 0,
+                };
+                self.round(
+                    index == 0,
+                    (4 + fraction) as u128,
+                    EXPONENT[index] - 2,
+                    Rounding::NearestEven,
+                )
+                .bits
+            }
+        }
+    }
+
     pub fn unbox(self, bits: u64) -> u64 {
         match self {
             Self::Half | Self::BFloat if bits >> 16 != 0xffff_ffff_ffff => self.nan(),

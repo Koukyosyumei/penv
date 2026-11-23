@@ -134,6 +134,10 @@ impl Hart {
                     };
                     ResultBits { bits, flags: 0 }
                 }
+                0x1e if self.zfa_fli && rs2 == 1 && funct3 == 0 => ResultBits {
+                    bits: format.load_immediate(rs1),
+                    flags: 0,
+                },
                 0x1e if rs2 == 0 && funct3 == 0 && !matches!(format, Format::Double) => {
                     ResultBits {
                         bits: u64::from(self.registers[rs1]),
