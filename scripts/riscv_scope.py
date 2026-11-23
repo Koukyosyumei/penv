@@ -125,6 +125,14 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 "User Level Exists 32Bits", "User Level Does Not Exists 32Bits",
             }:
                 return "target", "ported", "fixed rv32gc fixture and instruction words; both single-step PC and MPP assertions checked"
+            if filename == "riscv-unit-tests.robot" and case in {
+                "Should Set MEPC on Illegal Instruction",
+                "Should Set MEPC on Illegal CSR access",
+                "Should Set MEPC on Non-Existing CSR access",
+                "Should Clear MTVAL On EBREAK And ECALL",
+                "Should Allow SRET In Machine Mode",
+            }:
+                return "target", "ported", "fixed rv32gc_Zfh fixture; opcode, step count, and all PC/CSR assertions checked"
             if filename == "riscv-priv.robot":
                 return "target", "blocked-cpu", "pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence"
             return "target", status, "case passes bitness=32 to its CPU fixture; " + (basis or "equivalence pending")

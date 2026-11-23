@@ -7,7 +7,7 @@ use std::{
 use crate::{
     bitmanip::BitManip,
     bus::Bus,
-    csr::InterruptMode,
+    csr::{DEFAULT_MTVEC, InterruptMode},
     litex::{Gpio, GpioMode, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     litex_i2c::{I2c, Sensor},
@@ -1036,6 +1036,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             path.display()
         ));
     }
+    // A platform with RAM at the Renode reset trap vector can receive guest traps
+    // before firmware initializes MTVEC. Boards without a mapped handler can
+    // still use the CLI stop conditions until the guest or monitor sets a vector.
+    let default_vector_mapped = machine.bus.read_ram::<4>(DEFAULT_MTVEC).is_ok();
     machine.configure_harts(configs.len());
     for &(
         id,
@@ -1078,6 +1082,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         if entry.model == "CPU.RiscV32" {
             hart.enable_address_triggers();
+            if default_vector_mapped {
+                hart.set_mtvec(DEFAULT_MTVEC);
+            }
         }
         if pmp != 0 {
             hart.enable_pmp(pmp);

@@ -453,3 +453,23 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 固定 `riscv-priv.robot` の RV32 フィクスチャは `rv32imafd_zicsr_zifencei_c_v_zba_zbb_zbc_zbs_zfh_zacas_zcb` を要求し、CPU 作成が `c, v, zcb` で止まります。カウンタ 6 件と権限命令 3 件はこの阻害点を台帳に記録しました。縮小 ISA の検証は補助証拠として扱います。今回の上流等価合格は 2 件で累計 56 件です。上流最大 ISA と最終分母の確定が残っています。
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-850b661-2xKxYz/` に保存しました。
+
+### RV32 の既定 MTVEC と例外レジスター
+
+固定 `riscv-unit-tests.robot` の RV32 5 ケースを移植しました。固定 tlib の `DEFAULT_MTVEC` は 0x1010 です。penv は、同アドレスに 4 バイトの RAM を持つ `CPU.RiscV32` REPL で、ゲスト実行前にその値を設定します。REPL の明示モード、初期化コマンド、ゲストからの CSR 書き込みを引き続き適用します。既定アドレスに RAM を持たないプラットフォームでは、ベクター設定前の CLI 停止動作を使います。この場合のリセット直後の MTVEC は固定 Renode と異なります。
+
+移植は固定の `rv32gc_Zfh` フィクスチャで、3 種類の不正命令・CSR アクセスについて 3 ステップ後の PC、MCAUSE、MTVAL、MEPC を照合します。EBREAK と ECALL は同一マシンで MTVAL を事前設定し、各ステップでクリアと原因を確認します。M モードでの SRET は SEPC 0x1234 への遷移を確認します。
+
+```bash
+cargo test --locked upstream_rv32_unit_traps_and_sret -- --nocapture
+cargo test --locked
+cargo build --locked --release
+target/release/penv run --platform "$evidence/cpu.repl" --stats --max-steps 3 "$evidence/fault.elf"
+python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$evidence/interrupt-mode-rerun"
+```
+
+保存した `fault.S` と `fault.ld` は上流の不正命令ケースの命令語と配置を再現します。変更前は PC 0x4004 で終了コード 1、変更後は 0x1010 に遷移し、指定したステップ上限で終了コード 2 でした。テスト 78 件、既存割り込みモード 12 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC プローブと上流 Bare/PMP MRET ELF を確認しました。
+
+台帳の上流等価合格は累計 61 件です。同じスイートの低アドレスのデータアクセス、モニターの x0 書き込みと ResetVector、命令診断ログの検証が残っています。固定 `riscv-priv.robot` の最大構成に残る ISA 阻害点も継続です。
+
+再現用 ELF、ソース、ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/riscv/backlog-871700a-6getcP/` に保存しました。

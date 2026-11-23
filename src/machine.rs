@@ -1220,6 +1220,73 @@ mod tests {
     }
 
     #[test]
+    fn upstream_rv32_unit_traps_and_sret() {
+        // Renode riscv-unit-tests.robot: three MEPC cases, EBREAK/ECALL,
+        // and SRET executed in machine mode.
+        let directory =
+            std::env::temp_dir().join(format!("penv-rv32-traps-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }
+cpu: CPU.RiscV32 @ sysbus { timeProvider: clint; cpuType: "rv32gc_Zfh" }
+mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        let write_word = |machine: &mut Machine, address, word: u32| {
+            machine
+                .bus
+                .memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&word.to_le_bytes());
+        };
+        let mut output = std::io::sink();
+        for (name, word) in [
+            ("Should Set MEPC on Illegal Instruction", 0x0000_8000),
+            ("Should Set MEPC on Illegal CSR access", 0xf120_d073),
+            ("Should Set MEPC on Non-Existing CSR access", 0xfff0_d073),
+            ("Should Allow SRET In Machine Mode", 0x1020_0073),
+        ] {
+            let mut machine = crate::platform::load(&repl, None).unwrap();
+            machine.set_entry(0x2000);
+            write_word(&mut machine, 0x1010, 0x0000_006f); // j .
+            write_word(&mut machine, 0x2000, 0x0000_206f); // j 0x4000
+            write_word(&mut machine, 0x4000, 0x0000_0013); // nop
+            write_word(&mut machine, 0x4004, word);
+            if word == 0x1020_0073 {
+                machine.primary.csr.access(0x1410_9073, 0x1234).unwrap();
+                machine.run(3, &mut output).unwrap();
+                assert_eq!(machine.primary.pc, 0x1234, "{name}");
+            } else {
+                // penv always validates CSR accesses, as in the upstream Full mode.
+                machine.run(3, &mut output).unwrap();
+                assert_eq!(machine.primary.pc, 0x1010, "{name}");
+                let csr = &mut machine.primary.csr;
+                assert_eq!(csr.access(0x3420_2073, 0).unwrap(), 2, "{name}");
+                assert_eq!(csr.access(0x3430_2073, 0).unwrap(), word, "{name}");
+                assert_eq!(csr.access(0x3410_2073, 0).unwrap(), 0x4004, "{name}");
+            }
+        }
+
+        let mut machine = crate::platform::load(&repl, None).unwrap();
+        machine.primary.set_mtvec(0x1010);
+        write_word(&mut machine, 0x1010, 0x0000_006f); // j .
+        write_word(&mut machine, 0x2000, 0x0010_0073); // ebreak
+        write_word(&mut machine, 0x2004, 0x0000_0073); // ecall
+        for (address, cause) in [(0x2000, 3), (0x2004, 11)] {
+            machine.set_entry(address);
+            machine.primary.csr.access(0x3430_9073, 0x1234).unwrap();
+            machine.run(1, &mut output).unwrap();
+            assert_eq!(machine.primary.pc, 0x1010);
+            assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), cause);
+            assert_eq!(machine.primary.csr.access(0x3430_2073, 0).unwrap(), 0);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn upstream_rv32_mret_restores_pc_and_sets_mpp_to_lowest_privilege() {
         // Renode riscv-mret.robot: User Level [Does Not] Exist[s] 32Bits.
         const START: u32 = 0x2000;

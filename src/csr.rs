@@ -8,6 +8,7 @@ const MIE: u32 = 1 << 3;
 const MPIE: u32 = 1 << 7;
 const MPRV: u32 = 1 << 17;
 const MPP: u32 = 3 << 11;
+pub const DEFAULT_MTVEC: u32 = 0x1010;
 pub const EXTERNAL: u32 = 1 << 11;
 const MACHINE_INTERRUPTS: u32 = SOFTWARE | TIMER | EXTERNAL;
 
@@ -628,7 +629,7 @@ impl Csr {
 
     pub fn configure_interrupt_mode(&mut self, mode: InterruptMode) {
         self.interrupt_mode = Some(mode);
-        let machine = mode.correct(0x1010);
+        let machine = mode.correct(DEFAULT_MTVEC);
         let supervisor = mode.correct(0);
         if matches!(mode, InterruptMode::Vectored) {
             eprintln!("Vectored interrupt mode set - updating MTVEC from 0x1010 to {machine:#x}");
