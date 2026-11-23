@@ -346,7 +346,10 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
         .transpose()?;
     // Renode returns zero for unhandled MMIO. Zephyr accesses DBGMCU
     // during STM32H7 startup even though the upstream platform has no model.
-    machine.bus.tag(0x5c001000..=0x5c0013ff, 0);
+    machine
+        .bus
+        .tag(0x5c001000..=0x5c0013ff, 0)
+        .map_err(|error| rcc.error(error))?;
     let mut control = NetworkControl::new(rcc_base, syscfg_base, nic);
     control.hse_frequency = hse_frequency;
     machine

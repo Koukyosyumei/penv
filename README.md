@@ -1395,3 +1395,23 @@ target/release/penv run --script "$e/fault.resc" --platform-root ../renode
 ```
 
 最後のコマンドは意図したアドレスエラーで終了します。`cargo test` 182件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格167件、部分検証17件、未達602件です。既定未マップ方針の差、上流の報告ログ、タグ分割時の例外保持は残っています。UART の失敗文字列群は固定 Tock 構成を使い、正規表現と失敗文字列の登録解除も必要なため、今回の検証は SystemBus に切り替えました。
+
+### backlog-network-863d546a9dff-1
+
+SystemBus の子タグ追加で親範囲を分割し、左右に残る親タグの既定値と例外方針を保持します。タグは上流と同じくアクセスの開始アドレスで選びます。複数の既存範囲にまたがる追加は拒否し、既存タグを保持します。固定上流 `ShouldPreserveThrowExceptionWhenSplittingTag` の同じ入力で、左右の親範囲の例外と子範囲の読み取り成功を確認しました。STM32H743 の CLI でも同じ3観測をワード読み取りで確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-tag-split.NLpdOJdr
+for address in 0x50000000 0x50000010 0x500000f0; do
+    target/release/penv run --script "$e/$address.resc" --platform-root ../renode
+done
+```
+
+CLI の期待終了状態は順に 1、0、1 です。`cargo test` 184件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格168件、部分検証17件、未達601件です。上流既定の未マップアクセス方針、タグの階層名を用いた報告、周辺機器からのアドレス以外のバス例外の伝播が残っています。

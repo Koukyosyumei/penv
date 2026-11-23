@@ -1080,7 +1080,8 @@ fn configure_sysbus_tags(entry: &Entry, bus: &mut crate::bus::Bus) -> Result<(),
                 return Err(invalid());
             }
         }
-        bus.tag_with_policy(start..=end, value.unwrap_or(0), throw_exception);
+        bus.tag_with_policy(start..=end, value.unwrap_or(0), throw_exception)
+            .map_err(|error| format!("{source}: {error}"))?;
     }
     Ok(())
 }

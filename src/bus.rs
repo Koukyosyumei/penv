@@ -506,8 +506,12 @@ impl Bus {
         Ok(())
     }
 
-    pub fn tag(&mut self, range: std::ops::RangeInclusive<u32>, value: u32) {
-        self.tag_with_policy(range, value, false);
+    pub fn tag(
+        &mut self,
+        range: std::ops::RangeInclusive<u32>,
+        value: u32,
+    ) -> Result<(), &'static str> {
+        self.tag_with_policy(range, value, false)
     }
 
     pub(crate) fn tag_with_policy(
@@ -515,21 +519,50 @@ impl Bus {
         range: std::ops::RangeInclusive<u32>,
         value: u32,
         throw_exception: bool,
-    ) {
+    ) -> Result<(), &'static str> {
+        if range.is_empty() {
+            return Err("empty SystemBus tag range");
+        }
+        let (start, end) = (*range.start(), *range.end());
+        let mut overlaps = self
+            .tags
+            .iter()
+            .enumerate()
+            .filter(|(_, tag)| *tag.range.start() <= end && start <= *tag.range.end());
+        if let Some((index, parent)) = overlaps.next() {
+            if overlaps.next().is_some()
+                || !parent.range.contains(&start)
+                || !parent.range.contains(&end)
+            {
+                return Err("SystemBus subtag must be contained in a single existing tag");
+            }
+            let parent = self.tags.swap_remove(index);
+            if *parent.range.start() < start {
+                self.tags.push(BusTag {
+                    range: *parent.range.start()..=start - 1,
+                    value: parent.value,
+                    throw_exception: parent.throw_exception,
+                });
+            }
+            if end < *parent.range.end() {
+                self.tags.push(BusTag {
+                    range: end + 1..=*parent.range.end(),
+                    value: parent.value,
+                    throw_exception: parent.throw_exception,
+                });
+            }
+        }
         self.tags.push(BusTag {
             range,
             value,
             throw_exception,
         });
+        Ok(())
     }
 
     fn unhandled_value(&self, address: u32, width: usize) -> Option<u32> {
-        let end = address.checked_add(width as u32 - 1)?;
-        let tag = self
-            .tags
-            .iter()
-            .rev()
-            .find(|tag| tag.range.contains(&address) && tag.range.contains(&end));
+        address.checked_add(width as u32 - 1)?;
+        let tag = self.tags.iter().find(|tag| tag.range.contains(&address));
         if tag.is_some_and(|tag| tag.throw_exception) {
             return None;
         }
@@ -2589,6 +2622,36 @@ mod unhandled_access_cases {
     }
 
     #[test]
+    fn upstream_preserve_exception_when_splitting_tag() {
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::Report,
+            ..Bus::default()
+        };
+        bus.tag_with_policy(0x1000..=0x10ff, 0, true).unwrap();
+        bus.tag(0x1010..=0x101f, 0).unwrap();
+        assert!(matches!(
+            bus.read::<1>(0x1000),
+            Err(BusError::Unmapped(0x1000, 1))
+        ));
+        assert_eq!(bus.read::<1>(0x1010).unwrap(), 0);
+        assert!(matches!(
+            bus.read::<1>(0x10f0),
+            Err(BusError::Unmapped(0x10f0, 1))
+        ));
+    }
+
+    #[test]
+    fn reject_tag_spanning_multiple_ranges_without_changing_them() {
+        let mut bus = Bus::default();
+        bus.tag(0x1000..=0x10ff, 0x42).unwrap();
+        bus.tag(0x1010..=0x101f, 0x12).unwrap();
+        assert!(bus.tag(0x1008..=0x1018, 0).is_err());
+        assert_eq!(bus.read::<1>(0x1008).unwrap(), 0x42);
+        assert_eq!(bus.read::<1>(0x1018).unwrap(), 0x12);
+        assert_eq!(bus.read::<1>(0x1020).unwrap(), 0x42);
+    }
+
+    #[test]
     fn upstream_unmapped_throw_exception() {
         let mut bus = Bus {
             unhandled_access: UnhandledAccess::ThrowException,
@@ -2605,7 +2668,7 @@ mod unhandled_access_cases {
     #[test]
     fn upstream_tagged_throw_if_not_tagged() {
         let mut bus = Bus::default();
-        bus.tag(0xabcd1200..=0xabcd12ff, 0x42);
+        bus.tag(0xabcd1200..=0xabcd12ff, 0x42).unwrap();
         bus.write(0xabcd1234, 1, 0, &mut std::io::sink()).unwrap();
         assert_eq!(bus.read::<1>(0xabcd1234).unwrap(), 0x42);
     }
@@ -2616,7 +2679,7 @@ mod unhandled_access_cases {
             unhandled_access: UnhandledAccess::Report,
             ..Bus::default()
         };
-        bus.tag_with_policy(0x1000..=0x10ff, 0, true);
+        bus.tag_with_policy(0x1000..=0x10ff, 0, true).unwrap();
         address_error(&mut bus, 0x1000);
     }
 
@@ -2626,7 +2689,7 @@ mod unhandled_access_cases {
             unhandled_access: UnhandledAccess::Report,
             ..Bus::default()
         };
-        bus.tag(0x1000..=0x10ff, 0x42);
+        bus.tag(0x1000..=0x10ff, 0x42).unwrap();
         bus.write(0x1000, 1, 0, &mut std::io::sink()).unwrap();
         assert_eq!(bus.read::<1>(0x1000).unwrap(), 0x42);
     }
@@ -2637,7 +2700,7 @@ mod unhandled_access_cases {
             unhandled_access: UnhandledAccess::DoNotReport,
             ..Bus::default()
         };
-        bus.tag_with_policy(0x1000..=0x10ff, 0, true);
+        bus.tag_with_policy(0x1000..=0x10ff, 0, true).unwrap();
         address_error(&mut bus, 0x1000);
     }
 }
