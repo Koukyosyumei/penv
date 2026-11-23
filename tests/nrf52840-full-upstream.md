@@ -59,7 +59,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
 - `page-access-via-io.robot` は固定 Cortex-M4 のページ単位 I/O 切替。monitor 操作とアクセスログの回帰が未達。
 - `python-engine.robot` の nRF RADIO 構文エラーと `external-control.robot` の nRF SPI 転送は Cortex-M4 へ移植できる。RISC-V カスタム命令による CPU abort は固定の別 ISA を必要とする。
-- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースの移植は後述。切断10ケースは未達。
+- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースと登録解除4ケースの移植は後述。切断関連の6ケースは未達。
 
 ## 固定構成の集計
 
@@ -69,8 +69,8 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
 | 監査した共有・混成 Robot | 190 | 138 | 5 | 47 |
-| Infrastructure GPIO NUnit | 14 | 4 | 0 | 10 |
-| 合計 | **221** | **159** | **5** | **57** |
+| Infrastructure GPIO NUnit | 14 | 8 | 0 | 6 |
+| 合計 | **221** | **163** | **5** | **53** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -459,4 +459,10 @@ tests/nrf52840-gpio-connect-upstream.sh "$PWD/target/debug/penv" ../renode "$BUT
 tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
-ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-connect.EdaoxRTz/` の `cargo-test.verified`、`elf.verified`、`shell.verified` に保存した。登録解除・外部機器削除・機械破棄と連動する `GPIODetachingTests.cs` の10ケースが残る。
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-connect.EdaoxRTz/` の `cargo-test.verified`、`elf.verified`、`shell.verified` に保存した。`GPIODetachingTests.cs` の登録解除回帰は次節に記録した。
+
+### GPIO 受信側の登録解除
+
+Infrastructure の `GPIODetachingTests.cs` のうち、番号付き接続の列挙と受信側の登録解除の4ケースを Rust に移植した。固定の端点数、入力番号と登録アドレスに対応する ID を使い、対象の端点だけが外れ、他の接続が残ることを同じバイナリで照合した。nRF LED の `sysbus Unregister led` も同じ端点削除経路を使う。固定 Zephyr Button ELF の短い回帰で、登録解除の前後を別起動で比較する。解除後も Button の入力は検出され、LED の通知が出ないことを確認した。
+
+前節のコマンドで再現できる。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-detach.OqI6dLiI/` の `cargo-test`、`elf`、`shell` に保存した。今回の RESC は起動前の LED 登録解除に対応する。接続グラフの連鎖解除、外部機器の削除、機械破棄などの6ケースは引き続き未達。

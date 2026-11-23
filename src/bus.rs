@@ -159,7 +159,8 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
-    nrf_led_routes: BTreeMap<(u32, u8), crate::nrf52840::gpio_line::GpioLine<usize>>,
+    nrf_led_routes: crate::nrf52840::gpio_line::GpioRoutes<usize>,
+    nrf_leds: Vec<Option<GpioLed>>,
     gpio_buttons: Vec<GpioButton>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
@@ -468,9 +469,9 @@ impl Bus {
     }
 
     pub fn sample_nrf_gpio_outputs(&mut self, gpio: u32, pins: u32) {
-        for (&(_, pin), line) in self.nrf_led_routes.range((gpio, 0)..=(gpio, u8::MAX)) {
+        for (pin, line) in self.nrf_led_routes.lines(gpio) {
             for endpoint in line.endpoints() {
-                let (_, led) = &mut self.gpio_leds[endpoint.receiver];
+                let led = self.nrf_leds[endpoint.receiver].as_mut().unwrap();
                 led.sample_level(pins & (1 << pin) != 0, self.led_events);
             }
         }
@@ -1260,13 +1261,26 @@ impl Bus {
         mut led: GpioLed,
         input: u32,
     ) -> Result<(), String> {
-        self.nrf_led_routes
-            .entry((base, led.pin))
-            .or_default()
-            .connect(self.gpio_leds.len(), &led.name, 1, input)?;
+        self.nrf_led_routes.line_mut(base, led.pin).connect(
+            self.nrf_leds.len(),
+            &led.name,
+            1,
+            input,
+        )?;
         let driven = self.nrf_gpio_driven_high(base);
         led.sample_level(driven & (1 << led.pin) != 0, self.led_events);
-        self.gpio_leds.push((base, led));
+        self.nrf_leds.push(Some(led));
+        Ok(())
+    }
+
+    pub fn unregister_nrf_led(&mut self, name: &str) -> Result<(), String> {
+        let receiver = self
+            .nrf_leds
+            .iter()
+            .position(|led| led.as_ref().is_some_and(|led| led.name == name))
+            .ok_or_else(|| format!("unknown nRF GPIO LED {name:?}"))?;
+        self.nrf_led_routes.unregister_receiver(&receiver);
+        self.nrf_leds[receiver] = None;
         Ok(())
     }
 
@@ -1332,9 +1346,16 @@ impl Bus {
         for (base, led) in &mut self.gpio_leds {
             if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == *base) {
                 led.sample(port.pins(), self.led_events);
-            } else if let Some(port) = self.nrf_peripherals.iter().find(|port| port.base == *base) {
-                let high = port.gpio_driven_high().unwrap_or(0);
-                led.sample_level(high & (1 << led.pin) != 0, self.led_events);
+            }
+        }
+        for port in &self.nrf_peripherals {
+            if let Some(high) = port.gpio_driven_high() {
+                for (pin, line) in self.nrf_led_routes.lines(port.base) {
+                    for endpoint in line.endpoints() {
+                        let led = self.nrf_leds[endpoint.receiver].as_mut().unwrap();
+                        led.sample_level(high & (1 << pin) != 0, self.led_events);
+                    }
+                }
             }
         }
     }

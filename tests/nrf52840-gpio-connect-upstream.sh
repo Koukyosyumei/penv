@@ -33,3 +33,21 @@ awk '/Booting Zephyr OS/ { boot = NR }
     /^LED led / { events = events " " $3 }
     END { exit !(boot && boot < prompt && events == " on off on") }' "$out/button.log"
 cat "$out/button.log"
+
+# Exercise bus unregistration on the same board and firmware.
+cat >"$out/detached.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @button.repl
+sysbus LoadELF @button.elf
+sysbus Unregister led
+RESC
+status=0
+"$penv" run --platform-root "$renode" --script "$out/detached.resc" --led-events \
+    --button-event 500000:button:press --button-event 1500000:button:release \
+    --max-steps 3000001 "$elf" >"$out/detached.log" 2>&1 || status=$?
+[ "$status" -eq 2 ]
+grep -Fq 'Button pressed' "$out/detached.log"
+if grep -q '^LED led ' "$out/detached.log"; then
+    exit 1
+fi
+cat "$out/detached.log"

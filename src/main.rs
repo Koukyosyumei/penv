@@ -413,6 +413,7 @@ fn run() -> Result<ExitCode, String> {
     let mut ram_io_pages = Vec::new();
     let mut cpu_hooks = Vec::new();
     let mut cpu_control = Vec::new();
+    let mut unregister_leds = Vec::new();
     let mut itstate_log_hook = None;
     let mut opcode_counters = Vec::new();
     let mut opcode_counting = None;
@@ -461,6 +462,7 @@ fn run() -> Result<ExitCode, String> {
         ram_io_pages = boot.ram_io_pages;
         cpu_hooks = boot.cpu_hooks;
         cpu_control = boot.cpu_control;
+        unregister_leds = boot.unregister_leds;
         itstate_log_hook = boot.itstate_log_hook;
         opcode_counters = boot.opcode_counters;
         opcode_counting = boot.opcode_counting;
@@ -499,6 +501,9 @@ fn run() -> Result<ExitCode, String> {
         }
         machine.bus.fault_on_unmapped_thumb_data = fault_on_unmapped_data;
         machine.bus.report_unmapped_thumb_data = report_unmapped_data;
+    }
+    for name in unregister_leds {
+        machine.bus.unregister_nrf_led(&name)?;
     }
     if let Some(arguments) = semihosting_arguments {
         let handler = machine
