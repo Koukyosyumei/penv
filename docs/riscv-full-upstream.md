@@ -566,3 +566,24 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 公開 Zbkb ELF は変更前に CPU 作成で 10 件とも停止し、修正後に縮小 ISA 構成で 10 件とも通過しました。既存 Zba・Zbb・Zbc・Zbs の公開 ELF 64 件、virt の UART・CLINT・PLIC プローブ、Rust テスト 81 件も通過しました。公開 ELF の上流共通構成は引き続き V を要求するため、縮小構成の結果は上流等価合格に算入していません。固定 Robot の 5 件を加え、上流等価合格は累計 79 件です。
 
 変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-a7ba641-zB4Rkf/` に保存しました。
+
+### RV32 AMOCAS と非ゼロの hartId
+
+固定 `riscv-amocas.robot` の RV32 単一ページ 7 ケースを移植しました。変更前は、RV32 ハートだけを取り出したフィクスチャの `hartId: 2` が REPL の連番制約で拒否されました。設定した ID を `mhartid` に返し、CLINT、割り込み配送、LR/SC 予約は内部のハート番号を使うようにしました。
+
+固定フィクスチャの RV32 ISA、ハート ID、メモリー範囲、アドレス、命令語、レジスターとメモリー初期値を保持しました。対象外の RV64 ハートと 4 GiB 以降の MMIO は、選択したハートとアドレスの単一ステップに関与しないため省略しました。`CyclesPerInstruction` の時間設定も省略し、元ケースが観測する全レジスター・メモリー値と、奇数レジスター対の PC・MCAUSE・MTVAL・MEPC を照合しました。
+
+```bash
+cargo test --locked upstream_rv32_amocas_single_page -- --nocapture
+cargo test --locked
+cargo build --locked --release
+target/release/penv run --platform "$evidence/virt-hart32.repl" \
+  --tohost 0x80001000 --max-steps 100 "$evidence/hart.elf"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/act-hart2.repl" --artifacts "$evidence/act-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zacas/*.elf
+```
+
+固定 Zacas ACT ELF は UART を持たない Robot フィクスチャでは終了処理の送信待ちに入りました。NS16550 を追加した縮小構成では `hartId: 2` で完了コード 0 を確認しました。この ACT 結果は上流最大構成の合格には算入していません。virt の別プローブで `mhartid=32` と LR/SC、既存の実 ELF で CLINT・PLIC・UART を確認しました。Rust テスト 82 件と、LiteX SMP Linux の 4 ハート起動・ログイン・CPU 一覧も通過しました。上流等価合格は累計 86 件です。最大 ISA 構成の V と Zcb、および未確定の台帳展開は残っています。
+
+再現用 REPL、プローブ、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-266bffd-iiUKGl/` に保存しました。

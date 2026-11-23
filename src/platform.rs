@@ -1027,14 +1027,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         ));
     }
     configs.sort_unstable_by_key(|config| config.0);
-    if configs.len() > MAX_HARTS
-        || configs
-            .iter()
-            .enumerate()
-            .any(|(index, config)| index != config.0)
-    {
+    if configs.len() > MAX_HARTS || configs.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(format!(
-            "{}: hart IDs must be unique and contiguous from zero, up to {MAX_HARTS} harts",
+            "{}: hart IDs must be unique, up to {MAX_HARTS} harts",
             path.display()
         ));
     }
@@ -1043,15 +1038,19 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     // still use the CLI stop conditions until the guest or monitor sets a vector.
     let default_vector_mapped = machine.bus.read_ram::<4>(DEFAULT_MTVEC).is_ok();
     machine.configure_harts(configs.len());
-    for &(
-        id,
-        entry,
-        (multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating),
-        pmp,
-        (user, supervisor),
-    ) in &configs
+    for (
+        slot,
+        &(
+            id,
+            entry,
+            (multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating),
+            pmp,
+            (user, supervisor),
+        ),
+    ) in configs.iter().enumerate()
     {
-        let hart = machine.hart_mut(id);
+        let hart = machine.hart_mut(slot);
+        hart.set_hart_id(id);
         hart.name = Some(entry.name.clone());
         let unaligned = entry
             .body
@@ -1176,7 +1175,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         {
             return Err(entry.error("invalid CLINT frequency or target wiring"));
         }
-        for &(id, target, _, _, _) in &configs[..wires.len()] {
+        for (slot, &(_, target, _, _, _)) in configs[..wires.len()].iter().enumerate() {
             let (software, timer) = if uses_vex_irq(target) {
                 (101, 100)
             } else {
@@ -1184,8 +1183,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             };
             let expected = format!(
                 "[{},{}]->{}@[{software},{timer}]",
-                2 * id,
-                2 * id + 1,
+                2 * slot,
+                2 * slot + 1,
                 target.name
             );
             if !wires.contains(&expected) {
@@ -2123,9 +2122,14 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
     if let Some((pin, target)) = wire.split_once("->")
         && matches!(pin.trim(), "" | "IRQ")
         && let Some((cpu, line)) = target.split_once('@')
-        && let Some(&(hart, target, _, _, _)) = configs.iter().find(|(_, target, _, _, _)| {
-            target.name == cpu.trim() && (uses_vex_irq(target) || target.model == "CPU.Minerva")
-        })
+        && let Some((hart, &(_, target, _, _, _))) =
+            configs
+                .iter()
+                .enumerate()
+                .find(|(_, (_, target, _, _, _))| {
+                    target.name == cpu.trim()
+                        && (uses_vex_irq(target) || target.model == "CPU.Minerva")
+                })
     {
         let line = number(line.trim()).map_err(|e| entry.error(&e))?;
         return match line {

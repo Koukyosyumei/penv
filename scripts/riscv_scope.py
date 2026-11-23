@@ -107,7 +107,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if operations == {"RV64"}:
             return "outside", "outside", "AMOCAS keyword selects CPU.RiscV64 from mixed CPU fixture"
         if operations == {"RV32"}:
-            return "target", status, "AMOCAS keyword selects CPU.RiscV32 rv32gc_zicsr_zifencei_zacas; " + (basis or "equivalence pending")
+            return "target", "ported", "fixed RV32 ISA and hartId 2; single-step registers, memory and illegal-instruction assertions checked with inactive RV64 omitted"
     if filename == "riscv-ebreak.robot" and re.search(r"(?m)^\s+Create Machine\s*$", source):
         return "target", "partial", "CPU.VexRiscv rv32gc and LiteX UART; upstream ELF UART sequence tested with reduced ISA"
     if filename in {"memory-assertions.robot", "riscv-bkb.robot", "riscv-mret.robot", "riscv-priv.robot",

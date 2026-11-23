@@ -43,6 +43,7 @@ enum Input {
 #[derive(Clone)]
 pub struct Hart {
     pub name: Option<String>,
+    slot: usize,
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
@@ -175,6 +176,7 @@ impl Machine {
             function_symbols: None,
             primary: Hart {
                 name: None,
+                slot: 0,
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
@@ -210,7 +212,9 @@ impl Machine {
         self.secondary = (1..count)
             .map(|id| {
                 let mut hart = self.primary.clone();
-                hart.csr.hart_id = id;
+                hart.slot = id;
+                hart.csr.hart_id =
+                    (self.primary.csr.hart_id as u32).wrapping_add(id as u32) as usize;
                 hart.name = None;
                 hart
             })
@@ -493,6 +497,10 @@ impl Machine {
 }
 
 impl Hart {
+    pub fn set_hart_id(&mut self, id: usize) {
+        self.csr.hart_id = id;
+    }
+
     pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
         self.thumb = Some(Thumb::new(vectors));
     }
@@ -804,10 +812,7 @@ impl Hart {
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }
-        let clint = bus
-            .clint
-            .as_mut()
-            .map_or(0, |clint| clint.tick(self.csr.hart_id));
+        let clint = bus.clint.as_mut().map_or(0, |clint| clint.tick(self.slot));
         let mut pending = clint;
         let mut time = bus
             .clint
@@ -826,8 +831,8 @@ impl Hart {
             .is_some_and(|uart| uart.interrupt_pending());
         let timer = bus.timer.as_mut().is_some_and(|(_, timer)| timer.tick());
         let plic = bus.tick_plic();
-        let mut lines = bus.tick_litex(self.csr.hart_id, elapsed_steps);
-        if self.csr.hart_id == 0 {
+        let mut lines = bus.tick_litex(self.slot, elapsed_steps);
+        if self.slot == 0 {
             lines |=
                 u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));
             if self.csr.vex && self.csr.local_irq_mask.is_some() {
@@ -1066,10 +1071,10 @@ impl Hart {
                     .map_err(|error| Fault::Bus(access, error))?;
                 let value = match operation {
                     2 if rs2 == 0 => bus
-                        .load_reserved(self.csr.hart_id, physical)
+                        .load_reserved(self.slot, physical)
                         .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(a))),
                     3 => bus
-                        .store_conditional(self.csr.hart_id, physical, b)
+                        .store_conditional(self.slot, physical, b)
                         .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a))),
                     0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => bus
                         .atomic_update(physical, |previous| match operation {
@@ -1148,6 +1153,118 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_rv32_amocas_single_page() {
+        // Renode riscv-amocas.robot selects only cpu32 for these single-step cases.
+        let directory =
+            std::env::temp_dir().join(format!("penv-rv32-amocas-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"cpu32: CPU.RiscV32 @ sysbus
+    cpuType: "rv32gc_zicsr_zifencei_zacas"
+    hartId: 2
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+    timeProvider: empty
+    allowUnalignedAccesses: true
+dram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x80000000
+mtvec: Memory.MappedMemory @ sysbus 0x1000
+    size: 0x40000
+"#,
+        )
+        .unwrap();
+        const DATA: u32 = RAM_BASE + 0x1000;
+        const OLD: u64 = 0x1afe_dead_beef_d00d;
+        const NEW: u64 = 0xbeef_f00d_babe_dead;
+        const ADJACENT: u64 = 0x2bad_c000_10ff_b0ba;
+        for (width, rd, rs2, old, expected, new, result, illegal) in [
+            (
+                4,
+                10,
+                18,
+                OLD,
+                OLD & 0xffff_ffff,
+                0xbeef_babe,
+                (OLD & !0xffff_ffff) | 0xbeef_babe,
+                false,
+            ),
+            (4, 10, 18, OLD, 0x1234, 0xbeef_babe, OLD, false),
+            (8, 10, 18, OLD, OLD, NEW, NEW, false),
+            (8, 10, 0, OLD, OLD, 0, 0, false),
+            (8, 0, 18, 0, 0, NEW, NEW, false),
+            (8, 10, 18, OLD, 0x1_2345_6789_1011, NEW, OLD, false),
+            (8, 11, 19, OLD, OLD, NEW, OLD, true),
+        ] {
+            let mut machine = crate::platform::load(&repl, None).unwrap();
+            assert_eq!(machine.primary.csr.access(0xf140_2073, 0).unwrap(), 2);
+            machine.set_entry(RAM_BASE);
+            let opcode = 0x2800_002fu32
+                | (rs2 as u32) << 20
+                | 13 << 15
+                | (if width == 4 { 2 } else { 3 }) << 12
+                | (rd as u32) << 7;
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+            machine
+                .bus
+                .memory(DATA, 8)
+                .unwrap()
+                .copy_from_slice(&old.to_le_bytes());
+            machine
+                .bus
+                .memory(DATA + 8, 8)
+                .unwrap()
+                .copy_from_slice(&ADJACENT.to_le_bytes());
+            let registers = &mut machine.primary.registers;
+            if rd == 0 || rs2 == 0 {
+                registers[1] = 0x1234;
+            }
+            for (register, value) in [(rd, expected), (rs2, new)] {
+                if register != 0 {
+                    registers[register] = value as u32;
+                    if width == 8 {
+                        registers[register + 1] = (value >> 32) as u32;
+                    }
+                }
+            }
+            registers[13] = DATA;
+            let before = *registers;
+            machine.run(1, &mut std::io::sink()).unwrap();
+            let read = |address| machine.bus.read_ram::<4>(address).unwrap();
+            assert_eq!(
+                u64::from(read(DATA)) | u64::from(read(DATA + 4)) << 32,
+                result
+            );
+            assert_eq!(
+                u64::from(read(DATA + 8)) | u64::from(read(DATA + 12)) << 32,
+                ADJACENT
+            );
+            let mut after = before;
+            if illegal {
+                let csr = &mut machine.primary.csr;
+                assert_eq!(machine.primary.pc, 0x1010);
+                assert_eq!(csr.access(0x3420_2073, 0).unwrap(), 2);
+                assert_eq!(csr.access(0x3430_2073, 0).unwrap(), opcode);
+                assert_eq!(csr.access(0x3410_2073, 0).unwrap(), RAM_BASE);
+            } else {
+                assert_eq!(machine.primary.pc, RAM_BASE + 4);
+                if rd != 0 {
+                    after[rd] = old as u32;
+                    if width == 8 {
+                        after[rd + 1] = (old >> 32) as u32;
+                    }
+                }
+            }
+            assert_eq!(machine.primary.registers, after, "{opcode:#010x}");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn rv32_amocas_double_handles_register_pairs_and_faults() {
