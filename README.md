@@ -75,6 +75,51 @@ target/release/penv run --platform ../renode/platforms/cpus/sifive-fu740.repl \
 
 `CPU.RiscV64` は RV64IMAFDC、Zicsr、Zifencei、M/S/U モード、PMP、Sv39 と Sv48 に対応します。REPL の ISA 指定で Zba、Zbb、Zbc、Zbs、Zicond、Zacas を選択できます。SiFive、Kendryte、PolarFire、StarFive の REPL から RAM とその別名、ハート、CLINT、PLIC、SiFive UART または NS16550 を構成できます。CLINT の REPL に `frequency` がある場合、各ハートが既定の 100 MIPS で進む仮想時間に合わせて `mtime` を更新します。複数の UART がある場合は `--uart-device NAME` で入力先を選択できます。REPL の `Tag` と `SilenceRange` で指定した範囲では既定値を返します。その他の未実装アドレスへのアクセスはゲストの例外になります。
 
+### 汎用 RV64 virt の Linux 起動
+
+[`platforms/rv64_virt.repl`](platforms/rv64_virt.repl) と [`platforms/rv64_virt.dts`](platforms/rv64_virt.dts) は QEMU 9.2 の legacy CLINT/PLIC を使う virt に対応する単一ハートの構成です。Renode 上流の `platforms/cpus/riscv_virt.repl` は RV32 ハート、M モード用 PLIC コンテキスト 1 個、UART ソース 3 を定義しています。Penv の RV64 virt では QEMU と同じ UART ソース 10、PLIC の M/S コンテキスト、512 MiB の RAM を使います。BeagleV 固有のリセットや Ethernet はこの構成に登録しません。[QEMU virt のメモリマップと DTB](https://github.com/qemu/qemu/blob/v9.2.0/hw/riscv/virt.c) [QEMU virt の IRQ 定義](https://github.com/qemu/qemu/blob/v9.2.0/include/hw/riscv/virt.h)
+
+| 機器 | アドレス | この構成での接続 |
+| --- | --- | --- |
+| RAM | `0x80000000` | 起動ファームウェア、Linux、initramfs、DTB |
+| CLINT | `0x02000000` | 10 MHz、hart 0 の MSIP/MTIP |
+| PLIC | `0x0c000000` | 95 ソース、hart 0 の MEIP/SEIP |
+| NS16550A | `0x10000000` | バイト間隔の UART、PLIC ソース 10 |
+
+`--dtb BASE:PATH` は RV64 のファームウェア入口で `a0` に hart ID、`a1` に DTB の物理アドレスを設定します。QEMU のリセット ROM が設定する引数に対応します。この手順では OpenSBI FW_JUMP を DDR 先頭から直接起動し、Linux の物理入口を `0x80200000` に固定します。DTB を `--load-binary` で置くだけの試行では `a1` が 0 のままで、OpenSBI の UART 出力まで進みませんでした。[QEMU の RV64 リセット ROM](https://github.com/qemu/qemu/blob/v9.2.0/hw/riscv/boot.c) [OpenSBI FW_JUMP の引数](https://github.com/riscv-software-src/opensbi/blob/v1.6/docs/firmware/fw_jump.md)
+
+RISC-V クロスコンパイラー、DTC 一式、U-Boot の `dumpimage` が必要です。検証では下記の StarLight ビルド手順と同じ Bootlin GCC 10.3.0 を使いました。`$assets` は StarLight デモの公開ファイルを保存したディレクトリです。既存 FIT の Linux 5.10.6 と Buildroot initramfs を再利用し、起動ファームウェアと DTB は virt 用に用意します。
+
+```sh
+set -e
+cargo build --release
+work=$(mktemp -d)
+fit="$assets/beaglev--image.fit-s_83025501-3c24fa8a3dd087ac05f6a17399ff2f44f673e1c4"
+printf '%s  %s\n' '3c24fa8a3dd087ac05f6a17399ff2f44f673e1c4' "$fit" | sha1sum -c -
+curl -fLsS https://codeload.github.com/riscv-software-src/opensbi/tar.gz/refs/tags/v1.6 \
+  -o "$work/opensbi.tar.gz"
+printf '%s  %s\n' 'd11702103f177a2914e94eec57ce5ed820296d874f6b6525c4482e55d71a3667' \
+  "$work/opensbi.tar.gz" | sha256sum -c -
+tar -xf "$work/opensbi.tar.gz" -C "$work"
+make -C "$work/opensbi-1.6" -j8 CROSS_COMPILE="${CROSS_COMPILE:-riscv64-linux-gnu-}" \
+  PLATFORM=generic FW_JUMP=y FW_JUMP_ADDR=0x80200000 FW_JUMP_FDT_ADDR=0x88000000
+"${DUMPIMAGE:-dumpimage}" -T flat_dt -p 0 -o "$work/Image" "$fit"
+"${DUMPIMAGE:-dumpimage}" -T flat_dt -p 1 -o "$work/rootfs.cpio" "$fit"
+end=$(printf '%x' "$((0x84000000 + $(stat -c %s "$work/rootfs.cpio")))")
+dtc -I dts -O dtb -o "$work/virt.dtb" platforms/rv64_virt.dts
+fdtput -t x "$work/virt.dtb" /chosen linux,initrd-start 0 84000000
+fdtput -t x "$work/virt.dtb" /chosen linux,initrd-end 0 "$end"
+dtc -I dtb -O dtb -p 4096 -o "$work/virt-padded.dtb" "$work/virt.dtb"
+target/release/penv run --platform platforms/rv64_virt.repl --raw --uart-stdin \
+  --dtb "0x88000000:$work/virt-padded.dtb" --load-binary "0x80200000:$work/Image" \
+  --load-binary "0x84000000:$work/rootfs.cpio" --max-steps 5000000000 \
+  "$work/opensbi-1.6/build/platform/generic/firmware/fw_jump.bin"
+```
+
+Buildroot のプロンプトには、公開デモと同じ `root` / `starfive` を使います。initramfs の起動スクリプトは `eth0` を探してタイムアウトします。この virt 構成の残課題は VirtIO、PCIe、RTC、SiFive Test のリセットと電源断、QEMU の `a2` を使う FW_DYNAMIC、複数ハートの Linux 検証です。PLIC の閾値と MMIO 範囲には既存の Renode 向けモデルを使用します。
+
+OpenSBI v1.6 が `Penv RV64 virt` と 10 MHz のタイマーを認識し、Linux 5.10.6 が `0x10000000` の `ttyS0` を有効にして `/init` を実行しました。UART のパスワード認証後、`id -u` が `0`、`uname -m` が `riscv64` を返しました。`cargo test` は全 49 件通過しました。CLI の回帰テストは 2 ハートの `a0` と 4 GiB 超の `a1`、DTB のマジックとアラインメントの検証を含みます。
+
 ### BeagleV StarLight
 
 Renode の `scripts/single-node/beaglev_starlight.resc` と同じ OpenSBI、U-Boot、Linux 5.10.6、Buildroot を起動します。ファイル名に含まれる SHA-1 を照合してから実行します。RESC 内のシンボル指定はデバッガー用メタデータとして扱い、ゲスト RAM には ELF と FIT をロードします。

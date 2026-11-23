@@ -123,6 +123,11 @@ impl Rv64 {
         }
     }
 
+    pub fn set_boot_arguments(&mut self, hart: usize, dtb: u64) {
+        self.registers[10] = hart as u64;
+        self.registers[11] = dtb;
+    }
+
     pub fn isa(&self) -> Isa {
         self.isa
     }

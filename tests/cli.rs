@@ -485,3 +485,72 @@ gpio: GPIOPort.SiFive_GPIO @ sysbus 0x1191000
     assert_eq!(result.status.code(), Some(2), "{result:?}");
     assert_eq!(result.stdout, b">>>");
 }
+
+#[test]
+fn rv64_dtb_passes_hart_ids_and_a_64_bit_pointer() {
+    let directory = std::env::temp_dir().join(format!("penv-boot-dtb-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let raw = directory.join("boot.bin");
+    let dtb = directory.join("boot.dtb");
+    let instructions: [u32; 6] = [
+        0x1000_02b7, // lui t0, 0x10000
+        0x0305_0313, // addi t1, a0, '0'
+        0x0062_8023, // sb t1, 0(t0)
+        0x0005_c303, // lbu t1, 0(a1)
+        0x0062_8023, // sb t1, 0(t0)
+        0x0010_0073, // ebreak
+    ];
+    fs::write(
+        &raw,
+        instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let cells: [u32; 18] = [
+        0xd00d_feed,
+        72,
+        56,
+        72,
+        40,
+        17,
+        16,
+        0,
+        0,
+        16, // Header
+        0,
+        0,
+        0,
+        0, // Reservation terminator
+        1,
+        0,
+        2,
+        9, // Empty root node
+    ];
+    let mut bytes = cells
+        .into_iter()
+        .flat_map(u32::to_be_bytes)
+        .collect::<Vec<_>>();
+    fs::write(&dtb, &bytes).unwrap();
+    let invoke = |address: &str| {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--raw", "--rv64", "--harts", "2", "--ram-mib", "1"])
+            .args(["--map-ram", "0x100000000:4096", "--dtb"])
+            .arg(format!("{address}:{}", dtb.display()))
+            .arg(&raw)
+            .output()
+            .unwrap()
+    };
+    let success = invoke("0x100000000");
+    let unaligned = invoke("0x100000001");
+    bytes[0] = 0;
+    fs::write(&dtb, bytes).unwrap();
+    let invalid = invoke("0x100000000");
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(success.status.success(), "{success:?}");
+    assert_eq!(success.stdout, [b'0', b'1', 0xd0, 0xd0]);
+    assert!(String::from_utf8_lossy(&unaligned.stderr).contains("8-byte aligned"));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("invalid DTB magic or size"));
+}

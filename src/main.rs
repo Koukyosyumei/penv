@@ -53,6 +53,7 @@ Options:
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --load-binary BASE:PATH  Load a flat companion image into RAM (repeatable)
+  --dtb BASE:PATH    Load an RV64 boot DTB and pass its address in a1
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
@@ -133,6 +134,7 @@ fn run() -> Result<ExitCode, String> {
     let mut max_steps = 10_000_000;
     let mut extra_ram = Vec::new();
     let mut companion_images = Vec::new();
+    let mut dtb = None;
     let mut clint = None;
     let mut mtvec = None;
     let mut vex_irq_mask = None;
@@ -250,16 +252,22 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
-            Some("--load-binary") => {
+            Some(option @ ("--load-binary" | "--dtb")) => {
+                let error = || format!("{option} requires BASE:PATH");
                 let value = args
                     .next()
                     .and_then(|value| value.into_string().ok())
-                    .ok_or("--load-binary requires BASE:PATH")?;
+                    .ok_or_else(error)?;
                 let (base, path) = value
                     .split_once(':')
                     .filter(|(_, path)| !path.is_empty())
-                    .ok_or("--load-binary requires BASE:PATH")?;
-                companion_images.push((PathBuf::from(path), parse_address64(base)?));
+                    .ok_or_else(error)?;
+                let image = (PathBuf::from(path), parse_address64(base)?);
+                if option == "--load-binary" {
+                    companion_images.push(image);
+                } else if dtb.replace(image).is_some() {
+                    return Err("--dtb may only be specified once".into());
+                }
             }
             Some("--map-ram") => {
                 let value = args
@@ -423,6 +431,11 @@ fn run() -> Result<ExitCode, String> {
         }
         for (cpu, address) in &boot_pcs {
             machine.set_named_entry(cpu, *address)?;
+        }
+        if let Some((path, address)) = &dtb {
+            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            image::load_rv64_dtb(&mut machine, file, *address)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.validate_entry()?;
         if let Some((local, peer)) = ethernet_loopback {

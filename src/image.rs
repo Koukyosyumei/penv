@@ -25,6 +25,35 @@ pub fn load_binary(machine: &mut Machine, mut file: File, address: u64) -> Resul
     file.read_exact(memory).map_err(|error| error.to_string())
 }
 
+pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {
+    if machine.primary.rv64.is_none() {
+        return Err("--dtb requires an RV64 machine".into());
+    }
+    if address & 7 != 0 {
+        return Err("DTB address must be 8-byte aligned".into());
+    }
+    let mut header = [0; 40];
+    file.read_exact(&mut header)
+        .map_err(|e| format!("DTB header: {e}"))?;
+    let total_size = u32::from_be_bytes(header[4..8].try_into().unwrap());
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    if header[..4] != [0xd0, 0x0d, 0xfe, 0xed] || total_size < 40 || u64::from(total_size) > length
+    {
+        return Err("invalid DTB magic or size".into());
+    }
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    load_binary(machine, file, address)?;
+    for hart in 0..machine.hart_count() {
+        machine
+            .hart_mut(hart)
+            .rv64
+            .as_mut()
+            .expect("RV64 machine")
+            .set_boot_arguments(hart, address);
+    }
+    Ok(())
+}
+
 pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), String> {
     if raw {
         return load_binary(machine, file, u64::from(machine.raw_load_address()));
