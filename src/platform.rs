@@ -67,10 +67,25 @@ impl Entry {
     }
 
     fn bus_range(&self) -> Result<(u32, u32), String> {
-        let range = self
-            .registration
-            .as_deref()
-            .and_then(|text| text.strip_prefix("sysbus "))
+        self.parse_sysbus_range(self.registration.as_deref().unwrap_or(""))
+    }
+
+    fn bus_ranges(&self) -> Result<Vec<(u32, u32)>, String> {
+        if let Some(registration) = self.registration.as_deref()
+            && registration.starts_with('{')
+        {
+            return registration_items(registration)
+                .map_err(|error| self.error(error))?
+                .into_iter()
+                .map(|item| self.parse_sysbus_range(item))
+                .collect();
+        }
+        self.bus_range().map(|range| vec![range])
+    }
+
+    fn parse_sysbus_range(&self, registration: &str) -> Result<(u32, u32), String> {
+        let range = registration
+            .strip_prefix("sysbus ")
             .ok_or_else(|| self.error("expected sysbus range"))?;
         let range = if let Some(body) = range.strip_prefix(TYPED_BUS_RANGE) {
             body.trim()
@@ -858,7 +873,8 @@ fn parse_content(
             continue;
         }
         if registration_depth != 0 {
-            let registration = current.as_mut().unwrap().registration.as_mut().unwrap();
+            let entry = current.as_mut().unwrap();
+            let registration = entry.registration.as_mut().unwrap();
             registration.push(' ');
             registration.push_str(text);
             registration_depth += brace_depth(text);
@@ -866,6 +882,11 @@ fn parse_content(
                 return Err(error("unexpected closing registration brace"));
             }
             if registration_depth == 0 {
+                let (mapping, alias) = split_registration_alias(registration).map_err(error)?;
+                if alias.is_some() {
+                    entry.alias = alias;
+                    registration.truncate(mapping.trim_end().len());
+                }
                 normalize_registration(registration).map_err(error)?;
             }
             continue;
@@ -946,18 +967,7 @@ fn parse_content(
             declaration
         };
         let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
-        let (declaration, alias) = match unquoted_delimiters(declaration, &[' '])
-            .find(|&(index, _)| declaration[index..].starts_with(" as "))
-        {
-            Some((index, _)) => (
-                &declaration[..index],
-                Some(
-                    quoted_string(&declaration[index + 4..])
-                        .ok_or_else(|| error("expected quoted registration alias"))?,
-                ),
-            ),
-            None => (declaration, None),
-        };
+        let (declaration, alias) = split_registration_alias(declaration).map_err(error)?;
         let (model, mut registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
@@ -1005,6 +1015,17 @@ fn parse_content(
     }
     entries.extend(current);
     Ok(())
+}
+
+fn split_registration_alias(declaration: &str) -> Result<(&str, Option<String>), &'static str> {
+    let Some((index, _)) = unquoted_delimiters(declaration, &[' '])
+        .find(|&(index, _)| declaration[index..].starts_with(" as "))
+    else {
+        return Ok((declaration, None));
+    };
+    let alias =
+        quoted_string(&declaration[index + 4..]).ok_or("expected quoted registration alias")?;
+    Ok((&declaration[..index], Some(alias)))
 }
 
 fn registration_items(registration: &str) -> Result<Vec<&str>, &'static str> {
@@ -1904,6 +1925,7 @@ fn build_entries_with_scripts(
     let mut f4_rcc = None;
     let mut plic = None;
     let mut timer = None;
+    let mut empty_peripheral_names = HashSet::new();
     // Run sysbus preinit first, then the other entries in declaration order.
     for entry in entries
         .iter()
@@ -1984,11 +2006,19 @@ fn build_entries_with_scripts(
             EMPTY_PERIPHERAL => {
                 validate_empty_peripheral_constructor(entry)?;
                 if !matches!(entry.registration.as_deref(), None | Some("none")) {
-                    let (base, size) = entry.bus_range()?;
-                    machine
-                        .bus
-                        .map_constant_mmio(ConstantMmio::zeroed(base, size))
-                        .map_err(|error| entry.error(&error))?;
+                    for (base, size) in entry.bus_ranges()? {
+                        machine
+                            .bus
+                            .map_constant_mmio(ConstantMmio::zeroed(base, size))
+                            .map_err(|error| {
+                                entry.error(&format!("RegistrationException: {error}"))
+                            })?;
+                    }
+                    if !empty_peripheral_names.insert(entry.registered_name()) {
+                        return Err(
+                            entry.error("NameSettingException: duplicate sysbus peripheral name")
+                        );
+                    }
                 }
                 for (_, attribute) in &entry.body {
                     if let Some((phase, _, commands)) = script_commands(attribute)

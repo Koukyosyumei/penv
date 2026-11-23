@@ -1765,3 +1765,39 @@ fn renode_construction_exception_from_inline_object() {
     assert!(error.contains("ConstructionException:"), "{error}");
     assert!(error.contains("Fake exception"), "{error}");
 }
+
+#[test]
+fn renode_peripheral_registration_many_ranges() {
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @{\n    sysbus <0x100, +0x10>;\n    sysbus <0x200, +0x20>} as \"alias\"\n";
+    let path = Path::new("<platform string>");
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    let [entry] = entries.as_slice() else {
+        panic!("expected one registered peripheral")
+    };
+    let mut machine = build_entries(path, &entries, false, true).unwrap();
+    assert_eq!(
+        format!("sysbus.{}", entry.registered_name()),
+        "sysbus.alias"
+    );
+    assert_eq!(entry.bus_ranges().unwrap(), [(0x100, 0x10), (0x200, 0x20)]);
+    for address in [0x100, 0x10f, 0x200, 0x21f] {
+        assert_eq!(machine.bus.read::<1>(address).unwrap(), 0);
+    }
+    for address in [0xff, 0x110, 0x1ff, 0x220] {
+        assert!(machine.bus.read::<1>(address).is_err());
+    }
+}
+
+#[test]
+fn renode_peripheral_registration_overlapping_ranges() {
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ {\n    sysbus <0x100, +0x100>;\n    sysbus <0x150, +0x100>\n}";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("RegistrationException:"), "{error}");
+}
+
+#[test]
+fn renode_peripheral_registration_duplicate_name() {
+    let source = "\np1: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0x100, +0x50>\np2: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0x200, +0x50> as \"p1\"\n";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("NameSettingException:"), "{error}");
+}
