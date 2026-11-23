@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 10 | 35 |
+| 監査した共有・混成 Robot | 190 | 145 | 13 | 32 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **10** | **35** |
+| 合計 | **221** | **176** | **13** | **32** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -732,3 +732,16 @@ tests/nrf52840-boot-snapshot-candidate.sh "$ARTIFACT_DIR/source/target/debug/pen
 固定 Neonkey ELF は上流の SHA-1 を照合し、`_vector_table` を `0x08000000` に設定した。固定 REPL の `UART.STM32_UART` で停止したため、上流の `Hello World!` は未達。固定 ITSTATE の再現では候補が `cpu Step 4` で停止し、別の `RunFor` 付き再現で実行後保存が未達であることも確認した。2件とも台帳は未達を維持する。結果は `nrf52-snapshot-candidate-b69d351.md` で ARM 担当へ返した。
 
 ケース別 RESC・ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/snapshot-candidate.vnmB4wLl` に保存した。候補の CLI テストは20件合格。担当ブランチの `cargo test --locked` と Zephyr Shell の UART・リセット回帰も通過した。
+
+### ARM の GDB メモリ候補とページ境界
+
+統合 SHA `96e0519ed65ff010c49b70682fe21464614a73cc` を独立ディレクトリでビルドした。ARM の再現スクリプトで `0x500` の `0 → 127 → 55` と `0xf0000000` の `0xdead2bad` を確認した。ページ境界ケースは、上流の生成式 `index % 0x80` とアドレス範囲 `[0x80000800, 0x80002000)` を保持し、ゲストが全6144バイトを読み出して UARTE EasyDMA で出力する。入力とのバイト比較は統合 SHA と担当の両方で合格した。GDB ダンプと monitor/GDB 相互操作は未達のため、3件の台帳は部分移植とした。
+
+```sh
+mkdir -p "$ARTIFACT_DIR/source"
+git archive 96e0519ed65ff010c49b70682fe21464614a73cc | tar -x -C "$ARTIFACT_DIR/source"
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo build --locked --manifest-path "$ARTIFACT_DIR/source/Cargo.toml"
+tests/nrf52840-gdb-memory-pages-fixture.sh "$ARTIFACT_DIR/source/target/debug/penv" ../renode "$ARTIFACT_DIR/pages"
+```
+
+`pages-nrf/gdb.resc` で候補も `StartGdbServer 3333` に未対応と確認し、結果は `nrf52-gdb-memory-candidate-96e0519.md` で ARM 担当へ返した。候補のソース、ARM の再現スクリプト、ケース別ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-memory-candidate.SvLTz8G7`。候補の cargo test は230件合格・8件無視。担当の cargo test と Zephyr Shell の UART・リセット回帰も通過した。
