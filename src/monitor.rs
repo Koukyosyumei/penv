@@ -22,6 +22,7 @@ pub struct Boot {
     pub ram_access_logs: Vec<String>,
     pub ram_io_pages: Vec<(u32, bool)>,
     pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
+    pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
     pub opcode_queries: Vec<String>,
@@ -207,6 +208,14 @@ fn execute(
         ["cpu" | "sysbus.cpu", "AddPauseHook", pc] if boot.platform.is_some() => {
             let pc = crate::parse_address(resolve(pc)?)? & !1;
             boot.cpu_hooks.push((pc, crate::bus::CpuHook::Pause));
+        }
+        ["cpu" | "sysbus.cpu", "SetSingleStepItStateLog", boundary] if boot.platform.is_some() => {
+            use crate::thumb::opcode_counter::HookPhase;
+            boot.itstate_log_hook = Some(match *boundary {
+                "Begin" => HookPhase::Pre,
+                "End" => HookPhase::Post,
+                _ => return Err("expected Begin or End for the ITSTATE log".into()),
+            });
         }
         ["cpu" | "sysbus.cpu", "GetOpcodeCounter", name] if boot.platform.is_some() => {
             boot.opcode_queries.push(name.trim_matches('"').into());

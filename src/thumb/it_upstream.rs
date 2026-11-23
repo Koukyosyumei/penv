@@ -165,3 +165,51 @@ fn should_survive_interrupt() {
     m.step(4);
     assert_eq!(m.r[1..5], [1, 2, 0, 4]);
 }
+
+fn check_itstate_boundary_log(phase: opcode_counter::HookPhase, steps: usize, expected: &str) {
+    let mut m = Fixture::new(ITSTATE);
+    m.step(3);
+    assert_eq!(m.pc, 0x112);
+    m.bus.itstate_log_hook = Some(phase);
+    let mut log = Vec::new();
+    for _ in 0..steps {
+        m.cpu
+            .step(&mut m.pc, &mut m.r, &mut m.bus, &mut log)
+            .unwrap();
+    }
+    assert_eq!(String::from_utf8(log).unwrap(), expected);
+}
+
+#[test]
+fn upstream_block_begin_hook_observes_itstate() {
+    check_itstate_boundary_log(
+        opcode_counter::HookPhase::Pre,
+        6,
+        concat!(
+            "Checking IT_STATE, while not in IT block\n",
+            "PC 0x112;IT_state 0x0\n",
+            "PC 0x114;IT_state 0x5\n",
+            "PC 0x116;IT_state 0xa\n",
+            "PC 0x118;IT_state 0x14\n",
+            "PC 0x11a;IT_state 0x8\n",
+            "Checking IT_STATE, while not in IT block\n",
+            "PC 0x11c;IT_state 0x0\n",
+        ),
+    );
+}
+
+#[test]
+fn upstream_block_end_hook_observes_next_itstate() {
+    check_itstate_boundary_log(
+        opcode_counter::HookPhase::Post,
+        5,
+        concat!(
+            "PC 0x114;IT_state 0x5\n",
+            "PC 0x116;IT_state 0xa\n",
+            "PC 0x118;IT_state 0x14\n",
+            "PC 0x11a;IT_state 0x8\n",
+            "Checking IT_STATE, while not in IT block\n",
+            "PC 0x11c;IT_state 0x0\n",
+        ),
+    );
+}

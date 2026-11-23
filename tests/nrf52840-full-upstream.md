@@ -55,7 +55,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-dsp-examples-cortex-m4.robot` は Cortex-M4F の汎用フィクスチャのため対象。13 ケースで上流の UART 判定を確認。ELF と期待値は `nrf52840-dsp-upstream.sh` を参照。
 - `tests/unit-tests/arm-cortex-m-fpu.robot` の `Should Pass Context Stacking Preservation Test v7-M` は元の ELF と fixture で `Test succeeded` を確認。FRDM-K64F 用 ELF の generic sharing は固定 NXP プラットフォーム、v8-M stacking は TrustZone を要求する。NOCP の FPU 有効側は Cortex-M4 で元の命令列から `OK` を確認。無効側はゲスト UsageFault と `NOCP` を確認。上流の UFSR 読み出しは Cortex-M4 の整列半語アクセスに移植した。
 - `tests/unit-tests/arm-ge-flag.robot` は同じ Armv7E-M 命令列を Cortex-M4 で実行し、R4 の期待値 6 件を確認。usub8 という名前の行も、上流本文が実際に実行する ssub8 を使用。
-- `tests/unit-tests/it-status.robot` は元の Cortex-M4 命令列と判定を Rust に移植し、条件コード、IT 状態とシフト、命令の条件実行、NMI 復帰、IT ブロック内フラグ更新の 6 ケースが合格。NMI は上流の monitor 注入と同じ例外番号を ICSR でペンドする。保存・復元と block begin/end hook の 3 ケースは未移植。
+- `tests/unit-tests/it-status.robot` は元の Cortex-M4 命令列と判定を Rust に移植し、条件コード、IT 状態とシフト、命令の条件実行、NMI 復帰、IT ブロック内フラグ更新の 6 ケースが合格。NMI は上流の monitor 注入と同じ例外番号を ICSR でペンドする。単一ステップの開始・終了フックは後述。保存・復元は未移植。
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
 - `page-access-via-io.robot` は固定 Cortex-M4 のページ単位 I/O 切替。monitor 操作とアクセスログの回帰が未達。
 - `python-engine.robot` の nRF RADIO 構文エラーと `external-control.robot` の nRF SPI 転送は Cortex-M4 へ移植できる。RISC-V カスタム命令による CPU abort は固定の別 ISA を必要とする。
@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 121 | 5 | 64 |
+| 監査した共有・混成 Robot | 190 | 123 | 5 | 62 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **138** | **5** | **78** |
+| 合計 | **221** | **140** | **5** | **76** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -416,3 +416,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/systick-hooks.X3326rpO/` の `cargo-test.final`、`elf.final`、`bus-fault`、`shell` に保存した。
+
+### 単一ステップの ITSTATE フック
+
+`it-status.robot:277–320` の2ケースを移植した。上流の固定命令を使って最初の3命令の後にフックを登録し、開始時または終了時の PC と ITSTATE、IT ブロック外の診断を照合した。上流 Python の観測処理は `SetSingleStepItStateLog Begin|End` に移植した。RESC は起動時にログを有効化するため、生成 ELF の確認は上流でフックを登録する地点以降のログを照合する。対話型 monitor、複数命令の翻訳ブロック用フック、Save/Load は未達。
+
+```sh
+cargo test
+tests/nrf52840-itstate-hooks-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/itstate-hooks"
+tests/nrf52840-systick-hooks-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/systick-hooks"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/itstate-hooks.DCaT6HP9/` の `cargo-test.verified`、`elf`、`systick`、`shell` に保存した。

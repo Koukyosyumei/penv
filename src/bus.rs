@@ -128,6 +128,7 @@ pub enum CpuHook {
 #[derive(Default)]
 pub struct Bus {
     pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
+    pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub thumb_trace: Option<crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,

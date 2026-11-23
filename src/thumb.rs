@@ -917,12 +917,29 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
+        if bus.itstate_log_hook == Some(opcode_counter::HookPhase::Pre) && !self.locked_up {
+            self.log_itstate_boundary(*pc, output)?;
+        }
         bus.thumb_unprivileged = self.active_exception == 0 && self.thread_unprivileged;
         let address = *pc;
         let result = self.step_with_bus_context(pc, r, bus, output);
         bus.thumb_unprivileged = false;
         bus.write_ram_io_logs(address, output)?;
+        if bus.itstate_log_hook == Some(opcode_counter::HookPhase::Post)
+            && matches!(result, Ok(ThumbStep::Retired))
+        {
+            self.log_itstate_boundary(*pc, output)?;
+        }
         result
+    }
+
+    fn log_itstate_boundary(&self, pc: u32, output: &mut impl Write) -> Result<(), String> {
+        if self.itstate == 0 {
+            writeln!(output, "Checking IT_STATE, while not in IT block")
+                .map_err(|error| format!("ITSTATE hook output: {error}"))?;
+        }
+        writeln!(output, "PC {pc:#x};IT_state {:#x}", self.itstate)
+            .map_err(|error| format!("ITSTATE hook output: {error}"))
     }
 
     fn step_with_bus_context(
