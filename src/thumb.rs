@@ -2,6 +2,8 @@ mod fpu;
 mod thumb2;
 
 #[cfg(test)]
+mod it_status_tests;
+#[cfg(test)]
 mod stack_fault_tests;
 
 use std::io::Write;
@@ -233,6 +235,7 @@ impl Thumb {
             4 => self.carry && !self.zero,
             5 => self.negative == self.overflow,
             6 => !self.zero && self.negative == self.overflow,
+            7 => true, // AL
             _ => unreachable!(),
         };
         positive ^ (condition & 1 != 0)
@@ -244,6 +247,19 @@ impl Thumb {
             | (u32::from(self.carry) << 29)
             | (u32::from(self.overflow) << 28)
             | (u32::from(self.ge) << 16)
+    }
+
+    fn xpsr(&self) -> u32 {
+        let it = u32::from(self.it_state);
+        self.apsr()
+            | (u32::from(!self.invalid_thumb_state) << 24)
+            | u32::from(self.active_exception)
+            | ((it & 3) << 25)
+            | ((it & 0xfc) << 8)
+    }
+
+    fn it_instruction_executes(&self) -> bool {
+        self.it_state == 0 || self.condition(u32::from(self.it_state >> 4))
     }
 
     fn set_apsr(&mut self, value: u32) {
@@ -464,13 +480,7 @@ impl Thumb {
         let sp = r[13];
         let extra = if self.fp_active { 72 } else { 0 };
         let stack = (sp & !7).wrapping_sub(32 + extra);
-        let it = u32::from(self.it_state);
-        let xpsr = self.apsr()
-            | (1 << 24)
-            | ((sp & 4) << 7)
-            | u32::from(self.active_exception)
-            | ((it & 3) << 25)
-            | ((it & 0xfc) << 8);
+        let xpsr = self.xpsr() | ((sp & 4) << 7);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
         let save = (|| {
             for (index, value) in frame.into_iter().enumerate() {
@@ -999,13 +1009,14 @@ impl Thumb {
         let in_it = self.it_state != 0;
         let flags_before = self.apsr();
         if in_it {
+            let executes = self.it_instruction_executes();
             let state = self.it_state;
             self.it_state = if state & 7 == 0 {
                 0
             } else {
                 (state & 0xe0) | ((state << 1) & 0x1f)
             };
-            if !self.condition(u32::from(state >> 4)) {
+            if !executes {
                 *pc = pc.wrapping_add(if inst >= 0xe800 { 4 } else { 2 });
                 return Ok(true);
             }

@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 62 | 0 | 451 | 237 |
+| Renode | 513 | 68 | 0 | 445 | 237 |
 | Infrastructure | 217 | 1 | 0 | 216 | 7 |
-| **合計** | **730** | **63** | **0** | **667** | **244** |
+| **合計** | **730** | **69** | **0** | **661** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 667 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 661 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -371,3 +371,38 @@ mkdir -p "$work"
 `cargo test` 96 件、フォールト ELF 16 件、FreeRTOS の FPU 回帰が通過しました。
 残件には CMSIS-DSP の公開 ELF と、飽和・半減など今回の命令群に含まれない
 DSP 命令の検証があります。
+
+## Cortex-M4 の IT ブロックと条件コード
+
+固定上流 `tests/unit-tests/it-status.robot` から CPU の単一命令ステップだけで
+再現できる 6 ケースを移植しました。Clang で上流アセンブリを Cortex-M4 に
+組み立て、4 プログラムの命令バイトをテストの固定配列と照合しました。
+上流と同じリセット／NMI アドレス `0x100`／`0x200`、初期 SP `0x800`、
+ステップ数、レジスター条件を使用します。
+
+AL の条件照会に対応し、例外保存と検査で xPSR の組み立てを共用します。
+8 種類の条件照会と 4 組の xPSR、ITSTATE の `05 → 0a → 14 → 08 → 00`、
+条件が偽の命令のスキップ、ブロック内部のフラグ更新と NMI 前後の ITSTATE を検査します。
+保存・再読込の 1 件には永続スナップショット、残る 2 件にはブロック開始・終了フックと
+ログ待機のモニター機能が必要です。この 3 件は未達です。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-it
+mkdir -p "$work"
+cargo test thumb::it_status_tests
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/cortex-m4f-faults.sh "$work/faults" >"$work/fault-elf.log" 2>&1
+    echo "$?" >"$work/fault-elf.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+期待値は IT テスト 6 件と全 Rust テスト 102 件の合格、フォールト ELF 16 件の
+判定行、FreeRTOS の `FPU context OK: A`、`FPU context OK: B` と
+`IWDG reboot: SRAM retained` です。
