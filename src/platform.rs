@@ -1880,6 +1880,34 @@ fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
 }
 
 const MOCK_EXTERNAL: &str = "Antmicro.Renode.UnitTests.Mocks.MockExternal";
+const MOCK_ENUM: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute";
+
+fn bind_fixture_enums(entry: &Entry) -> Result<[u8; 2], String> {
+    let mut values = [1, 1];
+    for (key, value) in keys(entry, &["mockEnum", "mockEnumWithAttribute"])? {
+        let extensible = key == "mockEnumWithAttribute";
+        let enum_type = if extensible {
+            "MockEnumWithAttribute"
+        } else {
+            "MockEnum"
+        };
+        let value = match scalar_value(value) {
+            Some(ScalarValue::Enum(kind, "ValidValue"))
+                if kind.is_none() || kind == Some(enum_type) =>
+            {
+                Some(1)
+            }
+            Some(ScalarValue::Number(number)) => unsigned_number(&number)
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|&value| extensible || value == 1),
+            _ => None,
+        }
+        .ok_or_else(|| entry.error(&format!("NoCtor: invalid {enum_type} argument")))?;
+        values[usize::from(extensible)] = value;
+    }
+    Ok(values)
+}
+
 const EMPTY_PERIPHERAL: &str = "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
 
 fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
@@ -2024,6 +2052,19 @@ fn build_entries_with_scripts(
                     .bus
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
+            }
+            MOCK_ENUM if check_only => {
+                let values = bind_fixture_enums(entry)?;
+                if !matches!(entry.registration.as_deref(), None | Some("none")) {
+                    machine
+                        .bus
+                        .register_fixture_enum(
+                            format!("sysbus.{}", entry.registered_name()),
+                            entry.bus_range()?,
+                            values,
+                        )
+                        .map_err(|error| entry.error(&error))?;
+                }
             }
             MOCK_DEPENDENCY if check_only && entry.registration.is_none() => {
                 construct_dependency(entry)?;
@@ -2281,6 +2322,7 @@ fn build_entries_with_scripts(
                         | MOCK_EXTERNAL
                         | MOCK_CPU
                         | MOCK_DEPENDENCY
+                        | MOCK_ENUM
                         | MOCK_REGISTER
                         | NULL_REGISTER
                 )

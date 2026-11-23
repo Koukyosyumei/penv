@@ -1835,3 +1835,75 @@ fn renode_named_registration_unregistered() {
     );
     assert!(result.err().unwrap().contains("RegistrationException:"));
 }
+
+#[test]
+fn renode_enum_fixture_qualified() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>\n    mockEnum: MockEnum.ValidValue\n",
+    );
+    let machine = result.unwrap();
+    assert_eq!(
+        machine.bus.fixture_enum_value("sysbus.mockPeripheral"),
+        Some([1, 1])
+    );
+}
+
+#[test]
+fn renode_enum_fixture_shorthand() {
+    let result = mock_registration_machine(
+        "\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>\n    mockEnum: .ValidValue\n",
+    );
+    let machine = result.unwrap();
+    assert_eq!(
+        machine.bus.fixture_enum_value("sysbus.mockPeripheral"),
+        Some([1, 1])
+    );
+}
+
+#[test]
+fn renode_enum_fixture_invalid_name() {
+    let result = mock_registration_machine(
+        "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute\n    mockEnum: MockEnum.InvalidValue\n",
+    );
+    assert!(result.err().unwrap().contains("NoCtor:"));
+}
+
+#[test]
+fn renode_enum_fixture_integer() {
+    let result = mock_registration_machine(
+        "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>\n    mockEnum: 1\n",
+    );
+    let machine = result.unwrap();
+    assert_eq!(
+        machine.bus.fixture_enum_value("sysbus.peripheral"),
+        Some([1, 1])
+    );
+}
+
+#[test]
+fn renode_enum_fixture_invalid_integer() {
+    let result = mock_registration_machine(
+        "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute\n    mockEnum: 2\n",
+    );
+    assert!(result.err().unwrap().contains("NoCtor:"));
+}
+
+#[test]
+fn renode_enum_fixture_invalid_name_with_attribute() {
+    let result = mock_registration_machine(
+        "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>\n    mockEnumWithAttribute: MockEnumWithAttribute.InvalidValue\n",
+    );
+    assert!(result.err().unwrap().contains("NoCtor:"));
+}
+
+#[test]
+fn renode_enum_fixture_arbitrary_integer() {
+    let result = mock_registration_machine(
+        "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>\n    mockEnumWithAttribute: 2\n",
+    );
+    let machine = result.unwrap();
+    assert_eq!(
+        machine.bus.fixture_enum_value("sysbus.peripheral"),
+        Some([1, 2])
+    );
+}

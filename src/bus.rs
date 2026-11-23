@@ -141,6 +141,7 @@ pub struct Bus {
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
     fixture_cpus: HashMap<String, String>,
+    fixture_enums: HashMap<String, [u8; 2]>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
@@ -461,6 +462,22 @@ impl Bus {
 
     pub fn empty_peripheral_ranges(&self, name: &str) -> Option<&[(u32, u32)]> {
         self.empty_peripherals.get(name).map(Vec::as_slice)
+    }
+
+    pub fn register_fixture_enum(
+        &mut self,
+        name: String,
+        range: (u32, u32),
+        values: [u8; 2],
+    ) -> Result<(), String> {
+        self.register_empty_peripheral(name.clone(), vec![range])?;
+        self.fixture_enums.insert(name, values);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn fixture_enum_value(&self, path: &str) -> Option<[u8; 2]> {
+        self.fixture_enums.get(path).copied()
     }
 
     pub fn register_fixture_cpu(
