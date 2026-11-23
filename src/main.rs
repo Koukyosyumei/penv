@@ -37,6 +37,7 @@ mod stm32h7_fdcan;
 mod stm32h7_flash;
 mod stm32h7_gpio;
 mod stm32h7_gpio_platform;
+mod stm32h7_hsem;
 mod stm32h7_i2c;
 mod stm32h7_lptim;
 mod stm32h7_ltdc;

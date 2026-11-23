@@ -7,6 +7,7 @@ use crate::{
     stm32_uart::Stm32Irq,
     stm32h7_dma2d::Dma2d,
     stm32h7_fdcan::Fdcan,
+    stm32h7_hsem::Hsem,
     stm32h7_i2c::{I2C, I2c},
     stm32h7_lptim::LpTimer,
     stm32h7_ltdc::Ltdc,
@@ -26,6 +27,7 @@ pub fn has_regions(model: &str) -> bool {
             | Dma2d::MODEL
             | Ltdc::MODEL
             | LpTimer::MODEL
+            | Hsem::MODEL
     )
 }
 
@@ -42,6 +44,7 @@ pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
         I2C => &["I2C1", "I2C2", "I2C3", "I2C4"],
         Dma2d::MODEL => &["DMA2D"],
         Ltdc::MODEL => &["LTDC"],
+        Hsem::MODEL => &["HSEM"],
         LpTimer::MODEL => &LpTimer::RCC_ALIASES,
         Rng::MODEL => &["RNG"],
         Qspi::MODEL => &["QSPI"],
@@ -64,6 +67,28 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
+    for entry in entries.iter().filter(|entry| entry.model == Hsem::MODEL) {
+        let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
+        if !matches!(alias, None | Some("HSEM")) {
+            return Err(entry.error("invalid HSEM RCC alias"));
+        }
+        let irq = match entry.body.as_slice() {
+            [] => None,
+            [(_, text)] => {
+                let (pin, target, line) = wire(text).map_err(|e| entry.error(e))?;
+                if !matches!(pin, "" | "IRQ") || !nvic.is_some_and(|nvic| nvic.name == target) {
+                    return Err(entry.error("expected HSEM IRQ connected to NVIC"));
+                }
+                Some(irq_index(line, IRQ_LINES as u32).map_err(|e| entry.error(&e))?)
+            }
+            _ => return Err(entry.error("expected at most one HSEM IRQ")),
+        };
+        machine
+            .bus
+            .map_h7_hsem(Hsem::new(base, alias.is_some(), irq))
+            .map_err(|e| entry.error(&e))?;
+    }
+
     for entry in entries.iter().filter(|entry| entry.model == Iwdg::MODEL) {
         let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
         if alias.is_some() {

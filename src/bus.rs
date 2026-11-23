@@ -25,6 +25,7 @@ use crate::{
     stm32h7_fdcan::Fdcan,
     stm32h7_flash::FlashController,
     stm32h7_gpio::Stm32Gpio,
+    stm32h7_hsem::Hsem,
     stm32h7_i2c::I2c,
     stm32h7_lptim::LpTimer,
     stm32h7_ltdc::Ltdc,
@@ -114,6 +115,7 @@ pub struct Bus {
     h7_crc: Vec<Stm32Crc>,
     h7_fdcan: Vec<Fdcan>,
     h7_dma2d: Vec<Dma2d>,
+    h7_hsem: Option<Hsem>,
     h7_ltdc: Option<Ltdc>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
@@ -378,6 +380,15 @@ impl Bus {
         })
     }
 
+    pub fn map_h7_hsem(&mut self, device: Hsem) -> Result<(), String> {
+        if self.h7_hsem.is_some() {
+            return Err("only one STM32H7 HSEM is supported".into());
+        }
+        self.check_peripheral_range(device.base, Hsem::SIZE)?;
+        self.h7_hsem = Some(device);
+        Ok(())
+    }
+
     pub fn map_h7_dma2d(&mut self, device: Dma2d) -> Result<(), String> {
         self.check_peripheral_range(device.base, Dma2d::SIZE)?;
         self.h7_dma2d.push(device);
@@ -457,6 +468,9 @@ impl Bus {
             device.reset();
         }
         for device in &mut self.h7_crc {
+            device.reset();
+        }
+        if let Some(device) = &mut self.h7_hsem {
             device.reset();
         }
         for device in &mut self.h7_dma2d {
@@ -651,6 +665,7 @@ impl Bus {
                 .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
                 .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
                 .chain(self.h7_ltdc.iter().map(|device| (device.base, Ltdc::SIZE)))
+                .chain(self.h7_hsem.iter().map(|device| (device.base, Hsem::SIZE)))
                 .chain(
                     self.h7_dma2d
                         .iter()
@@ -862,6 +877,12 @@ impl Bus {
                         .iter()
                         .filter(|device| ltdc_clocked(control, device))
                         .filter_map(Ltdc::interrupt),
+                )
+                .chain(
+                    self.h7_hsem
+                        .iter()
+                        .filter(|device| hsem_clocked(control, device))
+                        .filter_map(Hsem::interrupt),
                 )
                 .chain(
                     self.h7_dma2d
@@ -1434,6 +1455,19 @@ impl Bus {
         {
             return Ok(device.read(address));
         }
+        if matches!(N, 1 | 2 | 4)
+            && address as usize & (N - 1) == 0
+            && let Some(device) = self
+                .h7_hsem
+                .as_mut()
+                .filter(|device| device.contains(address))
+        {
+            return Ok(if hsem_clocked(self.h7_network_control.as_ref(), device) {
+                device.read(address, N)
+            } else {
+                0
+            });
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1614,6 +1648,11 @@ impl Bus {
                 for crc in self.h7_crc.iter_mut().filter(|crc| crc.rcc_bound) {
                     crc.reset();
                 }
+            }
+            if control.hsem_in_reset()
+                && let Some(device) = self.h7_hsem.as_mut().filter(|device| device.rcc_bound)
+            {
+                device.reset();
             }
             if control.ltdc_in_reset()
                 && let Some(device) = self.h7_ltdc.as_mut().filter(|device| device.rcc_bound)
@@ -1876,6 +1915,16 @@ impl Bus {
             device.write(address, value);
             return Ok(());
         }
+        if let Some(device) = self
+            .h7_hsem
+            .as_mut()
+            .filter(|device| device.contains(address))
+        {
+            if hsem_clocked(self.h7_network_control.as_ref(), device) {
+                device.write(address, width, value);
+            }
+            return Ok(());
+        }
         self.guest_memory(address, width)?
             .copy_from_slice(&value.to_le_bytes()[..width]);
         Ok(())
@@ -1884,6 +1933,10 @@ impl Bus {
 
 fn ltdc_clocked(control: Option<&NetworkControl>, device: &Ltdc) -> bool {
     !device.rcc_bound || control.is_some_and(NetworkControl::ltdc_enabled)
+}
+
+fn hsem_clocked(control: Option<&NetworkControl>, device: &Hsem) -> bool {
+    !device.rcc_bound || control.is_some_and(NetworkControl::hsem_enabled)
 }
 
 fn dma2d_clocked(control: Option<&NetworkControl>, device: &Dma2d) -> bool {

@@ -49,6 +49,8 @@ awk -v RS='' -v ORS='\n\n' '
     $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|system_flash_ro|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|ltdc|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|lptimer[1-5]|crc|fdcan[12]|canMessageRAM):$/ &&
     $2 ~ /[A-Z]/ {print}
 ' "$cpu" >> "$work/boot.repl"
+# The reference REPL leaves HSEM IRQ unconnected. Route it for the notification check.
+awk -v RS='' -v ORS='\n\n' '$1 == "hsem:" { print $0 "\n    IRQ -> nvic@125" }' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 == "watchdog:" { sub(/frequency: [0-9_]+/, "frequency: 32000"); print }'     "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$work/boot.repl"
 awk '$1 == "veml7700:" {print}' "$board" >> "$work/boot.repl"
@@ -98,5 +100,25 @@ if [[ "$status" != 2 ]] ||
     ' "$work/watchdog-uart.log"; then
     cat "$work/watchdog-penv.log" >&2
     cat "$work/watchdog-uart.log" >&2
+    exit 1
+fi
+
+# Check acquisition, wrong-owner release, and IRQ 125 pending through the guest shell.
+events=()
+step=1000000
+for command in '0x580244e0 32 0x02000000' '0x58026500 32 8'     '0x5802640c 32 0x8000032a' '0x5802640c 32 0x32b' '0x5802640c 32'     '0x58026508 32' '0x5802640c 32 0x32a' '0x5802650c 32'     '0xe000e20c 32' '0x58026504 32 8' '0xe000e28c 32 0x20000000'     '0x5802650c 32' '0xe000e20c 32' '0x58026490 32'; do
+    printf 'devmem %s\r' "$command" > "$work/hsem-$step.txt"
+    events+=(--uart-event "$step:$work/hsem-$step.txt")
+    step=$((step + 150000))
+done
+status=0
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
+    "${events[@]}" > "$work/hsem-uart.log" 2> "$work/hsem-penv.log" || status=$?
+expected=$(printf '%s\n' 0x8000032a 0x0 0x8 0x20000000 0x0 0x0 0x80000300)
+actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/hsem-uart.log")
+if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
+    cat "$work/hsem-penv.log" >&2
+    cat "$work/hsem-uart.log" >&2
     exit 1
 fi

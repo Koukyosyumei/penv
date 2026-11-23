@@ -7,6 +7,7 @@ const ADC12: u32 = 1 << 5;
 const ADC3: u32 = 1 << 24;
 const CRC: u32 = 1 << 19;
 const BDMA: u32 = 1 << 21;
+const HSEM: u32 = 1 << 25;
 const GPIO_PORTS: u32 = 0x7ff;
 const LPTIM1: u32 = 1 << 9;
 const LPTIM2_TO_5: u32 = 15 << 9;
@@ -90,6 +91,14 @@ impl NetworkControl {
                 let start = u64::from(base);
                 (start, start + SIZE)
             })
+    }
+
+    pub fn hsem_enabled(&self) -> bool {
+        self.ahb4_clock & !self.ahb4_reset & HSEM != 0
+    }
+
+    pub fn hsem_in_reset(&self) -> bool {
+        self.ahb4_reset & HSEM != 0
     }
 
     pub fn adc_enabled(&self, clock: AdcClock) -> bool {
@@ -381,7 +390,7 @@ impl NetworkControl {
                 Change::None
             }
             0x88 => {
-                self.ahb4_reset = value & (ADC3 | CRC | BDMA | GPIO_PORTS);
+                self.ahb4_reset = value & (ADC3 | CRC | BDMA | HSEM | GPIO_PORTS);
                 Change::None
             }
             0x8c => {
