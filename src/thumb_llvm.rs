@@ -1,7 +1,9 @@
 //! Cortex-M4 assembly and disassembly using the host LLVM MC tool.
 use std::{
     ffi::OsString,
+    fs::File,
     io::Write,
+    path::Path,
     process::{Command, Stdio},
 };
 
@@ -13,10 +15,12 @@ fn llvm_mc(option: &str, input: &str) -> Result<String, String> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("starting llvm-mc: {error}"))?;
-    let input_result = child.stdin.take().unwrap().write_all(input.as_bytes());
-    let result = child
-        .wait_with_output()
-        .map_err(|error| error.to_string())?;
+    let mut stdin = child.stdin.take().unwrap();
+    let (result, input_result) = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || stdin.write_all(input.as_bytes()));
+        (child.wait_with_output(), writer.join().unwrap())
+    });
+    let result = result.map_err(|error| error.to_string())?;
     if !result.status.success() || !result.stderr.is_empty() {
         return Err(String::from_utf8_lossy(&result.stderr).trim().to_owned());
     }
@@ -56,18 +60,45 @@ fn assemble(source: &str) -> Result<String, String> {
     Ok(bytes)
 }
 
-fn disassemble(address: u32, hex: &str) -> Result<String, String> {
-    if address & 1 != 0
-        || !matches!(hex.len(), 4 | 8)
-        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err("expected a halfword-aligned address and 2 or 4 instruction bytes".into());
+fn disassemble_hex(address: u32, hex: &str) -> Result<String, String> {
+    if !matches!(hex.len(), 4 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("expected 2 or 4 instruction bytes".into());
     }
     let bytes: Vec<_> = hex
         .as_bytes()
         .chunks_exact(2)
         .map(|part| u8::from_str_radix(std::str::from_utf8(part).unwrap(), 16).unwrap())
         .collect();
+    disassemble(address, &bytes)
+}
+
+fn disassemble_memory(
+    platform: &Path,
+    image: &Path,
+    address: u32,
+    width: usize,
+) -> Result<String, String> {
+    if !matches!(width, 2 | 4) {
+        return Err("expected a 2- or 4-byte Thumb instruction".into());
+    }
+    let mut machine = crate::platform::load(platform, None, false)?;
+    if !machine.has_cortex_m4() {
+        return Err("thumb-disassemble-memory requires a Cortex-M4 platform".into());
+    }
+    let file = File::open(image).map_err(|error| format!("{}: {error}", image.display()))?;
+    crate::image::load(&mut machine, file, false)
+        .map_err(|error| format!("{}: {error}", image.display()))?;
+    let bytes = machine
+        .bus
+        .memory_slice(address, width)
+        .map_err(|error| format!("disassembly error detected: {error}"))?;
+    disassemble(address, bytes)
+}
+
+fn disassemble(address: u32, bytes: &[u8]) -> Result<String, String> {
+    if address & 1 != 0 {
+        return Err("expected a halfword-aligned address".into());
+    }
     let halfword = u16::from_le_bytes([bytes[0], bytes[1]]);
     if (halfword >= 0xe800) != (bytes.len() == 4) {
         return Err("disassembly error detected: Thumb instruction width mismatch".into());
@@ -111,8 +142,14 @@ pub fn run(command: &str, args: impl Iterator<Item = OsString>) -> Result<(), St
     let result = match (command, args.as_slice()) {
         ("thumb-assemble", [source]) => assemble(source),
         ("thumb-disassemble", [address, bytes]) => {
-            disassemble(crate::parse_address(address)?, bytes)
+            disassemble_hex(crate::parse_address(address)?, bytes)
         }
+        ("thumb-disassemble-memory", [platform, image, address, width]) => disassemble_memory(
+            Path::new(platform),
+            Path::new(image),
+            crate::parse_address(address)?,
+            crate::parse_address(width)? as usize,
+        ),
         _ => Err("see --help for Thumb assembly and disassembly arguments".into()),
     }?;
     println!("{result}");

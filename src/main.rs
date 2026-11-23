@@ -50,6 +50,7 @@ Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
        penv thumb-assemble SOURCE
        penv thumb-disassemble ADDRESS HEXBYTES
+       penv thumb-disassemble-memory REPL ELF ADDRESS SIZE
 
 Thumb assembly tools require llvm-mc on PATH. HEXBYTES are in memory order.
 
@@ -112,7 +113,9 @@ fn run() -> Result<ExitCode, String> {
             println!("penv {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
-        Some(Some(command @ ("thumb-assemble" | "thumb-disassemble"))) => {
+        Some(Some(
+            command @ ("thumb-assemble" | "thumb-disassemble" | "thumb-disassemble-memory"),
+        )) => {
             thumb_llvm::run(command, args)?;
             return Ok(ExitCode::SUCCESS);
         }
