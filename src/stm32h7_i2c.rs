@@ -1,4 +1,4 @@
-use crate::{stm32_uart::Stm32Irq, veml7700::Veml7700};
+use crate::{iis2mdc::Iis2mdc, stm32_uart::Stm32Irq, veml7700::Veml7700};
 
 pub const I2C: &str = "I2C.STM32F7_I2C";
 
@@ -16,6 +16,11 @@ const STOPPED: u32 = 1 << 5;
 const START: u32 = 1 << 13;
 const STOP: u32 = 1 << 14;
 
+pub enum Target {
+    Light(Veml7700),
+    Magnetometer(Iis2mdc),
+}
+
 /// STM32F7 master register interface.
 pub struct I2c {
     pub base: u32,
@@ -24,10 +29,10 @@ pub struct I2c {
     pub error: Option<Stm32Irq>,
     registers: [u32; 11],
     status: u32,
-    targets: Vec<(u16, Veml7700)>,
+    targets: Vec<(u16, Target)>,
     active: Option<usize>,
     remaining: u8,
-    data: [u8; 3],
+    data: [u8; 256],
     position: usize,
     reading: bool,
 }
@@ -46,13 +51,13 @@ impl I2c {
             targets: Vec::new(),
             active: None,
             remaining: 0,
-            data: [0; 3],
+            data: [0; 256],
             position: 0,
             reading: false,
         }
     }
 
-    pub fn attach(&mut self, address: u16, target: Veml7700) -> Result<(), &'static str> {
+    pub fn attach(&mut self, address: u16, target: Target) -> Result<(), &'static str> {
         if address > 0x7f
             || self
                 .targets
@@ -88,12 +93,11 @@ impl I2c {
                 if self.status & RXNE == 0 {
                     return 0;
                 }
-                let value = self
-                    .data
-                    .get(self.position)
-                    .copied()
-                    .filter(|_| self.position < 2)
-                    .unwrap_or(0xff);
+                let value = match self.active.map(|target| &mut self.targets[target].1) {
+                    Some(Target::Magnetometer(sensor)) => sensor.read_byte(),
+                    Some(Target::Light(_)) if self.position < 2 => self.data[self.position],
+                    _ => 0xff,
+                };
                 self.position += 1;
                 self.remaining -= 1;
                 self.update_transfer();
@@ -164,16 +168,19 @@ impl I2c {
         if selected != self.active
             && let Some(old) = self.active
         {
-            self.targets[old].1.stop();
+            if let Target::Light(sensor) = &mut self.targets[old].1 {
+                sensor.stop();
+            }
         }
         self.active = selected;
         self.position = 0;
         self.reading = control & READ != 0;
         if let Some(target) = selected {
             self.status |= BUSY;
-            if self.reading {
-                let [low, high] = self.targets[target].1.read();
-                self.data = [low, high, 0];
+            if self.reading
+                && let Target::Light(sensor) = &mut self.targets[target].1
+            {
+                self.data[..2].copy_from_slice(&sensor.read());
             }
             self.load_count();
         } else {
@@ -203,16 +210,25 @@ impl I2c {
     fn finish_write(&mut self) {
         if let Some(target) = self.active
             && !self.reading
-            && (1..=3).contains(&self.position)
         {
-            self.targets[target].1.write(&self.data[..self.position]);
+            match &mut self.targets[target].1 {
+                Target::Light(sensor) if (1..=3).contains(&self.position) => {
+                    sensor.write(&self.data[..self.position])
+                }
+                Target::Magnetometer(sensor) if self.position <= self.data.len() => {
+                    sensor.write(&self.data[..self.position])
+                }
+                _ => {}
+            }
         }
     }
 
     fn stop(&mut self) {
         self.finish_write();
-        if let Some(target) = self.active.take() {
-            self.targets[target].1.stop();
+        if let Some(target) = self.active.take()
+            && let Target::Light(sensor) = &mut self.targets[target].1
+        {
+            sensor.stop();
         }
         self.remaining = 0;
         self.position = 0;
@@ -229,7 +245,8 @@ mod tests {
     fn sensor_register_read_uses_reload_repeated_start_and_event_irq() {
         let mut i2c = I2c::new(0, None);
         i2c.event = Some(Stm32Irq::Nvic(31));
-        i2c.attach(0x10, Veml7700::new(500.0)).unwrap();
+        i2c.attach(0x10, Target::Light(Veml7700::new(500.0)))
+            .unwrap();
         i2c.write(0, PE | TXIS | RXNE | TC | STOPPED);
 
         let address = 0x10 << 1;

@@ -7,6 +7,7 @@ mod designware_usb;
 mod dwt;
 mod ethernet;
 mod ethernet_switch;
+mod iis2mdc;
 mod image;
 mod litex_ethernet;
 mod machine;
@@ -91,6 +92,7 @@ Options:
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
   --max-steps N      Stop after N execution steps or simulation rounds (default: 10000000)
+  --sd-image PATH    Attach a read-only image to the STM32H7 SDMMC slot
   --framebuffer-out PATH  Export LTDC layer 1 as PPM after a single-machine run
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -141,6 +143,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
     let mut framebuffer_out = None;
+    let mut sd_image = None;
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -153,7 +156,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--framebuffer-out"),
+                | "--asset-dir" | "--framebuffer-out" | "--sd-image"),
             ) => {
                 let path = args
                     .next()
@@ -163,6 +166,7 @@ fn run() -> Result<ExitCode, String> {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
+                    "--sd-image" => &mut sd_image,
                     "--framebuffer-out" => &mut framebuffer_out,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
@@ -286,6 +290,7 @@ fn run() -> Result<ExitCode, String> {
                 || uart_input_at.is_some()
                 || !uart_events.is_empty()
                 || framebuffer_out.is_some()
+                || sd_image.is_some()
             {
                 return Err(
                     "single-machine overrides cannot be combined with a simulation script".into(),
@@ -343,6 +348,10 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if let Some(path) = sd_image {
+        let image = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        machine.bus.attach_sd_image(image)?;
+    }
     for (base, size) in extra_ram {
         machine.bus.map_ram(base, size)?;
     }
@@ -404,6 +413,9 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.pc
         );
+        for (name, level) in machine.bus.gpio_pwm_led_levels() {
+            eprintln!("{name}={:.2}%", level * 100.0);
+        }
         for (name, on) in machine.bus.gpio_led_states() {
             eprintln!("{name}={}", if on { "on" } else { "off" });
         }

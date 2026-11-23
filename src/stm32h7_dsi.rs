@@ -1,6 +1,8 @@
-/// STM32H747 DSI host initialization and transmit path with an unattached panel.
+/// STM32H747 DSI host initialization and transmit path with an optional NT35510 panel.
 pub struct Dsi {
     pub base: u32,
+    panel: bool,
+    response: Option<u32>,
     registers: [u32; 0x434 / 4],
 }
 
@@ -8,25 +10,29 @@ impl Dsi {
     pub const MODEL: &str = "Video.STM32H7_DSI";
     pub const SIZE: u32 = 0x800;
 
-    pub fn new(base: u32) -> Self {
+    pub fn new(base: u32, panel: bool) -> Self {
         Self {
             base,
+            panel,
+            response: None,
             registers: [0; 0x434 / 4],
         }
     }
 
     pub fn reset(&mut self) {
         self.registers.fill(0);
+        self.response = None;
     }
 
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn read(&self, address: u32) -> u32 {
+    pub fn read(&mut self, address: u32) -> u32 {
         match address - self.base {
             0 => 0x3133302a,
-            0x74 => 0x15, // Command, write payload and read payload FIFOs are empty.
+            0x70 => self.response.take().unwrap_or(0),
+            0x74 => 0x5 | (u32::from(self.response.is_none()) << 4),
             0x40c => {
                 let regulator = self.registers[0x430 / 4];
                 if regulator & (1 << 24) == 0 {
@@ -50,7 +56,8 @@ impl Dsi {
 
     pub fn write(&mut self, address: u32, value: u32) {
         match address - self.base {
-            // With no panel connected, transmitted header and payload words drain immediately.
+            // Virtual channel 0, DCS read (0x06), NT35510 Read ID2 (0xdb).
+            0x6c if self.panel && value & 0xffff == 0xdb06 => self.response = Some(0x80),
             0x6c | 0x70 => {}
             offset @ (0x04..=0x68
             | 0x78..=0xac
@@ -74,7 +81,7 @@ mod tests {
 
     #[test]
     fn dsi_lock_requires_regulator_and_pll_enable() {
-        let mut dsi = Dsi::new(0);
+        let mut dsi = Dsi::new(0, false);
         dsi.write(0x430, 1);
         assert_eq!(dsi.read(0x40c), 0);
         dsi.write(0x430, 1 << 24);

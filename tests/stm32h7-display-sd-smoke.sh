@@ -35,6 +35,7 @@ extSdram: Memory.MappedMemory @ sysbus 0xd0000000
     size: 0x2000000
 
 dsi: Video.STM32H7_DSI @ sysbus 0x50000000
+    panel: "NT35510"
 REPL
 
 run_sample() {
@@ -59,9 +60,10 @@ RESC
 }
 
 run_sample display "$display_url" --framebuffer-out "$work/display.ppm"
+rg -aqF 'nt35510: Init complete(0)' "$work/display-uart.log"
 rg -aqF 'Display starts' "$work/display-uart.log"
 rg -aqF 'Display updated' "$work/display-uart.log"
-if rg -aqF 'DSI init failed' "$work/display-uart.log"; then
+if rg -aq 'DSI init failed|Panel ID check failed|DSI init sequence failed' "$work/display-uart.log"; then
     cat "$work/display-uart.log" >&2
     exit 1
 fi
@@ -79,3 +81,10 @@ PY
 run_sample sd "$sd_url"
 rg -aqF 'Booting Zephyr OS' "$work/sd-uart.log"
 rg -aqF 'Error mounting disk.' "$work/sd-uart.log"
+
+# Same image and guest-visible checks as STM32SDMMC.robot.
+disk_url=$(fetch 'https://dl.antmicro.com/projects/renode/test-fs-ext2.img-s_524288-67f5bc210d7be8905b4de4ae5d70a8a142459110' \
+    67f5bc210d7be8905b4de4ae5d70a8a142459110)
+run_sample sd-mounted "$sd_url" --sd-image "$assets/${disk_url##*/}"
+rg -aqF 'Disk mounted.' "$work/sd-mounted-uart.log"
+rg -aqF '[DIR ] lost+found' "$work/sd-mounted-uart.log"

@@ -374,3 +374,11 @@ bash tests/stm32h7-display-sd-smoke.sh /tmp/第1スクリプトのログディ�
 - **Display**。DSI ラッパーはレギュレーターの準備完了、PLL のロック、PHY のレーン停止状態を制御レジスターに応じて返します。実 ELF で DSI ホスト初期化を通過し、UART に `Display starts` と `Display updated` が出ました。LTDC の行長を H7 HAL に合わせて `CFBLL − 7` として解釈し、複数色を含む 800×480 RGB PPM を検証しました。NT35510 のパネル ID 読み取り、ボタン入力、FIFO アンダーランは残件です。 [STM32H747 CMSIS](https://github.com/STMicroelectronics/cmsis_device_h7/blob/master/Include/stm32h747xx.h) [STM32H7 LTDC HAL](https://github.com/STMicroelectronics/stm32h7xx-hal-driver/blob/master/Src/stm32h7xx_hal_ltdc.c)
 - **SD**。単一 Cortex-M7 構成で `SYSCFG_UR1.BCM4` は 0 を返し、`RCC_GCR.BOOT_C2` への要求を保持します。SDMMC は応答不要の `CMD0` に送信完了を返し、応答を要求するコマンドにはカード未接続時にタイムアウトを返します。実 ELF は Zephyr を起動し、UART に `Error mounting disk.` を出しました。Cortex-M4 の実行、SD イメージ接続、カード応答と転送、ext2 マウントは残件です。
 - **回帰**。ユニット 57 件と CLI 5 件、公開 STM32H7 Shell、VEML7700、DMA2D から LTDC への 1×1 PPM とシャドーレジスターの検証が通過しました。
+
+### close-h7-platform
+
+前節の両スモークを実行すると、公開 Zephyr の診断 Shell と、上流 Robot が指定する display・SD の ELF を検証できます。
+
+- **Display**。診断 REPL の DSI ホストに `panel: "NT35510"` を設定します。DCS の Read ID2 を受けたときにパネル ID を読み出し FIFO に入れます。Zephyr は `nt35510: Init complete(0)` と `Display updated` を出力し、800×480 の多色 PPM を取得できました。LTDC のボタン入力とアンダーラン、一般の DSI パネル応答とリンクタイミングは残件です。 [Zephyr NT35510 ドライバー](https://github.com/zephyrproject-rtos/zephyr/blob/v4.3.0/drivers/display/display_nt35510.c)
+- **SD**。`--sd-image PATH` で単一の STM32H7 SDMMC に、サイズが 512 KiB の倍数の読み取り専用 SDHC イメージを接続します。SD 初期化、アドレス選択、ブロック読み取り、受信 FIFO と IRQ に対応します。上流 `STM32SDMMC.robot` のイメージで `Disk mounted.` と `[DIR ] lost+found` を確認し、カードなしの場合のエラー経路も検証しました。M4 起動要求は単一 M7 構成で保持されます。M4 の命令実行、カードへの書き込みと IDMA は残件です。
+- **Shell と上流定義**。診断 Shell で既存の VEML7700 と新しい IIS2MDC を読み出し、TIM3 CH1 → GPIOB4 AF2 の PWM を `pwmled0=25.00%` として確認しました。PWM のレベル表示はエッジ整列のアップカウント設定に対応し、IIS2MDC は静止したゼロ磁場を返します。未変更 RESC の最初の停止箇所は `stm32h7_renode_reference_board.repl:50` の `Sensors.TMP108` です。追加の I²C センサー、上流タイマーの IRQ と代替機能の全配線、未変更構成での Shell 起動は残件です。

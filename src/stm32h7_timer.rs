@@ -59,6 +59,26 @@ impl Timer {
             .filter(|_| self.registers[3] & self.registers[4] & 0xff != 0)
     }
 
+    /// Average high level for an enabled edge-aligned, up-counting PWM channel.
+    pub fn pwm_level(&self, channel: u8) -> Option<f64> {
+        let channel = usize::from(channel);
+        let control = self.registers[0];
+        let ccer = self.registers[8] >> (channel * 4);
+        let mode = (self.registers[6 + channel / 2] >> (channel % 2 * 8)) & 0xff;
+        if control & (CEN | DIR | (3 << 5)) != CEN || ccer & 1 == 0 || mode & 3 != 0 {
+            return None;
+        }
+        let compare = self.registers[13 + channel];
+        let period = f64::from(self.active_arr) + 1.0;
+        let active = (f64::from(compare) / period).min(1.0);
+        let active = match (mode >> 4) & 7 {
+            6 => active,
+            7 => 1.0 - active,
+            _ => return None,
+        };
+        Some(if ccer & 2 == 0 { active } else { 1.0 - active })
+    }
+
     pub fn read(&self, address: u32) -> u32 {
         match address - self.base {
             0x14 => 0,

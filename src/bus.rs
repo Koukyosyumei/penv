@@ -88,6 +88,14 @@ struct Region {
     bytes: Vec<u8>,
 }
 
+struct PwmLed {
+    name: String,
+    base: u32,
+    pin: u8,
+    inverted: bool,
+    routes: [Option<(u32, u8)>; 16],
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
@@ -110,6 +118,7 @@ pub struct Bus {
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
     gpio_leds: Vec<(String, u32, u8, bool)>,
+    gpio_pwm_leds: Vec<PwmLed>,
     h7_rtc: Vec<Stm32Rtc>,
     h7_spi: Vec<Spi>,
     h7_i2c: Vec<I2c>,
@@ -365,6 +374,48 @@ impl Bus {
             })
     }
 
+    pub fn add_gpio_pwm_led(
+        &mut self,
+        name: String,
+        base: u32,
+        pin: u8,
+        inverted: bool,
+        routes: [Option<(u32, u8)>; 16],
+    ) {
+        self.gpio_pwm_leds.push(PwmLed {
+            name,
+            base,
+            pin,
+            inverted,
+            routes,
+        });
+    }
+
+    pub fn gpio_pwm_led_levels(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.gpio_pwm_leds.iter().filter_map(|led| {
+            let port = self.h7_gpio.iter().find(|port| port.base == led.base)?;
+            let level = if let Some(af) = port.alternate_function(led.pin) {
+                led.routes[af]
+                    .and_then(|(base, channel)| {
+                        let timer = self.h7_timers.iter().find(|timer| {
+                            timer.base == base
+                                && timer_clocked(self.h7_network_control.as_ref(), timer)
+                        })?;
+                        timer.pwm_level(channel)
+                    })
+                    .unwrap_or(0.0)
+            } else if port.pins() & (1 << led.pin) != 0 {
+                1.0
+            } else {
+                0.0
+            };
+            Some((
+                led.name.as_str(),
+                if led.inverted { 1.0 - level } else { level },
+            ))
+        })
+    }
+
     pub fn map_h7_gpio(&mut self, port: Stm32Gpio) -> Result<(), String> {
         self.check_peripheral_range(port.base, port.size)?;
         self.h7_gpio.push(port);
@@ -432,6 +483,13 @@ impl Bus {
         self.check_peripheral_range(device.base, Crypto::SIZE)?;
         self.h7_crypto.push(device);
         Ok(())
+    }
+
+    pub fn attach_sd_image(&mut self, image: Vec<u8>) -> Result<(), String> {
+        match self.h7_sdmmc.as_mut_slice() {
+            [controller] => controller.attach(image),
+            _ => Err("--sd-image requires exactly one SDMMC controller".into()),
+        }
     }
 
     pub fn map_h7_sdmmc(&mut self, device: Sdmmc) -> Result<(), String> {
@@ -1560,7 +1618,10 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
-            && let Some(device) = self.h7_sdmmc.iter().find(|device| device.contains(address))
+            && let Some(device) = self
+                .h7_sdmmc
+                .iter_mut()
+                .find(|device| device.contains(address))
         {
             return Ok(device.read(address));
         }
@@ -1584,7 +1645,10 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
-            && let Some(device) = self.h7_dsi.iter().find(|device| device.contains(address))
+            && let Some(device) = self
+                .h7_dsi
+                .iter_mut()
+                .find(|device| device.contains(address))
         {
             return Ok(device.read(address));
         }

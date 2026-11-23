@@ -1,5 +1,6 @@
 use crate::{
     designware_usb::DesignWareUsb,
+    iis2mdc::Iis2mdc,
     machine::Machine,
     nvic::IRQ_LINES,
     platform::{Entry, irq_index, number},
@@ -11,7 +12,7 @@ use crate::{
     stm32h7_dsi::Dsi,
     stm32h7_fdcan::Fdcan,
     stm32h7_hsem::Hsem,
-    stm32h7_i2c::{I2C, I2c},
+    stm32h7_i2c::{I2C, I2c, Target},
     stm32h7_lptim::LpTimer,
     stm32h7_ltdc::Ltdc,
     stm32h7_qspi::Qspi,
@@ -42,6 +43,7 @@ pub fn is_device(model: &str) -> bool {
             Qspi::FLASH
                 | Fdcan::MODEL
                 | Veml7700::MODEL
+                | Iis2mdc::MODEL
                 | Iwdg::MODEL
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
@@ -108,12 +110,14 @@ pub fn configure(
         let base = entry
             .sysbus()?
             .ok_or_else(|| entry.error("missing DSI address"))?;
-        if !entry.body.is_empty() {
-            return Err(entry.error("unsupported DSI properties or connections"));
-        }
+        let panel = match entry.body.as_slice() {
+            [] => false,
+            [(_, property)] if property == "panel: \"NT35510\"" => true,
+            _ => return Err(entry.error("expected optional DSI panel: \"NT35510\"")),
+        };
         machine
             .bus
-            .map_h7_dsi(Dsi::new(base))
+            .map_h7_dsi(Dsi::new(base, panel))
             .map_err(|e| entry.error(&e))?;
     }
     for entry in entries.iter().filter(|entry| entry.model == Crypto::MODEL) {
@@ -299,18 +303,26 @@ pub fn configure(
     }
     for entry in entries
         .iter()
-        .filter(|entry| entry.model == Veml7700::MODEL)
+        .filter(|entry| matches!(entry.model.as_str(), Veml7700::MODEL | Iis2mdc::MODEL))
     {
         let (parent, address) = entry
             .registration
             .as_deref()
             .and_then(|text| text.split_once(char::is_whitespace))
-            .ok_or_else(|| entry.error("expected VEML7700 on an I2C address"))?;
+            .ok_or_else(|| entry.error("expected sensor on an I2C address"))?;
         let address = irq_index(address, 128).map_err(|e| entry.error(&e))?;
         let (_, bus) = buses
             .iter_mut()
             .find(|(target, _)| target.name == parent)
-            .ok_or_else(|| entry.error("unknown VEML7700 I2C parent"))?;
+            .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Iis2mdc::MODEL {
+            if !entry.body.is_empty() {
+                return Err(entry.error("unsupported IIS2MDC properties"));
+            }
+            bus.attach(u16::from(address), Target::Magnetometer(Iis2mdc::new()))
+                .map_err(|e| entry.error(e))?;
+            continue;
+        }
         let illuminance = match entry.body.as_slice() {
             [] => 0.0,
             [(_, text)] => text
@@ -321,8 +333,11 @@ pub fn configure(
                 .ok_or_else(|| entry.error("expected a nonnegative VEML7700 Illuminance value"))?,
             _ => return Err(entry.error("unsupported VEML7700 properties")),
         };
-        bus.attach(u16::from(address), Veml7700::new(illuminance))
-            .map_err(|e| entry.error(e))?;
+        bus.attach(
+            u16::from(address),
+            Target::Light(Veml7700::new(illuminance)),
+        )
+        .map_err(|e| entry.error(e))?;
     }
     for (entry, bus) in buses {
         machine.bus.map_h7_i2c(bus).map_err(|e| entry.error(&e))?;
@@ -480,6 +495,29 @@ fn parse_timer(
                 _ => return Err("unsupported, invalid or duplicate STM32 timer property".into()),
             }
         } else {
+            if let Some((channel, targets)) = text.split_once("->")
+                && irq_index(channel, 4).is_ok()
+            {
+                for target in targets.split('|') {
+                    let (port, selector) = target
+                        .trim()
+                        .split_once('#')
+                        .ok_or("missing timer GPIO pin")?;
+                    let (pin, alternate) = selector
+                        .split_once('@')
+                        .ok_or("missing timer GPIO alternate function")?;
+                    if !entries.iter().any(|entry| {
+                        entry.name == port && entry.model == crate::stm32h7_gpio_platform::GPIO
+                    }) {
+                        return Err(
+                            "expected timer output routed to a GPIO alternate function".into()
+                        );
+                    }
+                    irq_index(pin, 16)?;
+                    irq_index(alternate, 16)?;
+                }
+                continue;
+            }
             let (output, target, input) = wire(text)?;
             if !matches!(output, "" | "IRQ") || irq.is_some() {
                 return Err("expected one STM32 timer IRQ".into());

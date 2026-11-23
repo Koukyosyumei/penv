@@ -52,6 +52,9 @@ awk -v RS='' -v ORS='\n\n' '$1 ~ /^(usart2|watchdog|rcc):$/' "$board" >> "$work/
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(redRgbLed|greenRgbLed|blueRgbLed|gpioPortD):$/' \
     "$board" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 ~ /^(pwmled0|pwmled3|gpioPortB):$/' "$board" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 == "timer3:" && NF > 1 && $2 == "0" {print}' "$cpu" >> "$work/boot.repl"
+awk '$1 == "iis2mdc:" {print $0 "\n"}' "$board" >> "$work/boot.repl"
 awk '$1 == "veml7700:" {print}' "$board" >> "$work/boot.repl"
 printf '    Illuminance: 500\n' >> "$work/boot.repl"
 sed 's|@platforms/boards/stm32h7_renode_reference_board.repl|@boot.repl|' \
@@ -60,6 +63,8 @@ printf 'help\r' > "$work/help.txt"
 printf 'kernel version\r' > "$work/kernel-version.txt"
 printf 'sensor get veml7700@10 light\r' > "$work/sensor.txt"
 
+printf 'sensor get iis2mdc@1e magn_xyz\r' > "$work/magnetometer.txt"
+
 cargo build --release
 status=0
 target/release/penv run --script "$work/boot.resc" \
@@ -67,6 +72,7 @@ target/release/penv run --script "$work/boot.resc" \
     --uart-event "850000:$work/help.txt" \
     --uart-event "1300000:$work/kernel-version.txt" \
     --uart-event "1700000:$work/sensor.txt" \
+    --uart-event "2100000:$work/magnetometer.txt" \
     --stats > "$work/uart.log" 2> "$work/penv.log" || status=$?
 printf 'STM32H7 UART and simulator logs: %s\n' "$work"
 if [[ "$status" != 2 ]] ||
@@ -74,7 +80,8 @@ if [[ "$status" != 2 ]] ||
     ! rg -aqF 'demo:~$' "$work/uart.log" ||
     ! rg -aqF 'Available commands:' "$work/uart.log" ||
     ! rg -aqF 'Zephyr version 4.4.99' "$work/uart.log" ||
-    ! rg -aq 'channel type=18\(light\).*\(499\.000000\)' "$work/uart.log"; then
+    ! rg -aq 'channel type=18\(light\).*\(499\.000000\)' "$work/uart.log" ||
+    ! rg -aq 'channel type=11\(magn_xyz\).*\(0\.000000, 0\.000000, 0\.000000\)' "$work/uart.log"; then
     cat "$work/penv.log" >&2
     cat "$work/uart.log" >&2
     exit 1
@@ -136,7 +143,7 @@ status=0
 target/release/penv run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" > "$work/sdmmc-uart.log" 2> "$work/sdmmc-penv.log" || status=$?
-expected=$(printf '%s\n' 0x4 0x20000 0x0 0x0 0x4 0x4f54310a)
+expected=$(printf '%s\n' 0x80004 0x20000 0x80000 0x0 0x4 0x4f54310a)
 actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/sdmmc-uart.log")
 if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
     cat "$work/sdmmc-penv.log" >&2
@@ -184,7 +191,9 @@ for command in '0x48021030 32 0x00010203' '0x48021034 32 0x04050607' \
     '0x48021008 32 0x44556677' '0x48021008 32 0x8899aabb' '0x48021008 32 0xccddeeff' \
     '0x4802101c 32' '0x4802100c 32' '0x4802100c 32' '0x4802100c 32' '0x4802100c 32' \
     '0x4802101c 32' '0x580244e0 32 0x8' '0x58020c00 32 0x04000000' \
-    '0x58020c18 32 0x2000'; do
+    '0x58020c18 32 0x2000' '0x580244e0 32 0xa' '0x58020400 32 0x200' \
+    '0x58020420 32 0x20000' '0x580244e8 32 2' '0x4000042c 32 0x63' \
+    '0x40000434 32 0x19' '0x40000418 32 0x60' '0x40000420 32 1' '0x40000400 32 1'; do
     printf 'devmem %s\r' "$command" > "$work/cryp-$step.txt"
     events+=(--uart-event "$step:$work/cryp-$step.txt")
     step=$((step + 150000))
@@ -197,7 +206,8 @@ expected=$(printf '%s\n' 0x2 0x69c4e0d8 0x6a7b0430 0xd8cdb780 0x70b4c55a 0x0)
 actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/cryp-uart.log")
 if [[ "$status" != 2 || "$actual" != "$expected" ]] ||
     ! rg -qxF 'redRgbLed=on' "$work/cryp-penv.log" ||
-    ! rg -qxF 'greenRgbLed=off' "$work/cryp-penv.log"; then
+    ! rg -qxF 'greenRgbLed=off' "$work/cryp-penv.log" ||
+    ! rg -qxF 'pwmled0=25.00%' "$work/cryp-penv.log"; then
     cat "$work/cryp-penv.log" >&2
     cat "$work/cryp-uart.log" >&2
     exit 1

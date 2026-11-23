@@ -64,6 +64,11 @@ impl Stm32Gpio {
         self.external = (self.external & !bit) | (u16::from(high) << pin);
     }
 
+    pub fn alternate_function(&self, pin: u8) -> Option<usize> {
+        ((self.mode >> (pin * 2)) & 3 == 2)
+            .then(|| ((self.alternate[usize::from(pin / 8)] >> ((pin % 8) * 4)) & 15) as usize)
+    }
+
     pub fn pins(&self) -> u16 {
         let mut pins = 0;
         let mut active = self.external | self.output as u16;

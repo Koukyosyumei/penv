@@ -6,11 +6,12 @@ use crate::{
 
 pub const GPIO: &str = "GPIOPort.STM32_GPIOPort";
 const SYSCFG: &str = "Miscellaneous.STM32_SYSCFG";
+const PWM_LED: &str = "Miscellaneous.PWMLED";
 const LED: &str = "Miscellaneous.LED";
 const BUTTON: &str = "Miscellaneous.Button";
 
 pub fn is_device(model: &str) -> bool {
-    matches!(model, GPIO | BUTTON | LED)
+    matches!(model, GPIO | BUTTON | LED | PWM_LED)
 }
 
 pub fn configure(
@@ -84,7 +85,10 @@ pub fn configure(
         port.set_external(pin, invert);
     }
 
-    for led in entries.iter().filter(|entry| entry.model == LED) {
+    for led in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), LED | PWM_LED))
+    {
         let (parent, pin) = led
             .registration
             .as_deref()
@@ -117,9 +121,51 @@ pub fn configure(
         if !wired {
             return Err(led.error("expected GPIO pin wired to LED input 0"));
         }
-        machine
-            .bus
-            .add_gpio_led(led.name.clone(), port.base, pin, inverted);
+        if led.model == PWM_LED {
+            let mut routes = [None; 16];
+            for timer in entries
+                .iter()
+                .filter(|timer| timer.model == crate::stm32h7_timer::Timer::MODEL)
+            {
+                for (_, text) in &timer.body {
+                    let Some((channel, targets)) = text.split_once("->") else {
+                        continue;
+                    };
+                    let Ok(channel) = irq_index(channel, 4) else {
+                        continue;
+                    };
+                    for target in targets.split('|') {
+                        let Some((port_name, function)) = target.trim().split_once('#') else {
+                            continue;
+                        };
+                        let Some((output_pin, alternate)) = function.split_once('@') else {
+                            continue;
+                        };
+                        if port_name != parent || irq_index(output_pin, 16) != Ok(pin) {
+                            continue;
+                        }
+                        let alternate = irq_index(alternate, 16).map_err(|e| timer.error(&e))?;
+                        let (base, _) = crate::stm32h7_board_platform::registration(timer, entries)
+                            .map_err(|e| timer.error(&e))?;
+                        if routes[usize::from(alternate)]
+                            .replace((base, channel))
+                            .is_some()
+                        {
+                            return Err(led.error(
+                                "multiple timers drive the same LED pin and alternate function",
+                            ));
+                        }
+                    }
+                }
+            }
+            machine
+                .bus
+                .add_gpio_pwm_led(led.name.clone(), port.base, pin, inverted, routes);
+        } else {
+            machine
+                .bus
+                .add_gpio_led(led.name.clone(), port.base, pin, inverted);
+        }
     }
 
     for (_, port) in ports {
@@ -187,7 +233,7 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
             .ok_or("missing GPIO destination pins")?;
         if let Some(led) = entries
             .iter()
-            .find(|led| led.model == LED && led.name == target.trim())
+            .find(|led| matches!(led.model.as_str(), LED | PWM_LED) && led.name == target.trim())
         {
             let expected = led
                 .registration
