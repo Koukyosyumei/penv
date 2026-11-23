@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 16 | 0 | 201 | 7 |
-| **合計** | **730** | **94** | **0** | **636** | **244** |
+| Infrastructure | 217 | 25 | 0 | 192 | 7 |
+| **合計** | **730** | **103** | **0** | **627** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 636 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 627 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -537,3 +537,35 @@ mkdir -p "$work"
     echo "$?" >"$work/freertos.status"
 ) &
 ```
+
+## 共有タイマーの周期境界
+
+固定 Infrastructure の `src/Emulator/Main/Tests/UnitTests/LimitTimerTests.cs` 全 9 件を
+移植しました。SysTick が使用する周期境界計算とイベント選択を、固定上流と同じ
+周波数・上限・経過時間で検証します。上昇カウントは上限までの残距離から値を取得し、
+方向切り替えでは切り替え時の値を保持します。1 MHz で 10 µs、10 MHz で 1 µs
+進む各ケースで、期限到達 2 回と残り 2 クロックを確認します。
+STM32 TIM は SysTick とクロック分数の繰り越しを共用し、TIM 固有の ARR と
+更新・比較イベントの条件は各レジスターモデルに保持します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-limit-timer
+mkdir -p "$work"
+cargo test limit_timer
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+TIM2 の公開 ELF 回帰は `tests/stm32f407-upstream-smoke.sh` の TIM2 段を
+個別に実行します。上流の SHA-1 に一致する上昇・下降ファームウェアを
+各 100000 ステップ、未変更の CPU REPL で実行し、バナー、IRQ 有効化、開始、
+3 回以上の周期コールバックの順序を照合します。ログは `tim2-up.log` と
+`tim2-down.log` に保存しました。比較値変更と比較イベントを扱う共有
+`ComparingTimerTests.cs` は別群に残っています。

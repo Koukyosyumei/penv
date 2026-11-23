@@ -1,4 +1,7 @@
-use crate::machine::VIRTUAL_STEPS_PER_SECOND;
+use crate::{
+    limit_timer::{advance_limit, clock_ticks},
+    machine::VIRTUAL_STEPS_PER_SECOND,
+};
 
 pub const PENDSV: u8 = 14;
 pub const SYSTICK: u8 = 15;
@@ -60,28 +63,11 @@ impl SysTick {
         if self.control & 1 == 0 {
             return;
         }
-        let steps_per_second = u64::from(step_hz);
-        self.phase += u64::from(self.frequency);
-        let cycles = (self.phase / steps_per_second) as u32;
-        self.phase %= steps_per_second;
-        if cycles == 0 {
-            return;
-        }
-        let until_zero = self.current;
-        if until_zero == 0 {
-            return;
-        }
-        if cycles < until_zero {
-            self.current = until_zero - cycles;
-        } else {
-            self.count_flag = true;
-            self.pending |= self.control & 2 != 0;
-            self.current = if self.reload == 0 {
-                0
-            } else {
-                self.reload - (cycles - until_zero) % self.reload
-            };
-        }
+        let cycles = clock_ticks(&mut self.phase, self.frequency, step_hz);
+        let advance = advance_limit(u64::from(self.current), u64::from(self.reload), cycles);
+        self.current = advance.remaining as u32;
+        self.count_flag |= advance.expirations != 0;
+        self.pending |= advance.events(self.control & 2 != 0) != 0;
     }
 
     pub fn pending_mask(&self) -> u8 {

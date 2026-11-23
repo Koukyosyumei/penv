@@ -8,6 +8,7 @@ mod dwt;
 mod ethernet;
 mod ethernet_switch;
 mod image;
+mod limit_timer;
 mod litex_ethernet;
 mod machine;
 mod mii_phy;

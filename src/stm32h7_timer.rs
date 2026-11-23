@@ -278,10 +278,7 @@ impl Timer {
         {
             return;
         }
-        let step_hz = u64::from(step_hz);
-        self.phase += u64::from(self.frequency);
-        let cycles = self.phase / step_hz;
-        self.phase %= step_hz;
+        let cycles = crate::limit_timer::clock_ticks(&mut self.phase, self.frequency, step_hz);
         for _ in 0..cycles {
             self.count_clock();
             if self.registers[0] & CEN == 0 {
