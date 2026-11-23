@@ -1133,6 +1133,57 @@ impl Bus {
         }))
     }
 
+    pub fn find_bytes(&self, pattern: &[u8], start: u32, end: u32) -> Result<Vec<u32>, String> {
+        if pattern.is_empty() || pattern.len() > 1 << 20 {
+            return Err("FindBytes pattern must contain 1 to 1048576 bytes".into());
+        }
+        if start > end {
+            return Ok(Vec::new());
+        }
+
+        // A prefix can continue into an adjacent mapping, but never across
+        // an unmapped address or a peripheral.
+        let mut prefix = vec![0; pattern.len()];
+        let advance = |mut matched: usize, byte, prefix: &[usize]| {
+            while matched != 0 && pattern[matched] != byte {
+                matched = prefix[matched - 1];
+            }
+            matched + usize::from(pattern[matched] == byte)
+        };
+        for index in 1..pattern.len() {
+            prefix[index] = advance(prefix[index - 1], pattern[index], &prefix);
+        }
+
+        let mut regions: Vec<_> = self.regions.iter().collect();
+        regions.sort_unstable_by_key(|region| region.base);
+        let mut locations = Vec::new();
+        let mut matched = 0;
+        let mut previous_end = None;
+        for region in regions {
+            let base = u64::from(region.base);
+            let low = u64::from(start).max(base);
+            let high = (u64::from(end) + 1).min(base + region.bytes.len() as u64);
+            if low >= high {
+                continue;
+            }
+            if previous_end != Some(low) {
+                matched = 0;
+            }
+            for (offset, &byte) in region.bytes[(low - base) as usize..(high - base) as usize]
+                .iter()
+                .enumerate()
+            {
+                matched = advance(matched, byte, &prefix);
+                if matched == pattern.len() {
+                    locations.push((low + offset as u64 + 1 - matched as u64) as u32);
+                    matched = prefix[matched - 1];
+                }
+            }
+            previous_end = Some(high);
+        }
+        Ok(locations)
+    }
+
     pub fn write_bytes(
         &mut self,
         address: u32,
@@ -1692,6 +1743,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn renode_systembus_finds_bytes_across_mappings_and_mebibyte_boundary() {
+        const BLOCK: u32 = 1 << 20;
+        let pattern: Vec<u8> = (0..8).collect();
+        let mut bus = Bus::default();
+        // Register second memory first to also check address-ordered results.
+        bus.map_ram(BLOCK, BLOCK as usize).unwrap();
+        bus.map_ram(0, BLOCK as usize).unwrap();
+        bus.write_bytes(0, &pattern, &mut io::sink()).unwrap();
+        bus.write_bytes(BLOCK - 4, &pattern, &mut io::sink())
+            .unwrap();
+        assert_eq!(
+            bus.find_bytes(&pattern, 0, u32::MAX).unwrap(),
+            [0, BLOCK - 4]
+        );
+        assert_eq!(bus.find_bytes(&pattern, 1, BLOCK + 3).unwrap(), [BLOCK - 4]);
+        assert!(bus.find_bytes(&pattern, 1, BLOCK + 2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn systembus_find_bytes_skips_gaps_and_peripherals_and_keeps_overlapping_matches() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 3).unwrap();
+        bus.map_ram(4, 2).unwrap();
+        bus.map_ram(u32::MAX, 1).unwrap();
+        bus.byte_peripheral.insert(3, b'a');
+        bus.write_bytes(0, b"aaaaaa", &mut io::sink()).unwrap();
+        bus.write_bytes(u32::MAX, b"a", &mut io::sink()).unwrap();
+        assert_eq!(bus.find_bytes(b"aa", 0, 5).unwrap(), [0, 1, 4]);
+        assert_eq!(
+            bus.find_bytes(b"a", u32::MAX, u32::MAX).unwrap(),
+            [u32::MAX]
+        );
+        assert!(bus.find_bytes(b"", 0, 5).is_err());
+        assert!(bus.find_bytes(b"a", 5, 0).unwrap().is_empty());
     }
 
     #[test]

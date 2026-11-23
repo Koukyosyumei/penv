@@ -41,6 +41,7 @@ enum Action {
     CpuPc(String, u32),
     MachineReset,
     ReadBytes(u32, usize),
+    FindBytes(Vec<u8>, u32, u32),
     WriteBytes(u32, Vec<u8>),
     Button(String, bool),
     ButtonPulse(String),
@@ -118,6 +119,13 @@ pub fn run(
             Action::ReadBytes(address, count) => {
                 read_bus_bytes(machine, *address, *count, output.output).map(|()| None)
             }
+            Action::FindBytes(pattern, start, end) => machine
+                .bus
+                .find_bytes(pattern, *start, *end)
+                .and_then(|addresses| {
+                    write_hex_list(addresses, 8, output.output).map_err(|error| error.to_string())
+                })
+                .map(|()| None),
             Action::WriteBytes(address, bytes) => machine
                 .bus
                 .write_bytes(*address, bytes, &mut output)
@@ -221,6 +229,19 @@ fn read_bus_bytes(
         write!(output, "{separator}0x{byte:02x}").map_err(|error| error.to_string())?;
     }
     writeln!(output, "]").map_err(|error| error.to_string())
+}
+
+fn write_hex_list<T: std::fmt::LowerHex>(
+    values: impl IntoIterator<Item = T>,
+    digits: usize,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    write!(output, "[")?;
+    for (index, value) in values.into_iter().enumerate() {
+        let separator = if index == 0 { "" } else { ", " };
+        write!(output, "{separator}0x{value:0digits$x}")?;
+    }
+    writeln!(output, "]")
 }
 
 fn wait_for_led(
@@ -503,22 +524,35 @@ fn execute(
         )),
         ["sysbus", "WriteBytes", ..] => {
             let args = text["sysbus".len()..].trim_start()["WriteBytes".len()..].trim_start();
-            let (list, address) = args
-                .strip_prefix('[')
-                .and_then(|args| args.split_once(']'))
-                .ok_or("expected sysbus WriteBytes [byte, ...] address")?;
-            let bytes = if list.trim().is_empty() {
-                Vec::new()
-            } else {
-                list.split(',')
-                    .map(|number| {
-                        let value = crate::parse_address(resolve(number.trim())?)?;
-                        u8::try_from(value).map_err(|_| format!("byte value out of range: {value}"))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?
-            };
-            let address = crate::parse_address(resolve(address.trim())?)?;
+            let (bytes, address) = byte_list(args, resolve)?;
+            let address = crate::parse_address(resolve(address)?)?;
             Some(Action::WriteBytes(address, bytes))
+        }
+        ["sysbus", "FindBytes", ..] => {
+            let args = text["sysbus".len()..].trim_start()["FindBytes".len()..].trim_start();
+            let (pattern, remainder) = if args.starts_with('[') {
+                byte_list(args, resolve)?
+            } else {
+                let (hex, remainder) = quoted_argument(args)
+                    .ok_or("expected sysbus FindBytes \"hex bytes\" or [byte, ...]")?;
+                (hex_pattern(hex)?, remainder)
+            };
+            let mut bounds = remainder.split_whitespace();
+            let start = bounds
+                .next()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?
+                .unwrap_or(0);
+            let end = bounds
+                .next()
+                .filter(|&value| value != "null")
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?
+                .unwrap_or(u32::MAX);
+            if bounds.next().is_some() {
+                return Err("expected sysbus FindBytes pattern [start [end]]".into());
+            }
+            Some(Action::FindBytes(pattern, start, end))
         }
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset),
@@ -655,6 +689,44 @@ fn execute(
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn byte_list<'a>(
+    args: &'a str,
+    resolve: impl Fn(&'a str) -> Result<&'a str, String>,
+) -> Result<(Vec<u8>, &'a str), String> {
+    let (list, remainder) = args
+        .strip_prefix('[')
+        .and_then(|args| args.split_once(']'))
+        .ok_or("expected [byte, ...]")?;
+    let bytes = if list.trim().is_empty() {
+        Vec::new()
+    } else {
+        list.split(',')
+            .map(|number| {
+                let value = crate::parse_address(resolve(number.trim())?)?;
+                u8::try_from(value).map_err(|_| format!("byte value out of range: {value}"))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    };
+    Ok((bytes, remainder.trim()))
+}
+
+fn hex_pattern(value: &str) -> Result<Vec<u8>, String> {
+    let hex: String = value
+        .chars()
+        .filter(|char| !matches!(char, ' ' | '\r' | '\n'))
+        .collect();
+    if !hex.is_ascii() || hex.len() % 2 != 0 {
+        return Err("FindBytes requires complete hexadecimal bytes".into());
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&hex[index..index + 2], 16)
+                .map_err(|_| "FindBytes requires complete hexadecimal bytes".into())
+        })
+        .collect()
 }
 
 fn quoted_argument(value: &str) -> Option<(&str, &str)> {

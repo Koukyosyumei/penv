@@ -259,7 +259,7 @@ def classify_nunit(name, case, attrs, parameter):
         if case == "ShouldReadBytes":
             return PASS, COMMON, "renode_systembus_bulk_transfers_between_memory_and_byte_peripherals; 350 bytes, four RAM/byte-MMIO combinations, zero-filled gaps"
         if case == "ShouldFindBytePattern":
-            return OPEN, COMMON, "Requires FindBytes pattern search across adjacent mappings and the 1 MiB internal scan-buffer boundary"
+            return PASS, COMMON, "renode_systembus_finds_bytes_across_mappings_and_mebibyte_boundary; same two 1 MiB mappings, 00..07 pattern and addresses 0/0x000ffffc"
     if name == "CRCTests":
         if case == "ShouldCalculateCRC31Philips":
             return OUT, "Generic CRCEngine with arbitrary polynomial width", "31-bit width cannot be selected on STM32F072 CRC"

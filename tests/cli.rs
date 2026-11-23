@@ -199,6 +199,9 @@ sysbus ReadBytes 0x0e 4
 sysbus WriteBytes [0, 1, 2, 3, 4, 5, 6, 7] 0xbffffffc
 sysbus ReadBytes 0xbffffffc 8
 sysbus ReadBytes 0 0
+sysbus FindBytes "11 22"
+sysbus FindBytes [0x04, 0x05, 0x06, 0x07] 0xc0000000 0xc0000003
+sysbus FindBytes "04050607" 0xc0000000 0xc0000002
 "#,
     )
     .unwrap();
@@ -212,7 +215,12 @@ sysbus ReadBytes 0 0
     assert!(run.status.success(), "{run:?}");
     assert_eq!(
         run.stdout,
-        b"[0x11, 0x22, 0x00, 0x00]\n[0x00, 0x00, 0x00, 0x00, 0x04, 0x05, 0x06, 0x07]\n[]\n"
+        concat!(
+            "[0x11, 0x22, 0x00, 0x00]\n",
+            "[0x00, 0x00, 0x00, 0x00, 0x04, 0x05, 0x06, 0x07]\n",
+            "[]\n[0x0000000e]\n[0xc0000000]\n[]\n",
+        )
+        .as_bytes()
     );
 }
 

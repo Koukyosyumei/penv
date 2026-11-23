@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 21 | 35 | 57 | 239 |
-| Renode Infrastructure NUnit | 134 | 26 | 0 | 108 | 9 |
-| 合計 | **247** | **47** | **35** | **165** | **248** |
+| Renode Infrastructure NUnit | 134 | 27 | 0 | 107 | 9 |
+| 合計 | **247** | **48** | **35** | **164** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植35件と未達165件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植35件と未達164件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -177,9 +177,23 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-crc-verification
 - オフセット50–149と200–299に RAM またはバイト幅のテスト用周辺機器を置き、4組の組み合わせでオフセット0からの350バイト転送と穴のゼロ埋めを確認した。
 - RESC の解析と CLI 表示、ゼロ長の読み出し、32ビットアドレス空間端を越える書き込みの事前拒否も検査した。
 
-`FindBytes` は隣接する別領域と1 MiBの検索バッファ境界をまたぐパターン照合が必要なので未達に残した。CPU コンテキスト付き転送、`onlyMemory` オプション、バス上の別名登録はこの移植の範囲外。
+隣接領域をまたぐ `FindBytes` は下記で検証した。CPU コンテキスト付き転送、`onlyMemory` オプション、バス上の別名登録はこの移植の範囲外。
 
 ```sh
 cargo test --locked bulk
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systembus-verification
+```
+
+
+## SystemBus のバイト列検索
+
+固定 Infrastructure の `SystemBusTests.cs` の `ShouldFindBytePattern` と、`SystemBus.cs` の `FindBytes` を移植した。上流と同じように隣接する1 MiBのメモリを2領域登録し、バイト列 `00 01 02 03 04 05 06 07` を `0x00000000` と `0x000ffffc` に書く。2件がアドレス順に見つかり、後者は領域と上流の1 MiB検索バッファの境界をまたぐ。
+
+RESC の `sysbus FindBytes "00 01 02 03 04 05 06 07"` は引用符付き16進文字列とバイトリストを受け付ける。開始・終了アドレスは任意で、指定時は両端を含む。マップされたメモリのみ走査し、隣接領域の間では途中一致を維持し、穴や MMIO では途切れる。検索結果はアドレスリストとして標準出力へ返し、UART の待機履歴には入れない。
+
+CPU コンテキスト付き検索と動的な別名登録は残件。SystemBus の未割り当てアクセス方針とタグの分割を検査する別群も未達に残した。
+
+```sh
+cargo test --locked systembus
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-findbytes-verification
 ```
