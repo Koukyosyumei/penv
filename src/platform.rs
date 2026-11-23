@@ -150,6 +150,33 @@ fn number_token(value: &str) -> Option<String> {
     Some(format!("{sign}{digits}{fraction}"))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ScalarValue<'a> {
+    Text(String),
+    Number(String),
+    Boolean(bool),
+    Reference(&'a str),
+    Range(u64, u64),
+    Enum(Option<&'a str>, &'a str),
+}
+
+fn scalar_value(value: &str) -> Option<ScalarValue<'_>> {
+    let value = value.trim();
+    match value {
+        "true" | "True" => Some(ScalarValue::Boolean(true)),
+        "false" | "False" => Some(ScalarValue::Boolean(false)),
+        _ if value.starts_with('"') => quoted_string(value).map(ScalarValue::Text),
+        _ if value.starts_with("'''") => multiline_value(value).map(ScalarValue::Text),
+        _ if value.starts_with('<') => parse_bus_range(value)
+            .ok()
+            .map(|(base, size)| ScalarValue::Range(base, size)),
+        _ if is_repl_identifier(value) => Some(ScalarValue::Reference(value)),
+        _ => number_token(value)
+            .map(ScalarValue::Number)
+            .or_else(|| enum_token(value).map(|(kind, member)| ScalarValue::Enum(kind, member))),
+    }
+}
+
 fn hexadecimal_unsigned(value: &str) -> Option<u64> {
     let digits = digit_sequence(value.strip_prefix("0x")?, |byte| byte.is_ascii_hexdigit())?;
     u64::from_str_radix(&digits, 16).ok()
@@ -1196,16 +1223,18 @@ fn validate_mock_cpu_properties(
             continue;
         };
         let value = statement.split_once(':').unwrap().1.trim();
+        let parsed = scalar_value(value);
         let error = match key {
-            "Placeholder" if quoted_string(value).is_some() || multiline_value(value).is_some() => {
-                continue;
-            }
+            "Placeholder" if matches!(parsed, Some(ScalarValue::Text(_))) => continue,
             "EnumValue"
-                if number_token(value).is_some()
-                    || is_repl_identifier(value)
-                    || enum_token(value).is_some_and(|(kind, _)| {
-                        kind.is_none() || kind == Some("TwoStateEnum")
-                    }) =>
+                if matches!(
+                    parsed,
+                    Some(
+                        ScalarValue::Number(_)
+                            | ScalarValue::Reference(_)
+                            | ScalarValue::Enum(None | Some("TwoStateEnum"), _)
+                    )
+                ) =>
             {
                 continue;
             }

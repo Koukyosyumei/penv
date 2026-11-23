@@ -1162,3 +1162,59 @@ fn renode_init_syntax_quoted_semicolon() {
         &["CallMethod \"string ; with semicolon\""],
     );
 }
+
+fn typed_attributes(entry: &Entry) -> Vec<(&str, ScalarValue<'_>)> {
+    entry
+        .body
+        .iter()
+        .map(|(_, text)| {
+            let (key, value) = text.split_once(':').unwrap();
+            (key, scalar_value(value).unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn renode_typed_scalar_attribute_values() {
+    use ScalarValue::*;
+    let entry = attribute_syntax("\nuart:\n    model: \"ABC666\"\n    numberOfBits: 32\n    sleepTime: 0.01\n    friendUart: otherUart\n    range: <0x1000, +0x100>\n").unwrap();
+    assert_eq!(
+        typed_attributes(&entry),
+        [
+            ("model", Text("ABC666".into())),
+            ("numberOfBits", Number("32".into())),
+            ("sleepTime", Number("0.01".into())),
+            ("friendUart", Reference("otherUart")),
+            ("range", Range(0x1000, 0x100)),
+        ]
+    );
+}
+
+#[test]
+fn renode_typed_scalar_boolean_case() {
+    use ScalarValue::*;
+    let entry = attribute_syntax("\ndevice: Something @ somewhere\n    BoolProp: true\n    BoolProp2: false\n    BoolProp3: True\n    BoolProp4: False\n    BoolProp5: tRue\n    BoolProp6: FALSE\n").unwrap();
+    let actual: Vec<_> = typed_attributes(&entry)
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            Boolean(true),
+            Boolean(false),
+            Boolean(true),
+            Boolean(false),
+            Reference("tRue"),
+            Reference("FALSE")
+        ]
+    );
+}
+
+#[test]
+fn renode_typed_scalar_escaped_backslashes() {
+    let entry = attribute_syntax("\nuart:\n    string: \"\\\\escaped backslash: \\\\, two in a row: \\\\\\\\, before quote: \\\\\\\", and one at the end: \\\\\"\n").unwrap();
+    assert_eq!(entry.name, "uart");
+    assert!(entry.model.is_empty());
+    assert_eq!(typed_attributes(&entry), [("string", ScalarValue::Text("\\escaped backslash: \\, two in a row: \\\\, before quote: \\\", and one at the end: \\".into()))]);
+}
