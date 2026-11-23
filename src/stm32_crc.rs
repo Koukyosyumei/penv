@@ -1,3 +1,5 @@
+use crate::crc::CrcEngine;
+
 pub struct Stm32Crc {
     pub base: u32,
     pub rcc_bound: bool,
@@ -7,7 +9,7 @@ pub struct Stm32Crc {
     initial: u32,
     control: u32,
     independent: u8,
-    state: u32,
+    engine: CrcEngine,
 }
 
 impl Stm32Crc {
@@ -24,7 +26,7 @@ impl Stm32Crc {
             initial: u32::MAX,
             control: 0,
             independent: 0,
-            state: u32::MAX,
+            engine: CrcEngine::new(0x04c1_1db7, 32, false, false, u32::MAX, 0).unwrap(),
         }
     }
 
@@ -45,8 +47,7 @@ impl Stm32Crc {
 
     pub fn read(&self, address: u32, width: usize) -> u32 {
         let value = match address - self.base {
-            0 if self.control & 0x80 != 0 => self.state.reverse_bits() >> (32 - self.bits()),
-            0 => self.state,
+            0 => self.engine.value(),
             4 => u32::from(self.independent),
             8 => self.control,
             0x10 if !self.legacy => self.initial,
@@ -81,7 +82,17 @@ impl Stm32Crc {
     }
 
     fn reset_state(&mut self) {
-        self.state = self.initial & (u32::MAX >> (32 - self.bits()));
+        let bits = self.bits();
+        let mask = u32::MAX >> (32 - bits);
+        self.engine = CrcEngine::new(
+            self.polynomial & mask,
+            bits,
+            false,
+            self.control & 0x80 != 0,
+            self.initial,
+            0,
+        )
+        .unwrap();
     }
 
     fn update(&mut self, value: u32, width: usize) {
@@ -101,18 +112,7 @@ impl Stm32Crc {
                 }
             }
         }
-        // Keep the CRC left-aligned so the feedback bit is always bit 31.
-        let shift = 32 - self.bits();
-        let polynomial = self.polynomial << shift;
-        let mut state = self.state << shift;
-        for &byte in bytes.iter() {
-            state ^= u32::from(byte) << 24;
-            for _ in 0..8 {
-                let feedback = state >> 31;
-                state = (state << 1) ^ (polynomial & feedback.wrapping_neg());
-            }
-        }
-        self.state = state >> shift;
+        self.engine.update(bytes);
     }
 }
 

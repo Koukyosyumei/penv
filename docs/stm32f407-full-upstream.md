@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 68 | 0 | 445 | 237 |
-| Infrastructure | 217 | 1 | 0 | 216 | 7 |
-| **合計** | **730** | **69** | **0** | **661** | **244** |
+| Infrastructure | 217 | 16 | 0 | 201 | 7 |
+| **合計** | **730** | **84** | **0** | **646** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 661 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 646 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -406,3 +406,34 @@ cargo test thumb::it_status_tests
 期待値は IT テスト 6 件と全 Rust テスト 102 件の合格、フォールト ELF 16 件の
 判定行、FreeRTOS の `FPU context OK: A`、`FPU context OK: B` と
 `IWDG reboot: SRAM retained` です。
+
+## STM32F407 の共有 CRC エンジン
+
+固定 Infrastructure の `src/Emulator/Main/Tests/UnitTests/CRCTests.cs` 全 15 件を
+Rust に移植しました。STM32 の CRC DR が使う共通エンジンで、入力・出力反転、
+初期値と出力 XOR、空入力と分割更新、CRC の各幅を照合します。上流の引数例外は
+Rust の型付きエラーで照合します。移植は共有エンジンを対象とし、F407 上の
+レジスターで設定できる幅と多項式は機種の定義に従います。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-crc
+mkdir -p "$work"
+cargo test crc
+(
+    tests/stm32f407-crc.sh "$work/elf" >"$work/crc-elf.log" 2>&1
+    echo "$?" >"$work/crc-elf.status"
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+Discovery の未変更 kit REPL で実行する追加 ELF は、2 ワード更新、CR による
+累積値のリセット、IDR の保持を確認すると、USART2 に
+`STM32F407 CRC DR=49E3C2FB RESET=FFFFFFFF IDR=5A` を出力します。
+この ELF は共有ケースの追加回帰であり、上流台帳の分母には含めていません。
+DMA、GPIO、SystemBus など共有インフラのケースは別群として残っています。

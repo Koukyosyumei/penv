@@ -2,6 +2,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod constant_mmio;
+mod crc;
 mod csr;
 mod dwt;
 mod ethernet;
