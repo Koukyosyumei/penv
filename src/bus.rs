@@ -869,6 +869,11 @@ impl Bus {
                 timer.tick(rate);
             }
         }
+        for uart in &mut self.stm32_uarts {
+            if f4_clocked(self.f4_rcc.as_ref(), uart.base) {
+                uart.tick(rate);
+            }
+        }
         for rtc in &mut self.h7_rtc {
             if rtc_clocked(control, rtc) && f4_clocked(self.f4_rcc.as_ref(), rtc.base) {
                 rtc.tick(rate);
@@ -1385,6 +1390,7 @@ impl Bus {
         base: u32,
         irq: Option<Stm32Irq>,
         layout: UsartLayout,
+        frequency: u32,
     ) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(layout.size());
@@ -1393,7 +1399,8 @@ impl Bus {
                 "invalid or overlapping STM32 USART range at {base:#010x}"
             ));
         }
-        self.stm32_uarts.push(Stm32Usart::new(base, irq, layout));
+        self.stm32_uarts
+            .push(Stm32Usart::new(base, irq, layout, frequency));
         self.stm32_uart_names.push(name.into());
         Ok(())
     }

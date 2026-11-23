@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 50 | 0 | 463 | 237 |
+| Renode | 513 | 56 | 0 | 457 | 237 |
 | Infrastructure | 217 | 1 | 0 | 216 | 7 |
-| **合計** | **730** | **51** | **0** | **679** | **244** |
+| **合計** | **730** | **57** | **0** | **673** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 679 件には、共有フォールト配送、UART ビット時間・パリティー、GDB・モニター・
+未達 673 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -292,3 +292,46 @@ cargo test thumb::stack_fault_tests
 `upstream-fpu.log` に `Test succeeded` を記録しました。実行上限での終了コード 2 と
 UART 成功行を合わせて検証しています。TrustZone の追加スタック、共有のフォールト配送の
 残件、一般の遅延 FP 準備ビットの組み合わせは今回の 9 ケースの外に残ります。
+
+## STM32F407 USART の受信時刻
+
+優先グループは固定上流 `tests/peripherals/STM32_UART.robot` の全 6 件です。
+CPU を持たない上流フィクスチャと同様に、Rust のテストはアドレス `0x40000000` に
+F4 UART を配置し、同じバスアクセスと 1 µs の時間刻みで検査します。16 MHz の入力と
+`BRR=0x10` で、9 µs 後に RXNE が立たず、10 µs 後にデータを読めることを確認します。
+パリティーを有効にしても 8 ビットのワードにパリティーを含めるため、フレーム長は
+10 µs です。IDLE の検出・取り消し、BRR がゼロになったときのバイト順序、
+UE/RE を無効にしたときの受信破棄も上流と同じ順序で検査します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-uart-timing
+mkdir -p "$work"
+cargo test stm32_uart::
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos-fpu" --fpu >"$work/freertos-fpu.log" 2>&1
+    echo "$?" >"$work/freertos-fpu.status"
+) &
+```
+
+FreeRTOS の期待値は `UART4 echo=X/Y/Z`、TIM2 のキュー通知、CAN ループバックと
+IWDG 再起動です。`--fpu` では `FPU context OK: A` と `FPU context OK: B` も照合します。
+送信タイミング、パリティーエラー、汎用端末テスターの未移植ケースは、この受信スイートの
+合格件数には含めていません。
+
+`cargo test` は 96 件、FreeRTOS の通常版と FPU 版はともに通過しました。
+UART 入力変更に対する追加の短い回帰として、先の RTC 手順で取得した RIOT ELF に
+同じ UART 計画を既定の 1 MIPS で適用し、4 回のアラームと最後の 3 秒の無通信を
+確認しました。今回の短い回帰には 100 MIPS での再実行を含めていません。
+
+```sh
+rtc=target/stm32f407-timed-tests-rtc
+target/release/penv run --script "$rtc/rtc.resc" --platform-root "$RENODE_ROOT" \
+    --f4-repl-timing --uart-check "$rtc/rtc.tsv"
+```

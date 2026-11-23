@@ -839,7 +839,13 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
             let base = uart.address_with_optional_range(layout.size())?;
             machine
                 .bus
-                .map_stm32_usart(&uart.name, base, irq, layout)
+                .map_stm32_usart(
+                    &uart.name,
+                    base,
+                    irq,
+                    layout,
+                    frequency.unwrap_or(8_000_000),
+                )
                 .map_err(|e| uart.error(&e))?;
         }
         if let Some(rcc) = f4_rcc {
