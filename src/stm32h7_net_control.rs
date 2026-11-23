@@ -1,4 +1,4 @@
-use crate::stm32h7_adc::AdcClock;
+use crate::{stm32h7_adc::AdcClock, stm32h7_timer::TimerClock};
 
 const SIZE: u64 = 0x400;
 const ETH_CLOCKS: u32 = 7 << 15;
@@ -188,12 +188,19 @@ impl NetworkControl {
         }
     }
 
-    pub fn timer_enabled(&self, bit: u8) -> bool {
-        self.apb1l_clock & !self.apb1l_reset & (1 << bit) != 0
+    pub fn timer_enabled(&self, clock: TimerClock) -> bool {
+        let enabled = match clock {
+            TimerClock::Apb1Low(bit) => self.apb1l_clock & (1 << bit) != 0,
+            TimerClock::Apb2(bit) => self.apb2_clock & (1 << bit) != 0,
+        };
+        enabled && !self.timer_in_reset(clock)
     }
 
-    pub fn timer_in_reset(&self, bit: u8) -> bool {
-        self.apb1l_reset & (1 << bit) != 0
+    pub fn timer_in_reset(&self, clock: TimerClock) -> bool {
+        match clock {
+            TimerClock::Apb1Low(bit) => self.apb1l_reset & (1 << bit) != 0,
+            TimerClock::Apb2(bit) => self.apb2_reset & (1 << bit) != 0,
+        }
     }
 
     pub fn i2c_enabled(&self, instance: u8) -> bool {
@@ -415,7 +422,7 @@ impl NetworkControl {
                 Change::None
             }
             0x98 => {
-                self.apb2_reset = value & SPI4;
+                self.apb2_reset = value & (SPI4 | TimerClock::apb2_mask());
                 Change::None
             }
             0xd8 => {

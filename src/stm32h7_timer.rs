@@ -7,10 +7,49 @@ const OPM: u32 = 1 << 3;
 const DIR: u32 = 1 << 4;
 const ARPE: u32 = 1 << 7;
 
+#[derive(Clone, Copy)]
+pub enum TimerClock {
+    Apb1Low(u8),
+    Apb2(u8),
+}
+
+impl TimerClock {
+    pub const ALIASES: [(&str, Self); 12] = [
+        ("TIM2", Self::Apb1Low(0)),
+        ("TIM3", Self::Apb1Low(1)),
+        ("TIM4", Self::Apb1Low(2)),
+        ("TIM5", Self::Apb1Low(3)),
+        ("TIM6", Self::Apb1Low(4)),
+        ("TIM7", Self::Apb1Low(5)),
+        ("TIM12", Self::Apb1Low(6)),
+        ("TIM13", Self::Apb1Low(7)),
+        ("TIM14", Self::Apb1Low(8)),
+        ("TIM15", Self::Apb2(16)),
+        ("TIM16", Self::Apb2(17)),
+        ("TIM17", Self::Apb2(18)),
+    ];
+
+    pub fn from_alias(alias: &str) -> Result<Self, String> {
+        Self::ALIASES
+            .iter()
+            .find_map(|&(name, clock)| (name == alias).then_some(clock))
+            .ok_or_else(|| format!("unsupported STM32 timer RCC alias {alias}"))
+    }
+
+    pub fn apb2_mask() -> u32 {
+        Self::ALIASES
+            .iter()
+            .fold(0, |mask, (_, clock)| match *clock {
+                Self::Apb2(bit) => mask | (1 << bit),
+                Self::Apb1Low(_) => mask,
+            })
+    }
+}
+
 /// STM32 general-purpose timer counter, update and output-compare registers.
 pub struct Timer {
     pub base: u32,
-    pub clock: Option<u8>,
+    pub clock: Option<TimerClock>,
     pub irq: Option<Stm32Irq>,
     frequency: u32,
     limit: u32,
@@ -26,7 +65,7 @@ impl Timer {
     pub const MODEL: &str = "Timers.STM32_Timer";
     pub const SIZE: u32 = 0x400;
 
-    pub fn new(base: u32, frequency: u32, limit: u32, clock: Option<u8>) -> Self {
+    pub fn new(base: u32, frequency: u32, limit: u32, clock: Option<TimerClock>) -> Self {
         let mut timer = Self {
             base,
             frequency,

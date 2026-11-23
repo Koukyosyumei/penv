@@ -491,3 +491,23 @@ bash tests/stm32h7-lsm6dso-smoke.sh /tmp/Shellスモークのログディレク�
 | Driver errata | `errata/0.uart.log` | Zephyr 4.4 polling ELF の起動と加速度の期待値 |
 
 いずれも診断 REPL と固定の仮想実行区間を使うため台帳は部分移植です。上流 REPL での実行、Robot の各 UART 待機タイムアウト、RESD コンテナー、FIFO と追加バンクは残件です。未変更の参照 RESC は IMU 定義を通過し、`platforms/cpus/stm32h7.repl:267` の TIM17 に対して `expected an APB1L STM32 timer RCC alias` を返します。対象分母 778 行は維持し、内訳は未達 763、部分移植 15 行です。
+
+### full-h7-tim17
+
+固定上流 REPL の TIM17 宣言を、APB2ENR のビット 18 と APB2RSTR のビット 18 に接続しました。同じ APB2 バンクの TIM15 と TIM16 にも各ビット 16 と 17 を割り当てました。APB1L の既存タイマーは従来のゲートを使います。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-io-smoke.sh /tmp/Shellスモークのログディレクトリ
+bash tests/stm32h7-lsm6dso-smoke.sh /tmp/Shellスモークのログディレクトリ
+target/release/penv run \
+    --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```
+
+公開参照 ELF の Shell で TIM17 の ARR を読み、クロック停止中と APB1LENR の同ビットを有効にした場合の両方で 0 を確認しました。APB2ENR を有効にすると ARR は `0xffff` を返し、ゲストが書いた `0x42` も読み出せました。EGR で発行した更新イベントで SR の UIF と NVIC IRQ 118 の保留を読み出し、APB2RSTR でリセット後に ARR が初期値へ戻り、IRQ が再保留されないことを確認しました。ログは `tim17-uart.log` と `tim17-penv.log` です。TIM15 と TIM16 は同じバンクへの宣言取り込みまで確認しました。
+
+未変更の上流 RESC は TIM15・TIM16・TIM17 を通過し、`platforms/cpus/stm32h7.repl:305` の `timer8: unsupported STM32 timer RCC alias TIM8` で停止します。TIM8 の APB2 結合と複数 IRQ ルートは残件です。このゲスト検証は診断スモークのため、上流ケース台帳の等価合格数には算入しません。

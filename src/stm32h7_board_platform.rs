@@ -20,7 +20,7 @@ use crate::{
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
     stm32h7_sdmmc::Sdmmc,
-    stm32h7_timer::Timer,
+    stm32h7_timer::{Timer, TimerClock},
     tmp108::Tmp108,
     veml7700::Veml7700,
 };
@@ -59,6 +59,14 @@ pub fn is_device(model: &str) -> bool {
 }
 
 pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
+    if entry.model == Timer::MODEL {
+        return TimerClock::ALIASES.iter().any(|(alias, _)| {
+            crate::network_platform::rcc_alias(
+                entry,
+                &format!("RegistrationPeripheralAlias.{alias}"),
+            ) == Some(&rcc.name)
+        });
+    }
     let accepted: &[&str] = match entry.model.as_str() {
         I2C => &["I2C1", "I2C2", "I2C3", "I2C4"],
         Dma2d::MODEL => &["DMA2D"],
@@ -67,9 +75,6 @@ pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
         LpTimer::MODEL => &LpTimer::RCC_ALIASES,
         Rng::MODEL => &["RNG"],
         Qspi::MODEL => &["QSPI"],
-        Timer::MODEL => &[
-            "TIM2", "TIM3", "TIM4", "TIM5", "TIM6", "TIM7", "TIM12", "TIM13", "TIM14",
-        ],
         Stm32Crc::MODEL => &["CRC"],
         _ => return false,
     };
@@ -611,22 +616,7 @@ fn parse_timer(
     exti_lines: u32,
 ) -> Result<Timer, String> {
     let (base, alias) = registration(entry, entries)?;
-    let clock = if let Some(alias) = alias {
-        Some(match alias {
-            "TIM2" => 0,
-            "TIM3" => 1,
-            "TIM4" => 2,
-            "TIM5" => 3,
-            "TIM6" => 4,
-            "TIM7" => 5,
-            "TIM12" => 6,
-            "TIM13" => 7,
-            "TIM14" => 8,
-            _ => return Err("expected an APB1L STM32 timer RCC alias".into()),
-        })
-    } else {
-        None
-    };
+    let clock = alias.map(TimerClock::from_alias).transpose()?;
     let mut frequency = None;
     let mut limit = None;
     let mut irq = None;
