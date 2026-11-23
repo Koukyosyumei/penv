@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 113 | 5 | 72 |
+| 監査した共有・混成 Robot | 190 | 116 | 5 | 69 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **130** | **5** | **86** |
+| 合計 | **221** | **133** | **5** | **83** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -339,3 +339,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/conditional-vtor.tfNCYjT8/` の `cargo-test.final`、`elf`、`bus-fault`、`shell` に保存した。
+
+### 条件付きバス登録の initiator 診断
+
+`bus-isolation.robot:172–192` の3ケースを移植した。空の機械への `UART.PL011` の登録で、未登録の `reader` を指定する2条件と、状態を供給する initiator がいない `!privileged` の診断を照合した。`validate-platform REPL` でファームウェアなしの登録失敗を再現する。全条件の評価や登録済みの複数 initiator による読み出し・アクセスログは未達。
+
+```sh
+cargo test
+tests/nrf52840-bus-point-errors-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/bus-point-errors"
+tests/nrf52840-conditional-vtor-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/conditional-vtor"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/bus-point-errors.s2WNfWm8/` の `cargo-test.final`、`errors.final`、`vtor`、`shell` に保存した。

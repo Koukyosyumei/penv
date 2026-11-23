@@ -64,7 +64,12 @@ impl Entry {
     }
 }
 
-fn privileged_bus_point(entry: &Entry) -> Result<Option<u32>, String> {
+struct BusPoint<'a> {
+    address: u32,
+    condition: &'a str,
+}
+
+fn conditional_bus_point(entry: &Entry) -> Result<Option<BusPoint<'_>>, String> {
     let Some(registration) = entry
         .registration
         .as_deref()
@@ -78,7 +83,7 @@ fn privileged_bus_point(entry: &Entry) -> Result<Option<u32>, String> {
         .and_then(|value| value.strip_suffix('}'))
         .ok_or_else(|| entry.error("expected a bus point registration body"))?;
     let mut address = None;
-    let mut condition = false;
+    let mut condition = None;
     for field in fields
         .split(';')
         .map(str::trim)
@@ -89,20 +94,49 @@ fn privileged_bus_point(entry: &Entry) -> Result<Option<u32>, String> {
             .map(|(key, value)| (key.trim(), value.trim()))
         {
             Some(("address", value)) if address.is_none() => {
-                address = Some(number(value).map_err(|e| entry.error(&e))?)
+                address = Some(number(value).map_err(|e| entry.error(&e))?);
             }
-            Some(("condition", value))
-                if !condition && value == r#""privileged && cpuSecure && attributionSecure""# =>
-            {
-                condition = true
+            Some(("condition", value)) if condition.is_none() => {
+                condition = Some(
+                    value
+                        .strip_prefix('"')
+                        .and_then(|value| value.strip_suffix('"'))
+                        .filter(|value| !value.trim().is_empty() && !value.contains('"'))
+                        .ok_or_else(|| entry.error("expected a nonempty quoted bus condition"))?,
+                );
             }
-            _ => return Err(entry.error("unsupported or duplicate Cortex-M4 bus point property")),
+            _ => return Err(entry.error("unsupported or duplicate bus point property")),
         }
     }
-    address
-        .filter(|_| condition)
-        .map(Some)
-        .ok_or_else(|| entry.error("expected address and privileged non-TrustZone condition"))
+    let address = address.ok_or_else(|| entry.error("expected a bus point address"))?;
+    let condition = condition.ok_or_else(|| entry.error("expected a bus point condition"))?;
+    Ok(Some(BusPoint { address, condition }))
+}
+
+fn validate_bus_point(
+    entry: &Entry,
+    point: &BusPoint<'_>,
+    entries: &[Entry],
+) -> Result<(), String> {
+    for term in point.condition.split("&&") {
+        if let Some((field, name)) = term.split_once("==")
+            && field.trim() == "initiator"
+        {
+            let name = name.trim();
+            if !entries.iter().any(|peer| peer.name == name) {
+                return Err(entry.error(&format!("Invalid initiator: {name}")));
+            }
+        }
+    }
+    // In an otherwise empty platform the newly registered peripheral is
+    // a bus target. There is no initiator that could supply state bits.
+    if entries.len() == 1 && !entry.model.starts_with("CPU.") {
+        return Err(entry.error(&format!(
+            "Conditions provided ({}) but there are no peripherals implementing IPeripheralWithTransactionState or they have no common state bits",
+            point.condition
+        )));
+    }
+    Ok(())
 }
 
 fn number(value: &str) -> Result<u32, String> {
@@ -319,6 +353,10 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         if !names.insert(&entry.name) {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
+        let bus_point = conditional_bus_point(entry)?;
+        if let Some(point) = &bus_point {
+            validate_bus_point(entry, point, &entries)?;
+        }
         match entry.model.as_str() {
             "" if cortex_m4 && entry.name == "sysbus" => {
                 nrf52840::map_tags(entry, &mut machine.bus)?
@@ -370,10 +408,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
                 let size = number(size).map_err(|e| entry.error(&e))? as usize;
-                if cortex_m4 && let Some(base) = privileged_bus_point(entry)? {
+                if cortex_m4 && let Some(point) = bus_point {
+                    if point.condition != "privileged && cpuSecure && attributionSecure" {
+                        return Err(entry.error("unsupported Cortex-M4 bus point condition"));
+                    }
                     machine
                         .bus
-                        .map_privileged_ram(base, size)
+                        .map_privileged_ram(point.address, size)
                         .map_err(|e| entry.error(&e))?;
                 } else if cortex_m4
                     && entry

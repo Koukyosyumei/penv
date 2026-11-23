@@ -48,6 +48,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv validate-platform REPL
        penv thumb-assemble SOURCE
        penv thumb-disassemble ADDRESS HEXBYTES
        penv thumb-disassemble-memory REPL ELF ADDRESS SIZE
@@ -117,6 +118,16 @@ fn run() -> Result<ExitCode, String> {
             command @ ("thumb-assemble" | "thumb-disassemble" | "thumb-disassemble-memory"),
         )) => {
             thumb_llvm::run(command, args)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Some("validate-platform")) => {
+            let path = args
+                .next()
+                .ok_or("validate-platform requires one REPL path")?;
+            if args.next().is_some() {
+                return Err("validate-platform requires one REPL path".into());
+            }
+            platform::load(std::path::Path::new(&path), None, false)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}
