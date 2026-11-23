@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS が PolarFire のキャッシュ設定まで通過。次の阻害点は `MPFS_Sysreg`。SD 起動と Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。L2 キャッシュの次のアトミックアクセスで停止。SD 起動と Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -279,7 +279,7 @@ target/release/penv run --script "$fire_resc" --platform-root ../renode \
   --asset-dir "$fire_assets" --max-steps 100000
 
 # 上流 REPL と HSS ELF を直接指定し、e51 の到達 PC を確認する。
-for steps in 3763660 3763661; do
+for steps in 3763661 3763760 3763761; do
   target/release/penv run --platform ../renode/platforms/boards/beaglev-fire.repl \
     --platform-root ../renode --uart-device mmuart0 --max-steps "$steps" --stats \
     "$fire_assets"/hss-envm-wrapper.elf-s_*
@@ -288,9 +288,21 @@ done
 
 変更前の `11b9d76` では同じ 3,763,660 ステップで `pc=0x20220350` に入りました。HSS は e51 の `pc=0x20231a74` で `amoswap.d` によるストアアクセス例外（原因 7、`mtval=0x02010008`）を起こしました。上流 REPL の `CacheConfig_WayEnable` と同じ初期値 0 の保持レジスターを追加し、HSS が使うアトミック交換をそのレジスターに実装しました。CLI テスト `polarfire_hss_can_swap_the_cache_way_enable_register` が初期値、64 ビットの交換前の値、ロードとストアの読み戻しを確認します。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
 
-変更後は 3,763,660 ステップで `pc=0x20231a7c` まで到達し、次のステップで `MPFS_Sysreg` の `0x20002174` への書き込みが例外となり、早期トラップハンドラー `0x20220350` に入ります。Fire の UART 出力はこの段階では空です。残課題は `MPFS_Sysreg` と後続の HSS 初期化、MPFS SD コントローラーと SD イメージの接続、上流 RESC が使う GPIO ボタンと起動用 Monitor コマンドです。Fire の OpenSBI、U-Boot、Linux は未到達です。
+コミット `9807d54` では、3,763,661 ステップ目の `MPFS_Sysreg` 書き込みで早期トラップハンドラー `0x20220350` に入りました。上流の SYSREG は 4 KiB の 32 ビット MMIO で、HSS が書き込むオフセット `0x174` は未定義です。今回の実装ではこの書き込みを受け付けて破棄し、未定義オフセットは 0 を返します。上流のリセット値とクロック・ソフトリセットレジスターの書き込み可能ビットを再現しました。各周辺機器へのクロック制御とリセットの配線は残課題です。[Renode MPFS_Sysreg](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/MPFS_Sysreg.cs)
 
-今回の `cargo test` は全 63 件が通過しました。上記の StarLight 公開素材を使った `python3 scripts/verify-starlight.py "$assets"` でも、UART から root にログインし、`id -u` が `0`、`uname -m` が `riscv64` を返しました。
+| 実行ステップ数 | 変更後の e51 の PC |
+| --- | --- |
+| 3,763,661 | `0x20231a80`（SYSREG 書き込みの次の命令） |
+| 3,763,760 | `0x20231ad2`（`0x02010800` に対する `amoswap.d`） |
+| 3,763,761 | `0x20220350`（早期トラップハンドラー） |
+
+次の例外は L2 キャッシュ設定へのアトミックアクセスです。対象アドレスは上流 REPL の `SilenceRange` に含まれます。現在の Penv はこの範囲の通常ロード／ストアに対応し、`amoswap.d` はそこでストアアクセス例外（原因 7、`mtval=0x02010800`）になります。この段階の Fire の UART 出力は空です。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
+
+上流の `SdCardFromFile $image mmc 0x100000000` は、ファイルを裏付けにした公称容量 4 GiB の SD カードを `mmc` に接続します。永続化は既定で有効です。`mmc` は `0x20008000` にマップされる MPFS SD コントローラーで、PLIC の IRQ 88 と WakeupIRQ 89 に接続されます。Penv の RESC はこのコマンドで停止します。SD カードの接続、コントローラーの SD コマンド・データ転送・割り込み、上流 RESC が使う GPIO ボタンと起動用 Monitor コマンドは残課題です。Fire の OpenSBI、U-Boot、Linux は未到達です。[Renode SDCardExtensions](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/SDCardExtensions.cs) [Renode MPFS_SDController](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SD/MPFS_SDController.cs)
+
+今回の `cargo test` は全 64 件が通過しました。CLI テスト `polarfire_sysreg_handles_hss_access_and_register_defaults` は HSS と同じオフセットへの書き込みと、PLL 状態およびクロック・ソフトリセットレジスターの読み戻しを確認します。
+
+前回は上記の StarLight 公開素材を使った `python3 scripts/verify-starlight.py "$assets"` でも、UART から root にログインし、`id -u` が `0`、`uname -m` が `riscv64` を返しました。
 
 ## Cortex-M0 / Cortex-M0+
 

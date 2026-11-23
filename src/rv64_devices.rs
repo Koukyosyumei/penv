@@ -7,6 +7,7 @@ use crate::{
     machine::MAX_HARTS,
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
+    rv64_mpfs::Sysreg,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
@@ -16,6 +17,7 @@ pub struct Devices {
     pub uarts: Vec<Uart>,
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
+    pub mpfs_sysreg: Option<Sysreg>,
     pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
     pub fallback_ranges: Vec<FallbackRange>,
     pub starlight_reset_pin: Option<StarLightResetPin>,
@@ -143,6 +145,13 @@ impl Devices {
         {
             return Some(device.read(address));
         }
+        if let Some(value) = self
+            .mpfs_sysreg
+            .as_ref()
+            .and_then(|reg| reg.read(address, width))
+        {
+            return Some(value);
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -173,6 +182,13 @@ impl Devices {
                 .find(|device| device.contains(address))
         {
             device.write(address, value);
+            return Some(Ok(()));
+        }
+        if let Some(()) = self
+            .mpfs_sysreg
+            .as_mut()
+            .and_then(|reg| reg.write(address, width, value))
+        {
             return Some(Ok(()));
         }
         let plic = self.plic.as_mut()?;

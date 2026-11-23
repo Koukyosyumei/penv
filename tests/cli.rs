@@ -619,3 +619,61 @@ elif request.IsWrite:
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, b"\0ABC");
 }
+
+#[test]
+fn polarfire_sysreg_handles_hss_access_and_register_defaults() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-polarfire-sysreg-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("polarfire.repl");
+    let raw = directory.join("sysreg.bin");
+    fs::write(
+        &board,
+        r#"cpu: CPU.RiscV64 @ sysbus
+    cpuType: "rv64i"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.NS16550 @ sysbus 0x10000000
+TopSystemRegisters: Miscellaneous.MPFS_Sysreg @ sysbus 0x20002000
+"#,
+    )
+    .unwrap();
+    let instructions: [u32; 18] = [
+        0x2000_22b7, // lui t0, 0x20002
+        0x1000_0337, // lui t1, 0x10000
+        0x0550_0393, // addi t2, zero, 0x55
+        0x1672_aa23, // sw t2, 0x174(t0): the undefined offset used by HSS
+        0x1742_ae03, // lw t3, 0x174(t0)
+        0x01c3_0023, // sb t3, 0(t1)
+        0x1472_a623, // sw t2, 0x14c(t0): PLL status ignores writes
+        0x14c2_ae03, // lw t3, 0x14c(t0)
+        0x01c3_0023, // sb t3, 0(t1)
+        0x0872_a223, // sw t2, 0x84(t0): subblock clock flags
+        0x0842_ae03, // lw t3, 0x84(t0)
+        0x01c3_0023, // sb t3, 0(t1)
+        0x0882_ae03, // lw t3, 0x88(t0): soft reset default
+        0x01c3_0023, // sb t3, 0(t1)
+        0x0802_a423, // sw zero, 0x88(t0): clear implemented soft reset bits
+        0x0882_ae03, // lw t3, 0x88(t0)
+        0x01c3_0023, // sb t3, 0(t1)
+        0x0010_0073, // ebreak
+    ];
+    fs::write(
+        &raw,
+        instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--platform"])
+        .arg(&board)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, [0, 7, 0x55, 0xfe, 0]);
+}
