@@ -23,7 +23,7 @@ pub struct Boot {
     pub ram_io_pages: Vec<(u32, bool)>,
     pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
     pub cpu_control: Vec<CpuControl>,
-    pub unregister_leds: Vec<String>,
+    pub unregister_gpio_peripherals: Vec<String>,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
@@ -310,7 +310,7 @@ fn execute(
         }
         ["sysbus", "Unregister", value] if boot.platform.is_some() => {
             let name = resolve(value)?;
-            boot.unregister_leds
+            boot.unregister_gpio_peripherals
                 .push(name.strip_prefix("sysbus.").unwrap_or(name).into());
         }
         ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {

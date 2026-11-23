@@ -51,3 +51,15 @@ if grep -q '^LED led ' "$out/detached.log"; then
     exit 1
 fi
 cat "$out/detached.log"
+
+# Removing the GPIO port itself also removes its output routes.
+sed 's/sysbus Unregister led/sysbus Unregister gpio0/' "$out/detached.resc" >"$out/source-detached.resc"
+status=0
+"$penv" run --platform-root "$renode" --script "$out/source-detached.resc" --led-events \
+    --max-steps 3000001 "$elf" >"$out/source-detached.log" 2>&1 || status=$?
+[ "$status" -eq 1 ]
+grep -Eq 'unmapped RAM access at 0x500005[0-9a-f]{2}' "$out/source-detached.log"
+if grep -q '^LED led ' "$out/source-detached.log"; then
+    exit 1
+fi
+cat "$out/source-detached.log"

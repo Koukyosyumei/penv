@@ -1273,14 +1273,26 @@ impl Bus {
         Ok(())
     }
 
-    pub fn unregister_nrf_led(&mut self, name: &str) -> Result<(), String> {
-        let receiver = self
+    pub fn unregister_nrf_gpio_peripheral(&mut self, name: &str) -> Result<(), String> {
+        if let Some(receiver) = self
             .nrf_leds
             .iter()
             .position(|led| led.as_ref().is_some_and(|led| led.name == name))
-            .ok_or_else(|| format!("unknown nRF GPIO LED {name:?}"))?;
-        self.nrf_led_routes.unregister_receiver(&receiver);
-        self.nrf_leds[receiver] = None;
+        {
+            self.nrf_led_routes
+                .unregister_peripheral(None, Some(&receiver));
+            self.nrf_leds[receiver] = None;
+        } else if let Some(source) = self
+            .nrf_peripherals
+            .iter()
+            .position(|device| device.name == name && device.gpio_driven_high().is_some())
+        {
+            let port = self.nrf_peripherals.remove(source);
+            self.nrf_led_routes
+                .unregister_peripheral(Some(port.base), None);
+        } else {
+            return Err(format!("unknown nRF GPIO peripheral {name:?}"));
+        }
         Ok(())
     }
 

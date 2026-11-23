@@ -64,10 +64,14 @@ impl<R: Eq> GpioRoutes<R> {
             .map(|(&(_, pin), line)| (pin, line))
     }
 
-    pub fn unregister_receiver(&mut self, receiver: &R) {
-        for line in self.lines.values_mut() {
-            line.endpoints
-                .retain(|endpoint| &endpoint.receiver != receiver);
+    pub fn unregister_peripheral(&mut self, source: Option<u32>, receiver: Option<&R>) {
+        for (&(owner, _), line) in &mut self.lines {
+            if source == Some(owner) {
+                line.endpoints.clear();
+            } else if let Some(receiver) = receiver {
+                line.endpoints
+                    .retain(|endpoint| &endpoint.receiver != receiver);
+            }
         }
     }
 }
@@ -137,14 +141,14 @@ mod detach_tests {
     #[test]
     fn upstream_gpio_detach_unregisters_numbered_receiver() {
         let mut routes = register_fixture(1);
-        routes.unregister_receiver(&0x10);
+        routes.unregister_peripheral(None, Some(&0x10));
         assert!(routes.lines(0).next().unwrap().1.endpoints().is_empty());
     }
 
     #[test]
     fn upstream_gpio_detach_preserves_other_numbered_receivers() {
         let mut routes = register_fixture(3);
-        routes.unregister_receiver(&0x10);
+        routes.unregister_peripheral(None, Some(&0x10));
         let mut lines = routes.lines(0);
         assert!(lines.next().unwrap().1.endpoints().is_empty());
         assert!(!lines.next().unwrap().1.endpoints().is_empty());
@@ -158,7 +162,82 @@ mod detach_tests {
             .line_mut(0x10, 0)
             .connect(0, "MockReceiver", 0, 1)
             .unwrap();
-        routes.unregister_receiver(&0);
+        routes.unregister_peripheral(None, Some(&0));
         assert!(routes.lines(0x10).next().unwrap().1.endpoints().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn upstream_gpio_unregisters_chained_peripheral() {
+        let mut routes = GpioRoutes::default();
+        routes.line_mut(0, 0).connect(0x10, "B", 0, 1).unwrap();
+        routes.line_mut(0x10, 0).connect(0x20, "C", 0, 1).unwrap();
+        routes.line_mut(0x10, 1).connect(0x30, "D", 0, 1).unwrap();
+        routes.line_mut(0, 1).connect(0x20, "C", 0, 2).unwrap();
+        routes.unregister_peripheral(Some(0x10), Some(&0x10));
+        let a: Vec<_> = routes.lines(0).map(|(_, line)| line.endpoints()).collect();
+        let b: Vec<_> = routes
+            .lines(0x10)
+            .map(|(_, line)| line.endpoints())
+            .collect();
+        assert!(a[0].is_empty());
+        assert!(b[0].is_empty() && b[1].is_empty());
+        assert_eq!(
+            a[1],
+            &[Endpoint {
+                receiver: 0x20,
+                input: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn upstream_gpio_unregisters_shared_endpoint_once() {
+        let mut routes = GpioRoutes::default();
+        routes.line_mut(0, 0).connect(0x10, "B", 0, 1).unwrap();
+        routes.line_mut(0, 0).connect(0x20, "C", 0, 1).unwrap();
+        routes.line_mut(0x10, 0).connect(0x20, "C", 0, 1).unwrap();
+        assert_eq!(routes.line_mut(0, 0).endpoints().len(), 2);
+        assert_eq!(routes.line_mut(0x10, 0).endpoints().len(), 1);
+        routes.line_mut(0, 0).connect(0x20, "C", 0, 1).unwrap();
+        assert_eq!(
+            routes
+                .line_mut(0, 0)
+                .endpoints()
+                .iter()
+                .filter(|endpoint| endpoint.receiver == 0x20 && endpoint.input == 1)
+                .count(),
+            1
+        );
+        routes.unregister_peripheral(None, Some(&0x20));
+        assert_eq!(
+            routes.line_mut(0, 0).endpoints(),
+            &[Endpoint {
+                receiver: 0x10,
+                input: 1
+            }]
+        );
+        assert!(routes.line_mut(0x10, 0).endpoints().is_empty());
+    }
+
+    #[test]
+    fn upstream_gpio_preserves_receiver_identity() {
+        let mut routes = GpioRoutes::default();
+        for pin in 0..3 {
+            routes.line_mut(0, pin);
+        }
+        let receiver = std::rc::Rc::new(());
+        routes
+            .line_mut(0, 0)
+            .connect(receiver.clone(), "MockReceiver", 0, 1)
+            .unwrap();
+        let lines: Vec<_> = routes.lines(0).map(|(_, line)| line.endpoints()).collect();
+        assert_eq!(lines[0].len(), 1);
+        assert!(lines[1].is_empty() && lines[2].is_empty());
+        assert!(std::rc::Rc::ptr_eq(&receiver, &lines[0][0].receiver));
     }
 }
