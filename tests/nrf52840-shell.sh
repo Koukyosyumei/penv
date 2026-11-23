@@ -13,7 +13,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # The complete upstream REPL still diagnoses unsupported peripheral models.
-awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
+awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|rng|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
     "$repl" > "$work/boot.repl"
 printf 'demo ping\r' > "$work/ping.txt"
 

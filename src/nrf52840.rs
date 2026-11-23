@@ -1,3 +1,6 @@
+mod rng;
+use rng::Rng;
+
 mod radio;
 use radio::Radio;
 
@@ -46,6 +49,7 @@ enum Device {
     I2s(I2s),
     Pdm(Pdm),
     Radio(Radio),
+    Rng(Rng),
     Twi(Twi),
     Spi(Spi),
     Watchdog(Watchdog),
@@ -131,6 +135,15 @@ impl Peripheral {
             irq,
             name,
             device: Device::I2s(I2s::new(loopback)),
+        }
+    }
+
+    pub fn rng(base: u32, irq: u8, name: String) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Rng(Rng::default()),
         }
     }
 
@@ -252,6 +265,7 @@ impl Peripheral {
                 Device::I2s(_) => I2s::event(address - self.base).is_some(),
                 Device::Pdm(_) => Pdm::event(address - self.base).is_some(),
                 Device::Radio(_) => Radio::event(address - self.base).is_some(),
+                Device::Rng(_) => address - self.base == rng::VALRDY,
                 _ => false,
             }
     }
@@ -265,6 +279,7 @@ impl Peripheral {
                 Device::I2s(_) => matches!(address - self.base, 0 | 4),
                 Device::Pdm(_) => matches!(address - self.base, 0 | 4),
                 Device::Radio(_) => Radio::task(address - self.base),
+                Device::Rng(_) => matches!(address - self.base, 0 | 4),
                 Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
                 _ => false,
             }
@@ -279,6 +294,7 @@ impl Peripheral {
             Device::I2s(i2s) => std::mem::take(&mut i2s.raised),
             Device::Pdm(pdm) => std::mem::take(&mut pdm.raised),
             Device::Radio(radio) => std::mem::take(&mut radio.raised),
+            Device::Rng(rng) => std::mem::take(&mut rng.raised),
             _ => return,
         };
         while raised != 0 {
@@ -372,6 +388,7 @@ impl Peripheral {
         match &mut self.device {
             Device::Rtc(rtc) => rtc.tick(),
             Device::Timer(timer) => timer.tick(),
+            Device::Rng(rng) => rng.tick(),
             Device::Watchdog(watchdog) => watchdog.tick(sleeping),
             _ => {}
         }
@@ -394,6 +411,7 @@ impl Peripheral {
             Device::I2s(i2s) => i2s.reset(),
             Device::Pdm(pdm) => pdm.reset(),
             Device::Radio(radio) => radio.reset(),
+            Device::Rng(rng) => *rng = Rng::default(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -427,6 +445,7 @@ impl Peripheral {
             Device::I2s(i2s) => i2s.pending(),
             Device::Pdm(pdm) => pdm.pending(),
             Device::Radio(radio) => radio.pending(),
+            Device::Rng(rng) => rng.pending(),
         }
     }
 
@@ -455,6 +474,7 @@ impl Peripheral {
             Device::I2s(i2s) => i2s.read(offset),
             Device::Pdm(pdm) => pdm.read(offset),
             Device::Radio(radio) => radio.read(offset),
+            Device::Rng(rng) => rng.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -503,6 +523,7 @@ impl Peripheral {
             Device::I2s(i2s) => i2s.write(offset, value),
             Device::Pdm(pdm) => pdm.write(offset, value),
             Device::Radio(radio) => radio.write(offset, value, bus)?,
+            Device::Rng(rng) => rng.write(offset, value),
         };
         if supported {
             Ok(())

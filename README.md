@@ -92,7 +92,7 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ### nRF52840 の段階検証
 
-nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4、I²S マスター、PDM、ローカル RADIOと、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
+nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、EasyDMA UART0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモード、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNGと、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 
 RTC と Watchdog は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。Watchdog は有効な全リロード要求の受理でカウンターを再ロードします。タイムアウト割り込みを有効にした場合は 2 LFCLK サイクル後にリセットします。UART の TX は即時に転送され、CLI 入力は最初に宣言した UART が受信を開始していれば SRAM に転送されます。
 
@@ -111,12 +111,12 @@ target/release/penv run --script "$resc" --platform-root ../renode \
   --asset-dir "$assets" --max-steps 100000
 ```
 
-未変更のスクリプトは、以前停止していた上流 REPL 86 行目の RADIO 宣言を通過し、89 行目の `rng: unsupported platform model "Miscellaneous.NRF52840_RNG"` で終了コード 1 を返します。RNG、ECB、EGU のモデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
+未変更のスクリプトは、以前停止していた上流 REPL 89 行目の RNG 宣言を通過し、92 行目の `ecb: unsupported platform model "Miscellaneous.NRF52840_ECB"` で終了コード 1 を返します。ECB と EGU のモデルが残っています。未対応モデルを含む REPL は読み込みエラーになります。
 
 実機ファームウェアの検証では、実装済みの宣言を明示的に選んだ一時 REPL を使用します。`sysbus` の FICR/UICR タグは初期化コードの読み出しに使います。SVD の指定は診断用メタデータとして受理します。
 
 ```sh
-awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
+awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|rng|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
   ../renode/platforms/cpus/nrf52840.repl > "$assets/boot.repl"
 printf 'help\r' > "$assets/help.txt"
 target/release/penv run --platform "$assets/boot.repl" \
@@ -143,7 +143,7 @@ target/release/penv run --platform "$assets/boot.repl" \
   --max-steps 130000000 "$assets/watchdog.elf"
 ```
 
-`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・I²S・PDM・RADIO 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・I²S・PDM・RADIO・RNG 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモードです。REPL の NVIC IRQ 3/4 に接続し、アドレス NACK、受信・送信・停止・一時停止イベントと割り込み、繰り返し START、受信時の BB_STOP/BB_SUSPEND に対応します。`Memory.GenericI2cEeprom @ twi1 0x50` のように EEPROM を接続できます。TWIM EasyDMA、スレーブモード、ピン波形とバス速度の再現は未実装です。
 
@@ -211,7 +211,16 @@ tests/nrf52840-radio.sh target/release/penv ../renode
 
 検証 ELF は IRQ 1 で送信と受信の完了を確認し、送信側の元データを書き換えた後も受信データが一致すること、書き込みがバッファ境界を越えないこと、空の受信では END が発生しないことを確認して `RADIO OK` を出力します。RF 波形、パケットの送信時間、物理 CRC、アドレスフィルタリング、共有無線媒体と複数ノードは未実装です。
 
-上流の Bluetooth central ELF（`nrf52840--zephyr-bluetooth_central_hr.elf-s_3380332-316e27f81dcda3c2b0e7f2c3516001e7b27ad051`）を、上記 Shell と同じ段階検証用 REPL で試すと、PC `0x0001aa2e` の RNG アクセス（`0x4000d504`）で停止します。上流テストに記載の peripheral ELF は取得先が HTTP 404 を返し、Bluetooth 接続の検証には未到達です。
+上流の Bluetooth central ELF（`nrf52840--zephyr-bluetooth_central_hr.elf-s_3380332-316e27f81dcda3c2b0e7f2c3516001e7b27ad051`）を、上記 Shell と同じ段階検証用 REPL で試すと、以前停止した RNG アクセス（PC `0x0001aa2e`、レジスター `0x4000d504`）を通過して Zephyr の起動バナーを表示します。現在は PC `0x00021c88` の未対応 Thumb-2 命令（`0xe8df 0xf003`）で停止します。上流テストに記載の peripheral ELF は取得先が HTTP 404 を返し、Bluetooth 接続の検証には未到達です。
+
+RNG は START/STOP、VALUE、VALRDY イベント、NVIC IRQ 13、プログラマブル PPI、VALRDY_STOP ショートカットに対応します。VALUE と VALRDY は STOP 後も保持され、イベントはゲストがクリアします。固定シードの疑似乱数を、シミュレーション上の 64 µs 間隔（DERCEN を設定すると 128 µs）で生成します。DERCEN は生成間隔に反映し、物理エントロピーや統計的偏りの補正はモデル化していません。この出力は暗号用途に使用できません。
+
+```sh
+# clang と ld.lld が必要
+tests/nrf52840-rng.sh target/release/penv ../renode
+```
+
+検証 ELF は最初の値が準備される前の STOP、連続して生成される 2 値と IRQ 13、INTENCLR でマスクした VALRDY、再有効化時の保留割り込み、VALRDY_STOP を確認して `RNG OK` を出力します。Zephyr Shell のリセット回帰にも RNG を含めます。
 
 ## 現在の実装範囲
 
