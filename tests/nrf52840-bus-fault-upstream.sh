@@ -88,7 +88,24 @@ done
 # Robot 1360-1377: scalar VSTR/VLDR on the first byte of the mock.
 # The guest checks the same PC, registers, SP, stacked words and SCB state.
 sed '/^faultingPeripheral:/a\    FaultOffset: 0' "$out/bus-fault.repl" >"$out/fp.repl"
-for instruction in vstr-s0 vstr-d0 vldr-s0 vldr-d0; do
+cat >"$out/unmapped.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @bus-fault.repl
+sysbus LoadELF @unmapped.elf
+sysbus UnhandledAccessBehaviour ThrowException
+RESC
+for instruction in vstr-s0 vstr-d0 vldr-s0 vldr-d0 unmapped; do
+    if [ "$instruction" = unmapped ]; then
+        fault_address=0x200000
+        fault_instruction='ldr r2, [r0]; movs r1, #0x22'
+        expected_sp=0xfe0
+        set -- --script "$out/unmapped.resc"
+    else
+        fault_address=0x100000
+        fault_instruction="${instruction%-*} ${instruction#*-}, [r0]"
+        expected_sp=0xf98
+        set -- --platform "$out/fp.repl"
+    fi
     cat >"$out/$instruction.s" <<ASM
 .syntax unified
 .thumb
@@ -102,14 +119,14 @@ reset:
     ldr r3, =0xe000ed88
     ldr r4, =0xf00000
     str r4, [r3]
-    ldr r0, =0x100000
+    ldr r0, =$fault_address
     movs r1, #0x11
     ldr r2, =0xa5a5a5a5
     b fault
     .ltorg
     .org 0x200
 fault:
-    ${instruction%-*} ${instruction#*-}, [r0]
+    $fault_instruction
     b .
     .org 0x300
 .thumb_func
@@ -120,7 +137,7 @@ handler:
     cmp r2, r3
     bne failed
     mov r4, sp
-    movw r5, #0xf98
+    movw r5, #$expected_sp
     cmp r4, r5
     bne failed
     ldr r4, [sp, #4]
@@ -149,7 +166,14 @@ failed:
 ASM
     clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/$instruction.s" -o "$out/$instruction.o"
     ld.lld -N -Ttext=0 --entry=reset "$out/$instruction.o" -o "$out/$instruction.elf"
-    "$penv" run --platform "$out/fp.repl" --max-steps 100 "$out/$instruction.elf" \
+    "$penv" run "$@" --max-steps 100 "$out/$instruction.elf" \
         >"$out/$instruction.log" 2>&1
     printf '%s: all fault checks passed\n' "$instruction"
 done
+
+# The same ELF without the opt-in must fail at the unmapped instruction.
+status=0
+"$penv" run --platform "$out/bus-fault.repl" --max-steps 100 "$out/unmapped.elf" \
+    >"$out/unmapped-default.log" 2>&1 || status=$?
+[ "$status" -eq 1 ]
+grep -Fq 'pc=0x00000200: unmapped RAM access at 0x00200000 (4 bytes)' "$out/unmapped-default.log"

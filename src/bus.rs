@@ -110,6 +110,7 @@ pub struct Bus {
     regions: Vec<Region>,
     faulting_peripherals: Vec<FaultingPeripheral>,
     thumb_data_fault: Option<u32>,
+    pub fault_on_unmapped_thumb_data: bool,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
     nrf_cpu_hz: Option<u64>,
@@ -1562,8 +1563,15 @@ impl Bus {
     }
 
     fn thumb_data_error(&mut self, error: BusError) -> String {
-        if let BusError::SlaveFault(address) = error {
-            self.thumb_data_fault = Some(address);
+        match error {
+            BusError::SlaveFault(address) => self.thumb_data_fault = Some(address),
+            BusError::Unmapped(address, width)
+                if self.fault_on_unmapped_thumb_data
+                    && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>
+            {
+                self.thumb_data_fault = Some(address);
+            }
+            _ => {}
         }
         error.to_string()
     }

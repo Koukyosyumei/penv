@@ -15,6 +15,7 @@ pub struct Boot {
     pub named_analyzers: Vec<String>,
     pub uart_irqs: Vec<UartIrq>,
     pub performance_in_mips: Option<u32>,
+    pub fault_on_unmapped_data: bool,
     pub semihosting_arguments: Option<String>,
     pub semihosting_directory: Option<PathBuf>,
     pub semihosting_temporary_directory: Option<String>,
@@ -133,6 +134,9 @@ fn execute(
                 .strip_prefix('@')
                 .ok_or("expected @platform-path")?;
             boot.platform = Some(local_path(file, script, root));
+        }
+        ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {
+            boot.fault_on_unmapped_data = true;
         }
         ["sysbus", "LoadELF", value] if boot.platform.is_some() && boot.image.is_none() => {
             let file = resolve(value)?
