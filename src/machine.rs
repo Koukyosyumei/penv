@@ -1577,4 +1577,32 @@ mod tests {
             assert_eq!(machine.primary.registers[3], expected, "funct3={operation}");
         }
     }
+
+    #[test]
+    #[ignore = "requires the pinned public Thumb-2 data-processing ELF"]
+    fn renode_thumb2_data_processing_cortex_m4() {
+        let path = std::env::var_os("PENV_THUMB2_DP_ELF").expect("set PENV_THUMB2_DP_ELF");
+        let open = || std::fs::File::open(&path).unwrap();
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(0, 0x40000).unwrap();
+        machine.bus.map_nvic(0xf0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        crate::image::load(&mut machine, open(), false).unwrap();
+        machine.validate_entry().unwrap();
+        let symbols = crate::image::find_symbols(open(), &["run_result"]).unwrap();
+        let address = symbols
+            .into_iter()
+            .find(|(name, _)| *name == "run_result")
+            .expect("run_result symbol")
+            .1;
+        let result = machine.run(u64::from(machine.bus.step_hz()), &mut std::io::sink());
+        let value = machine.bus.read_ram::<2>(address).unwrap();
+        eprintln!(
+            "run_result at {address:#010x}: {value:#06x}; run={result:?}; pc={:#010x}",
+            machine.primary.pc
+        );
+        assert_eq!(result.unwrap().0, Stop::Limit);
+        assert_eq!(value, 0xffff, "upstream assertion line {value}");
+    }
 }

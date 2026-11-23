@@ -1714,3 +1714,24 @@ TCP 接続とペイロードの一致を確認できます。
 `target/release/penv platform check --file ../renode/platforms/cpus/nxp-k6xf.repl`
 で `UART.K6xF_UART` の型解決が停止します。ログは `target/stm32f407-f429-echo/k6xf.log` です。
 元の ELF で32仮想秒以内の `PROJECT EXECUTION SUCCESSFUL` を確認する条件が残っています。
+
+### Cortex-M4 Thumb-2 データ処理
+
+固定上流 `thumb2-data-processing-instr.robot:18` の公開 ELF をそのまま使い、
+RAM と NVIC を保持して CPU を Cortex-M4 に設定します。1仮想秒後に
+ELF シンボル `run_result` の16ビット値が `0xffff` か確認します。
+現行コアでは PC `0x16c2` の `PKHBT r10, r8, r9, LSL #2` で停止し、
+値は `0x0000` です。元の Cortex-M85 ケースとの等価性は未確認で、台帳では未達です。
+
+```sh
+work=target/stm32f407-thumb2-dp
+mkdir -p "$work"
+tests/cortex-m4-thumb2-dp.sh "$work" > "$work/focused.log" 2>&1
+cargo test > "$work/cargo.log" 2>&1
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+別群の IT 状態のブロックフック2件も調べました。元の
+`SetHookAtBlockBegin`、`SetHookAtBlockEnd` を含む RESC は、どちらも
+コマンドの解決時に停止します。代表再現の `hook-Begin.resc` と
+`hook-End.resc`、実測ログは同じ作業ディレクトリにあります。
