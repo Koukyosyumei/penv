@@ -1223,7 +1223,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
         }
         validate_entry_attributes(&entry)?;
         irq_checks.push(validate_entry_irq_shape(&entry));
-        if entry.model.is_empty() && entry.name != "sysbus" {
+        if entry.model.is_empty() && (entry.name != "sysbus" || declared.contains_key("sysbus")) {
             blocks.push(entry);
             continue;
         }
@@ -1264,7 +1264,31 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
         target
             .body
             .retain(|(_, text)| !scalar_property(text).is_some_and(|key| replaced.contains(key)));
-        target.body.extend(block.body);
+        for (line, attribute) in block.body {
+            if let Some((header, commands)) = init_commands(&attribute) {
+                let existing = target
+                    .body
+                    .iter()
+                    .position(|(_, text)| init_commands(text).is_some());
+                let mut section = String::from("init:");
+                if let Some(index) = existing {
+                    let (_, previous) = target.body.remove(index);
+                    if header == "init add:" {
+                        for command in init_commands(&previous).unwrap().1 {
+                            section.push('\n');
+                            section.push_str(command);
+                        }
+                    }
+                }
+                for command in commands {
+                    section.push('\n');
+                    section.push_str(command);
+                }
+                target.body.push((line, section));
+            } else {
+                target.body.push((line, attribute));
+            }
+        }
     }
     for entry in &declarations {
         validate_entry_references(entry, &declared, &declarations)?;

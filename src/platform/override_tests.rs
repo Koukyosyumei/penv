@@ -1494,3 +1494,53 @@ fn renode_empty_keyword_using_parameter() {
     let error = check_string("using empty", None).unwrap_err();
     assert!(error.contains("SyntaxError:"), "{error}");
 }
+
+fn assert_merged_init(source: &str, expected: &[&str]) {
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    let [entry] = entries.as_slice() else {
+        panic!("expected one peripheral")
+    };
+    let [(_, section)] = entry.body.as_slice() else {
+        panic!("expected one merged init section")
+    };
+    assert_eq!(init_commands(section).unwrap().1, expected);
+}
+
+#[test]
+fn renode_init_merge_replace() {
+    assert_merged_init(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>\n    init:\n        Increment 1\n\nperi:\n    init:\n        Increment 2\n        Increment 3",
+        &["Increment 2", "Increment 3"],
+    );
+}
+
+#[test]
+fn renode_init_merge_append() {
+    assert_merged_init(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    init:\n        Increment 1\n\nperi:\n    init add:\n        Increment 2\n        Increment 3",
+        &["Increment 1", "Increment 2", "Increment 3"],
+    );
+}
+
+#[test]
+fn renode_init_merge_sysbus_applies_final_section() {
+    let source = r#"
+mem: Memory.MappedMemory @ sysbus 0 { size: 0x1000 }
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+sysbus:
+    init:
+        Tag <0x1000, 0x10ff> "old" 0x11
+sysbus:
+    init:
+        UnhandledAccessBehaviour Report
+        Tag <0x1000, 0x10ff> "new" 0x22
+sysbus:
+    init add:
+        Tag <0x2000, 0x20ff> "extra" 0x33
+"#;
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    let mut machine = load_entries(Path::new("<platform string>"), &entries, false).unwrap();
+    assert_eq!(machine.bus.read::<4>(0x1000).unwrap(), 0x22);
+    assert_eq!(machine.bus.read::<4>(0x2000).unwrap(), 0x33);
+}
