@@ -322,6 +322,17 @@ def classify_nunit(name, case, attrs, parameter):
             "ShouldUnblockHandle": (PARTIAL, "unblocks_zero_remaining_grant"),
             "ContinueShouldFinishWaiting": (PARTIAL, "continue_after_unblock_reports_resumed_grant"),
             "BreakingShouldFinishWaiting3": (PARTIAL, "break_after_unblock_reports_resumed_grant"),
+            "HandleShouldNotBeReadyForNewTimeGrantAfterDispose": (PASS, "disposal_disables_grant_readiness"),
+            "ShouldNotAllowToGrantTimeAfterDispose": (PASS, "rejects_grant_after_dispose"),
+            "RequestShouldNotBlockOnDisabledHandle": (PASS, "request_returns_without_grant_when_disabled"),
+            "DisablingHanldeSinkSideShouldFinishRequest": (PARTIAL, "disabling_sink_resolves_pending_request"),
+            "DisablingHanldeSourceSideShouldFinishRequest": (PARTIAL, "deactivating_source_resolves_pending_request"),
+            "RequestShouldReturnDifferentValuesDependingOnSideEnabledState2": (PARTIAL, "request_responds_to_source_state_transitions"),
+            "GratingShouldFinishRequestAfterReEnablingSourceSide": (PARTIAL, "grant_fulfills_request_after_source_reactivation"),
+            "RequestSholdNotBlockAfterGrantOnReEnabledHandle": (PASS, "request_returns_immediately_after_grant_on_reactivated_source"),
+            "WaitShouldNotBlockOnDisabledHandle": (PARTIAL, "wait_on_disabled_handle_reports_grant_used"),
+            "WaitShouldNotBlockAfterGrantingOnReEnabledHandleS": (PASS, "reenabled_sink_waits_without_consuming_unrequested_grant"),
+            "ShouldHandleDisablingBlockedHandle": (PASS, "disabling_blocked_sink_completes_the_remaining_grant"),
         })
         if case in checks:
             status, check = checks[case]

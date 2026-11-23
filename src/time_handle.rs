@@ -15,25 +15,85 @@ enum Grant {
     ResumeOffered(u64),
 }
 
-#[derive(Default)]
 pub struct TimeHandle {
     grant: Grant,
     waiting_to_unblock: bool,
     recently_unblocked: bool,
+    enabled: bool,
+    source_active: bool,
+    disposed: bool,
+}
+
+impl Default for TimeHandle {
+    fn default() -> Self {
+        Self {
+            grant: Grant::Idle,
+            waiting_to_unblock: false,
+            recently_unblocked: false,
+            enabled: true,
+            source_active: true,
+            disposed: false,
+        }
+    }
 }
 
 impl TimeHandle {
+    pub fn is_ready_for_grant(&self) -> bool {
+        !self.disposed && matches!(self.grant, Grant::Idle)
+    }
+
+    pub fn dispose(&mut self) {
+        self.disposed = true;
+        self.set_source_active(false);
+        self.set_enabled(false);
+        self.grant = Grant::Idle;
+    }
+
+    pub fn set_source_active(&mut self, active: bool) {
+        self.source_active = active;
+        if !active {
+            self.waiting_to_unblock = false;
+        }
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.waiting_to_unblock = false;
+            self.recently_unblocked = false;
+            match self.grant {
+                Grant::Blocked(left)
+                | Grant::ResumeOffered(left)
+                | Grant::Interrupted { left, .. } => {
+                    self.grant = Grant::Reported(left);
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn grant(&mut self, ticks: u64) -> Result<(), &'static str> {
-        if !matches!(self.grant, Grant::Idle) {
+        if !self.is_ready_for_grant() {
             return Err("time handle already has a grant");
         }
-        self.grant = Grant::Offered(ticks);
+        self.grant = if self.enabled {
+            Grant::Offered(ticks)
+        } else {
+            Grant::Reported(ticks)
+        };
         Ok(())
     }
 
-    pub fn request(&mut self) -> Result<Poll<u64>, &'static str> {
+    pub fn request(&mut self) -> Result<Poll<Option<u64>>, &'static str> {
+        if self.disposed || !self.enabled {
+            return Ok(Poll::Ready(None));
+        }
         match self.grant {
+            Grant::Idle if !self.source_active => Ok(Poll::Ready(None)),
             Grant::Idle => Ok(Poll::Pending),
+            Grant::Blocked(_) | Grant::Interrupted { .. } if !self.source_active => {
+                Ok(Poll::Ready(None))
+            }
             Grant::Blocked(_) | Grant::Interrupted { .. } => {
                 self.waiting_to_unblock = true;
                 Ok(Poll::Pending)
@@ -41,11 +101,11 @@ impl TimeHandle {
             Grant::ResumeOffered(ticks) => {
                 self.recently_unblocked = true;
                 self.grant = Grant::Running(ticks);
-                Ok(Poll::Ready(ticks))
+                Ok(Poll::Ready(Some(ticks)))
             }
             Grant::Offered(ticks) => {
                 self.grant = Grant::Running(ticks);
-                Ok(Poll::Ready(ticks))
+                Ok(Poll::Ready(Some(ticks)))
             }
             _ => Err("time handle already has a request"),
         }
@@ -116,7 +176,7 @@ impl TimeHandle {
     ) -> Result<(T, u64), String> {
         let mut handle = Self::default();
         handle.grant(ticks)?;
-        let Poll::Ready(granted) = handle.request()? else {
+        let Poll::Ready(Some(granted)) = handle.request()? else {
             return Err("time grant has no consumer".into());
         };
         let (result, used) = run(granted)?;
@@ -152,7 +212,7 @@ mod tests {
         let mut handle = TimeHandle::default();
         assert_eq!(handle.request(), Ok(Poll::Pending));
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
     }
 
     #[test]
@@ -160,7 +220,7 @@ mod tests {
         let mut handle = TimeHandle::default();
         handle.grant(INTERVAL).unwrap();
         assert!(handle.grant(INTERVAL).is_err());
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
     }
 
     #[test]
@@ -249,7 +309,7 @@ mod tests {
         let mut handle = TimeHandle::default();
         assert_eq!(handle.request(), Ok(Poll::Pending));
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         handle.report_break(0).unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, INTERVAL))));
     }
@@ -266,7 +326,7 @@ mod tests {
         assert_eq!(handle.unblock(), Ok(false));
         assert_eq!(handle.request(), Ok(Poll::Pending));
         assert_eq!(handle.unblock(), Ok(true));
-        assert_eq!(handle.request(), Ok(Poll::Ready(0)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(0))));
     }
 
     #[test]
@@ -285,7 +345,7 @@ mod tests {
         assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, 0))));
         assert_eq!(handle.request(), Ok(Poll::Pending));
         assert_eq!(handle.unblock(), Ok(true));
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         assert_eq!(handle.wait(), Ok(Poll::Pending));
         if break_again {
             handle.report_break(0).unwrap();
@@ -305,7 +365,7 @@ mod tests {
         assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, 750))));
         assert_eq!(handle.request(), Ok(Poll::Pending));
         assert_eq!(handle.unblock(), Ok(true));
-        assert_eq!(handle.request(), Ok(Poll::Ready(250)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(250))));
         handle.report_continue().unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((true, true, 250))));
     }
@@ -314,16 +374,122 @@ mod tests {
         let mut handle = TimeHandle::default();
         assert_eq!(handle.request(), Ok(Poll::Pending));
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         handle.report_break(0).unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, INTERVAL))));
         handle
     }
 
+    #[test]
+    fn renode_time_handle_disposal_disables_grant_readiness() {
+        let mut handle = TimeHandle::default();
+        assert!(handle.is_ready_for_grant());
+        handle.dispose();
+        assert!(!handle.is_ready_for_grant());
+    }
+
+    #[test]
+    fn renode_time_handle_rejects_grant_after_dispose() {
+        let mut handle = TimeHandle::default();
+        handle.dispose();
+        assert!(handle.grant(INTERVAL).is_err());
+    }
+
+    #[test]
+    fn renode_time_handle_request_returns_without_grant_when_disabled() {
+        let mut handle = TimeHandle::default();
+        handle.set_enabled(false);
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+    }
+
+    #[test]
+    fn renode_time_handle_disabling_sink_resolves_pending_request() {
+        let mut handle = TimeHandle::default();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.set_enabled(false);
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+    }
+
+    #[test]
+    fn renode_time_handle_deactivating_source_resolves_pending_request() {
+        let mut handle = TimeHandle::default();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.set_source_active(false);
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+    }
+
+    #[test]
+    fn renode_time_handle_request_responds_to_source_state_transitions() {
+        let mut handle = TimeHandle::default();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.set_source_active(false);
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+        handle.set_source_active(true);
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
+        assert_eq!(handle.wait(), Ok(Poll::Pending));
+    }
+
+    #[test]
+    fn renode_time_handle_grant_fulfills_request_after_source_reactivation() {
+        let mut handle = TimeHandle::default();
+        handle.set_source_active(false);
+        handle.set_source_active(true);
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
+    }
+
+    #[test]
+    fn renode_time_handle_request_returns_immediately_after_grant_on_reactivated_source() {
+        let mut handle = TimeHandle::default();
+        handle.set_source_active(false);
+        handle.set_source_active(true);
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
+    }
+
+    #[test]
+    fn renode_time_handle_wait_on_disabled_handle_reports_grant_used() {
+        let mut handle = TimeHandle::default();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.set_enabled(false);
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+    }
+
+    #[test]
+    fn renode_time_handle_reenabled_sink_waits_without_consuming_unrequested_grant() {
+        let mut handle = TimeHandle::default();
+        handle.set_enabled(false);
+        handle.set_enabled(true);
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, 0))));
+    }
+
+    #[test]
+    fn renode_time_handle_disabling_blocked_sink_completes_the_remaining_grant() {
+        let mut handle = running();
+        handle.report_break(500).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, 500))));
+        handle.set_enabled(false);
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, 500))));
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+        handle.set_enabled(true);
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
+        handle.report_continue().unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+    }
+
     fn running() -> TimeHandle {
         let mut handle = TimeHandle::default();
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         handle
     }
 
@@ -333,7 +499,7 @@ mod tests {
             assert_eq!(handle.request(), Ok(Poll::Pending));
         }
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         if !report_first {
             assert_eq!(handle.wait(), Ok(Poll::Pending));
         }
@@ -365,7 +531,7 @@ mod tests {
     fn renode_time_handle_wait_for_report_grant_first() {
         let mut handle = TimeHandle::default();
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         assert_eq!(handle.wait(), Ok(Poll::Pending));
     }
 
@@ -374,7 +540,7 @@ mod tests {
         let mut handle = TimeHandle::default();
         assert_eq!(handle.request(), Ok(Poll::Pending));
         handle.grant(INTERVAL).unwrap();
-        assert_eq!(handle.request(), Ok(Poll::Ready(INTERVAL)));
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         assert_eq!(handle.wait(), Ok(Poll::Pending));
     }
 }
