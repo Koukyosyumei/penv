@@ -309,6 +309,13 @@ impl StmCan {
 mod tests {
     use super::*;
 
+    // Renode Infrastructure STMCANTest.AnotherTest: construction and reset.
+    #[test]
+    fn renode_stmcan_another_test() {
+        let mut can = StmCan::new(0, None, [None; 4]);
+        can.reset();
+    }
+
     // Renode Infrastructure STMCANTest.InitTest.
     #[test]
     fn renode_stmcan_init_test() {
