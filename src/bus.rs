@@ -1499,6 +1499,9 @@ impl Bus {
     }
 
     pub fn read_exclusive(&mut self, address: u32) -> Result<u32, BusError> {
+        if address & 3 != 0 {
+            return Err(BusError::Misaligned(address, 4));
+        }
         let value = self.read_cortex_data::<4>(address)?;
         self.reservations[0] = Some(address);
         Ok(value)

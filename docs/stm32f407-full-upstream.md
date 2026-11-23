@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 75 | 0 | 438 | 237 |
+| Renode | 513 | 78 | 0 | 435 | 237 |
 | Infrastructure | 217 | 16 | 0 | 201 | 7 |
-| **合計** | **730** | **91** | **0** | **639** | **244** |
+| **合計** | **730** | **94** | **0** | **636** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 639 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 636 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -506,3 +506,34 @@ cargo test thumb::exception_return_tests
 FreeRTOS の FPU・IWDG 回帰の合格です。Armv8-M 固有の PMSAv8 ベクターケース、
 `BXNS`／`BLXNS`、`FNC_RETURN` は台帳の対象外理由に従います。
 汎用的な例外復帰トークンの検証や MPU の上流群は別の未達として残ります。
+
+## Cortex-M4 の単一 CPU 排他アクセス
+
+固定上流 `tests/unit-tests/arm-atomic.robot` の単一 CPU ケース 3 件を移植しました。
+Cortex-R8 の A32 命令を Cortex-M4 の Thumb-2 で組み立て、同じ初期レジスター、
+メモリーアドレス `0x1000`、データ値、操作順序で実行します。対象命令列の直後に
+R2 とメモリーの値を UART へ出力し、32 ビット値を照合します。期待値は順に
+`(0, 0x0a)`、`(1, 0x00)`、`(1, 0x0a)` です。
+
+ワード排他命令の LR オペランドのデコード範囲を修正し、LDREX のワード境界を
+バスアクセス前に検査します。LR の追加 ELF は上流台帳の分母に含めていません。
+同一バス上の複数 CPU が必要な排他モニターとその保存・復元は台帳の対象外理由に従います。
+GPIO の動的な切り離しには、周辺機器登録解除や外部コネクターのライフサイクルが
+必要です。この共有群は未達に残ります。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+test "$(git -C "$RENODE_ROOT" rev-parse HEAD)" = c38ac3babcd38a7144b9498e3ca4c2226b76aa37
+work=target/stm32f407-exclusive
+mkdir -p "$work"
+(
+    tests/cortex-m4-exclusive.sh "$work/elf" >"$work/exclusive-elf.log" 2>&1
+    echo "$?" >"$work/exclusive-elf.status"
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
