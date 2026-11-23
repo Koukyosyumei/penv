@@ -276,12 +276,17 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
         let mut commands = String::from(concat!(
             "mach create\nmachine LoadPlatformDescription @board.repl\n",
             "sysbus LoadBinary @firmware.bin 0\nsysbus WriteDoubleWord 0x40000000 1\n",
+            "macro reset \"\"\" sleep 0.5; log \"Machine resetting\" \"\"\"\n",
             "emulation RunFor \"0.00000002\"\n",
         ));
         let mut expected = String::new();
         for &(change, paused, halted, pc, ticks) in phases {
             use std::fmt::Write as _;
             commands.push_str(change);
+            if change == "machine Reset\n" {
+                commands.push_str("cpu PC\nsysbus WriteDoubleWord 0x40000000 1\n");
+                expected.push_str("Machine resetting\n0x00000100\n");
+            }
             commands.push_str("emulation SynchroniseQuantum\n");
             commands.push_str(run_and_observe);
             let flag = |state| if state { "True" } else { "False" };
@@ -339,6 +344,36 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
                 (last, false, false, 0x106, ticks),
             ]);
         }
+    }
+    for (before_reset, paused, halted, ticks) in [
+        ("", false, false, 3),
+        ("cpu IsHalted true\n", false, true, 3),
+        ("cpu Pause\n", true, false, 2),
+        ("cpu Pause\ncpu IsHalted true\n", true, true, 2),
+    ] {
+        run_case(&[
+            (
+                before_reset,
+                paused,
+                halted,
+                if paused || halted { 0x104 } else { 0x106 },
+                ticks,
+            ),
+            ("cpu Reset\n", true, false, 0x100, ticks),
+            ("cpu Resume\n", false, false, 0x102, ticks + 1),
+        ]);
+        run_case(&[
+            (
+                before_reset,
+                paused,
+                halted,
+                if paused || halted { 0x104 } else { 0x106 },
+                ticks,
+            ),
+            ("machine Reset\n", false, false, 0x102, 1),
+            ("", false, false, 0x104, 2),
+            ("", false, false, 0x106, 3),
+        ]);
     }
     fs::remove_dir_all(directory).unwrap();
 }

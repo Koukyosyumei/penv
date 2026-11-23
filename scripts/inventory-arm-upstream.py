@@ -438,7 +438,7 @@ def classify_robot(name, case, body, parameter):
             return OUT, "Allwinner A20 / Cortex-A7", "A32 fixture and retained halt state across Cortex-A reset"
         if case in {"CPU Should Start", "CPU Should Pause", "CPU Should Halt", "CPU Should Pause and Halt"}:
             return PASS, V6, "renode_resc_cortex_m_pause_halt_and_virtual_time; same Thumb reset loop and operation order; PC and timer CNT observe execution and virtual time"
-        return OPEN, V6, "Reset cases still need standalone cpu Reset paused state and machine reset macro/log ordering; retain CPUWAIT boot behavior"
+        return PASS, V6, "renode_resc_cortex_m_pause_halt_and_virtual_time; same initial pause/halt combinations, reset, 0.5s machine reset hook, PC restart and virtual time observations"
     if name == "gdb":
         if case == "Should Not Pause Machine Upon Python Peripheral Access":
             return OPEN, V6, "Cortex-M0 REPL, GDB breakpoint and rolling-bit Python peripheral; replace original MOV.W/MOVW with Armv6-M literals"

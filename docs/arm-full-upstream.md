@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 50 | 38 | 25 | 239 |
+| Renode Robot | 113 | 58 | 38 | 17 | 239 |
 | Renode Infrastructure NUnit | 134 | 45 | 2 | 87 | 9 |
-| 合計 | **247** | **95** | **40** | **112** | **248** |
+| 合計 | **247** | **103** | **40** | **104** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -327,7 +327,9 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-limit-timer-verification
 
 単一コアの Pause 中は、スケジュール済みイベントも含めて仮想時刻が進まない。Halt 中は命令と例外の受理を止め、タイマー、UART、割り込みのサンプリングを続ける。Pause と Halt は独立し、Resume 後も明示的に解除するまで Halt は継続する。
 
-残る8構成は、単独 `cpu Reset` 後の Pause と、`machine Reset` のマクロ・ログが CPU 再始動より前という観測が必要。既存 CPUWAIT の起動経路と合わせて検証する。GPIO の接続解除群は動的な周辺機器の登録解除と接続先の列挙が必要で、現在の固定 REPL 配線からは同じ刺激を与えられない。
+リセットの8構成も同じ回帰に含めた。実行中・Halt・Pause・両方の4状態から、単独 `cpu Reset` と `machine Reset` をそれぞれ実行する。CPUWAIT が解除された状態の単独リセットは Halt を解除して Pause に入り、PC はリセットベクター、TIM2 の CNT は停止前の値を維持する。CPUWAIT がアサートされた状態のリセットは既存の同期解除経路を使う。マシンリセットは Halt・Pause を解除し、上流と同じ `macro reset` の `sleep 0.5` と `log "Machine resetting"` を次の命令の前に実行する。CLI でログ、リセット直後の PC、ループ復帰とタイマーの進行を順に確認した。
+
+自動リセットマクロの対応範囲は RESC の明示的な `machine Reset` における `sleep` と `log`。任意のモニターコマンドやゲストによるリセット時のマクロは引き続き対象外。GPIO の接続解除群は動的な周辺機器の登録解除と接続先の列挙が必要で、現在の固定 REPL 配線からは同じ刺激を与えられない。
 
 ```sh
 cargo test --locked renode_resc_cortex_m_pause_halt_and_virtual_time

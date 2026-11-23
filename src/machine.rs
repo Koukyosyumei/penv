@@ -285,6 +285,7 @@ impl Machine {
             return Err(format!("unknown Cortex-M CPU {name:?}"));
         }
         self.primary.reset_cortex_m(&mut self.bus);
+        self.primary.monitor_paused = !self.primary.reset_held;
         Ok(())
     }
 

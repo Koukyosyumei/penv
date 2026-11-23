@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use crate::{
@@ -46,7 +47,7 @@ enum Action {
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
-    MachineReset,
+    MachineReset(Vec<ResetHook>),
     ReadScalar(u32, ScalarWidth),
     WriteScalar(u32, ScalarWidth, u32),
     Tag(u32, u32, u64, bool),
@@ -69,6 +70,11 @@ enum Action {
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
+}
+
+enum ResetHook {
+    Sleep(Duration),
+    Log(String),
 }
 
 #[derive(Clone, Copy)]
@@ -198,7 +204,17 @@ pub fn run(
             }
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
-            Action::MachineReset => machine.reset_cortex_m_machine().map(|()| None),
+            Action::MachineReset(hooks) => machine.reset_cortex_m_machine().and_then(|()| {
+                for hook in hooks {
+                    match hook {
+                        ResetHook::Sleep(duration) => std::thread::sleep(*duration),
+                        ResetHook::Log(message) => {
+                            writeln!(output.output, "{message}").map_err(|e| e.to_string())?;
+                        }
+                    }
+                }
+                Ok(None)
+            }),
             Action::ReadScalar(address, width) => width
                 .read(machine, *address)
                 .map_err(|error| error.to_string())
@@ -515,8 +531,18 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
             continue;
         }
-        if let Some(name) = text.strip_prefix("macro ") {
-            let name = name.trim();
+        if let Some(declaration) = text.strip_prefix("macro ") {
+            let declaration = declaration.trim();
+            if let Some((name, body)) = declaration.split_once(char::is_whitespace) {
+                let body = body
+                    .trim()
+                    .strip_prefix("\"\"\"")
+                    .and_then(|body| body.strip_suffix("\"\"\""))
+                    .ok_or_else(|| error("expected triple-quoted macro body"))?;
+                macros.insert(name, vec![(line, body)]);
+                continue;
+            }
+            let name = declaration;
             if cursor
                 .next()
                 .is_none_or(|(_, line)| line.trim() != "\"\"\"")
@@ -574,6 +600,18 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
             line + 1,
         )
         .map_err(|e| error(&e))?;
+        if let Some(RuntimeCommand {
+            line: command_line,
+            action: Action::MachineReset(hooks),
+        }) = boot.runtime.last_mut()
+            && *command_line == line + 1
+            && let Some(body) = macros.get("reset")
+        {
+            for (index, command) in body {
+                parse_reset_hooks(command.trim(), hooks)
+                    .map_err(|e| format!("{}:{}: {e}", path.display(), index + 1))?;
+            }
+        }
     }
     if !machine || boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
         return Err(format!(
@@ -582,6 +620,45 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
         ));
     }
     Ok(boot)
+}
+
+fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(), String> {
+    while !commands.is_empty() && !commands.starts_with('#') {
+        let (verb, argument) = commands
+            .split_once(char::is_whitespace)
+            .ok_or("expected reset macro sleep or log")?;
+        let argument = argument.trim_start();
+        let rest = match verb {
+            "sleep" => {
+                let end = argument.find(';').unwrap_or(argument.len());
+                let seconds = argument[..end]
+                    .trim()
+                    .parse::<f64>()
+                    .map_err(|_| "expected reset macro sleep duration in seconds")?;
+                let duration = Duration::try_from_secs_f64(seconds)
+                    .map_err(|_| "invalid reset macro sleep duration")?;
+                hooks.push(ResetHook::Sleep(duration));
+                &argument[end..]
+            }
+            "log" => {
+                let (message, rest) = argument
+                    .strip_prefix('"')
+                    .and_then(|arg| arg.split_once('"'))
+                    .ok_or("expected quoted reset macro log message")?;
+                hooks.push(ResetHook::Log(message.into()));
+                rest
+            }
+            _ => return Err(format!("unsupported reset macro operation {verb:?}")),
+        };
+        commands = rest.trim_start();
+        if !commands.is_empty() {
+            commands = commands
+                .strip_prefix(';')
+                .ok_or("expected ';' between reset macro commands")?
+                .trim_start();
+        }
+    }
+    Ok(())
 }
 
 fn execute(
@@ -983,7 +1060,7 @@ fn execute(
             ))
         }
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
-        ["machine" | "mach", "Reset"] => Some(Action::MachineReset),
+        ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
         [target, "Reset"] => {
             let cpu = resolve(target)?;
             Some(Action::CpuReset(
