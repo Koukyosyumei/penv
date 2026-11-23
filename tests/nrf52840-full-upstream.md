@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 144 | 3 | 43 |
+| 監査した共有・混成 Robot | 190 | 145 | 3 | 42 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **175** | **3** | **43** |
+| 合計 | **221** | **176** | **3** | **42** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -491,7 +491,7 @@ tests/nrf52840-systick-hooks-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR
 tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
-元の固定 Mi-V ELF（SHA-1 `ea4ddb074325b2cc1aae56800d099c7cf56e592a`）も取得し、`target/debug/penv run --script ../renode/scripts/single-node/miv.resc --platform-root ../renode --max-steps 1 "$MIV_ELF"` で確認した。固定 REPL の `UART.MiV_CoreUART` で停止したため、台帳では部分移植とした。任意の Python フックと MMIO 読み出し watchpoint は引き続き未達。別機械の GPIO 破棄ケースの現在の結果は次節に記録した。
+元の固定 Mi-V ELF（SHA-1 `ea4ddb074325b2cc1aae56800d099c7cf56e592a`）も取得し、`target/debug/penv run --script ../renode/scripts/single-node/miv.resc --platform-root ../renode --max-steps 1 "$MIV_ELF"` で確認した。固定 REPL の `UART.MiV_CoreUART` で停止したため、台帳では部分移植とした。任意の Python フックは未達。MMIO 読み出しウォッチポイントは末尾に記載した。別機械の GPIO 破棄ケースの現在の結果は次節に記録した。
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/nrf52-monitor-hook.fX1aN2OI/` に保存した。`baseline` は未対応コマンドの再現、`focal`、`systick`、`shell` は各回帰、`miv` は固定構成の起動結果。
 
@@ -559,4 +559,17 @@ tests/nrf52840-pydev-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/pydev"
 tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
-ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/pydev-quadword.joQdjhXD` の `cargo-test.final`、`pydev.final`、`shell.final` に保存した。対象ケースは上流から CPU と ELF を使わない。実ファームウェアへの回帰は Shell で確認した。CPU ゲストからの Python MMIO、PyDevFromFile、各種 Python フック間の診断一致は引き続き未達。
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/pydev-quadword.joQdjhXD` の `cargo-test.final`、`pydev.final`、`shell.final` に保存した。対象ケースは上流から CPU と ELF を使わない。実ファームウェアへの回帰は Shell で確認した。ゲストからの Python MMIO は次節に記載した。PyDevFromFile の monitor コマンドと各種 Python フック間の診断一致は未達。
+
+### Python MMIO の読み出しウォッチポイント
+
+`hooks.robot:23-52` の ARMv7-A 命令を Cortex-M4 の Thumb `ldrb` と分岐へ移植した。上流の `scripts/pydev/counter.py` を REPL から読み込み、固定アドレス `0xf0000004` の直接読み出し、1バイト読み出しウォッチポイント登録、ゲストの `Step 2` を上流の順で実行した。32ビット直接読み出しの値は `0, 1, 2, 4, 6, 8` で一致した。ゲストは `ldrb` 完了後の PC `0x12` で停止し、直接読み出しはウォッチポイントを発火させない。
+
+```sh
+cargo test --locked
+tests/nrf52840-pydev-watchpoint-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/watch"
+tests/nrf52840-pydev-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/quadword"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/pydev-watchpoint.RSpSTF7v` の `cargo-test`、`watch`、`quadword`、`shell` に保存した。今回のウォッチポイントは、アドレスと幅が一致するゲスト読み出しの停止を扱う。Python フック本体、書き込みウォッチポイント、GDB 経由の操作、Python 周辺機器のリセット連動は残課題。

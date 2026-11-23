@@ -39,6 +39,8 @@ pub enum CpuControl {
     Pause(bool),
     Halt(bool),
     Step(u64),
+    Read32(u32),
+    ReadWatchpoint(u32, usize),
     Clock(String, bool),
     Reset(crate::machine::CpuResetKind),
     ResetLog(String),
@@ -293,6 +295,27 @@ fn execute(
                     .to_ascii_lowercase()
                     .parse()
                     .map_err(|_| "expected true or false")?,
+            ));
+        }
+        ["sysbus", "ReadDoubleWord", address] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::Read32(crate::parse_address(resolve(address)?)?));
+        }
+        [
+            "sysbus",
+            "AddWatchpointHook",
+            address,
+            width,
+            "Read",
+            "\"\"",
+        ] if boot.platform.is_some() => {
+            let width = crate::parse_address(resolve(width)?)? as usize;
+            if !matches!(width, 1 | 2 | 4) {
+                return Err("unsupported Cortex-M read watchpoint width".into());
+            }
+            boot.cpu_control.push(CpuControl::ReadWatchpoint(
+                crate::parse_address(resolve(address)?)?,
+                width,
             ));
         }
         ["cpu" | "sysbus.cpu", "Step", count] if boot.platform.is_some() => {

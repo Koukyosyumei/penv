@@ -9,11 +9,16 @@ from types import SimpleNamespace
 import sys
 
 program = compile(sys.argv[1], "<PyDev>", "exec")
-scope = {}
+class PeripheralLog:
+    def NoisyLog(self, message):
+        pass
+
+scope = {"self": PeripheralLog()}
 request = SimpleNamespace()
 print(0, flush=True)
 for line in sys.stdin:
     kind, offset, address, width, value, counter = line.split()
+    request.Type = kind.upper()
     request.IsInit = kind == "init"
     request.IsRead = kind == "read"
     request.IsWrite = kind == "write"
@@ -99,12 +104,57 @@ enum Action {
     },
 }
 
-struct Peripheral {
+pub(crate) struct Peripheral {
     worker: Worker,
     base: u64,
     end: u64,
     init_pending: bool,
     counter: u64,
+}
+
+impl Peripheral {
+    pub fn new(source: &str, base: u64, size: u64, initable: bool) -> Result<Self, String> {
+        let end = base
+            .checked_add(size)
+            .filter(|&end| end > base)
+            .ok_or("invalid PyDev address range")?;
+        Ok(Self {
+            worker: Worker::start(source)?,
+            base,
+            end,
+            init_pending: initable,
+            counter: 0,
+        })
+    }
+
+    pub fn overlaps(&self, start: u64, end: u64) -> bool {
+        self.base < end && start < self.end
+    }
+
+    pub fn contains(&self, address: u64, width: u32) -> bool {
+        address >= self.base
+            && address
+                .checked_add(u64::from(width))
+                .is_some_and(|end| end <= self.end)
+    }
+
+    pub fn access(&mut self, address: u64, width: u32, value: Option<u64>) -> Result<u64, String> {
+        if std::mem::take(&mut self.init_pending) {
+            self.worker
+                .request(format_args!("init 0 {address} {width} 0 0"))?;
+        }
+        let offset = address - self.base;
+        let counter = self.counter;
+        self.counter += 1;
+        let mask = u64::MAX >> (64 - width * 8);
+        let kind = if value.is_some() { "write" } else { "read" };
+        let value = value.unwrap_or_default() & mask;
+        self.worker
+            .request(format_args!(
+                "{kind} {offset} {address} {width} {value} {counter}"
+            ))
+            .map(|response| response & mask)
+    }
 }
 
 fn number(text: &str) -> Result<u64, String> {
@@ -208,13 +258,7 @@ impl Script {
                     {
                         return Err("overlapping PyDev address ranges".into());
                     }
-                    peripherals.push(Peripheral {
-                        worker: Worker::start(&source)?,
-                        base,
-                        end,
-                        init_pending: initable,
-                        counter: 0,
-                    });
+                    peripherals.push(Peripheral::new(&source, base, size, initable)?);
                 }
                 Action::Access {
                     address,
@@ -223,32 +267,11 @@ impl Script {
                 } => {
                     let device = peripherals
                         .iter_mut()
-                        .find(|device| {
-                            address >= device.base
-                                && address
-                                    .checked_add(u64::from(width))
-                                    .is_some_and(|end| end <= device.end)
-                        })
+                        .find(|device| device.contains(address, width))
                         .ok_or_else(|| format!("unmapped PyDev access at {address:#x}"))?;
-                    if std::mem::take(&mut device.init_pending) {
-                        device
-                            .worker
-                            .request(format_args!("init 0 {address} {width} 0 0"))?;
-                    }
-                    let offset = address - device.base;
-                    let counter = device.counter;
-                    device.counter += 1;
-                    let mask = u64::MAX >> (64 - width * 8);
-                    if let Some(value) = value {
-                        let value = value & mask;
-                        device.worker.request(format_args!(
-                            "write {offset} {address} {width} {value} {counter}"
-                        ))?;
-                    } else {
-                        let value = device
-                            .worker
-                            .request(format_args!("read {offset} {address} {width} 0 {counter}"))?
-                            & mask;
+                    let response = device.access(address, width, value)?;
+                    if value.is_none() {
+                        let value = response;
                         if self.hex {
                             writeln!(output, "{value:#x}")
                         } else {

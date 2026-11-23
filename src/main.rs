@@ -744,6 +744,16 @@ fn run() -> Result<ExitCode, String> {
                 monitor::CpuControl::Step(count) => {
                     machine.monitor_step_cortex_m(count, &mut output)?
                 }
+                monitor::CpuControl::Read32(address) => {
+                    let value = machine
+                        .bus
+                        .read::<4>(address)
+                        .map_err(|error| error.to_string())?;
+                    writeln!(output, "{value:#010x}").map_err(|error| error.to_string())?;
+                }
+                monitor::CpuControl::ReadWatchpoint(address, width) => {
+                    machine.bus.add_thumb_read_watchpoint(address, width)
+                }
                 monitor::CpuControl::Halt(halted) => machine.set_cpu_halted(halted),
                 monitor::CpuControl::Clock(target, enabled) => match target.as_str() {
                     "cpu" | "cpu0" if machine.primary.name.as_deref() == Some(&target) => {

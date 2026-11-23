@@ -49,6 +49,7 @@ pub enum BusError {
     Page(u32),
     Misaligned(u32, usize),
     Output(io::Error),
+    Python(String),
 }
 
 impl BusError {
@@ -66,6 +67,7 @@ impl fmt::Display for BusError {
             Self::Unmapped(address, width) => {
                 write!(f, "unmapped RAM access at {address:#010x} ({width} bytes)")
             }
+            Self::Python(error) => f.write_str(error),
             Self::SlaveFault(address) => write!(f, "bus slave fault at {address:#010x}"),
             Self::Page(address) => write!(f, "page fault at {address:#010x}"),
             Self::Denied(address) => write!(
@@ -155,6 +157,9 @@ struct NrfGpioConnector {
 
 #[derive(Default)]
 pub struct Bus {
+    pydevs: Vec<crate::pydev::Peripheral>,
+    thumb_read_watchpoints: BTreeSet<(u32, usize)>,
+    pub thumb_read_watchpoint_hit: bool,
     pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub thumb_trace: Option<crate::thumb::trace::Trace>,
@@ -769,19 +774,23 @@ impl Bus {
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        self.trivial_peripherals.iter().any(|&base| {
-            let base = u64::from(base);
-            start < base + u64::from(TRIVIAL_PERIPHERAL_SIZE) && base < end
-        }) || self.faulting_peripherals.iter().any(|device| {
-            let base = u64::from(device.base);
-            start < base + FAULTING_PERIPHERAL_SIZE as u64 && base < end
-        }) || self.nrf_peripherals.iter().any(|device| {
-            let other = u64::from(device.base);
-            start < other + u64::from(device.size()) && other < end
-        }) || self
-            .nvic
-            .as_ref()
-            .is_some_and(|nvic| nvic.overlaps(start, end))
+        self.pydevs.iter().any(|device| device.overlaps(start, end))
+            || self.trivial_peripherals.iter().any(|&base| {
+                let base = u64::from(base);
+                start < base + u64::from(TRIVIAL_PERIPHERAL_SIZE) && base < end
+            })
+            || self.faulting_peripherals.iter().any(|device| {
+                let base = u64::from(device.base);
+                start < base + FAULTING_PERIPHERAL_SIZE as u64 && base < end
+            })
+            || self.nrf_peripherals.iter().any(|device| {
+                let other = u64::from(device.base);
+                start < other + u64::from(device.size()) && other < end
+            })
+            || self
+                .nvic
+                .as_ref()
+                .is_some_and(|nvic| nvic.overlaps(start, end))
             || self.dwt.as_ref().is_some_and(|dwt| {
                 let base = u64::from(dwt.base);
                 start < base + u64::from(Dwt::SIZE) && base < end
@@ -1221,6 +1230,31 @@ impl Bus {
         }
         self.exti = Some(Exti::new(base, outputs, first_direct));
         Ok(())
+    }
+
+    pub fn map_pydev(
+        &mut self,
+        source: &str,
+        base: u32,
+        size: u32,
+        initable: bool,
+    ) -> Result<(), String> {
+        let base = u64::from(base);
+        let end = base + u64::from(size);
+        if end > 1 << 32 || self.overlaps(base, end) {
+            return Err("overlapping or invalid Python peripheral range".into());
+        }
+        self.pydevs.push(crate::pydev::Peripheral::new(
+            source,
+            base,
+            u64::from(size),
+            initable,
+        )?);
+        Ok(())
+    }
+
+    pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
+        self.thumb_read_watchpoints.insert((address, width));
     }
 
     pub fn map_dwt(&mut self, base: u32, frequency: u32) -> Result<(), String> {
@@ -1977,6 +2011,7 @@ impl Bus {
                 .or_else(|error| self.thumb_data_error(error, false))?
         };
         self.log_ram_io_read(address, N, value);
+        self.thumb_read_watchpoint_hit |= self.thumb_read_watchpoints.contains(&(address, N));
         Ok(value)
     }
 
@@ -2069,6 +2104,16 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if let Some(device) = self
+            .pydevs
+            .iter_mut()
+            .find(|device| device.contains(address.into(), N as u32))
+        {
+            return device
+                .access(address.into(), N as u32, None)
+                .map(|value| value as u32)
+                .map_err(BusError::Python);
+        }
         if N == 4 && self.trivial_peripheral_at(address) {
             return Ok(0);
         }
@@ -2326,6 +2371,16 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        if let Some(device) = self
+            .pydevs
+            .iter_mut()
+            .find(|device| device.contains(address.into(), width as u32))
+        {
+            return device
+                .access(address.into(), width as u32, Some(value.into()))
+                .map(|_| ())
+                .map_err(BusError::Python);
+        }
         if width == 4 && self.trivial_peripheral_at(address) {
             return Ok(());
         }

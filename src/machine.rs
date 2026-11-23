@@ -57,6 +57,7 @@ pub enum CpuResetKind {
 
 enum Step {
     Retired,
+    RetiredAndPaused,
     Trap,
     Stop(Stop),
 }
@@ -105,7 +106,7 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) => return None,
+                BusError::Output(_) | BusError::Python(_) => return None,
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),
@@ -515,6 +516,10 @@ impl Machine {
             }
             match result? {
                 Step::Retired => retired += 1,
+                Step::RetiredAndPaused => {
+                    self.pause_cpu();
+                    return Ok((Stop::Paused, retired + 1));
+                }
                 Step::Trap => {}
                 Step::Stop(stop) => {
                     if stop == Stop::Paused {
@@ -738,9 +743,11 @@ impl Hart {
             {
                 return Ok(Step::Stop(Stop::Paused));
             }
+            bus.thumb_read_watchpoint_hit = false;
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
                 .map(|step| match step {
+                    ThumbStep::Retired if bus.thumb_read_watchpoint_hit => Step::RetiredAndPaused,
                     ThumbStep::Retired => Step::Retired,
                     ThumbStep::Fault => Step::Trap,
                     ThumbStep::Semihosting(exit) => Step::Stop(Stop::Semihosting(exit)),

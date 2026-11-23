@@ -377,6 +377,33 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 keys(entry, &[])?;
                 semihosting_uarts.push(entry);
             }
+            "Python.PythonPeripheral" if cortex_m4 => {
+                let mut size = None;
+                let mut filename = None;
+                let mut initable = false;
+                for (key, value) in keys(entry, &["size", "filename", "initable"])? {
+                    match key {
+                        "size" => size = Some(number(value).map_err(|e| entry.error(&e))?),
+                        "filename" => filename = Some(value.trim_matches('"')),
+                        "initable" => {
+                            initable = value
+                                .parse()
+                                .map_err(|_| entry.error("invalid initable flag"))?
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let size = size.ok_or_else(|| entry.error("missing Python peripheral size"))?;
+                let filename =
+                    filename.ok_or_else(|| entry.error("missing Python peripheral filename"))?;
+                let source_path = root.unwrap_or(Path::new(".")).join(filename);
+                let source = std::fs::read_to_string(&source_path)
+                    .map_err(|e| entry.error(&format!("{}: {e}", source_path.display())))?;
+                machine
+                    .bus
+                    .map_pydev(&source, entry.address()?, size, initable)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Miscellaneous.DWT" if cortex_m4 => {
                 let (_, frequency) = keys(entry, &["frequency"])?
                     .into_iter()
