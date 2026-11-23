@@ -478,7 +478,9 @@ def classify_robot(name, case, body, parameter):
         if case in byte_cases:
             return PASS, F072, "renode_resc_uart_testers_follow_identity_and_default_selection and renode_binary_uart_history_keeps_exact_cursor_after_matches_and_timeouts; upstream literal bytes and cursor/mode contract over STM32 USART"
         if "As Regex" in case:
-            return OPEN, COMMON, "Requires binary-mode regex matching with capture groups and exact match-end consumption; literal byte patterns now supported"
+            return PASS, F072, "renode_resc_uart_testers_follow_identity_and_default_selection; three copies of all 256 bytes, same three regexes, captures and retained feff suffix"
+        if case in {"Should Fail On Failing String", "Should Fail On Failing String On Specific Tester", "Should Unregister Failing String"}:
+            return PASS, F072, "renode_resc_uart_testers_follow_identity_and_default_selection; injected Tock markers, same literal/regex registration, tester ID, precedence and removal"
         if "Create Trivial Machine" in body:
             fixture = "TrivialUart with injected 0x00..0xff"
         elif "Create Tock Machine" in body:

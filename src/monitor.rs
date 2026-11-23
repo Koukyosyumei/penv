@@ -8,7 +8,7 @@ use std::{
 use crate::{
     bus::{CORTEX_M_STEP_HZ, UartWatch, UnhandledAccess},
     machine::{Machine, Stop},
-    uart::{UartHistory, UartWaitMode},
+    uart::{BinaryUartPattern, FailingUartPattern, UartHistory, UartWaitMode},
 };
 
 #[derive(PartialEq, Eq, Debug)]
@@ -62,7 +62,8 @@ enum Action {
     CreateUartTester(String, bool),
     DefaultUartTester(Option<usize>),
     WaitForTester(Option<usize>, String, u64),
-    WaitForBytes(Option<usize>, Vec<u8>, bool, u64),
+    WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
+    SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
 }
 
@@ -238,27 +239,30 @@ pub fn run(
             Action::DefaultUartTester(id) => {
                 machine.bus.set_default_uart_tester(*id).map(|()| None)
             }
+            Action::SetUartFailure(id, pattern, register) => machine
+                .bus
+                .set_uart_failure(*id, pattern.clone(), *register)
+                .map(|()| None),
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
                 let start = machine.elapsed_steps();
-                machine
-                    .bus
-                    .watch_uart_bytes(*id, pattern, *match_start)
-                    .and_then(|watch| {
-                        run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
-                    })
-                    .and_then(|(stop, count)| {
+                machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
+                    let result = drive_uart_watch(machine, watch, (*timeout).min(budget), &mut output);
+                    let matched = machine.bus.take_uart_byte_match(watch);
+                    machine.bus.finish_stm32_uart_watch(watch);
+                    result.and_then(|(stop, count)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
-                        if stop == Stop::OutputMatch {
-                            write_hex_list(pattern.iter(), 2, output.output)
-                                .map_err(|error| error.to_string())
-                                .map(|()| None)
-                        } else {
-                            Err(format!(
-                                "Terminal tester failed! Byte pattern was not received ({stop:?})"
-                            ))
+                        let matched = matched.ok_or_else(|| format!("Terminal tester failed! Byte pattern was not received ({stop:?})"))?;
+                        write_hex_list(matched.content, 2, output.output).map_err(|e| e.to_string())?;
+                        for group in matched.groups {
+                            match group {
+                                Some(bytes) => write_hex_list(bytes, 2, output.output),
+                                None => writeln!(output.output, "null"),
+                            }.map_err(|e| e.to_string())?;
                         }
+                        Ok(None)
                     })
+                })
             }
             Action::WaitForTester(id, pattern, timeout) => {
                 let start = machine.elapsed_steps();
@@ -405,17 +409,33 @@ fn wait_for_led(
     Ok(retired + count)
 }
 
+fn drive_uart_watch(
+    machine: &mut Machine,
+    watch: UartWatch,
+    budget: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    if machine.bus.stm32_uart_matched(watch) {
+        Ok((Stop::OutputMatch, 0))
+    } else {
+        machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(watch))
+    }
+}
+
 fn run_uart_watch(
     machine: &mut Machine,
     watch: UartWatch,
     budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    let result = if machine.bus.stm32_uart_matched(watch) {
-        Ok((Stop::OutputMatch, 0))
-    } else {
-        machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(watch))
-    };
+    let result = drive_uart_watch(machine, watch, budget, output).and_then(|result| {
+        if let Some(line) = machine.bus.uart_watch_failure(watch) {
+            return Err(format!(
+                "Terminal tester failed! Test failing entry has been found on UART:\n{line}"
+            ));
+        }
+        Ok(result)
+    });
     machine.bus.finish_stm32_uart_watch(watch);
     result
 }
@@ -587,25 +607,70 @@ fn execute(
         }
         ["WaitForBytesOnUart", ..] => {
             let args = text["WaitForBytesOnUart".len()..].trim_start();
-            let (hex, options) = quoted_argument(args)
-                .ok_or("expected WaitForBytesOnUart \"hex bytes\" [testerId=number] [timeout=seconds] [matchStart=true]")?;
-            let pattern = hex_pattern(hex)?;
-            if pattern.is_empty() || pattern.len() > crate::uart::UART_HISTORY_BYTES {
-                return Err("UART byte pattern must contain 1 to 65536 bytes".into());
-            }
-            let (id, timeout, match_start) = tester_wait_options(options, resolve, true)?;
-            Some(Action::WaitForBytes(id, pattern, match_start, timeout))
+            let (pattern, arguments) = quoted_argument(args)
+                .filter(|(pattern, _)| !pattern.is_empty())
+                .ok_or("expected WaitForBytesOnUart \"bytes or regex\" [options]")?;
+            let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Bytes)?;
+            let pattern = if options.regex {
+                BinaryUartPattern::Regex(
+                    regex::bytes::RegexBuilder::new(pattern)
+                        .unicode(false)
+                        .dot_matches_new_line(true)
+                        .build()
+                        .map_err(|e| format!("invalid UART byte regex: {e}"))?,
+                )
+            } else {
+                let bytes = hex_pattern(pattern)?;
+                if bytes.is_empty() || bytes.len() > crate::uart::UART_HISTORY_BYTES {
+                    return Err("UART byte pattern must contain 1 to 65536 bytes".into());
+                }
+                BinaryUartPattern::Literal(bytes)
+            };
+            Some(Action::WaitForBytes(
+                options.id,
+                pattern,
+                options.match_start,
+                options.timeout,
+            ))
         }
         ["WaitForLineOnUart", ..] => {
-            let (pattern, options) = quoted_argument(
+            let (pattern, arguments) = quoted_argument(
                 text["WaitForLineOnUart".len()..].trim_start(),
             )
             .filter(|(pattern, _)| !pattern.is_empty())
             .ok_or(
                 "expected WaitForLineOnUart \"literal text\" [testerId=number] [timeout=seconds]",
             )?;
-            let (id, timeout, _) = tester_wait_options(options, resolve, false)?;
-            Some(Action::WaitForTester(id, pattern.to_owned(), timeout))
+            let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Line)?;
+            Some(Action::WaitForTester(
+                options.id,
+                pattern.to_owned(),
+                options.timeout,
+            ))
+        }
+        [
+            command @ ("RegisterFailingUartString" | "UnregisterFailingUartString"),
+            ..,
+        ] => {
+            let (pattern, arguments) = quoted_argument(text[command.len()..].trim_start())
+                .filter(|(pattern, _)| !pattern.is_empty())
+                .ok_or("expected quoted failing UART pattern")?;
+            let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Failure)?;
+            let regex = options
+                .regex
+                .then(|| {
+                    regex::Regex::new(pattern)
+                        .map_err(|e| format!("invalid failing UART regex: {e}"))
+                })
+                .transpose()?;
+            Some(Action::SetUartFailure(
+                options.id,
+                FailingUartPattern {
+                    pattern: pattern.into(),
+                    regex,
+                },
+                *command == "RegisterFailingUartString",
+            ))
         }
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
@@ -1004,24 +1069,44 @@ fn parse_tester_bool(value: &str) -> Result<bool, String> {
         .map_err(|_| format!("expected true or false, got {value:?}"))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TesterOptionsKind {
+    Line,
+    Bytes,
+    Failure,
+}
+
+struct TesterWaitOptions {
+    id: Option<usize>,
+    timeout: u64,
+    match_start: bool,
+    regex: bool,
+}
+
 fn tester_wait_options<'a>(
     options: &'a str,
     resolve: impl Fn(&'a str) -> Result<&'a str, String>,
-    binary: bool,
-) -> Result<(Option<usize>, u64, bool), String> {
+    kind: TesterOptionsKind,
+) -> Result<TesterWaitOptions, String> {
     let mut id = None;
     let mut timeout = None;
     let mut match_start = None;
+    let mut regex = None;
     for option in options.split_whitespace() {
         match option.split_once('=') {
             Some(("testerId", value)) if id.is_none() => {
                 id = Some(crate::parse_address(resolve(value)?)? as usize);
             }
-            Some(("timeout", value)) if timeout.is_none() => {
+            Some(("timeout", value)) if kind != TesterOptionsKind::Failure && timeout.is_none() => {
                 timeout = Some(duration_steps(resolve(value)?)?);
             }
-            Some(("matchStart", value)) if binary && match_start.is_none() => {
+            Some(("matchStart", value))
+                if kind == TesterOptionsKind::Bytes && match_start.is_none() =>
+            {
                 match_start = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("treatAsRegex", value)) if kind != TesterOptionsKind::Line && regex.is_none() => {
+                regex = Some(parse_tester_bool(resolve(value)?)?);
             }
             _ => {
                 return Err(format!(
@@ -1030,11 +1115,12 @@ fn tester_wait_options<'a>(
             }
         }
     }
-    Ok((
+    Ok(TesterWaitOptions {
         id,
-        timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
-        match_start.unwrap_or(false),
-    ))
+        timeout: timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
+        match_start: match_start.unwrap_or(false),
+        regex: regex.unwrap_or(false),
+    })
 }
 
 fn byte_list<'a>(

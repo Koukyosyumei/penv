@@ -606,6 +606,75 @@ uart1: UART.STM32F7_USART @ sysbus 0x40004400
         [b"0\n", all.as_slice(), format!("[{list}]\n").as_bytes()].concat()
     );
 
+    let expression: String = all.iter().map(|byte| format!(r"\x{byte:02x}")).collect();
+    let tripled = all.repeat(3);
+    let captures = run(
+        binary,
+        &stream(&tripled),
+        &format!(
+            "WaitForBytesOnUart \"{expression}\" matchStart=true treatAsRegex=true\n{}",
+            concat!(
+                "WaitForBytesOnUart \"\\x00.*?\\xff\" matchStart=true treatAsRegex=true\n",
+                "WaitForBytesOnUart \"(\\x11.*)\\x41.*?([\\x50-\\x5f]+).*?\\xfd\" treatAsRegex=true\n",
+                "WaitForBytesOnUart \"feff\" matchStart=true timeout=0",
+            ),
+        ),
+    );
+    assert!(captures.status.success(), "{captures:?}");
+    let hex_list = |bytes: &[u8]| {
+        let items = bytes
+            .iter()
+            .map(|byte| format!("0x{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{items}]\n")
+    };
+    let expected: String = [
+        &all[..],
+        &all[..],
+        &all[0x11..0xfe],
+        &all[0x11..0x41],
+        &all[0x50..0x60],
+        &all[0xfe..],
+    ]
+    .into_iter()
+    .map(hex_list)
+    .collect();
+    assert_eq!(
+        captures.stdout,
+        [b"0\n", tripled.as_slice(), expected.as_bytes()].concat()
+    );
+
+    for (setup, data, query) in [
+        (
+            first,
+            &b"D2\r\nEntering test loop\r\n"[..],
+            "RegisterFailingUartString \"Entering.*loop\" treatAsRegex=true\nWaitForLineOnUart \"D2\"",
+        ),
+        (
+            &format!("{second}{first}")[..],
+            &b"D1\r\n"[..],
+            "RegisterFailingUartString \"D1\" testerId=1\nWaitForLineOnUart \"D1\" testerId=1",
+        ),
+    ] {
+        let received = run(setup, &stream(data), query);
+        assert_eq!(received.status.code(), Some(1), "{received:?}");
+        assert!(
+            String::from_utf8_lossy(&received.stderr).contains("Test failing entry"),
+            "{received:?}"
+        );
+    }
+    let unregistered = run(
+        first,
+        &stream(b"D1\r\n"),
+        concat!(
+            "RegisterFailingUartString \"D1\"\n",
+            "UnregisterFailingUartString \"D1\"\n",
+            "WaitForLineOnUart \"D1\"",
+        ),
+    );
+    assert!(unregistered.status.success(), "{unregistered:?}");
+
     fs::remove_dir_all(directory).unwrap();
 }
 

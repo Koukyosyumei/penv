@@ -172,15 +172,94 @@ impl UartLineMatch {
 
 pub const UART_HISTORY_BYTES: usize = 64 * 1024;
 
+#[derive(Clone)]
+pub struct FailingUartPattern {
+    pub pattern: String,
+    pub regex: Option<regex::Regex>,
+}
+
+impl FailingUartPattern {
+    fn matches(&self, line: &str) -> bool {
+        self.regex.as_ref().map_or_else(
+            || line.contains(&self.pattern),
+            |regex| regex.is_match(line),
+        )
+    }
+}
+
 #[derive(Default)]
 pub struct UartHistory {
     unread: VecDeque<u8>,
     active: Option<UartLineMatch>,
+    failures: Vec<FailingUartPattern>,
+    failure: Option<String>,
 }
 
 impl UartHistory {
+    pub fn set_failure(&mut self, pattern: FailingUartPattern, register: bool) {
+        let index = self.failures.iter().position(|p| {
+            p.pattern == pattern.pattern && p.regex.is_some() == pattern.regex.is_some()
+        });
+        match (register, index) {
+            (true, None) => self.failures.push(pattern),
+            (false, Some(index)) => {
+                self.failures.remove(index);
+            }
+            _ => {}
+        }
+    }
+
+    fn failing_line(&self) -> Option<(usize, String)> {
+        if self.failures.is_empty() {
+            return None;
+        }
+        let mut finished = Vec::new();
+        let mut start = 0;
+        for (index, &byte) in self.unread.iter().enumerate() {
+            if byte == b'\n' {
+                finished.push((start, index));
+                start = index + 1;
+            }
+        }
+        for pattern in &self.failures {
+            for &(start, end) in &finished {
+                let line: Vec<_> = self
+                    .unread
+                    .iter()
+                    .skip(start)
+                    .take(end - start)
+                    .copied()
+                    .filter(|byte| !matches!(byte, 0 | b'\r'))
+                    .collect();
+                let line: String = line.into_iter().map(char::from).collect();
+                if pattern.matches(&line) {
+                    return Some((end, line));
+                }
+            }
+        }
+        None
+    }
+
+    fn check_failure(&mut self) -> bool {
+        let Some((end, line)) = self.failing_line() else {
+            return false;
+        };
+        self.unread.drain(..=end);
+        self.failure = Some(line);
+        true
+    }
+
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
     pub fn begin_wait(&mut self, pattern: &str, end: UartWaitMode) {
+        self.failure = None;
         let mut matcher = UartLineMatch::new(pattern, end);
+        if self.check_failure() {
+            self.active = Some(matcher);
+            return;
+        }
         if let Some(index) = self.unread.iter().position(|&byte| {
             matcher.receive(byte);
             matcher.matched
@@ -195,7 +274,18 @@ impl UartHistory {
     }
 
     pub fn receive(&mut self, byte: u8) {
+        if byte == b'\n' && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
+            if self.unread.len() == UART_HISTORY_BYTES {
+                self.unread.pop_front();
+            }
+            self.unread.push_back(byte);
+            if self.check_failure() {
+                return;
+            }
+            self.unread.pop_back();
+        }
         if let Some(matcher) = &mut self.active
+            && self.failure.is_none()
             && !matcher.matched
         {
             matcher.receive(byte);
@@ -212,11 +302,12 @@ impl UartHistory {
     }
 
     pub fn matched(&self) -> bool {
-        self.active.as_ref().is_some_and(|matcher| matcher.matched)
+        self.failure.is_some() || self.active.as_ref().is_some_and(|matcher| matcher.matched)
     }
 
     pub fn finish_wait(&mut self) {
         self.active = None;
+        self.failure = None;
     }
 }
 
@@ -226,34 +317,104 @@ pub struct BinaryUartHistory {
     wait: Option<BinaryWait>,
 }
 
+#[derive(Clone)]
+pub enum BinaryUartPattern {
+    Literal(Vec<u8>),
+    Regex(regex::bytes::Regex),
+}
+
+pub struct BinaryUartMatch {
+    pub content: Vec<u8>,
+    pub groups: Vec<Option<Vec<u8>>>,
+}
+
 struct BinaryWait {
-    pattern: Vec<u8>,
+    pattern: BinaryUartPattern,
     match_start: bool,
     start_retained: bool,
-    matched: bool,
+    result: Option<BinaryUartMatch>,
 }
 
 impl BinaryUartHistory {
+    #[cfg(test)]
     pub fn begin_wait(&mut self, pattern: &[u8], match_start: bool) {
-        let last = self.unread.len().checked_sub(pattern.len());
-        let offset = last.and_then(|last| {
-            (0..=if match_start { 0 } else { last }).find(|&offset| {
-                self.unread
-                    .iter()
-                    .skip(offset)
-                    .take(pattern.len())
-                    .eq(pattern)
-            })
-        });
-        if let Some(offset) = offset {
-            self.unread.drain(..offset + pattern.len());
-        }
+        self.begin_pattern(&BinaryUartPattern::Literal(pattern.to_vec()), match_start);
+    }
+
+    pub fn begin_pattern(&mut self, pattern: &BinaryUartPattern, match_start: bool) {
         self.wait = Some(BinaryWait {
-            pattern: pattern.to_vec(),
+            pattern: pattern.clone(),
             match_start,
             start_retained: true,
-            matched: offset.is_some(),
+            result: None,
         });
+        self.check_match(false);
+    }
+
+    fn check_match(&mut self, live: bool) {
+        let Some(wait) = &mut self.wait else { return };
+        if wait.result.is_some() || (wait.match_start && !wait.start_retained) {
+            return;
+        }
+        let found = match &wait.pattern {
+            BinaryUartPattern::Literal(pattern) => {
+                let Some(last) = self.unread.len().checked_sub(pattern.len()) else {
+                    return;
+                };
+                let offset = if live {
+                    ((!wait.match_start || last == 0)
+                        && self
+                            .unread
+                            .iter()
+                            .rev()
+                            .zip(pattern.iter().rev())
+                            .all(|(left, right)| left == right))
+                    .then_some(last)
+                } else {
+                    (0..=if wait.match_start { 0 } else { last }).find(|&offset| {
+                        self.unread
+                            .iter()
+                            .skip(offset)
+                            .take(pattern.len())
+                            .eq(pattern)
+                    })
+                };
+                offset.map(|offset| {
+                    (
+                        offset + pattern.len(),
+                        BinaryUartMatch {
+                            content: pattern.clone(),
+                            groups: Vec::new(),
+                        },
+                    )
+                })
+            }
+            BinaryUartPattern::Regex(pattern) => {
+                let bytes = self.unread.make_contiguous();
+                pattern.captures(bytes).and_then(|captures| {
+                    let full = captures.get(0)?;
+                    if wait.match_start && full.start() != 0 {
+                        return None;
+                    }
+                    let groups = captures
+                        .iter()
+                        .skip(1)
+                        .map(|group| group.map(|group| group.as_bytes().to_vec()))
+                        .collect();
+                    Some((
+                        full.end(),
+                        BinaryUartMatch {
+                            content: full.as_bytes().to_vec(),
+                            groups,
+                        },
+                    ))
+                })
+            }
+        };
+        if let Some((end, result)) = found {
+            self.unread.drain(..end);
+            wait.result = Some(result);
+        }
     }
 
     pub fn receive(&mut self, byte: u8) {
@@ -264,25 +425,15 @@ impl BinaryUartHistory {
             }
         }
         self.unread.push_back(byte);
-        if let Some(wait) = &mut self.wait
-            && !wait.matched
-            && self.unread.len() >= wait.pattern.len()
-            && (!wait.match_start
-                || (wait.start_retained && self.unread.len() == wait.pattern.len()))
-            && self
-                .unread
-                .iter()
-                .rev()
-                .zip(wait.pattern.iter().rev())
-                .all(|(left, right)| left == right)
-        {
-            wait.matched = true;
-            self.unread.clear();
-        }
+        self.check_match(true);
     }
 
     pub fn matched(&self) -> bool {
-        self.wait.as_ref().is_some_and(|wait| wait.matched)
+        self.wait.as_ref().is_some_and(|wait| wait.result.is_some())
+    }
+
+    pub fn take_result(&mut self) -> Option<BinaryUartMatch> {
+        self.wait.as_mut()?.result.take()
     }
 
     pub fn finish_wait(&mut self) {

@@ -25,7 +25,10 @@ use crate::{
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
-    uart::{BinaryUartHistory, LiteXUart, MuraxUart, UartHistory, UartWaitMode},
+    uart::{
+        BinaryUartHistory, BinaryUartMatch, BinaryUartPattern, FailingUartPattern, LiteXUart,
+        MuraxUart, UartHistory, UartWaitMode,
+    },
 };
 
 // Cortex-M peripheral time advances by 10 ns per execution step.
@@ -1218,14 +1221,45 @@ impl Bus {
     pub fn watch_uart_bytes(
         &mut self,
         id: Option<usize>,
-        pattern: &[u8],
+        pattern: &BinaryUartPattern,
         match_start: bool,
     ) -> Result<UartWatch, String> {
         let (id, TesterHistory::Binary(history)) = self.uart_tester(id)? else {
             return Err("Attempt to wait for bytes on a tester configured in text mode.".into());
         };
-        history.begin_wait(pattern, match_start);
+        history.begin_pattern(pattern, match_start);
         Ok(UartWatch::Tester(id))
+    }
+
+    pub fn set_uart_failure(
+        &mut self,
+        id: Option<usize>,
+        pattern: FailingUartPattern,
+        register: bool,
+    ) -> Result<(), String> {
+        let (_, TesterHistory::Text(history)) = self.uart_tester(id)? else {
+            return Err("Failing UART strings require a text-mode tester.".into());
+        };
+        history.set_failure(pattern, register);
+        Ok(())
+    }
+
+    pub fn uart_watch_failure(&self, watch: UartWatch) -> Option<&str> {
+        if let UartWatch::Tester(id) = watch
+            && let TesterHistory::Text(history) = &self.uart_testers[id].1
+        {
+            return history.failure();
+        }
+        None
+    }
+
+    pub fn take_uart_byte_match(&mut self, watch: UartWatch) -> Option<BinaryUartMatch> {
+        if let UartWatch::Tester(id) = watch
+            && let TesterHistory::Binary(history) = &mut self.uart_testers[id].1
+        {
+            return history.take_result();
+        }
+        None
     }
 
     pub fn watch_stm32_uart(
