@@ -927,7 +927,7 @@ impl Hart {
             0x17 | 0x37 | 0x6f => RD_HIGH,
             0x03 | 0x13 | 0x67 => RD_HIGH | RS1_HIGH,
             0x23 | 0x63 => RS1_HIGH | RS2_HIGH,
-            0x2f | 0x33 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+            0x2f | 0x33 | 0x5b => RD_HIGH | RS1_HIGH | RS2_HIGH,
             0x73 => match (insn >> 12) & 7 {
                 1..=3 => RD_HIGH | RS1_HIGH,
                 5..=7 => RD_HIGH,
@@ -1163,6 +1163,7 @@ impl Hart {
             0x0f if funct3 <= 1 => None,
             // Renode VexRiscv accepts the custom whole-data-cache flush.
             0x0f if insn == 0x0000_500f && self.csr.vex => None,
+            0x5b if funct3 == 0 => Some(bitmanip.andes_register(funct7, a, b).ok_or_else(illegal)?),
             0x57 if !self.csr.vector_configured() => {
                 eprintln!(
                     "PC: 0x{pc:x}, opcode: 0x{encoded:08x}, RISC-V 'V' instruction set is not enabled for this CPU!"

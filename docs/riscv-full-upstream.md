@@ -774,3 +774,19 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 固定 Robot の最大 ISA では再試行した 6 件が V の未対応で停止し、固定構成の文字列には Zbkx の指定もありません。台帳の各行に縮小構成での通過と固定構成の阻害点を記録しました。上流等価合格は累計 121 件です。
 
 REPL、変更前後のログ、終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-daa6333-x5opTC/` に保存しました。
+
+### RV32 XandesPerf の LEA とバイト検索
+
+固定 `riscv-andestar-v5.robot` の LEA.H/W/D、FFB、FFZMISM、FFMISM、FLMISM に対応しました。LEA は RV32 幅で加算し、バイト検索は固定 Renode と同じ順序と負の位置を返します。以前は `rv32imac_xandesperf` の CPU 作成が拒否されていました。
+
+検証器は固定 Robot から 7 ケースの計 23 入力を取り出します。元の ISA・RAM と PC 0x2000 を使い、RESC で元のレジスターを設定します。各 ELF は固定 Renode と同じ命令語で開始し、次の PC に置いたコードで結果レジスターと完了を確認します。入力と出力が同じレジスターのケースも含みます。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-andes-register.py target/release/penv ../renode "$evidence/robot-rerun"
+```
+
+固定 7 ケース、Rust テスト 85 件、既存 ISA 構成 50 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC が通過しました。上流等価合格は累計 128 件です。XandesPerf は今回のレジスター演算に対応します。GP 相対のロード・ストア、条件分岐、ビットフィールド演算、専用 CSR、`Xandes` 別名と Andes のベクトル系は残っています。
+
+再現用 REPL、RESC、ELF とログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-3685669-dbvUOP/` に保存しました。

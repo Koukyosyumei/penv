@@ -7,6 +7,7 @@ pub struct BitManip {
     pub zbkb: bool,
     pub zbkx: bool,
     pub zcb: bool,
+    pub xandesperf: bool,
 }
 
 impl BitManip {
@@ -94,6 +95,31 @@ impl BitManip {
             }
             _ => return self.single_bit(funct3, funct7, a, b & 31),
         })
+    }
+
+    pub fn andes_register(self, funct7: u32, a: u32, b: u32) -> Option<u32> {
+        if !self.xandesperf {
+            return None;
+        }
+        match funct7 {
+            5..=7 => Some(a.wrapping_add(b << (funct7 - 4))),
+            16..=19 => {
+                let lhs = a.to_le_bytes();
+                let rhs = b.to_le_bytes();
+                let matches = |index: usize| match funct7 {
+                    16 => lhs[index] == rhs[0],
+                    17 => lhs[index] == 0 || lhs[index] != rhs[index],
+                    _ => lhs[index] != rhs[index],
+                };
+                let index = if funct7 == 19 {
+                    (0..4).rfind(|&index| matches(index))
+                } else {
+                    (0..4).find(|&index| matches(index))
+                };
+                Some(index.map_or(0, |index| (index as u32).wrapping_sub(4)))
+            }
+            _ => None,
+        }
     }
 
     fn single_bit(self, funct3: u32, funct7: u32, value: u32, index: u32) -> Option<u32> {

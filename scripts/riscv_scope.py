@@ -107,6 +107,12 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if selection:
             arguments = selection[1] or ""
             bits = "64" if re.search(r"\bbits=64\b|^64(?:\s|$)", arguments) else "32"
+            if bits == "32" and case in {
+                "Should Execute LEA H", "Should Execute LEA W", "Should Execute LEA D",
+                "Should Execute FFB", "Should Execute FFZMISM", "Should Execute FFMISM",
+                "Should Execute FLMISM",
+            }:
+                return "target", "ported", "fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF"
             scope, status = ("target", "pending") if bits == "32" else ("outside", "outside")
             return scope, status, f"Create Machine keyword uses CPU.RiscV{bits}; parameters: {arguments.strip() or 'fixture defaults'}"
     if filename == "riscv-amocas.robot":

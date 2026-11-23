@@ -1887,13 +1887,13 @@ Renode	tests/unit-tests/riscv-andestar-v5.robot	291	Should Decode SBGP Displacem
 Renode	tests/unit-tests/riscv-andestar-v5.robot	297	Should Decode SHGP Displacements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	303	Should Decode SWGP Displacements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
 Renode	tests/unit-tests/riscv-andestar-v5.robot	309	Should Decode Nineteen Bit LWGP Displacements		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	315	Should Execute LEA H		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	321	Should Execute LEA W		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	327	Should Execute LEA D		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	333	Should Execute FFB		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	340	Should Execute FFZMISM		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	347	Should Execute FFMISM		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
-Renode	tests/unit-tests/riscv-andestar-v5.robot	353	Should Execute FLMISM		target	pending	Create Machine keyword uses CPU.RiscV32; parameters: fixture defaults
+Renode	tests/unit-tests/riscv-andestar-v5.robot	315	Should Execute LEA H		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
+Renode	tests/unit-tests/riscv-andestar-v5.robot	321	Should Execute LEA W		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
+Renode	tests/unit-tests/riscv-andestar-v5.robot	327	Should Execute LEA D		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
+Renode	tests/unit-tests/riscv-andestar-v5.robot	333	Should Execute FFB		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
+Renode	tests/unit-tests/riscv-andestar-v5.robot	340	Should Execute FFZMISM		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
+Renode	tests/unit-tests/riscv-andestar-v5.robot	347	Should Execute FFMISM		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
+Renode	tests/unit-tests/riscv-andestar-v5.robot	353	Should Execute FLMISM		target	ported	fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF
 Renode	tests/unit-tests/riscv-andestar-v5.robot	359	Should Sign Extend GP Loads On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64
 Renode	tests/unit-tests/riscv-andestar-v5.robot	367	Should Execute LEA B ZE On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64
 Renode	tests/unit-tests/riscv-andestar-v5.robot	373	Should Execute LEA H ZE On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: bits=64
