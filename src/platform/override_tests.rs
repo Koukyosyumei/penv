@@ -485,3 +485,21 @@ fn renode_creation_type_protected_constructor() {
     let error = check_string("\np: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor @ sysbus 0x0\n", None).unwrap_err();
     assert!(error.contains("NoCtor:"));
 }
+
+#[test]
+fn renode_registration_validation_reference_type() {
+    let error = check_string("\nregPoint: Antmicro.Renode.UnitTests.Mocks.MockCPU\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus regPoint", None).unwrap_err();
+    assert!(error.contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_registration_validation_inline_type() {
+    let error = check_string("\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus new Antmicro.Renode.UnitTests.Mocks.MockCPU { Placeholder: \"abc\" }", None).unwrap_err();
+    assert!(error.contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_registration_validation_non_peripheral_parent() {
+    let error = check_string("\nemptyIterestingType: Antmicro.Renode.UnitTests.Mocks.EmptyInterestingType\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ emptyIterestingType\n", None).unwrap_err();
+    assert!(error.contains("CastException:"));
+}

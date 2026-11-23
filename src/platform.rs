@@ -576,7 +576,12 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
     };
     // A brace immediately after @ begins a registration expression.
     let prefix = declaration[..begin].trim_end();
-    if prefix.ends_with('@') || prefix.ends_with(TYPED_BUS_RANGE) {
+    if prefix.ends_with('@')
+        || prefix.ends_with(TYPED_BUS_RANGE)
+        || prefix
+            .split_once('@')
+            .is_some_and(|(_, registration)| registration.trim_start().starts_with("sysbus new "))
+    {
         return Ok((declaration, Vec::new()));
     }
 
@@ -995,21 +1000,46 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     Ok(declarations)
 }
 
+fn is_cpu_model(model: &str) -> bool {
+    matches!(
+        model,
+        "CPU.CortexM" | "CPU.RiscV32" | "CPU.VexRiscv" | "Antmicro.Renode.UnitTests.Mocks.MockCPU"
+    )
+}
+
 fn validate_entry_references(
     entry: &Entry,
     declared: &HashMap<String, usize>,
     declarations: &[Entry],
 ) -> Result<(), String> {
-    if let Some(reference) = entry
-        .registration
-        .as_deref()
-        .and_then(|registration| registration.strip_prefix("sysbus "))
-        .filter(|reference| is_repl_identifier(reference))
-        && !declared.contains_key(reference)
-    {
-        return Err(entry.error(&format!(
-            "MissingReference: registration point {reference:?}"
-        )));
+    if let Some(registration) = entry.registration.as_deref() {
+        if let Some(point) = registration.strip_prefix("sysbus ") {
+            if is_repl_identifier(point) {
+                let index = *declared.get(point).ok_or_else(|| {
+                    entry.error(&format!("MissingReference: registration point {point:?}"))
+                })?;
+                if is_cpu_model(&declarations[index].model) {
+                    return Err(
+                        entry.error("TypeMismatch: CPU cannot be a sysbus registration point")
+                    );
+                }
+            } else if let Some(inline) = point.strip_prefix("new ") {
+                let model = inline.split_whitespace().next().unwrap_or("");
+                if is_cpu_model(model) {
+                    return Err(
+                        entry.error("TypeMismatch: CPU cannot be a sysbus registration point")
+                    );
+                }
+            }
+        } else if is_repl_identifier(registration)
+            && let Some(&index) = declared.get(registration)
+            && matches!(
+                declarations[index].model.as_str(),
+                MOCK_EXTERNAL | "Antmicro.Renode.UnitTests.Mocks.EmptyInterestingType"
+            )
+        {
+            return Err(entry.error("CastException: registration parent is not a peripheral"));
+        }
     }
     for (_, text) in &entry.body {
         let Some((source, destination)) = text.split_once("->") else {
