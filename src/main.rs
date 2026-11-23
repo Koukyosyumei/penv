@@ -58,6 +58,8 @@ Options:
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --button-event STEP:NAME:STATE  Schedule a button press or release (repeatable)
   --led-events       Print board LED transitions to stderr
+  --uart-steps       Prefix UART lines with their first output step
+  --adxl-event STEP:NAME:X:Y:Z  Set nRF52840 ADXL372 acceleration in g at a step
   --adc-input CHANNEL:VOLTS  Set the initial STM32 ADC channel voltage (repeatable)
   --adc-event STEP:CHANNEL:VOLTS  Change an STM32 ADC channel voltage at a step (repeatable)
   --stm32f0-console  Require an STM32F0 REPL (legacy console option)
@@ -65,6 +67,7 @@ Options:
   --reset-at STEP    Reset the Cortex-M machine before this step (repeatable)
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --ble-hci-controller PATH  Use two external HCI controllers with --ble-peer
   --ble-peer PATH    Run a second nRF52840 ELF on an in-process RADIO medium
   --i2s-input PATH   Feed PCM bytes to nRF52840 I2S
   --i2s-output PATH  Save PCM bytes transmitted by nRF52840 I2S
@@ -123,13 +126,16 @@ fn run() -> Result<ExitCode, String> {
     let mut stm32f0_console = false;
     let mut adc_inputs = Vec::new();
     let mut adc_events = Vec::new();
+    let mut adxl_events = Vec::new();
     let mut button_events = Vec::new();
     let mut led_events = false;
+    let mut uart_steps = false;
     let mut uart_input = None;
     let mut pdm_input = None;
     let mut i2s_input = None;
     let mut i2s_output = None;
     let mut ble_peer = None;
+    let mut ble_hci_controller = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
     let mut reset_steps = Vec::new();
@@ -146,9 +152,16 @@ fn run() -> Result<ExitCode, String> {
             Some("--stm32f0-console") => stm32f0_console = true,
             Some("--stats") => stats = true,
             Some(
-                option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--pdm-input" | "--i2s-input" | "--i2s-output"
-                | "--ble-peer"),
+                option @ ("--platform"
+                | "--platform-root"
+                | "--uart-input"
+                | "--script"
+                | "--asset-dir"
+                | "--pdm-input"
+                | "--i2s-input"
+                | "--i2s-output"
+                | "--ble-peer"
+                | "--ble-hci-controller"),
             ) => {
                 let path = args
                     .next()
@@ -162,6 +175,7 @@ fn run() -> Result<ExitCode, String> {
                     "--i2s-input" => &mut i2s_input,
                     "--i2s-output" => &mut i2s_output,
                     "--ble-peer" => &mut ble_peer,
+                    "--ble-hci-controller" => &mut ble_hci_controller,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
                 };
@@ -170,6 +184,28 @@ fn run() -> Result<ExitCode, String> {
                 }
             }
             Some("--led-events") => led_events = true,
+            Some("--uart-steps") => uart_steps = true,
+            Some("--adxl-event") => {
+                let usage = "--adxl-event requires STEP:NAME:X:Y:Z";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(usage)?;
+                let fields: Vec<_> = value.split(':').collect();
+                let [step, name, x, y, z] = fields.as_slice() else {
+                    return Err(usage.into());
+                };
+                let step = step.parse().map_err(|_| "invalid --adxl-event step")?;
+                let mut acceleration = [0; 3];
+                for (axis, value) in acceleration.iter_mut().zip([x, y, z]) {
+                    let gs: f64 = value.parse().map_err(|_| "invalid ADXL372 acceleration")?;
+                    if !(-200.0..=200.0).contains(&gs) {
+                        return Err("ADXL372 acceleration must be within ±200 g".into());
+                    }
+                    *axis = (gs * 10.0).round() as i16;
+                }
+                adxl_events.push((step, (*name).to_string(), acceleration));
+            }
             Some("--button-event") => {
                 let value = args
                     .next()
@@ -412,11 +448,15 @@ fn run() -> Result<ExitCode, String> {
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     machine.bus.report_led_events(led_events);
+    machine.report_uart_steps(uart_steps);
     for (step, name, pressed) in button_events {
         machine.schedule_button(step, &name, pressed)?;
     }
     for (channel, volts) in adc_inputs {
         machine.bus.set_stm32f0_adc_input(channel, volts)?;
+    }
+    for (step, name, acceleration) in adxl_events {
+        machine.schedule_adxl_input(step, name, acceleration)?;
     }
     for (step, channel, volts) in adc_events {
         machine.schedule_adc_input(step, channel, volts)?;
@@ -474,6 +514,9 @@ fn run() -> Result<ExitCode, String> {
     }
     machine.validate_entry()?;
 
+    if ble_hci_controller.is_some() && ble_peer.is_none() {
+        return Err("--ble-hci-controller requires --ble-peer".into());
+    }
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
     let result = if let Some(peer_path) = ble_peer {
@@ -485,7 +528,20 @@ fn run() -> Result<ExitCode, String> {
         image::load(&mut peer, image, false)
             .map_err(|e| format!("{}: {e}", peer_path.display()))?;
         peer.validate_entry()?;
-        machine.run_radio_pair(&mut peer, max_steps, &mut output)
+        if let Some(controller_path) = ble_hci_controller {
+            let load_controller = || -> Result<_, String> {
+                let mut controller = platform::load(platform, platform_root.as_deref(), false)?;
+                let file = File::open(&controller_path)
+                    .map_err(|e| format!("{}: {e}", controller_path.display()))?;
+                image::load(&mut controller, file, false)?;
+                controller.validate_entry()?;
+                Ok(controller)
+            };
+            let mut controllers = [load_controller()?, load_controller()?];
+            machine.run_hci_radio_pair(&mut peer, &mut controllers, max_steps, &mut output)
+        } else {
+            machine.run_radio_pair(&mut peer, max_steps, &mut output)
+        }
     } else {
         machine.run(max_steps, &mut output)
     };

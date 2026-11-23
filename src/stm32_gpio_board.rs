@@ -16,7 +16,11 @@ impl GpioLed {
     }
 
     pub fn sample(&mut self, levels: u16, report: bool) {
-        let state = (levels & (1 << self.pin) != 0) ^ self.invert;
+        self.sample_level(levels & (1 << self.pin) != 0, report);
+    }
+
+    pub fn sample_level(&mut self, level: bool, report: bool) {
+        let state = level ^ self.invert;
         if state == self.state {
             return;
         }

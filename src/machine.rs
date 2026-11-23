@@ -15,10 +15,13 @@ pub struct Machine {
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
+    uart_step_prefix: bool,
+    uart_line_start: bool,
     reset_steps: VecDeque<u64>,
     uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
+    adxl_events: VecDeque<(u64, String, [i16; 3])>,
 }
 
 #[derive(Clone)]
@@ -151,10 +154,13 @@ impl Machine {
             secondary: Vec::new(),
             next_hart: 0,
             elapsed_steps: 0,
+            uart_step_prefix: false,
+            uart_line_start: true,
             reset_steps: VecDeque::new(),
             uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
+            adxl_events: VecDeque::new(),
         }
     }
 
@@ -261,11 +267,27 @@ impl Machine {
         let button = self
             .bus
             .board_button(name)
-            .ok_or_else(|| format!("unknown STM32 board button {name:?}"))?;
+            .ok_or_else(|| format!("unknown board button {name:?}"))?;
         let index = self
             .button_events
             .partition_point(|(scheduled, _, _)| *scheduled <= step);
         self.button_events.insert(index, (step, button, pressed));
+        Ok(())
+    }
+
+    pub fn schedule_adxl_input(
+        &mut self,
+        step: u64,
+        name: String,
+        acceleration: [i16; 3],
+    ) -> Result<(), String> {
+        if self.bus.nrf_adxl_input(&name).is_none() {
+            return Err(format!("unknown nRF52840 ADXL372 {name:?}"));
+        }
+        let index = self
+            .adxl_events
+            .partition_point(|(scheduled, _, _)| *scheduled <= step);
+        self.adxl_events.insert(index, (step, name, acceleration));
         Ok(())
     }
 
@@ -312,20 +334,83 @@ impl Machine {
             if stop != Stop::Limit {
                 return Ok((stop, retired));
             }
-            let primary_frame = self.bus.tick_radio_air();
-            let peer_frame = peer.bus.tick_radio_air();
-            if let Some(frame) = primary_frame {
-                peer.bus
-                    .receive_radio_air(frame)
-                    .map_err(|e| format!("peer RADIO: {e}"))?;
-            }
-            if let Some(frame) = peer_frame {
-                self.bus
-                    .receive_radio_air(frame)
-                    .map_err(|e| format!("primary RADIO: {e}"))?;
-            }
+            Self::exchange_radio(self, peer)?;
         }
         Ok((Stop::Limit, retired))
+    }
+
+    pub fn run_hci_radio_pair(
+        &mut self,
+        peer: &mut Self,
+        controllers: &mut [Self; 2],
+        limit: u64,
+        output: &mut impl Write,
+    ) -> Result<(Stop, u64), String> {
+        let [central, peripheral] = controllers;
+        central.bus.attach_radio_medium()?;
+        peripheral.bus.attach_radio_medium()?;
+        let central_host_link = self.bus.attach_uart_link("uart1")?;
+        let central_controller_link = central.bus.attach_uart_link("uart1")?;
+        let peripheral_host_link = peer.bus.attach_uart_link("uart1")?;
+        let peripheral_controller_link = peripheral.bus.attach_uart_link("uart1")?;
+        let mut nodes = [self, peer, central, peripheral];
+        let labels = [
+            "primary",
+            "peer",
+            "central controller",
+            "peripheral controller",
+        ];
+        let mut uart: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
+        let mut retired = 0;
+        for step in 0..limit {
+            // The upstream RESC holds the hosts in reset while the controllers start.
+            let first_node = if step < crate::bus::CORTEX_M_STEP_HZ {
+                2
+            } else {
+                0
+            };
+            for index in first_node..nodes.len() {
+                let result = nodes[index]
+                    .run(1, &mut uart[index])
+                    .map_err(|e| format!("{}: {e}", labels[index]));
+                let (stop, count) =
+                    Self::flush_radio_uart(result, labels[index], &mut uart[index], output)?;
+                retired += count;
+                if stop != Stop::Limit {
+                    return Ok((stop, retired));
+                }
+            }
+            let [host, peer, central, peripheral] = &mut nodes;
+            host.bus
+                .exchange_uart_link(central_host_link, &mut central.bus, central_controller_link)
+                .map_err(|e| format!("central HCI UART: {e}"))?;
+            peer.bus
+                .exchange_uart_link(
+                    peripheral_host_link,
+                    &mut peripheral.bus,
+                    peripheral_controller_link,
+                )
+                .map_err(|e| format!("peripheral HCI UART: {e}"))?;
+            Self::exchange_radio(central, peripheral)?;
+        }
+        Ok((Stop::Limit, retired))
+    }
+
+    fn exchange_radio(primary: &mut Self, peer: &mut Self) -> Result<(), String> {
+        let primary_frame = primary.bus.tick_radio_air();
+        let peer_frame = peer.bus.tick_radio_air();
+        if let Some(frame) = primary_frame {
+            peer.bus
+                .receive_radio_air(frame)
+                .map_err(|e| format!("peer RADIO: {e}"))?;
+        }
+        if let Some(frame) = peer_frame {
+            primary
+                .bus
+                .receive_radio_air(frame)
+                .map_err(|e| format!("primary RADIO: {e}"))?;
+        }
+        Ok(())
     }
 
     fn flush_radio_uart(
@@ -340,6 +425,10 @@ impl Machine {
             uart.drain(..=end);
         }
         result
+    }
+
+    pub fn report_uart_steps(&mut self, enabled: bool) {
+        self.uart_step_prefix = enabled;
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
@@ -398,13 +487,54 @@ impl Machine {
                 let (_, channel, volts) = self.adc_events.pop_front().unwrap();
                 self.bus.set_stm32f0_adc_input(channel, volts)?;
             }
-            match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
+            while self
+                .adxl_events
+                .front()
+                .is_some_and(|(step, _, _)| *step <= self.elapsed_steps)
+            {
+                let (_, name, acceleration) = self.adxl_events.pop_front().unwrap();
+                *self.bus.nrf_adxl_input(&name).unwrap() = acceleration;
+            }
+            let result = if self.uart_step_prefix {
+                let mut stamped = StepUart {
+                    output,
+                    step: self.elapsed_steps,
+                    line_start: &mut self.uart_line_start,
+                };
+                hart.execute_step(&mut self.bus, self.elapsed_steps, &mut stamped)
+            } else {
+                hart.execute_step(&mut self.bus, self.elapsed_steps, output)
+            };
+            match result? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
             }
         }
         Ok((Stop::Limit, retired))
+    }
+}
+
+struct StepUart<'a, W> {
+    output: &'a mut W,
+    step: u64,
+    line_start: &'a mut bool,
+}
+
+impl<W: Write> Write for StepUart<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+            if *self.line_start {
+                write!(self.output, "[step {}] ", self.step)?;
+            }
+            self.output.write_all(line)?;
+            *self.line_start = line.last() == Some(&b'\n');
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
     }
 }
 

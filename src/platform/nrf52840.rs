@@ -1,5 +1,9 @@
 use super::{Entry, number};
-use crate::{bus::Bus, nrf52840::Peripheral};
+use crate::{
+    bus::Bus,
+    nrf52840::{Peripheral, SpiMuxPort},
+    stm32_gpio_board::{GpioButton, GpioLed},
+};
 
 pub(super) fn apply_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
     let mut index = 0;
@@ -50,6 +54,179 @@ fn acceleration(entry: &Entry) -> Result<[i16; 3], String> {
     Ok(values)
 }
 
+pub(super) fn lis2ds12_config(
+    entry: &Entry,
+    entries: &[Entry],
+) -> Result<([f64; 3], u32, u8), String> {
+    let (port, address) = entry
+        .registration
+        .as_deref()
+        .and_then(|registration| registration.split_once(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected LIS2DS12 registered on TWI with an address"))?;
+    number(address.trim()).map_err(|e| entry.error(&e))?;
+    if !entries
+        .iter()
+        .any(|parent| parent.name == port && parent.model == "I2C.NRF52840_I2C")
+    {
+        return Err(entry.error("expected LIS2DS12 registered on nRF52840 TWI"));
+    }
+    let axes = ["accelerationX", "accelerationY", "accelerationZ"];
+    let mut values = [0.0; 3];
+    let mut irq = None;
+    for (_, line) in &entry.body {
+        if let Some((key, value)) = line.split_once(':')
+            && let Some(index) = axes.iter().position(|&axis| axis == key.trim())
+        {
+            let value = value
+                .trim()
+                .parse()
+                .map_err(|_| entry.error("invalid LIS2DS12 acceleration"))?;
+            if !(-19.5..=19.5).contains(&value) {
+                return Err(entry.error("LIS2DS12 acceleration is outside the model's input range"));
+            }
+            values[index] = value;
+        } else if let Some((source, destination)) = line.split_once("->")
+            && source.trim() == "IRQ"
+            && irq.is_none()
+            && let Some((name, pin)) = destination.trim().split_once('@')
+        {
+            let port = entries
+                .iter()
+                .find(|gpio| gpio.name == name && gpio.model == "GPIOPort.NRF52840_GPIO")
+                .ok_or_else(|| entry.error("invalid LIS2DS12 IRQ GPIO port"))?;
+            let base = port.address()?;
+            let pin = number(pin).map_err(|e| entry.error(&e))?;
+            if pin >= if base == 0x5000_0500 { 32 } else { 16 } {
+                return Err(entry.error("invalid LIS2DS12 IRQ pin"));
+            }
+            irq = Some((base, pin as u8));
+        } else {
+            return Err(entry.error("unsupported LIS2DS12 option"));
+        }
+    }
+    let (gpio, pin) = irq.ok_or_else(|| entry.error("missing LIS2DS12 IRQ wiring"))?;
+    Ok((values, gpio, pin))
+}
+
+pub(super) fn validate_bme280(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    super::keys(entry, &[])?;
+    validate_twi_target(entry, entries)
+}
+
+fn validate_twi_target(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    let (port, address) = entry
+        .registration
+        .as_deref()
+        .and_then(|registration| registration.split_once(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected a TWI controller and address"))?;
+    number(address.trim()).map_err(|e| entry.error(&e))?;
+    if !entries
+        .iter()
+        .any(|parent| parent.name == port && parent.model == "I2C.NRF52840_I2C")
+    {
+        return Err(entry.error("expected target registered on nRF52840 TWI"));
+    }
+    Ok(())
+}
+
+pub(super) fn bmp180_config(entry: &Entry, entries: &[Entry]) -> Result<(f64, u32), String> {
+    validate_twi_target(entry, entries)?;
+    let mut temperature = 0.0;
+    let mut pressure = 0;
+    for (property, value) in super::keys(entry, &["temperature", "uncompensatedPressure"])? {
+        if property == "temperature" {
+            temperature = value
+                .parse()
+                .map_err(|_| entry.error("invalid BMP180 temperature"))?;
+            if !(-40.0..=85.0).contains(&temperature) {
+                return Err(entry.error("BMP180 temperature is outside the model's range"));
+            }
+        } else {
+            pressure = number(value).map_err(|e| entry.error(&e))?;
+            if pressure > 0x7ffff {
+                return Err(entry.error("BMP180 uncompensated pressure exceeds 19 bits"));
+            }
+        }
+    }
+    Ok((temperature, pressure))
+}
+
+pub(super) fn lsm303_config(
+    entry: &Entry,
+    entries: &[Entry],
+) -> Result<([f64; 3], Option<(u32, [u8; 2])>), String> {
+    validate_twi_target(entry, entries)?;
+    let accel = entry.model == "Sensors.LSM303DLHC_Accelerometer";
+    let axes = if accel {
+        ["accelerationX", "accelerationY", "accelerationZ"]
+    } else {
+        ["magneticFieldX", "magneticFieldY", "magneticFieldZ"]
+    };
+    let mut values = [0.0; 3];
+    let mut irq = None;
+    for (_, line) in &entry.body {
+        if let Some((key, value)) = line.split_once(':')
+            && let Some(index) = axes.iter().position(|&axis| axis == key.trim())
+        {
+            let value = value
+                .trim()
+                .parse()
+                .map_err(|_| entry.error("invalid LSM303DLHC axis value"))?;
+            let limit = if accel { 19.5 } else { 29.5 };
+            if !(-limit..=limit).contains(&value) {
+                return Err(entry.error("LSM303DLHC axis value out of range"));
+            }
+            values[index] = value;
+        } else if let Some((source, destination)) = line.split_once("->")
+            && source.trim() == "[IRQ0,IRQ1]"
+            && accel
+            && irq.is_none()
+            && let Some((name, pins)) = destination.trim().split_once('@')
+            && let Some(pins) = pins.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+            && let Some((first, second)) = pins.split_once(',')
+        {
+            let port = entries
+                .iter()
+                .find(|gpio| gpio.name == name && gpio.model == "GPIOPort.NRF52840_GPIO")
+                .ok_or_else(|| entry.error("invalid LSM303DLHC IRQ port"))?;
+            let gpio = port.address()?;
+            let first = number(first.trim()).map_err(|e| entry.error(&e))?;
+            let second = number(second.trim()).map_err(|e| entry.error(&e))?;
+            let limit = if gpio == 0x5000_0500 { 32 } else { 16 };
+            if first >= limit || second >= limit || first == second {
+                return Err(entry.error("invalid LSM303DLHC IRQ pins"));
+            }
+            irq = Some((gpio, [first as u8, second as u8]));
+        } else {
+            return Err(entry.error("unsupported LSM303DLHC property or wiring"));
+        }
+    }
+    if accel && irq.is_none() {
+        return Err(entry.error("missing LSM303DLHC IRQ wiring"));
+    }
+    Ok((values, irq))
+}
+
+pub(super) fn lsm330_config(entry: &Entry, entries: &[Entry]) -> Result<([f64; 3], bool), String> {
+    validate_twi_target(entry, entries)?;
+    let gyro = entry.model == "Sensors.LSM330_Gyroscope";
+    let keys = if gyro {
+        ["angularRateX", "angularRateY", "angularRateZ"]
+    } else {
+        ["accelerationX", "accelerationY", "accelerationZ"]
+    };
+    let mut values = [0.0; 3];
+    for (property, value) in super::keys(entry, &keys)? {
+        let axis = keys.iter().position(|&key| key == property).unwrap();
+        values[axis] = value
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite())
+            .ok_or_else(|| entry.error("invalid LSM330 axis value"))?;
+    }
+    Ok((values, gyro))
+}
+
 pub(super) fn validate_adxl(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
     let registration = entry.registration.as_deref().unwrap_or("");
     let parent = registration.split_whitespace().next();
@@ -68,7 +245,11 @@ pub(super) fn validate_adxl(entry: &Entry, entries: &[Entry]) -> Result<(), Stri
 }
 
 fn spi_cs(entry: &Entry, entries: &[Entry]) -> Result<(u32, u32), String> {
-    let endpoint = format!("{}@0", entry.name);
+    spi_cs_line(entry, entries, 0)
+}
+
+fn spi_cs_line(entry: &Entry, entries: &[Entry], line: u32) -> Result<(u32, u32), String> {
+    let endpoint = format!("{}@{line}", entry.name);
     let endpoint = endpoint.as_str();
     let mut pins = entries
         .iter()
@@ -196,6 +377,8 @@ pub(super) fn map_peripheral(
     if entry.model == "Miscellaneous.NRF_CLOCK" && base == 0x4000_0000 {
         bus.map_nrf_peripheral(Peripheral::nvmc())
             .map_err(|e| entry.error(&e))?;
+        bus.map_nrf_peripheral(Peripheral::temperature())
+            .map_err(|e| entry.error(&e))?;
         bus.map_nrf_peripheral(Peripheral::spim3_config())
             .map_err(|e| entry.error(&e))?;
         bus.map_nrf_peripheral(Peripheral::usbd_config())
@@ -246,8 +429,10 @@ pub(super) fn map_peripheral(
             return Err(entry.error("nRF52840 SPIM EasyDMA is unsupported"));
         }
         let mut children = entries.iter().filter(|child| {
-            matches!(child.model.as_str(), "SPI.SPILoopback" | "Sensors.ADXL372")
-                && child.registration.as_deref() == Some(entry.name.as_str())
+            matches!(
+                child.model.as_str(),
+                "SPI.SPILoopback" | "Sensors.ADXL372" | "SPI.SPIMultiplexer"
+            ) && child.registration.as_deref() == Some(entry.name.as_str())
         });
         let child = children.next();
         let loopback = child.is_some_and(|child| child.model == "SPI.SPILoopback");
@@ -255,9 +440,13 @@ pub(super) fn map_peripheral(
             return Err(extra.error("nRF52840 SPI accepts only one attached device"));
         }
         let mut spi = Peripheral::spi(base, irq as u8, name, loopback);
-        if let Some(child) = child.filter(|child| child.model == "Sensors.ADXL372") {
-            let (gpio, pin) = spi_cs(child, entries)?;
-            spi.attach_adxl_spi(gpio, pin, acceleration(child)?);
+        if let Some(child) = child {
+            if child.model == "Sensors.ADXL372" {
+                let (gpio, pin) = spi_cs(child, entries)?;
+                spi.attach_adxl_spi(gpio, pin, child.name.clone(), acceleration(child)?);
+            } else if child.model == "SPI.SPIMultiplexer" {
+                spi.attach_spi_mux(spi_mux_ports(child, entries)?);
+            }
         }
         spi
     } else if entry.model == "I2C.NRF52840_I2C" {
@@ -265,7 +454,15 @@ pub(super) fn map_peripheral(
         for child in entries.iter().filter(|child| {
             matches!(
                 child.model.as_str(),
-                "Memory.GenericI2cEeprom" | "Sensors.ADXL372"
+                "Memory.GenericI2cEeprom"
+                    | "Sensors.ADXL372"
+                    | "I2C.BME280"
+                    | "Sensors.LIS2DS12"
+                    | "Sensors.BMP180"
+                    | "Sensors.LSM330_Accelerometer"
+                    | "Sensors.LSM330_Gyroscope"
+                    | "Sensors.LSM303DLHC_Accelerometer"
+                    | "Sensors.LSM303DLHC_Gyroscope"
             )
         }) {
             let Some((parent, address)) = child
@@ -278,7 +475,27 @@ pub(super) fn map_peripheral(
             if parent == entry.name {
                 let address = number(address.trim()).map_err(|e| child.error(&e))?;
                 if child.model == "Sensors.ADXL372" {
-                    twi.attach_adxl_i2c(address, acceleration(child)?)
+                    twi.attach_adxl_i2c(address, child.name.clone(), acceleration(child)?)
+                } else if child.model == "I2C.BME280" {
+                    twi.attach_bme280(address)
+                } else if child.model == "Sensors.LIS2DS12" {
+                    let (acceleration, gpio, pin) = lis2ds12_config(child, entries)?;
+                    twi.attach_lis2ds12(address, acceleration, gpio, pin)
+                } else if child.model == "Sensors.BMP180" {
+                    let (temperature, pressure) = bmp180_config(child, entries)?;
+                    twi.attach_bmp180(address, temperature, pressure)
+                } else if matches!(
+                    child.model.as_str(),
+                    "Sensors.LSM330_Accelerometer" | "Sensors.LSM330_Gyroscope"
+                ) {
+                    let (values, gyro) = lsm330_config(child, entries)?;
+                    twi.attach_lsm330(address, values, gyro)
+                } else if matches!(
+                    child.model.as_str(),
+                    "Sensors.LSM303DLHC_Accelerometer" | "Sensors.LSM303DLHC_Gyroscope"
+                ) {
+                    let (values, irq) = lsm303_config(child, entries)?;
+                    twi.attach_lsm303(address, values, irq)
                 } else {
                     twi.attach_eeprom(address, super::i2c_eeprom(child)?)
                 }
@@ -294,6 +511,84 @@ pub(super) fn map_peripheral(
     bus.map_nrf_peripheral(device).map_err(|e| entry.error(&e))
 }
 
+fn init_arguments<'a>(entry: &'a Entry, command: &str) -> Result<Vec<u32>, String> {
+    let mut body = entry.body.iter();
+    if !body.next().is_some_and(|(_, line)| line == "init:") {
+        return Err(entry.error("expected init block"));
+    }
+    body.map(|(_, line)| {
+        let argument = line
+            .strip_prefix(command)
+            .and_then(|value| value.strip_prefix(' '))
+            .ok_or_else(|| entry.error("unsupported SPI init command"))?;
+        number(argument.trim()).map_err(|e| entry.error(&e))
+    })
+    .collect()
+}
+
+fn mux_slave_address<'a>(entry: &'a Entry, entries: &[Entry]) -> Result<(&'a str, u32), String> {
+    let (parent, addr) = entry
+        .registration
+        .as_deref()
+        .and_then(|s| s.split_once(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected DummySPISlave registered on a multiplexer"))?;
+    if !entries
+        .iter()
+        .any(|mux| mux.name == parent && mux.model == "SPI.SPIMultiplexer")
+    {
+        return Err(entry.error("unknown SPI multiplexer"));
+    }
+    Ok((parent, number(addr.trim()).map_err(|e| entry.error(&e))?))
+}
+
+pub(super) fn validate_mux_slave(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    mux_slave_address(entry, entries)?;
+    Ok(())
+}
+
+pub(super) fn validate_mux(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    if !entries.iter().any(|parent| {
+        parent.model == "SPI.NRF52840_SPI"
+            && entry.registration.as_deref() == Some(parent.name.as_str())
+    }) {
+        return Err(entry.error("expected SPIMultiplexer registered on nRF52840 SPI"));
+    }
+    Ok(())
+}
+
+fn spi_mux_ports(entry: &Entry, entries: &[Entry]) -> Result<Vec<SpiMuxPort>, String> {
+    let active_low = init_arguments(entry, "SetActiveLow")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut ports = Vec::new();
+    for slave in entries
+        .iter()
+        .filter(|child| child.model == "Mocks.DummySPISlave")
+    {
+        let (parent, addr) = mux_slave_address(slave, entries)?;
+        if parent != entry.name {
+            continue;
+        }
+        if !seen.insert(addr) {
+            return Err(slave.error("duplicate SPI multiplexer slave address"));
+        }
+        let (gpio, pin) = spi_cs_line(entry, entries, addr)?;
+        let responses = init_arguments(slave, "EnqueueValue")?
+            .into_iter()
+            .map(|byte| u8::try_from(byte).map_err(|_| slave.error("SPI response must be a byte")))
+            .collect::<Result<_, _>>()?;
+        ports.push(SpiMuxPort {
+            gpio,
+            pin,
+            active_low: active_low.contains(&addr),
+            responses,
+        });
+    }
+    if ports.is_empty() || active_low.iter().any(|addr| !seen.contains(addr)) {
+        return Err(entry.error("missing SPI multiplexer slave"));
+    }
+    Ok(ports)
+}
+
 pub(super) fn validate_spi_loopback(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
     super::keys(entry, &[])?;
     if !entries.iter().any(|parent| {
@@ -305,19 +600,83 @@ pub(super) fn validate_spi_loopback(entry: &Entry, entries: &[Entry]) -> Result<
     Ok(())
 }
 
+pub(super) fn map_gpio_attachment(
+    entry: &Entry,
+    entries: &[Entry],
+    bus: &mut Bus,
+) -> Result<(), String> {
+    let (name, pin) = entry
+        .registration
+        .as_deref()
+        .and_then(|registration| registration.split_once(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected an nRF52840 GPIO port and pin"))?;
+    let gpio = entries
+        .iter()
+        .find(|gpio| gpio.name == name && gpio.model == "GPIOPort.NRF52840_GPIO")
+        .ok_or_else(|| entry.error("unknown nRF52840 GPIO port"))?;
+    let base = gpio.address()?;
+    let pin = number(pin.trim()).map_err(|e| entry.error(&e))?;
+    if pin >= if base == 0x5000_0500 { 32 } else { 16 } {
+        return Err(entry.error("invalid nRF52840 GPIO pin"));
+    }
+    let mut invert = None;
+    let mut wired = false;
+    for (_, property) in &entry.body {
+        if let Some(value) = property.strip_prefix("invert:")
+            && invert.is_none()
+        {
+            invert = Some(
+                value
+                    .trim()
+                    .parse()
+                    .map_err(|_| entry.error("invalid invert property"))?,
+            );
+        } else if let Some(destination) = property.strip_prefix("->")
+            && !wired
+            && entry.model == "Miscellaneous.Button"
+            && destination.trim() == format!("{name}@{pin}")
+        {
+            wired = true;
+        } else {
+            return Err(entry.error("unsupported nRF52840 GPIO attachment property"));
+        }
+    }
+    let invert = invert.unwrap_or(false);
+    if entry.model == "Miscellaneous.Button" && wired {
+        bus.add_gpio_button(GpioButton::new(entry.name.clone(), base, pin as u8, invert));
+    } else if entry.model == "Miscellaneous.LED"
+        && gpio.body.iter().any(|(_, wire)| {
+            wire.split_once("->").is_some_and(|(from, to)| {
+                number(from.trim()) == Ok(pin) && to.trim() == format!("{}@0", entry.name)
+            })
+        })
+    {
+        bus.add_gpio_led(base, GpioLed::new(entry.name.clone(), pin as u8, invert));
+    } else {
+        return Err(entry.error("missing nRF52840 GPIO wiring"));
+    }
+    Ok(())
+}
+
 pub(super) fn map_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Result<(), String> {
     for (_, wire) in &entry.body {
         let (_, target) = wire
             .split_once("->")
             .ok_or_else(|| entry.error("unsupported GPIO property"))?;
-        let target = target
+        let (target, line) = target
             .trim()
-            .strip_suffix("@0")
+            .split_once('@')
             .ok_or_else(|| entry.error("unsupported GPIO connection"))?;
-        if !entries
-            .iter()
-            .any(|child| child.name == target && child.model == "Sensors.ADXL372")
-        {
+        number(line).map_err(|e| entry.error(&e))?;
+        if !entries.iter().any(|child| {
+            child.name == target
+                && (child.model == "SPI.SPIMultiplexer"
+                    || (line == "0"
+                        && matches!(
+                            child.model.as_str(),
+                            "Sensors.ADXL372" | "Miscellaneous.LED"
+                        )))
+        }) {
             return Err(entry.error("unsupported GPIO destination"));
         }
     }

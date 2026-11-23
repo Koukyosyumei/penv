@@ -85,6 +85,7 @@ pub struct Bus {
     nrf_tags: Vec<(u32, u32, u32)>,
     reservations: [Option<(u32, usize)>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
+    trivial_uart: Option<u32>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
@@ -207,6 +208,16 @@ impl Bus {
         Ok(())
     }
 
+    fn apply_nrf_input(&mut self, base: u32, pin: u8, high: bool) {
+        if let Some(port) = self
+            .nrf_peripherals
+            .iter_mut()
+            .find(|port| port.base == base)
+        {
+            port.set_gpio_input(pin, high);
+        }
+    }
+
     pub fn nrf_gpio_sample(&self, base: u32) -> (u32, bool) {
         self.nrf_peripherals
             .iter()
@@ -231,11 +242,16 @@ impl Bus {
         {
             device.gpio_task(pin, action);
             let high = device.gpio_driven_high().unwrap_or_default();
-            self.release_nrf_spi_cs(base, high);
+            self.sample_nrf_gpio_outputs(base, high);
         }
     }
 
-    pub fn release_nrf_spi_cs(&mut self, gpio: u32, pins: u32) {
+    pub fn sample_nrf_gpio_outputs(&mut self, gpio: u32, pins: u32) {
+        for (base, led) in &mut self.gpio_leds {
+            if *base == gpio {
+                led.sample_level(pins & (1 << led.pin) != 0, self.led_events);
+            }
+        }
         for device in &mut self.nrf_peripherals {
             device.release_spi_cs(gpio, pins);
         }
@@ -251,6 +267,12 @@ impl Bus {
         self.nrf_peripherals
             .iter()
             .any(|device| device.ppi_task_supported(address))
+    }
+
+    pub fn nrf_adxl_input(&mut self, name: &str) -> Option<&mut [i16; 3]> {
+        self.nrf_peripherals
+            .iter_mut()
+            .find_map(|device| device.adxl_input(name))
     }
 
     pub fn set_nrf_pdm_input(&mut self, input: Vec<u8>) -> Result<(), String> {
@@ -302,6 +324,39 @@ impl Bus {
             }
         }
         Ok(())
+    }
+
+    pub fn attach_uart_link(&mut self, name: &str) -> Result<usize, String> {
+        let index = self
+            .nrf_peripherals
+            .iter()
+            .position(|device| device.is_uart() && device.name == name)
+            .ok_or_else(|| format!("unknown nRF52840 UART {name:?}"))?;
+        self.nrf_peripherals[index].link_uart();
+        Ok(index)
+    }
+
+    pub fn exchange_uart_link(
+        &mut self,
+        local: usize,
+        peer: &mut Self,
+        remote: usize,
+    ) -> Result<(), BusError> {
+        let local_tx = self.nrf_peripherals[local].take_uart_link_output();
+        let remote_tx = peer.nrf_peripherals[remote].take_uart_link_output();
+        self.receive_uart_link(local, remote_tx)?;
+        peer.receive_uart_link(remote, local_tx)
+    }
+
+    fn receive_uart_link(&mut self, index: usize, bytes: Vec<u8>) -> Result<(), BusError> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let mut device = self.nrf_peripherals.remove(index);
+        device.queue_uart_link_input(bytes);
+        let result = device.receive(self);
+        self.nrf_peripherals.insert(index, device);
+        result
     }
 
     pub fn attach_radio_medium(&mut self) -> Result<(), String> {
@@ -385,6 +440,10 @@ impl Bus {
             || self
                 .uart_tx
                 .is_some_and(|address| (start..end).contains(&u64::from(address)))
+            || self.trivial_uart.is_some_and(|base| {
+                let base = u64::from(base);
+                start < base + 4 && base < end
+            })
             || self.uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + MuraxUart::SIZE && other < end
@@ -489,6 +548,15 @@ impl Bus {
             ));
         }
         self.clint = Some(Clint::new(base, targets));
+        Ok(())
+    }
+
+    pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        if self.trivial_uart.is_some() || base & 3 != 0 || self.overlaps(start, start + 4) {
+            return Err("invalid, duplicate, or overlapping TrivialUart".into());
+        }
+        self.trivial_uart = Some(base);
         Ok(())
     }
 
@@ -921,6 +989,12 @@ impl Bus {
         {
             port.set_external(button.pin, pressed ^ button.invert);
             self.refresh_gpio_wiring();
+        } else if let Some(port) = self
+            .nrf_peripherals
+            .iter_mut()
+            .find(|port| port.base == button.port)
+        {
+            port.set_gpio_input(button.pin, pressed ^ button.invert);
         }
     }
 
@@ -953,6 +1027,9 @@ impl Bus {
         for (base, led) in &mut self.gpio_leds {
             if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == *base) {
                 led.sample(port.pins(), self.led_events);
+            } else if let Some(port) = self.nrf_peripherals.iter().find(|port| port.base == *base) {
+                let high = port.gpio_driven_high().unwrap_or(0);
+                led.sample_level(high & (1 << led.pin) != 0, self.led_events);
             }
         }
     }
@@ -1346,7 +1423,12 @@ impl Bus {
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
-            return device.read(address).ok_or(BusError::Unmapped(address, N));
+            let value = device.read(address);
+            let signals: Vec<_> = device.sensor_irqs().collect();
+            for (gpio, pin, high) in signals {
+                self.apply_nrf_input(gpio, pin, high);
+            }
+            return value.ok_or(BusError::Unmapped(address, N));
         }
         if N == 4
             && address & 3 == 0
@@ -1541,6 +1623,9 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        if self.trivial_uart == Some(address) && matches!(width, 1 | 2 | 4) {
+            return uart.write_all(&[value as u8]).map_err(BusError::Output);
+        }
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }
@@ -1555,6 +1640,9 @@ impl Bus {
         {
             let mut device = self.nrf_peripherals.remove(index);
             let result = device.write(address, value, self, uart);
+            for (gpio, pin, high) in device.sensor_irqs() {
+                self.apply_nrf_input(gpio, pin, high);
+            }
             self.nrf_peripherals.insert(index, device);
             return result;
         }

@@ -26,7 +26,29 @@ impl Thumb {
         let sd = ((low >> 12) * 2 + ((high >> 6) & 1)) as usize;
         let sn = ((high & 15) * 2 + ((low >> 7) & 1)) as usize;
         let sm = ((low & 15) * 2 + ((low >> 5) & 1)) as usize;
-        if high & 0xfe00 == 0xec00 {
+        if high & 0xffe0 == 0xec40 && low & 0xd0 == 0x10 {
+            let rt = (low >> 12) as usize;
+            let rt2 = (high & 15) as usize;
+            let first = if low & 0x100 == 0 {
+                sm
+            } else {
+                ((low & 15) * 2 + (low & 0x20)) as usize
+            };
+            if matches!(rt, 13 | 15)
+                || matches!(rt2, 13 | 15)
+                || first + 1 >= self.fp.len()
+                || (high & 0x10 != 0 && rt == rt2)
+            {
+                return Ok(false);
+            }
+            if high & 0x10 == 0 {
+                self.fp[first] = r[rt];
+                self.fp[first + 1] = r[rt2];
+            } else {
+                r[rt] = self.fp[first];
+                r[rt2] = self.fp[first + 1];
+            }
+        } else if high & 0xfe00 == 0xec00 {
             let rn = (high & 15) as usize;
             let base = if rn == 15 { pc & !3 } else { r[rn] };
             let offset = (low & 255) * 4;
@@ -112,10 +134,13 @@ impl Thumb {
             let value = match high & 0xffb0 {
                 0xee00 if subtract => (acc - a * b).to_bits(),
                 0xee00 => (acc + a * b).to_bits(),
-                0xee20 if !subtract => (a * b).to_bits(),
+                0xee20 if subtract => (-(a * b)).to_bits(),
+                0xee20 => (a * b).to_bits(),
                 0xee30 if subtract => (a - b).to_bits(),
                 0xee30 => (a + b).to_bits(),
                 0xee80 if !subtract => (a / b).to_bits(),
+                0xee90 if subtract => a.mul_add(b, -acc).to_bits(),
+                0xee90 => (-a).mul_add(b, -acc).to_bits(),
                 0xeea0 if subtract => (-a).mul_add(b, acc).to_bits(),
                 0xeea0 => a.mul_add(b, acc).to_bits(),
                 0xeeb0 if low & 0xe0 == 0 => {

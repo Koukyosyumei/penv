@@ -1,5 +1,6 @@
 pub(super) struct Adxl372 {
-    acceleration: [i16; 3],
+    pub(super) name: String,
+    pub(super) acceleration: [i16; 3],
     registers: [u8; 128],
     address: u8,
     addressed: bool,
@@ -7,8 +8,9 @@ pub(super) struct Adxl372 {
 }
 
 impl Adxl372 {
-    pub(super) fn new(acceleration: [i16; 3]) -> Self {
+    pub(super) fn new(name: String, acceleration: [i16; 3]) -> Self {
         Self {
+            name,
             acceleration,
             registers: [0; 128],
             address: 0,
@@ -18,7 +20,7 @@ impl Adxl372 {
     }
 
     pub(super) fn reset(&mut self) {
-        *self = Self::new(self.acceleration);
+        *self = Self::new(std::mem::take(&mut self.name), self.acceleration);
     }
 
     pub(super) fn start_write(&mut self) {

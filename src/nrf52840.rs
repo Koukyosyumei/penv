@@ -1,4 +1,9 @@
 mod adxl372;
+mod bme280;
+mod bmp180;
+mod lis2ds12;
+mod lsm303;
+mod lsm330;
 use adxl372::Adxl372;
 
 mod aar;
@@ -33,6 +38,7 @@ mod gpio;
 mod ppi;
 mod spi;
 use spi::Spi;
+pub(crate) use spi::SpiMuxPort;
 
 use ppi::Ppi;
 mod watchdog;
@@ -76,6 +82,7 @@ enum Device {
     PwmConfig { output_pin: u32 },
     UsbdConfig { iso_in: u32 },
     Spim3Config([u32; 10]),
+    Temperature { ready: bool, irq_enabled: bool },
 }
 
 #[derive(Default)]
@@ -84,6 +91,8 @@ struct Clock {
     events: u32,
     interrupts: u32,
     lf_source: u32,
+    lf_source_copy: u32,
+    constant_latency: bool,
     dcdc: u32,
     dcdc0: u32,
     trace_config: u32,
@@ -111,6 +120,7 @@ struct Uarte {
     tx_count: u32,
     tx_amount: u32,
     input: VecDeque<u8>,
+    link_output: Option<Vec<u8>>,
 }
 
 impl Default for Uarte {
@@ -135,12 +145,25 @@ impl Default for Uarte {
             tx_count: 0,
             tx_amount: 0,
             input: VecDeque::new(),
+            link_output: None,
         }
     }
 }
 
 impl Peripheral {
     pub const SIZE: u32 = 0x1000;
+
+    pub fn temperature() -> Self {
+        Self {
+            base: 0x4000_c000,
+            irq: 12,
+            name: "temp".into(),
+            device: Device::Temperature {
+                ready: false,
+                irq_enabled: false,
+            },
+        }
+    }
 
     pub fn spim3_config() -> Self {
         Self {
@@ -366,20 +389,117 @@ impl Peripheral {
         }
     }
 
-    pub fn attach_adxl_i2c(&mut self, address: u32, acceleration: [i16; 3]) -> Result<(), String> {
+    pub fn attach_lsm303(
+        &mut self,
+        address: u32,
+        values: [f64; 3],
+        irq: Option<(u32, [u8; 2])>,
+    ) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("LSM303DLHC requires TWI".into());
+        };
+        twi.attach(
+            address,
+            twi::Target::Lsm303(lsm303::Lsm303::new(values, irq)),
+        )
+    }
+
+    pub fn attach_lsm330(
+        &mut self,
+        address: u32,
+        values: [f64; 3],
+        gyroscope: bool,
+    ) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("LSM330 requires TWI".into());
+        };
+        twi.attach(
+            address,
+            twi::Target::Lsm330(lsm330::Lsm330::new(values, gyroscope)),
+        )
+    }
+
+    pub fn attach_bmp180(
+        &mut self,
+        address: u32,
+        temperature: f64,
+        pressure: u32,
+    ) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("BMP180 requires TWI".into());
+        };
+        twi.attach(
+            address,
+            twi::Target::Bmp180(bmp180::Bmp180::new(temperature, pressure)),
+        )
+    }
+
+    pub fn attach_lis2ds12(
+        &mut self,
+        address: u32,
+        acceleration: [f64; 3],
+        gpio: u32,
+        pin: u8,
+    ) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("LIS2DS12 requires TWI".into());
+        };
+        twi.attach(
+            address,
+            twi::Target::Lis2ds12(Box::new(lis2ds12::Lis2ds12::new(acceleration, gpio, pin))),
+        )
+    }
+
+    pub fn sensor_irqs(&self) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+        match &self.device {
+            Device::Twi(twi) => Some(twi.sensor_irqs()),
+            _ => None,
+        }
+        .into_iter()
+        .flatten()
+    }
+
+    pub fn attach_bme280(&mut self, address: u32) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("BME280 requires TWI".into());
+        };
+        twi.attach(address, twi::Target::Bme280(Box::default()))
+    }
+
+    pub fn attach_adxl_i2c(
+        &mut self,
+        address: u32,
+        name: String,
+        acceleration: [i16; 3],
+    ) -> Result<(), String> {
         let Device::Twi(twi) = &mut self.device else {
             return Err("ADXL372 requires TWI".into());
         };
         twi.attach(
             address,
-            twi::Target::Adxl372(Box::new(Adxl372::new(acceleration))),
+            twi::Target::Adxl372(Box::new(Adxl372::new(name, acceleration))),
         )
     }
 
-    pub fn attach_adxl_spi(&mut self, gpio: u32, pin: u32, acceleration: [i16; 3]) {
+    pub fn attach_adxl_spi(&mut self, gpio: u32, pin: u32, name: String, acceleration: [i16; 3]) {
         if let Device::Spi(spi) = &mut self.device {
-            spi.attach_adxl(gpio, pin, Adxl372::new(acceleration));
+            spi.attach_adxl(gpio, pin, Adxl372::new(name, acceleration));
         }
+    }
+
+    pub fn attach_spi_mux(&mut self, ports: Vec<SpiMuxPort>) {
+        if let Device::Spi(spi) = &mut self.device {
+            spi.attach_mux(ports);
+        }
+    }
+
+    pub fn adxl_input(&mut self, name: &str) -> Option<&mut [i16; 3]> {
+        let device = match &mut self.device {
+            Device::Twi(twi) => twi.adxl(name),
+            Device::Spi(spi) => spi.adxl(name),
+            _ => None,
+        }?;
+        Some(&mut device.acceleration)
     }
 
     pub fn release_spi_cs(&mut self, gpio: u32, pins: u32) {
@@ -490,6 +610,12 @@ impl Peripheral {
         }
     }
 
+    pub fn set_gpio_input(&mut self, pin: u8, high: bool) {
+        if let Device::Gpio(gpio) = &mut self.device {
+            gpio.set_external(pin, high);
+        }
+    }
+
     pub fn gpio_driven_high(&self) -> Option<u32> {
         match &self.device {
             Device::Gpio(gpio) => Some(gpio.driven_high()),
@@ -574,6 +700,23 @@ impl Peripheral {
         matches!(&self.device, Device::Watchdog(watchdog) if watchdog.reset_requested)
     }
 
+    pub fn link_uart(&mut self) {
+        if let Device::Uarte(uart) = &mut self.device {
+            uart.link_output = Some(Vec::new());
+        }
+    }
+
+    pub fn take_uart_link_output(&mut self) -> Vec<u8> {
+        match &mut self.device {
+            Device::Uarte(uart) => uart
+                .link_output
+                .as_mut()
+                .map(std::mem::take)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn is_uart(&self) -> bool {
         matches!(self.device, Device::Uarte(_))
     }
@@ -603,8 +746,16 @@ impl Peripheral {
             Device::PwmConfig { output_pin } => *output_pin = u32::MAX,
             Device::UsbdConfig { iso_in } => *iso_in = 0,
             Device::Spim3Config(registers) => registers.fill(0),
+            Device::Temperature { ready, irq_enabled } => {
+                *ready = false;
+                *irq_enabled = false;
+            }
             Device::Watchdog(watchdog) => *watchdog = Watchdog::default(),
-            Device::Uarte(uart) => *uart = Uarte::default(),
+            Device::Uarte(uart) => {
+                let linked = uart.link_output.is_some();
+                *uart = Uarte::default();
+                uart.link_output = linked.then(Vec::new);
+            }
             Device::Rtc(rtc) => {
                 *rtc = Rtc {
                     channels: rtc.channels,
@@ -621,6 +772,7 @@ impl Peripheral {
     pub fn pending(&self) -> bool {
         match &self.device {
             Device::Clock(clock) => clock.events & clock.interrupts != 0,
+            Device::Temperature { ready, irq_enabled } => *ready && *irq_enabled,
             Device::Nvmc { .. }
             | Device::PwmConfig { .. }
             | Device::UsbdConfig { .. }
@@ -644,6 +796,15 @@ impl Peripheral {
         }
     }
 
+    pub fn queue_uart_link_input(&mut self, bytes: Vec<u8>) {
+        if let Device::Uarte(uart) = &mut self.device
+            && uart.enabled != 0
+        {
+            // Bytes already received by the link can wait for the next DMA buffer.
+            uart.input.extend(bytes);
+        }
+    }
+
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
         if let Device::Uarte(uart) = &mut self.device
             && (uart.rx_active.is_some() || uart.legacy_rx)
@@ -663,6 +824,13 @@ impl Peripheral {
         let offset = address - self.base;
         match &mut self.device {
             Device::UsbdConfig { iso_in } => (offset == 0x530).then_some(*iso_in),
+            Device::Temperature { ready, irq_enabled } => match offset {
+                0 | 4 => Some(0),
+                0x100 => Some(u32::from(*ready)),
+                0x304 | 0x308 => Some(u32::from(*irq_enabled)),
+                0x508 => Some(25 * 4),
+                _ => None,
+            },
             Device::Spim3Config(registers) => Some(registers[Self::spim3_config_index(offset)?]),
             Device::PwmConfig { output_pin } => match offset {
                 0x500 => Some(0),
@@ -699,6 +867,17 @@ impl Peripheral {
     ) -> Result<(), BusError> {
         let offset = address - self.base;
         let supported = match &mut self.device {
+            Device::Temperature { ready, irq_enabled } => {
+                match offset {
+                    0 => *ready |= value & 1 != 0,
+                    4 => {}
+                    0x100 => *ready = value & 1 != 0,
+                    0x304 => *irq_enabled |= value & 1 != 0,
+                    0x308 => *irq_enabled &= value & 1 == 0,
+                    _ => return Err(BusError::Unmapped(address, 4)),
+                }
+                true
+            }
             Device::Spim3Config(registers) => {
                 if let Some(index) = Self::spim3_config_index(offset)
                     && (offset != 0x500 || matches!(value, 0 | 7))
@@ -734,7 +913,7 @@ impl Peripheral {
             Device::Gpio(gpio) => {
                 let supported = gpio.write(offset, value);
                 if supported {
-                    bus.release_nrf_spi_cs(self.base, gpio.driven_high());
+                    bus.sample_nrf_gpio_outputs(self.base, gpio.driven_high());
                 }
                 supported
             }
@@ -782,11 +961,12 @@ fn set_event(events: &mut u32, bit: u32, value: u32) {
 impl Clock {
     fn read(&self, offset: u32) -> Option<u32> {
         Some(match offset {
-            0x000..=0x010 | 0x018 => 0,
+            0x000..=0x010 | 0x018 | 0x078 | 0x07c => 0,
             0x100 | 0x104 | 0x10c => (self.events >> ((offset - 0x100) / 4)) & 1,
             0x304 | 0x308 => self.interrupts,
             0x40c => (self.running & 1) * 0x10001,
-            0x418 => ((self.running & 2) << 15) | (self.lf_source & 3),
+            0x414 => self.lf_source_copy,
+            0x418 => ((self.running & 2) << 15) | (self.lf_source_copy & 3),
             0x438 => 0, // USB VBUS is disconnected.
             0x518 => self.lf_source,
             0x51c => self.retention,
@@ -805,12 +985,17 @@ impl Clock {
                 if trigger {
                     let bit = 1 << (offset / 8);
                     let start = u32::from(offset & 4 == 0);
+                    if offset == 8 {
+                        self.lf_source_copy = self.lf_source;
+                    }
                     set_event(&mut self.running, bit, start);
                     set_event(&mut self.events, bit, start);
                 }
             }
             0x010 | 0x018 if trigger => set_event(&mut self.events, 8, u32::from(offset == 0x010)),
             0x010 | 0x018 => {}
+            0x078 | 0x07c if trigger => self.constant_latency = offset == 0x078,
+            0x078 | 0x07c => {}
             0x100 | 0x104 | 0x10c => {
                 set_event(&mut self.events, 1 << ((offset - 0x100) / 4), value)
             }
@@ -913,7 +1098,7 @@ impl Uarte {
             0x00c if self.enabled == 4 && value & 1 != 0 => self.legacy_tx = false,
             0x51c if self.enabled == 4 => {
                 if self.legacy_tx {
-                    output.write_all(&[value as u8]).map_err(BusError::Output)?;
+                    self.transmit(&[value as u8], output)?;
                     self.raise(Self::TX_READY);
                 }
             }
@@ -922,7 +1107,7 @@ impl Uarte {
                     let length = self.tx_count as usize;
                     let address = dma_address(self.tx_pointer, length)?;
                     let bytes = bus.memory_slice(address, length)?;
-                    output.write_all(bytes).map_err(BusError::Output)?;
+                    self.transmit(bytes, output)?;
                 }
                 self.tx_amount = self.tx_count;
                 self.raise(Self::TX_STARTED | Self::END_TX | Self::TX_READY);
@@ -969,6 +1154,15 @@ impl Uarte {
             },
         }
         Ok(true)
+    }
+
+    fn transmit(&mut self, bytes: &[u8], output: &mut impl Write) -> Result<(), BusError> {
+        if let Some(link) = &mut self.link_output {
+            link.extend_from_slice(bytes);
+            Ok(())
+        } else {
+            output.write_all(bytes).map_err(BusError::Output)
+        }
     }
 
     fn receive_legacy(&mut self) {

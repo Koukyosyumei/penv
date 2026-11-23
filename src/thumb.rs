@@ -757,6 +757,8 @@ impl Thumb {
                     _ => return Err(unsupported()),
                 };
             }
+            // Renode reports failure from semihosting calls without a registered handler.
+            0xbeab => r[0] = u32::MAX,
             0xbe00..=0xbeff => return Ok(false),
             0xbf00 | 0xbf10 => {} // NOP and scheduler yield.
             0xbf20 => {

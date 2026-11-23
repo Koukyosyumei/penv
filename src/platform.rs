@@ -229,7 +229,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         entry.model == "CPU.CortexM"
             && entry.body.iter().any(|(_, text)| {
                 text.split_once(':').is_some_and(|(key, value)| {
-                    key.trim() == "cpuType" && value.trim() == r#""cortex-m4""#
+                    key.trim() == "cpuType"
+                        && matches!(value.trim(), r#""cortex-m4""# | r#""cortex-m4f""#)
                 })
             })
     });
@@ -249,6 +250,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut stm32_gpios = Vec::new();
     let mut gpio_leds = Vec::new();
     let mut gpio_buttons = Vec::new();
+    let mut nrf_gpio_attachments = Vec::new();
     let mut stm32_i2cs = Vec::new();
     let mut stm32_cans = Vec::new();
     let mut i2c_eeproms = Vec::new();
@@ -292,6 +294,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 }
                 ram = true;
             }
+            "UART.TrivialUart" => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_trivial_uart(entry.address()?)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "GPIOPort.Murax_GPIO" => {
                 keys(entry, &[])?;
                 machine
@@ -323,6 +332,20 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 nrf52840::map_gpio(entry, &entries, &mut machine.bus)?;
             }
             "GPIOPort.STM32_GPIOPort" => stm32_gpios.push(entry),
+            "Miscellaneous.LED" | "Miscellaneous.Button"
+                if cortex_m4
+                    && entry
+                        .registration
+                        .as_deref()
+                        .and_then(|s| s.split_whitespace().next())
+                        .is_some_and(|name| {
+                            entries.iter().any(|gpio| {
+                                gpio.name == name && gpio.model == "GPIOPort.NRF52840_GPIO"
+                            })
+                        }) =>
+            {
+                nrf_gpio_attachments.push(entry)
+            }
             "Miscellaneous.LED" => gpio_leds.push(entry),
             "Miscellaneous.Button" => gpio_buttons.push(entry),
             "CRC.STM32_CRC" => {
@@ -354,7 +377,22 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "Sensors.BMP180" if cortex_m4 => {
+                nrf52840::bmp180_config(entry, &entries)?;
+            }
+            "Sensors.LSM303DLHC_Accelerometer" | "Sensors.LSM303DLHC_Gyroscope" if cortex_m4 => {
+                nrf52840::lsm303_config(entry, &entries)?;
+            }
+            "Sensors.LSM330_Accelerometer" | "Sensors.LSM330_Gyroscope" if cortex_m4 => {
+                nrf52840::lsm330_config(entry, &entries)?;
+            }
+            "Sensors.LIS2DS12" if cortex_m4 => {
+                nrf52840::lis2ds12_config(entry, &entries)?;
+            }
+            "I2C.BME280" if cortex_m4 => nrf52840::validate_bme280(entry, &entries)?,
             "Sensors.ADXL372" if cortex_m4 => nrf52840::validate_adxl(entry, &entries)?,
+            "SPI.SPIMultiplexer" if cortex_m4 => nrf52840::validate_mux(entry, &entries)?,
+            "Mocks.DummySPISlave" if cortex_m4 => nrf52840::validate_mux_slave(entry, &entries)?,
             "SPI.SPILoopback" if cortex_m4 => nrf52840::validate_spi_loopback(entry, &entries)?,
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
@@ -457,9 +495,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         }
         if !matches!(
             cpu_type,
-            Some(r#""cortex-m0""# | r#""cortex-m0+""# | r#""cortex-m4""#)
+            Some(r#""cortex-m0""# | r#""cortex-m0+""# | r#""cortex-m4""# | r#""cortex-m4f""#)
         ) {
-            return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M4 cpuType"));
+            return Err(
+                entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4 or Cortex-M4F cpuType")
+            );
         }
         if !cortex_m4 {
             machine
@@ -471,6 +511,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             let controller =
                 nvic.ok_or_else(|| peripheral.error("nRF52840 peripherals require NVIC"))?;
             nrf52840::map_peripheral(peripheral, controller, &entries, &mut machine.bus)?;
+        }
+        for attachment in nrf_gpio_attachments {
+            nrf52840::map_gpio_attachment(attachment, &entries, &mut machine.bus)?;
         }
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
         let mut priority = None;
@@ -510,7 +553,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .set_frequency(frequency);
         }
         let mut uart_irq = None;
-        if let Some(uart) = uart {
+        if let Some(uart) = uart.filter(|uart| uart.model == "UART.NS16550") {
+            keys(uart, &[])?;
+            machine
+                .bus
+                .map_ns16550(uart.address()?, 0, false)
+                .map_err(|e| uart.error(&e))?;
+        }
+        if let Some(uart) = uart.filter(|uart| uart.model != "UART.NS16550") {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
             }

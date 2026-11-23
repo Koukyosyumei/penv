@@ -416,6 +416,33 @@ impl Thumb {
                     }
                 }));
             }
+            0xfa90..=0xfa9e | 0xfaa0..=0xfaae | 0xfad0..=0xfade | 0xfae0..=0xfaee
+                if rt == 15
+                    && matches!(low & 0xf0, 0x10 | 0x20)
+                    && rn != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = r[rn] as i16 as i32;
+                let b = (r[rn] >> 16) as i16 as i32;
+                let c = r[rm] as i16 as i32;
+                let d = (r[rm] >> 16) as i16 as i32;
+                let (lo, hi) = match high & 0xf0 {
+                    0x90 => (a + c, b + d),
+                    0xa0 => (a - d, b + c),
+                    0xd0 => (a - c, b - d),
+                    _ => (a + d, b - c),
+                };
+                let lane = |value: i32| {
+                    let value = if low & 0x20 != 0 {
+                        value >> 1
+                    } else {
+                        value.clamp(-32768, 32767)
+                    };
+                    u32::from(value as u16)
+                };
+                r[rd] = lane(lo) | (lane(hi) << 16);
+            }
             0xfa90..=0xfa9e
                 if rn == rm
                     && rt == 15
@@ -478,7 +505,7 @@ impl Thumb {
                     self.saturation |= overflow;
                 }
             }
-            0xfb20..=0xfb2e
+            0xfb20..=0xfb2e | 0xfb40..=0xfb4e
                 if rn != 13
                     && low & 0xe0 == 0
                     && rt != 13
@@ -490,7 +517,11 @@ impl Thumb {
                 let lower = i32::from(a as i16) * i32::from(b as i16);
                 let upper = i32::from((a >> 16) as i16) * i32::from((b >> 16) as i16);
                 let acc = if rt == 15 { 0 } else { r[rt] as i32 };
-                let (product, q1) = lower.overflowing_add(upper);
+                let (product, q1) = if high & 0x40 != 0 {
+                    lower.overflowing_sub(upper)
+                } else {
+                    lower.overflowing_add(upper)
+                };
                 let (sum, q2) = product.overflowing_add(acc);
                 self.saturation |= q1 || q2;
                 r[rd] = sum as u32;

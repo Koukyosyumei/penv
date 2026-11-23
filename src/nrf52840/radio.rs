@@ -11,6 +11,7 @@ const RSSI_END: u32 = 1 << 7;
 const BIT_MATCH: u32 = 1 << 10;
 const CRC_OK: u32 = 1 << 12;
 const TX_READY: u32 = 1 << 21;
+const RATE_BOOST: u32 = 1 << 20;
 const RX_READY: u32 = 1 << 22;
 const PHY_END: u32 = 1 << 27;
 const EVENTS: u32 = READY
@@ -23,6 +24,7 @@ const EVENTS: u32 = READY
     | RSSI_END
     | BIT_MATCH
     | CRC_OK
+    | RATE_BOOST
     | TX_READY
     | RX_READY
     | PHY_END;
