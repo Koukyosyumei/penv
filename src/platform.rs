@@ -1899,11 +1899,19 @@ const MOCK_INTEGER: &str =
 const MOCK_STRING: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithStringAttribute";
 const MOCK_BOOL: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithBoolAttribute";
 
+const MOCK_RANGE: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithRangeAttribute";
+const MOCK_OBJECT: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithObjectAttribute";
+const MOCK_REFERENCE: &str =
+    "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralUsingReferenceAttribute";
+
 fn bind_scalar_fixture(entry: &Entry) -> Result<FixtureValue, String> {
     let key = match entry.model.as_str() {
         MOCK_INTEGER => "mockInt",
         MOCK_STRING => "mockString",
         MOCK_BOOL => "mockBool",
+        MOCK_RANGE => "mockRange",
+        MOCK_OBJECT => "mockObject",
+        MOCK_REFERENCE => "mockReference",
         _ => unreachable!(),
     };
     let properties = keys(entry, &[key])?;
@@ -1914,6 +1922,12 @@ fn bind_scalar_fixture(entry: &Entry) -> Result<FixtureValue, String> {
         ("mockInt", "empty", _) => Some(FixtureValue::Integer(0)),
         ("mockString", "empty", _) => Some(FixtureValue::Text(None)),
         ("mockBool", "empty", _) => Some(FixtureValue::Boolean(false)),
+        ("mockRange", "empty", _) => Some(FixtureValue::Range(0, 1)),
+        ("mockObject", "empty", _) => Some(FixtureValue::NullObject),
+        ("mockReference", "empty", _) => Some(FixtureValue::NullPeripheralReference),
+        ("mockRange", _, Some(ScalarValue::Range(base, size))) => {
+            Some(FixtureValue::Range(base, size))
+        }
         ("mockInt", _, Some(ScalarValue::Number(value))) => {
             value.parse().ok().map(FixtureValue::Integer)
         }
@@ -2097,7 +2111,10 @@ fn build_entries_with_scripts(
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
-            MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL if check_only => {
+            MOCK_ENUM | MOCK_INTEGER | MOCK_STRING | MOCK_BOOL | MOCK_RANGE | MOCK_OBJECT
+            | MOCK_REFERENCE
+                if check_only =>
+            {
                 let value = if entry.model == MOCK_ENUM {
                     FixtureValue::Enums(bind_fixture_enums(entry)?)
                 } else {
@@ -2374,6 +2391,9 @@ fn build_entries_with_scripts(
                         | MOCK_INTEGER
                         | MOCK_STRING
                         | MOCK_BOOL
+                        | MOCK_RANGE
+                        | MOCK_OBJECT
+                        | MOCK_REFERENCE
                         | MOCK_REGISTER
                         | NULL_REGISTER
                 )

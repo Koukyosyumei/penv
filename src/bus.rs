@@ -138,6 +138,9 @@ pub(crate) enum FixtureValue {
     Integer(i32),
     Text(Option<String>),
     Boolean(bool),
+    Range(u64, u64),
+    NullObject,
+    NullPeripheralReference,
 }
 
 #[derive(Default)]

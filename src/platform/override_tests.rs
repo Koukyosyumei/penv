@@ -1948,3 +1948,30 @@ fn renode_empty_scalar_bool() {
         Some(&FixtureValue::Boolean(false))
     );
 }
+
+#[test]
+fn renode_empty_binding_range() {
+    let machine = mock_registration_machine("\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithRangeAttribute @ sysbus  <0, 1>\n    mockRange: empty").unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.mockPeripheral"),
+        Some(&FixtureValue::Range(0, 1))
+    );
+}
+
+#[test]
+fn renode_empty_binding_object() {
+    let machine = mock_registration_machine("\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithObjectAttribute @ sysbus  <0, 1>\n    mockObject: empty").unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.mockPeripheral"),
+        Some(&FixtureValue::NullObject)
+    );
+}
+
+#[test]
+fn renode_empty_binding_reference() {
+    let machine = mock_registration_machine("\nmockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralUsingReferenceAttribute @ sysbus <0, 1>\n    mockReference: empty").unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.mockPeripheral"),
+        Some(&FixtureValue::NullPeripheralReference)
+    );
+}
