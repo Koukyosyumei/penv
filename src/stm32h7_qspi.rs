@@ -12,7 +12,8 @@ pub struct Qspi {
     pub base: u32,
     pub rcc_bound: bool,
     pub irq: Option<u8>,
-    capacity_code: Option<u8>,
+    capacity_exponent: Option<u8>,
+    macronix: bool,
     registers: [u32; 13],
     response: [u8; 88],
     flash: BTreeMap<u32, Box<[u8; SECTOR_SIZE as usize]>>,
@@ -30,6 +31,7 @@ pub struct Qspi {
 impl Qspi {
     pub const MODEL: &str = "SPI.STM32H7_QuadSPI";
     pub const FLASH: &str = "SPI.ISSI_IS25WP";
+    pub const MACRONIX_FLASH: &str = "SPI.Macronix_MX25R";
     pub const SIZE: u32 = 0x400;
     pub const DATA: u32 = 0x20;
 
@@ -39,7 +41,8 @@ impl Qspi {
             base,
             rcc_bound,
             irq,
-            capacity_code: None,
+            capacity_exponent: None,
+            macronix: false,
             registers: [0; 13],
             response: [0; 88],
             flash: BTreeMap::new(),
@@ -55,11 +58,12 @@ impl Qspi {
         }
     }
 
-    pub fn attach(&mut self, capacity: u32) -> Result<(), &'static str> {
-        if self.capacity_code.is_some() || !capacity.is_power_of_two() || capacity < 0x40000 {
-            return Err("invalid or duplicate ISSI SPI flash capacity");
+    pub fn attach(&mut self, capacity: u32, macronix: bool) -> Result<(), &'static str> {
+        if self.capacity_exponent.is_some() || !capacity.is_power_of_two() || capacity < 0x40000 {
+            return Err("invalid or duplicate SPI flash capacity");
         }
-        self.capacity_code = Some(capacity.ilog2() as u8);
+        self.capacity_exponent = Some(capacity.ilog2() as u8);
+        self.macronix = macronix;
         Ok(())
     }
 
@@ -152,7 +156,7 @@ impl Qspi {
                         self.status_configuration = value as u8 & 0xfc;
                     }
                     if self.write_enabled
-                        && matches!(self.registers[5] as u8, 0x02 | 0x12 | 0x32 | 0x34)
+                        && matches!(self.registers[5] as u8, 0x02 | 0x12 | 0x32 | 0x34 | 0x38)
                     {
                         for byte in value
                             .to_le_bytes()
@@ -188,7 +192,7 @@ impl Qspi {
 
     fn program_byte(&mut self, address: u32, byte: u8) {
         if self
-            .capacity_code
+            .capacity_exponent
             .is_some_and(|capacity| address < 1u32 << capacity)
         {
             let sector = self
@@ -214,7 +218,7 @@ impl Qspi {
         if self.registers[0] & 1 == 0 || ccr & (3 << 8) == 0 {
             return;
         }
-        let Some(capacity) = self.capacity_code else {
+        let Some(capacity) = self.capacity_exponent else {
             self.flags |= TEF;
             return;
         };
@@ -225,7 +229,7 @@ impl Qspi {
         self.index = 0;
         let status = (u8::from(self.write_enabled) << 1) | self.status_configuration;
         if mode == 0 && ccr & (3 << 24) != 0 {
-            if matches!(instruction, 0x01 | 0x02 | 0x12 | 0x32 | 0x34) {
+            if matches!(instruction, 0x01 | 0x02 | 0x12 | 0x32 | 0x34 | 0x38) {
                 self.write_remaining = self.registers[4].saturating_add(1);
             }
             return;
@@ -253,7 +257,19 @@ impl Qspi {
             ) => {
                 self.flash_read = true;
             }
-            (1, 0x9f) => self.response[..3].copy_from_slice(&[0x9d, 0x70, capacity]),
+            (1, 0x9f) => {
+                let id = if self.macronix {
+                    let code = if capacity > 25 {
+                        capacity - 26 + 0x20
+                    } else {
+                        capacity
+                    };
+                    [0xc2, 0x28, code]
+                } else {
+                    [0x9d, 0x70, capacity]
+                };
+                self.response[..3].copy_from_slice(&id);
+            }
             (1 | 2, 0x05) => self.response.fill(status),
             (1, 0x5a) => {
                 self.response = sfdp(capacity);
@@ -335,7 +351,7 @@ mod tests {
     #[test]
     fn issi_indirect_read_program_and_erase() {
         let mut qspi = Qspi::new("qspi".into(), 0, false, Some(92));
-        qspi.attach(0x0800_0000).unwrap();
+        qspi.attach(0x0800_0000, false).unwrap();
         qspi.write(0, 4, 1);
         let address = 0x0100_1000;
         indirect(&mut qspi, 0x0500_0000, 0x13, address, 4);
@@ -356,7 +372,7 @@ mod tests {
     #[test]
     fn issi_program_requires_write_enable_and_only_clears_bits() {
         let mut qspi = Qspi::new("qspi".into(), 0, false, None);
-        qspi.attach(0x0800_0000).unwrap();
+        qspi.attach(0x0800_0000, false).unwrap();
         qspi.write(0, 4, 1);
         for (enabled, value) in [(false, 0), (true, 0xf0), (true, 0xaa)] {
             if enabled {
@@ -370,9 +386,25 @@ mod tests {
     }
 
     #[test]
+    fn macronix_jedec_id_and_quad_program() {
+        let mut qspi = Qspi::new("qspi".into(), 0, false, Some(92));
+        qspi.attach(0x1000_0000, true).unwrap();
+        qspi.write(0, 4, 1 | (TCF << 16));
+        qspi.write(0x10, 4, 2);
+        qspi.write(0x14, 4, 0x0500_019f);
+        assert_eq!(qspi.read(Qspi::DATA, 4), 0x0022_28c2);
+        qspi.write(0x14, 4, 0x0106);
+        indirect(&mut qspi, 0x0300_0000, 0x38, 0x100, 4);
+        qspi.write(Qspi::DATA, 4, 0x1234_5678);
+        assert_eq!(qspi.interrupt(), Some(92));
+        indirect(&mut qspi, 0x0700_0000, 0xeb, 0x100, 4);
+        assert_eq!(qspi.read(Qspi::DATA, 4), 0x1234_5678);
+    }
+
+    #[test]
     fn reads_sfdp_and_completes_status_register_write_via_irq() {
         let mut qspi = Qspi::new("qspi".into(), 0, false, Some(92));
-        qspi.attach(0x0800_0000).unwrap();
+        qspi.attach(0x0800_0000, false).unwrap();
         qspi.write(0, 4, 1 | (TCF << 16) | (FTF << 16));
         qspi.write(0x10, 4, 3);
         qspi.write(0x14, 4, 0x0500_055a);

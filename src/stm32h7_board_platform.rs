@@ -46,6 +46,7 @@ pub fn is_device(model: &str) -> bool {
         || matches!(
             model,
             Qspi::FLASH
+                | Qspi::MACRONIX_FLASH
                 | Fdcan::MODEL
                 | Ina228::MODEL
                 | Veml7700::MODEL
@@ -800,13 +801,16 @@ fn configure_qspi(
         }
         controllers.push(Qspi::new(entry.name.clone(), base, alias.is_some(), irq));
     }
-    for entry in entries.iter().filter(|entry| entry.model == Qspi::FLASH) {
+    for entry in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), Qspi::FLASH | Qspi::MACRONIX_FLASH))
+    {
         let qspi = controllers
             .iter_mut()
             .find(|device| Some(device.name.as_str()) == entry.registration.as_deref())
             .ok_or_else(|| entry.error("expected an STM32H7 QuadSPI parent"))?;
         let [(_, property)] = entry.body.as_slice() else {
-            return Err(entry.error("expected underlyingMemory for ISSI flash"));
+            return Err(entry.error("expected underlyingMemory for SPI flash"));
         };
         let memory = property
             .split_once(':')
@@ -816,7 +820,7 @@ fn configure_qspi(
                     memory.name == name.trim() && memory.model == "Memory.MappedMemory"
                 })
             })
-            .ok_or_else(|| entry.error("unknown underlyingMemory for ISSI flash"))?;
+            .ok_or_else(|| entry.error("unknown underlyingMemory for SPI flash"))?;
         let capacity = memory
             .body
             .iter()
@@ -824,9 +828,12 @@ fn configure_qspi(
                 let (key, value) = property.split_once(':')?;
                 (key.trim() == "size").then_some(value.trim())
             })
-            .ok_or_else(|| memory.error("missing ISSI flash memory size"))?;
-        qspi.attach(number(capacity).map_err(|e| memory.error(&e))?)
-            .map_err(|e| entry.error(e))?;
+            .ok_or_else(|| memory.error("missing SPI flash memory size"))?;
+        qspi.attach(
+            number(capacity).map_err(|e| memory.error(&e))?,
+            entry.model == Qspi::MACRONIX_FLASH,
+        )
+        .map_err(|e| entry.error(e))?;
     }
     for controller in controllers {
         machine.bus.map_h7_qspi(controller)?;

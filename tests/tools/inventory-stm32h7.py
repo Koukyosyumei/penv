@@ -325,6 +325,20 @@ def triage(row):
         'Should Encrypt And Decrypt Data in AES GCM Mode With Interrupts',
     }:
         status, reason = 'OPEN', '担当ローカルは hard-float ELF を拒否。ARM 統合 b023006 では最小構成で両 ELF ロード可。全 H753 の TIM17 と LED テスターが共有阻害点。CRYP は整列と端数ブロックの暗号化・復号・タグを単体検証済み、HAL の CTR 切替も単体検証済み。実 ELF の LED 判定は未達'
+    elif suite == 'nucleo_h753zi.robot' and name in {
+        'Should Program Flash With QSPI',
+        'Should Program Flash With QSPI Memory Mapped',
+        'Should Program Flash With QSPI and use XIP',
+    }:
+        status = 'OPEN'
+        reason = '固定公開 ELF と上流 LED 配線で再現。Macronix JEDEC ID と間接 Quad Program は単体検証済み。'
+        if name == 'Should Program Flash With QSPI':
+            reason += 'Mocks.DummyI2CSlave 0x42/0x43 の登録で停止。'
+        else:
+            reason += 'ローカル ELF ローダーが hard-float ABI を拒否。0x90000000 の間接書き込みとの共有も残る。'
+            if name.endswith('XIP'):
+                reason += 'PC=0x90000010 の観測も未検証。'
+        reason += ' tests/stm32h7-mx25r-robot.sh'
     elif suite == 'nucleo_h753zi.robot' and name == 'Should Read and Write IS25WP Flash':
         status, reason = 'PASS', '固定上流 ELF・Nucleo REPL・ISSI 追記で、既定8秒の期限と同じUART 7行を順に照合。tests/stm32h7-is25wp-robot.sh'
     elif suite == 'MCAN.robot' and name == 'Should Run Zephyr CAN Counter Sample In Loopback Mode':

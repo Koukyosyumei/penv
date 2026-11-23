@@ -1886,3 +1886,19 @@ bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 238件、STM32H7 REPL 7構成、Zephyr Blinky・Button、独立した SD 装着3件も通過しました。ケース別結果、初回失敗とレジスタートレース、最終 UART ログは `~/.local/state/penv-dispatch/evidence/h7-is25wp-data.B7xtH7T6` に保存しました。台帳は対象786件のうち等価合格203件、部分検証18件、未達565件です。メモリーマップ読み取りと XIP、Macronix フラッシュの上流ケースは残っています。共有ソースの変更はありません。
+
+### H753ZI Macronix QuadSPI
+
+固定上流の Macronix MX25R を H7 QuadSPI に接続し、256 MiB 構成の JEDEC ID `c2 28 22`、間接 Quad Program (`0x38`)、完了 IRQ、間接読み戻しを単体テストで照合しました。固定公開 ELF 3個はファイル名の SHA-1 と照合済みです。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+cargo build --release
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+bash tests/stm32h7-mx25r-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-is25wp-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 239件、IS25WP の UART 7観測、Blinky・Button が通過しました。Macronix の間接転送 ELF は `Mocks.DummyI2CSlave` の登録で停止し、MemoryMapped と XIP は hard-float ELF の読み込みで停止しました。次の検証には間接転送とバス窓のデータ共有、XIP の最終 PC `0x90000010` の照合が残ります。再現用 REPL/RESC、SHA-1、ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-mx25r.Md9KKNw9` に保存しました。台帳は対象786件のうち等価合格203件、部分検証18件、未達565件です。
