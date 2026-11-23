@@ -701,11 +701,16 @@ impl Thumb {
             self.signal_event();
             return Ok(pc & !1);
         }
-        if target & 1 == 0 {
+        self.branch_exchange(target)
+    }
+
+    fn branch_exchange(&mut self, target: u32) -> Result<u32, String> {
+        if target & 1 == 0 && !self.thumb2 {
             return Err(format!(
                 "branch target {target:#010x} does not select Thumb state"
             ));
         }
+        self.invalid_thumb_state = target & 1 == 0;
         Ok(target & !1)
     }
 
@@ -1052,13 +1057,9 @@ impl Thumb {
                 let rm = ((inst >> 3) & 15) as usize;
                 let target = if rm == 15 { architectural_pc } else { r[rm] };
                 if inst & 0x80 != 0 {
-                    if target & 1 == 0 {
-                        return Err(format!(
-                            "branch target {target:#010x} does not select Thumb state"
-                        ));
-                    }
+                    let destination = self.branch_exchange(target)?;
                     r[14] = next | 1;
-                    next = target & !1;
+                    next = destination;
                 } else {
                     next = self.branch(target, r, bus)?;
                 }

@@ -567,3 +567,48 @@ clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/lazy-fp.s" -o "$out/lazy-f
 ld.lld -N -Ttext=0 --entry=reset "$out/lazy-fp.o" -o "$out/lazy-fp.elf"
 "$penv" run --platform "$out/lazy-fp.repl" --max-steps 100 "$out/lazy-fp.elf" >"$out/lazy-fp.log" 2>&1
 printf 'lazy FP: all preservation fault checks passed\n'
+
+# arm-cortex-m-exception-return.robot: plain BX in Thread and BLX in NMI.
+for branch in bx-thread blx-nmi; do
+    case "$branch" in
+        bx-thread) budget=2; expected=0xffffffb8 ;;
+        blx-nmi) budget=6; expected=0xfffffff8 ;;
+    esac
+    cat >"$out/$branch.s" <<'ASM'
+.syntax unified
+.thumb
+.global reset
+.word 0x800, reset, nmi
+.org 0x20
+.thumb_func
+reset:
+ASM
+    if [ "$branch" = bx-thread ]; then
+        cat >>"$out/$branch.s" <<'ASM'
+    mov r0, 0xffffffb8
+    bx r0
+ASM
+    else
+        cat >>"$out/$branch.s" <<'ASM'
+    ldr r0, =0xe000ed04
+    mov.w r1, #0x80000000
+    str r1, [r0]
+    b .
+    .ltorg
+ASM
+    fi
+    cat >>"$out/$branch.s" <<'ASM'
+.org 0x100
+.thumb_func
+nmi:
+    nop
+    blx lr
+ASM
+    clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/$branch.s" -o "$out/$branch.o"
+    ld.lld -N -Ttext=0 --entry=reset "$out/$branch.o" -o "$out/$branch.elf"
+    status=0
+    "$penv" run --platform "$out/bus-fault.repl" --max-steps "$budget" "$out/$branch.elf" \
+        >"$out/$branch.log" 2>&1 || status=$?
+    [ "$status" -eq 2 ]
+    grep -Fxq "penv: instruction limit reached at pc=$expected" "$out/$branch.log"
+done
