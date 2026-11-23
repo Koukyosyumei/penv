@@ -31,6 +31,8 @@ pub struct Stm32Usart {
     registers: [u32; 12],
     complete: bool,
     low_power: bool,
+    pub legacy_layout: bool,
+    legacy_rxne_cleared: bool,
 }
 
 impl Stm32Usart {
@@ -51,6 +53,8 @@ impl Stm32Usart {
             registers: [0; 12],
             complete: true,
             low_power,
+            legacy_layout: false,
+            legacy_rxne_cleared: false,
         }
     }
 
@@ -60,6 +64,7 @@ impl Stm32Usart {
         self.idle = false;
         self.registers.fill(0);
         self.complete = true;
+        self.legacy_rxne_cleared = false;
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -125,6 +130,7 @@ impl Stm32Usart {
             self.pending_receive.extend(bytes);
         } else {
             self.receive.extend(bytes);
+            self.legacy_rxne_cleared = false;
         }
     }
 
@@ -138,6 +144,7 @@ impl Stm32Usart {
         }
         if let Some(byte) = self.pending_receive.pop_front() {
             self.receive.push_back(byte);
+            self.legacy_rxne_cleared = false;
             // The same interval measures the next queued frame or the
             // idle period that starts after the last byte is delivered.
             self.receive_deadline = self.frame_ticks();
@@ -153,7 +160,7 @@ impl Stm32Usart {
             | TXE
             | (u32::from(self.idle) * IDLE)
             | (u32::from(self.complete) * TC)
-            | (u32::from(!self.receive.is_empty()) * RXNE)
+            | (u32::from(!self.receive.is_empty() && !self.legacy_rxne_cleared) * RXNE)
             | (u32::from(control & TE != 0) << 21)
             | (u32::from(control & RE != 0) << 22)
     }
@@ -162,7 +169,7 @@ impl Stm32Usart {
         let enabled = self.registers[0];
         enabled & TXE != 0
             || (enabled & TC != 0 && self.complete)
-            || (enabled & RXNE != 0 && !self.receive.is_empty())
+            || (enabled & RXNE != 0 && !self.receive.is_empty() && !self.legacy_rxne_cleared)
             || (self.receiver_enabled() && enabled & IDLE != 0 && self.idle)
     }
 
@@ -183,8 +190,31 @@ impl Stm32Usart {
         rx | tx
     }
 
+    fn legacy_register(&self, offset: u32) -> u32 {
+        match offset {
+            0x08 => self.registers[3],
+            0x0c => (self.registers[0] & !(UE | (1 << 13))) | ((self.registers[0] & UE) << 13),
+            0x10 => self.registers[1],
+            0x14 => self.registers[2],
+            0x18 => self.registers[5],
+            _ => 0,
+        }
+    }
+
     pub fn read(&mut self, address: u32, width: usize) -> u32 {
         let offset = address - self.base;
+        if self.legacy_layout {
+            let value = match offset & !3 {
+                0 => self.status() & 0xff,
+                4 if offset & 3 == 0 => {
+                    self.idle = false;
+                    self.legacy_rxne_cleared = false;
+                    u32::from(self.receive.pop_front().unwrap_or(0))
+                }
+                _ => self.legacy_register(offset & !3),
+            };
+            return (value >> ((offset & 3) * 8)) & width_mask(width);
+        }
         let value = match offset & !3 {
             0x00 | 0x04 | 0x08 | 0x0c | 0x14 | 0x28 | 0x2c => self.registers[(offset / 4) as usize],
             0x1c => self.status(),
@@ -202,6 +232,47 @@ impl Stm32Usart {
         transmit: impl FnOnce(u8) -> io::Result<()>,
     ) -> io::Result<()> {
         let offset = address - self.base;
+        if self.legacy_layout {
+            let shift = (offset & 3) * 8;
+            let mask = width_mask(width) << shift;
+            let value = (value << shift) & mask;
+            let aligned = offset & !3;
+            match aligned {
+                0 => {
+                    self.complete &= mask & !value & TC == 0;
+                    self.legacy_rxne_cleared |= mask & !value & RXNE != 0;
+                    return Ok(());
+                }
+                4 => {
+                    if offset & 3 == 0 && self.registers[0] & (UE | TE) != 0 {
+                        transmit(value as u8)?;
+                        self.complete = true;
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
+            let merged = (self.legacy_register(aligned) & !mask) | value;
+            let (offset, value) = match aligned {
+                0x08 => (0x0c, merged & 0xffff),
+                0x0c => (0x00, (merged & 0x9ffc) | ((merged >> 13) & UE)),
+                0x10 => (0x04, merged),
+                0x14 => (0x08, merged),
+                0x18 => (0x14, merged & 0xffff),
+                _ => return Ok(()),
+            };
+            return self.write_modern(offset, 4, value, transmit);
+        }
+        self.write_modern(offset, width, value, transmit)
+    }
+
+    fn write_modern(
+        &mut self,
+        offset: u32,
+        width: usize,
+        value: u32,
+        transmit: impl FnOnce(u8) -> io::Result<()>,
+    ) -> io::Result<()> {
         let shift = (offset & 3) * 8;
         let mask = width_mask(width) << shift;
         let value = (value << shift) & mask;
@@ -262,6 +333,31 @@ mod tests {
     const ICR: u32 = 0x20;
     const RDR: u32 = 0x24;
     const US: u64 = CORTEX_M_STEP_HZ / 1_000_000;
+
+    #[test]
+    fn renode_neonkey_legacy_uart_data_and_status() {
+        let mut uart = Stm32Usart::new("usart1".into(), 0, None, false);
+        uart.legacy_layout = true;
+        assert_eq!(uart.read(0, 4), 0xc0);
+        write(&mut uart, 8, 0x8b);
+        write(&mut uart, 0x0c, (1 << 13) | RE | TE | RXNE);
+        assert_eq!(uart.read(0x0c, 4), (1 << 13) | RE | TE | RXNE);
+        assert_eq!(uart.read(8, 4), 0x8b);
+        uart.queue_input([b'a', b'b']);
+        assert!(uart.interrupt_pending());
+        write(&mut uart, 0, !RXNE);
+        assert!(!uart.interrupt_pending());
+        assert_eq!(uart.read(4, 4), u32::from(b'a'));
+        assert!(uart.interrupt_pending());
+        assert_eq!(uart.read(4, 4), u32::from(b'b'));
+        assert!(!uart.interrupt_pending());
+        uart.write(4, 1, b'!' as u32, |byte| {
+            assert_eq!(byte, b'!');
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(uart.read(0, 4), 0xc0);
+    }
 
     fn configured_uart(control: u32) -> Stm32Usart {
         let mut uart = Stm32Usart::new("uart".into(), 0, None, false);

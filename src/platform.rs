@@ -250,6 +250,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let mut i2c_eeproms = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_rtc = None;
+    let mut stm32f4_rcc = None;
     let mut stm32_dma = None;
     let mut plic = None;
     let mut timer = None;
@@ -331,6 +332,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_stm32f0_rcc(entry.address()?)
                     .map_err(|e| entry.error(&e))?;
             }
+            "Miscellaneous.STM32F4_RCC" => {
+                if stm32f4_rcc.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32F4 RCC is supported"));
+                }
+            }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
@@ -352,7 +358,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("only one STM32F0 ADC is supported"));
                 }
             }
-            "UART.STM32F7_USART" => stm32_uarts.push(entry),
+            "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
@@ -376,6 +382,23 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
+    }
+    let extended_nvic = stm32_uarts
+        .iter()
+        .any(|uart| uart.model == "UART.STM32_UART");
+    let irq_lines = if extended_nvic { 48 } else { 32 };
+    if let Some(rcc) = stm32f4_rcc {
+        let options = keys(rcc, &["rtcPeripheral"])?;
+        if !options
+            .iter()
+            .any(|(_, target)| stm32_rtc.is_some_and(|rtc| rtc.name == *target))
+        {
+            return Err(rcc.error("STM32F4 RCC requires an attached STM32 RTC"));
+        }
+        machine
+            .bus
+            .map_stm32f4_rcc(rcc.address()?)
+            .map_err(|e| rcc.error(&e))?;
     }
     if cpus.is_empty() || !ram {
         return Err(format!(
@@ -753,7 +776,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                         return Err(rtc.error("duplicate STM32 RTC output"));
                     }
                     *slot = Some(if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
-                        Stm32Irq::Nvic(irq_index(pin, 32).map_err(|e| rtc.error(&e))?)
+                        Stm32Irq::Nvic(irq_index(pin, irq_lines).map_err(|e| rtc.error(&e))?)
                     } else if exti.is_some_and(|exti| exti.name == target.trim()) {
                         Stm32Irq::Exti(irq_index(pin, exti_lines).map_err(|e| rtc.error(&e))?)
                     } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
@@ -1202,7 +1225,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                             );
                         }
                         irq = Some(if nvic.is_some_and(|controller| controller.name == name) {
-                            Stm32Irq::Nvic(irq_index(line, 32).map_err(|e| uart.error(&e))?)
+                            Stm32Irq::Nvic(irq_index(line, irq_lines).map_err(|e| uart.error(&e))?)
                         } else if exti.is_some_and(|controller| controller.name == name) {
                             Stm32Irq::Exti(irq_index(line, exti_lines).map_err(|e| uart.error(&e))?)
                         } else if let Some(&(pins, output)) = combined_routes.get(name) {
@@ -1236,10 +1259,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             let mut device = Stm32Usart::new(
                 uart.name.clone(),
-                uart.address()?,
+                sysbus_range(uart, Stm32Usart::SIZE)?.0,
                 irq,
                 low_power.unwrap_or(false),
             );
+            device.legacy_layout = uart.model == "UART.STM32_UART";
             device.frequency = frequency;
             device.dma_rx = dma_rx;
             device.dma_tx = dma_tx;
@@ -1252,6 +1276,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             .bus
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
+        if extended_nvic {
+            machine.bus.nvic.as_mut().unwrap().enable_extended_lines();
+        }
         if let Some(controller) = nvic {
             machine.bus.set_nvic_name(controller.name.clone());
         }

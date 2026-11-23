@@ -93,3 +93,70 @@ mod tests {
         assert_eq!(rcc.read(base + 0x34), 3);
     }
 }
+
+/// The clock control registers used during STM32F4 firmware startup.
+pub struct Stm32F4Rcc {
+    pub base: u32,
+    registers: [u32; 36],
+}
+
+impl Stm32F4Rcc {
+    pub const SIZE: u32 = 0x100;
+
+    pub fn new(base: u32) -> Self {
+        let mut registers = [0; 36];
+        registers[0] = 0x481;
+        registers[1] = 0x2400_3010;
+        registers[0x74 / 4] = 0x0e00_0000;
+        Self { base, registers }
+    }
+
+    pub fn contains(&self, address: u32) -> bool {
+        address.wrapping_sub(self.base) < Self::SIZE
+    }
+
+    pub fn read(&self, address: u32) -> u32 {
+        let offset = address - self.base;
+        let value = self
+            .registers
+            .get((offset / 4) as usize)
+            .copied()
+            .unwrap_or(0);
+        match offset {
+            0 => value | ((value & 0x1501_0001) << 1),
+            8 => value | ((value & 3) << 2),
+            0x70 | 0x74 => value | ((value & 1) << 1),
+            _ => value,
+        }
+    }
+
+    pub fn write(&mut self, address: u32, value: u32) {
+        let offset = address - self.base;
+        let mask = match offset {
+            0 => 0x150d_fff9,
+            4 => 0x0f43_7fff,
+            8 => 0xffff_fcf3,
+            0x10..=0x24 | 0x30..=0x44 | 0x50..=0x64 | 0x78..=0x8c => u32::MAX,
+            0x70 => 0x0001_830d,
+            0x74 => 0xff00_0001,
+            _ => 0,
+        };
+        if let Some(register) = self.registers.get_mut((offset / 4) as usize) {
+            *register = value & mask;
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn renode_neonkey_rcc_reports_clock_ready_and_source() {
+    let mut rcc = Stm32F4Rcc::new(0);
+    assert_eq!(rcc.read(0), 0x483);
+    assert_eq!(rcc.read(4), 0x2400_3010);
+    rcc.write(0, 0x0101_0081);
+    assert_eq!(rcc.read(0), 0x0303_0083);
+    rcc.write(8, 2);
+    assert_eq!(rcc.read(8), 10);
+    rcc.write(0x44, 1 << 4);
+    assert_eq!(rcc.read(0x44), 1 << 4);
+}

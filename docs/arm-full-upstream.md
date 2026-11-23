@@ -557,3 +557,14 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-events-verification
 cargo test --locked renode_resc_array_memory
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-array-save-verification
 ```
+
+## Neonkey の旧 USART と RCC
+
+固定上流の Neonkey フィクスチャで最初に停止していた `UART.STM32_UART` を追加した。旧 USART の SR・DR・BRR・CR1～CR3 配置と CR1 の UE ビットを、既存の送受信・割り込み経路に接続した。旧レイアウトを使うプラットフォームでのみ NVIC の第2バンクを有効にし、フィクスチャが使う IRQ37・IRQ41 の優先度と保留を扱う。STM32F4 RCC は起動時のクロック選択、ready ビット、クロック有効化のレジスタを扱う。周辺機器へのクロックゲート連動は範囲外。
+
+公開 Neonkey ELF を固定 SHA-1 で照合し、元の REPL が次に要求する `numberOfMPURegions: 8` を記録した。検証用 REPL から MPU 設定と `PerformanceInMips` を除くと、Save、Clear、Load を経て `0x08000a7c` の `MSR BASEPRI, r0` まで進む。直後にも Armv7-M の `MOV.W` があるため、Armv6-M の現行対象では UART 完了行まで進めない。`ArrayMemory.robot` は部分移植のまま。
+
+```sh
+cargo test --locked renode_neonkey
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-neonkey-verification
+```

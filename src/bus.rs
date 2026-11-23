@@ -20,7 +20,7 @@ use crate::{
     stm32_gpio::Stm32Gpio,
     stm32_gpio_board::{GpioButton, GpioLed},
     stm32_i2c::Stm32I2c,
-    stm32_rcc::Stm32F0Rcc,
+    stm32_rcc::{Stm32F0Rcc, Stm32F4Rcc},
     stm32_rtc::Stm32Rtc,
     stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
@@ -198,6 +198,7 @@ pub struct Bus {
     pub unhandled_access: Option<UnhandledAccess>,
     stm32f0_tags: Vec<std::ops::RangeInclusive<u32>>,
     stm32_rcc: Option<Stm32F0Rcc>,
+    stm32f4_rcc: Option<Stm32F4Rcc>,
     stm32_flash: Option<Stm32F0Flash>,
     stm32_rtc: Option<Stm32Rtc>,
     plic: Option<Plic>,
@@ -334,6 +335,10 @@ impl Bus {
             || self.stm32_rcc.as_ref().is_some_and(|rcc| {
                 let other = u64::from(rcc.base);
                 start < other + u64::from(Stm32F0Rcc::SIZE) && other < end
+            })
+            || self.stm32f4_rcc.as_ref().is_some_and(|rcc| {
+                let other = u64::from(rcc.base);
+                start < other + u64::from(Stm32F4Rcc::SIZE) && other < end
             })
             || self.exti.as_ref().is_some_and(|exti| {
                 let other = u64::from(exti.base);
@@ -612,6 +617,9 @@ impl Bus {
         }
         if let Some(rcc) = self.stm32_rcc.as_mut() {
             rcc.reset(reload);
+        }
+        if let Some(rcc) = self.stm32f4_rcc.as_mut() {
+            *rcc = Stm32F4Rcc::new(rcc.base);
         }
         if let Some(adc) = self.stm32_adc.as_mut() {
             adc.reset();
@@ -1222,6 +1230,19 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_stm32f4_rcc(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(Stm32F4Rcc::SIZE);
+        if self.stm32f4_rcc.is_some() || base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping STM32F4 RCC range at {base:#010x}"
+            ));
+        }
+        self.stm32f4_rcc = Some(Stm32F4Rcc::new(base));
+        Ok(())
+    }
+
     pub fn map_stm32_usart(&mut self, uart: Stm32Usart) -> Result<(), String> {
         let base = uart.base;
         let start = u64::from(base);
@@ -1801,6 +1822,13 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
+            && let Some(rcc) = self.stm32f4_rcc.as_ref()
+            && rcc.contains(address)
+        {
+            return Ok(rcc.read(address));
+        }
+        if N == 4
+            && address & 3 == 0
             && let Some(rcc) = self.stm32_rcc.as_ref()
             && rcc.contains(address)
         {
@@ -2069,6 +2097,13 @@ impl Bus {
                 let success = result.map(|bytes| bytes.fill(0xff)).is_ok();
                 self.stm32_flash.as_mut().unwrap().finish(success);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(rcc) = self.stm32f4_rcc.as_mut()
+            && rcc.contains(address)
+        {
+            rcc.write(address, value);
             return Ok(());
         }
         if width == 4

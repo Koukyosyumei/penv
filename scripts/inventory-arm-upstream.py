@@ -456,7 +456,7 @@ def classify_robot(name, case, body, parameter):
         config = "Cortex-A53 GICv3 / Zephyr" if "Create Zephyr Machine" in body else "Zedboard Zynq / Cortex-A9 Linux"
         return OUT, config, "PL330 channel program and controller are distinct from STM32F0 channel DMA; Linux branch uses dmatest or DMA-backed UART"
     if name == "ArrayMemory":
-        return PARTIAL, V6, "renode_resc_array_memory_save_clear_load_restores_boot_state; Cortex-M0+ ArrayMemory layout and preboot save/clear/load, STM32F072 Hello World ELF; original Neonkey ELF, platform restoration and Renode format remain"
+        return PARTIAL, V6, "renode_resc_array_memory_save_clear_load_restores_boot_state; Cortex-M0+ ArrayMemory layout and preboot save/clear/load, STM32F072 Hello World ELF; Neonkey UART/RCC recognized, adapted REPL reaches Armv7-M BASEPRI and MOV.W in original ELF; platform restoration and Renode format remain"
     if name == "STM32_UART":
         checks = {
             "Should Receive Characters At Configured Baud Rate": "receives_at_configured_baud_rate_and_detects_idle; two 9+1 us frames and one 9+1 us idle interval",
