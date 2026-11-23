@@ -783,6 +783,17 @@ fn create_cpu(
         return Err(entry.error("unsupported RV64 privileged architecture"));
     }
     let mut cpu = Rv64::new(isa);
+    if let Some(length) =
+        property(entry, "vectorRegisterLength").or_else(|| property(entry, "VectorRegisterLength"))
+    {
+        if cpu.privilege.vector.is_none() {
+            return Err(entry.error("vector register length requires the V extension"));
+        }
+        let length = number(entry, length)?;
+        cpu.privilege.vector = Some(Box::new(
+            crate::rv64::vector::VectorState::new(length).map_err(|error| entry.error(error))?,
+        ));
+    }
     let levels = match property(entry, "privilegeLevels") {
         None | Some("PrivilegeLevels.MachineSupervisorUser") => Levels::MachineSupervisorUser,
         Some("PrivilegeLevels.MachineUser") => Levels::MachineUser,

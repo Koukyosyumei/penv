@@ -976,3 +976,59 @@ fn renode_ram_move_targets_only_exclusive_cpu_registrations() {
     bus.cpu_memory64(0, new, 1).unwrap()[0] = 0x56;
     assert_eq!(bus.ram64(0x2010000, 1), Some(&[0x56][..]));
 }
+
+#[test]
+fn renode_rori_roriw_slli_uw_match_each_rv64_register_value() {
+    for (body, expected) in [
+        (
+            &[0x6015_5513u32, 0x6015_5513][..],
+            &[1, 2, 1, 0x8000_0000_0000_0000][..],
+        ),
+        (
+            &[0x6015_551b, 0x6015_551b][..],
+            &[1, 2, 1, 0xffff_ffff_8000_0000][..],
+        ),
+        (
+            &[0x0815_151b, 0x4000_0537, 0x0815_151b][..],
+            &[1, 2, 4, 0x4000_0000, 0x8000_0000][..],
+        ),
+    ] {
+        let mut cpu = Rv64::new(Isa::parse("rv64imac_zicsr_zba_zbb").unwrap());
+        cpu.pc = 0;
+        let mut bus = Bus::default();
+        bus.map_ram64(0, 0x1000).unwrap();
+        bus.memory64(0, 4)
+            .unwrap()
+            .copy_from_slice(&[0x05, 0x45, 0x05, 0x05]);
+        for (index, word) in body.iter().enumerate() {
+            bus.memory64(4 + index as u64 * 4, 4)
+                .unwrap()
+                .copy_from_slice(&word.to_le_bytes());
+        }
+        for (index, &expected) in expected.iter().enumerate() {
+            assert!(matches!(
+                cpu.step(&mut bus, 0, index as u64 + 1, &mut Vec::new())
+                    .unwrap(),
+                Step::Retired
+            ));
+            assert_eq!(cpu.registers[A0], expected);
+        }
+    }
+}
+
+#[test]
+fn vlen_caps_vstart_and_vector_length_for_configured_registers() {
+    use super::vector::VectorState;
+    for bits in [64, 256, 512, 65536] {
+        let mut state = VectorState::new(bits).unwrap();
+        assert_eq!(state.read(0xc22), Some(bits / 8));
+        assert!(state.write(0x008, u64::MAX));
+        assert_eq!(state.read(0x008), Some(bits - 1));
+        assert_eq!(state.configure(0xc3, Some(u64::MAX)), bits);
+        assert_eq!(state.read(0x008), Some(0));
+        assert!(state.execute(0x5e05_4c57, 0xff).is_some()); // vmv.v.x v24, a0, LMUL=8
+    }
+    for bits in [32, 192, 65537, 131072] {
+        assert!(VectorState::new(bits).is_err());
+    }
+}

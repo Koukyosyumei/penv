@@ -300,6 +300,14 @@ def disposition(path, name, context):
         if name.endswith(" 32"):
             return "out", "Harness selects only RV32 executable parameters"
         return "unexpanded", "One row per executable required from the upstream selector"
+    if path.name == "riscv-zbb-extension.robot" and name in {
+        "Should Handle RORI Properly on 64 Bit CPU",
+        "Should Handle RORIW Properly",
+        "Should Handle SLLI.UW Properly",
+    }:
+        return "pass", "Fixed CPU, PC, instruction bytes and all stepwise a0 assertions checked"
+    if path.name == "riscv-vector-csr.robot" and name == "Should Leave Enough VSTART Bits For Largest Possible Value":
+        return "partial", "VLEN=256 and VSTART checked with ELF; upstream Zcb configuration remains unsupported"
     if path.name == "riscv-vector-csr.robot" and name in {
         "Should Keep VCSR Upper Bits As Zero",
         "Should Reflect VSADD.VV Saturation In VCSR",
