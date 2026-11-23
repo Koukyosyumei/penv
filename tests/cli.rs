@@ -741,7 +741,7 @@ fn polarfire_resc_reads_a_sector_from_an_attached_sd_image() {
 
     let directory = std::env::temp_dir().join(format!("penv-polarfire-sd-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
-    let board = directory.join("polarfire.repl");
+    let board = directory.join("beaglev-fire.repl");
     let raw = directory.join("sd-probe.bin");
     let script = directory.join("sd-probe.resc");
     let disk = directory.join("disk.img");
@@ -773,17 +773,25 @@ mmc: SD.MPFS_SDController @ sysbus 0x20008000
         &script,
         r#"$image?=@https://example.invalid/disk.img
 mach create
-machine LoadPlatformDescription @polarfire.repl
+machine LoadPlatformDescription @beaglev-fire.repl
 machine SdCardFromFile $image mmc 0x100000000
 sysbus LoadBinary @sd-probe.bin 0x80000000
 cpu PC 0x80000000
 "#,
     )
     .unwrap();
-    let instructions: [u32; 32] = [
+    let instructions: [u32; 67] = [
         0x2000_82b7, // lui t0, 0x20008
         0x1000_03b7, // lui t2, 0x10000
-        0x2242_ae03, // lw t3, 0x224(t0): present state
+        0x2242_ae03, // lw t3, 0x224(t0): no eMMC attached
+        0x010e_5e13, // srli t3, t3, 16
+        0x01c3_8023, // sb t3, 0(t2)
+        0x5000_0eb7, // lui t4, 0x50000
+        0x0010_0313, // li t1, 1: select SD
+        0xf06e_a023, // sw t1, -256(t4): Fire media selector
+        0xf00e_ae03, // lw t3, -256(t4)
+        0x01c3_8023, // sb t3, 0(t2)
+        0x2242_ae03, // lw t3, 0x224(t0): SD card present
         0x010e_5e13, // srli t3, t3, 16
         0x01c3_8023, // sb t3, 0(t2)
         0x2000_0313, // li t1, 512
@@ -791,6 +799,33 @@ cpu PC 0x80000000
         0x0230_0313, // li t1, 0x23
         0x2262_aa23, // sw t1, 0x234(t0): status enable
         0x2262_ac23, // sw t1, 0x238(t0): signal enable
+        0x2002_a623, // sw zero, 0x20c(t0): CMD0
+        0x3702_0337, // lui t1, 0x37020
+        0x2062_a623, // sw t1, 0x20c(t0): CMD55
+        0x4000_0337, // lui t1, 0x40000: high capacity support
+        0x2062_a423, // sw t1, 0x208(t0)
+        0x2902_0337, // lui t1, 0x29020
+        0x2062_a623, // sw t1, 0x20c(t0): ACMD41
+        0x2102_ae03, // lw t3, 0x210(t0): OCR
+        0x018e_5e13, // srli t3, t3, 24
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0201_0337, // lui t1, 0x02010
+        0x2062_a623, // sw t1, 0x20c(t0): CMD2
+        0x0302_0337, // lui t1, 0x03020
+        0x2062_a623, // sw t1, 0x20c(t0): CMD3
+        0x0001_0337, // lui t1, 0x10: card address 1
+        0x2062_a423, // sw t1, 0x208(t0)
+        0x0901_0337, // lui t1, 0x09010
+        0x2062_a623, // sw t1, 0x20c(t0): CMD9
+        0x21c2_ae03, // lw t3, 0x21c(t0): CSD structure
+        0x010e_5e13, // srli t3, t3, 16
+        0x01c3_8023, // sb t3, 0(t2)
+        0x2142_ae03, // lw t3, 0x214(t0): CSD size
+        0x008e_5e13, // srli t3, t3, 8
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0703_0337, // lui t1, 0x07030
+        0x2062_a623, // sw t1, 0x20c(t0): CMD7
+        0x2002_a423, // sw zero, 0x208(t0): read sector 0
         0x0100_0313, // li t1, 0x10
         0x2062_9623, // sh t1, 0x20c(t0): read direction, PIO
         0x0000_1337, // lui t1, 1
@@ -832,5 +867,8 @@ cpu PC 0x80000000
     fs::remove_dir_all(directory).unwrap();
 
     assert!(result.status.success(), "{result:?}");
-    assert_eq!(result.stdout, [&[0xf7], &sector[..], &[0x23, 0]].concat());
+    assert_eq!(
+        result.stdout,
+        [&[0xf2, 1, 0xf7, 0xc0, 0x40, 0xff], &sector[..], &[0x23, 0]].concat()
+    );
 }

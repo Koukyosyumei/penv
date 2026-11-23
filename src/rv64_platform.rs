@@ -12,7 +12,7 @@ use crate::{
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
-pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
+pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, String> {
     let entries = merge(entries)?;
     let mut machine = Machine::without_default_ram();
     let mut cpus = Vec::new();
@@ -335,7 +335,7 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
     }
 
     map_ethernet(&mut machine, &entries, plic, sources)?;
-    if starlight
+    if board_name == Some("beaglev_starlight.repl")
         && let Some(gpio) = entries.iter().find(|entry| {
             entry.name == "gpio"
                 && entry.model == "GPIOPort.SiFive_GPIO"
@@ -347,6 +347,20 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
         // The upstream placeholder is a SiFive model; use the address in the guest DTB.
         check_mapping(&machine, gpio, StarLightResetPin::DOUT, 8)?;
         machine.bus.rv64_devices.starlight_reset_pin = Some(StarLightResetPin::default());
+    }
+    if board_name == Some("beaglev-fire.repl")
+        && let Some((index, _)) = machine
+            .bus
+            .rv64_devices
+            .mpfs_sd
+            .iter()
+            .enumerate()
+            .find(|(_, controller)| controller.name == "mmc")
+    {
+        let entry = entries.iter().find(|entry| entry.name == "mmc").unwrap();
+        check_mapping(&machine, entry, rv64_mpfs_sd::FIRE_MEDIA_SELECT, 4)?;
+        machine.bus.rv64_devices.mpfs_sd[index].select_sd(false);
+        machine.bus.rv64_devices.fire_media_controller = Some(index);
     }
     Ok(machine)
 }

@@ -19,6 +19,7 @@ pub struct Devices {
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
     pub read_only_words: Vec<(u32, u32)>,
+    pub fire_media_controller: Option<usize>,
     pub mpfs_sd: Vec<rv64_mpfs_sd::Controller>,
     pub mpfs_ddr: Vec<DdrMock>,
     pub mpfs_sysreg: Option<Sysreg>,
@@ -194,6 +195,12 @@ impl Devices {
         {
             return Some(*value);
         }
+        if width == 4
+            && address == rv64_mpfs_sd::FIRE_MEDIA_SELECT
+            && let Some(index) = self.fire_media_controller
+        {
+            return Some(u32::from(self.mpfs_sd[index].sd_selected()));
+        }
         for sd in &mut self.mpfs_sd {
             if let Some(value) = sd.read(address, width) {
                 return Some(value);
@@ -247,6 +254,15 @@ impl Devices {
                 .iter()
                 .any(|&(word, _)| word == address)
         {
+            return Some(Ok(()));
+        }
+        if width == 4
+            && address == rv64_mpfs_sd::FIRE_MEDIA_SELECT
+            && let Some(index) = self.fire_media_controller
+        {
+            if value <= 1 {
+                self.mpfs_sd[index].select_sd(value == 1);
+            }
             return Some(Ok(()));
         }
         for sd in &mut self.mpfs_sd {

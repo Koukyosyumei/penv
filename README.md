@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナーと eMMC 選択まで到達。公開 SD イメージの 1 セクター読み出しも確認。SD 起動と Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC 初期化まで到達。別のゲストプローブで公開 SD イメージのカード識別と 1 セクター読み出しを確認。SD 起動と Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -318,14 +318,18 @@ Cadence GEM の Network Status は、両方のバスエイリアスで管理イ�
 
 #### Fire の SD イメージ接続
 
-`SdCardFromFile $image mmc 0x100000000` を MPFS SD コントローラーへの読み出し専用の接続として実装しました。カード容量の検証、Present State の挿入状態、CMD0・CMD8 と単一セクターの CMD17 PIO 読み出し、完了ステータスの W1C を実装しています。容量末尾までのファイルに含まれない領域は 0 を返します。主 IRQ は REPL の PLIC 入力に接続します。書き込みと永続化、DMA、カード初期化のコマンド一式、WakeupIRQ は残課題です。
+`SdCardFromFile $image mmc 0x100000000` を MPFS SD コントローラーへの読み出し専用の接続として実装しました。SDHC/SDXC の容量検証、Present State の挿入状態、CMD0・CMD8・CMD55/ACMD41・CMD2/3/7/9/13/16 と単一セクターの CMD17 PIO 読み出し、完了ステータスの W1C を実装しています。容量末尾までのファイルに含まれない領域は 0 を返します。主 IRQ は REPL の PLIC 入力に接続します。書き込みと永続化、DMA、カード初期化のコマンド一式、WakeupIRQ は残課題です。
 
 ```sh
 PENV_FIRE_SD_IMAGE="$(find "$fire_assets" -maxdepth 1 -name 'sdcard.img-s_*')" \
   cargo test --test cli polarfire_resc_reads_a_sector_from_an_attached_sd_image
 ```
 
-公開 SD イメージの先頭 512 バイトをゲストの CMD17 と UART 経由で取り出し、ファイルと一致することを確認しました。上流 RESC は `SdCardFromFile` を解析して次の未対応コマンド `SetGlobalQuantum` で停止します。完全な起動にはファブリックの SD/eMMC 選択と GPIO ボタンの配線、残りの SD コマンドとデータ転送、RESC のシンボルロードと CPU フックが必要です。Fire の U-Boot と Buildroot ログインは未到達です。
+ゲストのプローブがファブリック選択レジスター `0x4fffff00` に 1 を書くと SD カードが見えるようになります。リセット直後は eMMC 側で、eMMC の媒体は未実装です。プローブにより OCR、4 GiB の CSD、CMD17 の先頭 512 バイトとステータスクリアを確認しました。上流 RESC は `SdCardFromFile` を解析して次の未対応コマンド `SetGlobalQuantum` で停止します。[HSS のメディア選択](https://github.com/polarfire-soc/hart-software-services/blob/5e3f86966381ee9acb94969d0e18ad666f272a30/baremetal/polarfire-soc-bare-metal-library/src/platform/mpfs_hal/common/nwc/mss_io.c)
+
+Fire の直接起動を `--max-steps 400000000` で実行すると、MPFS SD ホストの初期設定を通過します。eMMC 未接続のため選択は失敗し、HSS は CLI の待機を経て `Initializing Mi-V IHC` まで進みます。次に `pc=0x0a01353e` からの `0x50000004` 書き込みでストアアクセス例外になります。Mi-V IHC、GPIO ボタンの配線、残りの SD コマンドと DMA、RESC のシンボルロードと CPU フックが残っています。Fire の U-Boot と Buildroot ログインは未到達です。[Fire の IHC アドレス定義](https://github.com/polarfire-soc/hart-software-services/blob/5e3f86966381ee9acb94969d0e18ad666f272a30/boards/mpfs-beaglev-fire/drivers_config/fpga_ip/miv_ihc/miv_ihc_add_mapping.h)
+
+継続作業では `cargo test` 68 件が通過しました。StarLight の上流対応 4 ケースを公開ファームウェアで再実行し、両ゲストの root ログイン、56 バイトと 3200 バイトの ping 各 10/10 応答、`eth0` IRQ の A 側 3 → 61 と B 側 3 → 60 を確認しました。外部 PMP の 3 ケースは残っています。RV64 virt は OpenSBI v1.6、Linux 5.10.6、UART ログインを経て `id -u` が `0`、`uname -m` が `riscv64` を返しました。
 
 ## Cortex-M0 / Cortex-M0+
 
