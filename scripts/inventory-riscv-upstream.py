@@ -82,6 +82,8 @@ def robot_cases(root, isa, act):
                             basis += "; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:Zabha|ZacasZabha)/[^/]+\.elf", portable):
                             basis += "; fixed ISA omits Zabha; reduced-ISA Zabha/Zacas ELF passed"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zmmul/[^/]+\.elf", portable):
+                            basis += "; ELF passed both standalone Zmmul and fixed ISA with V omitted"
                         if portable == "spike-rv32-max/elfs/rv32i/Zacas/Zacas-amocas.w-00.elf":
                             basis += "; reduced-ISA Zacas diagnostic passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:F|D|Zcd|Zcf)/[^/]+\.elf", portable):

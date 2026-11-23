@@ -544,6 +544,10 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
+    pub fn set_zmmul(&mut self, enabled: bool) {
+        self.csr.zmmul = enabled;
+    }
+
     pub fn enable_vector_bootstrap(&mut self) {
         self.csr.enable_vector_bootstrap();
     }
@@ -1158,7 +1162,9 @@ impl Hart {
                     .ok_or_else(illegal)?,
             }),
             0x33 => Some(match (funct3, funct7) {
-                (_, 1) if self.csr.m_extension => multiply_divide(funct3, a, b),
+                (_, 1) if self.csr.m_extension || (self.csr.zmmul && funct3 < 4) => {
+                    multiply_divide(funct3, a, b)
+                }
                 (5, 7) if self.zicond => {
                     if b == 0 {
                         0

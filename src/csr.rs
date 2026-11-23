@@ -130,6 +130,7 @@ fn set_counter_half(counter: &mut u64, value: u32, high: bool) {
 pub struct Csr {
     pub hart_id: usize,
     pub m_extension: bool,
+    pub zmmul: bool,
     pub a_extension: bool,
     pub c_extension: bool,
     pub embedded_base: bool,
@@ -170,6 +171,7 @@ impl Default for Csr {
         Self {
             hart_id: 0,
             m_extension: true,
+            zmmul: false,
             a_extension: false,
             c_extension: false,
             embedded_base: false,

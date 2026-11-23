@@ -912,6 +912,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         let mut floating = (false, false, false);
         let mut zicond = false;
         let mut zacas = false;
+        let mut zmmul = false;
         let mut zabha = false;
         let mut smepmp = false;
         let mut sscofpmf = false;
@@ -948,6 +949,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     let mut base = architecture.as_str();
                     zicond = false;
                     zacas = false;
+                    zmmul = false;
                     zabha = false;
                     smepmp = false;
                     sscofpmf = false;
@@ -956,6 +958,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
+                            "zmmul" if !zmmul => zmmul = true,
                             "zabha" if !zabha => zabha = true,
                             "zacas" if !zacas => zacas = true,
                             "sscofpmf" if !sscofpmf => sscofpmf = true,
@@ -1076,7 +1079,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     return Err(entry.error("Zabha requires the RV32 A extension"));
                 }
                 (
-                    multiply,
+                    (multiply, zmmul),
                     atomic,
                     compressed,
                     embedded,
@@ -1109,7 +1112,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             id,
             entry,
             (
-                multiply,
+                (multiply, zmmul),
                 atomic,
                 compressed,
                 embedded,
@@ -1138,6 +1141,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             .unwrap_or(entry.model == "CPU.IbexRiscV32");
         hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic, compressed);
+        hart.set_zmmul(zmmul);
         hart.set_embedded_base(embedded);
         hart.set_zicond(zicond);
         hart.set_zacas(zacas);
@@ -2166,6 +2170,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "xandesbfhcvt"
                     | "zacas"
                     | "zabha"
+                    | "zmmul"
                     | "zfh"
                     | "smepmp"
                     | "sscofpmf"
@@ -2187,7 +2192,7 @@ type RiscvConfig<'a> = (
     usize,
     &'a Entry,
     (
-        bool,
+        (bool, bool),
         bool,
         bool,
         bool,

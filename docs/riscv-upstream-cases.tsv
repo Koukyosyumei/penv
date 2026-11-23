@@ -2453,10 +2453,10 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zksed/Zksed-sm4ks-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zksh/Zksh-sm3p0-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zksh/Zksh-sm3p1-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mul-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulhsu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulhu-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mul-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed both standalone Zmmul and fixed ISA with V omitted
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulh-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed both standalone Zmmul and fixed ISA with V omitted
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulhsu-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed both standalone Zmmul and fixed ISA with V omitted
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulhu-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed both standalone Zmmul and fixed ISA with V omitted
 Renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64		outside	outside	Run Test Case width=64 selects CPU.RiscV64 and the RV64 ELF discovery list
 Renode	tests/unit-tests/riscv-bkb.robot	42	Should Execute Pack Instruction On RV32		target	ported	fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked
 Renode	tests/unit-tests/riscv-bkb.robot	50	Should Execute Pack Instruction On RV64		outside	outside	case passes bitness=64 to its CPU fixture

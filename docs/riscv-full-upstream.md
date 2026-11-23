@@ -882,3 +882,25 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 固定 Robot の最大 ISA 構成では、再試行した 20 件が V の未対応で CPU 作成時に停止しました。その構成には Zabha の指定もありません。各行に縮小構成での結果を追記し、上流等価合格は累計 155 件です。
 
 REPL、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-72d2ea2-YAXBL1/` に保存しました。
+
+### RV32 Zmmul の単独構成と固定 ACT ELF
+
+`Zmmul` を指定した RV32 で MUL、MULH、MULHSU、MULHU を実行できるようにしました。M を指定しない Zmmul 構成では `misa.M` は 0 で、DIV・REM は不正命令になります。既存 M 構成は同じ演算実装を共有します。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zmmul.repl" --artifacts "$evidence/zmmul-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zmmul/*.elf
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 -nostdlib -fuse-ld=lld \
+  -Wl,-T,scripts/firmware/rv32-virt.ld scripts/firmware/rv32-zmmul.S -o "$evidence/probe.elf"
+target/release/penv run --platform "$evidence/zmmul.repl" \
+  --tohost 0x80001000 --max-steps 150 "$evidence/probe.elf"
+```
+
+固定 ACT ELF は変更前に Zmmul の CPU 作成で 4 件とも停止しました。修正後は `rv32ic_zmmul` で全件が完了コード 0 に到達し、補助 ELF でも MUL と DIV・REM の例外を確認しました。固定 ISA から V だけを除いた構成でも 4 件すべて通過しました。Rust テスト 87 件、公開 M 拡張 ELF 16 件、virt の UART・CLINT・PLIC も通過しました。
+
+固定構成そのものを再試行した 4 件は引き続き V の未対応で CPU 作成時に停止します。台帳の 4 行に両診断構成の結果を追記しました。上流等価合格は累計 155 件です。
+
+REPL、実 ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-26cff01-UHp1Hp/` に保存しました。
