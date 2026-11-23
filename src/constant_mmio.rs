@@ -5,6 +5,7 @@ pub struct ConstantMmio {
     pub size: u32,
     values: Vec<(u32, u32)>,
     warn_unhandled: bool,
+    doubleword_only: bool,
 }
 
 impl ConstantMmio {
@@ -40,10 +41,27 @@ impl ConstantMmio {
             size,
             values,
             warn_unhandled,
+            doubleword_only: false,
+        })
+    }
+
+    pub fn doubleword(base: u32, size: u32, value: u32) -> Result<Self, String> {
+        if size < 4 || base % 4 != 0 {
+            return Err("expected an aligned doubleword peripheral range".into());
+        }
+        Ok(Self {
+            base,
+            size,
+            values: vec![(0, value)],
+            warn_unhandled: false,
+            doubleword_only: true,
         })
     }
 
     pub fn offset(&self, address: u32, width: usize) -> Option<u32> {
+        if self.doubleword_only && width != 4 {
+            return None;
+        }
         let offset = address.checked_sub(self.base)?;
         (u64::from(offset) + width as u64 <= u64::from(self.size)).then_some(offset)
     }

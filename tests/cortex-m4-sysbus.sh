@@ -83,3 +83,56 @@ target/release/penv run --platform "$work/command-error.repl" --max-steps 128 \
 diff -u <(printf 'OK\n') "$work/command-error.uart"
 printf 'CommandError: '
 cat "$work/command-error.uart"
+
+cat >"$work/registration.S" <<'ASM'
+.syntax unified
+.thumb
+.section .vectors,"a"
+.word 0x380, reset
+.text
+.global reset
+.thumb_func
+reset:
+    movw r0, #1000
+    ldr r1, [r0]
+    movw r2, #0x666
+    cmp r1, r2
+    bne done
+#ifdef MULTIPLE
+    movw r0, #2000
+    ldr r1, [r0]
+    adds r2, #1
+    cmp r1, r2
+    bne done
+    movw r0, #3000
+    ldr r1, [r0]
+    adds r2, #1
+    cmp r1, r2
+    bne done
+#endif
+    ldr r0, =0x40000000
+    movs r1, #'K'
+    strb r1, [r0]
+done:
+    bkpt #0
+ASM
+for fixture in single multiple; do
+    head -n 4 "$work/bus.repl" | sed 's/size: 0x1000/size: 0x380/' >"$work/$fixture.repl"
+    flags=()
+    if [[ $fixture == single ]]; then
+        echo 'peri1: Mocks.DoubleWordPeripheral @ sysbus <1000, +1000> { value: 0x666 }' >>"$work/$fixture.repl"
+    else
+        cat >>"$work/$fixture.repl" <<'REPL'
+peri1: Mocks.DoubleWordPeripheral @ sysbus <1000, +100> { value: 0x666 }
+peri2: Mocks.DoubleWordPeripheral @ sysbus <2000, +100> { value: 0x667 }
+peri3: Mocks.DoubleWordPeripheral @ sysbus <3000, +100> { value: 0x668 }
+REPL
+        flags+=(-DMULTIPLE)
+    fi
+    "${CLANG:-clang}" --target=arm-none-eabi -mcpu=cortex-m4 -mthumb -nostdlib -fuse-ld=lld \
+        "${flags[@]}" -Wl,-T,"$work/bus.ld" "$work/registration.S" -o "$work/$fixture.elf"
+    target/release/penv run --platform "$work/$fixture.repl" --max-steps 128 \
+        "$work/$fixture.elf" >"$work/$fixture.uart"
+    diff -u <(printf K) "$work/$fixture.uart"
+    printf 'Doubleword registration (%s): OK\n' "$fixture"
+done

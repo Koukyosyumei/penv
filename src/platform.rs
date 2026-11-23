@@ -407,6 +407,20 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
+            "Mocks.DoubleWordPeripheral" => {
+                let props = keys(entry, &["value"])?;
+                let [(_, value)] = props.as_slice() else {
+                    return Err(entry.error("expected doubleword value"));
+                };
+                let (base, size) = entry.bus_range()?;
+                let value = number(value).map_err(|e| entry.error(&e))?;
+                let peripheral =
+                    ConstantMmio::doubleword(base, size, value).map_err(|e| entry.error(&e))?;
+                machine
+                    .bus
+                    .map_constant_mmio(peripheral)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Mocks.CommandErrorPeripheral" => {
                 keys(entry, &[])?;
                 let (base, size) = entry.bus_range()?;

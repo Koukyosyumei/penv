@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 48 | 0 | 169 | 7 |
-| **合計** | **730** | **126** | **0** | **604** | **244** |
+| Infrastructure | 217 | 50 | 0 | 167 | 7 |
+| **合計** | **730** | **128** | **0** | **602** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 604 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 602 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -742,3 +742,32 @@ cargo test renode_find_byte_pattern
 上記の未登録アクセス検証手順で `work=target/stm32f407-command-error` に設定すると
 再現できます。フォールト検証の実行ログは `faults.log`、ほかのログは手順と同じ名前で、
 各終了状態は対応する `.status` に記録しています。
+
+### SystemBus の 32 ビット周辺機器登録
+
+固定 Infrastructure の `ShouldFindAfterRegistration` と
+`ShouldFindAfterManyRegistrations` を Cortex-M4 ELF に移植しました。
+`Mocks.DoubleWordPeripheral` を既存の固定値 MMIO と重複検査に接続し、
+上流と同じ十進アドレス、登録サイズ、読み出し順序、応答値を使います。
+各 ELF は全比較が一致したときだけ UART に `K` を出し、スクリプトが完全一致を検査します。
+上流で `Ignore` 指定の登録解除ケースは、動的な登録解除と上流の乱数フィクスチャが必要なため未達です。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+work=target/stm32f407-doubleword-registration
+mkdir -p "$work"
+(
+    run() {
+        local name=$1
+        shift
+        "$@" >"$work/$name.log" 2>&1
+        echo "$?" >"$work/$name.status"
+    }
+    run sysbus-elf tests/cortex-m4-sysbus.sh "$work/elf"
+    run cargo-test cargo test
+    run freertos tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu
+) &
+```
+
+`sysbus-elf.log` には単独登録と複数登録の `OK` が出ます。各 `.status` の期待値は 0 です。
