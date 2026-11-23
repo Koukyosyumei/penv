@@ -8,9 +8,11 @@ use crate::{
     rv64::Rv64,
     sv32::TranslationCache,
     thumb::Thumb,
+    zephyr_boot::BusyWait,
 };
 
 pub const MAX_HARTS: usize = 8;
+pub const VIRTUAL_STEPS_PER_SECOND: u32 = 1_000_000;
 
 pub struct Machine {
     pub bus: Bus,
@@ -46,6 +48,7 @@ pub struct Hart {
     unaligned_accesses: bool,
     zicond: bool,
     pub rv64: Option<Box<Rv64>>,
+    busy_wait: Option<BusyWait>,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -175,6 +178,7 @@ impl Machine {
                 unaligned_accesses: false,
                 zicond: false,
                 rv64: None,
+                busy_wait: None,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -224,6 +228,23 @@ impl Machine {
         Ok(())
     }
 
+    pub fn set_boot_vectors(&mut self, name: &str, address: u32) -> Result<(), String> {
+        self.set_named_vector_table(name, address)
+    }
+
+    pub fn set_zephyr_wait_hooks(
+        &mut self,
+        name: &str,
+        entries: impl Iterator<Item = u32>,
+    ) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_none() {
+            return Err("Zephyr busy-wait hooks currently require Cortex-M".into());
+        }
+        hart.busy_wait = BusyWait::new(entries);
+        Ok(())
+    }
+
     fn named_hart(&mut self, name: &str) -> Result<&mut Hart, String> {
         std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
@@ -240,7 +261,7 @@ impl Machine {
         if address & 0x7f != 0 {
             return Err("VectorTableOffset requires a 128-byte-aligned address".into());
         }
-        *thumb = Thumb::new(Some(address));
+        thumb.set_vector_base(address);
         Ok(())
     }
 
@@ -527,6 +548,10 @@ impl Machine {
             if ethernet_link && self.elapsed_steps % 16_384 == 0 {
                 self.bus.poll_rv64_ethernet();
             }
+            if self.bus.tick_watchdogs() {
+                self.bus.reset_cortex_m_devices();
+                self.primary.reset_cortex_m(&mut self.bus)?;
+            }
             let index = self.next_hart;
             if index == self.secondary.len() {
                 self.next_hart = 0;
@@ -538,6 +563,10 @@ impl Machine {
             } else {
                 &mut self.secondary[index - 1]
             };
+            self.bus.tick_h7_peripherals();
+            if let Some(dwt) = &mut self.bus.dwt {
+                dwt.tick();
+            }
             while self
                 .button_events
                 .front()
@@ -592,7 +621,10 @@ impl Hart {
         let thumb = self.thumb.as_mut().unwrap();
         let (sp, pc) = thumb.reset(bus)?;
         let vectors = thumb.vector_base();
-        *thumb = Thumb::new(Some(vectors));
+        thumb.reset_state();
+        if let Some(wait) = &mut self.busy_wait {
+            wait.reset();
+        }
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
         }
@@ -602,8 +634,10 @@ impl Hart {
         Ok(())
     }
 
-    pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
-        self.thumb = Some(Thumb::new(vectors));
+    pub fn configure_cortex_m(&mut self, vectors: Option<u32>, thumb2: bool) {
+        let mut thumb = Thumb::new(vectors);
+        thumb.thumb2 = thumb2;
+        self.thumb = Some(thumb);
     }
 
     pub fn set_integer_extensions(&mut self, multiply: bool, atomic: bool, compressed: bool) {
@@ -808,6 +842,12 @@ impl Hart {
         if let Some(thumb) = self.thumb.as_mut() {
             bus.advance_stm32_dma(output)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
+            if self.busy_wait.as_mut().is_some_and(BusyWait::waiting) {
+                if let Some(timer) = &mut bus.systick {
+                    timer.tick();
+                }
+                return Ok(Step::Trap);
+            }
             if thumb
                 .service_interrupts(&mut self.pc, &mut self.registers, bus)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?
@@ -816,6 +856,22 @@ impl Hart {
             }
             if thumb.sleeping() {
                 return Ok(Step::Trap);
+            }
+            if let Some(wait) = &mut self.busy_wait
+                && wait.contains(self.pc)
+            {
+                let return_address = self.registers[14];
+                if return_address & 1 == 0 {
+                    return Err(format!(
+                        "invalid Zephyr busy-wait return address {return_address:#010x}"
+                    ));
+                }
+                self.pc = return_address & !1;
+                let delay = self.registers[0];
+                if delay != 0 {
+                    wait.skip(delay);
+                    return Ok(Step::Trap);
+                }
             }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
@@ -852,8 +908,14 @@ impl Hart {
         let plic = bus.tick_plic();
         let mut lines = bus.tick_litex(self.csr.hart_id, elapsed_steps);
         if self.csr.hart_id == 0 {
-            lines |=
-                u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));
+            lines |= u64::from(
+                (u32::from(uart) * EXTERNAL)
+                    | (u32::from(timer) * crate::clint::TIMER)
+                    | bus
+                        .ethernet
+                        .iter()
+                        .fold(0, |lines, device| lines | device.vex_irq()),
+            );
             if self.csr.vex && self.csr.local_irq_mask.is_some() {
                 lines |= u64::from(plic);
             } else {
@@ -869,6 +931,7 @@ impl Hart {
             || bus.timer.is_some()
             || bus.has_litex_irq()
             || bus.has_plic()
+            || !bus.ethernet.is_empty()
             || self.csr.has_injected_interrupts())
             && let Some(target) = self.csr.interrupt(self.pc, pending)
         {
@@ -1132,7 +1195,7 @@ mod tests {
         machine.bus.map_ram(0, 0x400).unwrap();
         machine.bus.map_systick().unwrap();
         machine.bus.map_nvic(0xc0, None).unwrap();
-        machine.primary.configure_cortex_m(Some(0));
+        machine.primary.configure_cortex_m(Some(0), false);
         let mut output = std::io::sink();
         for (address, width, value) in [
             (0, 4, 0x400),

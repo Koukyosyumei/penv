@@ -354,3 +354,76 @@ fn read_at(file: &mut File, offset: u64, bytes: &mut [u8]) -> Result<(), String>
         .and_then(|_| file.read_exact(bytes))
         .map_err(|e| format!("ELF offset {offset:#x}: {e}"))
 }
+
+pub fn find_symbols<'a>(mut file: File, wanted: &[&'a str]) -> Result<Vec<(&'a str, u32)>, String> {
+    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    let mut header = [0; 52];
+    read_at(&mut file, 0, &mut header)?;
+    if header[..7] != *b"\x7fELF\x01\x01\x01" {
+        return Err("expected a little-endian ELF32 image for symbol lookup".into());
+    }
+    let table = u64::from(word(&header, 32));
+    let count = u64::from(half(&header, 48));
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if table < 52 || half(&header, 46) != 40 || table + count * 40 > length {
+        return Err("invalid ELF section table for symbol lookup".into());
+    }
+    let name_capacity = wanted.iter().map(|name| name.len()).max().unwrap_or(0) + 1;
+    let mut name = vec![0; name_capacity];
+    let mut found = Vec::new();
+    for index in 0..count {
+        let mut section = [0; 40];
+        read_at(&mut file, table + index * 40, &mut section)?;
+        if !matches!(word(&section, 4), 2 | 11) {
+            continue;
+        }
+        let symbols = symbol_range(&section, length)?;
+        let section_link = u64::from(word(&section, 24));
+        if word(&section, 36) != 16
+            || (symbols.end - symbols.start) % 16 != 0
+            || section_link >= count
+        {
+            return Err("invalid ELF symbol table".into());
+        }
+        read_at(&mut file, table + section_link * 40, &mut section)?;
+        if word(&section, 4) != 3 {
+            return Err("invalid ELF symbol string table".into());
+        }
+        let strings = symbol_range(&section, length)?;
+        let mut entries = [0; 16 * 128];
+        let mut offset = symbols.start;
+        while offset < symbols.end {
+            let size = (symbols.end - offset).min(entries.len() as u64) as usize;
+            read_at(&mut file, offset, &mut entries[..size])?;
+            let (batch, _) = entries[..size].as_chunks::<16>();
+            for symbol in batch {
+                let name_offset = strings.start + u64::from(word(symbol, 0));
+                if half(symbol, 14) == 0 || name_offset >= strings.end {
+                    continue;
+                }
+                let name_size = (strings.end - name_offset).min(name_capacity as u64) as usize;
+                read_at(&mut file, name_offset, &mut name[..name_size])?;
+                if let Some(end) = name[..name_size].iter().position(|&byte| byte == 0)
+                    && let Some(&requested) = wanted
+                        .iter()
+                        .find(|candidate| candidate.as_bytes() == &name[..end])
+                {
+                    found.push((requested, word(symbol, 4)));
+                }
+            }
+            offset += size as u64;
+        }
+    }
+    Ok(found)
+}
+
+fn symbol_range(section: &[u8; 40], file_length: u64) -> Result<Range<u64>, String> {
+    let start = u64::from(word(section, 16));
+    let end = start + u64::from(word(section, 20));
+    if end > file_length {
+        return Err("ELF symbol section extends past the image".into());
+    }
+    Ok(start..end)
+}

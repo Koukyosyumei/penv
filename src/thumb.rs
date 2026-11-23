@@ -1,8 +1,10 @@
+mod thumb2;
+
 use std::io::Write;
 
 use crate::{
     bus::Bus,
-    nvic::Nvic,
+    nvic::{ActiveExceptions, IRQ_LINES, Nvic},
     systick::{PENDSV, SYSTICK, SysTick},
 };
 
@@ -17,16 +19,21 @@ enum Sleep {
 #[derive(Clone, Default)]
 pub struct Thumb {
     vectors: Option<u32>,
+    pub(crate) thumb2: bool,
+    basepri: u8,
+    faultmask: bool,
+    it_state: u8,
     negative: bool,
     zero: bool,
     carry: bool,
     overflow: bool,
     active_exception: u8,
-    active_exceptions: u64,
+    active_exceptions: ActiveExceptions,
     interrupts_masked: bool,
     sleep: Sleep,
     event: bool,
-    pending: u64,
+    pending: [u32; IRQ_LINES.div_ceil(32)],
+    system_pending: u64,
     thread_uses_psp: bool,
     msp: u32,
     psp: u32,
@@ -40,8 +47,20 @@ impl Thumb {
         }
     }
 
+    pub fn reset_state(&mut self) {
+        *self = Self {
+            vectors: self.vectors,
+            thumb2: self.thumb2,
+            ..Self::default()
+        };
+    }
+
     pub fn vector_base(&self) -> u32 {
         self.vectors.unwrap_or(0)
+    }
+
+    pub fn set_vector_base(&mut self, base: u32) {
+        self.vectors = Some(base);
     }
 
     pub fn infer_vector_base(&mut self, base: u32) {
@@ -209,6 +228,8 @@ impl Thumb {
                 }
             }
             16 => u32::from(self.interrupts_masked),
+            17 if self.thumb2 => u32::from(self.basepri),
+            19 if self.thumb2 => u32::from(self.faultmask),
             20 => u32::from(self.uses_psp()) << 1,
             _ => return None,
         })
@@ -223,6 +244,14 @@ impl Thumb {
             9 if self.uses_psp() => r[13] = value & !3,
             9 => self.psp = value & !3,
             16 => self.interrupts_masked = value & 1 != 0,
+            17 if self.thumb2 => self.basepri = value as u8,
+            18 if self.thumb2 => {
+                let priority = value as u8;
+                if priority != 0 && (self.basepri == 0 || priority < self.basepri) {
+                    self.basepri = priority;
+                }
+            }
+            19 if self.thumb2 => self.faultmask = value & 1 != 0,
             20 => self.select_thread_stack(value & 2 != 0, r),
             _ => return false,
         }
@@ -253,9 +282,17 @@ impl Thumb {
         }
         let sp = r[13];
         let stack = (sp & !7).wrapping_sub(32);
-        let xpsr = self.apsr() | (1 << 24) | ((sp & 4) << 7) | u32::from(self.active_exception);
+        let it = u32::from(self.it_state);
+        let xpsr = self.apsr()
+            | (1 << 24)
+            | ((sp & 4) << 7)
+            | u32::from(self.active_exception)
+            | ((it & 3) << 25)
+            | ((it & 0xfc) << 8);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        let memory = bus.memory(stack, 32).map_err(|error| error.to_string())?;
+        let memory = bus
+            .guest_memory(stack, 32)
+            .map_err(|error| error.to_string())?;
         for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
             *word = value.to_le_bytes();
         }
@@ -271,7 +308,9 @@ impl Thumb {
                 0xffff_fff1
             };
         }
-        self.active_exceptions |= 1 << exception;
+        bus.clear_reservation(0);
+        self.it_state = 0;
+        self.active_exceptions.insert(exception);
         self.active_exception = exception;
         Ok(handler & !1)
     }
@@ -288,11 +327,13 @@ impl Thumb {
             }
             let [r0, r1, r2, r3, r12, lr, pc, xpsr] = frame;
             let previous = xpsr & 0x1ff;
-            let remaining = self.active_exceptions & !(1 << self.active_exception);
+            let mut remaining = self.active_exceptions;
+            remaining.remove(self.active_exception);
             let valid_mode = if target != 0xffff_fff1 {
-                previous == 0 && remaining == 0
+                previous == 0 && remaining.is_empty()
             } else {
-                previous != 0 && previous < 64 && remaining & (1 << previous) != 0
+                previous != 0
+                    && u8::try_from(previous).is_ok_and(|exception| remaining.contains(exception))
             };
             if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
                 return Err("invalid Cortex-M exception return frame".into());
@@ -310,7 +351,9 @@ impl Thumb {
             }
             r[13] = stack.wrapping_add(32 + ((xpsr >> 7) & 4));
             r[14] = lr;
+            self.faultmask = false;
             self.set_apsr(xpsr);
+            self.it_state = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
             return Ok(pc);
@@ -341,19 +384,26 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<bool, String> {
-        bus.sample_nvic(self.active_exceptions);
+        bus.sample_nvic(&self.active_exceptions);
         if let Some(timer) = bus.systick.as_mut() {
             timer.tick();
         }
-        let pending = bus.nvic.as_ref().map_or(0, Nvic::pending_exceptions)
-            | bus.systick.as_ref().map_or(0, SysTick::pending_exceptions);
-        if pending & !self.pending != 0
-            && bus.nvic.as_ref().is_some_and(Nvic::send_event_on_pending)
-        {
+        let pending = bus
+            .nvic
+            .as_ref()
+            .map_or(Default::default(), Nvic::pending_exceptions);
+        let system_pending = bus.systick.as_ref().map_or(0, SysTick::pending_exceptions);
+        let newly_pending = pending
+            .iter()
+            .zip(self.pending)
+            .any(|(next, previous)| next & !previous != 0)
+            || system_pending & !self.system_pending != 0;
+        if newly_pending && bus.nvic.as_ref().is_some_and(Nvic::send_event_on_pending) {
             self.signal_event();
         }
         self.pending = pending;
-        if self.interrupts_masked && self.sleep != Sleep::Interrupt {
+        self.system_pending = system_pending;
+        if self.faultmask || (self.interrupts_masked && self.sleep != Sleep::Interrupt) {
             return Ok(false);
         }
         let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
@@ -365,14 +415,14 @@ impl Thumb {
         let mut selected = bus
             .nvic
             .as_ref()
-            .and_then(|nvic| nvic.next_irq(self.active_exceptions))
+            .and_then(|nvic| nvic.next_irq(&self.active_exceptions))
             .map(|(line, priority)| (16 + line, priority));
         for exception in [PENDSV, SYSTICK] {
             if bus
                 .systick
                 .as_ref()
                 .is_some_and(|timer| timer.pending(exception))
-                && self.active_exceptions & (1 << exception) == 0
+                && !self.active_exceptions.contains(exception)
             {
                 let candidate = (exception, priority(exception));
                 if selected.is_none_or(|(number, priority)| {
@@ -382,9 +432,10 @@ impl Thumb {
                 }
             }
         }
-        if let Some((exception, _)) =
-            selected.filter(|(_, priority)| u16::from(*priority) < current_priority)
-        {
+        if let Some((exception, _)) = selected.filter(|(_, priority)| {
+            u16::from(*priority) < current_priority
+                && (self.basepri == 0 || *priority < self.basepri)
+        }) {
             self.sleep = Sleep::Running;
             if self.interrupts_masked {
                 return Ok(false);
@@ -395,10 +446,102 @@ impl Thumb {
             } else {
                 bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
             }
-            self.pending &= !(1 << exception);
+            if exception < 16 {
+                self.system_pending &= !(1 << exception);
+            } else {
+                let irq = usize::from(exception - 16);
+                self.pending[irq / 32] &= !(1 << (irq % 32));
+            }
             return Ok(true);
         }
         Ok(false)
+    }
+
+    fn stack_transfer(
+        &mut self,
+        mut mask: u32,
+        pop: bool,
+        next: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Result<(), String> {
+        let bytes = mask.count_ones() * 4;
+        let sp = r[13];
+        if sp & 3 != 0 {
+            return Err(format!("unaligned stack pointer {sp:#010x}"));
+        }
+        if pop {
+            let mut restored = *r;
+            let mut target = None;
+            let mut address = sp;
+            while mask != 0 {
+                let register = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                let value = bus
+                    .read_ram::<4>(address)
+                    .map_err(|error| error.to_string())?;
+                if register == 15 {
+                    target = Some(value);
+                } else {
+                    restored[register] = value;
+                }
+                address = address.wrapping_add(4);
+            }
+            restored[13] = sp.wrapping_add(bytes);
+            if let Some(target) = target {
+                *next = self.branch(target, &mut restored, bus)?;
+            }
+            *r = restored;
+        } else {
+            let new_sp = sp.wrapping_sub(bytes);
+            let stack = bus
+                .guest_memory(new_sp, bytes as usize)
+                .map_err(|error| error.to_string())?;
+            for word in stack.as_chunks_mut::<4>().0 {
+                let register = mask.trailing_zeros() as usize;
+                mask &= mask - 1;
+                *word = r[register].to_le_bytes();
+            }
+            r[13] = new_sp;
+        }
+        Ok(())
+    }
+
+    fn allows_unaligned(&self, bus: &Bus) -> bool {
+        self.thumb2
+            && bus
+                .nvic
+                .as_ref()
+                .is_none_or(|nvic| !nvic.unaligned_access_traps())
+    }
+
+    fn read_data<const N: usize>(
+        &self,
+        bus: &mut Bus,
+        address: u32,
+    ) -> Result<u32, crate::bus::BusError> {
+        if address as usize & (N - 1) != 0 && self.allows_unaligned(bus) {
+            bus.read_unaligned_ram::<N>(address)
+        } else {
+            bus.read::<N>(address)
+        }
+    }
+
+    fn write_data(
+        &self,
+        bus: &mut Bus,
+        address: u32,
+        width: usize,
+        value: u32,
+        output: &mut impl Write,
+    ) -> Result<(), crate::bus::BusError> {
+        if address as usize & (width - 1) != 0 && self.allows_unaligned(bus) {
+            bus.guest_memory(address, width)?
+                .copy_from_slice(&value.to_le_bytes()[..width]);
+            Ok(())
+        } else {
+            bus.write(address, width, value, output)
+        }
     }
 
     pub fn step(
@@ -410,6 +553,20 @@ impl Thumb {
     ) -> Result<bool, String> {
         let inst = bus.read_ram::<2>(*pc).map_err(|error| error.to_string())?;
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
+        let in_it = self.it_state != 0;
+        let flags_before = self.apsr();
+        if in_it {
+            let state = self.it_state;
+            self.it_state = if state & 7 == 0 {
+                0
+            } else {
+                (state & 0xe0) | ((state << 1) & 0x1f)
+            };
+            if !self.condition(u32::from(state >> 4)) {
+                *pc = pc.wrapping_add(if inst >= 0xe800 { 4 } else { 2 });
+                return Ok(true);
+            }
+        }
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);
         let rd = (inst & 7) as usize;
@@ -505,8 +662,9 @@ impl Thumb {
             }
             0x4800..=0x4fff => {
                 let address = (architectural_pc & !3).wrapping_add((inst & 0xff) << 2);
-                r[((inst >> 8) & 7) as usize] =
-                    bus.read::<4>(address).map_err(|error| error.to_string())?;
+                r[((inst >> 8) & 7) as usize] = self
+                    .read_data::<4>(bus, address)
+                    .map_err(|error| error.to_string())?;
             }
             0x5000..=0x5fff => {
                 let offset = ((inst >> 6) & 7) as usize;
@@ -514,13 +672,13 @@ impl Thumb {
                 let operation = (inst >> 9) & 7;
                 if operation < 3 {
                     let width = [4, 2, 1][operation as usize];
-                    bus.write(address, width, r[rd], output)
+                    self.write_data(bus, address, width, r[rd], output)
                         .map_err(|error| error.to_string())?;
                 } else {
                     let value = match operation {
-                        3 | 6 => bus.read::<1>(address),
-                        5 | 7 => bus.read::<2>(address),
-                        _ => bus.read::<4>(address),
+                        3 | 6 => self.read_data::<1>(bus, address),
+                        5 | 7 => self.read_data::<2>(bus, address),
+                        _ => self.read_data::<4>(bus, address),
                     }
                     .map_err(|error| error.to_string())?;
                     r[rd] = match operation {
@@ -538,13 +696,13 @@ impl Thumb {
                 };
                 let address = r[rn].wrapping_add(((inst >> 6) & 31) * width);
                 if inst & 0x800 == 0 {
-                    bus.write(address, width as usize, r[rd], output)
+                    self.write_data(bus, address, width as usize, r[rd], output)
                         .map_err(|error| error.to_string())?;
                 } else {
                     r[rd] = match width {
-                        1 => bus.read::<1>(address),
-                        2 => bus.read::<2>(address),
-                        _ => bus.read::<4>(address),
+                        1 => self.read_data::<1>(bus, address),
+                        2 => self.read_data::<2>(bus, address),
+                        _ => self.read_data::<4>(bus, address),
                     }
                     .map_err(|error| error.to_string())?;
                 }
@@ -553,10 +711,12 @@ impl Thumb {
                 let register = ((inst >> 8) & 7) as usize;
                 let address = r[13].wrapping_add((inst & 0xff) << 2);
                 if inst & 0x800 == 0 {
-                    bus.write(address, 4, r[register], output)
+                    self.write_data(bus, address, 4, r[register], output)
                         .map_err(|error| error.to_string())?;
                 } else {
-                    r[register] = bus.read::<4>(address).map_err(|error| error.to_string())?;
+                    r[register] = self
+                        .read_data::<4>(bus, address)
+                        .map_err(|error| error.to_string())?;
                 }
             }
             0xa000..=0xafff => {
@@ -575,51 +735,25 @@ impl Thumb {
                     r[13].wrapping_sub(bytes)
                 };
             }
+            0xb100..=0xbbff if self.thumb2 && inst & 0xf500 == 0xb100 => {
+                if (r[rd] != 0) == (inst & 0x800 != 0) {
+                    let offset = ((inst & 0x200) >> 3) | ((inst & 0xf8) >> 2);
+                    next = architectural_pc.wrapping_add(offset);
+                }
+            }
             0xb400..=0xb5ff | 0xbc00..=0xbdff if inst & 0x1ff != 0 => {
                 let pop = inst & 0x800 != 0;
                 let mut mask = inst & 0xff;
                 if inst & 0x100 != 0 {
                     mask |= 1 << if pop { 15 } else { 14 };
                 }
-                let bytes = mask.count_ones() * 4;
-                let sp = r[13];
-                if sp & 3 != 0 {
-                    return Err(format!("unaligned stack pointer {sp:#010x}"));
-                }
-                if pop {
-                    let mut restored = *r;
-                    let mut target = None;
-                    let mut address = sp;
-                    while mask != 0 {
-                        let register = mask.trailing_zeros() as usize;
-                        mask &= mask - 1;
-                        let value = bus
-                            .read_ram::<4>(address)
-                            .map_err(|error| error.to_string())?;
-                        if register == 15 {
-                            target = Some(value);
-                        } else {
-                            restored[register] = value;
-                        }
-                        address = address.wrapping_add(4);
-                    }
-                    restored[13] = sp.wrapping_add(bytes);
-                    if let Some(target) = target {
-                        next = self.branch(target, &mut restored, bus)?;
-                    }
-                    *r = restored;
-                } else {
-                    let new_sp = sp.wrapping_sub(bytes);
-                    let stack = bus
-                        .memory(new_sp, bytes as usize)
-                        .map_err(|error| error.to_string())?;
-                    for word in stack.as_chunks_mut::<4>().0 {
-                        let register = mask.trailing_zeros() as usize;
-                        mask &= mask - 1;
-                        *word = r[register].to_le_bytes();
-                    }
-                    r[13] = new_sp;
-                }
+                self.stack_transfer(mask, pop, &mut next, r, bus)?;
+            }
+            0xb661 | 0xb671 if self.thumb2 => self.faultmask = inst & 0x10 != 0,
+            0xb663 | 0xb673 if self.thumb2 => {
+                let masked = inst & 0x10 != 0;
+                self.interrupts_masked = masked;
+                self.faultmask = masked;
             }
             0xb662 => self.interrupts_masked = false, // cpsie i
             0xb672 => self.interrupts_masked = true,  // cpsid i
@@ -649,6 +783,9 @@ impl Thumb {
             }
             0xbf30 => self.sleep = Sleep::Interrupt,
             0xbf40 => self.signal_event(),
+            0xbf01..=0xbfef if self.thumb2 && !in_it && inst & 15 != 0 => {
+                self.it_state = inst as u8;
+            }
             0xc000..=0xcfff if inst & 0xff != 0 => {
                 let registers = inst & 0xff;
                 let base_register = ((inst >> 8) & 7) as usize;
@@ -676,7 +813,7 @@ impl Thumb {
                         return Err(unsupported());
                     }
                     let memory = bus
-                        .memory(address, count as usize * 4)
+                        .guest_memory(address, count as usize * 4)
                         .map_err(|error| error.to_string())?;
                     for (word, register) in memory.as_chunks_mut::<4>().0.iter_mut().zip(selected) {
                         *word = r[register].to_le_bytes();
@@ -701,7 +838,8 @@ impl Thumb {
             }
             0xf000..=0xf7ff => {
                 let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
-                if low & 0xd000 == 0xd000 {
+                let link = low & 0xd000 == 0xd000;
+                if link || (self.thumb2 && low & 0xd000 == 0x9000) {
                     let sign = (inst >> 10) & 1;
                     let i1 = 1 ^ (((low >> 13) & 1) ^ sign);
                     let i2 = 1 ^ (((low >> 11) & 1) ^ sign);
@@ -711,11 +849,30 @@ impl Thumb {
                         | ((inst & 0x3ff) << 12)
                         | ((low & 0x7ff) << 1);
                     let offset = (((offset << 7) as i32) >> 7) as u32;
-                    r[14] = architectural_pc | 1;
+                    if link {
+                        r[14] = architectural_pc | 1;
+                    }
                     next = architectural_pc.wrapping_add(offset);
+                } else if self.thumb2 && low & 0xd000 == 0x8000 && (inst >> 6) & 15 < 14 {
+                    let offset = ((inst & 0x400) << 10)
+                        | ((low & 0x800) << 8)
+                        | ((low & 0x2000) << 5)
+                        | ((inst & 0x3f) << 12)
+                        | ((low & 0x7ff) << 1);
+                    if self.condition((inst >> 6) & 15) {
+                        next =
+                            architectural_pc.wrapping_add((((offset << 11) as i32) >> 11) as u32);
+                    } else {
+                        next = architectural_pc;
+                    }
+                } else if self.thumb2 && self.modified_immediate(inst, low, r) {
+                    next = architectural_pc;
                 } else {
+                    next = architectural_pc;
                     let sysm = low & 0xff;
                     match (inst, low) {
+                        (0xf3bf, 0x8f2f) if self.thumb2 => bus.clear_reservation(0),
+                        (0xf3bf, 0x8f40..=0x8f5f) if self.thumb2 => {}
                         (0xf3bf, 0x8f4f | 0x8f5f | 0x8f6f) => {
                             // Bus operations execute synchronously and instruction fetch reads RAM.
                         }
@@ -734,12 +891,34 @@ impl Thumb {
                                 return Err(unsupported());
                             }
                         }
+                        _ if self.thumb2 => {
+                            self.execute_thumb2(inst, low, &mut next, r, bus, output)?
+                        }
                         _ => return Err(unsupported()),
                     }
-                    next = architectural_pc;
+                }
+            }
+            0xe800..=0xefff | 0xf800..=0xffff if self.thumb2 => {
+                let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
+                next = architectural_pc;
+                if matches!(inst, 0xe92d | 0xe8bd)
+                    && low.count_ones() >= 2
+                    && low & (1 << 13) == 0
+                    && (low & (1 << 15) == 0 || (inst == 0xe8bd && low & (1 << 14) == 0))
+                {
+                    self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
+                } else {
+                    self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
                 }
             }
             _ => return Err(unsupported()),
+        }
+        if in_it
+            && inst < 0x4400
+            && !(matches!(inst, 0x2800..=0x2fff)
+                || (matches!(inst, 0x4000..=0x43ff) && matches!((inst >> 6) & 15, 8 | 10 | 11)))
+        {
+            self.set_apsr(flags_before);
         }
         *pc = next;
         Ok(true)
@@ -1295,7 +1474,10 @@ mod wait_tests {
             assert!(thumb.sleeping());
             assert_eq!(bus.read_ram::<4>(TARGET).unwrap(), 0);
 
-            bus.nvic.as_mut().unwrap().set_line(5, true, 0);
+            bus.nvic
+                .as_mut()
+                .unwrap()
+                .set_line(5, true, &ActiveExceptions::default());
             assert!(
                 !thumb
                     .service_interrupts(&mut pc, &mut registers, &mut bus)

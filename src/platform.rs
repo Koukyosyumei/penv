@@ -1598,7 +1598,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             machine.bus.set_nvic_name(controller.name.clone());
         }
         machine.primary.name = Some(entry.name.clone());
-        machine.primary.configure_cortex_m(vectors);
+        machine.primary.configure_cortex_m(vectors, false);
         return Ok(machine);
     }
     if let Some(nvic) = nvic {

@@ -16,6 +16,7 @@ pub struct SysTick {
     pending: bool,
     pendsv_pending: bool,
     frequency: Option<u32>,
+    steps_per_second: u64,
     phase: u64,
     clock_gated: bool,
     counting: bool,
@@ -31,6 +32,7 @@ impl Default for SysTick {
             pending: false,
             pendsv_pending: false,
             frequency: None,
+            steps_per_second: CORTEX_M_STEP_HZ,
             phase: 0,
             clock_gated: false,
             counting: false,
@@ -50,6 +52,7 @@ impl SysTick {
     pub fn reset(&mut self) {
         *self = Self {
             frequency: self.frequency,
+            steps_per_second: self.steps_per_second,
             clock_gated: self.clock_gated,
             ..Self::default()
         };
@@ -60,6 +63,10 @@ impl SysTick {
         self.phase = 0;
     }
 
+    pub fn set_step_rate(&mut self, steps_per_second: u32) {
+        self.steps_per_second = u64::from(steps_per_second);
+    }
+
     pub fn set_clocked(&mut self, clocked: bool) {
         self.clock_gated = !clocked;
     }
@@ -68,30 +75,29 @@ impl SysTick {
         if self.clock_gated || !self.counting {
             return;
         }
-        if let Some(frequency) = self.frequency {
+        let cycles = if let Some(frequency) = self.frequency {
             self.phase += u64::from(frequency);
-            while self.phase >= CORTEX_M_STEP_HZ && self.counting {
-                self.phase -= CORTEX_M_STEP_HZ;
-                self.cycle();
-            }
+            let cycles = self.phase / self.steps_per_second;
+            self.phase %= self.steps_per_second;
+            cycles as u32
         } else {
-            self.cycle();
-        }
-    }
-
-    fn cycle(&mut self) {
+            1
+        };
         if self.current == 0 {
             return;
         }
-        self.current -= 1;
-        if self.current == 0 {
-            self.count_flag = true;
-            self.pending |= self.control & 2 != 0;
-            self.current = self.reload;
-            self.counting = self.reload != 0;
-            if !self.counting {
-                self.phase = 0;
-            }
+        if cycles < self.current {
+            self.current -= cycles;
+            return;
+        }
+        self.count_flag = true;
+        self.pending |= self.control & 2 != 0;
+        if self.reload == 0 {
+            self.current = 0;
+            self.counting = false;
+            self.phase = 0;
+        } else {
+            self.current = self.reload - ((cycles - self.current) % self.reload);
         }
     }
 

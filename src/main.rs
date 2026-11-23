@@ -1,11 +1,18 @@
 mod bus;
 mod clint;
 mod compressed;
+mod constant_mmio;
 mod csr;
+mod designware_usb;
+mod dwt;
+mod ethernet;
 mod ethernet_switch;
+mod iis2mdc;
 mod image;
+mod image64;
 mod litex;
 mod litex_eth;
+mod litex_ethernet;
 mod litex_flash;
 mod litex_i2c;
 mod litex_i2s;
@@ -13,19 +20,19 @@ mod litex_panel;
 mod litex_sd;
 mod litex_tftp;
 mod litex_video;
-mod image64;
 mod machine;
+mod mii_phy;
 mod monitor;
 mod murax;
+mod network_monitor;
+mod network_platform;
+mod network_repl;
+mod network_resc;
 mod ns16550;
 mod nvic;
 mod platform;
 mod plic;
 mod pmp;
-mod stm32_adc;
-mod stm32_can;
-mod stm32_crc;
-mod stm32_dma;
 mod rv64;
 mod rv64_devices;
 mod rv64_ethernet;
@@ -39,20 +46,55 @@ mod rv64_platform;
 mod rv64_priv;
 mod rv64_starfive;
 mod rv64_vm;
+mod simulation;
+mod stm32_adc;
+mod stm32_can;
+mod stm32_crc;
+mod stm32_dma;
+mod stm32_ethernet;
 mod stm32_exti;
 mod stm32_flash;
 mod stm32_gpio;
 mod stm32_gpio_board;
 mod stm32_i2c;
+mod stm32_iwdg;
 mod stm32_rcc;
 mod stm32_rtc;
 mod stm32_spi;
 mod stm32_timer;
 mod stm32_uart;
+mod stm32h7_adc;
+mod stm32h7_adc_dma;
+mod stm32h7_adc_platform;
+mod stm32h7_bdma;
+mod stm32h7_board_platform;
+mod stm32h7_crypto;
+mod stm32h7_dma2d;
+mod stm32h7_dsi;
+mod stm32h7_ethernet;
+mod stm32h7_exti;
+mod stm32h7_fdcan;
+mod stm32h7_flash;
+mod stm32h7_gpio;
+mod stm32h7_gpio_platform;
+mod stm32h7_hsem;
+mod stm32h7_i2c;
+mod stm32h7_lptim;
+mod stm32h7_ltdc;
+mod stm32h7_net_control;
+mod stm32h7_qspi;
+mod stm32h7_rng;
+mod stm32h7_rtc;
+mod stm32h7_rtc_platform;
+mod stm32h7_sdmmc;
+mod stm32h7_spi;
+mod stm32h7_timer;
 mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod veml7700;
+mod zephyr_boot;
 
 use std::{
     env,
@@ -115,6 +157,8 @@ Options:
   --tohost ADDRESS  Stop on an odd write to the RV32 test completion word
   --tohost-act ADDRESS  Decode RV32 Sail ACT console and completion writes
   --max-steps N      Stop after N execution steps (default: 10000000)
+  --sd-image PATH    Attach a read-only image to the STM32H7 SDMMC slot
+  --uart-log-dir DIR Save each simulation node UART to a numbered file
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
@@ -212,6 +256,8 @@ fn run() -> Result<ExitCode, String> {
     let mut frame_waits = Vec::new();
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
+    let mut sd_image = None;
+    let mut uart_log_dir = None;
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -245,7 +291,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--framebuffer-out"),
+                | "--asset-dir" | "--framebuffer-out" | "--sd-image" | "--uart-log-dir"),
             ) => {
                 let path = args
                     .next()
@@ -256,6 +302,8 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--platform-root" => &mut platform_root,
+                    "--sd-image" => &mut sd_image,
+                    "--uart-log-dir" => &mut uart_log_dir,
                     "--framebuffer-out" => &mut framebuffer_out,
                     _ => &mut uart_input,
                 };
@@ -579,6 +627,7 @@ fn run() -> Result<ExitCode, String> {
     let mut sd_cards = Vec::new();
     let mut mpfs_buttons = Vec::new();
     let mut halt_hooks = Vec::new();
+    let mut zephyr = zephyr_boot::BootOptions::default();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -589,7 +638,62 @@ fn run() -> Result<ExitCode, String> {
         let root = platform_root
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
-        let boot = monitor::load(&script, root)?;
+        let boot = match monitor::load(script, root) {
+            Ok(boot) if uart_log_dir.is_none() => boot,
+            result => {
+                let mut plan =
+                    network_monitor::Plan::load(script, root).map_err(|error| match result {
+                        Ok(_) => error,
+                        Err(original) => format!("{original}; network RESC: {error}"),
+                    })?;
+                if !plan.is_single_boot() || uart_log_dir.is_some() {
+                    if path.is_some()
+                        || ram_mib.is_some()
+                        || !extra_ram.is_empty()
+                        || clint.is_some()
+                        || harts.is_some()
+                        || mtvec.is_some()
+                        || vex_irq_mask.is_some()
+                        || uart_input.is_some()
+                        || uart_input_at.is_some()
+                        || !uart_events.is_empty()
+                        || framebuffer_out.is_some()
+                        || sd_image.is_some()
+                    {
+                        return Err(
+                            "single-machine overrides cannot be combined with a simulation script"
+                                .into(),
+                        );
+                    }
+                    return simulation::run(
+                        plan,
+                        platform_root.as_deref(),
+                        asset_dir.as_deref(),
+                        max_steps.unwrap_or(10_000_000),
+                        stats,
+                        uart_log_dir.as_deref(),
+                    );
+                }
+                let boot = plan.nodes.pop().unwrap();
+                zephyr = boot.boot.zephyr;
+                let mut common = monitor::Boot::default();
+                common.platform = boot.boot.platform;
+                common.image = boot
+                    .boot
+                    .image
+                    .map(|image| monitor::Asset::new(&image, &boot.source));
+                common.binaries = boot
+                    .boot
+                    .binaries
+                    .into_iter()
+                    .map(|(image, address)| (monitor::Asset::new(&image, &boot.source), address))
+                    .collect();
+                common.boot_pcs = boot.boot.boot_pcs;
+                common.mtvec = boot.boot.mtvec;
+                common.mask = boot.boot.mask;
+                common
+            }
+        };
         if let Some(server) = boot.network.into_tftp()? {
             let file = server.file.resolve(root, asset_dir.as_deref())?;
             let data = fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -668,7 +772,15 @@ fn run() -> Result<ExitCode, String> {
                         .into(),
                 );
                 }
-                platform::load(platform_path, platform_root.as_deref(), stm32f0_console)?
+                platform::load(platform_path, platform_root.as_deref(), stm32f0_console).or_else(
+                    |original| {
+                        if stm32f0_console {
+                            return Err(original);
+                        }
+                        network_repl::load(platform_path, platform_root.as_deref())
+                            .map_err(|error| format!("{original}; network REPL: {error}"))
+                    },
+                )?
             }
             None => {
                 if platform_root.is_some() {
@@ -708,8 +820,9 @@ fn run() -> Result<ExitCode, String> {
                 return Err(format!("unknown analyzer peripheral {analyzer:?}"));
             }
         }
-        if framebuffer_out.is_some() && machine.bus.litex_video.is_none() {
-            return Err("--framebuffer-out requires a LiteX framebuffer".into());
+        if let Some(path) = &sd_image {
+            let image = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            machine.bus.attach_sd_image(image)?;
         }
         for &(base, size) in &silence_ranges {
             machine.bus.map_silencer(base, size)?;
@@ -745,7 +858,8 @@ fn run() -> Result<ExitCode, String> {
                     .attach(path, *capacity)
                     .map_err(|error| format!("{}: {error}", path.display()))?;
             } else {
-                let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+                let file =
+                    File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
                 let card = litex_sd::Card::new(file, *capacity)
                     .map_err(|error| format!("{}: {error}", path.display()))?;
                 machine.bus.attach_litex_sd(name, card)?;
@@ -859,6 +973,7 @@ fn run() -> Result<ExitCode, String> {
             }
             machine.bus.watch_tohost(address, act)?;
         }
+        zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
         machine.validate_entry()?;
         if let Some((local, peer)) = ethernet_loopback {
             machine.bus.connect_rv64_ethernet(local, peer)?;
@@ -938,7 +1053,14 @@ fn run() -> Result<ExitCode, String> {
     let result = if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
         monitor::run(&mut machine, script, &runtime, limit, &mut output)
     } else {
-        run_machine(&mut machine, limit, &mut output, &boot_machine, uart_stdin, uart_stdin_reset)
+        run_machine(
+            &mut machine,
+            limit,
+            &mut output,
+            &boot_machine,
+            uart_stdin,
+            uart_stdin_reset,
+        )
     };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
@@ -972,7 +1094,11 @@ fn run() -> Result<ExitCode, String> {
             .map_err(|error| format!("{}: {error}", device.name))?;
     }
     if let Some(path) = framebuffer_out {
-        machine.bus.capture_litex_framebuffer(&path)?;
+        if machine.bus.litex_video.is_some() {
+            machine.bus.capture_litex_framebuffer(&path)?;
+        } else {
+            machine.bus.capture_ltdc(&path)?;
+        }
     }
     if let Stop::FrameMatched(step) = stop {
         eprintln!("penv: framebuffer matched at step {step}");
@@ -983,6 +1109,12 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.program_counter()
         );
+        for (name, level) in machine.bus.gpio_pwm_led_levels() {
+            eprintln!("{name}={:.2}%", level * 100.0);
+        }
+        for (name, on) in machine.bus.h7_gpio_led_states() {
+            eprintln!("{name}={}", if on { "on" } else { "off" });
+        }
     }
     if let Stop::Tohost(code) = stop {
         eprintln!("penv: tohost exit code {code}");

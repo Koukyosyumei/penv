@@ -401,7 +401,10 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
             continue;
         }
-        if let Some(name) = text.strip_prefix("set ").filter(|name| !name.contains(char::is_whitespace)) {
+        if let Some(name) = text
+            .strip_prefix("set ")
+            .filter(|name| !name.contains(char::is_whitespace))
+        {
             if cursor
                 .next()
                 .is_none_or(|(_, line)| line.trim() != "\"\"\"")
@@ -924,7 +927,11 @@ fn execute(
             // UART output is already connected to stdout.
         }
         ["showAnalyzer", analyzer] if boot.platform.is_some() => {
-            if analyzer.rsplit('.').next().is_some_and(|name| name.starts_with("uart") || name.starts_with("usart")) {
+            if analyzer
+                .rsplit('.')
+                .next()
+                .is_some_and(|name| name.starts_with("uart") || name.starts_with("usart"))
+            {
                 return Ok(());
             }
             boot.video_analyzers.push(
@@ -1116,12 +1123,32 @@ mod tests {
                 );
                 assert_eq!(machine.bus.read::<4>(GPIO + 0x10).unwrap() & 1, 0);
                 assert_eq!(machine.bus.read::<4>(EXTI + 20).unwrap(), 1);
-                machine.bus.sample_nvic(0);
-                assert_eq!(machine.bus.nvic.as_ref().unwrap().next_irq(0), Some((5, 0)));
+                machine
+                    .bus
+                    .sample_nvic(&crate::nvic::ActiveExceptions::default());
+                assert_eq!(
+                    machine
+                        .bus
+                        .nvic
+                        .as_ref()
+                        .unwrap()
+                        .next_irq(&crate::nvic::ActiveExceptions::default()),
+                    Some((5, 0))
+                );
                 machine.bus.nvic.as_mut().unwrap().acknowledge(5);
                 machine.bus.write(EXTI + 20, 4, 1, &mut output).unwrap();
-                machine.bus.sample_nvic(0);
-                assert_eq!(machine.bus.nvic.as_ref().unwrap().next_irq(0), None);
+                machine
+                    .bus
+                    .sample_nvic(&crate::nvic::ActiveExceptions::default());
+                assert_eq!(
+                    machine
+                        .bus
+                        .nvic
+                        .as_ref()
+                        .unwrap()
+                        .next_irq(&crate::nvic::ActiveExceptions::default()),
+                    None
+                );
             }
         }
     }
@@ -1149,7 +1176,7 @@ mod tests {
 
         machine.bus.write(gpio + 0x18, 4, 1, &mut output).unwrap(); // set pin
         machine.bus.write(0, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
-        machine.primary.configure_cortex_m(Some(0));
+        machine.primary.configure_cortex_m(Some(0), false);
         machine.primary.pc = 0;
         machine.primary.registers[..2].copy_from_slice(&[gpio + 0x28, 1]); // clear pin
         let error =
@@ -1252,7 +1279,10 @@ sysbus LoadELF @hss.elf
 "#;
         fs::write(&script, source).unwrap();
         let boot = load(&script, &directory).unwrap();
-        assert_eq!(boot.mpfs_buttons, [("gpio0".into(), "UserButton".into(), true)]);
+        assert_eq!(
+            boot.mpfs_buttons,
+            [("gpio0".into(), "UserButton".into(), true)]
+        );
         assert_eq!(
             boot.halt_hooks,
             [(
@@ -1310,7 +1340,10 @@ sysbus LoadELF @hss.elf
         let root = Path::new("renode");
         let mut boot = Boot::default();
         let mut machine = false;
-        let vars = HashMap::from([("symbols".to_owned(), "@https://example.org/vmlinux".to_owned())]);
+        let vars = HashMap::from([(
+            "symbols".to_owned(),
+            "@https://example.org/vmlinux".to_owned(),
+        )]);
         for command in [
             "emulation SetSeed 0x1",
             "mach create BeagleV",
@@ -1322,11 +1355,27 @@ sysbus LoadELF @hss.elf
             "sysbus LoadBinary @image.fit 0xa0000000",
             "echo \"Script loaded.\"",
         ] {
-            execute(command, &command_words(command).unwrap(), &vars, &mut machine, &mut boot, path, root, 1).unwrap();
+            execute(
+                command,
+                &command_words(command).unwrap(),
+                &vars,
+                &mut machine,
+                &mut boot,
+                path,
+                root,
+                1,
+            )
+            .unwrap();
         }
-        assert_eq!(boot.image.as_ref().map(|asset| asset.value.as_str()), Some("fw_payload.elf"));
+        assert_eq!(
+            boot.image.as_ref().map(|asset| asset.value.as_str()),
+            Some("fw_payload.elf")
+        );
         assert_eq!(boot.binaries.len(), 1);
-        assert_eq!((boot.binaries[0].0.value.as_str(), boot.binaries[0].1), ("image.fit", 0xa000_0000));
+        assert_eq!(
+            (boot.binaries[0].0.value.as_str(), boot.binaries[0].1),
+            ("image.fit", 0xa000_0000)
+        );
     }
 
     #[test]

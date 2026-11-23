@@ -1,5 +1,6 @@
-pub struct Stm32F0Crc {
+pub struct Stm32Crc {
     pub base: u32,
+    pub rcc_bound: bool,
     configurable_poly: bool,
     polynomial: u32,
     initial: u32,
@@ -8,12 +9,14 @@ pub struct Stm32F0Crc {
     state: u32,
 }
 
-impl Stm32F0Crc {
+impl Stm32Crc {
+    pub const MODEL: &str = "CRC.STM32_CRC";
     pub const SIZE: u32 = 0x400;
 
     pub fn new(base: u32, configurable_poly: bool) -> Self {
         Self {
             base,
+            rcc_bound: false,
             configurable_poly,
             polynomial: 0x04c1_1db7,
             initial: u32::MAX,
@@ -24,7 +27,9 @@ impl Stm32F0Crc {
     }
 
     pub fn reset(&mut self) {
+        let rcc_bound = self.rcc_bound;
         *self = Self::new(self.base, self.configurable_poly);
+        self.rcc_bound = rcc_bound;
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -109,7 +114,7 @@ mod tests {
 
     #[test]
     fn supports_crc32_mpeg2_and_crc8_smbus_check_values() {
-        let mut crc = Stm32F0Crc::new(0, true);
+        let mut crc = Stm32Crc::new(0, true);
         crc.write(0, 4, u32::from_be_bytes(*b"1234"));
         crc.write(0, 2, u16::from_be_bytes(*b"56").into());
         for byte in b"789" {
@@ -126,3 +131,5 @@ mod tests {
         assert_eq!(crc.read(0, 1), 0xf4);
     }
 }
+
+pub type Stm32F0Crc = Stm32Crc;

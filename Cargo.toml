@@ -8,3 +8,4 @@ lto = "thin"
 
 [dependencies]
 png = "0.18.1"
+aes = "0.8.4"
