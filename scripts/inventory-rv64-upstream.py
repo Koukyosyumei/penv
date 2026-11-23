@@ -356,6 +356,11 @@ def disposition(path, name, context):
         "Should Extract And Insert Full Width Bit Fields On RV64",
     }:
         return "pass", "Fixed XAndesPerf bit operands, registers and branch PCs verified (rv64-andes-bits.md)"
+    if path.name == "riscv-andestar-v5.robot" and name in {
+        "Should Sign Extend GP Loads On RV64",
+        "Should Preserve Full Width Global Pointer On RV64",
+    }:
+        return "pass", "Fixed XAndesPerf GP memory inputs, destination and next PC verified (rv64-andes-gp.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

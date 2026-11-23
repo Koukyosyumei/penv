@@ -541,6 +541,29 @@ impl Rv64 {
                     .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs))
                     .ok_or(illegal)?,
             ),
+            opcode @ (0x0b | 0x2b) if self.isa.xandesperf => {
+                let function = fields.funct3();
+                let (width, signed, add) = match (opcode, function) {
+                    (0x0b, 0 | 4) => (1, true, false),
+                    (0x0b, 2 | 6) => (1, false, false),
+                    (0x0b, 1 | 5) => (1, false, true),
+                    (0x2b, 1) => (2, true, false),
+                    (0x2b, 5) => (2, false, false),
+                    (0x2b, 2) => (4, true, false),
+                    _ => return Err(illegal),
+                };
+                let address = self.registers[3].wrapping_add(andes_gp_offset(instruction, width));
+                if add {
+                    Some(address)
+                } else {
+                    let value = self.load(bus, address, width)?;
+                    Some(if signed {
+                        sign(value, width as u32 * 8)
+                    } else {
+                        value
+                    })
+                }
+            }
             0x5b if self.isa.xandesperf && matches!(fields.funct3(), 2 | 3) => {
                 Some(andes_bit_field(instruction, lhs, fields.funct3() == 3))
             }
@@ -1022,6 +1045,25 @@ pub(crate) fn ram_read(bus: &Bus, hart: Option<usize>, address: u64, width: usiz
         None => bus.ram64(address, width)?,
     });
     Some(u64::from_le_bytes(bytes))
+}
+
+fn andes_gp_offset(instruction: u32, width: usize) -> u64 {
+    let middle =
+        ((instruction >> 9) & 0x800) | ((instruction >> 5) & 0x7000) | (instruction & 0x18000);
+    let offset = if width == 4 {
+        middle
+            | ((instruction >> 20) & 0x7fc)
+            | ((instruction >> 4) & 0x20000)
+            | ((instruction >> 13) & 0x40000)
+    } else {
+        let byte = if width == 1 {
+            (instruction >> 14) & 1
+        } else {
+            0
+        };
+        middle | ((instruction >> 20) & 0x7fe) | ((instruction >> 14) & 0x20000) | byte
+    };
+    sign(u64::from(offset), if width == 4 { 19 } else { 18 })
 }
 
 fn andes_bit_field(instruction: u32, source: u64, signed: bool) -> u64 {

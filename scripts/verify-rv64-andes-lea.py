@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run fixed RV64 AndeStar LEA and bit operation cases through the Penv CLI."""
+"""Run fixed RV64 AndeStar LEA, bit operation and GP-relative cases through the Penv CLI."""
 
 import argparse
 from pathlib import Path
@@ -70,6 +70,50 @@ def verify_bits(args, platform, tests, step):
     verify(args, platform, case, commands, expected)
 
 
+def gp_word(mnemonic, offset):
+    opcode, function, width = {
+        "nds.lbgp": (0x0b, 0, 1),
+        "nds.lbugp": (0x0b, 2, 1),
+        "nds.addigp": (0x0b, 1, 1),
+        "nds.lhgp": (0x2b, 1, 2),
+        "nds.lhugp": (0x2b, 5, 2),
+        "nds.lwgp": (0x2b, 2, 4),
+    }[mnemonic]
+    word = opcode | 12 << 7 | function << 12
+    word |= (offset & 0x800) << 9 | (offset & 0x7000) << 5 | (offset & 0x18000)
+    if width == 4:
+        word |= (offset & 0x7fc) << 20 | (offset & 0x20000) << 4 | (offset & 0x40000) << 13
+    else:
+        word |= (offset & 0x7fe) << 20 | (offset & 0x20000) << 14
+        if width == 1:
+            word |= (offset & 1) << 14
+    return word
+
+
+def verify_gp(args, platform, tests, step):
+    case = "Should Sign Extend GP Loads On RV64"
+    commands = ["--set-gpr", "cpu@x3:0x80000"]
+    expected = []
+    widths = {"Byte": 1, "Word": 2, "DoubleWord": 4}
+    for mnemonic, access, address, offset, value, rd in fixture_rows(tests[case], "Check GP Load", 5):
+        word = gp_word(mnemonic, int(offset, 0))
+        commands += ["--write-memory", f"{address}:{widths[access]}:{value}",
+                     "--write-memory", f"0x2000:4:{word:#x}", *step,
+                     "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 0))]
+    verify(args, platform, case, commands, expected)
+
+    case = "Should Preserve Full Width Global Pointer On RV64"
+    commands = []
+    expected = []
+    for base, offset, rd in fixture_rows(tests[case], "Check ADDIGP", 3):
+        word = gp_word("nds.addigp", int(offset, 0))
+        commands += ["--set-gpr", f"cpu@x3:{base}", "--write-memory", f"0x2000:4:{word:#x}",
+                     *step, "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 0))]
+    verify(args, platform, case, commands, expected)
+
+
 def fixture_rows(body, keyword, count):
     prefix = keyword.split()
     rows = [cells[len(prefix):] for line in body.splitlines()
@@ -109,6 +153,7 @@ def main():
         verify(args, platform, case, commands, expected)
 
     verify_bits(args, platform, tests, step)
+    verify_gp(args, platform, tests, step)
 
     base = args.logs / "base.repl"
     write_platform(base, "rv64imac")
