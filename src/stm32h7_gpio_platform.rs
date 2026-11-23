@@ -86,10 +86,8 @@ pub fn configure(
         let mut invert = false;
         for (_, text) in &entry.body {
             if let Some(value) = text.strip_prefix("invert:") {
-                invert = value
-                    .trim()
-                    .parse()
-                    .map_err(|_| entry.error("invalid button inversion"))?;
+                invert = crate::platform::boolean_value(value)
+                    .ok_or_else(|| entry.error("invalid button inversion"))?;
             } else if text
                 .strip_prefix("->")
                 .and_then(|wire| wire.split_once('@'))
@@ -124,7 +122,7 @@ pub fn configure(
             [] => false,
             [(_, property)] => property
                 .strip_prefix("invert:")
-                .and_then(|value| value.trim().parse().ok())
+                .and_then(crate::platform::boolean_value)
                 .ok_or_else(|| led.error("expected LED invert property"))?,
             _ => return Err(led.error("unsupported LED properties")),
         };

@@ -585,6 +585,40 @@ fn brace_depth(text: &str) -> i32 {
         .sum()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum SymbolicValue<'a> {
+    Boolean(bool),
+    Reference(&'a str),
+    Enum(Option<&'a str>, &'a str),
+}
+
+fn symbolic_value(value: &str) -> Option<SymbolicValue<'_>> {
+    fn identifier(text: &str) -> bool {
+        let mut chars = text.chars();
+        chars.next().is_some_and(char::is_alphabetic)
+            && chars.all(|c| c.is_alphanumeric() || c == '_')
+    }
+
+    match value.trim() {
+        "true" | "True" => Some(SymbolicValue::Boolean(true)),
+        "false" | "False" => Some(SymbolicValue::Boolean(false)),
+        reference if identifier(reference) => Some(SymbolicValue::Reference(reference)),
+        value => {
+            let (family, member) = value.split_once('.')?;
+            (identifier(member) && (family.is_empty() || identifier(family))).then_some(
+                SymbolicValue::Enum((!family.is_empty()).then_some(family), member),
+            )
+        }
+    }
+}
+
+pub(crate) fn boolean_value(value: &str) -> Option<bool> {
+    match symbolic_value(value)? {
+        SymbolicValue::Boolean(value) => Some(value),
+        _ => None,
+    }
+}
+
 fn property_key(text: &str) -> Option<&str> {
     let (key, value) = text.split_once(':')?;
     let key = key.trim();
@@ -2364,6 +2398,55 @@ uart:
             let entries = parse(source).unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
+        }
+    }
+
+    #[test]
+    fn upstream_boolean_properties() {
+        let entries = parse("\ndevice: Something @ somewhere\n    BoolProp: true\n    BoolProp2: false\n    BoolProp3: True\n    BoolProp4: False\n    BoolProp5: tRue\n    BoolProp6: FALSE\n").unwrap();
+        assert_eq!(entries.len(), 1);
+        let values = entries[0]
+            .body
+            .iter()
+            .map(|(_, property)| {
+                let value = property.split_once(':').unwrap().1.trim();
+                symbolic_value(value).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                SymbolicValue::Boolean(true),
+                SymbolicValue::Boolean(false),
+                SymbolicValue::Boolean(true),
+                SymbolicValue::Boolean(false),
+                SymbolicValue::Reference("tRue"),
+                SymbolicValue::Reference("FALSE"),
+            ]
+        );
+    }
+
+    #[test]
+    fn upstream_enum_properties() {
+        for (source, family) in [
+            ("\nuart:\n    baudRate: BaudRate.B9600\n", Some("BaudRate")),
+            ("\nuart:\n    baudRate: .B9600\n", None),
+        ] {
+            let entries = parse(source).unwrap();
+            let [entry] = entries.as_slice() else {
+                panic!("expected one entry")
+            };
+            let [(_, property)] = entry.body.as_slice() else {
+                panic!("expected one attribute")
+            };
+            let (name, value) = property.split_once(':').unwrap();
+            assert_eq!(entry.name, "uart");
+            assert!(entry.model.is_empty());
+            assert_eq!(name, "baudRate");
+            assert_eq!(
+                symbolic_value(value),
+                Some(SymbolicValue::Enum(family, "B9600"))
+            );
         }
     }
 

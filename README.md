@@ -1176,3 +1176,21 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-simple-irqs.RiE7SzEV` に保存しました。台帳は対象786件のうち等価合格119件、部分検証10件、未達657件です。
+
+### backlog-network-d851b265aa4a-1
+
+REPL の真偽値、参照、列挙値を分類し、STM32H7 の LED とボタンの `invert` に適用しました。真偽値として認識する綴りは `true`、`false`、`True`、`False` です。固定 `ParserTests.cs` の3件を同じ入力で移植し、真偽値と参照の区別、型名付きと省略形の列挙値を照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-boolean-values.zehmtRdP
+target/release/penv check-platform "$e/bool.repl" --platform-root ../renode
+```
+
+`cargo test` 128件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF、タイトルケースの真偽値を使う Nucleo 追記の構築が通過しました。ケース別結果は上記の `cases.tsv` に記録しました。対象786件のうち等価合格122件、部分検証10件、未達654件です。型付き参照の解決と、他の周辺機器への真偽値処理の適用は残っています。
