@@ -306,7 +306,7 @@ tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
 
 #### STM32F072B Discovery
 
-最初の 6 件は `tests/platforms/STM32F072b.robot`、最後の 1 件は `tests/unit-tests/hex.robot` です。いずれも `tests/fixtures/stm32f072-*.resc` から、上流の変更していないボード REPL と公開イメージを使用します。
+最初の 6 件は `tests/platforms/STM32F072b.robot`、最後の 1 件は `tests/unit-tests/hex.robot` です。固定ツリーの `scripts/` に STM32F072 専用の RESC はなく、Robot の起動・操作を `tests/fixtures/stm32f072-*.resc` に転記しました。全ケースで上流の変更していないボード REPL と公開イメージを使用します。
 
 | 上流ケース | 移植状況 | 観測条件 |
 | --- | --- | --- |
@@ -317,6 +317,8 @@ tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
 | `Should Read ADC` | 既存。 `upstream_stm32f072_adc_waits_for_uart_between_voltage_changes` | 起動行、0.6 V で `745`、1.2 V で `1489`。 |
 | `Should Run stm32f0-crc-test Application` | 今回追加。 `upstream_stm32f072_crc_firmware_passes_840_cases` | `test result: ok. 840 passed; 0 failed` の完了行。 |
 | `Should Load HEX` | 今回追加。 `upstream_stm32f072_hello_world_boots_elf_and_hex` の HEX 実行 | `LoadHEX`、明示的な `VectorTableOffset`、同じ Hello World 完了行。 |
+
+対応する RESC は順に `stm32f072-hello-elf.resc`、`stm32f072-echo.resc`、`stm32f072-blinky.resc`、`stm32f072-button.resc`、`stm32f072-adc.resc`、`stm32f072-crc.resc`、`stm32f072-hello-hex.resc` です。追加の公開 ELF 回帰では、Echo の `stm32f072-prompt.resc` と Blinky の `stm32f072-blinky-clock.resc` を使います。
 
 `tests/unit-tests/per-core-registration.robot` の `Should Load Hex To Core Specific Memory` と `Should Not Load Hex To Invalid Core Specific Memory` は同じ HEX を参照します。CPU ごとのメモリ登録とロード先指定が必要なため、上表の単一 CPU の HEX 回帰とは別の残課題です。
 
@@ -336,8 +338,17 @@ Blinky と Button の RESC が使う `waitForLed sysbus.gpioPortC.led true "1s" 
 | UART 受信 | `tests/peripherals/STM32_UART.robot` の `Should Drop Characters When UART Or Receiver Disabled` | `renode_stm32_usart_drops_input_if_either_enable_is_clear` は F072 のレジスター配置で、上流の `0x12` と `0x34` が受信器または USART の無効中に破棄され、再有効化しても現れないことを検査します。フレーム時間、パリティ、アイドル検出の上流ケースは対象外です。 |
 | UART 端末 | `tests/platforms/STM32F072b.robot` の Console Echo と ADC、`tests/unit-tests/uart-tester.robot` の端末選択 | 既存の公開 ELF 回帰は Echo、プロンプト待機、ADC をカバーします。`uart_watch_ignores_other_ports_without_filtering_stdout` は端末選択に対応する USART 分離を検査します。Robot のテスター ID とバイナリ・正規表現モードは未移植です。 |
 | STM32 フラッシュ | `tests/unit-tests/stm32f4-erase.robot` の `Should Ignore Erase When MER And SER Are Reset`、`Should Perform Mass Erase`、`Should Perform Sector Erase`。隣接ページの観測条件は `tests/platforms/STM32L072.robot` の `Should Handle Flash Operations` | `renode_stm32_flash_erase_modes_preserve_the_expected_ranges` は F072 の 128 KiB バンク、2 KiB ページ、消去値 `0xff` を使用します。消去モードなし、指定ページ全体と隣接ページ、バンク全消去を検査します。F4/L0/H7 固有のコントローラーとフラッシュ用 ELF は対象外です。既存の `stm32f072_flash_preserves_programmed_data_on_reload_and_erases_a_page` は F072 のプログラムと再ロードを検査します。 |
+| ADC | `tests/platforms/STM32F072b.robot` の `Should Read ADC` | 公開 ELF の UART 回帰に加えて、`renode_stm32f072_adc_sample_values_drive_eoc_irq` で上流 REPL と同じ 3.3 V 基準とチャネル 1 を使い、`745`、`1489`、EOC 割り込み要求、DR 読み出し後の解除を検査します。 |
+| GPIO と EXTI | `tests/platforms/nucleo_wba52cg.robot` の `Should have Working EXTI`、F072 の `Should Run Zephyr Button Sample` | `renode_button_press_and_release_latches_exti_between_steps` に移植。 `sysbus.gpioPortA.button PressAndRelease` が CPU ステップを挟まずに押下・解放しても、EXTI が設定済みのエッジを保留し、NVIC に配送します。公開 F072 Button ELF の押下・解放と LED 保持も引き続き検査します。 |
+| TIM2 更新 | `tests/platforms/STM32F4_Discovery.robot` の `Should Fire Update Event When Counting Up` と `Should Fire Update Event When Counting Down` | `renode_tim2_update_irq_repeats_in_both_directions` に更新条件を移植。 縮尺したプリスケーラーと ARR を使い、両方向で 3 周期の UIF、IRQ、クリアと再発行を検査します。 |
+| GPIO の PWM | `tests/platforms/STM32L072.robot` の `PWM Should Support GPIO Output` | `renode_stm32_pwm_duty_reaches_gpio_for_all_four_upstream_pulses` に CH3 の周期 256 とパルス幅 5、85、127、250 を移植。 F072 の TIM2 と GPIO の接続からハイ期間を数え、4 条件すべてで上流の許容差 10 ポイントを満たします。L072 専用 RESC・PWMTester・シェルコマンドは残件です。 |
+| PWM 入力キャプチャ | `tests/platforms/STM32F4_Discovery.robot` の `PWM Capture` と `PWM Capture Four Channel Capture Support`、`tests/platforms/nucleo_wba52cg.robot` の `Timer Should Support Input Capture` | `renode_stm32_pwm_input_capture_routes_period_and_pulse_to_gpio` は、GPIO から CH1/2 と CH3/4 の各キャプチャペアに 1 kHz・33% の信号を入力し、周期とパルス幅を検査します。元のボードでの配線追加、WBA 固有の 2/3 kHz 設定と UART 報告、Cortex-M4/M33 ELF の起動は残件です。 |
 
 STM32 フラッシュの消去操作は Rust のバス回帰で検証しています。
+
+固定上流の `Button.PressAndRelease` は連続する `Press` と `Release` です。GPIO のエッジは EXTI で即時に保留し、次の実行ステップで配送します。[固定上流の Button 実装](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/Button.cs)
+
+タイマー回帰の残件は、STM32F4 の直交エンコーダー、FAULTMASK を使う割り込み、STM32L072 の低消費電力タイマーと RTC の専用サンプルです。F4 の公開 TIM2 アップカウント ELF を固定上流の `platforms/cpus/stm32f4.repl` で試すと、10 行目の `MTD.STM32F4_FlashController` が未対応で起動前に止まります。上の移植は実行可能な観測条件を F072 向けに抽出したものです。固定ツリーの `tests/unit-tests/timer-reconfiguration.robot` は RISC-V CLINT と変換ブロックのケースなので、この ARM 回帰一覧の対象外です。
 
 #### NVIC・SysTick・例外の追加移植
 
@@ -369,7 +380,7 @@ SysTick の 100 Hz ケースでは、固定した上流の NVIC と同じくカ�
 
 RESC の `sysbus.nvic OnGPIO 5 true` と `sysbus.nvic OnGPIO 5 false` は、REPL で宣言された NVIC の外部 IRQ（0〜31）を操作します。`true` の直後に `false` を実行しても、CPU が次のステップに進む前に要求が保留されます。`cargo test renode_resc_nvic_gpio` で WFE の復帰、信号が非アクティブな場合のタイムアウト、REPL に存在しない名前のエラーを再現できます。[固定上流の NVIC.OnGPIO](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Cores/Arm-M/NVIC.cs#L157)
 
-通常の `cargo test` は 71 件成功しました。LED の失敗経路は `cargo test led_wait_times_out` で確認できます。
+通常の `cargo test` は 76 件成功しました。追加の GPIO・タイマー・ADC の移植は `cargo test renode_`、LED の失敗経路は `cargo test led_wait_times_out` で確認できます。
 
 #### 対応表の回帰を実行する
 
@@ -388,6 +399,17 @@ PENV_RENODE_ROOT="$renode_root" PENV_RENODE_ASSETS="$assets" \
 ```
 
 公開イメージによる回帰は 8 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky の通常動作とクロック停止・再開、Button、CRC の計 9 シナリオを確認しました。
+
+F4 の TIM2 ELF が起動前に止まる箇所は以下で再現できます。F072 のタイマー観測条件は `cargo test renode_tim2` と `cargo test renode_stm32_pwm` で実行します。
+
+```sh
+cargo build --release
+f4_url=$(sed -n 's/^.*sysbus LoadELF @\(https:.*stm32f4disco-timer-upcount.*\)$/\1/p' \
+  "$renode_root/tests/platforms/STM32F4_Discovery.robot")
+curl -fL "$f4_url" -o "$assets/f4-tim2-up.elf"
+target/release/penv run --platform "$renode_root/platforms/cpus/stm32f4.repl" \
+  --platform-root "$renode_root" --max-steps 1000000 "$assets/f4-tim2-up.elf"
+```
 
 Thumb-2 ELF 全体は Cortex-M85 向けです。移植元の命令と現行の実行限界は次の手順で再現できます。Cortex-M0 の最小 REPL での実行は、最初のワイド `MOVS.W`（PC `0x108e`、命令の先頭半ワード `0xf05f`）で停止します。
 

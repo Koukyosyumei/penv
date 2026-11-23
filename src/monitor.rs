@@ -37,6 +37,7 @@ pub struct RuntimeCommand {
 enum Action {
     RunFor(u64),
     Button(String, bool),
+    ButtonPulse(String),
     NvicGpio(String, u8, bool),
     NvicClocked(String, bool),
     WaitForLed(String, bool, u64, u64),
@@ -104,6 +105,11 @@ pub fn run(
             Action::Button(name, pressed) => {
                 machine.bus.set_named_button(name, *pressed).map(|()| None)
             }
+            Action::ButtonPulse(name) => machine
+                .bus
+                .set_named_button(name, true)
+                .and_then(|()| machine.bus.set_named_button(name, false))
+                .map(|()| None),
             Action::NvicGpio(target, line, high) => machine
                 .bus
                 .drive_nvic_line(target, *line, *high)
@@ -424,6 +430,7 @@ fn execute(
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
         }
+        [device, "PressAndRelease"] => Some(Action::ButtonPulse(resolve(device)?.to_owned())),
         [device, state @ ("Press" | "Release")] => Some(Action::Button(
             resolve(device)?.to_owned(),
             *state == "Press",
@@ -602,6 +609,72 @@ pub fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_button_press_and_release_latches_exti_between_steps() {
+        use crate::{stm32_gpio::Stm32Gpio, stm32_gpio_board::GpioButton};
+
+        // nucleo_wba52cg.robot: Should have Working EXTI (GPIO/EXTI portion).
+        const GPIO: u32 = 0x4800_0000;
+        const EXTI: u32 = 0x4001_0400;
+        const ISER: u32 = 0xe000_e100;
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_exti(EXTI, vec![Some(5)], 32).unwrap();
+        machine.bus.map_nvic(0xc0, None).unwrap();
+        let mut gpio = Stm32Gpio::new(GPIO, 0x400, [0; 3], 8);
+        gpio.exti_routes[0] = 1;
+        machine.bus.map_stm32_gpio(gpio).unwrap();
+        machine.bus.add_gpio_button(GpioButton::new(
+            "button".into(),
+            Some("gpioPortA".into()),
+            GPIO,
+            0,
+            false,
+        ));
+        let mut output = io::sink();
+        for (address, value) in [(EXTI, 1), (ISER, 1 << 5)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+
+        let mut boot = Boot {
+            platform: Some("board.repl".into()),
+            image: Some(("test.hex".into(), ImageFormat::Hex)),
+            ..Boot::default()
+        };
+        let script = Path::new("test.resc");
+        execute(
+            "sysbus.gpioPortA.button PressAndRelease",
+            &HashMap::new(),
+            &mut true,
+            &mut boot,
+            script,
+            Path::new("."),
+            1,
+        )
+        .unwrap();
+
+        for (rising, falling) in [(1, 0), (0, 1)] {
+            machine.bus.write(EXTI + 8, 4, rising, &mut output).unwrap();
+            machine
+                .bus
+                .write(EXTI + 12, 4, falling, &mut output)
+                .unwrap();
+            for _ in 0..2 {
+                assert_eq!(
+                    run(&mut machine, script, &boot.runtime, 0, &mut output).unwrap(),
+                    (Stop::ScriptComplete, 0)
+                );
+                assert_eq!(machine.bus.read::<4>(GPIO + 0x10).unwrap() & 1, 0);
+                assert_eq!(machine.bus.read::<4>(EXTI + 20).unwrap(), 1);
+                machine.bus.sample_nvic(0);
+                assert_eq!(machine.bus.nvic.as_ref().unwrap().next_irq(0), Some((5, 0)));
+                machine.bus.nvic.as_mut().unwrap().acknowledge(5);
+                machine.bus.write(EXTI + 20, 4, 1, &mut output).unwrap();
+                machine.bus.sample_nvic(0);
+                assert_eq!(machine.bus.nvic.as_ref().unwrap().next_irq(0), None);
+            }
+        }
+    }
 
     #[test]
     fn led_wait_times_out_and_rejects_a_change_during_hold() {

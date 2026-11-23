@@ -52,12 +52,20 @@ impl Exti {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn sample(&mut self, inputs: u32) -> u32 {
-        let rising = inputs & !self.input;
-        let falling = self.input & !inputs;
-        self.input = inputs;
+    fn latch_edges(&mut self, rising: u32, falling: u32) {
         self.pending |=
             ((rising & self.rising) | (falling & self.falling)) & self.mask & !self.direct;
+    }
+
+    pub fn update_gpio(&mut self, previous: u32, inputs: u32) {
+        let changed = (previous ^ inputs) & !self.direct;
+        self.latch_edges(inputs & changed, previous & changed);
+        self.input = (self.input & !changed) | (inputs & changed);
+    }
+
+    pub fn sample(&mut self, inputs: u32) -> u32 {
+        self.latch_edges(inputs & !self.input, self.input & !inputs);
+        self.input = inputs;
         self.levels = inputs & self.direct;
         let mut asserted = self.levels | self.pending | self.software;
         let mut active = 0;

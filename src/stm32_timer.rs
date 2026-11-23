@@ -335,3 +335,38 @@ impl Stm32Timer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // STM32F4_Discovery.robot: Should Fire Update Event When Counting Up/Down.
+    #[test]
+    fn renode_tim2_update_irq_repeats_in_both_directions() {
+        const TIM2_IRQ: u32 = 1 << 15;
+        for direction in [0, DOWN] {
+            let mut timer = Stm32Timer::new(
+                0,
+                CORTEX_M_STEP_HZ as u32,
+                u32::MAX,
+                [TIM2_IRQ, 0, 0, 0, 0, 0, 0, 0],
+            );
+            timer.write(0, direction | UPDATE_OVERFLOW_ONLY);
+            timer.write(0x28, 1); // two input cycles per counter tick
+            timer.write(0x2c, 3); // four counter values
+            timer.write(0x14, 1); // establish the initial counter without raising UIF
+            timer.write(0x0c, 1); // UIE
+            timer.write(0, direction | UPDATE_OVERFLOW_ONLY | ENABLE);
+            for _ in 0..3 {
+                for _ in 0..7 {
+                    assert_eq!(timer.tick(), 0);
+                }
+                assert_eq!(timer.tick(), TIM2_IRQ);
+                assert_ne!(timer.read(0x10) & 1, 0);
+                assert_eq!(timer.read(0x24), if direction == DOWN { 3 } else { 0 });
+                timer.write(0x10, !1);
+                assert_eq!(timer.read(0x10) & 1, 0);
+            }
+        }
+    }
+}

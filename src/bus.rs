@@ -739,10 +739,14 @@ impl Bus {
     }
 
     fn refresh_gpio_wiring(&mut self) {
+        let previous = self.gpio_exti_levels;
         self.gpio_exti_levels = self
             .stm32_gpios
             .iter()
             .fold(0, |levels, port| levels | port.exti_levels());
+        if let Some(exti) = &mut self.exti {
+            exti.update_gpio(previous, self.gpio_exti_levels);
+        }
         if !self.gpio_timer_inputs.is_empty() {
             for timer in &mut self.stm32_timers {
                 timer.capture_next = 0;
@@ -1576,6 +1580,114 @@ mod tests {
         assert_eq!(output, b"OOK\nK\r\n");
         bus.finish_stm32_uart_watch(index);
         assert!(!bus.stm32_uart_matched(index));
+    }
+
+    #[test]
+    fn renode_stm32_pwm_duty_reaches_gpio_for_all_four_upstream_pulses() {
+        use crate::stm32_timer::TimerPin;
+
+        // STM32L072.robot: PWM Should Support GPIO Output, adapted to F072 TIM2.
+        const GPIO: u32 = 0x4800_0000;
+        const TIM2: u32 = 0x4000_0000;
+        for (pulse, expected_percent) in [(5, 0), (85, 33), (127, 50), (250, 100)] {
+            let mut bus = Bus::default();
+            bus.map_nvic(0xc0, None).unwrap();
+            bus.map_stm32_gpio(Stm32Gpio::new(GPIO, 0x400, [2, 0, 0], 8))
+                .unwrap();
+            let mut timer = Stm32Timer::new(TIM2, CORTEX_M_STEP_HZ as u32, u32::MAX, [0; 8]);
+            timer.gpio_outputs.push((
+                2,
+                TimerPin {
+                    port: GPIO,
+                    pin: 0,
+                    function: 0,
+                },
+            ));
+            bus.map_stm32_timer(timer).unwrap();
+            let mut output = io::sink();
+            for (offset, value) in [
+                (0x2c, 255),
+                (0x3c, pulse),
+                (0x1c, 6 << 4),
+                (0x20, 1 << 8),
+                (0, 1),
+            ] {
+                bus.write(TIM2 + offset, 4, value, &mut output).unwrap();
+            }
+            let mut high = 0u32;
+            for _ in 0..256 {
+                bus.sample_nvic(0);
+                high += bus.read::<4>(GPIO + 0x10).unwrap() & 1;
+            }
+            assert_eq!(high, pulse);
+            assert!((high * 100).abs_diff(expected_percent * 256) <= 10 * 256);
+        }
+    }
+
+    #[test]
+    fn renode_stm32_pwm_input_capture_routes_period_and_pulse_to_gpio() {
+        use crate::stm32_timer::TimerPin;
+
+        // STM32F4_Discovery.robot: both PWM Capture cases use 1 kHz / 33%.
+        const GPIO: u32 = 0x4800_0000;
+        const SOURCE: u32 = 0x4000_0000;
+        const CAPTURE: u32 = 0x4000_0400;
+        for pair in [0, 2] {
+            let mut bus = Bus::default();
+            bus.map_nvic(0xc0, None).unwrap();
+            bus.map_stm32_gpio(Stm32Gpio::new(GPIO, 0x400, [2, 0, 0], 8))
+                .unwrap();
+            let mut source = Stm32Timer::new(SOURCE, 1_000_000, u32::MAX, [0; 8]);
+            source.gpio_outputs.push((
+                0,
+                TimerPin {
+                    port: GPIO,
+                    pin: 0,
+                    function: 0,
+                },
+            ));
+            bus.map_stm32_timer(source).unwrap();
+            bus.map_stm32_timer(Stm32Timer::new(CAPTURE, 1_000_000, 0xffff, [0; 8]))
+                .unwrap();
+            bus.route_gpio_timer_input(GPIO, 0, CAPTURE, pair);
+            let flags = 6 << pair;
+            let first_ccr = CAPTURE + 0x34 + 4 * u32::from(pair);
+            let mut output = io::sink();
+            for (base, offset, value) in [
+                (CAPTURE, 0x18 + 2 * u32::from(pair), 0x0201), // direct and paired indirect input
+                (CAPTURE, 0x20, 0x31 << (pair * 4)),           // rising and falling
+                (CAPTURE, 0, 1),
+                (SOURCE, 0x2c, 999),
+                (SOURCE, 0x34, 330),
+                (SOURCE, 0x18, 0x60),
+                (SOURCE, 0x20, 1),
+                (SOURCE, 0, 1),
+            ] {
+                bus.write(base + offset, 4, value, &mut output).unwrap();
+            }
+            let mut rising = Vec::new();
+            let mut falling = Vec::new();
+            for _ in 0..135_000 {
+                bus.sample_nvic(0);
+                let status = bus.read::<4>(CAPTURE + 0x10).unwrap();
+                if status & (2 << pair) != 0 {
+                    rising.push(bus.read::<4>(first_ccr).unwrap());
+                }
+                if status & (4 << pair) != 0 {
+                    falling.push(bus.read::<4>(first_ccr + 4).unwrap());
+                }
+                if status & flags != 0 {
+                    bus.write(CAPTURE + 0x10, 4, !flags, &mut output).unwrap();
+                }
+            }
+            assert_eq!(rising.len(), 2);
+            assert_eq!(falling.len(), 2);
+            let period = rising[1] - rising[0];
+            let pulse = falling[1] - rising[1];
+            assert_eq!((period, pulse), (1000, 330));
+            assert!((1_000_000u32 / period).abs_diff(1000) <= 25);
+            assert!((pulse * 100 / period).abs_diff(33) <= 1);
+        }
     }
 
     #[test]

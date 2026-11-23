@@ -217,3 +217,27 @@ impl Stm32F0Adc {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renode_stm32f072_adc_sample_values_drive_eoc_irq() {
+        // STM32F072b.robot: Should Read ADC, with the board REPL's ADC settings.
+        let mut adc = Stm32F0Adc::new(0, Some(12), 3.3, 1000);
+        adc.write(0x04, EOC);
+        adc.write(0x28, 1 << 1);
+        adc.write(0x08, 1);
+        for (volts, expected) in [(0.6, 745), (1.2, 1489)] {
+            adc.set_input(1, volts).unwrap();
+            assert!(!adc.tick());
+            adc.write(0x08, 4);
+            assert!(adc.tick());
+            assert_eq!(adc.read(0x00) & (EOC | EOS), EOC | EOS);
+            assert_eq!(adc.read(0x40), expected);
+            assert!(!adc.tick());
+            adc.write(0x00, EOS);
+        }
+    }
+}
