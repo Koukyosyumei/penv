@@ -473,3 +473,27 @@ python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$
 台帳の上流等価合格は累計 61 件です。同じスイートの低アドレスのデータアクセス、モニターの x0 書き込みと ResetVector、命令診断ログの検証が残っています。固定 `riscv-priv.robot` の最大構成に残る ISA 阻害点も継続です。
 
 再現用 ELF、ソース、ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/riscv/backlog-871700a-6getcP/` に保存しました。
+
+### RV32 の未マップ先への整数ロード・ストア
+
+固定 `riscv-unit-tests.robot` の RV32 メモリー命令 10 ケースを Rust へ移植しました。固定フィクスチャの RAM は 0x1000 から始まり、命令は 0x5、0x6、0x8 のいずれかにアクセスします。変更前は、バイトロードでもアクセス例外で PC が 0x1010 に遷移しました。
+
+標準 `CPU.RiscV32` のみで構成される REPL で、既存の Renode 互換バス処理を有効化しました。未マップ先の通常ロードはゼロを返し、ストアは破棄します。命令フェッチ、PMP、ページ変換、アライメントの検査は引き続き適用します。固定フィクスチャで元の命令語と a1 を使い、1 ステップ後の PC を全件で、MCAUSE をトラップ 4 件で照合しました。
+
+```bash
+cargo test --locked upstream_rv32_unit_data_accesses -- --nocapture
+cargo test --locked
+cargo build --locked --release
+clang --target=riscv32-unknown-elf -march=rv32gc -mabi=ilp32 -nostdlib -fuse-ld=lld \
+  -Wl,-Ttext,0x2000 "$evidence/access.S" -o "$evidence/access.elf"
+target/release/penv run --platform "$evidence/cpu.repl" --stats --max-steps 1 "$evidence/access.elf"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --artifacts "$evidence/privilege-rerun" "$work"/isa/rv32[ms]i-*
+bash scripts/validate-riscv-upstream.sh "$(realpath target/release/penv)" \
+  "$(realpath ../renode)" "$evidence/litex-rerun"
+```
+
+LB の再現 ELF は変更後、1 命令をリタイアして期待 PC 0x2004 に到達しました。テスト 79 件、公開 M/S 特権 ELF 22 件とアライメント済みの ISA ELF 120 件、virt の UART・CLINT・PLIC プローブが通過しました。実ファームウェア回帰スクリプトも完走し、LiteX 単一ハート・SMP Linux、Minerva の UART からのロードと実行、I²S の PCM バイト一致を確認しました。上流等価合格は累計 71 件です。Renode の未マップアクセス診断ログ、モニターの x0・ResetVector、無効命令のログ、V と Zcb が必要な固定特権フィクスチャは残っています。
+
+再現用 ELF、ソース、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-f146f92-5wB6Ke/` に保存しました。

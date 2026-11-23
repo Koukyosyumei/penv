@@ -1132,6 +1132,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
     }
     let cpu = configs[0].1;
+    if configs.iter().all(|config| config.1.model == "CPU.RiscV32") {
+        // Renode's system bus returns zero for an unmapped data read
+        // and discards an unmapped data write.
+        machine.bus.use_renode_unmapped_data();
+    }
     if let Some(entry) = clint {
         let mut target_count = None;
         let mut frequency = None;

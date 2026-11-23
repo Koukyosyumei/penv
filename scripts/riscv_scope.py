@@ -133,6 +133,12 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 "Should Allow SRET In Machine Mode",
             }:
                 return "target", "ported", "fixed rv32gc_Zfh fixture; opcode, step count, and all PC/CSR assertions checked"
+            if filename == "riscv-unit-tests.robot" and case in {
+                "Should Handle LB", "Should Handle LH", "Should Handle LW",
+                "Should Handle SB", "Should Handle SH", "Should Handle SW",
+                "Should Fail LH", "Should Fail LW", "Should Fail SH", "Should Fail SW",
+            }:
+                return "target", "ported", "fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked"
             if filename == "riscv-priv.robot":
                 return "target", "blocked-cpu", "pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence"
             return "target", status, "case passes bitness=32 to its CPU fixture; " + (basis or "equivalence pending")

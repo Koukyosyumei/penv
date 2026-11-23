@@ -1220,6 +1220,54 @@ mod tests {
     }
 
     #[test]
+    fn upstream_rv32_unit_data_accesses() {
+        // Renode riscv-unit-tests.robot: RV32 LB/LH/LW/SB/SH/SW cases.
+        let directory = std::env::temp_dir().join(format!("penv-rv32-data-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }
+cpu: CPU.RiscV32 @ sysbus { timeProvider: clint; cpuType: "rv32gc_Zfh" }
+mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        for (name, opcode, a1, cause) in [
+            ("Should Handle LB", 0x0055_8503u32, 0, None),
+            ("Should Handle LH", 0x0055_9503, 1, None),
+            ("Should Fail LH", 0x0055_9503, 0, Some(4)),
+            ("Should Handle LW", 0x0055_a503, 3, None),
+            ("Should Fail LW", 0x0055_a503, 0, Some(4)),
+            ("Should Handle SB", 0x00a5_82a3, 0, None),
+            ("Should Handle SH", 0x00a5_92a3, 1, None),
+            ("Should Fail SH", 0x00a5_92a3, 0, Some(6)),
+            ("Should Handle SW", 0x00a5_a2a3, 3, None),
+            ("Should Fail SW", 0x00a5_a2a3, 0, Some(6)),
+        ] {
+            let mut machine = crate::platform::load(&repl, None).unwrap();
+            machine.set_entry(0x2000);
+            machine.primary.registers[11] = a1;
+            machine
+                .bus
+                .memory(0x2000, 4)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+            machine.run(1, &mut std::io::sink()).unwrap();
+            let expected_pc = if cause.is_some() { 0x1010 } else { 0x2004 };
+            assert_eq!(machine.primary.pc, expected_pc, "{name}");
+            if let Some(cause) = cause {
+                assert_eq!(
+                    machine.primary.csr.access(0x3420_2073, 0).unwrap(),
+                    cause,
+                    "{name}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn upstream_rv32_unit_traps_and_sret() {
         // Renode riscv-unit-tests.robot: three MEPC cases, EBREAK/ECALL,
         // and SRET executed in machine mode.

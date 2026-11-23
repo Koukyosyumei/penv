@@ -2935,18 +2935,18 @@ Renode	tests/unit-tests/riscv-stack-access-hook.robot	138	Should Trigger Stack A
 Renode	tests/unit-tests/riscv-stack-access-hook.robot	146	Should Trigger Stack Access Hook On Vlse64		outside	outside	Create Machine instantiates CPU.RiscV64 rv64gc_V
 Renode	tests/unit-tests/riscv-stack-access-hook.robot	154	Should Trigger Stack Access Hook On Vsse8		outside	outside	Create Machine instantiates CPU.RiscV64 rv64gc_V
 Renode	tests/unit-tests/riscv-stack-access-hook.robot	162	Should Trigger Stack Access Hook On Vsse64		outside	outside	Create Machine instantiates CPU.RiscV64 rv64gc_V
-Renode	tests/unit-tests/riscv-unit-tests.robot	101	Should Handle LB		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	114	Should Handle LH		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	127	Should Fail LH		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	143	Should Handle LW		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	156	Should Fail LW		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-unit-tests.robot	101	Should Handle LB		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	114	Should Handle LH		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	127	Should Fail LH		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	143	Should Handle LW		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	156	Should Fail LW		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
 Renode	tests/unit-tests/riscv-unit-tests.robot	172	Should Handle LD		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	185	Should Fail LD		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-unit-tests.robot	201	Should Handle SB		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	214	Should Handle SH		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	227	Should Fail SH		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	243	Should Handle SW		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-unit-tests.robot	256	Should Fail SW		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-unit-tests.robot	201	Should Handle SB		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	214	Should Handle SH		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	227	Should Fail SH		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	243	Should Handle SW		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
+Renode	tests/unit-tests/riscv-unit-tests.robot	256	Should Fail SW		target	ported	fixed rv32gc_Zfh fixture; opcode and a1 preserved, single-step PC and trapping MCAUSE checked
 Renode	tests/unit-tests/riscv-unit-tests.robot	272	Should Handle SD		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	285	Should Fail SD		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-unit-tests.robot	301	Should Fail On Setting X0 register		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
