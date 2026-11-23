@@ -330,3 +330,57 @@ status=0
     >"$out/pending-hardfault.log" 2>&1 || status=$?
 [ "$status" -eq 2 ]
 grep -Fxq 'penv: instruction limit reached at pc=0x00000350' "$out/pending-hardfault.log"
+
+# Robot 444-491: IRQ16 stays pending when stacking selects a derived fault.
+for selection in hardfault busfault; do
+    case "$selection" in
+        hardfault) hard=check; bus=failed; enables=0; forced=0x40000000 ;;
+        busfault) hard=failed; bus=check; enables=0x20000; forced=0 ;;
+    esac
+    cat >"$out/stacking-$selection.s" <<ASM
+.syntax unified
+.thumb
+.global reset
+.word 0x100020, reset, 0, $hard, 0, $bus
+.org 0x40
+.word failed
+.thumb_func
+reset:
+    ldr r0, =0xe000ed24
+    ldr r1, =$enables
+    str r1, [r0]
+    ldr r0, =0xe000e100
+    movs r1, #1
+    str r1, [r0]
+    str r1, [r0, #0x100]
+    b .
+.thumb_func
+check:
+    mov r0, sp
+    cmp.w r0, #0x100000
+    bne failed
+    ldr r0, =0xe000ed28
+    ldr r1, [r0]
+    cmp.w r1, #0x1000
+    bne failed
+    ldr r1, [r0, #4]
+    cmp.w r1, #$forced
+    bne failed
+    ldr r0, =0xe000e200
+    ldr r1, [r0]
+    tst r1, #1
+    beq failed
+    ldr r1, [r0, #0x100]
+    tst r1, #1
+    bne failed
+    bkpt 0
+.thumb_func
+failed:
+    b .
+ASM
+    clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/stacking-$selection.s" -o "$out/stacking-$selection.o"
+    ld.lld -N -Ttext=0 --entry=reset "$out/stacking-$selection.o" -o "$out/stacking-$selection.elf"
+    "$penv" run --platform "$out/bus-fault.repl" --max-steps 100 "$out/stacking-$selection.elf" \
+        >"$out/stacking-$selection.log" 2>&1
+    printf 'stacking fault: %s selected\n' "$selection"
+done

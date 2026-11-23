@@ -881,6 +881,94 @@ impl Hart {
 mod tests {
     use super::*;
 
+    fn check_upstream_stacking_bus_fault(exception: u8, bus_fault_enabled: bool, handler: u8) {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut out = std::io::sink();
+        for (address, value) in [
+            (0, 0x100020),
+            (4, 0x201),
+            (8, 0x381),
+            (12, 0x341),
+            (20, 0x301),
+            (64, 0x3c1),
+        ] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for address in [0x200, 0x300, 0x340, 0x380, 0x3c0] {
+            machine.bus.write(address, 2, 0xe7fe, &mut out).unwrap();
+        }
+        machine.validate_entry().unwrap();
+        if bus_fault_enabled {
+            machine
+                .bus
+                .write(0xe000_ed24, 4, 1 << 17, &mut out)
+                .unwrap();
+        }
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, 0x200);
+        if exception == 2 {
+            machine
+                .bus
+                .write(0xe000_ed04, 4, 1 << 31, &mut out)
+                .unwrap();
+        } else {
+            machine.bus.write(0xe000_e100, 4, 1, &mut out).unwrap();
+            machine.bus.write(0xe000_e200, 4, 1, &mut out).unwrap();
+        }
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(
+            machine.primary.pc,
+            match handler {
+                2 => 0x380,
+                3 => 0x340,
+                5 => 0x300,
+                _ => unreachable!(),
+            }
+        );
+        assert_eq!(machine.primary.registers[13], 0x100000);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (false, 0, handler)
+        );
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 12);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ed2c).unwrap(),
+            if bus_fault_enabled { 0 } else { 1 << 30 }
+        );
+        if exception == 2 {
+            assert_ne!(
+                machine.bus.nvic.as_ref().unwrap().pending_exceptions() & (1 << 3),
+                0
+            );
+        } else {
+            assert_eq!(machine.bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+            assert_eq!(machine.bus.read::<4>(0xe000_e300).unwrap() & 1, 0);
+        }
+    }
+
+    #[test]
+    fn upstream_nmi_stacking_fault_pends_hard_fault() {
+        check_upstream_stacking_bus_fault(2, false, 2);
+    }
+
+    #[test]
+    fn upstream_external_irq_stacking_fault_selects_hard_fault() {
+        check_upstream_stacking_bus_fault(16, false, 3);
+    }
+
+    #[test]
+    fn upstream_equal_priority_stacking_fault_selects_bus_fault() {
+        check_upstream_stacking_bus_fault(16, true, 5);
+    }
+
     fn exception_vector_fault_machine(offset: Option<usize>) -> Machine {
         let mut machine = Machine::new(0x1000).unwrap();
         machine.bus.map_ram(0, 0x1000).unwrap();

@@ -10,6 +10,7 @@ use crate::{
 };
 
 const HARD_FAULT: u8 = 3;
+const BUS_FAULT: u8 = 5;
 pub(crate) const LOCKUP_PC: u32 = 0xefff_fffe;
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -384,22 +385,60 @@ impl Thumb {
             | ((it & 3) << 25)
             | ((it & 0xfc) << 8)
             | u32::from(self.active_exception);
-        let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        let memory = bus
-            .memory(stack, frame_size)
-            .map_err(|error| error.to_string())?;
+        let mut frame = [0; 26];
+        frame[..8].copy_from_slice(&[r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr]);
         if self.fp_active {
-            for (word, value) in memory[32..]
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(self.fp[..16].iter().copied().chain([self.fpscr, 0]))
-            {
-                *word = value.to_le_bytes();
-            }
+            frame[8..24].copy_from_slice(&self.fp[..16]);
+            frame[24] = self.fpscr;
         }
-        for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
-            *word = value.to_le_bytes();
+        match bus.write_cortex_m_exception_stack(stack, &frame[..frame_size / 4]) {
+            Ok(()) => {}
+            Err(BusError::SlaveFault(_)) if self.thumb2 => {
+                let nvic = bus
+                    .nvic
+                    .as_mut()
+                    .ok_or("stacking BusFault requires an NVIC")?;
+                if handler.is_none() {
+                    return Err(
+                        "simultaneous Cortex-M stacking and vector BusFaults are unsupported"
+                            .into(),
+                    );
+                }
+                let priority = nvic.priority(BUS_FAULT);
+                let configurable = nvic.bus_fault_enabled()
+                    && !self.interrupts_masked
+                    && !self.faultmask
+                    && (self.basepri == 0 || priority < self.basepri)
+                    && (self.active_exception == 0
+                        || (self.active_exception > HARD_FAULT
+                            && priority < nvic.priority(self.active_exception)));
+                let derived = if configurable { BUS_FAULT } else { HARD_FAULT };
+                let cannot_escalate = !configurable
+                    && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask);
+                nvic.record_stacking_bus_fault(!configurable && !cannot_escalate);
+
+                if cannot_escalate {
+                    handler = None;
+                } else if derived == HARD_FAULT && exception == NMI {
+                    nvic.set_hard_fault_pending(true);
+                } else if !matches!(exception, NMI | HARD_FAULT)
+                    && (derived == HARD_FAULT
+                        || (priority, derived) < (nvic.priority(exception), exception))
+                {
+                    exception = derived;
+                    handler = read_handler(bus, exception)?;
+                    if handler.is_none()
+                        && let Some(nvic) = bus.nvic.as_mut()
+                    {
+                        nvic.record_exception_vector_fault();
+                    }
+                } else if derived != exception {
+                    return Err(
+                        "deferring a configurable Cortex-M stacking BusFault is unsupported".into(),
+                    );
+                }
+            }
+            Err(error) => return Err(error.to_string()),
         }
         if self.uses_psp() {
             self.psp = stack;
@@ -698,7 +737,6 @@ impl Thumb {
         let result = self.step_instruction(pc, r, bus, output);
         bus.thumb_negative_priority = false;
         if let Some(address) = bus.take_thumb_data_fault() {
-            const BUS_FAULT: u8 = 5;
             self.itstate = original_itstate;
             *pc = self.synchronous_fault(BUS_FAULT, Some(address), *pc, r, bus)?;
             return Ok(ThumbStep::Fault);

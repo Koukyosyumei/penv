@@ -186,6 +186,13 @@ impl Nvic {
         self.fault_enables & BUSFAULTENA != 0
     }
 
+    pub fn record_stacking_bus_fault(&mut self, escalate: bool) {
+        self.cfsr |= 1 << 12; // STKERR
+        if escalate {
+            self.hfsr |= FORCED;
+        }
+    }
+
     pub fn record_precise_bus_fault(&mut self, address: u32, escalate: bool) {
         self.cfsr |= PRECISERR | BFARVALID;
         self.bfar = address;

@@ -1824,6 +1824,45 @@ impl Bus {
         Err(BusError::Unmapped(address, N))
     }
 
+    fn write_faulting_peripheral(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+    ) -> Option<Result<(), BusError>> {
+        let device = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.offset(address).is_some())?;
+        let offset = device.offset(address).unwrap();
+        Some((|| {
+            for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
+                device.check_byte(offset + index, address)?;
+                device.bytes[offset + index] = *byte;
+            }
+            Ok(())
+        })())
+    }
+
+    pub fn write_cortex_m_exception_stack(
+        &mut self,
+        stack: u32,
+        frame: &[u32],
+    ) -> Result<(), BusError> {
+        if let Ok(memory) = self.memory(stack, frame.len() * 4) {
+            for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
+                *word = value.to_le_bytes();
+            }
+            return Ok(());
+        }
+        for (index, &value) in frame.iter().enumerate() {
+            let address = stack.wrapping_add(index as u32 * 4);
+            self.write_faulting_peripheral(address, 4, value)
+                .ok_or(BusError::Unmapped(address, 4))??;
+        }
+        Ok(())
+    }
+
     pub fn write(
         &mut self,
         address: u32,
@@ -1831,17 +1870,8 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
-        if let Some(device) = self
-            .faulting_peripherals
-            .iter_mut()
-            .find(|device| device.offset(address).is_some())
-        {
-            let offset = device.offset(address).unwrap();
-            for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
-                device.check_byte(offset + index, address)?;
-                device.bytes[offset + index] = *byte;
-            }
-            return Ok(());
+        if let Some(result) = self.write_faulting_peripheral(address, width, value) {
+            return result;
         }
         if self.trivial_uart == Some(address) && matches!(width, 1 | 2 | 4) {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
