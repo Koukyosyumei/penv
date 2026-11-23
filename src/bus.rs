@@ -17,7 +17,7 @@ use crate::{
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
     stm32_iwdg::Iwdg,
-    stm32_uart::{Stm32Irq, Stm32Usart},
+    stm32_uart::{Stm32Irq, Stm32Usart, Stm32UsartClock},
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -1047,7 +1047,8 @@ impl Bus {
             }
             let mut exti_inputs = [0; 3];
             for uart in &self.stm32_uarts {
-                if uart.interrupt_pending() {
+                if usart_clocked(self.h7_network_control.as_ref(), uart) && uart.interrupt_pending()
+                {
                     match uart.irq {
                         Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
                         Some(Stm32Irq::Exti(line)) => {
@@ -1241,6 +1242,7 @@ impl Bus {
         base: u32,
         irq: Option<Stm32Irq>,
         low_power: bool,
+        clock: Option<Stm32UsartClock>,
     ) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(Stm32Usart::SIZE);
@@ -1249,7 +1251,8 @@ impl Bus {
                 "invalid or overlapping STM32 USART range at {base:#010x}"
             ));
         }
-        self.stm32_uarts.push(Stm32Usart::new(base, irq, low_power));
+        self.stm32_uarts
+            .push(Stm32Usart::new(base, irq, low_power, clock));
         Ok(())
     }
 
@@ -1267,7 +1270,9 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.litex_uart.as_mut() {
             uart.queue_input(bytes);
-        } else if let Some(uart) = self.stm32_uarts.first_mut() {
+        } else if let Some(uart) = self.stm32_uarts.iter_mut().find(|uart| {
+            usart_clocked(self.h7_network_control.as_ref(), uart) && uart.receiver_enabled()
+        }) {
             uart.queue_input(bytes);
         }
     }
@@ -1467,7 +1472,11 @@ impl Bus {
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
-            return Ok(uart.read(address, N));
+            return Ok(if usart_clocked(self.h7_network_control.as_ref(), uart) {
+                uart.read(address, N)
+            } else {
+                0
+            });
         }
         if N == 4
             && address & 3 == 0
@@ -1856,9 +1865,12 @@ impl Bus {
             .iter_mut()
             .find(|device| device.contains(address))
         {
-            return device
-                .write(address, width, value, uart)
-                .map_err(BusError::Output);
+            if usart_clocked(self.h7_network_control.as_ref(), device) {
+                device
+                    .write(address, width, value, uart)
+                    .map_err(BusError::Output)?;
+            }
+            return Ok(());
         }
         if width == 4
             && let Some(exti) = self.h7_exti.as_mut()
@@ -1901,6 +1913,14 @@ impl Bus {
             if control.rtc_in_reset() {
                 for rtc in self.h7_rtc.iter_mut().filter(|rtc| rtc.rcc_bound) {
                     rtc.reset();
+                }
+            }
+            for uart in &mut self.stm32_uarts {
+                if uart
+                    .clock
+                    .is_some_and(|clock| control.usart_in_reset(clock))
+                {
+                    uart.reset();
                 }
             }
             for i2c in &mut self.h7_i2c {
@@ -2296,6 +2316,12 @@ fn lptim_clocked(control: Option<&NetworkControl>, timer: &LpTimer) -> bool {
     timer
         .clock
         .is_none_or(|clock| control.is_some_and(|control| control.lptim_enabled(clock)))
+}
+
+fn usart_clocked(control: Option<&NetworkControl>, uart: &Stm32Usart) -> bool {
+    control
+        .zip(uart.clock)
+        .is_none_or(|(control, clock)| control.usart_enabled(clock))
 }
 
 fn timer_clocked(control: Option<&NetworkControl>, timer: &H7Timer) -> bool {

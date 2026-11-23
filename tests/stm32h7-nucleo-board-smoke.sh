@@ -4,17 +4,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:-$(mktemp -d)}
-base=${1:?Pass the directory printed by tests/stm32h7-zephyr-smoke.sh}
+base=${1:-}
 mkdir -p "$assets"
 work=$(mktemp -d)
 printf 'STM32H753ZI board logs: %s\n' "$work"
 
-board="$renode/platforms/boards/nucleo_h753zi.repl"
+board=platforms/boards/nucleo_h753zi.repl
+platform=$board
 robot="$renode/tests/platforms/nucleo_h753zi.robot"
-cp "$base/boot.repl" "$work/board.repl"
-awk -v RS='' -v ORS='\n\n' '$1 ~ /^(GreenLED|YellowLED|RedLED|UserButton1|gpioPortB|gpioPortE|rcc):$/' \
-    "$board" >> "$work/board.repl"
-cat >> "$work/board.repl" <<'REPL'
+if [[ -n $base ]]; then
+    platform=board.repl
+    cp "$base/boot.repl" "$work/board.repl"
+    awk -v RS='' -v ORS='\n\n' '$1 ~ /^(GreenLED|YellowLED|RedLED|UserButton1|gpioPortB|gpioPortE|rcc):$/' \
+        "$renode/$board" >> "$work/board.repl"
+    cat >> "$work/board.repl" <<'REPL'
 
 usart3: UART.STM32F7_USART @ sysbus 0x40004800
     frequency: 125000000
@@ -24,6 +27,7 @@ lpuart1: UART.STM32F7_USART @ sysbus 0x58000c00
     frequency: 125000000
     IRQ -> exti@64
 REPL
+fi
 
 for scenario in blinky button; do
     tag=${scenario^^}
@@ -39,7 +43,7 @@ for scenario in blinky button; do
     script="$work/$scenario.resc"
     cat > "$script" <<RESC
 mach create "$scenario"
-machine LoadPlatformDescription @board.repl
+machine LoadPlatformDescription @$platform
 sysbus LoadELF @$url
 cpu VectorTableOffset \`sysbus GetSymbolAddress "_vector_table"\`
 RESC

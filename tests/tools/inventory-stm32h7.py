@@ -111,10 +111,19 @@ def platform_variants():
     for path in files:
         configuration = path.relative_to(renode).as_posix()
         if inherits_h7(path, set()):
-            reason = '固定 REPL が cpus/stm32h7.repl の Cortex-M7 構成を継承'
-            if configuration in {'platforms/cpus/stm32h7.repl', 'platforms/boards/stm32h7_renode_reference_board.repl'}:
-                reason += '。同じ TIM1 宣言と追記で APB2・IRQ 25/26/27 を実 ELF 検証。GPIO ファンアウトを実 ELF 上で確認。未変更参照 RESC は lpuart1 の登録で停止し、REPL 全体のロードは未達'
-            yield configuration, 'OPEN', reason
+            if configuration == 'platforms/boards/stm32h747-disco.repl':
+                yield configuration, 'OPEN', '固定 REPL は Input.FT5336（I2C4 0x38、GPIOK7 の IRQ）で停止'
+            elif configuration in {
+                'platforms/boards/nucleo_h753zi.repl',
+                'platforms/boards/stm32h7_renode_reference_board.repl',
+                'platforms/cpus/stm32h7.repl',
+                'platforms/cpus/stm32h743.repl',
+                'platforms/cpus/stm32h747.repl',
+                'platforms/cpus/stm32h753.repl',
+            }:
+                yield configuration, 'PASS', '固定 REPL を新規マシンで読み込み、破棄。上流 Try Load Platform と同じ入力・ロード失敗条件。tests/stm32h7-platform-load.sh'
+            else:
+                yield configuration, 'OPEN', '固定 REPL が cpus/stm32h7.repl を継承。等価なロード検証なし'
         else:
             yield configuration, 'OUT', f'テンプレートが {configuration} 自体のロードを要求。STM32H7 REPL 継承なし'
 
@@ -165,11 +174,13 @@ for file, kind in robot.items():
         elif file.endswith('VEML7700.robot') and name == 'Should Work From Zephyr Shell':
             status, note = 'PARTIAL', '参照デモ Shell で両照度を確認。上流の同一 ELF と実行時変更が未確認'
         elif name == 'Should Talk Over Ethernet':
-            status, note = 'PARTIAL', '同一 ELF と仮想スイッチ。連続接続で成功カウンターは 0x44、クライアント UART の比較行は未出力。切断を追加すると比較行を確認できるが上流刺激と異なる'
+            status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL・仮想スイッチ。10 仮想秒で成功カウンター 0x2c とサーバーの応答 10 回を確認。クライアント UART の比較行と Robot の順序条件が未達'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Have Ethernet as Link Up in CubeMX':
+            note = '同一 ELF を未変更 Nucleo REPL で試行。ARM EABI5 hard-float ELF のローダー拒否で UART 観測前に停止'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Blink Led':
-            status, note = 'PARTIAL', '同一 ELF・UART。GPIOB0 を 10 ms ごとに観測して 8 区間を確認。診断 REPL で Robot の LED Tester と停止条件は未移植'
+            status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL。GPIOB0 を 10 ms ごとに観測して 8 区間を確認。Robot の LED Tester と停止条件は未移植'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should See Button Press':
-            status, note = 'PARTIAL', '同一 ELF・UART・UserButton1 Press/Release。診断 REPL で GPIOB0 の消灯・点灯・消灯を確認。Robot の停止条件は未移植'
+            status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL・UserButton1 Press/Release。GPIOB0 の消灯・点灯・消灯を確認。Robot の停止条件は未移植'
         if file.endswith('/platform_descriptions.robot') and name == 'Should Load Repls':
             for configuration, decision, reason in platform_variants():
                 rows.append(('renode', file, f'{start+1}-{stop}', name, configuration, decision, reason))

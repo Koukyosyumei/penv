@@ -342,6 +342,9 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
                 .ok_or_else(|| ethernet.error("missing STM32H7 Ethernet controller"))
         })
         .transpose()?;
+    // Renode returns zero for unhandled MMIO. Zephyr accesses DBGMCU
+    // during STM32H7 startup even though the upstream platform has no model.
+    machine.bus.tag(0x5c001000..=0x5c0013ff, 0);
     machine
         .bus
         .map_h7_network_control(NetworkControl::new(rcc_base, syscfg_base, nic))

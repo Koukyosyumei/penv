@@ -612,3 +612,32 @@ target/release/penv run --script ../renode/scripts/single-node/stm32h7_renode_re
 target/release/penv run --script "$e/nucleo-load.resc" \
     --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
 ```
+
+### backlog-network-e9661f3ff43b-1
+
+複数登録を持つ上流 STM32H7 USART/LPUART を読み込み、既存の EXTI ルートに接続しました。RCC の APB1L、APB2、APB4 の有効化・リセットを適用し、UART 入力はクロックと受信が有効な最初の USART に渡します。リンクした USART3 でゲート、受信、EXTI28 → NVIC39、リセットをテストしました。上流定義では未配置の DBGMCU 領域は固定 Renode の未配置アクセスに合わせて 0 を返します。従来の診断 REPL にある DBGMCU モデルは引き続き使用できます。
+
+上流 `tests/unit-tests/platform_descriptions.robot` の `Should Load Repls` を STM32H7 の固定パラメーター 7 件で移植しました。各 CLI プロセスで新規マシンを作成し、同じ REPL のロードの成否を観測して破棄します。Nucleo、参照ボード、CPU 定義 4 件の計 6 件が等価合格です。Disco は I²C4 アドレス `0x38` の `Input.FT5336` と GPIOK7 の割り込みが未対応です。台帳全体では対象 785 件のうち 6 件が等価合格、17 件が部分検証、762 件が未達です。
+
+未変更の参照 RESC で公開 Zephyr が起動し、UART の `kernel version` に `Zephyr version 4.4.99` と応答しました。未変更 Nucleo REPL でも上流の Blinky、Button のスモークは通過しました。LED Tester と停止条件が未移植のため部分検証のままです。Ethernet echo は同じ構成で 10 仮想秒以内にサーバー応答 10 回と照合成功カウンター `0x2c` を観測しました。クライアント UART の比較行と順序条件は未達です。CubeMX の Ethernet リンクケースは公開 ELF の hard-float ABI をローダーが拒否しました。上流の `netif link up` は未観測です。
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-usart.gG85D2ya` に保存しました。参照 RESC のシェルは応答後に手順中の命令上限に達するため、コード 2 で終了します。ロードスクリプトは Disco の未達によりコード 1 を返し、全構成の個別終了状態を記録します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-board-smoke.sh
+input=$(mktemp)
+printf 'kernel version\r' > "$input"
+target/release/penv run --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1800000 \
+    --uart-event "1250000:$input"
+e=~/.local/state/penv-dispatch/evidence/h7-usart.gG85D2ya
+target/release/penv run --script "$e/echo/echo.resc" --platform-root ../renode \
+    --asset-dir "$PENV_ASSET_DIR" --max-steps 11000000 --uart-log-dir "$(mktemp -d)"
+target/release/penv run --platform ../renode/platforms/boards/nucleo_h753zi.repl \
+    --platform-root ../renode --max-steps 3000000 "$PENV_ASSET_DIR"/cubemx--stm32h7-eth-test.elf-s_1231644-3e808bfc20a3a96ad304acbc94c7dbd6b06245e5
+```

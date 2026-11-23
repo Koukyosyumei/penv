@@ -188,6 +188,26 @@ impl NetworkControl {
         }
     }
 
+    pub fn usart_enabled(&self, clock: crate::stm32_uart::Stm32UsartClock) -> bool {
+        use crate::stm32_uart::Stm32UsartClock::*;
+        let (enable, bit) = match clock {
+            Apb1Low(bit) => (self.apb1l_clock, bit),
+            Apb2(bit) => (self.apb2_clock, bit),
+            Apb4(bit) => (self.apb4_clock, bit),
+        };
+        enable & (1 << bit) != 0 && !self.usart_in_reset(clock)
+    }
+
+    pub fn usart_in_reset(&self, clock: crate::stm32_uart::Stm32UsartClock) -> bool {
+        use crate::stm32_uart::Stm32UsartClock::*;
+        let (reset, bit) = match clock {
+            Apb1Low(bit) => (self.apb1l_reset, bit),
+            Apb2(bit) => (self.apb2_reset, bit),
+            Apb4(bit) => (self.apb4_reset, bit),
+        };
+        reset & (1 << bit) != 0
+    }
+
     pub fn timer_enabled(&self, clock: TimerClock) -> bool {
         let enabled = match clock {
             TimerClock::Apb1Low(bit) => self.apb1l_clock & (1 << bit) != 0,
@@ -414,15 +434,15 @@ impl NetworkControl {
                 Change::None
             }
             0x90 => {
-                self.apb1l_reset = value & ((7 << 21) | 0x1ff | LPTIM1);
+                self.apb1l_reset = value & ((7 << 21) | 0x1ff | LPTIM1 | (0xf << 17) | (3 << 30));
                 Change::None
             }
             0x9c => {
-                self.apb4_reset = value & ((1 << 7) | LPTIM2_TO_5);
+                self.apb4_reset = value & ((1 << 7) | LPTIM2_TO_5 | (1 << 3));
                 Change::None
             }
             0x98 => {
-                self.apb2_reset = value & (SPI4 | TimerClock::apb2_mask());
+                self.apb2_reset = value & (SPI4 | TimerClock::apb2_mask() | (3 << 4));
                 Change::None
             }
             0xd8 => {

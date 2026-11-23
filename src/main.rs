@@ -78,6 +78,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv check-platform PATH [--platform-root PATH]
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
@@ -125,8 +126,23 @@ fn run() -> Result<ExitCode, String> {
             println!("penv {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Some("check-platform")) => {
+            let path = args.next().ok_or("expected a platform path")?;
+            let root = match args.next() {
+                None => None,
+                Some(flag) if flag == "--platform-root" => Some(PathBuf::from(
+                    args.next().ok_or("expected a platform root")?,
+                )),
+                _ => return Err("expected --platform-root PATH".into()),
+            };
+            if args.next().is_some() {
+                return Err("unexpected check-platform argument".into());
+            }
+            platform::load(&PathBuf::from(path), root.as_deref())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run'; see --help".into()),
+        _ => return Err("expected 'run' or 'check-platform'; see --help".into()),
     }
 
     let mut raw = false;

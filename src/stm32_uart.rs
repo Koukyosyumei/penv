@@ -16,9 +16,34 @@ pub enum Stm32Irq {
     Exti(u8),
 }
 
+#[derive(Clone, Copy)]
+pub enum Stm32UsartClock {
+    Apb1Low(u8),
+    Apb2(u8),
+    Apb4(u8),
+}
+
+impl Stm32UsartClock {
+    pub fn from_alias(alias: &str) -> Result<Self, String> {
+        Ok(match alias {
+            "USART1" => Self::Apb2(4),
+            "USART6" => Self::Apb2(5),
+            "USART2" => Self::Apb1Low(17),
+            "USART3" => Self::Apb1Low(18),
+            "UART4" => Self::Apb1Low(19),
+            "UART5" => Self::Apb1Low(20),
+            "UART7" => Self::Apb1Low(30),
+            "UART8" => Self::Apb1Low(31),
+            "LPUART1" => Self::Apb4(3),
+            _ => return Err(format!("unsupported STM32 USART RCC alias {alias}")),
+        })
+    }
+}
+
 pub struct Stm32Usart {
     pub base: u32,
     pub irq: Option<Stm32Irq>,
+    pub clock: Option<Stm32UsartClock>,
     receive: VecDeque<u8>,
     registers: [u32; 12],
     complete: bool,
@@ -28,10 +53,16 @@ pub struct Stm32Usart {
 impl Stm32Usart {
     pub const SIZE: u32 = 0x400;
 
-    pub fn new(base: u32, irq: Option<Stm32Irq>, low_power: bool) -> Self {
+    pub fn new(
+        base: u32,
+        irq: Option<Stm32Irq>,
+        low_power: bool,
+        clock: Option<Stm32UsartClock>,
+    ) -> Self {
         Self {
             base,
             irq,
+            clock,
             receive: VecDeque::new(),
             registers: [0; 12],
             complete: true,
@@ -40,15 +71,19 @@ impl Stm32Usart {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.base, self.irq, self.low_power);
+        *self = Self::new(self.base, self.irq, self.low_power, self.clock);
     }
 
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
+    pub fn receiver_enabled(&self) -> bool {
+        self.registers[0] & (UE | RE) == UE | RE
+    }
+
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
-        if self.registers[0] & (UE | RE) == UE | RE {
+        if self.receiver_enabled() {
             self.receive.extend(bytes);
         }
     }
@@ -118,8 +153,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn registered_usart_uses_rcc_gate_reset_and_exti_route() {
+        use crate::{
+            bus::Bus, nvic::ActiveExceptions, stm32h7_exti::H7Exti,
+            stm32h7_net_control::NetworkControl,
+        };
+
+        const RCC: u32 = 0x58024400;
+        const BASE: u32 = 0x40004800;
+        let mut bus = Bus::default();
+        bus.map_h7_network_control(NetworkControl::new(RCC, None, None))
+            .unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        let mut lines = [None; H7Exti::LINES];
+        lines[28] = Some(39);
+        bus.map_h7_exti(0x58000000, lines).unwrap();
+        bus.map_stm32_usart(
+            BASE,
+            Some(Stm32Irq::Exti(28)),
+            false,
+            Some(Stm32UsartClock::from_alias("USART3").unwrap()),
+        )
+        .unwrap();
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut io::sink()).unwrap();
+        };
+        write(&mut bus, BASE, UE | RE | RXNE);
+        write(&mut bus, RCC + 0xf0, 1 << 18);
+        assert_eq!(bus.read::<4>(BASE + 0x1c).unwrap(), 0);
+        write(&mut bus, RCC + 0xe8, 1 << 18);
+        assert_eq!(bus.read::<4>(BASE).unwrap(), 0);
+        write(&mut bus, BASE, UE | RE | RXNE);
+        bus.queue_uart_input(b"A".to_vec());
+        bus.sample_nvic(&ActiveExceptions::default());
+        assert_eq!(bus.read::<4>(0xe000e204).unwrap(), 1 << (39 - 32));
+        assert_eq!(bus.read::<4>(BASE + 0x24).unwrap(), u32::from(b'A'));
+        write(&mut bus, RCC + 0x90, 1 << 18);
+        write(&mut bus, RCC + 0x90, 0);
+        assert_eq!(bus.read::<4>(BASE).unwrap(), 0);
+    }
+
+    #[test]
     fn receive_irq_and_transmit_follow_control_and_status_registers() {
-        let mut uart = Stm32Usart::new(0, Some(Stm32Irq::Nvic(3)), false);
+        let mut uart = Stm32Usart::new(0, Some(Stm32Irq::Nvic(3)), false, None);
         let mut output = Vec::new();
         uart.queue_input(b"X".to_vec());
         uart.write(0, 1, UE | RE | TE | RXNE, &mut output).unwrap();

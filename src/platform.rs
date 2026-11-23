@@ -243,6 +243,7 @@ fn parse(
         if (crate::network_platform::has_regions(model)
             || stm32h7_adc_platform::has_regions(model)
             || model == stm32h7_gpio_platform::GPIO
+            || model == "UART.STM32F7_USART"
             || model == stm32h7_rtc_platform::RTC
             || model == crate::stm32h7_spi::SPI
             || crate::stm32h7_board_platform::has_regions(model))
@@ -791,9 +792,15 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(uart.error("unsupported USART IRQ wiring"));
                 }
             }
+            let (base, alias) = crate::stm32h7_board_platform::registration(uart, &entries)
+                .map_err(|e| uart.error(&e))?;
+            let clock = alias
+                .map(crate::stm32_uart::Stm32UsartClock::from_alias)
+                .transpose()
+                .map_err(|e| uart.error(&e))?;
             machine
                 .bus
-                .map_stm32_usart(uart.address()?, irq, low_power.unwrap_or(false))
+                .map_stm32_usart(base, irq, low_power.unwrap_or(false), clock)
                 .map_err(|e| uart.error(&e))?;
         }
         machine
