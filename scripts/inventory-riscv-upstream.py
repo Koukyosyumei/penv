@@ -146,6 +146,13 @@ def robot_cases(root, isa, act):
                             basis += "; Zfh ISA diagnostic passed with 2 MiB RAM"
                         if re.fullmatch(r"spike-rv32-max/elfs/priv/(?:Exceptions(?:S|Sm|U|Zaamo|Zalrsc)/[^/]+|Sv/mstatus_tvm_test)\.elf", portable):
                             basis += "; fixed ELF passed in vector-bootstrap diagnostic with CLINT"
+                        if re.fullmatch(r"spike-rv32-max/elfs/priv/(?:S|U|UF|SmF|SsstrictS|SsstrictSm|SsstrictU|ZicntrS|ZicntrU|Svinval)/[^/]+\.elf", portable):
+                            if portable.endswith("/Svinval.elf"):
+                                basis += "; diagnostic tohost=0 but M-mode SINVAL.VMA probe traps; shared ISA dispatch requested"
+                            elif portable.endswith("/SsstrictCsrSm.elf"):
+                                basis += "; diagnostic hits step limit with Smepmp, reaches tohost=0 with Smepmp omitted"
+                            else:
+                                basis += "; fixed ELF reached tohost=0 in vector-bootstrap diagnostic with CLINT"
                         if portable == "spike-rv32-max/elfs/priv/Sm/Sm-00.elf":
                             basis += "; vector-bootstrap diagnostic with Sail MSTATUS init passes full signature"
                         if portable == "spike-rv32-max/elfs/priv/UV/UV.elf":

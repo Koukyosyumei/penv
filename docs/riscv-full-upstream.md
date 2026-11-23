@@ -1557,3 +1557,23 @@ cmp "$p.sig" "$repro/fresh.sig"
 ベクトル初期化の診断設定と CLINT を使った固定特権 ELF は変更前 5/6 件、変更後 6/6 件でした。固定 Robot 構成では V の未対応により 6 件とも CPU 作成時に停止しました。Rust テストは 88/88 件が通過しました。
 
 BF16 は Sail 0.9 で署名用 ELF 6 件の署名を再生成し、固定の署名とすべて一致しました。penv の診断構成は 5/6 件で、不正な NaN ボックスの固定署名 `0x7e000000` と仕様に基づく標準 NaN の差が残っています。比較結果は上記の証拠ディレクトリに保存しました。台帳の上流等価合格は累計 174 件です。
+
+### RV32 特権 ACT の終了コードと命令観測
+
+S・U・UF・SmF・Ssstrict・ZicntrS/U・Svinval の固定 ELF 13 件を同じ release バイナリで実行しました。V を外し診断用ベクトル初期化と CLINT を加えた構成では 12 件が `tohost=0`、`SsstrictCsrSm.elf` は 1000 万ステップの上限で停止しました。同じ診断構成から Smepmp を外すと 13 件とも `tohost=0` に達しました。機械モード CSR 全走査は `mseccfg` に全ビットを書き込みます。Smepmp を外した結果を固定構成の合格に算入しません。
+
+`Svinval.elf` は診断構成で `tohost=0` でした。一方、最初の `sinval.vma` を M モードで実行する補助 ELF は不正命令で停止しました。Svinval の命令動作も未達とし、共有 ISA 設定とディスパッチの依頼を ARM 担当に渡しました。固定 Robot 構成では V の未対応で全 13 件が CPU 作成時に停止しました。Rust テストは 88/88 件が通過し、台帳の等価合格は累計 174 件です。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-8fe9ef8-oc6JF3"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv --max-steps 10000000 \
+  --platform "$evidence/priv.repl" --artifacts "$repro/priv" \
+  "$work"/act/work/spike-rv32-max/elfs/priv/{S,U,UF,SmF,SsstrictS,SsstrictSm,SsstrictU,ZicntrS,ZicntrU,Svinval}/*.elf
+target/release/penv run --platform "$evidence/priv.repl" --max-steps 20 "$evidence/svinval-probe.elf"
+```
+
+ケース別結果、実行構成、補助 ELF とソースは上記の証拠ディレクトリに保存しました。
