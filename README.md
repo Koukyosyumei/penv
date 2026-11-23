@@ -955,3 +955,23 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 固定 REPL の 7 構成、インライン REPL の 3 ケース、公開 Nucleo Zephyr ELF の Blinky と Button は回帰を通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-using.iKgL0z6U` に保存しました。台帳は対象 786 件のうち等価合格 70 件、部分検証 10 件、未達 706 件です。
+
+### backlog-network-51d0b6ddb4c3-1
+
+REPL の `using` グラフを子から親へ合成し、同じ階層では宣言順に属性を適用します。型付き宣言が後に現れる場合も、先行する属性の追記先を解決します。型付き宣言の重複と、同じ宣言内で重複したプロパティは既存の診断を維持します。
+
+固定上流 `UsingTests.cs` の属性上書き順 5 件を移植しました。固定 REPL 文字列を使い、上流の MockCPU が保持する文字列 `Placeholder` の期待値を合成結果で照合します。実 STM32H743 でも、`using` より前に置いた GPIO の属性が構築後の MMIO に反映されることを確認しました。MockCPU の参照解決と `local` スコープを扱う 4 件は残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test should_follow_attribute_override_order
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-using-order.bX4dvaHY
+target/release/penv run --script "$e/gpio.resc" --platform-root ../renode
+```
+
+検証ログと終了状態は上記のディレクトリに保存しました。台帳は対象 786 件のうち等価合格 75 件、部分検証 10 件、未達 701 件です。

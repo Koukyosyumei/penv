@@ -219,6 +219,7 @@ fn parse_text(
 ) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
+    let mut definitions = Vec::new();
     let mut registration_depth = 0;
     let mut seen_usings = HashSet::new();
     let mut lines = content.lines().enumerate();
@@ -271,10 +272,13 @@ fn parse_text(
                 .push((source, text.into()));
             continue;
         }
-        entries.extend(current.take());
+        definitions.extend(current.take());
         if let Some(include) = text.strip_prefix("using ") {
+            let include = include.trim();
             let filename = include
-                .trim()
+                .strip_suffix(';')
+                .unwrap_or(include)
+                .trim_end()
                 .strip_prefix('"')
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
@@ -329,7 +333,8 @@ fn parse_text(
     if registration_depth != 0 {
         return Err(current.unwrap().error("unterminated Ethernet registration"));
     }
-    entries.extend(current);
+    definitions.extend(current);
+    entries.extend(definitions);
     Ok(())
 }
 
@@ -348,46 +353,66 @@ fn property_key(text: &str) -> Option<&str> {
     .then_some(key)
 }
 
-fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
-    let mut definitions: Vec<Entry> = Vec::new();
-    let mut names: HashMap<String, usize> = HashMap::new();
-    for entry in entries {
-        if entry.model.is_empty()
-            && entry.registration.is_none()
-            && let Some(&index) = names.get(&entry.name)
+fn merge_properties(body: &mut Properties, incoming: Properties) {
+    // Keep same-entry duplicate properties for the peripheral validator.
+    let mut replaced = HashSet::new();
+    for (_, text) in &incoming {
+        if let Some(key) = property_key(text)
+            && replaced.insert(key)
         {
-            let body = &mut definitions[index].body;
-            // Replace a property from an earlier entry. Preserve duplicates within an
-            // entry for the individual peripheral's existing validation.
-            let mut replaced = HashSet::new();
-            for (_, text) in &entry.body {
-                if let Some(key) = property_key(text)
-                    && replaced.insert(key)
-                {
-                    let mut previous = body
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, (_, property))| property_key(property) == Some(key));
-                    if let Some((index, _)) = previous.next()
-                        && previous.next().is_none()
-                    {
-                        body.remove(index);
-                    }
-                }
-            }
-            let insertion = body
+            let mut matches = body
                 .iter()
-                .position(|(_, text)| text == "init:")
-                .unwrap_or(body.len());
-            body.splice(insertion..insertion, entry.body);
-        } else {
-            if !entry.model.is_empty() {
-                names.entry(entry.name.clone()).or_insert(definitions.len());
+                .enumerate()
+                .filter(|(_, (_, property))| property_key(property) == Some(key));
+            if let Some((index, _)) = matches.next()
+                && matches.next().is_none()
+            {
+                body.remove(index);
             }
-            definitions.push(entry);
         }
     }
+    let insertion = body
+        .iter()
+        .position(|(_, text)| text == "init:")
+        .unwrap_or(body.len());
+    body.splice(insertion..insertion, incoming);
+}
+
+fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut names = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if !entry.model.is_empty() {
+            names.entry(entry.name.clone()).or_insert(index);
+        }
+    }
+    let mut bodies: HashMap<usize, Properties> = HashMap::new();
+    let mut definitions = Vec::new();
+    for (index, mut entry) in entries.into_iter().enumerate() {
+        let target = names.get(&entry.name).copied();
+        if entry.model.is_empty()
+            && entry.registration.is_none()
+            && let Some(target) = target
+        {
+            merge_properties(bodies.entry(target).or_default(), entry.body);
+            continue;
+        }
+        if target == Some(index) {
+            merge_properties(
+                bodies.entry(index).or_default(),
+                std::mem::take(&mut entry.body),
+            );
+        }
+        definitions.push((index, entry));
+    }
     definitions
+        .into_iter()
+        .map(|(index, mut entry)| {
+            if let Some(body) = bodies.remove(&index) {
+                entry.body = body;
+            }
+            entry
+        })
+        .collect()
 }
 
 fn configure_sysbus_tags(entry: &Entry, bus: &mut crate::bus::Bus) -> Result<(), String> {
@@ -1549,6 +1574,221 @@ using \"A\"\np: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
         assert!(
             parse_using_fixture("missing", "\nusing \"A\"", &[])
                 .contains("Using 'A' does not exist")
+        );
+    }
+
+    fn check_override(index: u8, source: &str, files: &[(&str, &str)], expected: &str) {
+        let directory =
+            std::env::temp_dir().join(format!("penv-using-{}-order-{index}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        for (name, content) in files {
+            fs::write(directory.join(name), content).unwrap();
+        }
+        let mut entries = Vec::new();
+        let result = parse_text(
+            source,
+            &directory.join("root"),
+            &directory,
+            &directory,
+            &mut HashSet::new(),
+            &mut entries,
+        );
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+        let definitions = apply_overlays(entries);
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].name, "cpu");
+        assert_eq!(definitions[0].body.len(), 1);
+        assert_eq!(
+            definitions[0].body[0].1,
+            format!("Placeholder: \"{expected}\"")
+        );
+    }
+
+    #[test]
+    fn should_follow_attribute_override_order_0() {
+        check_override(
+            0,
+            r#"
+using "A"
+using "B"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 0x0
+    Placeholder: "set by source first"
+
+cpu:
+    Placeholder: "set by source second"
+"#,
+            &[
+                (
+                    "A",
+                    r#"
+cpu:
+    Placeholder: "set by A"
+"#,
+                ),
+                (
+                    "B",
+                    r#"
+using "C"
+cpu:
+    Placeholder: "set by B"
+"#,
+                ),
+                (
+                    "C",
+                    r#"
+cpu:
+    Placeholder: "set by C"
+"#,
+                ),
+            ],
+            "set by source second",
+        );
+    }
+
+    #[test]
+    fn should_follow_attribute_override_order_1() {
+        check_override(
+            1,
+            r#"
+using "A"
+using "B"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+"#,
+            &[
+                (
+                    "A",
+                    r#"
+cpu:
+    Placeholder: "set by A first"
+cpu:
+    Placeholder: "set by A second"
+"#,
+                ),
+                (
+                    "B",
+                    r#"
+using "C"
+cpu:
+    Placeholder: "set by B first"
+cpu:
+    Placeholder: "set by B second"
+"#,
+                ),
+                (
+                    "C",
+                    r#"
+cpu:
+    Placeholder: "set by C first"
+cpu:
+    Placeholder: "set by C second"
+"#,
+                ),
+            ],
+            "set by B second",
+        );
+    }
+
+    #[test]
+    fn should_follow_attribute_override_order_2() {
+        check_override(
+            2,
+            r#"
+using "A"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 0x0
+"#,
+            &[
+                (
+                    "A",
+                    r#"
+using "B"
+cpu:
+    Placeholder: "set by A"
+"#,
+                ),
+                (
+                    "B",
+                    r#"
+cpu:
+    Placeholder: "set by B"
+"#,
+                ),
+            ],
+            "set by A",
+        );
+    }
+
+    #[test]
+    fn should_follow_attribute_override_order_3() {
+        check_override(
+            3,
+            r#"
+using "A"
+using "B"
+using "C"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+"#,
+            &[
+                (
+                    "A",
+                    r#"
+cpu:
+    Placeholder: "set by A first"
+cpu:
+    Placeholder: "set by A second"
+"#,
+                ),
+                (
+                    "B",
+                    r#"
+cpu:
+    Placeholder: "set by B first"
+cpu:
+    Placeholder: "set by B second"
+"#,
+                ),
+                (
+                    "C",
+                    r#"
+using "A";
+"#,
+                ),
+            ],
+            "set by A second",
+        );
+    }
+
+    #[test]
+    fn should_follow_attribute_override_order_4() {
+        check_override(
+            4,
+            r#"
+using "A"
+using "B"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+"#,
+            &[
+                (
+                    "A",
+                    r#"
+cpu:
+    Placeholder: "set by A first"
+cpu:
+    Placeholder: "set by A second"
+"#,
+                ),
+                (
+                    "B",
+                    r#"
+using "A"
+cpu:
+    Placeholder: "set by B first"
+cpu:
+    Placeholder: "set by B second"
+"#,
+                ),
+            ],
+            "set by B second",
         );
     }
 
