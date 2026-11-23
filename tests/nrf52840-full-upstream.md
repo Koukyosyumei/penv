@@ -47,7 +47,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 同 / Should Read Pressure | twi0 0x77、未補償圧力 1100 | `Pressure: 231048.00 Pa`。元の ELF で確認 |
 | `tests/peripherals/LSM9DS1.robot` / Should Detect RING Motion | Nano 33 BLE、`circle_rotated.data` | `Magic starts` → `RING:`。元の REPL・ELF・入力で確認 |
 | 同 / Should Detect SLOPE Motion | Nano 33 BLE、`angle_rotated.data` | `Magic starts` → `SLOPE:`。元の REPL・ELF・入力で確認 |
-| `tests/platforms/imxrt500.robot` / Should Run Pigweed Bluetooth Advertiser | mixed RESC の nRF52840 observer と i.MX RT500 beacon、HCI UART と BLE | nRF 側で RSSI −10 の広告受信。混成構成を対象に残す。未移植。上流 RESC は `emulation CreateUARTHub "hci_beacon"` で停止 |
+| `tests/platforms/imxrt500.robot` / Should Run Pigweed Bluetooth Advertiser | mixed RESC の nRF52840 observer と i.MX RT500 beacon、HCI UART と BLE | nRF 側で RSSI −10 の広告受信。代替の nRF HCI 広告による Observer 側の部分検証済み。上流 RESC は `emulation CreateUARTHub "hci_beacon"` で停止 |
 | `tests/unit-tests/monitor-tests.robot` / Should Call GPIO Set | nRF52840 RESC、`uart0 IRQ Set true` | 元の RESC 読み込み後、同じ monitor コマンドで `GPIO: unset` → `GPIO: set` を確認 |
 
 ## 共有 CPU・周辺部品の適用性
@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 4 | 41 |
+| 監査した共有・混成 Robot | 190 | 145 | 6 | 39 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **4** | **41** |
+| 合計 | **221** | **176** | **6** | **39** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -589,3 +589,29 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 各フックは個別 RESC で登録時の失敗を判定する。CPU は起動しない。パケットフックの再現には `block.resc` の末尾を `emulation CreateIEEE802_15_4Medium "wireless"` と `wireless SetPacketHookFromScript radio "if error"` に置き換える。媒体作成で停止するため台帳では部分移植とした。汎用 Python フックの実行は残課題。
 
 ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/python-hook-errors.xzNlFAQ2` に保存した。`cases/` に6診断、パケットの阻害点、有効な構文を与えた対照のログがある。
+
+### Cortex-M PC 同期と混成 Bluetooth の共有依頼
+
+`sync_pc.robot:157–178` の Cortex-M 構成で、3個の NOP と分岐、1 MIPS で20 µs の条件を20命令スロットとして移植した。同期有効の試作では `block started: PC 0x1004` が5回出力された。同期無効と連結翻訳ブロックの検証は残るため、試作をローカルコミット `89083f05` に保存し、ARM 担当に依頼 `nrf52-sync-pc-89083f05.md` を渡した。
+
+```sh
+cargo test --locked
+tests/nrf52840-sync-pc-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/sync"
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+`imxrt500.robot:2–18` の固定 RESC を `target/debug/penv run --script ../renode/scripts/multi-node/imxrt500_nrf52840_pigweed_bt_advertiser.resc --platform-root ../renode` で再現すると、`emulation CreateUARTHub "hci_beacon"` で停止する。別に `target/debug/penv validate-platform ../renode/platforms/cpus/imxrt500.repl` を実行すると `Timers.LPC_CTimer` で停止する。4台の共有トポロジーは ARM 担当へ `nrf52-pigweed-topology-73400312.md` で依頼した。i.MX RT500 の周辺機器モデルも必要。
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/sync-pc.quUfU9lH` に保存した。
+
+固定 Observer ELF（SHA-1 `3cdf09a1f95f708618a3600a360696b7d5c3a988`）は、既存 nRF52840 HCI UART の4台経路で、Pigweed 側を nRF52840 心拍 Peripheral HCI サンプルに置き換えて検証した。Observer のスキャン開始と `(RSSI -10), type 0, AD data len 11` を観測した。固定 Pigweed の期待は type 2・len 28 であり、i.MX RT500 の UART 検証も残る。台帳は部分移植。
+
+```sh
+cargo build --release --locked
+target/release/penv run --platform ../renode/platforms/boards/nrf52840dk_nrf52840.repl \
+    --platform-root ../renode --uart-steps --ble-peer "$HCI_PERIPHERAL_ELF" \
+    --ble-hci-controller "$HCI_CONTROLLER_ELF" --max-steps 240000000 "$OBSERVER_ELF"
+```
+
+`HCI_PERIPHERAL_ELF` と `HCI_CONTROLLER_ELF` は `tests/nrf52840-hci-upstream.sh` の固定ファイル。代替の広告行を観測した後にゲストを停止し、`observer-observed.status` に観測結果、`observer.status` にプロセスの終了状態を保存した。
