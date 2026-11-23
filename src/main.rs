@@ -10,6 +10,7 @@ mod ethernet_switch;
 mod iis2mdc;
 mod image;
 mod litex_ethernet;
+mod lps25hb;
 mod machine;
 mod mii_phy;
 mod monitor;

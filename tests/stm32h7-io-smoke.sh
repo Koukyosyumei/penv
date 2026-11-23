@@ -228,3 +228,42 @@ target/release/penv run --script "$work/pwm/boot.resc" --platform-root "$renode"
 rg -aqF 'Booting STM32H7 Renode Platform Demo' "$work/pwm/0.uart.log"
 printf '%s\n' 0x00000010 0x00000000 0x00000000 0x00000010 |
     diff -u - <(awk '/sysbus\[0x58020410\]/ { print $NF }' "$work/pwm/waveform.log")
+
+# Run the exact polling ELFs named by LPS25HB.robot with selected static inputs.
+robot="$renode/tests/peripherals/LPS25HB.robot"
+mkdir "$work/pressure"
+for version in 420 440; do
+    url=$(sed -n "s/^\${ZEPHYR${version}_BIN}[[:space:]]*@//p" "$robot")
+    elf="$assets/${url##*/}"
+    if [[ ! -f "$elf" ]]; then
+        curl --fail --location "$url" --output "$elf.part"
+        mv "$elf.part" "$elf"
+    fi
+    printf '%s  %s\n' "${elf##*-}" "$elf" | sha1sum --check -
+    cases=(high)
+    if [[ $version == 420 ]]; then cases+=(default negative); fi
+    for case in "${cases[@]}"; do
+        mkdir "$work/pressure/$version-$case"
+        sample="$work/pressure/$version-$case"
+        cp "$work/positive/poll.repl" "$sample/poll.repl"
+        cp "$work/positive/poll.resc" "$sample/poll.resc"
+        printf '\nlps25hb: Sensors.LPS25HB @ i2c1 0x5D\n' >> "$sample/poll.repl"
+        case "$case" in
+            default) expected='temp 42.50 Cel, pressure 0.000000 kPa' ;;
+            high)
+                printf '    Temperature: 100\n    Pressure: 1013.25\n' >> "$sample/poll.repl"
+                expected='temp 100.31 Cel, pressure 101.325000 kPa' ;;
+            negative)
+                printf '    Temperature: -10\n    Pressure: 1013.25\n' >> "$sample/poll.repl"
+                expected='temp -9.31 Cel, pressure 101.325000 kPa' ;;
+        esac
+        status=0
+        target/release/penv run --script "$sample/poll.resc" \
+            --platform-root "$renode" --asset-dir "$assets" --max-steps 1500000 "$elf" \
+            > "$sample/uart.log" 2> "$sample/penv.log" || status=$?
+        if [[ $status != 2 ]] || ! rg -aqF "$expected" "$sample/uart.log"; then
+            cat "$sample/penv.log" "$sample/uart.log" >&2
+            exit 1
+        fi
+    done
+done

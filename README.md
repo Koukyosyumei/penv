@@ -436,7 +436,7 @@ Ethernet はハッシュ固定の ELF 内の成功カウンターを合格判定
 - Packet.Net `20e0f2fe40743fed4e6a81bb8fe9523c257f168b`
 - UI `5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f`
 
-984 行のうち、適用範囲の確認待ち `REVIEW` が 704、未達 `OPEN` が 82、部分移植 `PARTIAL` が 7、適用外の根拠を確認した `OUT` が 191 です。初回台帳は完全な適用性判定やパラメータ展開を終えていません。機種固有の未実装・失敗・ビルド依存を除外理由にはしていません。上流と等価な合格はまだ記録していません。既存の `network-ready` は診断スモークのゲートです。全上流ケース用の `network-full-upstream-ready` は未作成です。
+初回棚卸しの 984 行のうち、適用範囲の確認待ち `REVIEW` が 704、未達 `OPEN` が 82、部分移植 `PARTIAL` が 7、適用外の根拠を確認した `OUT` が 191 です。初回台帳は完全な適用性判定やパラメータ展開を終えていません。機種固有の未実装・失敗・ビルド依存を除外理由にはしていません。上流と等価な合格はまだ記録していません。既存の `network-ready` は診断スモークのゲートです。全上流ケース用の `network-full-upstream-ready` は未作成です。
 
 固定の Infrastructure と Packet.Net は作業ディレクトリの外で展開し、`../renode` は読み取り専用の参照にしました。tlib と UI の固定アーカイブに Robot/NUnit のテストファイルは見つかりませんでした。対象 NUnit プロジェクトは .NET 10 を指定しており、今回の環境では `dotnet` と Renode/Robot ランナーを検出できませんでした。直接実行の確認は残件です。
 
@@ -452,3 +452,18 @@ cmp tests/stm32h7-full-upstream.tsv "$scan/inventory.tsv"
 ```
 
 TMP108 は固定温度、ビッグエンディアンの温度・閾値、ワンショットからの復帰を実装しました。診断 Shell で `sensor get tmp108@48 ambient_temp` が `23.500000` を返します。時系列入力、比較器と IRQ は残件です。未変更の上流参照 RESC は TMP108 を通過し、`platforms/boards/stm32h7_renode_reference_board.repl:52` の `Sensors.LPS25HB` で停止します。実行コマンドは前節のスモーク 3 本と、SDMMC・USB・sysbus タグ節の未変更 RESC 用コマンドを使います。
+
+### full-h7-triage-and-lps25hb
+
+固定版の [ケース台帳](tests/stm32h7-full-upstream.tsv) で、機種固有の Nucleo H753ZI Robot は全 25 ケースを適用対象に維持しました。既存の 984 行の内訳は、適用対象 778 行（`OPEN` 768、`PARTIAL` 10）、適用外 206 行です。既存行の `REVIEW` は 0 です。この分母は現台帳の行単位で、上流全体の追加発見や未展開のパラメータは含みません。汎用 Cortex-M・REPL・モニター・DMA・バス・パケットの共有契約は対象側に残しました。新たな適用外の行には Zynq 固定 Linux ゲスト、NXP K6xF 固定 ELF、Cortex-M33/TrustZone、Windows 固有操作、PPP または Linux cooked キャプチャ形式の根拠を記録しました。性能ケースは対象に残し、実行は後工程です。
+
+LPS25HB はサブアドレスと自動インクリメント、`WHO_AM_I=0xbd`、設定レジスター、温度と圧力の換算を実装しました。前節の Shell スモークが作る診断 REPL を使い、`stm32h7-io-smoke.sh` が `LPS25HB.robot` 指定の Zephyr 4.2・4.4 ELF を SHA-1 照合して実行します。実行ログはスモークが出力するディレクトリの `pressure/` 配下に残ります。
+
+| 上流ケース | 上流期待値との照合と残件 |
+| --- | --- |
+| Should Read Temperature And Pressure | v4.2 ELF で初期値、100 °C、−10 °C の UART と既知の 101.325000 kPa を個別に照合。範囲外入力の保持は単体テストで確認。1 回の実行内の入力変更と順序の検証は残件。 |
+| Should Correctly Calculate Pressure | 1023.346923828125 hPa が `8d f5 3f` になることを I²C サブアドレス読み出しで照合。Robot のプロパティ getter と直接 Read の再現は残件。 |
+| Should Read Samples From RESD | 未達。再生、サンプル切替、終端後に静的値へ戻る処理が必要。 |
+| Should Work After Errata Driver Update | v4.4 の同一 ELF が `temp 100.31 Cel, pressure 101.325000 kPa` を出力。元の REPL と実行時入力の等価性は未確定。 |
+
+未変更の上流 RESC は `lps25hb` を通過し、ボード REPL の 54 行目にある `Sensors.LSM6DSO_IMU` で停止します。診断スモークの合格を全上流ケースの合格数には算入していません。

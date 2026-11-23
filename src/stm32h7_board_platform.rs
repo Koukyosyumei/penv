@@ -1,6 +1,7 @@
 use crate::{
     designware_usb::DesignWareUsb,
     iis2mdc::Iis2mdc,
+    lps25hb::Lps25hb,
     machine::Machine,
     nvic::IRQ_LINES,
     platform::{Entry, irq_index, number},
@@ -46,6 +47,7 @@ pub fn is_device(model: &str) -> bool {
                 | Veml7700::MODEL
                 | Iis2mdc::MODEL
                 | Tmp108::MODEL
+                | Lps25hb::MODEL
                 | Iwdg::MODEL
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
@@ -306,7 +308,7 @@ pub fn configure(
     for entry in entries.iter().filter(|entry| {
         matches!(
             entry.model.as_str(),
-            Veml7700::MODEL | Iis2mdc::MODEL | Tmp108::MODEL
+            Veml7700::MODEL | Iis2mdc::MODEL | Tmp108::MODEL | Lps25hb::MODEL
         )
     }) {
         let (parent, address) = entry
@@ -319,6 +321,34 @@ pub fn configure(
             .iter_mut()
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Lps25hb::MODEL {
+            let mut sensor = Lps25hb::new();
+            let mut set = [false; 2];
+            for (_, text) in &entry.body {
+                let (key, value) = text
+                    .split_once(':')
+                    .ok_or_else(|| entry.error("invalid LPS25HB property"))?;
+                let value = value
+                    .trim()
+                    .parse::<f64>()
+                    .map_err(|_| entry.error("invalid LPS25HB input"))?;
+                let accepted = match key.trim() {
+                    "Temperature" if !std::mem::replace(&mut set[0], true) => {
+                        sensor.set_temperature(value)
+                    }
+                    "Pressure" if !std::mem::replace(&mut set[1], true) => {
+                        sensor.set_pressure(value)
+                    }
+                    _ => return Err(entry.error("invalid or duplicate LPS25HB property")),
+                };
+                if !accepted {
+                    return Err(entry.error("LPS25HB input is outside operating range"));
+                }
+            }
+            bus.attach(u16::from(address), Target::Pressure(sensor))
+                .map_err(|e| entry.error(e))?;
+            continue;
+        }
         if entry.model == Tmp108::MODEL {
             let celsius = match entry.body.as_slice() {
                 [] => 0.0,

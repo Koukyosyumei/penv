@@ -105,7 +105,43 @@ for file,kind in nunit.items():
                 rows.append((repository,source,f'{i+1}-{k+1}',name.group(1),binding,status,note))
         else:
             rows.append((repository,source,f'{i+1}-{k+1}',name.group(1),args,status,note))
+def triage(row):
+    repo, source, span, name, bindings, status, reason = row
+    suite = pathlib.PurePosixPath(source).name
+    if suite == 'MCAN.robot' and name in {
+        'Should Boot Linux And Login With MCAN',
+        'Should Handle CAN Messages Issued Through CAN Utils Tools',
+    }:
+        status, reason = 'OUT', '固定 Zynq Linux ゲストで実行し、CAN Utils は Zynq ログイン状態を要求'
+    elif suite == 'LPS25HB.robot' and name != 'Should Read Samples From RESD':
+        status, reason = 'PARTIAL', {
+            'Should Read Temperature And Pressure': '同一 v4.2 ELF の初期値と正負の入力を別実行で照合。稼働中の入力変更と順序は未移植',
+            'Should Correctly Calculate Pressure': 'I²C サブアドレスで上流の 3 バイトを確認。Robot のプロパティ getter と直接 Read は未移植',
+            'Should Work After Errata Driver Update': '同一 v4.4 ELF の UART 期待値を確認。元のプラットフォーム構成と操作順の等価性は未確定',
+        }[name]
+    elif status == 'REVIEW':
+        if suite == 'arm-cortex-m-fpu.robot' and name != 'Should Pass Context Stacking Preservation Test v7-M':
+            status, reason = 'OUT', 'FPU 共有は NXP K6xF 固定。残りのスタック・NOCP ケースは v8-M/M33 固定'
+        elif suite == 'monitor-tests.robot' and name == 'Should Fail to Find Unix-only Method on Windows':
+            status, reason = 'OUT', 'Windows 固有のメソッド探索。対象の検証ホストは Unix'
+        elif repo == 'packetnet' and suite in {'PPPPacketTest.cs', 'PPPoEPPPTest.cs', 'LinuxCookedCaptureTest.cs'}:
+            status, reason = 'OUT', 'PPP セッションまたは Linux cooked キャプチャ形式固有。対象スイッチは生の Ethernet フレームを入出力'
+        else:
+            status = 'OPEN'
+            if repo == 'packetnet':
+                reason = '共有パケット処理契約として保守的に対象。等価性未確認'
+                if '/Performance/' in source:
+                    reason = '共有パケット処理の計測契約。明示された性能タスクで実行予定'
+            elif repo == 'infrastructure':
+                reason = '共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認'
+            elif '/PlatformDescription/' in source:
+                reason = '上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認'
+            else:
+                reason = 'Cortex-M・バス・UART・モニター・センサーの共有契約として保守的に対象。等価性未確認'
+    return repo, source, span, name, bindings, status, reason
+
+
 with arguments.output.open('w', encoding='utf-8', newline='') as f:
     out=csv.writer(f,delimiter='\t',lineterminator='\n')
     out.writerow(('repository','source','lines','case','parameter_bindings','status','evidence_or_reason'))
-    out.writerows(rows)
+    out.writerows(map(triage, rows))

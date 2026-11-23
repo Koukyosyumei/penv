@@ -1,3 +1,4 @@
+use crate::lps25hb::Lps25hb;
 use crate::{iis2mdc::Iis2mdc, stm32_uart::Stm32Irq, tmp108::Tmp108, veml7700::Veml7700};
 
 pub const I2C: &str = "I2C.STM32F7_I2C";
@@ -20,6 +21,7 @@ pub enum Target {
     Light(Veml7700),
     Magnetometer(Iis2mdc),
     Temperature(Tmp108),
+    Pressure(Lps25hb),
 }
 
 impl Target {
@@ -27,6 +29,7 @@ impl Target {
         match self {
             Self::Light(sensor) => sensor.stop(),
             Self::Temperature(sensor) => sensor.stop(),
+            Self::Pressure(sensor) => sensor.stop(),
             Self::Magnetometer(_) => {}
         }
     }
@@ -120,6 +123,7 @@ impl I2c {
                 }
                 let value = match self.active.map(|target| &mut self.targets[target].1) {
                     Some(Target::Magnetometer(sensor)) => sensor.read_byte(),
+                    Some(Target::Pressure(sensor)) => sensor.read_byte(),
                     Some(Target::Light(_) | Target::Temperature(_)) if self.position < 2 => {
                         self.data[self.position]
                     }
@@ -213,7 +217,7 @@ impl I2c {
                 let bytes = match &mut self.targets[target].1 {
                     Target::Light(sensor) => Some(sensor.read()),
                     Target::Temperature(sensor) => Some(sensor.read()),
-                    Target::Magnetometer(_) => None,
+                    Target::Magnetometer(_) | Target::Pressure(_) => None,
                 };
                 if let Some(bytes) = bytes {
                     self.data[..2].copy_from_slice(&bytes);
@@ -259,6 +263,9 @@ impl I2c {
                     sensor.write(&self.data[..self.position])
                 }
                 Target::Temperature(sensor) if self.position <= self.data.len() => {
+                    sensor.write(&self.data[..self.position])
+                }
+                Target::Pressure(sensor) if self.position <= self.data.len() => {
                     sensor.write(&self.data[..self.position])
                 }
                 Target::Magnetometer(sensor) if self.position <= self.data.len() => {
