@@ -2507,54 +2507,54 @@ Renode	tests/unit-tests/riscv-interrupt-mode.robot	269	Should Correct MTVEC From
 Renode	tests/unit-tests/riscv-interrupt-mode.robot	297	Should Correct STVEC From Monitor in Vectored Mode	interruptMode=Vectored	target	ported	CPU.RiscV32 rv32imac, Priv1_10, interruptMode=Vectored; ordered monitor writes, readbacks and warnings checked
 Renode	tests/unit-tests/riscv-interrupt-mode.robot	325	Should Correct MTVEC Written By Software in Vectored Mode	interruptMode=Vectored	target	ported	CPU.RiscV32 rv32imac, Priv1_10, interruptMode=Vectored; fixed guest opcodes, readbacks and warning sequence checked
 Renode	tests/unit-tests/riscv-interrupt-mode.robot	352	Should Correct STVEC Written By Software in Vectored Mode	interruptMode=Vectored	target	ported	CPU.RiscV32 rv32imac, Priv1_10, interruptMode=Vectored; fixed guest opcodes, readbacks and warning sequence checked
-Renode	tests/unit-tests/riscv-isa-string.robot	25	Should Parse All Valid ISA Strings	RV32G	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	26	Should Parse All Valid ISA Strings	rv32gc	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	28	Should Parse All Valid ISA Strings	RV32GC	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	29	Should Parse All Valid ISA Strings	rv32gc_xandes	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	30	Should Parse All Valid ISA Strings	RV32GC_Xandes	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	31	Should Parse All Valid ISA Strings	RV32GC_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	32	Should Parse All Valid ISA Strings	RV32G_V	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	33	Should Parse All Valid ISA Strings	rv32ia_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	34	Should Parse All Valid ISA Strings	RV32IM	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	35	Should Parse All Valid ISA Strings	RV32IMAC	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	36	Should Parse All Valid ISA Strings	RV32IMACB_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	37	Should Parse All Valid ISA Strings	RV32IMACFD_Zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	38	Should Parse All Valid ISA Strings	RV32IMACFD_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	39	Should Parse All Valid ISA Strings	rv32imac_zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	40	Should Parse All Valid ISA Strings	RV32_IMACZicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	41	Should Parse All Valid ISA Strings	RV32IMAC_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	42	Should Parse All Valid ISA Strings	RV32IMACZicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	43	Should Parse All Valid ISA Strings	rv32imafc_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	44	Should Parse All Valid ISA Strings	rv32imafdcg	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	45	Should Parse All Valid ISA Strings	RV32IMAFDC_Zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	46	Should Parse All Valid ISA Strings	RV32IMAFDC_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	47	Should Parse All Valid ISA Strings	RV32IMAF_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	48	Should Parse All Valid ISA Strings	rv32ima_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	49	Should Parse All Valid ISA Strings	RV32IMC	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	50	Should Parse All Valid ISA Strings	rv32imcb_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	51	Should Parse All Valid ISA Strings	rv32imc_zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	52	Should Parse All Valid ISA Strings	rv32imc_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	53	Should Parse All Valid ISA Strings	RV32IMC_Zicsr_Zifencei_Zbs	target	partial	CPU.RiscV32 construction keyword; penv loads exact CPU string; Renode log behavior still to compare
-Renode	tests/unit-tests/riscv-isa-string.robot	54	Should Parse All Valid ISA Strings	RV32IMAC_Zicsr_Zicond	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	55	Should Parse All Valid ISA Strings	rv32imac_zicsr_zicond	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	56	Should Parse All Valid ISA Strings	RV32IM_Zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	57	Should Parse All Valid ISA Strings	rv32im_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	58	Should Parse All Valid ISA Strings	RV32IZifencei_Xandes	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	59	Should Parse All Valid ISA Strings	rv32ea_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	60	Should Parse All Valid ISA Strings	RV32EM	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	61	Should Parse All Valid ISA Strings	RV32EMAC	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	62	Should Parse All Valid ISA Strings	rv32emac_zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	63	Should Parse All Valid ISA Strings	RV32_EMACZicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	64	Should Parse All Valid ISA Strings	RV32EMAC_Zicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	65	Should Parse All Valid ISA Strings	RV32EMACZicsr_Zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	66	Should Parse All Valid ISA Strings	rv32ema_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	67	Should Parse All Valid ISA Strings	RV32EMC	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	68	Should Parse All Valid ISA Strings	rv32emc_zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	69	Should Parse All Valid ISA Strings	rv32emc_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	70	Should Parse All Valid ISA Strings	RV32EMC_Zicsr_Zifencei_Zbs	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	71	Should Parse All Valid ISA Strings	RV32EM_Zicsr	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	72	Should Parse All Valid ISA Strings	rv32em_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	73	Should Parse All Valid ISA Strings	RV32EZifencei_Xandes	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
+Renode	tests/unit-tests/riscv-isa-string.robot	25	Should Parse All Valid ISA Strings	RV32G	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	26	Should Parse All Valid ISA Strings	rv32gc	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	28	Should Parse All Valid ISA Strings	RV32GC	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	29	Should Parse All Valid ISA Strings	rv32gc_xandes	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	30	Should Parse All Valid ISA Strings	RV32GC_Xandes	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	31	Should Parse All Valid ISA Strings	RV32GC_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	32	Should Parse All Valid ISA Strings	RV32G_V	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	33	Should Parse All Valid ISA Strings	rv32ia_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	34	Should Parse All Valid ISA Strings	RV32IM	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	35	Should Parse All Valid ISA Strings	RV32IMAC	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	36	Should Parse All Valid ISA Strings	RV32IMACB_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	37	Should Parse All Valid ISA Strings	RV32IMACFD_Zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	38	Should Parse All Valid ISA Strings	RV32IMACFD_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	39	Should Parse All Valid ISA Strings	rv32imac_zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	40	Should Parse All Valid ISA Strings	RV32_IMACZicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	41	Should Parse All Valid ISA Strings	RV32IMAC_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	42	Should Parse All Valid ISA Strings	RV32IMACZicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	43	Should Parse All Valid ISA Strings	rv32imafc_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	44	Should Parse All Valid ISA Strings	rv32imafdcg	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	45	Should Parse All Valid ISA Strings	RV32IMAFDC_Zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	46	Should Parse All Valid ISA Strings	RV32IMAFDC_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	47	Should Parse All Valid ISA Strings	RV32IMAF_Zicsr_Zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	48	Should Parse All Valid ISA Strings	rv32ima_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	49	Should Parse All Valid ISA Strings	RV32IMC	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	50	Should Parse All Valid ISA Strings	rv32imcb_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	51	Should Parse All Valid ISA Strings	rv32imc_zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	52	Should Parse All Valid ISA Strings	rv32imc_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	53	Should Parse All Valid ISA Strings	RV32IMC_Zicsr_Zifencei_Zbs	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	54	Should Parse All Valid ISA Strings	RV32IMAC_Zicsr_Zicond	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	55	Should Parse All Valid ISA Strings	rv32imac_zicsr_zicond	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	56	Should Parse All Valid ISA Strings	RV32IM_Zicsr	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	57	Should Parse All Valid ISA Strings	rv32im_zicsr_zifencei	target	ported	fixed ISA spelling constructs CPU.RiscV32 and reaches guest entry
+Renode	tests/unit-tests/riscv-isa-string.robot	58	Should Parse All Valid ISA Strings	RV32IZifencei_Xandes	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	59	Should Parse All Valid ISA Strings	rv32ea_zicsr_zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	60	Should Parse All Valid ISA Strings	RV32EM	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	61	Should Parse All Valid ISA Strings	RV32EMAC	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	62	Should Parse All Valid ISA Strings	rv32emac_zicsr	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	63	Should Parse All Valid ISA Strings	RV32_EMACZicsr_Zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	64	Should Parse All Valid ISA Strings	RV32EMAC_Zicsr_Zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	65	Should Parse All Valid ISA Strings	RV32EMACZicsr_Zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	66	Should Parse All Valid ISA Strings	rv32ema_zicsr_zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	67	Should Parse All Valid ISA Strings	RV32EMC	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	68	Should Parse All Valid ISA Strings	rv32emc_zicsr	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	69	Should Parse All Valid ISA Strings	rv32emc_zicsr_zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	70	Should Parse All Valid ISA Strings	RV32EMC_Zicsr_Zifencei_Zbs	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	71	Should Parse All Valid ISA Strings	RV32EM_Zicsr	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	72	Should Parse All Valid ISA Strings	rv32em_zicsr_zifencei	target	pending	construction requires RV32E, V or an Andes extension
+Renode	tests/unit-tests/riscv-isa-string.robot	73	Should Parse All Valid ISA Strings	RV32EZifencei_Xandes	target	pending	construction requires RV32E, V or an Andes extension
 Renode	tests/unit-tests/riscv-isa-string.robot	75	Should Handle Both 32 And 64 Bit Versions		outside	outside	requires mixed CPU.RiscV32 and CPU.RiscV64 construction
 Renode	tests/unit-tests/riscv-isa-string.robot	81	Should Throw Construction Exception	RV32IE | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-isa-string.robot	82	Should Throw Construction Exception	RV32EI | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic

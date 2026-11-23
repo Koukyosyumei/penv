@@ -402,3 +402,18 @@ python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$work
 ```
 
 正当な ISA 文字列の構築テストには、RV32E、V とベンダー拡張、区切りを省いた表記などの未対応行が残っています。これらは対象のままとし、拒否ケースの合格に含めていません。台帳全体は上流等価合格 18 件、部分移植 31 件、未達 1,030 件です。最終分母は未確定です。
+
+### RV32 の既存機能を指定する ISA 表記
+
+固定 `riscv-isa-string.robot` の構築ケースのうち、既存の命令セットだけを必要とする 29 件を検証しました。変更前に拒否された 8 件を含め、全件が CPU を作成できました。単文字拡張の順序、G の展開、`Zicsr` の直前や `RV32` の直後の区切り、A を M なしで指定する構成を扱います。B は固定 Renode の実装に合わせて Zba/Zbb/Zbc/Zbs を有効にします。
+
+検証器は固定 Robot の元の表記を保持し、同じ文字列が重複する場合は一度だけ実行します。構築後に最小 RAM 上の EBREAK を実行してゲスト入口まで到達したことも確認します。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$work/isa-valid" --valid
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$work/isa-errors"
+```
+
+RV32E・V・Andes 拡張を必要とする構築ケースは、それぞれ未実装の機能を要求するため台帳の対象に残しています。混在 RV32/RV64 のケースは既存の範囲判定を維持します。上流等価合格は累計 47 件です。

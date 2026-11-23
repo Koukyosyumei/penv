@@ -924,39 +924,39 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         }
                         base = prefix;
                     }
-                    let (letters, suffix) = base.split_once('_').unwrap_or((base, ""));
-                    let (normalized, flags) = match letters {
-                        "rv32if" => ("rv32i", (true, false)),
-                        "rv32ifd" => ("rv32i", (true, true)),
-                        "rv32imaf" => ("rv32ima", (true, false)),
-                        "rv32imafc" => ("rv32imac", (true, false)),
-                        "rv32imafd" | "rv32g" => ("rv32ima", (true, true)),
-                        "rv32imafdc" | "rv32gc" => ("rv32imac", (true, true)),
-                        _ => (letters, (false, false)),
-                    };
-                    floating = (flags.0, flags.1, zfh);
-                    if floating.0 && !matches!(suffix, "" | "zicsr" | "zifencei" | "zicsr_zifencei")
+                    let (letters, suffix) = base.split_at(base.find('z').unwrap_or(base.len()));
+                    let letters = letters.strip_prefix("rv32").unwrap_or("");
+                    let letters = letters.trim_matches('_');
+                    let general = letters.contains('g');
+                    let single = general || letters.contains('f');
+                    let double = general || letters.contains('d');
+                    let valid_csr_suffix = suffix
+                        .split('_')
+                        .all(|part| matches!(part, "" | "zicsr" | "zifencei"));
+                    let ibex_legacy = ibex && base == "rv32imcu_zicsr_zifencei";
+                    if !ibex_legacy
+                        && (!(general || letters.contains('i'))
+                            || !letters.chars().all(|letter| "imafdcgb".contains(letter))
+                            || !valid_csr_suffix
+                            || (double && !single))
                     {
                         return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
                     }
-                    let base = if floating.0 { normalized } else { base };
-                    isa = match base {
-                        "rv32i" => Some((false, false, false)),
-                        "rv32im" | "rv32im_zicsr" | "rv32im_zicsr_zifencei" => {
-                            Some((true, false, false))
-                        }
-                        "rv32ima" | "rv32ima_zicsr" | "rv32ima_zicsr_zifencei" => {
-                            Some((true, true, false))
-                        }
-                        "rv32imac" | "rv32imac_zicsr" | "rv32imac_zicsr_zifencei" => {
-                            Some((true, true, true))
-                        }
-                        "rv32imc" | "rv32imc_zicsr" | "rv32imc_zicsr_zifencei" => {
-                            Some((true, false, true))
-                        }
-                        "rv32imcu_zicsr_zifencei" if ibex => Some((true, false, true)),
-                        _ => return Err(entry.error(&unsupported_rv32_isa(value, &architecture))),
-                    };
+                    floating = (single, double, zfh);
+                    if letters.contains('b') {
+                        // Renode enables all four supported bit-manipulation subsets for B.
+                        bitmanip = BitManip {
+                            zba: true,
+                            zbb: true,
+                            zbc: true,
+                            zbs: true,
+                        };
+                    }
+                    isa = Some((
+                        general || letters.contains('m'),
+                        general || letters.contains('a'),
+                        letters.contains('c'),
+                    ));
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_10") => {}
