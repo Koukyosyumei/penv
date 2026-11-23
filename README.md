@@ -810,3 +810,26 @@ PYTHON="$venv/bin/python" bash tests/stm32h7-veml7700-robot.sh "$(mktemp -d)"
 ```
 
 検証ログ、RESD、終了状態は `~/.local/state/penv-dispatch/evidence/h7-lps-live.w4haoFY7` にあります。LPS25HB の最終ログは `paced/` にあり、VEML7700 ポーリング 4 件と参照 Zephyr Shell の回帰も通過しました。台帳は対象 789 件のうち等価合格 33 件、部分検証 14 件、未達 742 件です。
+
+### backlog-network-961099fa88c2-1
+
+LSM6DSO に加速度・角速度の独立した RESD ストリームを追加しました。固定上流の CSV と変換器で、チャンネル 0、12 Hz、開始 100 ms の RESD を生成します。ゲストが設定した出力データレートでサンプルを更新し、ストリーム終了後は設定された既定値へ戻ります。従来の CSV 診断入力も引き続き使えます。
+
+未変更 Nucleo REPL に Robot と同じ I²C1 の `0x6A` と PC13 の割り込み配線を追加し、固定上流の ELF で USART3 の順序と 2 仮想秒の各期限を照合しました。基本ポーリング、基本割り込み、割り込み RESD、Errata 対応ドライバーの 4 件が合格しました。
+
+ポーリング RESD は部分検証です。第 3 組の加速度は 3,149,860 ラウンドで一致します。次の角速度には第 3 組の期待値が出ず、ゲストは既定値を出力します。固定 RESD は約 3.1 仮想秒で終了するため、このポーリングでの出力サンプルの保持とゲスト読み出しの時系列が残件です。移植スクリプトは全 5 件を実行し、この未達をコード 1 で報告します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-lsm6dso-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+```
+
+検証ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-lsm-resd.YFHMg3EA` にあります。LSM6DSO の最終実行は `final/` です。台帳は対象 789 件のうち等価合格 37 件、部分検証 10 件、未達 742 件です。

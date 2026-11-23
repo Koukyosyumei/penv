@@ -1,6 +1,6 @@
 //! LSM6DSO user-bank I²C interface and the accelerometer/gyroscope data-ready outputs.
 
-use crate::machine::VIRTUAL_STEPS_PER_SECOND;
+use crate::{machine::VIRTUAL_STEPS_PER_SECOND, resd::Samples};
 
 const RATES: [u32; 12] = [0, 12, 26, 52, 104, 208, 416, 833, 1660, 3330, 6660, 5];
 
@@ -23,6 +23,7 @@ pub struct Lsm6dso {
     route: Option<(u32, u8)>,
     default: [f64; 6],
     samples: Vec<[f64; 6]>,
+    resd: [Option<Samples<[i32; 3]>>; 2],
     start: u64,
     frequency: u32,
     phase: [u32; 2],
@@ -40,6 +41,7 @@ impl Lsm6dso {
             route,
             default,
             samples: Vec::new(),
+            resd: [None, None],
             start: 0,
             frequency: 12,
             phase: [0; 2],
@@ -93,8 +95,27 @@ impl Lsm6dso {
             ]);
         }
         self.samples = samples;
+        self.resd = [None, None];
         self.start = start;
         self.frequency = frequency;
+        Ok(())
+    }
+
+    pub fn feed_resd(&mut self, path: &std::path::Path, angular_rate: bool) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        let group = usize::from(angular_rate);
+        let sample_type = if angular_rate { 3 } else { 2 };
+        let samples = Samples::decode(&bytes, sample_type, |bytes: [u8; 12]| {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .try_into()
+                .map(|words: &[[u8; 4]; 3]| words.map(i32::from_le_bytes))
+                .unwrap()
+        })
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+        self.resd[group] = Some(samples);
+        self.phase[group] = 0;
         Ok(())
     }
 
@@ -112,14 +133,34 @@ impl Lsm6dso {
                 continue;
             }
             self.phase[group] -= VIRTUAL_STEPS_PER_SECOND;
-            let input = step
-                .checked_sub(self.start)
-                .and_then(|elapsed| elapsed.checked_mul(u64::from(self.frequency)))
-                .and_then(|scaled| {
-                    usize::try_from(scaled / u64::from(VIRTUAL_STEPS_PER_SECOND)).ok()
-                })
-                .and_then(|index| self.samples.get(index))
-                .unwrap_or(&self.default);
+            let start_axis = group * 3;
+            let defaults = &self.default[start_axis..start_axis + 3];
+            let input: [f64; 3] = if let Some(samples) = &self.resd[group] {
+                let nanoseconds =
+                    step.saturating_mul(1_000_000_000 / u64::from(VIRTUAL_STEPS_PER_SECOND));
+                samples.sample_at(nanoseconds, false).map_or_else(
+                    || defaults.try_into().unwrap(),
+                    |sample| {
+                        sample.map(|value| {
+                            if group == 0 {
+                                f64::from(value) / 1e6
+                            } else {
+                                f64::from(value) / 1e5 * 180.0 / std::f64::consts::PI
+                            }
+                        })
+                    },
+                )
+            } else {
+                let input = step
+                    .checked_sub(self.start)
+                    .and_then(|elapsed| elapsed.checked_mul(u64::from(self.frequency)))
+                    .and_then(|scaled| {
+                        usize::try_from(scaled / u64::from(VIRTUAL_STEPS_PER_SECOND)).ok()
+                    })
+                    .and_then(|index| self.samples.get(index))
+                    .unwrap_or(&self.default);
+                input[start_axis..start_axis + 3].try_into().unwrap()
+            };
             let fs = usize::from((self.registers[control] >> 2) & 3);
             let gain = if group == 0 {
                 let range = if fs == 1 && self.registers[0x17] & 2 != 0 {
@@ -133,8 +174,11 @@ impl Lsm6dso {
             } else {
                 1000.0 / [8.75, 17.5, 35.0, 70.0][fs]
             };
-            for axis in group * 3..group * 3 + 3 {
-                self.output[axis] = (input[axis] * gain).round_ties_even() as i16;
+            for (output, input) in self.output[start_axis..start_axis + 3]
+                .iter_mut()
+                .zip(input)
+            {
+                *output = (input * gain).round_ties_even() as i16;
             }
             self.ready |= mask;
         }

@@ -301,11 +301,12 @@ def triage(row):
     }:
         status, reason = 'OUT', '固定 Zynq Linux ゲストで実行し、CAN Utils は Zynq ログイン状態を要求'
     elif suite == 'LSM6DSO_IMU.robot':
-        status = 'PARTIAL'
-        if 'RESD' in name:
-            reason = '同一 ELF・元の CSV 12 Hz・100 ms オフセット・3 区間と終端復帰を同順 UART で照合。RESD コンテナー、元の REPL、Robot timeout は未移植'
+        if name == 'Should Read Samples From RESD (Polling)':
+            status, reason = 'PARTIAL', '固定 ELF・Nucleo REPL・上流 RESD (12 Hz、開始 100 ms)。第3組の加速度までは一致し、角速度は終端後の既定値。2秒の期限で未達'
+        elif name == 'Should Read Samples From RESD (Interrupt)':
+            status, reason = 'PASS', '固定 ELF・Nucleo REPL・PC13・上流 RESD (12 Hz、開始 100 ms)。全刺激と USART3 の期待値を上流順、各2秒以内に照合'
         else:
-            reason = '同一 ELF と同順の実行時プロパティ刺激を UART で照合。元の REPL と Robot timeout の等価性は未確認'
+            status, reason = 'PASS', '固定 ELF・Nucleo REPL・PC13。上流と同じプロパティ変更、USART3 の順序と2秒期限を照合'
     elif suite == 'LPS25HB.robot':
         status, reason = 'PASS', {
             'Should Read Temperature And Pressure': '固定 v4.2 ELF・Nucleo REPL と同じ I2C 登録。既定値・正負・範囲外を含む全刺激と USART3 の全期待値を上流順に照合',

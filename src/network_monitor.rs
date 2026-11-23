@@ -176,6 +176,23 @@ impl Plan {
                     value,
                 });
             }
+            [
+                sensor,
+                command @ ("FeedAccelerationSamplesFromRESD" | "FeedAngularRateSamplesFromRESD"),
+                file,
+            ] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let path = resolve(*file)?
+                    .strip_prefix('@')
+                    .ok_or("expected @RESD path")?;
+                let file = monitor::asset_path(path.trim_matches('"'), source, root, None)?;
+                self.actions.push(Action::ImuResd {
+                    node,
+                    sensor: (*sensor).into(),
+                    file,
+                    angular_rate: *command == "FeedAngularRateSamplesFromRESD",
+                });
+            }
             [sensor, "FeedSamplesFromCsv", file] if sensor.starts_with("sysbus.") => {
                 let node = self.monitor_node()?;
                 let value = resolve(*file)?;

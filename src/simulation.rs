@@ -71,6 +71,12 @@ pub enum Action {
         sensor: String,
         value: f64,
     },
+    ImuResd {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+        angular_rate: bool,
+    },
     ImuFeed {
         node: usize,
         sensor: String,
@@ -266,6 +272,18 @@ pub fn run(
                         .machine
                         .bus
                         .set_illuminance(&sensor, value)?;
+                }
+                Action::ImuResd {
+                    node,
+                    sensor,
+                    file,
+                    angular_rate,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .find_imu(&sensor)?
+                        .feed_resd(&file, angular_rate)?;
                 }
                 Action::ImuFeed { node, sensor, file } => {
                     simulation.nodes[node]
