@@ -932,6 +932,8 @@ impl Thumb {
 }
 
 #[cfg(test)]
+mod exception_return_upstream;
+#[cfg(test)]
 mod ge_upstream;
 #[cfg(test)]
 mod it_upstream;

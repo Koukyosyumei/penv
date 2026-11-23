@@ -101,46 +101,16 @@ renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1293-1308	Should Raise BusF
 renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1309-1329	Should Raise BusFault on VLD/VST Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
 renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1330-1359	Should Raise BusFault on VSTR/VLDR Vector Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
 renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1360-1377	Should Raise BusFault on VSTR/VLDR Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	90-94	Should Not Return From Exception When Loading PC From Vector Table	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	95-95	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	96-96	...    // Set up MPU so that exception return can fault if SP is protected memory	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	97-97	...    ldr r1, =0xe000ed90	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	98-98	...    // Set region 0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	99-99	...    mov r0, 0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	100-100	...    str r0, [r1, #0x8]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	101-101	...    // Set RBAR to 0x0, readable by all	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	102-102	...    mov r0, 0x00000006	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	103-103	...    str r0, [r1, #0xc]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	104-104	...    // Set RLAR to 0xfff, enabled	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	105-105	...    mov r0, 0x00000fe1	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	106-106	...    str r0, [r1, #0x10]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	107-107	...    // Enable MPU	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	108-108	...    mov r0, 0b001	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	109-109	...    str r0, [r1, #0x4]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	110-110	...    b .	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	111-114	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	115-115	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	116-116	...    // Trigger HardFault in exception return - stack will be read on exception return,	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	117-117	...    // but since SP is a protected address, this will cause a HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	118-118	...    mov r0, 0x2000	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	119-119	...    mov sp, r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	120-120	...    bx lr	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	121-128	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	129-132	Should Not Return From Exception When In Thread Mode	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	133-133	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	134-134	...    mov r0, 0xffffffb8	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	135-135	...    bx r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	136-140	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	141-144	Should Return From Exception When Using Allowed Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	145-149	Should Not Return From Exception When Not Using Allowed Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	150-153	Should Not Return From Insecure Mode When Not Using TrustZone	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	154-154	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	155-155	...    mov r0, 0xfeffffff	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	156-156	...    bx r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	157-162	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	163-165	Should Return From Insecure Mode When Using bx	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	166-168	Should Not Return From Insecure Mode When Using blx	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	169-185	Should Not Restore Reserved Bits From FncReturn Partial Retpsr	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	90-128	Should Not Return From Exception When Loading PC From Vector Table	Armv8-M MPU RBAR/RLAR; NMI; HardFault vector 0xffffffb0	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	129-140	Should Not Return From Exception When In Thread Mode	thread mode; bx 0xffffffb8; PC=0xffffffb8	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	141-144	Should Return From Exception When Using Allowed Instruction	trustZone=false; NMI; bx lr; PC=RESET	共有 Cortex-M 命令・Cortex-M4 に適用	合格・上流命令列と PC 判定を Rust へ移植
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	141-144	Should Return From Exception When Using Allowed Instruction	trustZone=true; NMI; bxns lr; PC=RESET	Armv8-M TrustZone の非セキュア分岐命令を要求。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	145-149	Should Not Return From Exception When Not Using Allowed Instruction	trustZone=false; NMI; blx lr; PC=0xffffffb8	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	145-149	Should Not Return From Exception When Not Using Allowed Instruction	trustZone=true; NMI; blxns lr; PC=0xfffffff8	Armv8-M TrustZone の非セキュア分岐命令を要求。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	150-162	Should Not Return From Insecure Mode When Not Using TrustZone	trustZone=false; bx 0xfeffffff; PC=0xfefffffe	共有 Cortex-M 命令・Cortex-M4 に適用	合格・上流命令列と PC 判定を Rust へ移植
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	163-165	Should Return From Insecure Mode When Using bx	trustZone=true; SAU; bx lr in non-secure code	Armv8-M TrustZone の SAU または FNC_RETURN を要求。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	166-168	Should Not Return From Insecure Mode When Using blx	trustZone=true; SAU; blx lr in non-secure code	Armv8-M TrustZone の SAU または FNC_RETURN を要求。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	169-185	Should Not Restore Reserved Bits From FncReturn Partial Retpsr	trustZone=true; FNC_RETURN partial RETPSR	Armv8-M TrustZone の SAU または FNC_RETURN を要求。nRF52840 に適用不可	対象外の根拠は applicability 欄
 renode	tests/unit-tests/arm-cortex-m-fpu.robot	105-114	Should Pass Zephyr FPU Sharing Generic Tests	上流の行範囲とそこで参照するフィクスチャ	FRDM K64F 専用 Zephyr ELF・nRF52840 に適用不可	対象外の根拠は applicability 欄
 renode	tests/unit-tests/arm-cortex-m-fpu.robot	115-125	Should Pass Context Stacking Preservation Test v7-M	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・元の ELF と UART 判定
 renode	tests/unit-tests/arm-cortex-m-fpu.robot	126-136	Should Pass Context Stacking Preservation Test v8-M with TrustZone	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
@@ -190,16 +160,33 @@ renode	tests/unit-tests/arm-ge-flag.robot	70-92	Signed Byte Subtraction Should S
 renode	tests/unit-tests/arm-ge-flag.robot	93-115	Signed Word Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (ssub16)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
 renode	tests/unit-tests/arm-ge-flag.robot	116-138	Unsigned Byte Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (usub8)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
 renode	tests/unit-tests/arm-ge-flag.robot	139-160	Unsigned Word Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (usub16)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
-renode	tests/unit-tests/arm-semihosting.robot	194-196	Should do Simple Semihosting Call on Cortex-M	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	197-199	Should do Simple Semihosting Call on Cortex-A in Arm mode	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	200-202	Should do Simple Semihosting Call on Cortex-A in Thumb mode	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	226-239	Should Pass Semihosting Tests With Different Exit Status	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	240-253	Should Pass Semihosting Tests With Arguments	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	254-267	Should Pass Semihosting Tests With Input	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	268-282	Should Pass Semihosting Tests With Output	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	283-288	Should Pass Semihosting Test With Separate Error Output	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
-renode	tests/unit-tests/arm-semihosting.robot	289-294	Should Pass Semihosting Test With Custom Temporary Files Directory	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	194-196	Should do Simple Semihosting Call on Cortex-M	use_cortex_a=false; use_thumb=true	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	197-199	Should do Simple Semihosting Call on Cortex-A in Arm mode	use_cortex_a=true; use_thumb=false	CPU.ARMv7A / Cortex-A15 専用フィクスチャ。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-semihosting.robot	200-202	Should do Simple Semihosting Call on Cortex-A in Thumb mode	use_cortex_a=true; use_thumb=true	CPU.ARMv7A / Cortex-A15 専用フィクスチャ。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	EXIT-EXTENDED; semihost-exit-extended-s_59876-dd881e08ed184b28a48f231062840dc5856c8d8b	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	OPEN; semihost-open-s_115964-3ae549276bf15409ffda90a29a774413fe160e64	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	CLOSE; semihost-close-s_115748-e7786c3fbc64b3ddf82fe172b7ebb1bd296e6006	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	ERRNO; semihost-errno-s_60668-65766aec1c151e0841732ef0b8eeee5100e58d1c	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	REMOVE; semihost-remove-s_116256-4414d8ebb902f615d988456fc3c92a9dd51a0524	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	READ; semihost-read-s_119964-609477adb46a5ae575fa3ad3fc8a06d815a53ad0	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	SEEK; semihost-seek-s_121508-5a1437cf1f47317f9125a986b6f3be249d3540ef	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	FLEN; semihost-flen-s_118180-5008661883e9a6bc46034aac6637319d14fdf1ae	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	ISTTY; semihost-istty-s_118120-0f42b00819ad238d03bae0a5b8996a89556755d3	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	NO-ARGV; semihost-no-argv-s_104632-668457828b8be6155e4d1a0eac6b181e742ee343	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	TMPNAM; semihost-tmpnam-s_119132-774a78f78a07b105c759282663f14134b00fe67e	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	ISERROR; semihost-iserror-s_62812-0be95351d4bdaf32702f2d86954e8020be523199	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	226-239	Should Pass Semihosting Tests With Different Exit Status	EXIT ADP_Stopped_ApplicationExit(0x20026) ${None}; semihost-exit-s_57900-33bc007b69c3391b622e96098b1902dbc319e2fd	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	226-239	Should Pass Semihosting Tests With Different Exit Status	EXIT-FAILURE ADP_Stopped_RunTimeErrorUnknown(0x20023) ${None}; semihost-exit-failure-s_49140-cfea79b96be8885bd058444a9f343174b6f4b9e9	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	226-239	Should Pass Semihosting Tests With Different Exit Status	EXIT-EXTENDED-FAILURE ADP_Stopped_ApplicationExit(0x20026) 1; semihost-exit-extended-failure-s_51116-f2b8d311a48ebfafa90594518e632062c8190b18	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	240-253	Should Pass Semihosting Tests With Arguments	GET-CMDLINE; semihost-get-cmdline-s_116144-e594e104222e2a4baa10aa5cea27790b94ad0e2c; ProgramArguments "hello world"	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	240-253	Should Pass Semihosting Tests With Arguments	ARGV; semihost-argv-s_115876-ff8e8b4252f73a98e883f63c14ac61b4915eefb4; ProgramArguments "hello world"	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	254-267	Should Pass Semihosting Tests With Input	READ-TTY; semihost-read-tty-s_117320-254b992769723646d9a8e7cdc9cff52a1b69ef43; input "hello, world"	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	254-267	Should Pass Semihosting Tests With Input	READC; semihost-readc-s_113908-44bc0688a4bbfb91f968e833affa8eb12733f7bd; input "hello, world"	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	268-282	Should Pass Semihosting Tests With Output	WRITE-TTY; semihost-write-tty-s_118576-054920038e048c27b319e7340e7aeefebddd1e7e; UART SUCCESS	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	268-282	Should Pass Semihosting Tests With Output	WRITE0; semihost-write0-s_58800-c2283a55f28120b6dce3ad06e965a6676955b701; UART SUCCESS	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	268-282	Should Pass Semihosting Tests With Output	WRITEC; semihost-writec-s_58436-f37d8cd101afce7620b15db41fe77ca60fc3e051; UART SUCCESS	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	283-288	Should Pass Semihosting Test With Separate Error Output	semihost-write-tty-s_118576-054920038e048c27b319e7340e7aeefebddd1e7e; separate_stderr=true	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
+renode	tests/unit-tests/arm-semihosting.robot	289-294	Should Pass Semihosting Test With Custom Temporary Files Directory	semihost-tmpnam-s_119132-774a78f78a07b105c759282663f14134b00fe67e; TemporaryFilesDirectory "my-temp"	共有 Cortex-M semihosting、Cortex-M85 fixture の命令を照合中	未確認
 renode	tests/unit-tests/bus-isolation.robot	50-66	Should Handle Separation By State In Secure World	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
 renode	tests/unit-tests/bus-isolation.robot	67-84	Should Handle Separation By State In Nonsecure World	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
 renode	tests/unit-tests/bus-isolation.robot	85-100	Should Change Access Conditions At Runtime	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
@@ -341,10 +328,22 @@ renode	tests/unit-tests/python-engine.robot	26-57	Should Return Syntax Error	上
 renode	tests/unit-tests/python-engine.robot	58-71	Should Abort On Runtime Error	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
 renode	tests/unit-tests/python-engine.robot	72-96	PyDev Should Handle QuadWord Accesses	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
 renode	tests/unit-tests/python-engine.robot	97-102	Should Handle Unsupported Variable Types	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
-renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	[Template] Syncing Disabled Template	Cortex-M7 を含む複数 fixture。共通の PC 同期動作を照合	未確認
-renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	[Template] Syncing Enabled Template	Cortex-M7 を含む複数 fixture。共通の PC 同期動作を照合	未確認
-renode	tests/unit-tests/sync_pc.robot	179-181	Should Report Correct PC Between Chained Blocks Xtensa	ケース内のフィクスチャ	Cortex-M7 を含む複数 fixture。共通の PC 同期動作を照合	未確認
-renode	tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot	18-29	Should Run All Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M85 fixture・命令集合を照合中	未確認
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	${PLAT_ARM} ${PROG_ARM} "armv7r"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	${PLAT_ARM64} ${PROG_ARM} "arm64"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	${PLAT_ARMv8R} ${PROG_ARM} "armv8r"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	${PLAT_ARM-M} ${PROG_ARM}	Cortex-M7 fixture・Cortex-M4 への適用性を照合	未確認
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	${PLAT_POWERPC} ${PROG_POWERPC}	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	${PLAT_SPARC} ${PROG_SPARC}	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_RISCV} ${PROG_RISCV}	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_ARM} ${PROG_ARM} "armv7r"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_ARM64} ${PROG_ARM} "arm64"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_ARMv8R} ${PROG_ARM} "armv8r"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_ARM-M} ${PROG_ARM}	Cortex-M7 fixture・Cortex-M4 への適用性を照合	未確認
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_POWERPC} ${PROG_POWERPC}	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_X86} ${PROG_X86} "i386"	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	${PLAT_SPARC} ${PROG_SPARC}	パラメータで別 ISA/実行状態を指定。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/sync_pc.robot	179-181	Should Report Correct PC Between Chained Blocks Xtensa	Xtensa fixture	Xtensa ISA 専用フィクスチャ。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot	18-29	Should Run All Instructions	cortex-m-thumb2-data-processing-instr-test.elf; run_result=0xffff	Cortex-M85 ELF に Armv8-M の CSEL/CSINC/CSINV/CSNEG を含む。全ケース構成は Cortex-M4 に適用不可	ELF SHA-1 と命令を確認。Armv7-M 共通命令の部分移植は未実施
 Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	34	ShouldGetAllGPIOConnections	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
 Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	52	ShouldDetachConnectionFromGPIOByNumberConnection	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
 Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	71	ShouldDetachOnlyOneConnectionFromGPIOByNumberConnection	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認

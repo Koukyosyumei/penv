@@ -56,6 +56,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-cortex-m-fpu.robot` の `Should Pass Context Stacking Preservation Test v7-M` は元の ELF と fixture で `Test succeeded` を確認。FRDM-K64F 用 ELF の generic sharing は固定 NXP プラットフォーム、v8-M stacking は TrustZone を要求する。2 件の NOCP ケースは Cortex-M33 フィクスチャのため Armv7-M への等価移植を要照合。
 - `tests/unit-tests/arm-ge-flag.robot` は同じ Armv7E-M 命令列を Cortex-M4 で実行し、R4 の期待値 6 件を確認。usub8 という名前の行も、上流本文が実際に実行する ssub8 を使用。
 - `tests/unit-tests/it-status.robot` は元の Cortex-M4 命令列と判定を Rust に移植し、条件コード、IT 状態とシフト、命令の条件実行、NMI 復帰、IT ブロック内フラグ更新の 6 ケースが合格。NMI は上流の monitor 注入と同じ例外番号を ICSR でペンドする。保存・復元と block begin/end hook の 3 ケースは未移植。
+- `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
 - `tests/unit-tests/page-access-via-io.robot` の Cortex-M4 ケースは対象。monitor 操作とパラメータを照合中。
 - `tests/unit-tests/python-engine.robot` の nRF RADIO は RISC-V fixture 内の単体部品。`tests/external-control/external-control.robot` の nRF SPI も RISC-V fixture。ボードとしては別構成。共有 API・部品テストとしての適用性は調査中。
 - Infrastructure の `src/Emulator/Main/Tests/UnitTests/GPIOTests.cs` と `GPIODetachingTests.cs` は汎用 GPIO 接続モデル用の NUnit。nRF モデル名を直接指定する fixture は PeripheralsTests、UnitTests、MonitorTests からは見つかっていない。共有 GPIO 操作の適用性と未分類 NUnit の調査は継続。
@@ -65,6 +66,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 
 - Renode の `tests` では、nRF52840・nRF52・Nano 33 BLE の直接参照と、Cortex-M・Armv7-M・Thumb-2 の共有フィクスチャを検索した。直接参照の 13 ファイルを記録し、機種固有の 17 ケースは上流の行と入力で照合した。
 - 汎用テストは関連が確認できたスイートと適用性の判定待ちを含む。共有 Robot/NUnit の調査には未分類があり、上流 Robot のテンプレート展開と NUnit のパラメータ照合も残る。
+- `arm-semihosting.robot` の ELF、引数、入力、出力条件はパラメータ単位で展開し、Cortex-A フィクスチャを区別した。対応するモニター・API と残る共有ケースの等価判定は未完了。
 - Armv8-M TrustZone と MVE の機種固有スイートは、その命令・セキュリティ状態を前提にするため対象外。別の Cortex-M をフィクスチャに使う共有ケースは、命令や入出力の適用性を個別に確認する。
 
 ## 再現
