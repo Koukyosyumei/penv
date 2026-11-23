@@ -917,8 +917,17 @@ pub fn registration<'a>(
 
 pub fn wire(text: &str) -> Result<(&str, &str, &str), &'static str> {
     let (from, to) = text.split_once("->").ok_or("expected peripheral wiring")?;
-    let (target, pins) = to
+    let (target, pins) = wire_destination(to)?;
+    Ok((from.trim(), target, pins))
+}
+
+pub(crate) fn wire_destination(text: &str) -> Result<(&str, &str), &'static str> {
+    let (target, pins) = text
         .split_once('@')
         .ok_or("missing wiring destination index")?;
-    Ok((from.trim(), target.trim(), pins.trim()))
+    let (target, pins) = (target.trim(), pins.trim());
+    if target.is_empty() || pins.is_empty() {
+        return Err("missing wiring destination target or index");
+    }
+    Ok((target, pins))
 }

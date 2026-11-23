@@ -1506,28 +1506,32 @@ fn exti_outputs(
         let Some((from, to)) = text.split_once("->") else {
             continue;
         };
-        let (target, pins) = to
-            .split_once('@')
-            .ok_or_else(|| controller.error("invalid EXTI output"))?;
-        let direct_nvic = nvic.is_some_and(|nvic| nvic.name == target.trim());
-        let combined = combined_routes.get(target.trim());
-        let pin_count = if direct_nvic {
-            IRQ_LINES as u32
-        } else if let Some((count, _)) = combined {
-            *count
-        } else {
-            return Err(controller.error("unknown EXTI output target"));
-        };
-        let from = irq_list(from, outputs.len() as u32).map_err(|e| controller.error(&e))?;
-        let to = irq_list(pins, pin_count).map_err(|e| controller.error(&e))?;
-        if from.len() != to.len() {
-            return Err(controller.error("mismatched EXTI wiring widths"));
-        }
-        for (line, pin) in from.into_iter().zip(to) {
-            let output = combined.map_or(pin, |&(_, output)| output);
-            if outputs[usize::from(line)].replace(output).is_some() {
-                return Err(controller.error("duplicate EXTI output"));
+        let mut destinations = irq_destinations(to);
+        for destination in destinations.by_ref().take(1) {
+            let (target, pins) = destination.map_err(|error| controller.error(error))?;
+            let direct_nvic = nvic.is_some_and(|nvic| nvic.name == target.trim());
+            let combined = combined_routes.get(target.trim());
+            let pin_count = if direct_nvic {
+                IRQ_LINES as u32
+            } else if let Some((count, _)) = combined {
+                *count
+            } else {
+                return Err(controller.error("unknown EXTI output target"));
+            };
+            let from = irq_list(from, outputs.len() as u32).map_err(|e| controller.error(&e))?;
+            let to = irq_list(pins, pin_count).map_err(|e| controller.error(&e))?;
+            if from.len() != to.len() {
+                return Err(controller.error("mismatched EXTI wiring widths"));
             }
+            for (line, pin) in from.into_iter().zip(to) {
+                let output = combined.map_or(pin, |&(_, output)| output);
+                if outputs[usize::from(line)].replace(output).is_some() {
+                    return Err(controller.error("duplicate EXTI output"));
+                }
+            }
+        }
+        if destinations.next().is_some() {
+            return Err(controller.error("multiple EXTI destinations are unsupported"));
         }
     }
     Ok(())
@@ -1542,27 +1546,46 @@ pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
 }
 
 pub(crate) fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
+    irq_ends(value, count, |name| {
+        Err(format!("invalid numeric IRQ {name:?}"))
+    })
+}
+
+fn irq_ends<T: From<u8>>(
+    value: &str,
+    count: u32,
+    named: impl Fn(&str) -> Result<T, String>,
+) -> Result<Vec<T>, String> {
     let value = value.trim();
-    let Some(list) = value
+    let mut ends = Vec::new();
+    let (list, grouped) = value
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
-    else {
-        return irq_index(value, count).map(|index| vec![index]);
-    };
-    let mut indices = Vec::new();
+        .map_or((value, false), |list| (list, true));
     for item in list.split(',') {
-        if let Some((start, end)) = item.split_once('-') {
+        let item = item.trim();
+        if grouped && let Some((start, end)) = item.split_once('-') {
             let start = irq_index(start, count)?;
             let end = irq_index(end, count)?;
             if start > end {
                 return Err("descending IRQ range".into());
             }
-            indices.extend(start..=end);
+            ends.extend((start..=end).map(T::from));
+        } else if item.starts_with(|c: char| c.is_ascii_digit()) {
+            ends.push(T::from(irq_index(item, count)?));
         } else {
-            indices.push(irq_index(item, count)?);
+            ends.push(named(item)?);
         }
     }
-    Ok(indices)
+    if !grouped && ends.len() != 1 {
+        return Err("expected a single IRQ".into());
+    }
+    Ok(ends)
+}
+
+fn irq_destinations(text: &str) -> impl Iterator<Item = Result<(&str, &str), &'static str>> {
+    text.split('|')
+        .map(crate::stm32h7_board_platform::wire_destination)
 }
 
 fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
@@ -2327,6 +2350,68 @@ uart:
             let entries = parse(source).unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
+        }
+    }
+
+    #[test]
+    fn upstream_irq_ranges_and_multiplexing() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Source {
+            Index(u8),
+            Named,
+        }
+        impl From<u8> for Source {
+            fn from(index: u8) -> Self {
+                Self::Index(index)
+            }
+        }
+
+        for (source, expected_sources, expected_targets) in [
+            (
+                "\nuart:\n    [1-3, IRQ] -> pic @ [2-5]",
+                &[
+                    Source::Index(1),
+                    Source::Index(2),
+                    Source::Index(3),
+                    Source::Named,
+                ][..],
+                &[("pic", &[2, 3, 4, 5][..])][..],
+            ),
+            (
+                "\nuart:\n    [1-2, IRQ] -> pic0@[4-6] | pic1@[7-8, 9] | pic2@[10, 11, 12]",
+                &[Source::Index(1), Source::Index(2), Source::Named],
+                &[
+                    ("pic0", &[4, 5, 6]),
+                    ("pic1", &[7, 8, 9]),
+                    ("pic2", &[10, 11, 12]),
+                ],
+            ),
+        ] {
+            let entries = parse(source).unwrap();
+            assert_eq!(entries.len(), 1);
+            let [(_, wiring)] = entries[0].body.as_slice() else {
+                panic!("expected one IRQ attribute");
+            };
+            let (from, to) = wiring.split_once("->").unwrap();
+            let sources = irq_ends(from, 256, |name| {
+                assert_eq!(name, "IRQ");
+                Ok(Source::Named)
+            })
+            .unwrap();
+            assert_eq!(sources, expected_sources);
+            let targets = irq_destinations(to)
+                .map(|target| {
+                    let (name, pins) = target.unwrap();
+                    (name, irq_list(pins, 256).unwrap())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(targets.len(), expected_targets.len());
+            for ((name, pins), (expected_name, expected_pins)) in
+                targets.iter().zip(expected_targets)
+            {
+                assert_eq!(name, expected_name);
+                assert_eq!(pins, expected_pins);
+            }
         }
     }
 

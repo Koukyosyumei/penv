@@ -1128,3 +1128,19 @@ target/release/penv run --script "$e/inline.resc" --platform-root ../renode
 ```
 
 ログと終了状態は上記に保存しました。`cargo test` 124件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格114件、部分検証10件、未達662件です。IRQ 専用の構文ケースやオブジェクト値・辞書値を含むケースは残っています。
+
+### backlog-network-6bc447f3a884-1
+
+REPL の IRQ リストで範囲と単一端点の展開を共通化し、STM32H7 EXTI の配線で宛先の解析を使用しました。固定上流 `ShouldParseEntryWithMultiIrqEntries` では、混在する番号・名前の送信元と宛先の番号順を照合しました。複数宛先のケースでも全宛先と展開順を照合しました。個別の範囲グループ境界を観測する上流のアサーションは残っているため、台帳では部分検証としています。EXTI モデルで複数宛先に同時配信する動作も残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 125件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-irq-attributes.9rE3Kilw` にあります。台帳は対象786件のうち等価合格115件、部分検証11件、未達660件です。
