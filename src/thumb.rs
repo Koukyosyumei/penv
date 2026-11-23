@@ -361,6 +361,7 @@ impl Thumb {
             }
         };
         let mut handler = read_handler(bus, exception)?;
+        let vector_fault = handler.is_none();
         let mut exception = exception;
         if handler.is_none() {
             if let Some(nvic) = bus.nvic.as_mut() {
@@ -398,12 +399,6 @@ impl Thumb {
                     .nvic
                     .as_mut()
                     .ok_or("stacking BusFault requires an NVIC")?;
-                if handler.is_none() {
-                    return Err(
-                        "simultaneous Cortex-M stacking and vector BusFaults are unsupported"
-                            .into(),
-                    );
-                }
                 let priority = nvic.priority(BUS_FAULT);
                 let configurable = nvic.bus_fault_enabled()
                     && !self.interrupts_masked
@@ -415,6 +410,14 @@ impl Thumb {
                 let derived = if configurable { BUS_FAULT } else { HARD_FAULT };
                 let cannot_escalate = !configurable
                     && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask);
+                // If NMI preempts an active HardFault, its terminal entry still
+                // records a failed vector read before asserting lockup.
+                if vector_fault && !(cannot_escalate && exception == NMI) {
+                    return Err(
+                        "simultaneous Cortex-M stacking and vector BusFaults are unsupported"
+                            .into(),
+                    );
+                }
                 nvic.record_stacking_bus_fault(!configurable && !cannot_escalate);
 
                 if cannot_escalate {

@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 88 | 5 | 97 |
+| 監査した共有・混成 Robot | 190 | 90 | 5 | 95 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **105** | **5** | **111** |
+| 合計 | **221** | **107** | **5** | **109** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -183,7 +183,7 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
 
-BusFault の適用対象31ケースのうち21件が合格、1件が部分移植、9件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
+BusFault の適用対象31ケースのうち23件が合格、1件が部分移植、7件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
 
 ### 未マップのデータアクセス
 
@@ -228,3 +228,9 @@ BusFault の適用対象31ケースのうち21件が合格、1件が部分移植
 `arm-cortex-m-bus-fault.robot:424–491` の3構成を移植した。上流と同じ SP と命令列を使い、NMI 入口で HardFault が保留されること、外部 IRQ 入口で HardFault または同優先度の BusFault が選ばれることを照合した。外部 IRQ は保留を維持し、アクティブにはならない。生成 ELF の `stacking-hardfault` と `stacking-busfault` でも、スタックの割当位置、SCB、IRQ の状態を確認した。
 
 `cargo test` と上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/stacking-bus-fault.a5Oiy5sV/` の `cargo-test.verified`、`elf.verified`、`shell` に保存した。同時に発生するスタックとベクタの障害の優先順位、選択されなかった設定可能 BusFault の保留、例外復帰時の障害、遅延 FP 保存は残る。
+
+### HardFault を中断する NMI のスタック障害
+
+`arm-cortex-m-bus-fault.robot:544–600` の2ケースを移植した。元の命令、SP、NMI の注入とベクタ位置を再現し、スタック障害後の SP、NMI の IPSR、ITSTATE、HardFault/NMI のアクティブ状態、CPU とデバッガの DHCSR を照合した。スタック障害と NMI ベクタ障害が重なる構成では、`STKERR` と `VECTTBL` の両方を記録する。追加 ELF は HardFault ハンドラから NMI をペンドし、CLI でも lockup に留まることを確認する。
+
+`cargo test` と上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/nmi-stacking-lockup.YyxdHtTN/` の `cargo-test`、`elf`、`shell` に保存した。今回の同時障害対応は NMI 入口の選択済みケースを対象とする。例外復帰時のスタック障害と遅延 FP 保存は未達。

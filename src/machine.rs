@@ -881,6 +881,87 @@ impl Hart {
 mod tests {
     use super::*;
 
+    fn check_nmi_entry_lockup(vector_fault: bool) {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        for (address, value) in [(8, 0x381), (12, 0x341)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for (address, opcode) in [
+            (0x200, 0x6802),
+            (0x202, 0x2122),
+            (0x204, 0xe7fe),
+            (0x340, 0x2d00),
+            (0x342, 0xbf04),
+            (0x344, 0x2101),
+            (0x346, 0x2202),
+            (0x348, 0xe7fe),
+            (0x380, 0xe7fe),
+        ] {
+            machine.bus.write(address, 2, opcode, &mut out).unwrap();
+        }
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        machine
+            .bus
+            .write(0xe000_ed28, 4, u32::MAX, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+            .unwrap();
+        if vector_fault {
+            machine.bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+        } else {
+            assert_eq!(machine.run(2, &mut out).unwrap(), (Stop::Limit, 2));
+            assert_ne!(machine.primary.thumb.as_ref().unwrap().lockup_state().1, 0);
+        }
+        machine.primary.registers[13] = 0x100020;
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0x100000);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 2)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 12);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ed2c).unwrap(),
+            if vector_fault { 2 } else { 0 }
+        );
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ed24).unwrap(),
+            (1 << 2) | (1 << 5)
+        );
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_nmi_stacking_fault_locks_over_hard_fault() {
+        check_nmi_entry_lockup(false);
+    }
+
+    #[test]
+    fn upstream_nmi_stacking_lockup_records_vector_fault() {
+        check_nmi_entry_lockup(true);
+    }
+
     fn check_upstream_stacking_bus_fault(exception: u8, bus_fault_enabled: bool, handler: u8) {
         let mut machine = Machine::new(0x1000).unwrap();
         machine.bus.map_ram(0, 0x1000).unwrap();

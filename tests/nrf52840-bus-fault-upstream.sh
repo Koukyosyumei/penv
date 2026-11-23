@@ -384,3 +384,40 @@ ASM
         >"$out/stacking-$selection.log" 2>&1
     printf 'stacking fault: %s selected\n' "$selection"
 done
+
+# Robot 544-575: a real ELF drives the stacking fault by pending NMI
+# after the HardFault handler redirects MSP into the faulting peripheral.
+cat >"$out/nmi-stacking-lockup.s" <<'ASM'
+.syntax unified
+.thumb
+.global reset
+.word 0x1000, reset, nmi, hardfault
+.thumb_func
+reset:
+    ldr r0, =0x100000
+    ldr r2, [r0]
+    b .
+.thumb_func
+hardfault:
+    ldr r0, =0xe000ed28
+    mov.w r1, #-1
+    str r1, [r0]
+    mov.w r1, #0x40000000
+    str r1, [r0, #4]
+    ldr r0, =0x100020
+    msr msp, r0
+    ldr r0, =0xe000ed04
+    mov.w r1, #0x80000000
+    str r1, [r0]
+    b .
+.thumb_func
+nmi:
+    b .
+ASM
+clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/nmi-stacking-lockup.s" -o "$out/nmi-stacking-lockup.o"
+ld.lld -N -Ttext=0 --entry=reset "$out/nmi-stacking-lockup.o" -o "$out/nmi-stacking-lockup.elf"
+status=0
+"$penv" run --platform "$out/bus-fault.repl" --max-steps 100 "$out/nmi-stacking-lockup.elf" \
+    >"$out/nmi-stacking-lockup.log" 2>&1 || status=$?
+[ "$status" -eq 2 ]
+grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/nmi-stacking-lockup.log"
