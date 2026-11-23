@@ -30,12 +30,17 @@ pub(crate) struct Entry {
     pub(crate) name: String,
     pub(crate) model: String,
     pub(crate) registration: Option<String>,
+    alias: Option<String>,
     pub(crate) body: Properties,
     source: PathBuf,
     line: usize,
 }
 
 impl Entry {
+    fn registered_name(&self) -> &str {
+        self.alias.as_deref().unwrap_or(&self.name)
+    }
+
     pub(crate) fn error(&self, detail: &str) -> String {
         format!(
             "{}:{}: {}: {detail}",
@@ -719,6 +724,18 @@ fn parse_content(
             return Err(error("unsupported declaration name"));
         }
         let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
+        let (declaration, alias) = match unquoted_delimiters(declaration, &[' '])
+            .find(|&(index, _)| declaration[index..].starts_with(" as "))
+        {
+            Some((index, _)) => (
+                &declaration[..index],
+                Some(
+                    quoted_string(&declaration[index + 4..])
+                        .ok_or_else(|| error("expected quoted registration alias"))?,
+                ),
+            ),
+            None => (declaration, None),
+        };
         let (model, registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
             None => (declaration.trim(), None),
@@ -739,6 +756,7 @@ fn parse_content(
             name: name.into(),
             model: model.into(),
             registration,
+            alias,
             body,
             source: path.into(),
             line: lineno,
@@ -912,6 +930,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             name: entry.name.clone(),
             model: String::new(),
             registration: None,
+            alias: None,
             body: std::mem::take(&mut entry.body),
             source: entry.source.clone(),
             line: entry.line,
@@ -923,6 +942,9 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             .get(&block.name)
             .ok_or_else(|| block.error("extension has no declaration"))?;
         let target = &mut declarations[index];
+        if block.alias.is_some() {
+            target.alias = block.alias;
+        }
         if let Some(registration) = block.registration {
             target.registration = Some(registration);
         }
@@ -935,6 +957,21 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             .body
             .retain(|(_, text)| !scalar_property(text).is_some_and(|key| replaced.contains(key)));
         target.body.extend(block.body);
+    }
+    for entry in &declarations {
+        if entry.alias.is_some() {
+            match entry.registration.as_deref() {
+                None => {
+                    return Err(
+                        entry.error("AliasWithoutRegistration: alias requires registration")
+                    );
+                }
+                Some("none") => {
+                    return Err(entry.error("AliasWithNoneRegistration: alias requires a parent"));
+                }
+                _ => {}
+            }
+        }
     }
     Ok(declarations)
 }
@@ -1886,7 +1923,7 @@ pub fn export_peripherals(path: &Path, root: Option<&Path>, output: &Path) -> Re
         nodes.push(format!(
             r#"{{"Name":{},"Alias":{},"Bindings":[{bindings}],"Children":[]}}"#,
             json_string(model),
-            json_string(&entry.name),
+            json_string(entry.registered_name()),
         ));
     }
     let mut file =

@@ -222,3 +222,46 @@ gone: @none
         assert!(machine.bus.read::<4>(address).is_err());
     }
 }
+
+#[test]
+fn renode_alias_sets_registered_name() {
+    let source = r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus as "otherName""#;
+    let path = Path::new("<platform string>");
+    let mut entries = Vec::new();
+    parse_content(
+        path,
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )
+    .unwrap();
+    let entries = merge_declarations(entries).unwrap();
+    let [cpu] = entries.as_slice() else {
+        panic!("expected the mock CPU")
+    };
+    assert_eq!(cpu.model, "Antmicro.Renode.UnitTests.Mocks.MockCPU");
+    assert_eq!(cpu.name, "cpu");
+    assert_eq!(cpu.registration.as_deref(), Some("sysbus"));
+    let names = HashSet::from([format!("sysbus.{}", cpu.registered_name())]);
+    assert!(names.contains("sysbus.otherName"));
+    assert!(!names.contains("sysbus.cpu"));
+}
+
+#[test]
+fn renode_alias_requires_registration() {
+    let source = r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral as "alias""#;
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("AliasWithoutRegistration:"));
+}
+
+#[test]
+fn renode_alias_rejects_none_registration() {
+    let source = r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ none as "alias""#;
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("AliasWithNoneRegistration:"));
+}
