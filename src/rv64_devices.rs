@@ -8,7 +8,7 @@ use crate::{
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
     rv64_gem::Gem,
-    rv64_mpfs::{DdrMock, Sysreg},
+    rv64_mpfs::{DdrMock, Spi, Sysreg},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_mpfs_wdog::Watchdog,
@@ -27,6 +27,7 @@ pub struct Devices {
     pub fire_media_controller: Option<usize>,
     pub mpfs_sd: Vec<rv64_mpfs_sd::Controller>,
     pub mpfs_watchdogs: Vec<Watchdog>,
+    pub mpfs_spi: Vec<Spi>,
     pub mpfs_ddr: Vec<DdrMock>,
     pub mpfs_sysreg: Option<Sysreg>,
     pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
@@ -250,6 +251,13 @@ impl Devices {
         if let Some(value) = self.gems.iter().find_map(|gem| gem.read(address, width)) {
             return Some(value);
         }
+        if let Some(value) = self
+            .mpfs_spi
+            .iter()
+            .find_map(|spi| spi.read(address, width))
+        {
+            return Some(value);
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -328,6 +336,13 @@ impl Devices {
             .gems
             .iter_mut()
             .any(|gem| gem.write(address, width, value).is_some())
+        {
+            return Some(Ok(()));
+        }
+        if self
+            .mpfs_spi
+            .iter_mut()
+            .any(|spi| spi.write(address, width, value).is_some())
         {
             return Some(Ok(()));
         }

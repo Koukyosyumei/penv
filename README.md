@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | 上流と同じ外部 PMP を両 U74 に接続。2 台の起動、ログインと 56 バイト ping の 10/10 応答を確認 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 から SD の Linux 6.6.35 を起動し、`ttyS0` コンソールを確認。SPI プローブでパニックになり、Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 から SD の Linux 6.6.35 を起動し、`ttyS0` コンソールを確認。両 CoreSPI の登録を確認。次の MPFS MUSB プローブでパニックになり、Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -390,9 +390,24 @@ python3 scripts/verify-fire.py "$fire_assets" --until linux
 
 公開 HSS と SD イメージの実行を `--max-steps 6000000000` の上限まで追いました。U-Boot は SD 上の FIT を読み込み、カーネルと DTB の SHA-256 を検証しました。`Starting kernel` の後に Linux `6.6.35-linux4microchip+fpga-2024.06` が起動し、`20000000.serial` を `ttyS0` コンソールとして有効にしました。カーネル引数は元のイメージの `root=/dev/mmcblk0p3 rootwait` を使用しています。
 
-最初の阻害点は `mchp_corespi_probe+0x174` の 32 ビット読み出しです。Linux は仮想アドレス `0xffff8f800004d000` でロードアクセス例外を報告し、起動中にパニックになりました。上流 REPL の `SPI.MPFS_SPI` が未実装なので、次は対象 MMIO を特定して SPI のプローブに必要な動作を移植します。SD ルートのマウント、Buildroot のログイン、`uname` は未確認です。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
+前回の最初の阻害点は `mchp_corespi_probe+0x174` の 32 ビット読み出しです。Linux は仮想アドレス `0xffff8f800004d000` でロードアクセス例外を報告し、起動中にパニックになりました。この阻害点の修正と次の例外は下の CoreSPI の節に記録しています。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
 
 検証スクリプトは上流 RESC からプラットフォーム、カード接続、HSS ELF ロードを取り出します。元の RESC 全体の実行には `SetGlobalQuantum`、GPIO ボタン操作、シンボルロードと CPU フックが残っています。今回の範囲では `cargo test` 75 件、StarLight の上流対応 7 ケース、RV64 virt の実 Linux ログインが通過しました。
+
+#### Fire の CoreSPI プローブ
+
+Fire の FIT に含まれる DTB は `spi@20108000` と `spi@20109000` を有効にしています。Penv は上流 REPL の `SPI.MPFS_SPI` を認識し、それぞれの 4 KiB の窓に CoreSPI の 32 ビット制御・状態レジスターを割り当てます。Linux のプローブで使う制御、フレーム幅、クロック分周、チップ選択とリセットを実装しました。SPI スレーブ、データ転送、転送割り込みは残課題です。[Renode MPFS_SPI](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SPI/MPFS_SPI.cs) [Linux 6.6 CoreSPI ドライバー](https://github.com/torvalds/linux/blob/v6.6/drivers/spi/spi-microchip-core.c)
+
+```sh
+cargo test
+cargo build --release
+python3 scripts/verify-fire.py "$fire_assets" --max-steps 6500000000 \
+  --logs target/fire-spi-probe
+```
+
+比較には同じ公開 HSS と SD イメージを使いました。FIT 内の元の DTB を使い、U-Boot のハッシュ検証が通過しました。修正前の `17b85ea` は Linux 6.6.35 の `console [ttyS0] enabled` の後、`mchp_corespi_probe+0x174` のロードアクセス例外を再現しました。修正後は同じコンソールの初期化を経て、`20108000.spi` と `20109000.spi` がそれぞれコントローラー 0 と 1 を登録しました。
+
+次の致命的な停止は `mpfs_musb_set_vbus` が呼ぶ `musb_default_readb` の USB 対象オフセット `0x60` への 8 ビット読み出しです。検証スクリプトはログイン待ちでこのカーネルパニックを検出します。SD ルートのマウント、Buildroot ログイン、`uname` は未確認です。`cargo test` は 76 件すべて通過しました。
 
 ## Cortex-M0 / Cortex-M0+
 
