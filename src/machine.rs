@@ -505,6 +505,14 @@ impl Hart {
         self.thumb = Some(Thumb::new(vectors));
     }
 
+    pub fn set_embedded_base(&mut self, enabled: bool) {
+        self.csr.embedded_base = enabled;
+    }
+
+    pub fn embedded_base(&self) -> bool {
+        self.csr.embedded_base
+    }
+
     pub fn set_integer_extensions(&mut self, multiply: bool, atomic: bool, compressed: bool) {
         self.csr.m_extension = multiply;
         self.csr.a_extension = atomic;
@@ -719,8 +727,8 @@ impl Hart {
         if self.thumb.is_some() {
             return Err("RISC-V register command requires a RISC-V CPU".into());
         }
-        let register = self
-            .registers
+        let count = if self.csr.embedded_base { 16 } else { 32 };
+        let register = self.registers[..count]
             .get_mut(index as usize)
             .ok_or_else(|| format!("Wrong register index: {index}"))?;
         match value {
@@ -879,6 +887,26 @@ impl Hart {
         }
     }
 
+    fn uses_rv32e_registers(insn: u32) -> bool {
+        const RD_HIGH: u32 = 1 << 11;
+        const RS1_HIGH: u32 = 1 << 19;
+        const RS2_HIGH: u32 = 1 << 24;
+
+        let mask = match insn & 0x7f {
+            0x17 | 0x37 | 0x6f => RD_HIGH,
+            0x03 | 0x13 | 0x67 => RD_HIGH | RS1_HIGH,
+            0x23 | 0x63 => RS1_HIGH | RS2_HIGH,
+            0x2f | 0x33 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+            0x73 => match (insn >> 12) & 7 {
+                1..=3 => RD_HIGH | RS1_HIGH,
+                5..=7 => RD_HIGH,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        insn & mask == 0
+    }
+
     fn step(
         &mut self,
         bus: &mut Bus,
@@ -901,6 +929,9 @@ impl Hart {
         } else {
             encoded
         };
+        if self.csr.embedded_base && !Self::uses_rv32e_registers(insn) {
+            return Err(illegal());
+        }
         let rd = ((insn >> 7) & 31) as usize;
         let a = self.registers[((insn >> 15) & 31) as usize];
         let b = self.registers[((insn >> 20) & 31) as usize];

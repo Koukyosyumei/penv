@@ -870,9 +870,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     for entry in cpus {
         let ibex = entry.model == "CPU.IbexRiscV32";
         let mut isa = match entry.model.as_str() {
-            "CPU.IbexRiscV32" => Some((true, false, true)),
-            "CPU.Minerva" => Some((false, false, false)),
-            "CPU.VexRiscv" => Some((true, false, false)),
+            "CPU.IbexRiscV32" => Some((true, false, true, false)),
+            "CPU.Minerva" => Some((false, false, false, false)),
+            "CPU.VexRiscv" => Some((true, false, false, false)),
             _ => None,
         };
         let mut floating = (false, false, false);
@@ -934,6 +934,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     let letters = letters.strip_prefix("rv32").unwrap_or("");
                     let letters = letters.trim_matches('_');
                     let general = letters.contains('g');
+                    let embedded = letters.contains('e');
                     let single = general || letters.contains('f');
                     let double = general || letters.contains('d');
                     let valid_csr_suffix = suffix
@@ -941,8 +942,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         .all(|part| matches!(part, "" | "zicsr" | "zifencei"));
                     let ibex_legacy = ibex && base == "rv32imcu_zicsr_zifencei";
                     if !ibex_legacy
-                        && (!(general || letters.contains('i'))
-                            || !letters.chars().all(|letter| "imafdcgb".contains(letter))
+                        && (!(general || embedded || letters.contains('i'))
+                            || !letters.chars().all(|letter| "iemafdcgb".contains(letter))
+                            || (embedded && !letters.chars().all(|letter| "emac".contains(letter)))
                             || !valid_csr_suffix
                             || (double && !single))
                     {
@@ -963,6 +965,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         general || letters.contains('m'),
                         general || letters.contains('a'),
                         letters.contains('c'),
+                        embedded,
                     ));
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
@@ -1007,7 +1010,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             id,
             entry,
             {
-                let (multiply, atomic, compressed) =
+                let (multiply, atomic, compressed, embedded) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
                 if floating.2 && !floating.0 {
                     return Err(entry.error("Zfh requires the RV32 F extension"));
@@ -1019,7 +1022,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("Zacas requires the RV32 A extension"));
                 }
                 (
-                    multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating,
+                    multiply, atomic, compressed, embedded, zicond, zacas, smepmp, bitmanip,
+                    floating,
                 )
             },
             pmp,
@@ -1043,7 +1047,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &(
             id,
             entry,
-            (multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating),
+            (multiply, atomic, compressed, embedded, zicond, zacas, smepmp, bitmanip, floating),
             pmp,
             (user, supervisor),
         ),
@@ -1063,6 +1067,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .unwrap_or(entry.model == "CPU.IbexRiscV32");
         hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic, compressed);
+        hart.set_embedded_base(embedded);
         hart.set_zicond(zicond);
         hart.set_zacas(zacas);
         hart.set_bitmanip(bitmanip);
@@ -2096,6 +2101,7 @@ type RiscvConfig<'a> = (
     usize,
     &'a Entry,
     (
+        bool,
         bool,
         bool,
         bool,

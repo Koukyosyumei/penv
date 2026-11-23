@@ -61,7 +61,11 @@ pub fn load(
             return Err("expected an ARM EABI5 ELF32 executable without the hard-float ABI".into());
         }
     } else if half(&header, 18) != 243
-        || flags & !(abi_flags | u32::from(machine.primary.compressed_instructions())) != 0
+        || flags
+            & !(abi_flags
+                | u32::from(machine.primary.compressed_instructions())
+                | (u32::from(machine.primary.embedded_base()) << 3))
+            != 0
     {
         return Err("expected a RISC-V ELF32 executable with supported ISA flags".into());
     }

@@ -131,6 +131,7 @@ pub struct Csr {
     pub m_extension: bool,
     pub a_extension: bool,
     pub c_extension: bool,
+    pub embedded_base: bool,
     status: u32,
     pub f_extension: bool,
     pub d_extension: bool,
@@ -168,6 +169,7 @@ impl Default for Csr {
             m_extension: true,
             a_extension: false,
             c_extension: false,
+            embedded_base: false,
             status: MPP,
             f_extension: false,
             d_extension: false,
@@ -415,7 +417,7 @@ impl Csr {
             0x301 => {
                 (1 << 30)
                     | (u32::from(self.m_extension) << 12)
-                    | (1 << 8)
+                    | (if self.embedded_base { 1 << 4 } else { 1 << 8 })
                     | u32::from(self.a_extension)
                     | (u32::from(self.c_extension) << 2)
                     | (u32::from(self.f_extension) << 5)

@@ -587,3 +587,24 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 固定 Zacas ACT ELF は UART を持たない Robot フィクスチャでは終了処理の送信待ちに入りました。NS16550 を追加した縮小構成では `hartId: 2` で完了コード 0 を確認しました。この ACT 結果は上流最大構成の合格には算入していません。virt の別プローブで `mhartid=32` と LR/SC、既存の実 ELF で CLINT・PLIC・UART を確認しました。Rust テスト 82 件と、LiteX SMP Linux の 4 ハート起動・ログイン・CPU 一覧も通過しました。上流等価合格は累計 86 件です。最大 ISA 構成の V と Zcb、および未確定の台帳展開は残っています。
 
 再現用 REPL、プローブ、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-266bffd-iiUKGl/` に保存しました。
+
+### RV32E の構成と整数レジスター制約
+
+固定 `riscv-isa-string.robot` で RV32E を要求する 14 表記を移植しました。以前は `rv32emac_zicsr` が CPU 作成時に拒否されました。RV32E では `misa.E` を立て、整数命令で x16–x31 を指定した場合は不正命令とします。整数レジスターを使うフィールドだけを検査し、CSR の即値は 0–31 のままです。圧縮命令は展開後に同じ検査を行い、例外には元の命令語を記録します。ELF ローダーは RV32E 構成で `EF_RISCV_RVE` を受け付けます。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/valid-rerun" --valid
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/invalid-rerun"
+riscv64-unknown-elf-gcc -march=rv32emac_zicsr -mabi=ilp32e -nostdlib \
+  -Wl,-T,scripts/firmware/rv32-virt.ld scripts/firmware/rv32e.S -o "$evidence/rv32e.elf"
+target/release/penv run --platform "$evidence/rv32e.repl" \
+  --tohost 0x80001000 --max-steps 256 "$evidence/rv32e.elf"
+```
+
+固定 Robot の有効表記 43 件と無効構成 5 件、Rust テスト 82 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC が通過しました。固定 ACT の取得済みツリーに RV32E ELF は見つからなかったため、実行検証には GCC でビルドした `ilp32e` プローブを使用しました。プローブは `misa`、CSR 即値、不正な x16 の読み書きと圧縮命令の例外を確認して完了コード 0 に到達しました。
+
+上流等価合格は累計 100 件です。V と Andes 拡張を要求する構成ケースは残っています。
+
+REPL、再現 ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-10f222a-HmbHR9/` に保存しました。
