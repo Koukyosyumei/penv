@@ -924,6 +924,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
                             "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
+                            "zbkb" if !bitmanip.zbkb => bitmanip.zbkb = true,
                             "zbs" if !bitmanip.zbs => bitmanip.zbs = true,
                             _ => break,
                         }
@@ -955,6 +956,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                             zbb: true,
                             zbc: true,
                             zbs: true,
+                            ..bitmanip
                         };
                     }
                     isa = Some((
@@ -2073,6 +2075,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zbb"
                     | "zbc"
                     | "zbs"
+                    | "zbkb"
                     | "zacas"
                     | "zfh"
                     | "smepmp"

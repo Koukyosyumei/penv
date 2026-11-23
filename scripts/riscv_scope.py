@@ -119,6 +119,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if choices == {"64"}:
             return "outside", "outside", "case passes bitness=64 to its CPU fixture"
         if choices == {"32"}:
+            if filename == "riscv-bkb.robot":
+                return "target", "ported", "fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked"
             if filename == "riscv-zicond-extension.robot":
                 return "target", "ported", "pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF"
             if filename == "riscv-mret.robot" and case in {

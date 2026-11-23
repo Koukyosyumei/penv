@@ -2458,15 +2458,15 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulhsu-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zmmul/Zmmul-mulhu-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64		outside	outside	Run Test Case width=64 selects CPU.RiscV64 and the RV64 ELF discovery list
-Renode	tests/unit-tests/riscv-bkb.robot	42	Should Execute Pack Instruction On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-bkb.robot	42	Should Execute Pack Instruction On RV32		target	ported	fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked
 Renode	tests/unit-tests/riscv-bkb.robot	50	Should Execute Pack Instruction On RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-bkb.robot	58	Should Execute Packh Instruction On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-bkb.robot	58	Should Execute Packh Instruction On RV32		target	ported	fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked
 Renode	tests/unit-tests/riscv-bkb.robot	62	Should Execute Packh Instruction On RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-bkb.robot	67	Should Execute Packw Instruction		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-bkb.robot	76	Should Execute Zip Instruction		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-bkb.robot	95	Should Execute Unzip Instruction		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-bkb.robot	76	Should Execute Zip Instruction		target	ported	fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked
+Renode	tests/unit-tests/riscv-bkb.robot	95	Should Execute Unzip Instruction		target	ported	fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked
 Renode	tests/unit-tests/riscv-bkb.robot	109	Should Execute Brev8 Instruction On RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-bkb.robot	119	Should Execute Brev8 Instruction On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-bkb.robot	119	Should Execute Brev8 Instruction On RV32		target	ported	fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked
 Renode	tests/unit-tests/riscv-custom-instructions.robot	37	Should Install Custom 16-bit Instruction		outside	outside	inline CPU.RiscV64 rv64imac_zicsr fixture
 Renode	tests/unit-tests/riscv-custom-instructions.robot	53	Should Not Install Custom Instructions With Invalid Length Encoding		outside	outside	inline CPU.RiscV64 rv64imac_zicsr fixture
 Renode	tests/unit-tests/riscv-custom-instructions.robot	77	Should Install Custom 32-bit Instruction		outside	outside	inline CPU.RiscV64 rv64imac_zicsr fixture

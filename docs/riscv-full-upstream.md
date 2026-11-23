@@ -549,3 +549,20 @@ python3 scripts/validate-rv32-mret-log.py target/release/penv "$evidence/mret.el
 Rust テスト 80 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC プローブ、ResetVector 回帰が通過しました。上流等価合格は累計 74 件です。関数ログはシンボルの開始アドレスに対応します。Renode の翻訳ブロック単位のログ、範囲内のシンボル解決、接頭辞フィルターは今回の範囲に含まれません。別ケースの無効命令診断ログ、最大 ISA 構成と未確定の台帳展開は残っています。
 
 固定 ELF、再現用 RESC、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-04137b1-z3RqND/` に保存しました。
+
+### RV32 Zbkb の固定 Robot ケース
+
+RV32 CPU に `Zbkb` を追加しました。PACK、PACKH、ZIP、UNZIP、BREV8 と、Zbb と共有する論理演算・ローテート・REV8 をデコードします。固定 `riscv-bkb.robot` の RV32 5 ケースは、元の `rv32gc_zbkb` フィクスチャでオペランド、各 1 ステップの非トラップ条件、結果レジスターを照合しました。
+
+```bash
+cargo test --locked upstream_rv32_zbkb -- --nocapture
+cargo test --locked
+cargo build --locked --release
+sed '/cpuType:/s/rv32imac/rv32gc_zbkb/' ../renode/platforms/cpus/riscv_virt.repl > "$evidence/zbkb.repl"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$evidence/zbkb.repl" --artifacts "$evidence/zbkb-rerun" "$work"/isa/rv32uzbkb-[pv]-*
+```
+
+公開 Zbkb ELF は変更前に CPU 作成で 10 件とも停止し、修正後に縮小 ISA 構成で 10 件とも通過しました。既存 Zba・Zbb・Zbc・Zbs の公開 ELF 64 件、virt の UART・CLINT・PLIC プローブ、Rust テスト 81 件も通過しました。公開 ELF の上流共通構成は引き続き V を要求するため、縮小構成の結果は上流等価合格に算入していません。固定 Robot の 5 件を加え、上流等価合格は累計 79 件です。
+
+変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-a7ba641-zB4Rkf/` に保存しました。

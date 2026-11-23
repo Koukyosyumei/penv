@@ -1314,6 +1314,77 @@ mod tests {
     }
 
     #[test]
+    fn upstream_rv32_zbkb() {
+        // Renode riscv-bkb.robot: exact RV32 input, result and non-trap checks.
+        let directory = std::env::temp_dir().join(format!("penv-rv32-zbkb-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"cpu: CPU.RiscV32 @ sysbus { cpuType: "rv32gc_zbkb"; timeProvider: empty }
+dram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x80000000 }
+mtvec: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None).unwrap();
+        for (opcode, rd, inputs) in [
+            (
+                0x08b5_4633u32,
+                12,
+                &[(0xffff_beef, 0xffff_dead, 0xdead_beef)][..],
+            ),
+            (0x08b5_7633, 12, &[(0xffff_ffcd, 0xffff_ffab, 0xabcd)]),
+            (
+                0x08f5_1593,
+                11,
+                &[
+                    (u32::MAX, 0, u32::MAX),
+                    (0xffff, 0, 0x5555_5555),
+                    (0xffff_0000, 0, 0xaaaa_aaaa),
+                    (0xdead_beef, 0, 0xe7fc_dcf7),
+                ],
+            ),
+            (
+                0x08f5_5593,
+                11,
+                &[
+                    (u32::MAX, 0, u32::MAX),
+                    (0x5555_5555, 0, 0xffff),
+                    (0xaaaa_aaaa, 0, 0xffff_0000),
+                ],
+            ),
+            (
+                0x6875_5593,
+                11,
+                &[(u32::MAX, 0, u32::MAX), (0xdead_beaf, 0, 0x7bb5_7df5)],
+            ),
+        ] {
+            machine.set_entry(RAM_BASE);
+            for &(a, b, expected) in inputs {
+                let pc = machine.primary.pc;
+                machine.primary.registers[10] = a;
+                machine.primary.registers[11] = b;
+                machine
+                    .bus
+                    .memory(pc, 4)
+                    .unwrap()
+                    .copy_from_slice(&opcode.to_le_bytes());
+                assert_eq!(
+                    machine.run(1, &mut std::io::sink()).unwrap(),
+                    (Stop::Limit, 1)
+                );
+                assert_ne!(machine.primary.pc, 0x1010);
+                assert_eq!(
+                    machine.primary.registers[rd], expected,
+                    "{opcode:#010x}, a0={a:#010x}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn upstream_rv32_monitor_rejects_writes_to_x0() {
         let directory = std::env::temp_dir().join(format!("penv-rv32-x0-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
