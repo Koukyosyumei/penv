@@ -1916,6 +1916,30 @@ impl Bus {
         self.read::<N>(address)
     }
 
+    pub fn read_cortex_unaligned_data<const N: usize>(
+        &self,
+        address: u32,
+    ) -> Result<u32, BusError> {
+        if let Some(address) = self.faulting_address(address, N, false) {
+            return Err(BusError::Unmapped(address, N));
+        }
+        self.read_unaligned_ram::<N>(address)
+    }
+
+    pub fn write_cortex_unaligned_data(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+    ) -> Result<(), BusError> {
+        if let Some(address) = self.faulting_address(address, width, true) {
+            return Err(BusError::Unmapped(address, width));
+        }
+        self.guest_memory(address, width)?
+            .copy_from_slice(&value.to_le_bytes()[..width]);
+        Ok(())
+    }
+
     pub fn read_cortex_instruction<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
         if let Some(address) = self.faulting_address(address, N, false) {
             return Err(BusError::Unmapped(address, N));

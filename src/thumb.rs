@@ -109,6 +109,9 @@ impl Thumb {
     }
 
     pub fn reset(&mut self, bus: &mut Bus, r: &mut [u32; 32]) -> Result<u32, String> {
+        if let Some(nvic) = &mut bus.nvic {
+            nvic.leave_lockup();
+        }
         let vector = self
             .vector_base()
             .checked_add(4)
@@ -731,18 +734,24 @@ impl Thumb {
         {
             self.signal_event();
         }
-        if self.locked_up {
-            return Ok(false);
-        }
         if self.thumb2
             && self.active_exception != 2
             && bus.systick.as_ref().is_some_and(|timer| timer.pending(2))
         {
+            if self.locked_up {
+                self.locked_up = false;
+                if let Some(nvic) = &mut bus.nvic {
+                    nvic.leave_lockup();
+                }
+            }
             *pc = self.exception_entry(2, *pc, r, bus)?;
             bus.systick.as_mut().unwrap().acknowledge(2);
             self.waiting_for_interrupt = false;
             self.waiting_for_event = false;
             return Ok(true);
+        }
+        if self.locked_up {
+            return Ok(false);
         }
         if !self.faultmask
             && self.exception_priority(self.active_exception, bus).0 >= 0
@@ -870,15 +879,50 @@ impl Thumb {
                 .is_none_or(|nvic| !nvic.unaligned_access_traps())
     }
 
-    fn read_data<const N: usize>(
+    fn handle_data_fault<T: Default>(
+        &self,
+        bus: &mut Bus,
+        result: Result<T, BusError>,
+    ) -> Result<T, BusError> {
+        if let Err(BusError::Unmapped(address, _)) = result
+            && self.thumb2
+            && (matches!(self.active_exception, 2 | 3) || self.faultmask)
+            && let Some(nvic) = &mut bus.nvic
+            && nvic.ignores_negative_priority_data_fault()
+        {
+            nvic.record_fault(Some(address));
+            return Ok(T::default());
+        }
+        result
+    }
+
+    fn read_aligned_data<const N: usize>(
         &self,
         bus: &mut Bus,
         address: u32,
-    ) -> Result<u32, crate::bus::BusError> {
+    ) -> Result<u32, BusError> {
+        let result = bus.read_cortex_data::<N>(address);
+        self.handle_data_fault(bus, result)
+    }
+
+    fn write_aligned_data(
+        &self,
+        bus: &mut Bus,
+        address: u32,
+        width: usize,
+        value: u32,
+        output: &mut impl Write,
+    ) -> Result<(), BusError> {
+        let result = bus.write(address, width, value, output);
+        self.handle_data_fault(bus, result)
+    }
+
+    fn read_data<const N: usize>(&self, bus: &mut Bus, address: u32) -> Result<u32, BusError> {
         if address as usize & (N - 1) != 0 && self.allows_unaligned(bus) {
-            bus.read_unaligned_ram::<N>(address)
+            let result = bus.read_cortex_unaligned_data::<N>(address);
+            self.handle_data_fault(bus, result)
         } else {
-            bus.read_cortex_data::<N>(address)
+            self.read_aligned_data::<N>(bus, address)
         }
     }
 
@@ -889,13 +933,12 @@ impl Thumb {
         width: usize,
         value: u32,
         output: &mut impl Write,
-    ) -> Result<(), crate::bus::BusError> {
+    ) -> Result<(), BusError> {
         if address as usize & (width - 1) != 0 && self.allows_unaligned(bus) {
-            bus.guest_memory(address, width)?
-                .copy_from_slice(&value.to_le_bytes()[..width]);
-            Ok(())
+            let result = bus.write_cortex_unaligned_data(address, width, value);
+            self.handle_data_fault(bus, result)
         } else {
-            bus.write(address, width, value, output)
+            self.write_aligned_data(bus, address, width, value, output)
         }
     }
 
@@ -906,6 +949,9 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<Instruction, String> {
+        if self.locked_up {
+            return Ok(Instruction::Fault);
+        }
         let it_state = self.it_state;
         let result = if self.invalid_thumb_state {
             Err(ExecuteError::InvalidState)

@@ -159,7 +159,7 @@ impl Thumb {
             0xe8d0..=0xe8df if low & 0xffe0 == 0xf000 && rm < 15 => {
                 let base = if rn == 15 { *next } else { r[rn] };
                 let offset = if low & 0x10 == 0 {
-                    bus.read_cortex_data::<1>(base.wrapping_add(r[rm]))
+                    self.read_data::<1>(bus, base.wrapping_add(r[rm]))
                 } else {
                     self.read_data::<2>(bus, base.wrapping_add(r[rm].wrapping_mul(2)))
                 }?;
@@ -185,9 +185,9 @@ impl Thumb {
                         continue;
                     }
                     if load {
-                        r[register] = bus.read_cortex_data::<4>(address)?;
+                        r[register] = self.read_aligned_data::<4>(bus, address)?;
                     } else {
-                        bus.write(address, 4, r[register], output)?;
+                        self.write_aligned_data(bus, address, 4, r[register], output)?;
                     }
                     address = address.wrapping_add(4);
                 }
@@ -201,11 +201,13 @@ impl Thumb {
             }
             0xe850..=0xe85e if low & 0x0f00 == 0x0f00 && rt < 13 => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
-                r[rt] = bus.read_exclusive(address)?;
+                let result = bus.read_exclusive(address);
+                r[rt] = self.handle_data_fault(bus, result)?;
             }
             0xe840..=0xe84e if rt < 13 && rd < 13 && rd != rt && rd != rn => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
-                r[rd] = bus.write_exclusive(address, r[rt], output)?;
+                let result = bus.write_exclusive(address, r[rt], output);
+                r[rd] = self.handle_data_fault(bus, result)?;
             }
             _ if high & 0xfe40 == 0xe840
                 && high & 0x120 != 0
@@ -224,13 +226,13 @@ impl Thumb {
                 let address = if high & 0x100 != 0 { indexed } else { r[rn] };
                 let second = address.wrapping_add(4);
                 if high & 0x10 != 0 {
-                    let first = bus.read_cortex_data::<4>(address)?;
-                    let second = bus.read_cortex_data::<4>(second)?;
+                    let first = self.read_aligned_data::<4>(bus, address)?;
+                    let second = self.read_aligned_data::<4>(bus, second)?;
                     r[rt] = first;
                     r[rd] = second;
                 } else {
-                    bus.write(address, 4, r[rt], output)?;
-                    bus.write(second, 4, r[rd], output)?;
+                    self.write_aligned_data(bus, address, 4, r[rt], output)?;
+                    self.write_aligned_data(bus, second, 4, r[rd], output)?;
                 }
                 if high & 0x20 != 0 {
                     r[rn] = indexed;

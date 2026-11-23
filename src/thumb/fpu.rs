@@ -111,15 +111,22 @@ impl Thumb {
             };
             let wide = low & 0x100 != 0;
             if load {
-                let low_word = bus.read_cortex_data::<4>(address)?;
+                let low_word = self.read_aligned_data::<4>(bus, address)?;
                 if wide {
-                    self.fp[first + 1] = bus.read_cortex_data::<4>(address.wrapping_add(4))?;
+                    self.fp[first + 1] =
+                        self.read_aligned_data::<4>(bus, address.wrapping_add(4))?;
                 }
                 self.fp[first] = low_word;
             } else {
-                bus.write(address, 4, self.fp[first], output)?;
+                self.write_aligned_data(bus, address, 4, self.fp[first], output)?;
                 if wide {
-                    bus.write(address.wrapping_add(4), 4, self.fp[first + 1], output)?;
+                    self.write_aligned_data(
+                        bus,
+                        address.wrapping_add(4),
+                        4,
+                        self.fp[first + 1],
+                        output,
+                    )?;
                 }
             }
         } else if from_signed {

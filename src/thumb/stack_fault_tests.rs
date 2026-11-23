@@ -260,3 +260,85 @@ fn check_lazy_stack(from_hardfault: bool) {
         assert_eq!(fixture.read(FPCCR) & LSPACT, 0);
     }
 }
+
+fn instruction_time_lockup() -> Fixture {
+    let mut fixture = Fixture::new(None, true);
+    // The upstream handler clears HFSR.FORCED, then faults inside an IT block.
+    fixture.code(
+        HARDFAULT,
+        &[
+            0x4b04, 0x4c05, 0x601c, 0x2d00, 0xbf04, 0x6802, 0x2122, 0xe7fe,
+        ],
+    );
+    fixture.write(HARDFAULT + 0x14, HFSR);
+    fixture.write(HARDFAULT + 0x18, FORCED);
+    fixture.r[0] = MOCK;
+    fixture.r[1] = 0x11;
+    fixture.r[2] = 0xa5a5_a5a5;
+    fixture.code(CODE, &[0x6802, 0x2122, 0xe7fe]);
+    for _ in 0..20 {
+        fixture.step();
+    }
+    fixture
+}
+
+#[test]
+fn renode_precise_busfault_locks_up_in_hardfault() {
+    let mut fixture = instruction_time_lockup();
+    fixture.state(LOCKUP_PC, 0xfe0, 3, 0x8200, 0);
+    assert_eq!(fixture.r[1..3], [0x11, 0xa5a5_a5a5]);
+    assert_eq!(fixture.read(0xe000_ed38), MOCK);
+    assert!(fixture.cpu.active_exceptions.contains(3));
+    assert!(!fixture.cpu.waiting_for_interrupt && !fixture.cpu.waiting_for_event);
+    let it = fixture.cpu.it_state;
+    assert_ne!(it, 0);
+    for _ in 0..10 {
+        assert!(!matches!(fixture.step(), Instruction::Retired));
+    }
+    assert_eq!((fixture.pc, fixture.cpu.it_state), (LOCKUP_PC, it));
+
+    fixture.write(0, 0x1000);
+    fixture.write(4, CODE | 1);
+    fixture.cpu.reset_state();
+    fixture.pc = fixture.cpu.reset(&mut fixture.bus, &mut fixture.r).unwrap();
+    assert!(!fixture.cpu.locked_up);
+    assert_eq!(fixture.read(crate::nvic::DHCSR), 0);
+}
+
+#[test]
+fn renode_nmi_preempts_instruction_time_lockup() {
+    let mut fixture = instruction_time_lockup();
+    fixture.enter(2);
+    fixture.step(); // NMI handler is the original self-loop.
+    fixture.state(NMI, 0xfc0, 2, 0x8200, 0);
+    assert_eq!(fixture.read(0xfd8), LOCKUP_PC);
+    assert_eq!(fixture.read(crate::nvic::DHCSR), 0);
+}
+
+#[test]
+fn renode_bfhfnmign_keeps_syndrome_and_continues_hardfault() {
+    let mut fixture = Fixture::new(None, true);
+    fixture.code(CODE, &[0x6802, 0x2122, 0xe7fe]);
+    fixture.code(HARDFAULT, &[0x6802, 0x2122, 0xe7fe]);
+    fixture.write(0xe000_ed14, 1 << 8);
+    fixture.r[0] = MOCK;
+    fixture.r[1] = 0x11;
+    fixture.r[2] = 0xa5a5_a5a5;
+    assert!(matches!(fixture.step(), Instruction::Fault));
+    assert_eq!((fixture.pc, fixture.r[1]), (HARDFAULT, 0x11));
+
+    // Complete the first retired step: exception dispatch itself did not retire.
+    assert!(matches!(fixture.step(), Instruction::Retired));
+    assert_eq!(fixture.r[1], 0x11);
+    assert!(matches!(fixture.step(), Instruction::Retired));
+    assert_eq!(fixture.r[1], 0x22);
+    fixture.state(HARDFAULT + 4, 0xfe0, 3, 0x8200, FORCED);
+    assert_eq!(fixture.read(0xe000_ed38), MOCK);
+
+    // BFHFNMIGN does not suppress an instruction fetch fault.
+    fixture.write(CFSR, u32::MAX);
+    fixture.pc = MOCK;
+    assert!(matches!(fixture.step(), Instruction::Fault));
+    fixture.state(LOCKUP_PC, 0xfe0, 3, 1 << 8, FORCED);
+    assert_eq!(fixture.read(0xe000_ed38), MOCK);
+}

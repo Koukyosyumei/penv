@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 68 | 0 | 445 | 237 |
+| Renode | 513 | 71 | 0 | 442 | 237 |
 | Infrastructure | 217 | 16 | 0 | 201 | 7 |
-| **合計** | **730** | **84** | **0** | **646** | **244** |
+| **合計** | **730** | **87** | **0** | **643** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 646 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 643 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -179,7 +179,7 @@ NMI 進入時にベクター取得とスタック書き込みが同時に失敗�
 （スレッド・MSP の基本フレームでは `0xfffffff9`）に置き換えました。
 上流の SHCSR に現れる NMI・HardFault のアクティブ状態は Rust テストで内部状態を照合します。
 初期 MSP がゼロのリセットでは、2 ステップ目の INVSTATE ロックアップと DHCSR の
-CPU・デバッガー別の読出しを確認します。ロックアップからの NMI 復帰は残件です。
+CPU・デバッガー別の読出しを確認します。命令実行時のロックアップ解除は下記を参照してください。
 
 ## Robot の時間条件を移植した 7 件
 
@@ -437,3 +437,39 @@ Discovery の未変更 kit REPL で実行する追加 ELF は、2 ワード更�
 `STM32F407 CRC DR=49E3C2FB RESET=FFFFFFFF IDR=5A` を出力します。
 この ELF は共有ケースの追加回帰であり、上流台帳の分母には含めていません。
 DMA、GPIO、SystemBus など共有インフラのケースは別群として残っています。
+
+## Cortex-M4F の精密 BusFault ロックアップと抑止
+
+固定上流 `tests/unit-tests/arm-cortex-m-bus-fault.robot` の 3 件を、
+同じ RAM、ベクター、故障アドレス `0x100000` と Thumb 命令で移植しました。
+HardFault 中に IT ブロックのデータアクセスが失敗すると、CFSR と BFAR を記録し、
+PC を `0xeffffffe` に固定します。ロックアップ中に 10 ステップを要求しても ITSTATE と
+命令の完了数は変化せず、CPU リセットで CPU と NVIC のロックアップ状態が解除されます。
+NMI は命令実行時ロックアップを中断でき、元の PC を `0xfd8` に保存します。
+
+`CCR.BFHFNMIGN` は負の優先度のデータフォルトを抑止し、CFSR と BFAR の更新は行います。
+Thread モードからの最初の失敗は HardFault に配送され、そのハンドラー内の同じ LDR
+から継続して R1 が `0x22` になることを確認しました。Rust フィクスチャは例外配送と
+命令の完了を別の呼び出しで観測します。追加検査では、同じ CCR 設定でも命令フェッチの
+失敗がロックアップすることと BFAR が保持されることを確認します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-lockup
+mkdir -p "$work"
+cargo test thumb::stack_fault_tests
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/cortex-m4f-faults.sh "$work/faults" >"$work/fault-elf.log" 2>&1
+    echo "$?" >"$work/fault-elf.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+期待結果は全 Rust テスト 120 件、フォールト ELF 16 件、FreeRTOS の FPU・IWDG 回帰の
+合格です。Fault 後の NMI からロックアップ元に戻る経路や、TrustZone の診断別名を使う
+上流ケースはこの 3 件の範囲外です。

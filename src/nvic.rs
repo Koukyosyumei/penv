@@ -305,6 +305,14 @@ impl Nvic {
         self.locked_up = true;
     }
 
+    pub fn leave_lockup(&mut self) {
+        self.locked_up = false;
+    }
+
+    pub fn ignores_negative_priority_data_fault(&self) -> bool {
+        self.ccr & (1 << 8) != 0
+    }
+
     pub fn record_stacking_fault(&mut self) {
         self.cfsr |= 1 << 12; // STKERR
     }
