@@ -235,7 +235,7 @@ impl Nvic {
     }
 
     pub fn allows_unaligned_data(&self) -> bool {
-        self.has_fpu() && !self.unaligned_access_traps()
+        (self.has_fpu() || self.mpu.is_some()) && !self.unaligned_access_traps()
     }
 
     pub fn div_zero_trap(&self) -> bool {

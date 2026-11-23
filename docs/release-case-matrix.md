@@ -12,3 +12,5 @@ Renode 固定リビジョンは `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`。各
 | STM32F407 | `c4960230193b12a5dc36fd31c52d6ad346fdb52a` | README の「STM32F407 上流ケースの棚卸し」と `tests/stm32f407-upstream-smoke.sh`。Discovery FreeRTOS、Contiki、Cortex-M4F FreeRTOS、PWM キャプチャと直交位相、および共有 STM32H7 の Zephyr 再確認 |
 
 リリース検証では `scripts/verify-release.sh` を統合コミットのクリーンな worktree から実行する。引数は固定 Renode worktree、新規ログディレクトリ、STM32F072 公開素材、RV32 ISA アーカイブ、StarLight 公開素材、再起動用 StarLight FIT 素材、RV64 virt 起動素材、Fire 公開素材の順。素材の入手と生成手順は各 README 節を参照する。ログには統合 SHA と共有 release 実行ファイルの SHA-256 を記録する。
+
+同じホスト上で並行する検証では、`PENV_RELEASE_PORT_BASE` に空いている連続9個のループバック UDP ポートの先頭を指定する。既定値は 30800。実行ファイルのコピーと SHA-256 は検証ディレクトリに残す。

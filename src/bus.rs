@@ -1385,9 +1385,16 @@ impl Bus {
 
     fn bus_tag(&self, address: u32, width: usize) -> Option<u32> {
         let last = address.checked_add(width as u32 - 1)?;
-        self.bus_tags
+        let matching = self
+            .bus_tags
             .iter()
-            .find_map(|&(start, end, value)| (address >= start && last <= end).then_some(value))
+            .filter(|&&(start, end, _)| address >= start && last <= end);
+        let tag = if self.f4_rcc.is_some() {
+            matching.into_iter().next()
+        } else {
+            matching.into_iter().next_back()
+        };
+        tag.map(|&(_, _, value)| value)
     }
 
     pub fn map_ram_alias(&mut self, base: u32, alias: u32, size: usize) -> Result<(), String> {
@@ -3470,7 +3477,7 @@ impl Bus {
             return Err(BusError::Misaligned(address, N).to_string());
         }
         let canonical = self.canonical_ram_address(address, N);
-        let value = if N == 4 && self.f4_rcc.is_some() {
+        let value = if N == 4 && (self.f4_rcc.is_some() || self.h7_network_control.is_some()) {
             self.read::<N>(address)
         } else {
             self.read_ram::<N>(address)
@@ -3492,7 +3499,10 @@ impl Bus {
         }
         let canonical = self
             .canonical_ram_address(address, N)
-            .or_else(|| (N == 4 && self.f4_rcc.is_some()).then_some(address))
+            .or_else(|| {
+                (N == 4 && (self.f4_rcc.is_some() || self.h7_network_control.is_some()))
+                    .then_some(address)
+            })
             .ok_or_else(|| BusError::Unmapped(address, N).to_string())?;
         if self.reservations[0].take() != Some((canonical, N)) {
             return Ok(1);

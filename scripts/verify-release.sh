@@ -51,11 +51,13 @@ PENV_RENODE_ROOT="$renode" PENV_RENODE_ASSETS="$arm" \
     cargo test --locked --release --test cli --color never upstream_stm32f072 -- --ignored \
     2>&1 | tee "$out/stm32f072.log"
 test "$(rg -c '^test upstream_stm32f072_.* \.\.\. ok$' "$out/stm32f072.log")" -eq 8
-PENV_BIN=$(realpath "${CARGO_TARGET_DIR:-target}/release/penv")
-test -x "$PENV_BIN"
-export PENV_BIN
+release_bin=$(realpath "${CARGO_TARGET_DIR:-target}/release/penv")
+test -x "$release_bin"
+export PENV_BIN="$out/penv"
+install -m 0755 "$release_bin" "$PENV_BIN"
+cmp "$release_bin" "$PENV_BIN"
 export RENODE_ROOT="$renode"
-sha256sum "$PENV_BIN" > "$out/penv.sha256"
+sha256sum "$PENV_BIN" | tee "$out/penv.sha256"
 
 run_case() {
     local name=$1
@@ -72,15 +74,20 @@ queue() {
     run_case "$@" &
     pids+=("$!")
 }
+port_base=${PENV_RELEASE_PORT_BASE:-30800}
+[[ "$port_base" =~ ^[1-9][0-9]{3,4}$ ]] && (( port_base + 8 <= 65535 )) || {
+    echo "PENV_RELEASE_PORT_BASE must reserve nine UDP ports in 1000–65535" >&2
+    exit 1
+}
 queue rv32 bash scripts/validate-riscv-acceptance.sh "$renode" "$out/rv32" "$rv32"
 queue nrf52 bash tests/nrf52840-acceptance.sh "$PENV_BIN" "$renode" "$out/nrf52"
 queue stm32f407 bash tests/stm32f407-upstream-smoke.sh "$out/stm32f407"
 queue starlight python3 scripts/verify-starlight.py "$starlight" --penv "$PENV_BIN" --renode "$renode" \
-    --ports 30801 30802 --switch-port 30800 --upstream-cases --logs "$out/starlight"
+    --ports "$((port_base + 1))" "$((port_base + 2))" --switch-port "$port_base" --upstream-cases --logs "$out/starlight"
 queue starlight-pmp python3 scripts/verify-starlight.py "$starlight" --penv "$PENV_BIN" --renode "$renode" \
-    --ports 30804 30805 --switch-port 30803 --upstream-cases --external-pmp --logs "$out/starlight-pmp"
+    --ports "$((port_base + 4))" "$((port_base + 5))" --switch-port "$((port_base + 3))" --upstream-cases --external-pmp --logs "$out/starlight-pmp"
 queue starlight-reboot python3 scripts/verify-starlight.py "$reboot" --penv "$PENV_BIN" --renode "$renode" \
-    --ports 30807 30808 --switch-port 30806 --recovery --linux-reboot --logs "$out/starlight-reboot"
+    --ports "$((port_base + 7))" "$((port_base + 8))" --switch-port "$((port_base + 6))" --recovery --linux-reboot --logs "$out/starlight-reboot"
 queue rv64-virt python3 scripts/verify-rv64-virt.py "$virt" --penv "$PENV_BIN" --logs "$out/virt"
 queue fire python3 scripts/verify-fire.py "$fire" --penv "$PENV_BIN" --renode "$renode" \
     --max-steps 9000000000 --timeout 1800 --logs "$out/fire"
