@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 510 | 301 | 1 | 208 | 240 |
+| Renode | 510 | 302 | 0 | 208 | 240 |
 | Infrastructure | 217 | 50 | 0 | 167 | 7 |
-| **合計** | **727** | **351** | **1** | **375** | **247** |
+| **合計** | **727** | **352** | **0** | **375** | **247** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -1387,3 +1387,16 @@ STM32 CAN に適用します。未知モデルの能力と複数宛先の検証�
 直前の再現手順で `work=target/stm32f407-repl-multi-registration` を使い、最後に
 `run sysbus tests/cortex-m4-sysbus.sh "$work/sysbus"` を加えます。
 `cargo-test.log` の `renode_peripheral_registration_` 3 行がケース別結果です。
+
+### REPL の実行時登録範囲検索
+
+固定上流の複数登録ケースを等価合格に更新しました。SystemBus の登録名で
+`sysbus.alias` を検索し、同じ機器の二つの範囲を登録順に取得します。
+元の宣言名が登録されていないことと、範囲の境界も検査します。
+登録途中に重複が発生すると、この操作で追加した範囲を取り消します。
+Peripheral Export は同じ登録情報を使います。他モデルへの一般化は残課題です。
+
+直前の再現手順で `work=target/stm32f407-repl-registration-lookup` を使います。
+`cargo-test.log` の `renode_peripheral_registration_` 4 行がケース別結果です。
+初回のコンパイルエラーは出力の分岐が値を返すよう修正しました。
+初回ログは `cargo-test-initial.log` に保存しています。

@@ -1,5 +1,6 @@
 use std::{
     alloc::{Layout, alloc_zeroed},
+    collections::HashMap,
     fmt,
     io::{self, Write},
     sync::Arc,
@@ -138,6 +139,7 @@ pub struct Bus {
     command_error_peripherals: Vec<CommandErrorPeripheral>,
     faulting_regions: Vec<(u32, Option<u32>, bool, bool)>,
     constant_mmio: Vec<ConstantMmio>,
+    empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
@@ -433,6 +435,31 @@ impl Bus {
         }
         self.h7_network_control = Some(control);
         Ok(())
+    }
+
+    pub fn register_empty_peripheral(
+        &mut self,
+        name: String,
+        ranges: Vec<(u32, u32)>,
+    ) -> Result<(), String> {
+        if self.empty_peripherals.contains_key(&name) {
+            return Err(format!(
+                "NameSettingException: duplicate peripheral name {name:?}"
+            ));
+        }
+        let first_mapping = self.constant_mmio.len();
+        for &(base, size) in &ranges {
+            if let Err(error) = self.map_constant_mmio(ConstantMmio::zeroed(base, size)) {
+                self.constant_mmio.truncate(first_mapping);
+                return Err(format!("RegistrationException: {error}"));
+            }
+        }
+        self.empty_peripherals.insert(name, ranges);
+        Ok(())
+    }
+
+    pub fn empty_peripheral_ranges(&self, name: &str) -> Option<&[(u32, u32)]> {
+        self.empty_peripherals.get(name).map(Vec::as_slice)
     }
 
     pub fn map_constant_mmio(&mut self, peripheral: ConstantMmio) -> Result<(), String> {

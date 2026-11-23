@@ -1925,7 +1925,6 @@ fn build_entries_with_scripts(
     let mut f4_rcc = None;
     let mut plic = None;
     let mut timer = None;
-    let mut empty_peripheral_names = HashSet::new();
     // Run sysbus preinit first, then the other entries in declaration order.
     for entry in entries
         .iter()
@@ -2006,19 +2005,13 @@ fn build_entries_with_scripts(
             EMPTY_PERIPHERAL => {
                 validate_empty_peripheral_constructor(entry)?;
                 if !matches!(entry.registration.as_deref(), None | Some("none")) {
-                    for (base, size) in entry.bus_ranges()? {
-                        machine
-                            .bus
-                            .map_constant_mmio(ConstantMmio::zeroed(base, size))
-                            .map_err(|error| {
-                                entry.error(&format!("RegistrationException: {error}"))
-                            })?;
-                    }
-                    if !empty_peripheral_names.insert(entry.registered_name()) {
-                        return Err(
-                            entry.error("NameSettingException: duplicate sysbus peripheral name")
-                        );
-                    }
+                    machine
+                        .bus
+                        .register_empty_peripheral(
+                            format!("sysbus.{}", entry.registered_name()),
+                            entry.bus_ranges()?,
+                        )
+                        .map_err(|error| entry.error(&error))?;
                 }
                 for (_, attribute) in &entry.body {
                     if let Some((phase, _, commands)) = script_commands(attribute)
@@ -2867,23 +2860,33 @@ fn build_entries_with_scripts(
 /// Export the system-bus peripheral tree using Renode's Peripheral Map schema.
 pub fn export_peripherals(path: &Path, root: Option<&Path>, output: &Path) -> Result<(), String> {
     let entries = declarations(path, root)?;
-    load_entries(path, &entries, false)?;
+    let machine = load_entries(path, &entries, false)?;
     let mut nodes = Vec::new();
     for entry in &entries {
-        let addresses = match entry.registration.as_deref() {
-            Some("sysbus") => Vec::new(),
-            Some(registration) if registration.starts_with("sysbus <") => {
-                vec![entry.bus_range()?.0]
+        let addresses = if entry.model == EMPTY_PERIPHERAL {
+            let Some(ranges) = machine
+                .bus
+                .empty_peripheral_ranges(&format!("sysbus.{}", entry.registered_name()))
+            else {
+                continue;
+            };
+            ranges.iter().map(|&(base, _)| base).collect()
+        } else {
+            match entry.registration.as_deref() {
+                Some("sysbus") => Vec::new(),
+                Some(registration) if registration.starts_with("sysbus <") => {
+                    vec![entry.bus_range()?.0]
+                }
+                Some(registration) if registration.starts_with("sysbus ") => vec![entry.address()?],
+                Some(registration)
+                    if registration.starts_with('{') && entry.model == F4Flash::MODEL =>
+                {
+                    let (registers, options, _) = f4_flash_registrations(entry)?;
+                    vec![registers, options]
+                }
+                None | Some("none") => continue,
+                Some(_) => return Err(entry.error("unsupported peripheral export registration")),
             }
-            Some(registration) if registration.starts_with("sysbus ") => vec![entry.address()?],
-            Some(registration)
-                if registration.starts_with('{') && entry.model == F4Flash::MODEL =>
-            {
-                let (registers, options, _) = f4_flash_registrations(entry)?;
-                vec![registers, options]
-            }
-            None | Some("none") => continue,
-            Some(_) => return Err(entry.error("unsupported peripheral export registration")),
         };
         let model = entry.model.rsplit('.').next().unwrap();
         let bindings = addresses
