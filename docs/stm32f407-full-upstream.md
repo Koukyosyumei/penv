@@ -1783,3 +1783,29 @@ PENV_F407_TIMED_RENODE_ROOT=../renode cargo test renode_f407_mpu_ -- --ignored -
 `cpu TranslateAddress 0xE000E000 Write` を含めた代表 RESC
 `$work/busyloop.resc` で、モニターコマンド解決時に停止します。
 元のユーザーモードとログ条件は未検証です。
+
+### Cortex-M4 Semihosting と Thumb 命令カウンター
+
+固定 `arm-semihosting.robot` の Cortex-M 対象25件を、元のメモリ配置と
+共通／分割出力の定義で事前検査しました。担当機種に合わせて CPU は
+Cortex-M4 を指定しています。両経路とも `CPU.SemihostingHandler` が
+未解決です。`cases.tsv` はケースごとに対応する事前検査の結果を記録し、
+実行結果とは区別します。
+
+```sh
+work=target/stm32f407-semihosting
+mkdir -p "$work"
+cargo build --release
+python3 tests/cortex-m4-semihosting-preflight.py "$work" > "$work/cases.tsv"
+```
+
+別の切り分けでは、公開 WRITE0 ELF の SHA-1 を照合して実行しました。
+`COMMON_OUTPUT.repl` から Semihosting の宣言2行を外した診断構成では、
+PC `0x010004f0` の `BKPT #0xab` で停止し、`SUCCESS` は出ません。
+ログは `$work/write0.log` です。Robot の入出力、終了状態、ファイル操作は未検証です。
+
+別群の Thumb 命令カウンター2件は、16ビットと32ビットの元のパターンを
+`cpu InstallOpcodeCounterPattern` に渡す代表 RESC で確認しました。
+いずれもコマンド解決で停止します。再現ファイルとログは
+`$work/opcode-{16,32}.resc` と `$work/opcode-{16,32}.log` です。
+両群の共有経路を ARM 担当に引き渡しました。
