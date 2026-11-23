@@ -205,12 +205,17 @@ impl Thumb {
                     r[rn] = indexed;
                 }
             }
-            _ if matches!(high & 0xfbf0, 0xf200 | 0xf2a0) && rn < 15 && rd < 15 => {
+            _ if matches!(high & 0xfbf0, 0xf200 | 0xf2a0)
+                && rd < 15
+                && low & 0x8000 == 0
+                && (rn != 15 || rd != 13) =>
+            {
                 let immediate = ((high & 0x400) << 1) | ((low & 0x7000) >> 4) | (low & 0xff);
+                let base = if rn == 15 { *next & !3 } else { r[rn] };
                 r[rd] = if high & 0x80 == 0 {
-                    r[rn].wrapping_add(immediate)
+                    base.wrapping_add(immediate)
                 } else {
-                    r[rn].wrapping_sub(immediate)
+                    base.wrapping_sub(immediate)
                 };
             }
             _ if matches!(high & 0xfbf0, 0xf240 | 0xf2c0)

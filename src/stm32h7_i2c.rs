@@ -35,6 +35,7 @@ pub struct I2c {
     data: [u8; 256],
     position: usize,
     reading: bool,
+    preloaded: Option<u8>,
 }
 
 impl I2c {
@@ -54,6 +55,7 @@ impl I2c {
             data: [0; 256],
             position: 0,
             reading: false,
+            preloaded: None,
         }
     }
 
@@ -137,20 +139,27 @@ impl I2c {
             0x0c => self.registers[3] = value & 0x87fe,
             0x10 => self.registers[4] = value & 0xf0ff_ffff,
             0x14 => self.registers[5] = value & 0x8fff_9fff,
+            0x18 if value & 1 != 0 => self.preloaded = None,
             0x1c => self.status &= !(value & (NACK | STOPPED)),
             0x28 => {
                 self.registers[10] = value & 0xff;
                 if self.status & TXIS != 0 {
-                    if let Some(byte) = self.data.get_mut(self.position) {
-                        *byte = value as u8;
-                    }
-                    self.position += 1;
-                    self.remaining -= 1;
+                    self.transmit(value as u8);
                     self.update_transfer();
+                } else if self.remaining == 0 {
+                    self.preloaded = Some(value as u8);
                 }
             }
             _ => {}
         }
+    }
+
+    fn transmit(&mut self, byte: u8) {
+        if let Some(slot) = self.data.get_mut(self.position) {
+            *slot = byte;
+        }
+        self.position += 1;
+        self.remaining -= 1;
     }
 
     fn start(&mut self) {
@@ -191,6 +200,12 @@ impl I2c {
 
     fn load_count(&mut self) {
         self.remaining = (self.registers[1] >> 16) as u8;
+        if !self.reading
+            && self.remaining != 0
+            && let Some(byte) = self.preloaded.take()
+        {
+            self.transmit(byte);
+        }
         self.update_transfer();
     }
 
@@ -232,6 +247,7 @@ impl I2c {
         }
         self.remaining = 0;
         self.position = 0;
+        self.preloaded = None;
         self.status = (self.status & NACK) | STOPPED;
     }
 }
@@ -240,6 +256,20 @@ impl I2c {
 mod tests {
     use super::*;
     use crate::{bus::Bus, nvic::ActiveExceptions, stm32h7_net_control::NetworkControl};
+
+    #[test]
+    fn preloaded_txdr_is_consumed_once_when_starting_write() {
+        let mut i2c = I2c::new(0, None);
+        i2c.attach(0x1e, Target::Magnetometer(Iis2mdc::new([0; 3])))
+            .unwrap();
+        i2c.write(0, PE);
+        i2c.write(0x28, 0x4f);
+        let address = 0x1e << 1;
+        i2c.write(4, address | START | (1 << 16));
+        assert_eq!(i2c.read(0x18) & (TC | TXIS), TC);
+        i2c.write(4, address | START | READ | AUTOEND | (1 << 16));
+        assert_eq!(i2c.read(0x24), 0x40);
+    }
 
     #[test]
     fn sensor_register_read_uses_reload_repeated_start_and_event_irq() {

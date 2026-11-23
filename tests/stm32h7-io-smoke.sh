@@ -109,3 +109,39 @@ if [[ $status != 2 ]] ||
     cat "$work/echo-penv.log" "$server" "$client" >&2
     exit 1
 fi
+
+# Exercise the older Zephyr I2C driver's TXDR-before-START path with the Robot ELF.
+poll_url=$(sed -n 's/^${POLLING_BIN}[[:space:]]*//p' "$renode/tests/peripherals/IIS2MDC.robot")
+poll_elf="$assets/${poll_url##*/}"
+if [[ ! -f "$poll_elf" ]]; then
+    curl --fail --location "$poll_url" --output "$poll_elf.part"
+    mv "$poll_elf.part" "$poll_elf"
+fi
+printf '%s  %s\n' 5599c7a86f3d898bc083c2a30d12ede98f9d2fec "$poll_elf" | sha1sum --check -
+for case in positive negative; do
+    cp "$work/$case/boot.repl" "$work/$case/poll.repl"
+    cat >> "$work/$case/poll.repl" <<'REPL'
+
+usart3: UART.STM32F7_USART @ sysbus 0x40004800
+    frequency: 125000000
+    IRQ -> nvic@39
+
+lpuart1: UART.STM32F7_USART @ sysbus 0x58000c00
+    frequency: 125000000
+    IRQ -> exti@64
+REPL
+    sed 's/@boot.repl/@poll.repl/' "$work/$case/boot.resc" > "$work/$case/poll.resc"
+    status=0
+    target/release/penv run --script "$work/$case/poll.resc" \
+        --platform-root "$renode" --asset-dir "$assets" --max-steps 2500000 "$poll_elf" \
+        > "$work/$case/poll-uart.log" 2> "$work/$case/poll-penv.log" || status=$?
+    if [[ $case == positive ]]; then
+        expected='0\.150000 +0\.300000 +0\.001500'
+    else
+        expected='-1\.234500 +0\.678000 +0\.000000'
+    fi
+    if [[ $status != 2 ]] || ! rg -aq "\\( x y z \\) = \\( +$expected \\)" "$work/$case/poll-uart.log"; then
+        cat "$work/$case/poll-penv.log" "$work/$case/poll-uart.log" >&2
+        exit 1
+    fi
+done

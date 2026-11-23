@@ -399,10 +399,16 @@ bash tests/stm32h7-io-smoke.sh /tmp/第1スクリプトのログディレクト�
 | 対象 | 実 ELF での確認と残件 |
 | --- | --- |
 | Shell、VEML7700 | 公開 STM32H7 参照デモで UART の `help` と `kernel version` に応答。上流 `VEML7700.robot` の Shell ケースから 500・1000 lux の条件を移植し、499・999 lux を照合。照度は実行ごとに REPL から設定。 |
-| IIS2MDC | 上流 `IIS2MDC.robot` の正・負のベクトルを参照 Shell で照合。REPL の `MagneticFluxDensityX/Y/Z` は整数 nT。上流専用 polling ELF は診断構成で `sensor: device not ready.` を表示。RESD の時系列・GPIO トリガーと専用 ELF の再現は残件。 |
+| IIS2MDC | 上流 `IIS2MDC.robot` の正・負のベクトルを参照 Shell で照合。REPL の `MagneticFluxDensityX/Y/Z` は整数 nT。上流専用 polling ELF でも同じ正・負のベクトルを別々の実行で照合。RESD の時系列と GPIO トリガーは残件。 |
 | DMA2D、LTDC | Shell から DMA2D の完了・ピクセル・IRQ 90 を照合。上流 `STM32LTDC.robot` のゼロ行テストを移植し、設定をステージした時点では ISR が 0、即時再読み込み後は ISR が `0xa`、IRQ 88 が保留。復元後に元の PPM を取得。専用 display ELF のパネル初期化と画像出力も通過。ボタン入力と走査に同期した発生タイミングは残件。 |
 | PWM | 参照ボードの TIM3 CH1、GPIOB4 AF2、`pwmled0` の配線を使い、実 Shell で 25% を確認。出力はタイマー設定から算出したデューティ比。波形による測定は残件。 |
 | SD | 上流 `STM32SDMMC.robot` と同じ ELF・ext2 イメージで `Disk mounted.` と `[DIR ] lost+found` を確認。カード未接続時の失敗経路も照合。 |
 | 仮想 Ethernet | 上流 `nucleo_h753zi.robot` の `Should Talk Over Ethernet` と同じ echo server/client ELF を仮想スイッチに接続。診断 REPL で両ノードが起動し、サーバーで TCP 接続受理と 4 回以上の `Received and replied` を照合。クライアント側 `Received and compared … all ok` は残件。STM32H7 と LiteX の双方向フレームは既存のモデルテストで照合。 |
 
 Ethernet の第 3 スクリプトは、`--uart-log-dir` でノード作成順に `0.uart.log` と `1.uart.log` を保存します。ディレクトリは事前に作成し、同名ファイルのない場所を指定します。echo ELF の実行で到達した Cortex-M の `CPSIE/CPSID if` と、LR を使うワード版の排他アクセスにも対応しました。
+
+### accept-network の再監査
+
+上記の 3 本の実ファームウェアスモークと `cargo test` を再実行しました。ユニット 59 件と CLI 5 件が通過しました。IIS2MDC 専用 polling ELF は、START より前に TXDR へ書いたレジスター番号を保持する修正と、Thumb-2 `ADR.W` の実装により起動しました。正ベクトル `0.150000 0.300000 0.001500` と負ベクトル `-1.234500 0.678000 0.000000` を UART から照合しています。
+
+上流ケースの合格判定には、IIS2MDC の RESD 再生と GPIO トリガー、専用 display ELF のボタン入力と走査タイミング、PWM 波形、Ethernet クライアントのペイロード照合が残っています。Ethernet サーバーの TCP 応答は複数回確認できましたが、クライアントの `Received and compared … all ok` は出力されていません。
