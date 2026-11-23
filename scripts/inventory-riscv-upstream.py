@@ -109,6 +109,8 @@ def robot_cases(root, isa, act):
                             basis += "; fixed ISA omits Zfa; ELF passed with V replaced by Zfa"
                             if "/ZfaZvfh/" in portable:
                                 basis += "; diagnostic uses Zfh in place of Zvfh"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zicsr/[^/]+\.elf", portable):
+                            basis += "; ELF passed with V omitted and 2 MiB RAM"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:Zihpm|Zicntr)/[^/]+\.elf", portable):
                             basis += "; fixed ELF passed with only V omitted from ISA"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zkn[ed]/[^/]+\.elf", portable):

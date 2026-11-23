@@ -1280,3 +1280,27 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 診断構成で固定 PAUSE と FENCE.I の ELF は 2/2 件、非整列アクセスは 13/13 件が通過しました。Rust テストは 88/88 件が通過しました。固定 Robot 構成では対象 15 件が V の未対応で CPU 作成時に停止しました。上流等価合格は累計 155 件です。構成別の `results.jsonl`、ケースログ、終了状態は上記の証拠ディレクトリに保存しました。
+
+### Minerva IRQ マスク CSR と RV32 Zicsr
+
+固定 Infrastructure の `Minerva.cs` は IRQ マスクを CSR `0x330`、IRQ ペンディングを `0x360` として登録します。penv では標準 RV32 の HPM イベント選択レジスター範囲が先にマッチし、Minerva の IRQ マスク書き込みを捨てていました。Minerva 固有の `0x330` を先に解決するように修正しました。両 CSR の書き込みと読み戻しを確認する実 ELF の UART 出力は、修正前の `F` から修正後の `P` になりました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-9c97d33-5dNYXV"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+"$work/tools/bin/riscv64-unknown-elf-gcc" -march=rv32i_zicsr -mabi=ilp32 \
+  -nostdlib -Wl,-n,-Ttext=0x80000000 -o "$repro/minerva.elf" "$evidence/minerva-irq.S"
+target/release/penv run --platform "$evidence/minerva.repl" --max-steps 40 "$repro/minerva.elf"
+mkdir "$repro/boot"
+python3 scripts/validate-minerva-serial.py target/release/penv ../renode "$repro/boot"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/no-v.repl" --artifacts "$repro/zicsr" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zicsr/*.elf
+```
+
+固定 Zicsr ELF は V を外した 2 MiB RAM の診断構成で 6/6 件が通過しました。固定 Robot 構成では V の未対応で 6 件すべてが CPU 作成時に停止しました。Rust テストは 88 件すべてが通過しました。台帳の上流等価合格は累計 155 件です。
+
+公開 Minerva BIOS の SFL UART ブートは転送・ジャンプを完了し、アドレス `0x40000000` から実行したペイロードの `~` を観測しました。IRQ CSR の実 ELF は固定 Renode のソースに基づく追加プローブです。固定 Renode バイナリとの同一 ELF の比較が残っています。ケースログ、終了状態、使用したプローブは上記の証拠ディレクトリに保存しました。

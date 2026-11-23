@@ -477,6 +477,7 @@ impl Csr {
             0x306 => self.counters.machine_enable,
             0x320 => self.counters.inhibit,
             // Fixed Renode models these HPM event selectors as hardwired zero.
+            0x330 if self.minerva => self.local_irq_mask?,
             0x323..=0x33f => 0,
             0x723..=0x73f | 0xda0 if self.sscofpmf => 0,
             0xb00 | 0xb80 => counter_half(self.counters.cycle, address & 0x80 != 0),
@@ -512,7 +513,6 @@ impl Csr {
             0x7c0 if self.ibex => 0,
             0x9c0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_mask,
             0xbc0 if self.vex => self.local_irq_mask?,
-            0x330 if self.minerva => self.local_irq_mask?,
             0x360 if self.minerva => self.local_irq_pending,
             0xdc0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_pending,
             0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info,
@@ -617,6 +617,7 @@ impl Csr {
             0x106 if self.supervisor.is_some() => {
                 self.counters.supervisor_enable = value;
             }
+            0x330 if self.minerva => self.local_irq_mask = Some(value),
             0x323..=0x33f => {}
             0x723..=0x73f if self.sscofpmf => {}
             0x320 => self.counters.inhibit = value & (CYCLE_ENABLE | INSTRET_ENABLE),
@@ -645,7 +646,6 @@ impl Csr {
                 }
             }
             0x7c0 if self.ibex => {}
-            0x330 if self.minerva => self.local_irq_mask = Some(value),
             0x360 if self.minerva => self.local_irq_pending = value,
             0x9c0 if self.vex && self.local_irq_mask.is_some() => {
                 self.vex_supervisor_irq_mask = value
