@@ -52,11 +52,16 @@ ASM
 failed=0
 direct=(0 500000 1000000 1500000 2000000 2500000 3000000 3500000 4000000 4500000)
 wire=(input1 input0 neither both)
+mux=(output-unselected output-disabled output-enabled)
+for ((channel=0; channel<16; channel++)); do
+    mux+=("mux-$channel-off" "mux-$channel-on")
+done
 case ${2:-direct} in
     direct) cases=("${direct[@]}") ;;
     --wire) cases=("${wire[@]}") ;;
-    --all) cases=("${direct[@]}" "${wire[@]}") ;;
-    *) echo "usage: $0 [OUTPUT_DIR] [--wire|--all]" >&2; exit 1 ;;
+    --mux) cases=("${mux[@]}") ;;
+    --all) cases=("${direct[@]}" "${wire[@]}" "${mux[@]}") ;;
+    *) echo "usage: $0 [OUTPUT_DIR] [--wire|--mux|--all]" >&2; exit 1 ;;
 esac
 for name in "${cases[@]}"; do
     input=$name
@@ -64,7 +69,48 @@ for name in "${cases[@]}"; do
 using "platforms/cpus/stm32f4.repl"
 adc: Analog.AD4011_ADC @ spi1 { referenceVoltage: 4.82 }
 REPL
-    if [[ $name != [0-9]* ]]; then
+    if [[ $name == mux-* ]]; then
+        channel=${name#mux-}
+        channel=${channel%-*}
+        source_uv=$((channel * 301250))
+        selected=0
+        enabled=false
+        input=0
+        if [[ $name == *-on ]]; then
+            enabled=true
+            selected=$channel
+            input=$source_uv
+        fi
+        cat >> "$work/adc-$name.repl" <<REPL
+mux: Analog.MUX36S16_Input @ adc 0
+    selectedChannel: $selected
+    enabled: $enabled
+REPL
+        for ((source=0; source<=channel; source++)); do
+            cat >> "$work/adc-$name.repl" <<REPL
+source$source: Analog.ADCChannelSource @ mux $source
+    defaultValueMicroVolts: $((source * 301250))
+REPL
+        done
+    elif [[ $name == output-* ]]; then
+        selected=5
+        enabled=true
+        input=0
+        case $name in
+            output-unselected) selected=0 ;;
+            output-disabled) enabled=false ;;
+            output-enabled) input=4820000 ;;
+        esac
+        cat >> "$work/adc-$name.repl" <<REPL
+mux: Analog.MUX36S16_Output @ sysbus
+    outputAdc: adc
+    outputChannel: 5
+    selectedChannel: $selected
+    enabled: $enabled
+source: Analog.ADCChannelSource @ mux 0
+    defaultValueMicroVolts: 4820000
+REPL
+    elif [[ $name != [0-9]* ]]; then
         input=0
         floating0=false
         floating1=false

@@ -33,6 +33,8 @@ pub struct Ad4011 {
 
 impl Ad4011 {
     pub const MODEL: &str = "Analog.AD4011_ADC";
+    pub const MUX_INPUT: &str = "Analog.MUX36S16_Input";
+    pub const MUX_OUTPUT: &str = "Analog.MUX36S16_Output";
     pub const WIRE_MODEL: &str = "Analog.AnalogWire";
     pub const SOURCE_MODEL: &str = "Analog.ADCChannelSource";
 

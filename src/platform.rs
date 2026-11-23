@@ -2656,6 +2656,8 @@ fn build_entries_on_machine(
                         | Ad4011::MODEL
                         | Ad4011::SOURCE_MODEL
                         | Ad4011::WIRE_MODEL
+                        | Ad4011::MUX_INPUT
+                        | Ad4011::MUX_OUTPUT
                 )
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
@@ -3077,6 +3079,8 @@ fn build_entries_on_machine(
                 | Ad4011::MODEL
                 | Ad4011::SOURCE_MODEL
                 | Ad4011::WIRE_MODEL
+                | Ad4011::MUX_INPUT
+                | Ad4011::MUX_OUTPUT
         )
     }) {
         return Err(entry.error("STM32F4 SPI requires a Cortex-M CPU"));
@@ -3751,12 +3755,28 @@ fn configure_f4_spi(
                     return Err(source.error("duplicate analog wire input"));
                 }
             }
+            Ad4011::MUX_INPUT | Ad4011::MUX_OUTPUT
+                if channel < 16 && (target.model == Ad4011::MUX_INPUT || channel == 0) =>
+            {
+                if wire_sources
+                    .entry(parent)
+                    .or_default()
+                    .insert(channel, sample)
+                    .is_some()
+                {
+                    return Err(source.error("duplicate analog multiplexer input"));
+                }
+            }
             Ad4011::MODEL if channel == 0 => {
                 if inputs.insert(parent, voltage).is_some() {
                     return Err(source.error("duplicate AD4011 ADC channel 0"));
                 }
             }
-            _ => return Err(source.error("expected AD4011 channel 0 or analog wire input")),
+            _ => {
+                return Err(
+                    source.error("expected AD4011 channel 0, analog wire or multiplexer input")
+                );
+            }
         }
     }
     for wire in entries
@@ -3778,6 +3798,69 @@ fn configure_f4_spi(
             .unwrap_or(0);
         if inputs.insert(parent, voltage).is_some() {
             return Err(wire.error("duplicate AD4011 ADC channel 0"));
+        }
+    }
+    for mux in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), Ad4011::MUX_INPUT | Ad4011::MUX_OUTPUT))
+    {
+        let output_mux = mux.model == Ad4011::MUX_OUTPUT;
+        let properties = if output_mux {
+            &["selectedChannel", "enabled", "outputAdc", "outputChannel"][..]
+        } else {
+            &["selectedChannel", "enabled"][..]
+        };
+        let props: HashMap<_, _> = keys(mux, properties)?.into_iter().collect();
+        let selected = number(props.get("selectedChannel").copied().unwrap_or("0"))
+            .ok()
+            .filter(|index| *index < 16)
+            .ok_or_else(|| mux.error("expected multiplexer channel 0 through 15"))?;
+        let enabled = props
+            .get("enabled")
+            .copied()
+            .unwrap_or("false")
+            .parse::<bool>()
+            .map_err(|_| mux.error("expected multiplexer enabled boolean"))?;
+        let (adc, input_channel) = if output_mux {
+            if mux.registration.as_deref() != Some("sysbus") {
+                return Err(mux.error("expected output multiplexer on sysbus"));
+            }
+            let Some(adc) = props.get("outputAdc").copied() else {
+                if props.contains_key("outputChannel") {
+                    return Err(mux.error("outputChannel requires outputAdc"));
+                }
+                continue;
+            };
+            let channel = props
+                .get("outputChannel")
+                .and_then(|channel| number(channel).ok())
+                .filter(|index| *index < 16)
+                .ok_or_else(|| mux.error("expected outputChannel from 0 through 15"))?;
+            (adc, (enabled && selected == channel).then_some(0))
+        } else {
+            let (adc, channel) = adc_registration(mux)?;
+            if number(channel).ok() != Some(0) {
+                return Err(mux.error("expected AD4011 ADC channel 0"));
+            }
+            (adc, enabled.then_some(selected))
+        };
+        if !entries
+            .iter()
+            .any(|entry| entry.name == adc && entry.model == Ad4011::MODEL)
+        {
+            return Err(mux.error("expected output connected to AD4011"));
+        }
+        let voltage = input_channel
+            .and_then(|channel| {
+                wire_sources
+                    .get(mux.name.as_str())?
+                    .get(&channel)
+                    .copied()
+                    .flatten()
+            })
+            .unwrap_or(0);
+        if inputs.insert(adc, voltage).is_some() {
+            return Err(mux.error("duplicate AD4011 ADC channel 0"));
         }
     }
     let mut converters = HashMap::new();

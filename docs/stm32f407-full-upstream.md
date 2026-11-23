@@ -1664,3 +1664,23 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
 残る入出力 MUX は `$work/mux-Input.repl` と `$work/mux-Output.repl` を
 `penv platform check --file PATH --platform-root ../renode` で検査すると、それぞれ
 `Analog.MUX36S16_Input` と `Analog.MUX36S16_Output` の型解決で停止します。
+
+AD4011 の入出力 MUX を STM32F4 SPI の接続構成に追加しました。
+入力 MUX はチャンネル 0–15 の選択と無効時の 0 V を、出力 MUX は
+出力5が選択され有効なときだけ ADC に入力を渡すことを確認しました。
+元の初期宣言はどちらもプラットフォーム検査を通過します。
+
+```sh
+work=target/stm32f407-ad4011-mux
+mkdir -p "$work"
+cargo test > "$work/cargo.log" 2>&1
+cargo build --release > "$work/build.log" 2>&1
+tests/stm32f407-ad4011.sh "$work" --all > "$work/all.tsv"
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+1本の SPI ELF で直接入力10点、浮動入力4状態、入力 MUX 32状態、
+出力 MUX 3状態を実行し、全49点が元の電圧誤差条件を満たしました。
+MUX の選択・有効状態と出力接続は、検証用 REPL の起動時に設定しています。
+元の Robot の同一マシン上の `OnGPIO`、`ConnectOutput`、`IsFloating` の戻り値、
+動的登録・`Transmit` は共有モニター対応待ちのため、両ケースは部分移植です。
