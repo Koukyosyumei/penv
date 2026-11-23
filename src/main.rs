@@ -65,6 +65,12 @@ mod stm32_rtc;
 mod stm32_spi;
 mod stm32_timer;
 mod stm32_uart;
+mod stm32f1_i2c;
+mod stm32f4_flash;
+mod stm32f4_power;
+mod stm32f4_rcc;
+mod stm32f4_spi;
+mod stm32f4_system;
 mod stm32h7_adc;
 mod stm32h7_adc_dma;
 mod stm32h7_adc_platform;
@@ -166,6 +172,7 @@ Options:
   --i2s-output PATH  Save transmitted nRF52840 I2S PCM
   --pdm-input PATH   Feed signed little-endian PCM to nRF52840 PDM
   --ble-peer PATH    Run a second nRF52840 image on a shared radio medium
+  --virtual-mips N   Set Cortex-M steps per virtual microsecond
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
@@ -263,6 +270,7 @@ fn run() -> Result<ExitCode, String> {
     let mut frame_waits = Vec::new();
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
+    let mut cli_mips = None;
     let mut reset_steps = Vec::new();
     let mut i2s_input = None;
     let mut i2s_output = None;
@@ -485,6 +493,15 @@ fn run() -> Result<ExitCode, String> {
                     .ok_or(FORMAT)?;
                 frame_waits.push((step, PathBuf::from(path), Some(region)));
             }
+            Some("--virtual-mips") => {
+                let value = args
+                    .next()
+                    .and_then(|raw| raw.into_string().ok())
+                    .and_then(|raw| raw.parse::<u32>().ok())
+                    .filter(|&mips| mips != 0 && mips <= u32::MAX / 1_000_000)
+                    .ok_or("--virtual-mips requires a positive supported rate")?;
+                cli_mips = Some(value);
+            }
             Some("--reset-at") => {
                 let step = args
                     .next()
@@ -645,6 +662,7 @@ fn run() -> Result<ExitCode, String> {
     let mut buttons = Vec::new();
     let mut tftp = None;
     let mut video_analyzers = Vec::new();
+    let mut serial_analyzer = None;
     let mut pcm_inputs = Vec::new();
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
@@ -652,6 +670,8 @@ fn run() -> Result<ExitCode, String> {
     let mut sd_cards = Vec::new();
     let mut mpfs_buttons = Vec::new();
     let mut halt_hooks = Vec::new();
+    let mut virtual_mips = None;
+    let mut boot_writes = Vec::new();
     let mut zephyr = zephyr_boot::BootOptions::default();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
@@ -700,6 +720,9 @@ fn run() -> Result<ExitCode, String> {
                     );
                 }
                 let boot = plan.nodes.pop().unwrap();
+                virtual_mips = boot.boot.mips;
+                boot_writes = boot.boot.writes;
+                uart_device = uart_device.or(boot.boot.uart_input);
                 zephyr = boot.boot.zephyr;
                 let mut common = monitor::Boot::default();
                 common.platform = boot.boot.platform;
@@ -772,6 +795,7 @@ fn run() -> Result<ExitCode, String> {
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
         video_analyzers = boot.video_analyzers;
+        serial_analyzer = boot.serial_analyzer;
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
@@ -829,6 +853,14 @@ fn run() -> Result<ExitCode, String> {
         }
         if script_elf_addresses.is_some() && !machine.is_cortex_m() {
             machine.bus.use_renode_unmapped_data();
+        }
+        if let Some(mips) = cli_mips.or(virtual_mips) {
+            if !machine.is_cortex_m() {
+                return Err("--virtual-mips requires Cortex-M".into());
+            }
+            machine
+                .bus
+                .set_step_hz(mips.checked_mul(1_000_000).ok_or("virtual MIPS overflow")?);
         }
         if let Some((name, server)) = &tftp {
             machine.bus.attach_litex_tftp(name, server.clone())?;
@@ -916,8 +948,17 @@ fn run() -> Result<ExitCode, String> {
         if let Some(base) = clint {
             machine.bus.map_clint(base, harts.unwrap_or(1))?;
         }
+        if machine.is_cortex_m()
+            && let Some(name) = &serial_analyzer
+        {
+            machine.bus.select_uart_input(name);
+        }
         if let Some(name) = uart_device.as_deref() {
-            machine.bus.rv64_devices.select_uart(name)?;
+            if machine.is_cortex_m() {
+                machine.bus.select_uart_input(name);
+            } else {
+                machine.bus.rv64_devices.select_uart(name)?;
+            }
         }
         for &step in &reset_steps {
             machine.schedule_reset(step)?;
@@ -1017,6 +1058,12 @@ fn run() -> Result<ExitCode, String> {
                 return Err("--tohost requires an RV32 machine".into());
             }
             machine.bus.watch_tohost(address, act)?;
+        }
+        for &(address, value) in &boot_writes {
+            machine
+                .bus
+                .write(address, 4, value, &mut io::sink())
+                .map_err(|error| error.to_string())?;
         }
         zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
         machine.validate_entry()?;

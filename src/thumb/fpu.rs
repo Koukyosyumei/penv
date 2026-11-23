@@ -153,7 +153,10 @@ impl Thumb {
         } else {
             return Ok(false);
         }
-        self.fp_active = true;
+        self.fp_active |= bus
+            .nvic
+            .as_ref()
+            .is_some_and(|nvic| nvic.fpu_auto_preserve());
         Ok(true)
     }
 }

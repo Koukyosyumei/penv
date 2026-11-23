@@ -43,6 +43,9 @@ pub struct Nvic {
     priority: [u8; IRQ_LINES],
     system_priority: [u8; 12],
     priority_mask: u8,
+    priority_group: u8,
+    pending_event: bool,
+    fpccr: Option<u32>,
     scr: u32,
     reset_requested: bool,
     ccr: u32,
@@ -111,6 +114,9 @@ impl Nvic {
             priority: [0; IRQ_LINES],
             system_priority: [0; 12],
             priority_mask,
+            priority_group: 0,
+            pending_event: false,
+            fpccr: None,
             scr: 0,
             reset_requested: false,
             ccr: 1 << 9,
@@ -124,10 +130,12 @@ impl Nvic {
         }
     }
 
-    pub const RANGES: [(u32, u32); 9] = [
+    pub const RANGES: [(u32, u32); 11] = [
         (ENABLE, PRIORITY_END + 1),
         (VTOR, VTOR + 4),
         (AIRCR, AIRCR + 4),
+        (BASE + 0xd00, BASE + 0xd04),
+        (BASE + 0xf34, BASE + 0xf38),
         (CPACR, CPACR + 4),
         (BASE + 0xd24, BASE + 0xd30),
         (BASE + 0xd90, BASE + 0xdbc),
@@ -151,9 +159,13 @@ impl Nvic {
     }
 
     pub fn reset(&mut self) {
+        let has_fpu = self.fpccr.is_some();
         let has_nrf_mpu = self.nrf_mpu.is_some();
         let mpu_count = self.mpu.as_ref().map(|mpu| mpu.count);
         *self = Self::new(self.priority_mask, self.uart_irq);
+        if has_fpu {
+            self.enable_fpu();
+        }
         if has_nrf_mpu {
             self.enable_nrf_mpu();
         }
@@ -182,12 +194,47 @@ impl Nvic {
         self.nrf_mpu = Some(mpu::Mpu::default());
     }
 
+    pub fn enable_fpu(&mut self) {
+        self.fpccr = Some(3 << 30);
+    }
+
+    pub fn has_fpu(&self) -> bool {
+        self.fpccr.is_some() || self.nrf_mpu.is_some()
+    }
+
+    pub fn fpu_auto_preserve(&self) -> bool {
+        self.fpccr.is_none_or(|value| value & (1 << 31) != 0)
+    }
+
+    pub fn priority_mask(&self) -> u8 {
+        self.priority_mask
+    }
+
+    pub fn preemption_priority(&self, priority: u8) -> u8 {
+        (u16::from(priority & self.priority_mask) & (0xff_u16 << (self.priority_group + 1))) as u8
+    }
+
+    pub fn signal_pending_event(&mut self) {
+        self.pending_event |= self.send_event_on_pending();
+    }
+
+    pub fn take_pending_event(&mut self) -> bool {
+        std::mem::take(&mut self.pending_event)
+    }
+
+    fn pend(&mut self, bank: usize, bits: u32) {
+        if bits & !self.pending[bank] != 0 {
+            self.signal_pending_event();
+        }
+        self.pending[bank] |= bits;
+    }
+
     pub fn fpu_access(&self) -> bool {
         self.cpacr & (0xf << 20) == 0xf << 20
     }
 
     pub fn allows_unaligned_data(&self) -> bool {
-        self.nrf_mpu.is_some() && !self.unaligned_access_traps()
+        self.has_fpu() && !self.unaligned_access_traps()
     }
 
     pub fn div_zero_trap(&self) -> bool {
@@ -231,7 +278,7 @@ impl Nvic {
 
     pub fn set_line(&mut self, line: u8, high: bool, active: &ActiveExceptions) {
         if high && usize::from(line) < IRQ_LINES && !active.contains(16 + line) {
-            self.pending[usize::from(line / 32)] |= 1 << (line % 32);
+            self.pend(usize::from(line / 32), 1 << (line % 32));
         }
     }
 
@@ -312,8 +359,14 @@ impl Nvic {
             if (0xd90..=0xdb8).contains(&offset) {
                 return self.mpu.as_ref().map(|mpu| mpu.read(offset));
             }
+            if offset == 0xd00 && self.has_fpu() {
+                return Some(0x410f_c241);
+            }
+            if offset == 0xf34 {
+                return self.fpccr;
+            }
             if address == AIRCR {
-                return Some(0xfa05_0000);
+                return Some(0xfa05_0000 | (u32::from(self.priority_group) << 8));
             }
             if address == BASE + 0xd10 {
                 return Some(self.scr);
@@ -389,8 +442,18 @@ impl Nvic {
             mpu.write(offset, value);
             return true;
         }
+        if width == 4
+            && offset == 0xf34
+            && let Some(fpccr) = &mut self.fpccr
+        {
+            *fpccr = value & (3 << 30);
+            return true;
+        }
         if width == 4 && address == AIRCR {
-            self.reset_requested |= value >> 16 == 0x05fa && value & (1 << 2) != 0;
+            if value >> 16 == 0x05fa {
+                self.priority_group = ((value >> 8) & 7) as u8;
+                self.reset_requested |= value & (1 << 2) != 0;
+            }
             return true;
         }
         if width == 4 && address == BASE + 0xd10 {
@@ -423,7 +486,7 @@ impl Nvic {
             match base {
                 ENABLE => self.enabled[bank] |= value,
                 DISABLE => self.enabled[bank] &= !value,
-                SET_PENDING => self.pending[bank] |= value,
+                SET_PENDING => self.pend(bank, value),
                 CLEAR_PENDING => self.pending[bank] &= !value,
                 _ => unreachable!(),
             }
@@ -449,5 +512,23 @@ impl Nvic {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aircr_requires_key_and_splits_preemption_from_subpriority() {
+        let mut nvic = Nvic::new(0xf0, None);
+        assert!(nvic.write(AIRCR, 4, 0x500));
+        assert_eq!(nvic.read(AIRCR, 4), Some(0xfa05_0000));
+        assert!(nvic.write(AIRCR, 4, 0x05fa_0500));
+        assert_eq!(nvic.read(AIRCR, 4), Some(0xfa05_0500));
+        assert_eq!(nvic.preemption_priority(0x70), 0x40);
+        assert_eq!(nvic.preemption_priority(0x50), 0x40);
+        nvic.reset();
+        assert_eq!(nvic.preemption_priority(0x70), 0x70);
     }
 }

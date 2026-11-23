@@ -69,7 +69,7 @@ pub fn configure(
 #[derive(Clone)]
 pub struct BusyWait {
     entries: Vec<u32>,
-    remaining: u32,
+    remaining: u64,
 }
 
 impl BusyWait {
@@ -99,8 +99,8 @@ impl BusyWait {
         self.entries.binary_search(&pc).is_ok()
     }
 
-    pub fn skip(&mut self, microseconds: u32) {
-        // penv schedules one Cortex-M step per virtual microsecond.
-        self.remaining = microseconds.saturating_sub(1);
+    pub fn skip(&mut self, microseconds: u32, step_hz: u32) {
+        let steps = (u64::from(microseconds) * u64::from(step_hz)).div_ceil(1_000_000);
+        self.remaining = steps.saturating_sub(1);
     }
 }

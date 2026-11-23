@@ -25,6 +25,7 @@ use crate::{
     plic::Plic,
     stm32_adc::Stm32F0Adc,
     stm32_can::Stm32Can,
+    stm32_can::{Filters, StmCan},
     stm32_crc::Stm32Crc,
     stm32_crc::Stm32F0Crc,
     stm32_dma::Stm32Dma,
@@ -39,6 +40,12 @@ use crate::{
     stm32_spi::Stm32F0Spi,
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
+    stm32f1_i2c::F1I2c,
+    stm32f4_flash::F4Flash,
+    stm32f4_power::F4Power,
+    stm32f4_rcc::F4Rcc,
+    stm32f4_spi::F4Spi,
+    stm32f4_system::F4System,
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -178,6 +185,8 @@ pub struct Bus {
     litex_flash: Option<(Vec<u32>, usize, crate::litex_flash::Flash)>,
     stm32_uarts: Vec<Stm32Usart>,
     stm32_uart_history: Vec<Option<UartHistory>>,
+    stm32_uart_input: usize,
+    step_hz: Option<u32>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
@@ -203,6 +212,11 @@ pub struct Bus {
     h7_bdma: Vec<Bdma>,
     h7_adc_dma: Vec<AdcDma>,
     h7_dma_mux: Vec<DmaMux>,
+    f4_flash: Option<F4Flash>,
+    f4_power: Option<F4Power>,
+    f4_rcc: Option<F4Rcc>,
+    f4_system: Option<F4System>,
+    f4_gated_ranges: Vec<(u32, u32)>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<H7Gpio>,
     h7_gpio_buttons: Vec<(String, u32, u8, bool)>,
@@ -210,7 +224,9 @@ pub struct Bus {
     gpio_pwm_leds: Vec<PwmLed>,
     h7_rtc: Vec<H7Rtc>,
     h7_spi: Vec<Spi>,
+    f4_spi: Vec<F4Spi>,
     h7_i2c: Vec<I2c>,
+    f1_i2c: Vec<F1I2c>,
     h7_rng: Vec<Rng>,
     h7_qspi: Vec<Qspi>,
     h7_timers: Vec<H7Timer>,
@@ -223,9 +239,14 @@ pub struct Bus {
     h7_crypto: Vec<Crypto>,
     h7_dsi: Vec<Dsi>,
     designware_usb: Vec<DesignWareUsb>,
-    h7_tags: Vec<(std::ops::RangeInclusive<u32>, u32)>,
     h7_ltdc: Option<Ltdc>,
     h7_step: u64,
+    stm32_can: Vec<StmCan>,
+    bitbands: Vec<(u32, u32, u32)>,
+    bus_tags: Vec<(u32, u32, u32)>,
+    timer_pins: Vec<TimerPin>,
+    gpio_wires: Vec<GpioWire>,
+    f4_gpio_leds: Vec<(String, u32, u8)>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
@@ -236,6 +257,21 @@ pub struct Bus {
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
+}
+
+pub struct GpioWire {
+    pub source: (u32, u8),
+    pub target: (u32, u8),
+    pub level: bool,
+}
+
+pub struct TimerPin {
+    pub timer: u32,
+    pub gpio: u32,
+    pub channel: usize,
+    pub pin: u8,
+    pub function: u8,
+    pub capture: bool,
 }
 
 pub struct EthernetDma<'a> {
@@ -576,6 +612,266 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_iwdg(&mut self, device: Iwdg) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Iwdg::SIZE)?;
+        self.iwdgs.push(device);
+        Ok(())
+    }
+
+    pub fn set_step_hz(&mut self, rate: u32) {
+        self.step_hz = Some(rate);
+        if let Some(timer) = &mut self.systick {
+            timer.set_step_rate(rate);
+        }
+    }
+
+    pub fn step_hz(&self) -> u32 {
+        self.step_hz
+            .unwrap_or(crate::machine::VIRTUAL_STEPS_PER_SECOND)
+    }
+
+    pub fn tick_systick(&mut self) {
+        if let Some(timer) = &mut self.systick {
+            let before = timer.pending_exceptions();
+            timer.tick();
+            if timer.pending_exceptions() & !before != 0
+                && let Some(nvic) = &mut self.nvic
+            {
+                nvic.signal_pending_event();
+            }
+        }
+    }
+
+    pub fn tick_watchdogs(&mut self) -> bool {
+        let rate = self.step_hz();
+        self.iwdgs.iter_mut().any(|watchdog| watchdog.tick(rate))
+    }
+
+    pub fn reset_cortex_m_devices(&mut self) {
+        self.reservations.fill(None);
+        if let Some(device) = &mut self.nvic {
+            device.reset();
+        }
+        if let Some(device) = &mut self.systick {
+            device.reset();
+        }
+        if let Some(device) = &mut self.dwt {
+            device.reset();
+        }
+        if let Some(device) = &mut self.exti {
+            device.reset(self.gpio_exti_levels);
+        }
+        if let Some(device) = &mut self.h7_exti {
+            device.reset();
+        }
+        if let Some(device) = &mut self.f4_flash {
+            device.reset();
+        }
+        if let Some(device) = &mut self.f4_power {
+            device.reset();
+        }
+        if let Some(control) = &mut self.h7_network_control {
+            if let Some(nic) = control.nic
+                && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
+            {
+                device.reset();
+                device.set_clock(false);
+            }
+            *control = NetworkControl::new(control.rcc_base, control.syscfg_base, control.nic);
+        }
+        for device in &mut self.stm32_uarts {
+            device.reset();
+        }
+        for device in &mut self.iwdgs {
+            device.reset();
+        }
+        for device in &mut self.h7_lptimers {
+            device.reset();
+        }
+        for device in &mut self.h7_timers {
+            device.reset();
+        }
+        for device in &mut self.h7_gpio {
+            device.reset();
+        }
+        for device in &mut self.h7_spi {
+            device.reset();
+        }
+        for device in &mut self.f4_spi {
+            device.reset();
+        }
+        for device in &mut self.h7_i2c {
+            device.reset();
+        }
+        for device in &mut self.f1_i2c {
+            device.reset();
+        }
+        for device in &mut self.h7_qspi {
+            device.reset();
+        }
+        for device in &mut self.h7_rng {
+            device.reset();
+        }
+        for device in &mut self.h7_crc {
+            device.reset();
+        }
+        for device in &mut self.designware_usb {
+            device.reset();
+        }
+        for device in &mut self.h7_dsi {
+            device.reset();
+        }
+        for device in &mut self.h7_crypto {
+            device.reset();
+        }
+        for device in &mut self.h7_sdmmc {
+            device.reset();
+        }
+        if let Some(device) = &mut self.h7_hsem {
+            device.reset();
+        }
+        for device in &mut self.h7_dma2d {
+            device.reset();
+        }
+        if let Some(device) = &mut self.h7_ltdc {
+            device.reset();
+        }
+        for device in &mut self.h7_adc {
+            device.reset();
+        }
+        for device in &mut self.h7_adc_dma {
+            device.reset();
+        }
+        for device in &mut self.h7_dma_mux {
+            device.reset();
+        }
+        for device in &mut self.h7_bdma {
+            device.reset();
+        }
+        for device in &mut self.stm32_can {
+            device.reset();
+        }
+        if let Some(rcc) = &mut self.f4_rcc {
+            rcc.watchdog_reset();
+        }
+        if let Some(system) = &mut self.f4_system {
+            *system = F4System::default();
+        }
+        self.refresh_f4_clocks();
+    }
+
+    pub fn map_f4_rcc(&mut self, rcc: F4Rcc) -> Result<(), String> {
+        self.check_peripheral_range(rcc.base, F4Rcc::SIZE)?;
+        for address in F4System::REGISTERS {
+            self.check_peripheral_range(address, 4)?;
+            if u64::from(address) >= u64::from(rcc.base)
+                && u64::from(address) < u64::from(rcc.base) + u64::from(F4Rcc::SIZE)
+            {
+                return Err("STM32F4 RCC overlaps a system register".into());
+            }
+        }
+        self.f4_gated_ranges.extend(
+            self.stm32_uarts
+                .iter()
+                .map(|uart| (uart.base, uart.size()))
+                .chain(self.f4_power.iter().map(|pwr| (pwr.base, F4Power::SIZE)))
+                .chain(self.f4_spi.iter().map(|spi| (spi.base, F4Spi::SIZE)))
+                .chain(self.f1_i2c.iter().map(|i2c| (i2c.base, F1I2c::SIZE)))
+                .chain(self.stm32_can.iter().map(|can| (can.base, StmCan::SIZE)))
+                .chain(self.h7_gpio.iter().map(|gpio| (gpio.base, gpio.size)))
+                .chain(
+                    self.h7_timers
+                        .iter()
+                        .map(|timer| (timer.base, H7Timer::SIZE)),
+                )
+                .chain(self.h7_adc_dma.iter().map(|dma| (dma.base, AdcDma::SIZE)))
+                .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, H7Rtc::SIZE))),
+        );
+        self.f4_rcc = Some(rcc);
+        self.f4_system = Some(F4System::default());
+        self.refresh_f4_clocks();
+        Ok(())
+    }
+
+    fn f4_access_blocked(&self, address: u32) -> bool {
+        self.f4_rcc.as_ref().is_some_and(|rcc| {
+            self.f4_gated_ranges
+                .iter()
+                .any(|&(base, size)| address.wrapping_sub(base) < size && !rcc.enabled(base))
+        })
+    }
+
+    fn refresh_f4_clocks(&mut self) {
+        let Some(rcc) = &self.f4_rcc else { return };
+        if let Some(systick) = &mut self.systick {
+            systick.set_frequency(rcc.hclk());
+        }
+        for timer in &mut self.h7_timers {
+            if let Some(frequency) = rcc.timer_frequency(timer.base) {
+                timer.set_frequency(frequency);
+            }
+        }
+        if let Some(rtc) = self.h7_rtc.iter_mut().find(|rtc| rcc.rtc == Some(rtc.base))
+            && let Some(frequency) = rcc.rtc_frequency()
+        {
+            rtc.set_frequency(frequency);
+        }
+    }
+
+    fn write_f4_rcc(&mut self, address: u32, width: usize, value: u32) {
+        let rcc = self.f4_rcc.as_mut().unwrap();
+        let backup_unlocked = self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked);
+        rcc.write(address, width, value, backup_unlocked);
+        if let Some(system) = &mut self.f4_system {
+            if rcc.adc_in_reset() {
+                system.reset_adc();
+            }
+            if rcc.syscfg_in_reset() {
+                system.reset_syscfg();
+            }
+        }
+        if rcc.timer9_in_reset()
+            && let Some(timer) = self
+                .h7_timers
+                .iter_mut()
+                .find(|timer| rcc.timer9 == Some(timer.base))
+        {
+            timer.reset();
+        }
+        if rcc.rtc_in_reset() {
+            if let Some(rtc) = self.h7_rtc.iter_mut().find(|rtc| rcc.rtc == Some(rtc.base)) {
+                rtc.reset();
+            }
+            if let Some(pwr) = &mut self.f4_power {
+                pwr.reset_backup_regulator();
+            }
+        }
+        self.refresh_f4_clocks();
+    }
+
+    pub fn map_f4_power(&mut self, base: u32) -> Result<(), String> {
+        self.check_peripheral_range(base, F4Power::SIZE)?;
+        if self.f4_power.is_some() {
+            return Err("only one STM32F4 power controller is supported".into());
+        }
+        self.f4_power = Some(F4Power::new(base));
+        Ok(())
+    }
+
+    pub fn map_f4_flash(&mut self, device: F4Flash) -> Result<(), String> {
+        let [(base, size), (option_base, option_size)] = device.mappings();
+        self.check_peripheral_range(base, size)?;
+        self.check_peripheral_range(option_base, option_size)?;
+        if self.f4_flash.is_some()
+            || (u64::from(base) < u64::from(option_base) + u64::from(option_size)
+                && u64::from(option_base) < u64::from(base) + u64::from(size))
+        {
+            return Err("duplicate or overlapping STM32F4 flash mapping".into());
+        }
+        self.f4_flash = Some(device);
+        Ok(())
+    }
+
     pub fn map_h7_flash(&mut self, device: FlashController) -> Result<(), String> {
         let start = u64::from(device.base);
         let end = start + u64::from(FlashController::SIZE);
@@ -739,19 +1035,6 @@ impl Bus {
         Ok(())
     }
 
-    pub fn tag(&mut self, range: std::ops::RangeInclusive<u32>, value: u32) {
-        self.h7_tags.push((range, value));
-    }
-
-    fn tag_value(&self, address: u32, width: usize) -> Option<u32> {
-        let end = address.checked_add(width as u32 - 1)?;
-        self.h7_tags
-            .iter()
-            .rev()
-            .find(|(range, _)| range.contains(&address) && range.contains(&end))
-            .map(|(_, value)| value & (u32::MAX >> (32 - width * 8)))
-    }
-
     pub fn map_h7_dsi(&mut self, device: Dsi) -> Result<(), String> {
         self.check_peripheral_range(device.base, Dsi::SIZE)?;
         self.h7_dsi.push(device);
@@ -792,6 +1075,43 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_f4_can(&mut self, can: StmCan) -> Result<(), String> {
+        self.check_peripheral_range(can.base, StmCan::SIZE)?;
+        self.stm32_can.push(can);
+        Ok(())
+    }
+
+    fn can_filters(&self, index: usize) -> &Filters {
+        let device = &self.stm32_can[index];
+        let owner = match device.master {
+            Some(base) => self
+                .stm32_can
+                .iter()
+                .find(|candidate| candidate.base == base)
+                .unwrap(),
+            None => device,
+        };
+        owner.filters.as_ref().unwrap()
+    }
+
+    fn write_stm32_can(&mut self, index: usize, address: u32, value: u32) {
+        let device = &mut self.stm32_can[index];
+        let offset = address - device.base;
+        if offset >= 0x200 {
+            if let Some(filters) = &mut device.filters {
+                filters.write(offset, value);
+            }
+            return;
+        }
+        device.write(offset, value);
+        let slave = device.master.is_some();
+        for frame in device.transmit().into_iter().flatten() {
+            if let Some((fifo, filter)) = self.can_filters(index).accept(slave, frame[0]) {
+                self.stm32_can[index].receive(fifo, filter, frame);
+            }
+        }
+    }
+
     pub fn map_h7_fdcan(&mut self, fdcan: Fdcan) -> Result<(), String> {
         self.check_peripheral_range(fdcan.base, Fdcan::SIZE)?;
         self.h7_fdcan.push(fdcan);
@@ -802,101 +1122,6 @@ impl Bus {
         self.check_peripheral_range(crc.base, Stm32Crc::SIZE)?;
         self.h7_crc.push(crc);
         Ok(())
-    }
-
-    pub fn map_iwdg(&mut self, device: Iwdg) -> Result<(), String> {
-        self.check_peripheral_range(device.base, Iwdg::SIZE)?;
-        self.iwdgs.push(device);
-        Ok(())
-    }
-
-    pub fn tick_watchdogs(&mut self) -> bool {
-        self.iwdgs.iter_mut().any(Iwdg::tick)
-    }
-
-    pub fn reset_cortex_m_devices(&mut self) {
-        self.reservations.fill(None);
-        if let Some(nvic) = &mut self.nvic {
-            nvic.reset();
-        }
-        if let Some(timer) = &mut self.systick {
-            timer.reset();
-        }
-        if let Some(dwt) = &mut self.dwt {
-            dwt.reset();
-        }
-        if let Some(exti) = &mut self.h7_exti {
-            exti.reset();
-        }
-        if let Some(control) = &mut self.h7_network_control {
-            if let Some(nic) = control.nic
-                && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
-            {
-                device.reset();
-                device.set_clock(false);
-            }
-            *control = NetworkControl::new(control.rcc_base, control.syscfg_base, control.nic);
-        }
-        for uart in &mut self.stm32_uarts {
-            uart.reset();
-        }
-        for device in &mut self.iwdgs {
-            device.reset();
-        }
-        for device in &mut self.h7_lptimers {
-            device.reset();
-        }
-        for device in &mut self.h7_timers {
-            device.reset();
-        }
-        for device in &mut self.h7_gpio {
-            device.reset();
-        }
-        for device in &mut self.h7_spi {
-            device.reset();
-        }
-        for device in &mut self.h7_i2c {
-            device.reset();
-        }
-        for device in &mut self.h7_qspi {
-            device.reset();
-        }
-        for device in &mut self.h7_rng {
-            device.reset();
-        }
-        for device in &mut self.h7_crc {
-            device.reset();
-        }
-        for device in &mut self.designware_usb {
-            device.reset();
-        }
-        for device in &mut self.h7_dsi {
-            device.reset();
-        }
-        for device in &mut self.h7_crypto {
-            device.reset();
-        }
-        for device in &mut self.h7_sdmmc {
-            device.reset();
-        }
-        if let Some(device) = &mut self.h7_hsem {
-            device.reset();
-        }
-        for device in &mut self.h7_dma2d {
-            device.reset();
-        }
-        if let Some(device) = &mut self.h7_ltdc {
-            device.reset();
-        }
-        for device in &mut self.h7_adc {
-            device.reset();
-        }
-        for device in &mut self.h7_adc_dma {
-            device.reset();
-        }
-        for device in &mut self.h7_bdma {
-            device.reset();
-        }
     }
 
     pub fn map_h7_lptim(&mut self, timer: LpTimer) -> Result<(), String> {
@@ -923,9 +1148,21 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_f1_i2c(&mut self, i2c: F1I2c) -> Result<(), String> {
+        self.check_peripheral_range(i2c.base, F1I2c::SIZE)?;
+        self.f1_i2c.push(i2c);
+        Ok(())
+    }
+
     pub fn map_h7_i2c(&mut self, i2c: I2c) -> Result<(), String> {
         self.check_peripheral_range(i2c.base, I2c::SIZE)?;
         self.h7_i2c.push(i2c);
+        Ok(())
+    }
+
+    pub fn map_f4_spi(&mut self, spi: F4Spi) -> Result<(), String> {
+        self.check_peripheral_range(spi.base, F4Spi::SIZE)?;
+        self.f4_spi.push(spi);
         Ok(())
     }
 
@@ -944,6 +1181,80 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_gpio_led(&mut self, name: String, gpio: u32, pin: u8) {
+        self.f4_gpio_leds.push((name, gpio, pin));
+    }
+
+    #[cfg(test)]
+    pub fn f4_gpio_led(&self, name: &str) -> Option<bool> {
+        let (_, gpio, pin) = self.f4_gpio_leds.iter().find(|(led, _, _)| led == name)?;
+        self.h7_gpio
+            .iter()
+            .find(|port| port.base == *gpio)
+            .map(|port| port.pins() & (1 << pin) != 0)
+    }
+
+    pub fn set_gpio_links(&mut self, pins: Vec<TimerPin>, wires: Vec<GpioWire>) {
+        self.timer_pins = pins;
+        self.gpio_wires = wires;
+    }
+
+    fn sample_timer_pins(&mut self) {
+        if self.timer_pins.is_empty() && self.gpio_wires.is_empty() {
+            return;
+        }
+        for gpio in &mut self.h7_gpio {
+            gpio.clear_timer_output();
+            gpio.clear_wired_input();
+        }
+        let clocked = |timer: &H7Timer| {
+            timer_clocked(self.h7_network_control.as_ref(), timer)
+                && f4_clocked(self.f4_rcc.as_ref(), timer.base)
+        };
+        for route in &self.timer_pins {
+            if let Some(timer) = self
+                .h7_timers
+                .iter()
+                .find(|timer| timer.base == route.timer && clocked(timer))
+                && let Some(high) = timer.output(route.channel)
+                && let Some(gpio) = self.h7_gpio.iter_mut().find(|gpio| gpio.base == route.gpio)
+                && gpio.alternate_selected(route.pin, route.function)
+            {
+                gpio.drive_timer_output(route.pin, high);
+            }
+        }
+        for wire in &mut self.gpio_wires {
+            let (base, pin) = wire.source;
+            wire.level = self
+                .h7_gpio
+                .iter()
+                .any(|gpio| gpio.base == base && gpio.pins() & (1 << pin) != 0);
+        }
+        for wire in self.gpio_wires.iter().filter(|wire| wire.level) {
+            let (base, pin) = wire.target;
+            if let Some(gpio) = self.h7_gpio.iter_mut().find(|gpio| gpio.base == base) {
+                gpio.set_wired_input(pin);
+            }
+        }
+        for timer in self.h7_timers.iter_mut().filter(|timer| clocked(timer)) {
+            let levels = std::array::from_fn(|channel| {
+                self.timer_pins
+                    .iter()
+                    .filter(|wire| {
+                        wire.capture && wire.timer == timer.base && wire.channel == channel
+                    })
+                    .any(|wire| {
+                        self.h7_gpio.iter().any(|gpio| {
+                            gpio.base == wire.gpio
+                                && gpio.alternate_selected(wire.pin, wire.function)
+                                && gpio.pins() & (1 << wire.pin) != 0
+                        })
+                    })
+            });
+            timer.sample_inputs(levels);
+        }
+    }
+
     pub fn tick_h7_peripherals(&mut self) {
         self.h7_step = self.h7_step.wrapping_add(1);
         let step = self.h7_step;
@@ -954,6 +1265,8 @@ impl Bus {
                 }
             }
         }
+        self.sample_timer_pins();
+        let rate = self.step_hz();
         let control = self.h7_network_control.as_ref();
         if let Some(display) = &mut self.h7_ltdc
             && ltdc_clocked(control, display)
@@ -970,8 +1283,8 @@ impl Bus {
             }
         }
         for timer in &mut self.h7_timers {
-            if timer_clocked(control, timer) {
-                timer.tick();
+            if timer_clocked(control, timer) && f4_clocked(self.f4_rcc.as_ref(), timer.base) {
+                timer.tick(rate);
             }
         }
         for led in &self.gpio_pwm_leds {
@@ -991,8 +1304,8 @@ impl Bus {
             port.drive_alternate(led.pin, level);
         }
         for rtc in &mut self.h7_rtc {
-            if rtc_clocked(control, rtc) {
-                rtc.tick();
+            if rtc_clocked(control, rtc) && f4_clocked(self.f4_rcc.as_ref(), rtc.base) {
+                rtc.tick(rate);
             }
         }
         for controller in &mut self.h7_bdma {
@@ -1004,7 +1317,7 @@ impl Bus {
             if !adc_clocked(control, adc) {
                 continue;
             }
-            adc.tick();
+            adc.tick(rate);
             let Some((request, value)) = adc.take_request() else {
                 continue;
             };
@@ -1039,6 +1352,42 @@ impl Bus {
                 adc.data_read();
             }
         }
+    }
+
+    pub fn map_bitband(&mut self, base: u32, size: u32, target: u32) -> Result<(), String> {
+        if !matches!(target, 0x2000_0000 | 0x4000_0000)
+            || base != target + 0x0200_0000
+            || size == 0
+            || size > 0x0200_0000
+            || size % 32 != 0
+        {
+            return Err("invalid Cortex-M bit-band aperture".into());
+        }
+        self.check_peripheral_range(base, size)?;
+        self.bitbands.push((base, size, target));
+        Ok(())
+    }
+
+    fn bitband(&self, address: u32) -> Option<(u32, u32)> {
+        self.bitbands.iter().find_map(|&(base, size, target)| {
+            let offset = address.wrapping_sub(base);
+            (offset < size).then_some((target + (offset / 128) * 4, 1 << ((offset / 4) & 31)))
+        })
+    }
+
+    pub fn map_bus_tag(&mut self, start: u32, end: u32, value: u32) -> Result<(), String> {
+        if start > end {
+            return Err("invalid sysbus Tag range".into());
+        }
+        self.bus_tags.push((start, end, value));
+        Ok(())
+    }
+
+    fn bus_tag(&self, address: u32, width: usize) -> Option<u32> {
+        let last = address.checked_add(width as u32 - 1)?;
+        self.bus_tags
+            .iter()
+            .find_map(|&(start, end, value)| (address >= start && last <= end).then_some(value))
     }
 
     pub fn map_ram_alias(&mut self, base: u32, alias: u32, size: usize) -> Result<(), String> {
@@ -1245,6 +1594,14 @@ impl Bus {
     }
 
     pub(crate) fn overlaps(&self, start: u64, end: u64) -> bool {
+        if self
+            .bitbands
+            .iter()
+            .any(|&(base, size, _)| overlaps_range(start, end, base, size))
+        {
+            return true;
+        }
+
         self.nrf_peripherals
             .iter()
             .any(|device| overlaps_range(start, end, device.base, device.size()))
@@ -1367,6 +1724,25 @@ impl Bus {
                 .litex_soc
                 .as_ref()
                 .is_some_and(|soc| overlaps_range(start, end, soc.base, soc.size()))
+            || (self.f4_system.is_some()
+                && F4System::REGISTERS.into_iter().any(|address| {
+                    let base = u64::from(address);
+                    start < base + 4 && base < end
+                }))
+            || self.f4_rcc.as_ref().is_some_and(|device| {
+                let base = u64::from(device.base);
+                start < base + u64::from(F4Rcc::SIZE) && base < end
+            })
+            || self.f4_power.as_ref().is_some_and(|device| {
+                let base = u64::from(device.base);
+                start < base + u64::from(F4Power::SIZE) && base < end
+            })
+            || self.f4_flash.as_ref().is_some_and(|device| {
+                device.mappings().into_iter().any(|(base, size)| {
+                    let base = u64::from(base);
+                    start < base + u64::from(size) && base < end
+                })
+            })
             || self.h7_flash.as_ref().is_some_and(|device| {
                 let base = u64::from(device.base);
                 start < base + u64::from(FlashController::SIZE) && base < end
@@ -1388,7 +1764,9 @@ impl Bus {
                 .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
                 .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, H7Rtc::SIZE)))
+                .chain(self.f4_spi.iter().map(|spi| (spi.base, F4Spi::SIZE)))
                 .chain(self.h7_spi.iter().map(|spi| (spi.base, Spi::SIZE)))
+                .chain(self.f1_i2c.iter().map(|i2c| (i2c.base, F1I2c::SIZE)))
                 .chain(self.h7_i2c.iter().map(|i2c| (i2c.base, I2c::SIZE)))
                 .chain(self.h7_rng.iter().map(|rng| (rng.base, Rng::SIZE)))
                 .chain(self.h7_qspi.iter().map(|qspi| (qspi.base, Qspi::SIZE)))
@@ -1404,6 +1782,7 @@ impl Bus {
                         .map(|timer| (timer.base, H7Timer::SIZE)),
                 )
                 .chain(self.h7_crc.iter().map(|crc| (crc.base, Stm32Crc::SIZE)))
+                .chain(self.stm32_can.iter().map(|can| (can.base, StmCan::SIZE)))
                 .chain(self.h7_fdcan.iter().map(|fdcan| (fdcan.base, Fdcan::SIZE)))
                 .chain(self.h7_ltdc.iter().map(|device| (device.base, Ltdc::SIZE)))
                 .chain(
@@ -1442,7 +1821,7 @@ impl Bus {
             })
             || self.stm32_uarts.iter().any(|uart| {
                 let other = u64::from(uart.base);
-                start < other + u64::from(Stm32Usart::SIZE) && other < end
+                start < other + u64::from(uart.size()) && other < end
             })
             || self.ns16550.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
@@ -1767,7 +2146,7 @@ impl Bus {
             }
             let mut exti_inputs = [self.gpio_exti_levels, 0, 0];
             for uart in &self.stm32_uarts {
-                if uart.interrupt_pending() {
+                if f4_clocked(self.f4_rcc.as_ref(), uart.base) && uart.interrupt_pending() {
                     match uart.irq {
                         Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
                         Some(Stm32Irq::Exti(line)) => {
@@ -1792,14 +2171,29 @@ impl Bus {
                 .chain(
                     self.h7_rtc
                         .iter()
-                        .filter(|device| rtc_clocked(control, device))
+                        .filter(|device| {
+                            rtc_clocked(control, device)
+                                && f4_clocked(self.f4_rcc.as_ref(), device.base)
+                        })
                         .flat_map(H7Rtc::interrupts),
+                )
+                .chain(
+                    self.f4_spi
+                        .iter()
+                        .filter(|spi| f4_clocked(self.f4_rcc.as_ref(), spi.base))
+                        .filter_map(F4Spi::interrupt),
                 )
                 .chain(
                     self.h7_spi
                         .iter()
                         .filter(|spi| spi_clocked(control, spi))
                         .filter_map(Spi::interrupt),
+                )
+                .chain(
+                    self.f1_i2c
+                        .iter()
+                        .filter(|i2c| f4_clocked(self.f4_rcc.as_ref(), i2c.base))
+                        .flat_map(F1I2c::interrupts),
                 )
                 .chain(
                     self.h7_i2c
@@ -1816,8 +2210,11 @@ impl Bus {
                 .chain(
                     self.h7_timers
                         .iter()
-                        .filter(|timer| timer_clocked(control, timer))
-                        .filter_map(H7Timer::interrupt),
+                        .filter(|timer| {
+                            timer_clocked(control, timer)
+                                && f4_clocked(self.f4_rcc.as_ref(), timer.base)
+                        })
+                        .flat_map(H7Timer::interrupts),
                 )
             {
                 match route {
@@ -1832,6 +2229,12 @@ impl Bus {
                 .filter_map(Rng::interrupt)
                 .chain(self.h7_sdmmc.iter().filter_map(Sdmmc::interrupt))
                 .chain(self.h7_crypto.iter().filter_map(Crypto::interrupt))
+                .chain(
+                    self.stm32_can
+                        .iter()
+                        .filter(|can| f4_clocked(self.f4_rcc.as_ref(), can.base))
+                        .flat_map(StmCan::interrupts),
+                )
                 .chain(self.h7_fdcan.iter().flat_map(Fdcan::interrupts))
                 .chain(
                     self.h7_ltdc
@@ -1860,7 +2263,10 @@ impl Bus {
                 .chain(
                     self.h7_adc_dma
                         .iter()
-                        .filter(|device| dma_clocked(control, device))
+                        .filter(|device| {
+                            dma_clocked(control, device)
+                                && f4_clocked(self.f4_rcc.as_ref(), device.base)
+                        })
                         .flat_map(AdcDma::interrupts),
                 )
             {
@@ -1884,17 +2290,32 @@ impl Bus {
                     }
                 }
             }
+            for gpio in &self.h7_gpio {
+                let pins = gpio.pins();
+                let port = gpio.base.wrapping_sub(0x4002_0000) / 0x400;
+                for (pin, line) in gpio.exti_inputs.iter().enumerate() {
+                    if let Some(line) = line
+                        && pins & (1 << pin) != 0
+                        && (*line >= 16
+                            || self
+                                .f4_system
+                                .as_ref()
+                                .is_none_or(|sys| sys.exti_port(*line) == port))
+                    {
+                        exti_inputs[usize::from(line / 32)] |= 1 << (line % 32);
+                    }
+                }
+            }
             if let Some(exti) = self.h7_exti.as_mut() {
                 for line in exti.sample(exti_inputs) {
                     nvic.set_line(line, true, active);
                 }
             }
             if let Some(exti) = self.exti.as_mut() {
-                let mut mask = exti.sample(exti_inputs[0]);
-                while mask != 0 {
-                    let line = mask.trailing_zeros() as u8;
-                    mask &= mask - 1;
-                    nvic.set_line(line, true, active);
+                let mut pending = exti.sample(exti_inputs[0]);
+                while pending != 0 {
+                    nvic.set_line(pending.trailing_zeros() as u8, true, active);
+                    pending &= pending - 1;
                 }
             }
             if let Some(rtc) = self.stm32_rtc.as_mut() {
@@ -2752,7 +3173,7 @@ impl Bus {
     pub fn map_stm32_usart(&mut self, uart: Stm32Usart) -> Result<(), String> {
         let base = uart.base;
         let start = u64::from(base);
-        let end = start + u64::from(Stm32Usart::SIZE);
+        let end = start + u64::from(uart.size());
         if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
             return Err(format!(
                 "invalid or overlapping STM32 USART range at {base:#010x}"
@@ -2783,6 +3204,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn select_uart_input(&mut self, name: &str) {
+        if let Ok(index) = self.stm32_usart_index(name) {
+            self.stm32_uart_input = index;
+        }
+    }
+
     pub fn has_uart_input(&self) -> bool {
         self.uart.is_some()
             || self.ns16550.is_some()
@@ -2799,7 +3226,9 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.litex_uart.as_mut() {
             uart.queue_input(bytes);
-        } else if let Some(uart) = self.stm32_uarts.first_mut() {
+        } else if let Some(uart) = self.stm32_uarts.get_mut(self.stm32_uart_input)
+            && f4_clocked(self.f4_rcc.as_ref(), uart.base)
+        {
             uart.queue_input(bytes);
         } else if let Some(index) = self.nrf_peripherals.iter().position(NrfPeripheral::is_uart) {
             let mut device = self.nrf_peripherals.remove(index);
@@ -3161,6 +3590,31 @@ impl Bus {
             return device.read(address).ok_or(BusError::Unmapped(address, N));
         }
         if N == 4
+            && let Some(system) = &self.f4_system
+            && let Some(rcc) = &self.f4_rcc
+            && let Some(value) = system.read(address, rcc)
+        {
+            return Ok(value);
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some((target, bit)) = self.bitband(address)
+        {
+            return self
+                .read::<4>(target)
+                .map(|value| u32::from(value & bit != 0));
+        }
+        if address as usize & (N - 1) == 0 {
+            if let Some(rcc) = &self.f4_rcc
+                && rcc.contains(address)
+            {
+                return Ok(rcc.read(address, N));
+            }
+            if self.f4_access_blocked(address) {
+                return Ok(0);
+            }
+        }
+        if N == 4
             && address & 3 == 0
             && let Some(uart) = self.uart.as_mut()
             && uart.contains(address)
@@ -3400,6 +3854,20 @@ impl Bus {
         {
             return Ok(value);
         }
+        if address as usize & (N - 1) == 0
+            && let Some(device) = self.f4_power.as_ref()
+            && device.contains(address)
+        {
+            return Ok(device.read(address, N));
+        }
+        if address as usize & (N - 1) == 0
+            && let Some(value) = self
+                .f4_flash
+                .as_ref()
+                .and_then(|device| device.read(address, N))
+        {
+            return Ok(value);
+        }
         if N == 4
             && address & 3 == 0
             && let Some(device) = self.h7_flash.as_ref()
@@ -3507,6 +3975,11 @@ impl Bus {
                 0
             });
         }
+        if address as usize & (N - 1) == 0
+            && let Some(spi) = self.f4_spi.iter_mut().find(|spi| spi.contains(address))
+        {
+            return Ok(spi.read(address, N));
+        }
         if matches!(N, 1 | 2 | 4)
             && address as usize & (N - 1) == 0
             && let Some(spi) = self.h7_spi.iter_mut().find(|spi| spi.contains(address))
@@ -3516,6 +3989,11 @@ impl Bus {
             } else {
                 0
             });
+        }
+        if address as usize & (N - 1) == 0
+            && let Some(i2c) = self.f1_i2c.iter_mut().find(|i2c| i2c.contains(address))
+        {
+            return Ok(i2c.read(address, N));
         }
         if matches!(N, 1 | 2 | 4)
             && address as usize & (N - 1) == 0
@@ -3549,14 +4027,19 @@ impl Bus {
                 },
             );
         }
-        if N == 4
-            && address & 3 == 0
-            && let Some(timer) = self.h7_timers.iter().find(|timer| timer.contains(address))
+        if matches!(N, 2 | 4)
+            && address as usize & (N - 1) == 0
+            && let Some(timer) = self
+                .h7_timers
+                .iter_mut()
+                .find(|timer| timer.contains(address))
         {
-            return Ok(if timer_clocked(self.h7_network_control.as_ref(), timer) {
-                timer.read(address)
-            } else {
+            return Ok(if !timer_clocked(self.h7_network_control.as_ref(), timer) {
                 0
+            } else if N == 2 {
+                timer.read_halfword(address)
+            } else {
+                timer.read(address)
             });
         }
         if address as usize & (N - 1) == 0
@@ -3566,6 +4049,18 @@ impl Bus {
                 crc.read(address, N)
             } else {
                 0
+            });
+        }
+        if N == 4
+            && address & 3 == 0
+            && let Some(index) = self.stm32_can.iter().position(|can| can.contains(address))
+        {
+            let can = &self.stm32_can[index];
+            let offset = address - can.base;
+            return Ok(if offset >= 0x200 {
+                self.can_filters(index).read(offset)
+            } else {
+                can.read(offset)
             });
         }
         if N == 4
@@ -3610,7 +4105,7 @@ impl Bus {
                 0
             });
         }
-        if N == 4
+        if matches!(N, 2 | 4)
             && address & 3 == 0
             && let Some(device) = self.iwdgs.iter().find(|device| device.contains(address))
         {
@@ -3669,7 +4164,10 @@ impl Bus {
             error @ BusError::Unmapped(..) => self
                 .nrf_tag(address, N)
                 .map(|value| value & (u32::MAX >> (32 - N * 8)))
-                .or_else(|| self.tag_value(address, N))
+                .or_else(|| {
+                    self.bus_tag(address, N)
+                        .map(|value| value & (u32::MAX >> (32 - N * 8)))
+                })
                 .or_else(|| {
                     (self.renode_unmapped_data
                         || self.zero_mmio(address, N)
@@ -3715,6 +4213,13 @@ impl Bus {
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }
+        if width == 4
+            && let Some(system) = &mut self.f4_system
+            && let Some(rcc) = &self.f4_rcc
+            && system.write(address, value, rcc)
+        {
+            return Ok(());
+        }
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));
         }
@@ -3743,6 +4248,28 @@ impl Bus {
             let result = device.write(address, value, self, uart);
             self.nrf_peripherals.insert(index, device);
             return result;
+        }
+        if width == 4
+            && let Some((target, bit)) = self.bitband(address)
+        {
+            let prior = self.read::<4>(target)?;
+            return self.write(
+                target,
+                4,
+                (prior & !bit) | if value & 1 != 0 { bit } else { 0 },
+                uart,
+            );
+        }
+        if self
+            .f4_rcc
+            .as_ref()
+            .is_some_and(|rcc| rcc.contains(address))
+        {
+            self.write_f4_rcc(address, width, value);
+            return Ok(());
+        }
+        if self.f4_access_blocked(address) {
+            return Ok(());
         }
         if width == 4
             && let Some(device) = self.uart.as_mut()
@@ -3813,9 +4340,16 @@ impl Bus {
         }
         if width == 4
             && let Some(timer) = self.systick.as_mut()
-            && timer.write(address, value)
         {
-            return Ok(());
+            let before = timer.pending_exceptions();
+            if timer.write(address, value) {
+                if timer.pending_exceptions() & !before != 0
+                    && let Some(nvic) = &mut self.nvic
+                {
+                    nvic.signal_pending_event();
+                }
+                return Ok(());
+            }
         }
         if address == VTOR && width == 4 {
             let base = value & !0x7f;
@@ -4158,6 +4692,21 @@ impl Bus {
             peripheral.write(offset);
             return Ok(());
         }
+        if let Some(device) = self.f4_power.as_mut()
+            && device.contains(address)
+        {
+            device.write(address, width, value);
+            return Ok(());
+        }
+        if let Some(device) = self.f4_flash.as_mut()
+            && device.contains(address)
+        {
+            if let Some(range) = device.write(address, width, value) {
+                self.memory(range.start, (range.end - range.start) as usize)?
+                    .fill(0xff);
+            }
+            return Ok(());
+        }
         if width == 4
             && let Some(device) = self.h7_flash.as_mut()
             && device.contains(address)
@@ -4229,7 +4778,29 @@ impl Bus {
                 .find(|device| device.contains(address))
         {
             if rtc_clocked(self.h7_network_control.as_ref(), rtc) {
-                rtc.write(address, value);
+                let backup_unlocked = self.f4_rcc.as_ref().and_then(|rcc| rcc.rtc)
+                    != Some(rtc.base)
+                    || self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked);
+                rtc.write(address, value, backup_unlocked);
+            }
+            return Ok(());
+        }
+        if let Some(spi) = self.f4_spi.iter_mut().find(|spi| spi.contains(address)) {
+            spi.write(address, width, value);
+            if let Some(target) = spi.dma
+                && f4_clocked(self.f4_rcc.as_ref(), target.base)
+                && let Some(value) = spi.dma_value()
+                && request_h7_stream(
+                    target,
+                    spi.base + F4Spi::DATA,
+                    value,
+                    self.h7_network_control.as_ref(),
+                    &mut self.h7_adc_dma,
+                    &mut self.h7_bdma,
+                    &mut dma,
+                )
+            {
+                spi.consume_rx();
             }
             return Ok(());
         }
@@ -4263,6 +4834,10 @@ impl Bus {
             }
             return Ok(());
         }
+        if let Some(i2c) = self.f1_i2c.iter_mut().find(|i2c| i2c.contains(address)) {
+            i2c.write(address, width, value);
+            return Ok(());
+        }
         if let Some(i2c) = self.h7_i2c.iter_mut().find(|i2c| i2c.contains(address)) {
             if i2c_clocked(self.h7_network_control.as_ref(), i2c) {
                 i2c.write(address, value & (u32::MAX >> (32 - 8 * width)));
@@ -4285,14 +4860,18 @@ impl Bus {
             }
             return Ok(());
         }
-        if width == 4
+        if matches!(width, 2 | 4)
             && let Some(timer) = self
                 .h7_timers
                 .iter_mut()
                 .find(|timer| timer.contains(address))
         {
             if timer_clocked(self.h7_network_control.as_ref(), timer) {
-                timer.write(address, value);
+                if width == 2 {
+                    timer.write_halfword(address, value);
+                } else {
+                    timer.write(address, value);
+                }
             }
             return Ok(());
         }
@@ -4300,6 +4879,12 @@ impl Bus {
             if crc_clocked(self.h7_network_control.as_ref(), crc) {
                 crc.write(address, width, value);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(index) = self.stm32_can.iter().position(|can| can.contains(address))
+        {
+            self.write_stm32_can(index, address, value);
             return Ok(());
         }
         if width == 4
@@ -4343,7 +4928,8 @@ impl Bus {
             }
             return Ok(());
         }
-        if width == 4
+        if matches!(width, 2 | 4)
+            && address & 3 == 0
             && let Some(device) = self
                 .iwdgs
                 .iter_mut()
@@ -4402,6 +4988,7 @@ impl Bus {
             || self.zero_mmio(address, width)
             || self.stm32f0_tagged(address, width)
             || self.nrf_tag(address, width).is_some()
+            || self.bus_tag(address, width).is_some()
         {
             return Ok(());
         }
@@ -4800,6 +5387,10 @@ fn lptim_clocked(control: Option<&NetworkControl>, timer: &LpTimer) -> bool {
     timer
         .clock
         .is_none_or(|clock| control.is_some_and(|control| control.lptim_enabled(clock)))
+}
+
+fn f4_clocked(rcc: Option<&F4Rcc>, base: u32) -> bool {
+    rcc.is_none_or(|rcc| rcc.enabled(base))
 }
 
 fn timer_clocked(control: Option<&NetworkControl>, timer: &H7Timer) -> bool {

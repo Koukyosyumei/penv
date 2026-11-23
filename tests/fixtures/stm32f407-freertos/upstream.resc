@@ -1,0 +1,4 @@
+mach create "STM32F407_Discovery"
+machine LoadPlatformDescription @platforms/boards/stm32f4_discovery-kit.repl
+sysbus LoadELF @freertos.elf
+showAnalyzer sysbus.uart4

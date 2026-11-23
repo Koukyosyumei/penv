@@ -1841,3 +1841,361 @@ curl -fL "https://dl.antmicro.com/projects/renode/$irq_asset" -o "$assets/kernel
 printf '%s  %s\n' 7802727d11c415c1859c00842063ebec6c0a6fdc "$assets/kernel-interrupt.elf" | sha1sum -c -
 tests/nrf52840-kernel-interrupt.sh target/release/penv ../renode "$assets/kernel-interrupt.elf"
 ```
+
+## STM32F407 Discovery と FreeRTOS
+
+`penv/stm32f407` は `3686ab4` を起点に、Cortex-M4 の整数命令を既存の
+Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の処理も共用します。
+`UART.STM32_UART` は F4 の SR/DR/CR1 レイアウトを使用し、既存の STM32 USART の
+入出力と割り込み配送を共用します。
+
+上流の `stm32f4_discovery.resc` は Contiki 用です。未変更の RESC での起動手順は下記にあります。
+未変更の上流ボード定義で FreeRTOS を起動する手順は下記の「未変更の上流 REPL」にあります。
+FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
+TIM2（`0x40000000`、IRQ 28）、GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
+128 KiB メイン SRAM を使用します。リセット時は HSI 16 MHz で、ファームウェアは
+RCC から SysTick を含む HCLK を 32 MHz に切り替えます。
+ファームウェアは PC10/PC11 の AF8 を設定し、UART4 から 115200 baud 設定で送信します。
+[`stm32f4_discovery.resc`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/stm32f4_discovery.resc)
+[`stm32f4.repl`](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/stm32f4.repl)
+[STM32F407VG データシート](https://www.st.com/resource/en/datasheet/stm32f407vg.pdf)
+
+最初の TIM2 割り込みでは、FreeRTOS の `xQueueSendFromISR` が IRQ 優先度を
+検証するために SCB_AIRCR（`0xe000ed0c`）を読み、未マップアクセスで停止しました。
+NVIC モデルはリセット値 `0xfa050000` を返し、キー付きの書き込みで `PRIGROUP` を変更できます。
+[STM32 Cortex-M4 プログラミングマニュアル PM0214、4.4.5](https://www.st.com/resource/en/programming_manual/pm0214-stm32-cortexm4-mcus-and-mpus-programming-manual-stmicroelectronics.pdf)
+
+### ビルドと実行
+
+Git、Clang、LLD、Rust/Cargo が必要です。下記は Linux x86_64 上で Clang/LLD 15.0.7 と
+ホストリンカー GCC を使った実行例です。ビルドスクリプトは公式 FreeRTOS-Kernel
+V11.1.0（`dbf70559b27d39c1fdb68dfb9a32140b6a6777a0`）を取得し、公式
+`portable/GCC/ARM_CM3` の整数ポートを `-mcpu=cortex-m4 -mfloat-abi=soft` で
+リンクします。起動コード、メモリー配置、タスクは
+`tests/fixtures/stm32f407-freertos/` にあります。
+[FreeRTOS-Kernel V11.1.0 の ARM_CM3 ポート](https://github.com/FreeRTOS/FreeRTOS-Kernel/tree/dbf70559b27d39c1fdb68dfb9a32140b6a6777a0/portable/GCC/ARM_CM3)
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-freertos-smoke.sh target/stm32f407-freertos
+
+# 生成済み ELF を同じ入力で直接実行
+work=target/stm32f407-freertos
+target/release/penv run --script "$work/boot.resc" --max-steps 36000 \
+    --uart-event "24000:$work/uart-x.txt" --uart-event "30000:$work/uart-yz.txt"
+```
+
+期待する UART4 出力は以下のとおりです。スモークテストは標準出力を全行照合し、
+命令上限で終了コード 2 になることを確認します。
+
+```text
+STM32F407 FreeRTOS V11.1.0
+RCC PLL 32 MHz, RTC and TIM9 OK
+TIM9 FAULTMASK OK
+PWR ready OK
+CAN loopback OK
+SPI IRQ and DMA OK
+I2C echo 01 23 and NACK OK
+task A tick=01
+task B tick=03
+TIM2 queue=1
+task A tick=05
+task B tick=07
+TIM2 queue=2
+task A tick=09
+task B tick=11
+TIM2 queue=3
+UART4 echo=X
+UART4 echo=Y
+UART4 echo=Z
+```
+
+- 両タスクは初回出力前と各出力後に `vTaskDelay` でブロックします。SysTick で
+  tick が進み、解除されたタスクへ PendSV が切り替えます。各タスクは出力前に tick 値を
+  検査し、A/B それぞれ 3 回の実行を確認できます。
+- TIM2 は 4 ms 周期の更新割り込みを 3 回発行します。TIM2 と UART4 RXNE の ISR は
+  `xQueueSendFromISR` で同じ静的キューに通知し、受信タスクが `xQueueReceive` で
+  取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
+  応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
+  それぞれに対応する出力だけが消えました。
+- `cargo test` はユニットテスト 65 件、CLI テスト 5 件が通過しました。既存の
+  `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
+  を確認しました。
+- 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
+  SHA-256 は `93f6e7b142181ccf75446ebdc9f5274a98d7a9927638c9a944a4200f54c28661` です。
+
+### CAN1/CAN2 のローカル検証
+
+検証用 REPL は上流と同じ `CAN.STMCAN` の MMIO 範囲、NVIC 配線（CAN1 は IRQ 19–22、
+CAN2 は IRQ 63–66）、`master: can1` を使用します。CAN2 は CAN1 のフィルターバンクを
+共有し、`CAN2SB` で割り当てを分けます。割り込み出力は TX、RX FIFO0、RX FIFO1、
+SCE の順です。
+[Renode の STMCAN モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/CAN/STMCAN.cs)
+[RM0090 の bxCAN 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32bit-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF はスケジューラー開始前に CAN1/CAN2 のサイレント内部ループバックを
+実行します。CAN1 は ID `0x456` を受信フィルターで拒否し、ID `0x123` を FIFO0 に
+受信します。CAN2 は CAN1 が設定したバンク 14 を使用し、ID `0x456` を FIFO1 に受信します。
+ファームウェアは両フレームの ID、DLC、ペイロード、TX 完了、受信 IRQ と FIFO 解放、
+CAN1 のスリープ通知を確認して `CAN loopback OK` を表示します。その後に SysTick、
+TIM2、FreeRTOS キュー、UART4 を検証します。
+
+### STM32F407 の PWR
+
+上流と同じ `Miscellaneous.STM32_PWR @ sysbus 0x40007000` を登録します。モデルは
+RM0090 の F407 用 `PWR_CR` と `PWR_CSR` を実装し、整列した 8/16/32 ビットアクセスを
+受け付けます。VOS は 1 ビットで、VOSRDY とバックアップレギュレーターの BRR は
+待ち時間なしで更新します。DBP がセットされているときに BRE を変更できます。
+CWUF と CSBF は対応する状態フラグをクリアします。
+[RM0090 の PWR 章、5.4 節](https://www.st.com/resource/en/reference_manual/rm0090-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF は RCC の PWREN を設定し、DBP の保護、VOSRDY と BRR の
+ポーリング、BRE の解除を確認して `PWR ready OK` を表示します。続いて CAN、IRQ、
+キュー、UART4 の出力を全行照合します。PWR の MMIO は RCC の PWREN に従います。
+PWR の個別リセット、バックアップ SRAM への DBP の伝播、
+PVD・WKUP の入力、Stop/Standby 遷移、レギュレーターの安定化時間は残課題です。
+
+### STM32F407 の SPI
+
+上流と同じ `SPI.STM32SPI` の `STM32Series.F4` 宣言を使用します。SPI1/2/3 の
+割り込みは NVIC 35/36/51 に、SPI2 の `DMAReceive` は既存の STM32 DMA モデルの
+DMA1 ストリーム 3 に配線します。マスターの全二重転送は 8/16 ビットに対応します。
+接続先がない SPI はゼロを受信し、検証用 REPL に接続した `SPI.SPILoopback` は送信値を返します。
+[Renode の STM32SPI モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SPI/STM32SPI.cs)
+[RM0090 の SPI 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32bit-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF は SPI1 の TXE 割り込みで `0xa5` を送信し、RXNE 割り込みで
+同じ値を読み出します。続けてオーバーラン割り込みを発生させ、最初のフレームを保持し、
+DR、SR の順に読んでフラグが消えることを検査します。SPI2 では `0x3c` と `0xc3` が
+DMA1 の完了割り込み後に SRAM に並ぶことを、SPI3 では 16 ビットの `0x12ab` が戻る
+ことを確認します。すべて通過すると `SPI IRQ and DMA OK` を出力します。
+
+SPI は転送を同期完了として扱います。SCK/NSS とビット時間、
+スレーブ、片方向・受信専用モード、CRC 計算、I2S、ループバック以外の SPI 接続先、
+送信 DMA、DMA の CHSEL による要求の選択は残課題です。
+
+### STM32F407 の I2C
+
+上流と同じ `I2C.STM32F1_I2C` 宣言を使用し、イベント・エラー割り込みを I2C1 は
+NVIC 31/32、I2C2 は 33/34、I2C3 は 72/73 に配線します。旧世代レジスター構成の
+7 ビットマスター送受信、反復 START、STOP、アドレス NACK を扱います。ADDR は SR1、SR2
+の順に読むと解除され、AF は SR1 の該当ビットへのゼロ書き込みで解除されます。
+[Renode の STM32F1_I2C モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b6a841a013db85/src/Emulator/Peripherals/Peripherals/I2C/STM32F1_I2C.cs)
+[RM0090 の I2C 章](https://www.st.com/resource/en/reference_manual/rm0090-stm32f407-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+
+検証用 REPL は `Mocks.EchoI2CDevice` を I2C1 のアドレス `0x10` に接続します。
+上流の ZynqMP エコーテストの `01 23 45` を書いて反復 START から `01 23` を読む
+ケースを FreeRTOS ELF に移植しました。ファームウェアはイベント IRQ で送受信し、
+未接続の `0x11` へのアクセスでエラー IRQ を確認して `I2C echo 01 23 and NACK OK`
+を出力します。Zedboard の 20 バイト書き込み・21 バイト読み出しも Rust テストに移植し、
+最後のゼロ埋めまで確認します。
+[Renode の ZynqMP エコーテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/zynqmp_linux.robot#L143)
+[Renode の Zedboard エコーテスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/Zedboard.robot#L291)
+
+SCL/SDA の信号とタイミング、10 ビットアドレス、スレーブ動作、
+DMA、SMBus、バス仲裁、エコー以外の接続先は残課題です。
+
+### STM32F407 の IWDG と FreeRTOS の再起動
+
+STM32H7 を担当する `penv/network` の `b96599c` を参照し、F407 の上流宣言
+`Timers.STM32_IndependentWatchdog @ sysbus 0x40003000` を配線しました。上流指定の
+32 kHz、ウィンドウなし、初期プリスケーラー値 `0x4` を使用します。KR の開始・書き込み
+解除・給餌キーと PR/RLR の保護を実装し、整列した 16/32 ビットのアクセスを処理します。
+満了時には Cortex-M の初期 SP と PC を元のベクターテーブルから読み直します。NVIC、
+SysTick、検証で使用する周辺機器をリセットし、SRAM、フラッシュ、ロード済み ELF を保持します。
+[RM0090 の IWDG 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32bit-mcus-stmicroelectronics.pdf)
+
+上記のスモークテストは通常起動に加え、UART の `!` を受けた FreeRTOS タスクから
+約 6 ms の期限で IWDG を開始するケースを実行します。4 tick 後に給餌し、元の期限を
+越えて生存したことを確認します。次の満了で再起動したファームウェアは、スタートアップが
+初期化しない SRAM の値と、IWDG・SysTick・NVIC・UART のリセット状態を検査します。
+`watchdog-uart.log` では通常の出力一式が次の 3 行を挟んで 2 回現れ、再起動後も
+`X`、`Y`、`Z` に応答します。シミュレーター側のログは `watchdog-penv.log` です。
+
+```text
+IWDG armed
+IWDG refresh held
+IWDG reboot: SRAM retained
+```
+
+生成済みの ELF でリセットケースを直接実行できます。
+
+```sh
+work=target/stm32f407-freertos
+target/release/penv run --script "$work/boot.resc" --max-steps 90000 \
+    --uart-event "24000:$work/uart-x.txt" --uart-event "30000:$work/uart-yz.txt" \
+    --uart-event "38000:$work/uart-watchdog.txt" \
+    --uart-event "75000:$work/uart-x.txt" --uart-event "81000:$work/uart-yz.txt"
+```
+
+IWDG の更新待ち状態、フラッシュオプションによる自動起動、デバッグ時停止、ボード全域のリセットは残課題です。
+
+### STM32F407 の RCC
+
+上流の `Miscellaneous.STM32F4_RCC` を `0x40023800` に登録し、`rtcPeripheral` と
+`Timer9Reset -> timer9@255` を既存の RTC/TIM モデルに接続します。RCC は HSI/HSE と
+主 PLL の選択・レディ状態、AHB/APB 分周、主要周辺機器のクロックゲートを扱います。
+SysTick は HCLK、TIM は対応する APB のタイマー周波数に追従します。RTC は BDCR で
+選んだクロックを使用し、BDRST でバックアップ領域をリセットします。
+[Renode の STM32F4_RCC モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/STM32F4_RCC.cs)
+[RM0090 の RCC 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f407-417-427-437-4x9-4a9-4x7-advanced-arm-based-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF は HSE 8 MHz から PLL で HCLK 32 MHz を生成し、APB1/APB2 を
+16 MHz に設定します。SPI1 のゲート、TIM9 のリセット、DBP による BDCR 保護、
+LSE による RTC の有効化とバックアップレジスターの消去を確認して
+`RCC PLL 32 MHz, RTC and TIM9 OK` を出力します。IWDG 再起動時には HSI とクロックゲートの
+初期状態、`RCC_CSR.IWDGRSTF`、`RMVF` によるフラグ消去を確認してから同じ設定を実行します。
+
+発振器の起動時間、PLL の電気的制約、IWDG による LSI の強制有効化、補助 PLL の出力クロック、RCC IRQ、
+低電力モードのクロック、TIM9 以外の個別周辺機器リセットは残課題です。
+
+### 未変更の上流 REPL
+
+`../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` で確認しました。
+`5fa3471` では `stm32f4.repl:10` の `MTD.STM32F4_FlashController` が最初の阻害点でした。
+現在は FLASH レジスターと `optionBytes` の二つのバス登録を受理し、`flash: flash` を
+消去対象のメモリーに結び付けます。モデルは ACR、キーによるロック解除、オプションバイト、
+F407 の先頭 1 MiB の同期消去を扱います。FreeRTOS ELF は同じフラッシュ宣言を含む
+検証用 REPL で、ACR の待ち状態の書き戻し、CR のリセット時ロック、RDP/nWRP の読み出しを
+検査してからスケジューラーを開始します。セクター消去の境界とロックは Rust のテストで確認します。
+[Renode の F4 フラッシュモデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/MTD/STM32F4_FlashController.cs)
+[STM32F407 リファレンスマニュアル RM0090](https://www.st.com/resource/en/reference_manual/rm0090-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf)
+
+上流の `stm32f4_discovery-kit.repl` をそのまま読み込み、FreeRTOS の通常起動と
+IWDG 後の再起動を実行できます。タイマーと GPIO の追加宣言を既存定義に適用し、TIM1/TIM8 の
+分割 IRQ、GPIO の代替機能・EXTI・LED の配線、ボタンの初期状態、2 つのビットバンド領域を
+扱います。CRC と RNG の F4 指定を受理します。複数 UART がある構成では
+`showAnalyzer sysbus.uart4` が UART4 を入力先に選びます。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-freertos-smoke.sh target/stm32f407-freertos
+tests/stm32f407-upstream-smoke.sh target/stm32f407-upstream
+```
+
+`RENODE_ROOT` の既定値は `../renode` です。上流スモークテストは公開 ELF の SHA-1 を確認し、
+`PENV_ASSET_DIR` を指定した場合はそのディレクトリをキャッシュとして使用します。
+FreeRTOS の上流構成では、基板上にエコー機器がない状態で SPI のゼロ応答と I2C の NACK を
+確認します。UART 出力には `Discovery bit-band GPIO and SRAM OK` と
+`I2C unpopulated bus NACK OK` が現れ、残りの TIM2、キュー、CAN、UART、IWDG の期待出力は
+検証用 REPL と共通です。上流構成の ELF の SHA-256 は
+`01a5823906138f045a7545050cff3051023e98bb5f6f78f67157e8cb4056283a` です。
+
+Renode の TIM2 上り・下りカウントケースは公開 ELF のまま移植し、開始後の
+`period elapsed callback` をそれぞれ 3 回以上確認します。Zephyr Hello World の公開 ELF は
+未変更の kit REPL から起動し、`Hello World! stm32f4_disco` を確認します。
+FAULTMASK の 2 ケースは公開 ELF の TIM3 と FreeRTOS ELF の TIM9 で実行します。
+フラッシュの消去モード未指定、一括消去、セクター 11 の選択消去は Rust テストで照合します。
+[上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
+[上流フラッシュ消去テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/stm32f4-erase.robot)
+
+### 上流の PWM キャプチャと直交位相デコーダー
+
+上記の `tests/stm32f407-upstream-smoke.sh` は、公開 ELF を使用した PWM キャプチャの
+通常版・4 チャネル版と、直交位相デコーダーも実行します。テスト用 REPL は未変更の
+CPU REPL を読み込み、Robot テストと同じ配線を追加します。PWM は PA6 → PD12、
+直交位相は PD12 → PA6 と PD13 → PA7 です。FreeRTOS 回帰には未変更の kit REPL を使います。
+[上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
+
+PWM は初回の校正値を読み飛ばし、2 回目が 1000 Hz ±25 Hz、デューティ比 33% ±1 ポイント
+であることを検査します。直交位相の最初の 2 出力は 10°・20°（各 ±1°）です。
+確認時の値は通常版が 1000 Hz・33.0%、4 チャネル版が 1002 Hz・32.8%、直交位相が 10°・20°
+でした。実行ログは出力ディレクトリの `pwm-capture.log`、
+`pwm-capture-four-channel-capture-support.log`、`qdec.log` に残ります。
+
+タイマーモデルは直接・間接キャプチャ、TI1/TI2 トリガーでのカウンターリセット、
+キャプチャフラグとオーバーキャプチャ、エンコーダーモードの方向とカウンター境界を
+扱います。GPIO 間の配線は出力レベルを入力側に伝え、選択された代替機能へ渡します。
+公開 ELF の初期化に必要な PLLI2S の設定・レディ状態、DBGMCU_CR、ADC 共通の
+クロック分周設定にも対応しました。
+[RM0090 の STM32F407 タイマー章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-407-415-417-437-455-469-application-note-stmicroelectronics.pdf)
+
+4 チャネル版は最初のエッジを受けた ISR でカウンターをリセットします。
+`--virtual-mips 24` で 1 仮想マイクロ秒あたりの Cortex-M 実行ステップを指定し、
+既定の 1 ステップでは大きくなる ISR とエッジ間の時間を再現可能な範囲に収めます。
+この設定は SysTick や周辺タイマーにも共通です。未変更 kit の FreeRTOS 回帰は既定値で実行します。
+
+残課題は入力のデジタルフィルター、GPIO の多段伝搬・競合、ADC 変換、PLLI2S の出力クロック、
+デバッグ時の停止動作、`ApplySVD` の汎用レジスター展開、
+AIRCR のソフトウェアリセット要求、実機確認です。
+フラッシュプログラム動作、UART のビット時間、CAN の通常モードでのノード間通信も
+残課題です。
+
+### Contiki の上流 RESC と Cortex-M4F FreeRTOS
+
+上流スモークテストは公開 Contiki ELF を SHA-1 で照合し、未変更の
+`scripts/single-node/stm32f4_discovery.resc` と kit REPL から実行します。
+最初の停止原因だった `cpu PerformanceInMips 125` を仮想時間に反映し、
+リセットマクロの UID 書き込みには再現可能な疑似乱数を使用します。
+ファームウェアの初期化には TIM7 の半ワードアクセス、SYSCFG の GPIO–EXTI 選択と
+MII/RMII 選択レジスターが必要でした。`contiki.log` の UART4 出力で
+`Contiki 3.x started.`、`ETH_BSP_Config done!`、`UDP server started` を確認します。
+[上流 Contiki RESC](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/stm32f4_discovery.resc)
+
+同じテストは FreeRTOS-Kernel V11.1.0 の公式 ARM_CM4F ポートを
+`-mfloat-abi=hard -mfpu=fpv4-sp-d16` でビルドし、未変更の kit REPL で実行します。
+2 タスクは別々の S0、S31、FPSCR の値を保持し、`vTaskDelay` 後に照合します。
+`cm4f/uart.log` には `FPU context OK: A` と `FPU context OK: B` が現れます。
+TIM2 の IRQ とキュー、CAN ループバック、UART エコー、IWDG 再起動後の出力も照合します。
+[公式 FreeRTOS ARM_CM4F ポート](https://github.com/FreeRTOS/FreeRTOS-Kernel/tree/dbf70559b27d39c1fdb68dfb9a32140b6a6777a0/portable/GCC/ARM_CM4F)
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-upstream-smoke.sh target/close-f407-platform
+# ARM_CM4F のみをビルド・実行する場合
+tests/stm32f407-freertos-smoke.sh target/stm32f407-cm4f --fpu
+```
+
+残課題は FPv4-SP の算術命令、FPCCR の遅延スタック保存（現状は例外進入時に保存）、
+FPU アクセス違反時の UsageFault、一般の Python モニターコマンド、
+Contiki の DHCP リース取得と UDP 疎通の検証です。
+
+### STM32F407 上流ケースの棚卸し
+
+Renode の参照リビジョンは `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` です。
+
+| 対象 | 上流ケースと penv での検査 |
+|---|---|
+| PWM・直交位相 | Discovery の `PWM Capture` 2 件と `Quadrature Decoder` を公開 ELF と同じ GPIO 接続で実行。2 番目の周波数とデューティ比、最初の 2 つの角度を照合 |
+| タイマー IRQ・FAULTMASK | Discovery の TIM2 上り・下りと FAULTMASK 2 件を公開 ELF で実行。FAULTMASK ELF は TIM3 を直接設定するため、生成 RESC が起動前に `RCC_APB1ENR.TIM3EN` を設定。マスク中に出力がないこと、解除後 3 回以上、例外復帰後 4 回以上の割り込みを照合。FreeRTOS では TIM9 と TIM2 のキュー配送も検査 |
+| RTC | Discovery の `Should Not Crash On RTC Writes` を公開 Zephyr ELF で実行し、初期値、月変更後、時変更後の UART 出力を順に照合。`Configure RTC Alarm` は公開 RIOT ELF に上流と同じ 32 kHz オーバーレイと UART 入力 `s` を使い、2 秒間隔で計 4 回の `Alarm!` とその後 3 秒間の無出力を検査 |
+| I²C | Discovery に専用の上流 ELF ケースは見当たりませんでした。FreeRTOS の検証用 REPL で `01 23` の書き込み・読み戻しとイベント IRQ、未接続アドレスの NACK とエラー IRQ を検査。未変更 kit でも NACK を確認 |
+| SPI | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流ループバックケースと同様に、検証用 REPL の FreeRTOS で 8/16 ビット転送、RX/TX 割り込み、DMA を検査。未変更 kit では未接続の応答を確認 |
+| CAN | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流 CAN ループバックケースに対応する範囲として、FreeRTOS で bxCAN のフィルター、CAN1 FIFO0、CAN2 FIFO1、送受信・状態 IRQ とペイロードを検査 |
+| フラッシュ | `stm32f4-erase.robot` の 3 ケースを Rust で移植。消去モード未指定で値保持、一括消去で両端が `0xffffffff`、セクター 11 消去で先頭の `0xdeadbeef` が残ることを照合。FreeRTOS ELF でも ACR レイテンシ、ロック、オプションバイトを検査。Discovery の標準・カスタムレイテンシ CubeMX ELF は未変更 CPU REPL でそれぞれ 3 行以上の `Hello World!` を照合 |
+| 再起動 | 上流 Cortex-M の BASEPRI リセットと STM32L072 の IWDG ケースに相当する検査を F407 FreeRTOS ELF で実施。IWDG のリフレッシュ、期限切れ、SRAM 保持、BASEPRI の `0x50 → 0`、周辺機器の初期状態、再起動後の UART・キュー出力を照合 |
+| Cortex-M | `arm-cortex-m-interrupts.robot` の WFE/SEVONPEND、SysTick の RVR/CVR 書き込み順 2 件は `cargo test` で照合。WFE は IRQ 5 の保留後の SRAM 書き込み、SysTick は 100 Hz の 10・1・10・9 を検査 |
+| 起動回帰 | 未変更の Contiki RESC で公開 Contiki と Zephyr Hello World を実行。FreeRTOS は未変更 kit の ARM_CM3・ARM_CM4F と検証用 REPL の 3 構成で実行 |
+
+[Discovery Robot ケース](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
+[フラッシュ消去](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/stm32f4-erase.robot)
+[Cortex-M 割り込みとリセット](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/arm-cortex-m-interrupts.robot)
+[STM32L072 IWDG](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32L072.robot)
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-upstream-smoke.sh target/close-f407-tests
+```
+
+公開 ELF は自動取得と SHA-1 照合の対象です。ログは指定ディレクトリに残ります。
+IRQ は `faultmask*.log`、I²C/SPI/CAN は `loopback/uart.log`、再起動は各構成の
+`watchdog-uart.log` で確認できます。`cargo test` は 70 件です。
+
+RIOT は、例外フレームに Thumb 関数ポインターを格納します。例外復帰では保存された
+xPSR の Thumb 状態を検査し、PC の下位ビットを落として命令をフェッチします。
+RTC のステータスフラグ消去はバックアップドメイン保護中でも受け付けます。
+アラームの検査は仮想開始後 0.1 秒に `s` を注入し、絶対時刻 2.0・2.2・4.2・6.2・8.2・11.2 秒
+で停止した各実行の累積アラーム数が 0・1・2・3・4・4 になることを照合します。
+
+CubeMX の USB 初期化には、上流 REPL の明示的な USB リセットタグと、SVD 由来の
+OTG FS リセット値を使用します。参照した `STM32F40x.svd.gz` の SHA-256 は
+`d71b3e11c870ec83346eb994e98a57c5eacdf0082d2949ed495d7a3828bf41ec` です。
+[SVD アセット](https://dl.antmicro.com/projects/renode/svd/STM32F40x.svd.gz)
+
+受け入れの対象は上表のゲスト起動と入出力です。Discovery の `Peripheral Export File Created` は
+Renode モニターが書き出す Peripheral Map ファイルを検査するツール機能として対象外です。
+USB データ転送、汎用 SVD 展開、フラッシュ書き込み、CAN 通常モードでのノード間通信は残課題です。

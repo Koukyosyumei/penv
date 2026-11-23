@@ -1,6 +1,7 @@
 pub struct Stm32Crc {
     pub base: u32,
     pub rcc_bound: bool,
+    pub legacy: bool,
     configurable_poly: bool,
     polynomial: u32,
     initial: u32,
@@ -17,6 +18,7 @@ impl Stm32Crc {
         Self {
             base,
             rcc_bound: false,
+            legacy: false,
             configurable_poly,
             polynomial: 0x04c1_1db7,
             initial: u32::MAX,
@@ -27,9 +29,10 @@ impl Stm32Crc {
     }
 
     pub fn reset(&mut self) {
-        let rcc_bound = self.rcc_bound;
+        let (rcc_bound, legacy) = (self.rcc_bound, self.legacy);
         *self = Self::new(self.base, self.configurable_poly);
         self.rcc_bound = rcc_bound;
+        self.legacy = legacy;
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -46,8 +49,8 @@ impl Stm32Crc {
             0 => self.state,
             4 => u32::from(self.independent),
             8 => self.control,
-            0x10 => self.initial,
-            0x14 => self.polynomial,
+            0x10 if !self.legacy => self.initial,
+            0x14 if !self.legacy => self.polynomial,
             _ => 0,
         };
         value & (u32::MAX >> (32 - width * 8))
@@ -55,14 +58,19 @@ impl Stm32Crc {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) {
         match (address - self.base, width) {
-            (0, _) => self.update(value, width),
+            (0, _) if !self.legacy || width == 4 => self.update(value, width),
             (4, 4) => self.independent = value as u8,
+            (8, 4) if self.legacy => {
+                if value & 1 != 0 {
+                    self.reset_state();
+                }
+            }
             (8, 4) => {
                 self.control = value & 0xf8;
                 self.reset_state();
             }
-            (0x10, 4) => self.initial = value,
-            (0x14, 4) => {
+            (0x10, 4) if !self.legacy => self.initial = value,
+            (0x14, 4) if !self.legacy => {
                 if self.configurable_poly {
                     self.polynomial = value;
                 }

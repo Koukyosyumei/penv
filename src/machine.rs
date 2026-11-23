@@ -648,8 +648,9 @@ impl Machine {
                 &mut self.secondary[index - 1]
             };
             self.bus.tick_h7_peripherals();
+            let rate = self.bus.step_hz();
             if let Some(dwt) = &mut self.bus.dwt {
-                dwt.tick();
+                dwt.tick(rate);
             }
             if self
                 .reset_steps
@@ -944,9 +945,7 @@ impl Hart {
                 .and_then(|()| bus.advance_stm32_dma(output))
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
             if self.busy_wait.as_mut().is_some_and(BusyWait::waiting) {
-                if let Some(timer) = &mut bus.systick {
-                    timer.tick();
-                }
+                bus.tick_systick();
                 return Ok(Step::Trap);
             }
             if thumb
@@ -970,7 +969,7 @@ impl Hart {
                 self.pc = return_address & !1;
                 let delay = self.registers[0];
                 if delay != 0 {
-                    wait.skip(delay);
+                    wait.skip(delay, bus.step_hz());
                     return Ok(Step::Trap);
                 }
             }

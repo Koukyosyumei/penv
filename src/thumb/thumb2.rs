@@ -179,6 +179,9 @@ impl Thumb {
         let rt = (low >> 12) as usize;
         let rm = (low & 15) as usize;
         let rd = ((low >> 8) & 15) as usize;
+        if matches!(high, 0xec00..=0xeeff) && self.execute_fpu(high, low, *next, r, bus, output)? {
+            return Ok(());
+        }
         match high {
             0xe8d0..=0xe8df if low & 0xffe0 == 0xf000 && !matches!(rm, 13 | 15) && rn != 13 => {
                 let base = if rn == 15 { *next } else { r[rn] };
@@ -417,13 +420,15 @@ impl Thumb {
                 }));
             }
             0xfa90..=0xfa9e
-                if rn == rm
-                    && rt == 15
-                    && low & 0xf0 == 0xa0
-                    && !matches!(rd, 13 | 15)
-                    && rn != 13 =>
+                if low & 0xf0c0 == 0xf080 && rn == rm && !matches!(rd, 13 | 15) && rn != 13 =>
             {
-                r[rd] = r[rm].reverse_bits();
+                let value = r[rn];
+                r[rd] = match (low >> 4) & 3 {
+                    0 => value.swap_bytes(),
+                    1 => ((value & 0xff00_ff00) >> 8) | ((value & 0x00ff_00ff) << 8),
+                    2 => value.reverse_bits(),
+                    _ => (value as u16).swap_bytes() as i16 as i32 as u32,
+                };
             }
             0xfab0..=0xfabe
                 if rn == rm && rt == 15 && low & 0xf0 == 0x80 && !matches!(rd, 13 | 15) =>

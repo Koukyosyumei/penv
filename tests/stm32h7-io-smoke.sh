@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:-$(mktemp -d)}
 mkdir -p "$assets"
@@ -36,7 +37,7 @@ for case in positive negative; do
     ' "$base/boot.repl" > "$work/$case/boot.repl"
     cp "$base/boot.resc" "$work/$case/boot.resc"
     status=0
-    target/release/penv run --script "$work/$case/boot.resc" \
+    "$penv" run --script "$work/$case/boot.resc" \
         --platform-root "$renode" --asset-dir "$assets" --max-steps 2600000 \
         --uart-event "1200000:$base/sensor.txt" --uart-event "1700000:$base/magnetometer.txt" \
         > "$work/$case/uart.log" 2> "$work/$case/penv.log" || status=$?
@@ -102,7 +103,7 @@ RESC
 } > "$work/echo.resc"
 mkdir "$work/uart"
 status=0
-target/release/penv run --script "$work/echo.resc" --platform-root "$renode" \
+"$penv" run --script "$work/echo.resc" --platform-root "$renode" \
     --asset-dir "$assets" --max-steps 10000000 --uart-log-dir "$work/uart" \
     > "$work/echo.log" 2> "$work/echo-penv.log" || status=$?
 server="$work/uart/0.uart.log"
@@ -138,7 +139,7 @@ lpuart1: UART.STM32F7_USART @ sysbus 0x58000c00
 REPL
     sed 's/@boot.repl/@poll.repl/' "$work/$case/boot.resc" > "$work/$case/poll.resc"
     status=0
-    target/release/penv run --script "$work/$case/poll.resc" \
+    "$penv" run --script "$work/$case/poll.resc" \
         --platform-root "$renode" --asset-dir "$assets" --max-steps 2500000 "$poll_elf" \
         > "$work/$case/poll-uart.log" 2> "$work/$case/poll-penv.log" || status=$?
     if [[ $case == positive ]]; then
@@ -179,7 +180,7 @@ for mode in poll trigger; do
     elf="$poll_elf"
     if [[ $mode == trigger ]]; then elf="$trigger_elf"; fi
     status=0
-    target/release/penv run --script "$work/timed/poll.resc" \
+    "$penv" run --script "$work/timed/poll.resc" \
         --platform-root "$renode" --asset-dir "$assets" --max-steps 11000000 "$elf" \
         > "$work/timed/$mode.uart" 2> "$work/timed/$mode.err" || status=$?
     if [[ $mode == trigger ]]; then
@@ -222,7 +223,7 @@ sysbus ReadDoubleWord 0x58020410
 emulation RunFor "0.0002"
 sysbus ReadDoubleWord 0x58020410
 RESC
-target/release/penv run --script "$work/pwm/boot.resc" --platform-root "$renode" \
+"$penv" run --script "$work/pwm/boot.resc" --platform-root "$renode" \
     --asset-dir "$assets" --max-steps 3000000 --uart-log-dir "$work/pwm" \
     > "$work/pwm/waveform.log" 2> "$work/pwm/penv.log"
 rg -aqF 'Booting STM32H7 Renode Platform Demo' "$work/pwm/0.uart.log"

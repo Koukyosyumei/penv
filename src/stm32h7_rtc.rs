@@ -1,4 +1,4 @@
-use crate::{machine::VIRTUAL_STEPS_PER_SECOND, stm32_uart::Stm32Irq};
+use crate::stm32_uart::Stm32Irq;
 
 const FORMAT_12H: u32 = 1 << 6;
 const ALARM_ENABLE: u32 = 1 << 8;
@@ -101,8 +101,14 @@ impl Stm32Rtc {
         }
     }
 
-    pub fn write(&mut self, address: u32, value: u32) {
+    pub fn write(&mut self, address: u32, value: u32, backup_unlocked: bool) {
         let offset = address - self.base;
+        if offset == 0x0c {
+            self.status &= value | !(SYNC | 0xff00);
+        }
+        if !backup_unlocked {
+            return;
+        }
         if offset == 0x24 {
             self.key = match (self.key, value as u8) {
                 (0 | 2, 0xca) => 1,
@@ -114,9 +120,6 @@ impl Stm32Rtc {
         if let 0x50..=0x9c = offset {
             self.backup[((offset - 0x50) / 4) as usize] = value;
             return;
-        }
-        if offset == 0x0c {
-            self.status &= value | !(SYNC | 0xff00);
         }
         if self.key != 2 {
             return;
@@ -155,6 +158,10 @@ impl Stm32Rtc {
         }
     }
 
+    pub fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = frequency;
+    }
+
     pub fn reset(&mut self) {
         let mut reset = Self::new(self.base, self.frequency, self.errata);
         reset.rcc_bound = self.rcc_bound;
@@ -162,11 +169,11 @@ impl Stm32Rtc {
         *self = reset;
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, step_hz: u32) {
         self.phase += u64::from(self.frequency);
-        if self.phase >= u64::from(VIRTUAL_STEPS_PER_SECOND) {
-            let cycles = self.phase / u64::from(VIRTUAL_STEPS_PER_SECOND);
-            self.phase %= u64::from(VIRTUAL_STEPS_PER_SECOND);
+        if self.phase >= u64::from(step_hz) {
+            let cycles = self.phase / u64::from(step_hz);
+            self.phase %= u64::from(step_hz);
             for _ in 0..cycles {
                 self.advance();
             }

@@ -1,12 +1,9 @@
-use crate::machine::VIRTUAL_STEPS_PER_SECOND;
-
 const DEMCR: u32 = 0xe000_edfc;
 
 pub struct Dwt {
     pub base: u32,
-    cycles_per_step: u32,
-    fractional_cycles: u32,
-    fraction: u32,
+    frequency: u32,
+    phase: u64,
     words: [u32; 23],
     demcr: u32,
 }
@@ -17,16 +14,15 @@ impl Dwt {
     pub fn new(base: u32, frequency: u32) -> Self {
         Self {
             base,
-            cycles_per_step: frequency / VIRTUAL_STEPS_PER_SECOND,
-            fractional_cycles: frequency % VIRTUAL_STEPS_PER_SECOND,
-            fraction: 0,
+            frequency,
+            phase: 0,
             words: [0; 23],
             demcr: 0,
         }
     }
 
     pub fn reset(&mut self) {
-        self.fraction = 0;
+        self.phase = 0;
         self.words.fill(0);
         self.demcr = 0;
     }
@@ -39,14 +35,14 @@ impl Dwt {
         ]
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, step_hz: u32) {
         if self.words[0] & 1 == 0 {
             return;
         }
-        self.fraction += self.fractional_cycles;
-        let carry = u32::from(self.fraction >= VIRTUAL_STEPS_PER_SECOND);
-        self.fraction -= carry * VIRTUAL_STEPS_PER_SECOND;
-        self.words[1] = self.words[1].wrapping_add(self.cycles_per_step + carry);
+        let step_hz = u64::from(step_hz);
+        self.phase += u64::from(self.frequency);
+        self.words[1] = self.words[1].wrapping_add((self.phase / step_hz) as u32);
+        self.phase %= step_hz;
     }
 
     pub fn read(&self, address: u32) -> Option<u32> {

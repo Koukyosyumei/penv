@@ -1,7 +1,9 @@
 use crate::{
+    bus::{GpioWire, TimerPin},
     machine::Machine,
     network_repl::{Entry, irq_index, irq_list, number},
     stm32h7_gpio::Stm32Gpio,
+    stm32h7_timer::Timer,
 };
 
 pub const GPIO: &str = "GPIOPort.STM32_GPIOPort";
@@ -51,15 +53,29 @@ pub fn configure(
     for entry in entries.iter().filter(|entry| entry.model == GPIO) {
         ports.push((
             entry.name.as_str(),
-            port(entry, entries, syscfg).map_err(|e| entry.error(&e))?,
+            port(entry, entries, syscfg, exti, exti_lines).map_err(|e| entry.error(&e))?,
         ));
     }
     for entry in entries.iter().filter(|entry| entry.model == BUTTON) {
-        let (name, pin) = entry
+        let registration = entry
             .registration
             .as_deref()
-            .and_then(|text| text.split_once(char::is_whitespace))
-            .ok_or_else(|| entry.error("expected button registered on a GPIO pin"))?;
+            .ok_or_else(|| entry.error("missing button GPIO registration"))?;
+        let (name, pin) = if let Some((name, pin)) = registration.split_once(char::is_whitespace) {
+            (name, pin.trim())
+        } else {
+            let pin = entry
+                .body
+                .iter()
+                .find_map(|(_, text)| {
+                    text.strip_prefix("->")
+                        .and_then(|wire| wire.trim().split_once('@'))
+                })
+                .filter(|(target, _)| target.trim() == registration)
+                .map(|(_, pin)| pin)
+                .ok_or_else(|| entry.error("expected button output connected to a GPIO pin"))?;
+            (registration, pin)
+        };
         let pin = irq_index(pin, 16).map_err(|e| entry.error(&e))?;
         let (_, port) = ports
             .iter_mut()
@@ -88,10 +104,13 @@ pub fn configure(
             .add_h7_gpio_button(format!("{name}.{}", entry.name), port.base, pin, invert);
     }
 
-    for led in entries
-        .iter()
-        .filter(|entry| matches!(entry.model.as_str(), LED | PWM_LED))
-    {
+    for led in entries.iter().filter(|entry| {
+        matches!(entry.model.as_str(), LED | PWM_LED)
+            && entry
+                .registration
+                .as_deref()
+                .is_some_and(|registration| registration.contains(char::is_whitespace))
+    }) {
         let (parent, pin) = led
             .registration
             .as_deref()
@@ -171,13 +190,20 @@ pub fn configure(
         }
     }
 
+    configure_gpio_links(entries, &ports, machine)?;
     for (_, port) in ports {
         machine.bus.map_h7_gpio(port)?;
     }
     Ok(())
 }
 
-fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm32Gpio, String> {
+fn port(
+    entry: &Entry,
+    entries: &[Entry],
+    syscfg: Option<&Entry>,
+    exti: Option<&Entry>,
+    exti_lines: u32,
+) -> Result<Stm32Gpio, String> {
     let (base, size, rcc_pin) = registration(entry, entries)?;
     let mut resets = [0; 3];
     let mut properties = [false; 4];
@@ -231,6 +257,29 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
             continue;
         }
         let (pins, target) = text.split_once("->").ok_or("expected GPIO output wiring")?;
+        if !target.contains('#') {
+            for wire in target.split('|') {
+                let (name, inputs) = wire.split_once('@').ok_or("missing GPIO destination pin")?;
+                if exti.is_some_and(|exti| exti.name == name.trim()) {
+                    let pins = irq_list(pins, 16)?;
+                    let inputs = irq_list(inputs, exti_lines)?;
+                    if pins.len() != inputs.len() {
+                        return Err("mismatched GPIO to EXTI wiring widths".into());
+                    }
+                    for (pin, input) in pins.into_iter().zip(inputs) {
+                        if port.exti_inputs[usize::from(pin)].replace(input).is_some() {
+                            return Err("duplicate GPIO to EXTI wiring".into());
+                        }
+                    }
+                } else if !entries.iter().any(|device| {
+                    device.name == name.trim()
+                        && matches!(device.model.as_str(), GPIO | LED | PWM_LED | Timer::MODEL)
+                }) {
+                    return Err("unknown GPIO output target".into());
+                }
+            }
+            continue;
+        }
         let (target, inputs) = target
             .split_once('@')
             .ok_or("missing GPIO destination pins")?;
@@ -276,6 +325,132 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
         }
     }
     Ok(port)
+}
+
+fn configure_gpio_links(
+    entries: &[Entry],
+    ports: &[(&str, Stm32Gpio)],
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let port = |name: &str| {
+        ports
+            .iter()
+            .find(|(parent, _)| *parent == name)
+            .map(|(_, port)| port.base)
+    };
+    let mut routes = Vec::new();
+    let mut timers = Vec::new();
+    for timer in entries.iter().filter(|entry| entry.model == Timer::MODEL) {
+        let (base, _) = crate::stm32h7_board_platform::registration(timer, entries)
+            .map_err(|error| timer.error(&error))?;
+        timers.push((timer.name.as_str(), base));
+        for (_, text) in &timer.body {
+            let Some((output, wires)) = text.split_once("->") else {
+                continue;
+            };
+            let Ok(channel) = number(output.trim()) else {
+                continue;
+            };
+            if channel >= 4 {
+                return Err(timer.error("invalid timer alternate-function channel"));
+            }
+            for wire in wires.split('|') {
+                let (target, function) = wire
+                    .trim()
+                    .split_once('@')
+                    .ok_or_else(|| timer.error("missing GPIO alternate function"))?;
+                let (name, pin) = target
+                    .split_once('#')
+                    .ok_or_else(|| timer.error("missing GPIO pin"))?;
+                let gpio = port(name).ok_or_else(|| timer.error("unknown timer GPIO port"))?;
+                let pin = irq_index(pin, 16).map_err(|error| timer.error(&error))?;
+                let function = irq_index(function, 16).map_err(|error| timer.error(&error))?;
+                routes.push(TimerPin {
+                    timer: base,
+                    gpio,
+                    channel: channel as usize,
+                    pin,
+                    function,
+                    capture: false,
+                });
+            }
+        }
+    }
+    let mut gpio_wires = Vec::new();
+    for gpio in entries.iter().filter(|entry| entry.model == GPIO) {
+        let base = port(&gpio.name).unwrap();
+        for (_, text) in &gpio.body {
+            let Some((pin, wires)) = text.split_once("->") else {
+                continue;
+            };
+            for wire in wires.split('|') {
+                let Some((target, index)) = wire.trim().split_once('@') else {
+                    continue;
+                };
+                if let Some(target) = port(target.trim()) {
+                    let input = irq_index(index, 16).map_err(|error| gpio.error(&error))?;
+                    let output = irq_index(pin, 16).map_err(|error| gpio.error(&error))?;
+                    gpio_wires.push(GpioWire {
+                        source: (base, output),
+                        target: (target, input),
+                        level: false,
+                    });
+                }
+                if let Some((_, timer)) = timers.iter().find(|(name, _)| *name == target.trim()) {
+                    let pin = irq_index(pin, 16).map_err(|error| gpio.error(&error))?;
+                    let channel = irq_index(index, 4).map_err(|error| gpio.error(&error))?;
+                    let mut matched = false;
+                    for route in routes.iter_mut().filter(|route| {
+                        route.timer == *timer
+                            && route.channel == usize::from(channel)
+                            && route.gpio == base
+                            && route.pin == pin
+                    }) {
+                        route.capture = true;
+                        matched = true;
+                    }
+                    if !matched {
+                        return Err(gpio.error("timer input has no alternate-function mapping"));
+                    }
+                }
+            }
+        }
+    }
+    machine.bus.set_gpio_links(routes, gpio_wires);
+    for led in entries.iter().filter(|entry| {
+        entry.model == LED
+            && entry
+                .registration
+                .as_deref()
+                .is_some_and(|registration| !registration.contains(char::is_whitespace))
+    }) {
+        if !led.body.is_empty() {
+            return Err(led.error("unsupported GPIO LED properties"));
+        }
+        let parent = led
+            .registration
+            .as_deref()
+            .and_then(port)
+            .ok_or_else(|| led.error("expected LED registered on a GPIO port"))?;
+        let gpio = entries
+            .iter()
+            .find(|entry| entry.model == GPIO && port(&entry.name) == Some(parent))
+            .unwrap();
+        let mut pin = None;
+        for (_, text) in &gpio.body {
+            if let Ok((output, target, "0")) = crate::stm32h7_board_platform::wire(text)
+                && target == led.name
+            {
+                let output = irq_index(output, 16).map_err(|error| led.error(&error))?;
+                if pin.replace(output).is_some() {
+                    return Err(led.error("duplicate GPIO LED wiring"));
+                }
+            }
+        }
+        let pin = pin.ok_or_else(|| led.error("missing GPIO LED wiring"))?;
+        machine.bus.map_gpio_led(led.name.clone(), parent, pin);
+    }
+    Ok(())
 }
 
 pub(crate) fn registration(
@@ -337,4 +512,56 @@ pub(crate) fn registration(
     }
     let (base, size) = mapping.ok_or("missing GPIO bus range")?;
     Ok((base, size, alias))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn applies_timer_alternate_function_and_led_extension() {
+        let path = std::env::temp_dir().join(format!("penv-f4-gpio-{}.repl", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    IRQ -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x1000
+timer4: Timers.STM32_Timer @ sysbus 0x40000800
+    -> nvic@30
+    frequency: 1000000
+gpioPortD: GPIOPort.STM32_GPIOPort @ sysbus <0x40020c00, +0x400>
+UserLED: Miscellaneous.LED @ gpioPortD
+timer4:
+    0 -> gpioPortD#12@02
+gpioPortD:
+    12 -> UserLED@0
+"#,
+        )
+        .unwrap();
+        let result = crate::network_repl::load(&path, None);
+        std::fs::remove_file(path).unwrap();
+        let mut bus = result.unwrap().bus;
+        let write = |bus: &mut crate::bus::Bus, address, value| {
+            bus.write(address, 4, value, &mut std::io::sink()).unwrap()
+        };
+        write(&mut bus, 0x40020c00, 2 << 24); // PD12 alternate function mode.
+        write(&mut bus, 0x40020c24, 2 << 16); // AF2 selects TIM4.
+        write(&mut bus, 0x40000818, 6 << 4); // PWM mode 1.
+        write(&mut bus, 0x40000820, 1);
+        write(&mut bus, 0x4000082c, 3);
+        write(&mut bus, 0x40000834, 2);
+        write(&mut bus, 0x40000800, 1);
+        bus.tick_h7_peripherals();
+        assert_eq!(bus.f4_gpio_led("UserLED"), Some(true));
+        bus.tick_h7_peripherals();
+        bus.tick_h7_peripherals();
+        assert_eq!(bus.f4_gpio_led("UserLED"), Some(false));
+        write(&mut bus, 0x40020c24, 1 << 16);
+        bus.tick_h7_peripherals();
+        bus.tick_h7_peripherals();
+        assert_eq!(bus.f4_gpio_led("UserLED"), Some(false));
+    }
 }

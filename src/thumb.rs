@@ -253,9 +253,9 @@ impl Thumb {
             9 if self.uses_psp() => r[13] = value & !3,
             9 => self.psp = value & !3,
             16 => self.interrupts_masked = value & 1 != 0,
-            17 if self.thumb2 => self.basepri = value as u8 & 0xe0,
+            17 if self.thumb2 => self.basepri = value as u8,
             18 if self.thumb2 => {
-                let value = value as u8 & 0xe0;
+                let value = value as u8;
                 if value != 0 && (self.basepri == 0 || value < self.basepri) {
                     self.basepri = value;
                 }
@@ -434,20 +434,21 @@ impl Thumb {
         bus: &mut Bus,
     ) -> Result<bool, String> {
         bus.sample_nvic(&self.active_exceptions, self.sleeping());
-        if let Some(timer) = bus.systick.as_mut() {
-            timer.tick();
-        }
+        bus.tick_systick();
         let pending = bus
             .nvic
             .as_ref()
             .map_or(Default::default(), Nvic::pending_exceptions);
         let system_pending = bus.systick.as_ref().map_or(0, SysTick::pending_exceptions);
+        let nvic_event = bus.nvic.as_mut().is_some_and(Nvic::take_pending_event);
         let newly_pending = pending
             .iter()
             .zip(self.pending)
             .any(|(next, previous)| next & !previous != 0)
             || system_pending & !self.system_pending != 0;
-        if newly_pending && bus.nvic.as_ref().is_some_and(Nvic::send_event_on_pending) {
+        if nvic_event
+            || (newly_pending && bus.nvic.as_ref().is_some_and(Nvic::send_event_on_pending))
+        {
             self.signal_event();
         }
         self.pending = pending;
@@ -459,7 +460,9 @@ impl Thumb {
         let current_priority = if self.active_exception == 0 {
             256
         } else {
-            u16::from(priority(self.active_exception))
+            u16::from(bus.nvic.as_ref().map_or(0, |nvic| {
+                nvic.preemption_priority(priority(self.active_exception))
+            }))
         };
         let mut selected = bus
             .nvic
@@ -482,8 +485,15 @@ impl Thumb {
             }
         }
         if let Some((exception, _)) = selected.filter(|(_, priority)| {
-            u16::from(*priority) < current_priority
-                && (self.basepri == 0 || *priority < self.basepri)
+            u16::from(
+                bus.nvic
+                    .as_ref()
+                    .map_or(*priority, |nvic| nvic.preemption_priority(*priority)),
+            ) < current_priority
+                && (self.basepri == 0
+                    || bus.nvic.as_ref().map_or(*priority < self.basepri, |nvic| {
+                        nvic.preemption_priority(*priority) < nvic.preemption_priority(self.basepri)
+                    }))
         }) {
             self.sleep = Sleep::Running;
             if self.interrupts_masked {
@@ -904,7 +914,18 @@ impl Thumb {
                         (0xf380..=0xf38f, 0x8800..=0x88ff) => {
                             let register = (inst & 15) as usize;
                             if matches!(register, 13 | 15)
-                                || !self.system_write(sysm, r[register], r)
+                                || !self.system_write(
+                                    sysm,
+                                    if matches!(sysm, 17 | 18) {
+                                        r[register]
+                                            & u32::from(
+                                                bus.nvic.as_ref().map_or(0xff, Nvic::priority_mask),
+                                            )
+                                    } else {
+                                        r[register]
+                                    },
+                                    r,
+                                )
                             {
                                 return Err(unsupported());
                             }

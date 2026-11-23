@@ -116,7 +116,7 @@ impl Plan {
                     resolve(*switch)?,
                 )?;
             }
-            ["sysbus", "WriteDoubleWord", address, value] => {
+            ["sysbus", "WriteDoubleWord", address, value] if self.configured != 0 => {
                 let node = self.monitor_node()?;
                 let address = crate::network_repl::number(resolve(*address)?)?;
                 let value = crate::network_repl::number(resolve(*value)?)?;

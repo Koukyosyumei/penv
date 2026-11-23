@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:-$(mktemp -d)}
 mkdir -p "$assets"
@@ -50,7 +51,7 @@ cpu EnableZephyrMode
 cpu VectorTableOffset \`sysbus GetSymbolAddress "_vector_table"\`
 RESC
     local status=0
-    target/release/penv run --script "$work/$sample.resc" --platform-root "$renode" \
+    "$penv" run --script "$work/$sample.resc" --platform-root "$renode" \
         --asset-dir "$assets" --max-steps 15000000 "$@" \
         > "$work/$sample-uart.log" 2> "$work/$sample-penv.log" || status=$?
     if [[ "$status" != 2 ]]; then
@@ -124,7 +125,7 @@ RESC
 sed '/^gpioPortA\.button /d' "$work/display-button.resc" > "$work/display-control.resc"
 for case in button control; do
     mkdir "$work/$case"
-    target/release/penv run --script "$work/display-$case.resc" \
+    "$penv" run --script "$work/display-$case.resc" \
         --platform-root "$renode" --asset-dir "$assets" --max-steps 12000000 \
         --uart-log-dir "$work/$case" > "$work/$case/monitor.log" 2> "$work/$case/penv.log"
 done

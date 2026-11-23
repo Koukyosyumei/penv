@@ -396,7 +396,10 @@ pub fn configure(
         }
         let mut irq = None;
         for (_, text) in &entry.body {
-            if text == "series: STM32Series.H7" {
+            if matches!(
+                text.as_str(),
+                "series: STM32Series.H7" | "series: STM32Series.F4"
+            ) {
                 continue;
             }
             let (output, target, input) = wire(text).map_err(|e| entry.error(e))?;
@@ -439,7 +442,9 @@ pub fn configure(
                 .split_once(':')
                 .ok_or_else(|| entry.error("expected STM32 CRC property"))?;
             match (key.trim(), value.trim()) {
-                ("series", "STM32Series.F0") if series.is_none() => series = Some(()),
+                ("series", value @ ("STM32Series.F0" | "STM32Series.F4")) if series.is_none() => {
+                    series = Some(value)
+                }
                 ("configurablePoly", value) if configurable.is_none() => {
                     configurable = Some(
                         value
@@ -452,6 +457,7 @@ pub fn configure(
         }
         let mut crc = Stm32Crc::new(base, configurable.unwrap_or(false));
         crc.rcc_bound = alias.is_some();
+        crc.legacy = series == Some("STM32Series.F4");
         machine.bus.map_h7_crc(crc).map_err(|e| entry.error(&e))?;
     }
 
@@ -529,7 +535,7 @@ fn parse_timer(
     };
     let mut frequency = None;
     let mut limit = None;
-    let mut irq = None;
+    let mut irq = [None; 5];
     for (_, text) in &entry.body {
         if let Some((key, value)) = text.split_once(':') {
             let value = number(value.trim())?;
@@ -565,12 +571,26 @@ fn parse_timer(
                 continue;
             }
             let (output, target, input) = wire(text)?;
-            if !matches!(output, "" | "IRQ") || irq.is_some() {
-                return Err("expected one STM32 timer IRQ".into());
+            let route = match output {
+                "" | "IRQ" => 0,
+                "BreakInterrupt" => 1,
+                "UpdateInterrupt" => 2,
+                "TriggerInterrupt"
+                | "CommutationInterrupt"
+                | "[TriggerInterrupt, CommutationInterrupt]" => 3,
+                "CaptureCompareInterrupt" => 4,
+                _ => return Err("unsupported STM32 timer output".into()),
+            };
+            let lines = crate::network_repl::irq_list(input, IRQ_LINES as u32)?;
+            let [line, ..] = lines.as_slice() else {
+                return Err("missing STM32 timer IRQ".into());
+            };
+            if lines.iter().any(|value| value != line) || irq[route].is_some() {
+                return Err("conflicting STM32 timer IRQ".into());
             }
-            irq = Some(
+            irq[route] = Some(
                 if nvic.is_some_and(|controller| controller.name == target) {
-                    Stm32Irq::Nvic(irq_index(input, IRQ_LINES as u32)?)
+                    Stm32Irq::Nvic(*line)
                 } else if exti.is_some_and(|controller| controller.name == target) {
                     Stm32Irq::Exti(irq_index(input, exti_lines)?)
                 } else {

@@ -25,6 +25,7 @@ pub struct Boot {
     pub silence_ranges: Vec<(u32, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
+    pub serial_analyzer: Option<String>,
     pub image: Option<Asset>,
     pub hex: bool,
     pub vector_tables: Vec<(String, u32)>,
@@ -932,6 +933,8 @@ fn execute(
                 .next()
                 .is_some_and(|name| name.starts_with("uart") || name.starts_with("usart"))
             {
+                boot.serial_analyzer =
+                    Some(analyzer.strip_prefix("sysbus.").unwrap_or(analyzer).into());
                 return Ok(());
             }
             boot.video_analyzers.push(

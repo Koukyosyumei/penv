@@ -203,6 +203,14 @@ impl Node {
     fn boot(node: NodeBoot, root: Option<&Path>, assets: Option<&Path>) -> Result<Self, String> {
         let NodeBoot { name, boot, source } = node;
         let mut machine = network_repl::load(&boot.platform.unwrap(), root)?;
+        if let Some(mips) = boot.mips {
+            machine
+                .bus
+                .set_step_hz(mips.checked_mul(1_000_000).ok_or("virtual MIPS overflow")?);
+        }
+        if let Some(uart) = &boot.uart_input {
+            machine.bus.select_uart_input(uart);
+        }
         let open = |value: &str| {
             let path = monitor::asset_path(value, &source, root.unwrap_or(Path::new(".")), assets)?;
             let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -228,6 +236,12 @@ impl Node {
         }
         for (cpu, address) in boot.boot_pcs {
             machine.set_named_entry(&cpu, address)?;
+        }
+        for (address, value) in boot.writes {
+            machine
+                .bus
+                .write(address, 4, value, &mut io::sink())
+                .map_err(|error| error.to_string())?;
         }
         zephyr_boot::configure(&mut machine, &boot.zephyr, image_path.as_deref())?;
         machine

@@ -9,7 +9,14 @@ use crate::{
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
-    stm32_uart::Stm32Irq,
+    stm32_can::StmCan,
+    stm32_iwdg::Iwdg,
+    stm32_uart::{Stm32Irq, UsartLayout},
+    stm32f1_i2c::F1I2c,
+    stm32f4_flash::F4Flash,
+    stm32f4_power::F4Power,
+    stm32f4_rcc::F4Rcc,
+    stm32f4_spi::F4Spi,
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -65,6 +72,46 @@ impl Entry {
         number(address.trim()).map(Some).map_err(|e| self.error(&e))
     }
 
+    fn bus_range(&self) -> Result<(u32, u32), String> {
+        let (base, size) = self
+            .registration
+            .as_deref()
+            .and_then(|text| text.strip_prefix("sysbus <"))
+            .and_then(|text| text.strip_suffix('>'))
+            .and_then(|text| text.split_once(','))
+            .ok_or_else(|| self.error("expected sysbus range"))?;
+        let size = size
+            .trim()
+            .strip_prefix('+')
+            .ok_or_else(|| self.error("expected +size in sysbus range"))?;
+        Ok((
+            number(base.trim()).map_err(|e| self.error(&e))?,
+            number(size).map_err(|e| self.error(&e))?,
+        ))
+    }
+
+    fn address_with_optional_range(&self, size: u32) -> Result<u32, String> {
+        let Some(range) = self
+            .registration
+            .as_deref()
+            .and_then(|text| text.strip_prefix("sysbus <"))
+            .and_then(|text| text.strip_suffix('>'))
+        else {
+            return self.address();
+        };
+        let (address, length) = range
+            .split_once(',')
+            .ok_or_else(|| self.error("invalid sysbus range"))?;
+        let length = length
+            .trim()
+            .strip_prefix('+')
+            .ok_or_else(|| self.error("expected +size in sysbus range"))?;
+        if number(length).map_err(|e| self.error(&e))? != size {
+            return Err(self.error("invalid sysbus range size"));
+        }
+        number(address.trim()).map_err(|e| self.error(&e))
+    }
+
     fn address(&self) -> Result<u32, String> {
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
@@ -82,7 +129,12 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
 
 fn without_comment(line: &str) -> &str {
     unquoted_delimiters(line, &['/'])
-        .find(|(index, _)| line[*index..].starts_with("//"))
+        .find(|(index, _)| {
+            let prefix = &line[..*index];
+            line[*index..].starts_with("//")
+                && !prefix.ends_with("@http:")
+                && !prefix.ends_with("@https:")
+        })
         .map_or(line, |(index, _)| &line[..index])
 }
 
@@ -241,6 +293,7 @@ fn parse(
             None => (declaration.trim(), None),
         };
         if (crate::network_platform::has_regions(model)
+            || model == F4Flash::MODEL
             || stm32h7_adc_platform::has_regions(model)
             || model == stm32h7_gpio_platform::GPIO
             || model == stm32h7_rtc_platform::RTC
@@ -261,7 +314,9 @@ fn parse(
         });
     }
     if registration_depth != 0 {
-        return Err(current.unwrap().error("unterminated Ethernet registration"));
+        return Err(current
+            .unwrap()
+            .error("unterminated peripheral registration"));
     }
     entries.extend(current);
     visiting.remove(&canonical);
@@ -325,45 +380,6 @@ fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
     definitions
 }
 
-fn configure_sysbus_tags(entry: &Entry, bus: &mut crate::bus::Bus) -> Result<(), String> {
-    let Some(((_, init), commands)) = entry.body.split_first() else {
-        return Err(entry.error("expected sysbus init"));
-    };
-    if init != "init:" || entry.registration.is_some() {
-        return Err(entry.error("expected sysbus init"));
-    }
-    for (source, command) in commands {
-        let invalid =
-            || format!("{source}: expected Tag <start, end> \"name\" [value] [silent=True]");
-        let (range, description) = command
-            .strip_prefix("Tag <")
-            .and_then(|text| text.split_once('>'))
-            .ok_or_else(invalid)?;
-        let (start, end) = range.split_once(',').ok_or_else(invalid)?;
-        let start = number(start.trim()).map_err(|e| format!("{source}: {e}"))?;
-        let end = number(end.trim()).map_err(|e| format!("{source}: {e}"))?;
-        if start > end {
-            return Err(invalid());
-        }
-        let (_, arguments) = description
-            .trim()
-            .strip_prefix('"')
-            .and_then(|text| text.split_once('"'))
-            .ok_or_else(invalid)?;
-        let mut arguments: Vec<_> = arguments.split_whitespace().collect();
-        if matches!(arguments.last(), Some(&"silent=True" | &"silent=False")) {
-            arguments.pop();
-        }
-        let value = match arguments.as_slice() {
-            [] => 0,
-            [value] => number(value).map_err(|e| format!("{source}: {e}"))?,
-            _ => return Err(invalid()),
-        };
-        bus.tag(start..=end, value);
-    }
-    Ok(())
-}
-
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
@@ -374,7 +390,6 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     )?;
     let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
-    let mut names = HashSet::new();
     let mut cpus = Vec::new();
     let mut clint = None;
     let mut dwt = None;
@@ -385,15 +400,19 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut ram = false;
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
+    let mut stm32_can = Vec::new();
+    let mut watchdogs = Vec::new();
+    let mut f4_rcc = None;
     let mut plic = None;
     let mut timer = None;
+    let mut names = HashSet::new();
     for entry in &entries {
         if !names.insert(&entry.name) {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
         if entry.model.is_empty() {
             if entry.name == "sysbus" {
-                configure_sysbus_tags(entry, &mut machine.bus)?;
+                configure_bus_init(entry, &mut machine)?;
                 continue;
             }
             let detail = if entry.registration.is_some() {
@@ -404,6 +423,18 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             return Err(entry.error(detail));
         }
         match entry.model.as_str() {
+            "Miscellaneous.BitBanding" => {
+                let properties = keys(entry, &["peripheralBase"])?;
+                let [(_, target)] = properties.as_slice() else {
+                    return Err(entry.error("expected bit-band target base"));
+                };
+                let target = number(target).map_err(|e| entry.error(&e))?;
+                let (base, size) = entry.bus_range()?;
+                machine
+                    .bus
+                    .map_bitband(base, size, target)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
@@ -493,7 +524,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(entry.error("only one PLIC is currently supported"));
                 }
             }
-            "UART.STM32F7_USART" => stm32_uarts.push(entry),
+            StmCan::MODEL => stm32_can.push(entry),
+            Iwdg::MODEL => watchdogs.push(entry),
+            "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
@@ -505,9 +538,21 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             "Miscellaneous.CombinedInput" => combiners.push(entry),
-            "MTD.STM32H7_FlashController" => {
+            F4Rcc::MODEL => {
+                if f4_rcc.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32F4 RCC is supported"));
+                }
+            }
+            F4Power::MODEL => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_f4_power(entry.address()?)
+                    .map_err(|error| entry.error(&error))?;
+            }
+            F4Flash::MODEL | "MTD.STM32H7_FlashController" => {
                 if flash_controller.replace(entry).is_some() {
-                    return Err(entry.error("only one STM32H7 flash controller is supported"));
+                    return Err(entry.error("only one STM32 flash controller is supported"));
                 }
             }
             "Miscellaneous.DWT" => {
@@ -529,6 +574,8 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 || stm32h7_adc_platform::is_device(&entry.model)
                 || stm32h7_gpio_platform::is_device(&entry.model)
                 || entry.model == stm32h7_rtc_platform::RTC
+                || matches!(entry.model.as_str(), F1I2c::MODEL | F1I2c::ECHO_MODEL)
+                || matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL)
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
@@ -579,13 +626,18 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 _ => unreachable!(),
             }
         }
-        let thumb2 = match cpu_type {
-            Some(r#""cortex-m0""# | r#""cortex-m0+""#) => false,
-            Some(r#""cortex-m7""#) => true,
-            _ => return Err(entry.error("expected Cortex-M0, Cortex-M0+ or Cortex-M7 cpuType")),
+        let (thumb2, default_mpu_regions, _has_cache) = match cpu_type {
+            Some(r#""cortex-m0""# | r#""cortex-m0+""#) => (false, 0, false),
+            Some(r#""cortex-m4""#) => (true, 8, false),
+            Some(r#""cortex-m7""#) => (true, 16, true),
+            _ => {
+                return Err(
+                    entry.error("expected Cortex-M0, Cortex-M0+, Cortex-M4 or Cortex-M7 cpuType")
+                );
+            }
         };
         if !thumb2 && mpu_regions.is_some() {
-            return Err(entry.error("MPU regions require Cortex-M7"));
+            return Err(entry.error("MPU regions require Cortex-M4 or Cortex-M7"));
         }
         if let Some(dwt) = dwt {
             let (_, frequency) = keys(dwt, &["frequency"])?
@@ -602,6 +654,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_err(|error| dwt.error(&error))?;
         }
         machine.bus.map_systick().map_err(|e| entry.error(&e))?;
+        machine
+            .bus
+            .set_step_hz(crate::machine::VIRTUAL_STEPS_PER_SECOND);
         let mut priority = None;
         let mut frequency = None;
         if let Some(controller) = nvic {
@@ -637,16 +692,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .as_mut()
                 .unwrap()
                 .set_frequency(frequency);
-            machine
-                .bus
-                .systick
-                .as_mut()
-                .unwrap()
-                .set_step_rate(crate::machine::VIRTUAL_STEPS_PER_SECOND);
         }
         if let Some(flash) = flash_controller {
-            configure_h7_flash(flash, &entries, nvic, &mut machine)?;
+            if flash.model == F4Flash::MODEL {
+                configure_f4_flash(flash, &entries, &mut machine)?;
+            } else {
+                configure_h7_flash(flash, &entries, nvic, &mut machine)?;
+            }
         }
+        configure_stm32_can(&stm32_can, nvic, &mut machine)?;
+        configure_f4_spi(&entries, nvic, &mut machine)?;
+        configure_f1_i2c(&entries, nvic, &mut machine)?;
         let mut uart_irq = None;
         if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
@@ -735,9 +791,6 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
                 let mut outputs = vec![None; count as usize];
                 exti_outputs(controller, nvic, &combined_routes, &mut outputs)?;
-                if outputs.iter().flatten().any(|&line| line >= 32) {
-                    return Err(controller.error("STM32F4 EXTI outputs require NVIC lines 0–31"));
-                }
                 machine
                     .bus
                     .map_exti(controller.address()?, outputs, direct)
@@ -752,6 +805,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         stm32h7_gpio_platform::configure(&entries, exti, exti_lines, &mut machine)?;
         stm32h7_rtc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
         for uart in stm32_uarts {
+            let legacy = uart.model == "UART.STM32_UART";
             let mut irq = None;
             let mut low_power = None;
             let mut frequency = None;
@@ -778,7 +832,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 } else if let Some((key, value)) = text.split_once(':') {
                     let value = value.trim();
                     match key.trim() {
-                        "lowPowerMode" if low_power.is_none() => {
+                        "lowPowerMode" if !legacy && low_power.is_none() => {
                             low_power = Some(
                                 value
                                     .parse::<bool>()
@@ -797,21 +851,35 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     return Err(uart.error("unsupported USART IRQ wiring"));
                 }
             }
+            let layout = if legacy {
+                UsartLayout::F4
+            } else {
+                UsartLayout::F7 {
+                    low_power: low_power.unwrap_or(false),
+                }
+            };
+            let base = uart.address_with_optional_range(layout.size())?;
             machine
                 .bus
-                .map_stm32_usart(crate::stm32_uart::Stm32Usart::new(
+                .map_stm32_usart(crate::stm32_uart::Stm32Usart::with_layout(
                     uart.name.clone(),
-                    uart.address()?,
+                    base,
                     irq,
-                    low_power.unwrap_or(false),
+                    layout,
                 ))
                 .map_err(|e| uart.error(&e))?;
+        }
+        if let Some(rcc) = f4_rcc {
+            configure_f4_rcc(rcc, &entries, &mut machine)?;
         }
         machine
             .bus
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
+        if cpu_type == Some(r#""cortex-m4""#) {
+            machine.bus.nvic.as_mut().unwrap().enable_fpu();
+        }
         machine.primary.configure_cortex_m(vectors, thumb2);
         if thumb2 {
             machine
@@ -819,7 +887,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .nvic
                 .as_mut()
                 .unwrap()
-                .configure_mpu(mpu_regions.unwrap_or(16));
+                .configure_mpu(mpu_regions.unwrap_or(default_mpu_regions));
         }
         crate::network_platform::configure(
             &entries,
@@ -828,6 +896,18 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             nvic.map(|entry| entry.name.as_str()),
         )?;
         return Ok(machine);
+    }
+    if let Some(entry) = entries
+        .iter()
+        .find(|entry| matches!(entry.model.as_str(), F1I2c::MODEL | F1I2c::ECHO_MODEL))
+    {
+        return Err(entry.error("STM32F1 I2C requires a Cortex-M CPU"));
+    }
+    if let Some(entry) = entries
+        .iter()
+        .find(|entry| matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL))
+    {
+        return Err(entry.error("STM32F4 SPI requires a Cortex-M CPU"));
     }
     if let Some(entry) = entries.iter().find(|entry| {
         stm32h7_adc_platform::is_device(&entry.model)
@@ -839,13 +919,22 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         return Err(entry.error("STM32H7 peripherals require a Cortex-M CPU"));
     }
     if let Some(flash) = flash_controller {
-        return Err(flash.error("STM32H7 flash controller requires a Cortex-M CPU"));
+        return Err(flash.error("STM32 flash controller requires a Cortex-M CPU"));
     }
     if let Some(dwt) = dwt {
         return Err(dwt.error("DWT requires a Cortex-M CPU"));
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(rcc) = f4_rcc {
+        return Err(rcc.error("STM32F4 RCC requires a Cortex-M CPU"));
+    }
+    if let Some(watchdog) = watchdogs.first() {
+        return Err(watchdog.error("IWDG requires a Cortex-M CPU"));
+    }
+    if let Some(can) = stm32_can.first() {
+        return Err(can.error("STM32 CAN requires a Cortex-M CPU"));
     }
     if let Some(uart) = stm32_uarts.first() {
         return Err(uart.error("STM32 USART requires a Cortex-M platform"));
@@ -1088,6 +1177,362 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String> {
+    let Some(((_, init), commands)) = entry.body.split_first() else {
+        return Err(entry.error("missing sysbus init"));
+    };
+    if init != "init:" || entry.registration.is_some() {
+        return Err(entry.error("expected sysbus init"));
+    }
+    for (_, command) in commands {
+        if let Some(path) = command.strip_prefix("ApplySVD @")
+            && !path.is_empty()
+            && !path.chars().any(char::is_whitespace)
+        {
+            if path == "https://dl.antmicro.com/projects/renode/svd/STM32F40x.svd.gz" {
+                map_f40x_otg_svd_defaults(machine).map_err(|e| entry.error(&e))?;
+            }
+            continue;
+        }
+        let (range, rest) = command
+            .strip_prefix("Tag <")
+            .and_then(|text| text.split_once('>'))
+            .ok_or_else(|| entry.error("unsupported sysbus init command"))?;
+        let (start, end) = range
+            .split_once(',')
+            .ok_or_else(|| entry.error("invalid Tag range"))?;
+        let (_, value) = rest
+            .trim()
+            .strip_prefix('"')
+            .and_then(|text| text.split_once('"'))
+            .ok_or_else(|| entry.error("expected quoted Tag name"))?;
+        let mut arguments = value.split_whitespace().collect::<Vec<_>>();
+        if matches!(arguments.last(), Some(&"silent=True" | &"silent=False")) {
+            arguments.pop();
+        }
+        let parse = |text: &str| number(text.trim()).map_err(|e| entry.error(&e));
+        let value = match arguments.as_slice() {
+            [] => 0,
+            [value] => parse(value)?,
+            _ => return Err(entry.error("invalid Tag value")),
+        };
+        machine
+            .bus
+            .map_bus_tag(parse(start)?, parse(end)?, value)
+            .map_err(|e| entry.error(&e))?;
+    }
+    Ok(())
+}
+
+fn map_f40x_otg_svd_defaults(machine: &mut Machine) -> Result<(), String> {
+    // Unmodeled OTG FS registers accessed during CubeMX host initialization.
+    // The REPL supplies an explicit USB:RESET tag for the global reset window.
+    const BASE: u32 = 0x5000_0000;
+    for (offset, reset) in [
+        (0x008, 0),          // GAHBCFG
+        (0x00c, 0x00000a00), // GUSBCFG
+        (0x100, 0x02000600), // HPTXFSIZ
+        (0x400, 0),          // HCFG
+        (0x408, 0x00003fff), // HFNUM
+        (0x440, 0),          // HPRT
+        (0xe00, 0),          // PCGCCTL
+    ] {
+        machine
+            .bus
+            .map_bus_tag(BASE + offset, BASE + offset + 3, reset)?;
+    }
+    for channel in 0..8 {
+        let address = BASE + 0x508 + channel * 0x20; // HCINT and HCINTMSK
+        machine.bus.map_bus_tag(address, address + 7, 0)?;
+    }
+    Ok(())
+}
+
+fn configure_f4_rcc(rcc: &Entry, entries: &[Entry], machine: &mut Machine) -> Result<(), String> {
+    let mut rtc = None;
+    let mut timer9 = None;
+    for (_, text) in &rcc.body {
+        if let Some(name) = text.strip_prefix("rtcPeripheral:")
+            && rtc.is_none()
+        {
+            let target = entries
+                .iter()
+                .find(|target| {
+                    target.name == name.trim() && target.model == stm32h7_rtc_platform::RTC
+                })
+                .ok_or_else(|| rcc.error("expected an STM32F4 RTC reference"))?;
+            rtc = Some(target.address()?);
+        } else if let Ok(("Timer9Reset", name, "255")) = crate::stm32h7_board_platform::wire(text)
+            && timer9.is_none()
+        {
+            let target = entries
+                .iter()
+                .find(|target| {
+                    target.name == name && target.model == crate::stm32h7_timer::Timer::MODEL
+                })
+                .ok_or_else(|| rcc.error("expected Timer9Reset connected to an STM32 timer"))?;
+            timer9 = Some(target.address()?);
+        } else {
+            return Err(rcc.error("unsupported or duplicate STM32F4 RCC property or wiring"));
+        }
+    }
+    machine
+        .bus
+        .map_f4_rcc(F4Rcc::new(rcc.address()?, rtc, timer9))
+        .map_err(|error| rcc.error(&error))
+}
+
+fn configure_f1_i2c(
+    entries: &[Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let mut controllers = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.model == F1I2c::MODEL) {
+        let mut i2c = F1I2c::new(entry.address()?);
+        for (_, text) in &entry.body {
+            let (output, target, input) =
+                crate::stm32h7_board_platform::wire(text).map_err(|error| entry.error(error))?;
+            let route = match output {
+                "EventInterrupt" if i2c.event.is_none() => &mut i2c.event,
+                "ErrorInterrupt" if i2c.error.is_none() => &mut i2c.error,
+                _ => return Err(entry.error("unsupported or duplicate I2C interrupt output")),
+            };
+            if !nvic.is_some_and(|nvic| nvic.name == target) {
+                return Err(entry.error("expected I2C interrupt connected to NVIC"));
+            }
+            *route = Some(Stm32Irq::Nvic(
+                irq_index(input, IRQ_LINES as u32).map_err(|error| entry.error(&error))?,
+            ));
+        }
+        controllers.push((entry, i2c));
+    }
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == F1I2c::ECHO_MODEL)
+    {
+        keys(entry, &[])?;
+        let (parent, address) = entry
+            .registration
+            .as_deref()
+            .and_then(|registration| registration.split_once(char::is_whitespace))
+            .ok_or_else(|| entry.error("expected I2C controller and target address"))?;
+        let (_, controller) = controllers
+            .iter_mut()
+            .find(|(entry, _)| entry.name == parent)
+            .ok_or_else(|| entry.error("expected echo attached to STM32F1 I2C"))?;
+        let address = irq_index(address, 128).map_err(|error| entry.error(&error))?;
+        if !controller.attach_echo(address) {
+            return Err(entry.error("duplicate I2C target address"));
+        }
+    }
+    for (entry, controller) in controllers {
+        machine
+            .bus
+            .map_f1_i2c(controller)
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
+}
+
+fn configure_f4_spi(
+    entries: &[Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    use crate::{
+        stm32h7_adc_dma::{AdcDma, StreamTarget},
+        stm32h7_board_platform::{registration, wire},
+    };
+
+    let mut loopbacks = HashSet::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == F4Spi::LOOPBACK_MODEL)
+    {
+        keys(entry, &[])?;
+        let parent = entry
+            .registration
+            .as_deref()
+            .filter(|name| {
+                entries
+                    .iter()
+                    .any(|spi| spi.name == *name && spi.model == F4Spi::MODEL)
+            })
+            .ok_or_else(|| entry.error("expected loopback attached to STM32F4 SPI"))?;
+        if !loopbacks.insert(parent) {
+            return Err(entry.error("duplicate SPI loopback"));
+        }
+    }
+    for entry in entries.iter().filter(|entry| entry.model == F4Spi::MODEL) {
+        let mut spi = F4Spi::new(entry.address()?);
+        spi.loopback = loopbacks.contains(entry.name.as_str());
+        let mut series = false;
+        for (_, text) in &entry.body {
+            if text.split_once(':').is_some_and(|(key, value)| {
+                key.trim() == "series" && value.trim() == "STM32Series.F4"
+            }) && !series
+            {
+                series = true;
+                continue;
+            }
+            let (output, target, input) = wire(text).map_err(|error| entry.error(error))?;
+            match output {
+                "IRQ" if spi.irq.is_none() && nvic.is_some_and(|nvic| nvic.name == target) => {
+                    let irq =
+                        irq_index(input, IRQ_LINES as u32).map_err(|error| entry.error(&error))?;
+                    spi.irq = Some(Stm32Irq::Nvic(irq));
+                }
+                "DMAReceive" if spi.dma.is_none() => {
+                    let dma = entries
+                        .iter()
+                        .find(|dma| dma.name == target && dma.model == "DMA.STM32DMA")
+                        .ok_or_else(|| {
+                            entry.error("expected SPI receive DMA connected to STM32 DMA")
+                        })?;
+                    let (base, _) =
+                        registration(dma, entries).map_err(|error| dma.error(&error))?;
+                    let stream = irq_index(input, AdcDma::STREAMS as u32)
+                        .map_err(|error| entry.error(&error))?;
+                    spi.dma = Some(StreamTarget {
+                        base,
+                        stream: usize::from(stream),
+                    });
+                }
+                _ => return Err(entry.error("unsupported or duplicate STM32F4 SPI output")),
+            }
+        }
+        if !series {
+            return Err(entry.error("expected series: STM32Series.F4"));
+        }
+        machine
+            .bus
+            .map_f4_spi(spi)
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
+}
+
+fn configure_stm32_can(
+    entries: &[&Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let mut devices = Vec::new();
+    for entry in entries {
+        let base = entry.address_with_optional_range(StmCan::SIZE)?;
+        let mut master = None;
+        let mut irq = [None; 4];
+        for (_, text) in &entry.body {
+            if let Some(name) = text.strip_prefix("master:")
+                && master.is_none()
+            {
+                master = Some(name.trim());
+                continue;
+            }
+            let Some((outputs, target)) = text.split_once("->") else {
+                return Err(entry.error("expected CAN master or NVIC wiring"));
+            };
+            let Some((name, inputs)) = target.split_once('@') else {
+                return Err(entry.error("missing CAN interrupt input"));
+            };
+            if !nvic.is_some_and(|nvic| nvic.name == name.trim()) {
+                return Err(entry.error("expected CAN interrupt routed to NVIC"));
+            }
+            let outputs = irq_list(outputs, 4).map_err(|error| entry.error(&error))?;
+            let inputs = irq_list(inputs, IRQ_LINES as u32).map_err(|error| entry.error(&error))?;
+            if outputs.len() != inputs.len() {
+                return Err(entry.error("mismatched CAN interrupt wiring widths"));
+            }
+            for (output, input) in outputs.into_iter().zip(inputs) {
+                if irq[usize::from(output)].replace(input).is_some() {
+                    return Err(entry.error("duplicate CAN interrupt output"));
+                }
+            }
+        }
+        devices.push((*entry, base, master, irq));
+    }
+
+    for &(entry, base, master, irq) in &devices {
+        let master = master
+            .map(|name| {
+                devices
+                    .iter()
+                    .find(|(candidate, _, parent, _)| candidate.name == name && parent.is_none())
+                    .map(|(_, address, _, _)| *address)
+                    .ok_or_else(|| entry.error("expected CAN master without its own master"))
+            })
+            .transpose()?;
+        machine
+            .bus
+            .map_f4_can(StmCan::new(base, master, irq))
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
+}
+
+fn configure_f4_flash(
+    controller: &Entry,
+    entries: &[Entry],
+    machine: &mut Machine,
+) -> Result<(), String> {
+    let properties = keys(controller, &["flash"])?;
+    let [(_, name)] = properties.as_slice() else {
+        return Err(controller.error("expected a flash memory reference"));
+    };
+    let flash = entries
+        .iter()
+        .find(|entry| entry.name == *name && entry.model == "Memory.MappedMemory")
+        .ok_or_else(|| controller.error("flash must reference mapped memory"))?;
+    let start = flash.address()?;
+    let end = start
+        .checked_add(F4Flash::BANK_SIZE)
+        .ok_or_else(|| flash.error("flash bank range overflow"))?;
+    machine
+        .bus
+        .memory(start, F4Flash::BANK_SIZE as usize)
+        .map_err(|error| flash.error(&error.to_string()))?;
+
+    let parse = || -> Option<(u32, u32, u32)> {
+        let registration = controller
+            .registration
+            .as_deref()?
+            .strip_prefix('{')?
+            .strip_suffix('}')?
+            .trim();
+        let (registers, options) = registration.split_once(';')?;
+        let base = number(registers.strip_prefix("sysbus ")?.trim()).ok()?;
+        let options = options
+            .trim()
+            .strip_prefix("sysbus new Bus.BusMultiRegistration")?
+            .trim()
+            .strip_prefix('{')?
+            .strip_suffix('}')?;
+        let mut option_base = None;
+        let mut size = None;
+        let mut region = false;
+        for field in options.split(';') {
+            let (key, value) = field.trim().split_once(':')?;
+            let value = value.trim();
+            match key {
+                "address" if option_base.is_none() => option_base = Some(number(value).ok()?),
+                "size" if size.is_none() => size = Some(number(value).ok()?),
+                "region" if !region && value == r#""optionBytes""# => region = true,
+                _ => return None,
+            }
+        }
+        let size = size.filter(|size| *size >= 12 && size % 4 == 0)?;
+        region.then_some((base, option_base?, size))
+    };
+    let (base, option_base, size) = parse().ok_or_else(|| {
+        controller.error("expected register and optionBytes sysbus registrations")
+    })?;
+    machine
+        .bus
+        .map_f4_flash(F4Flash::new(base, option_base, size, start..end))
+        .map_err(|error| controller.error(&error))
 }
 
 fn configure_h7_flash(

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+penv=${PENV_BIN:-target/release/penv}
 renode=${RENODE_ROOT:-../renode}
 assets=${PENV_ASSET_DIR:-$(mktemp -d)}
 mkdir -p "$assets"
@@ -65,9 +66,11 @@ printf 'sensor get veml7700@10 light\r' > "$work/sensor.txt"
 
 printf 'sensor get iis2mdc@1e magn_xyz\r' > "$work/magnetometer.txt"
 
-cargo build --release
+if [[ -z ${PENV_BIN:-} ]]; then
+    cargo build --locked --release
+fi
 status=0
-target/release/penv run --script "$work/boot.resc" \
+"$penv" run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 2600000 \
     --uart-event "850000:$work/help.txt" \
     --uart-event "1300000:$work/kernel-version.txt" \
@@ -95,7 +98,7 @@ for entry in '1000000:devmem 0x58004800 32 0x5555' '1150000:devmem 0x58004804 32
     events+=(--uart-event "$step:$work/wdt-$step.txt")
 done
 status=0
-target/release/penv run --script "$work/boot.resc" \
+"$penv" run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps 4900000 \
     "${events[@]}" > "$work/watchdog-uart.log" 2> "$work/watchdog-penv.log" || status=$?
 if [[ "$status" != 2 ]] ||
@@ -118,7 +121,7 @@ for command in '0x580244e0 32 0x02000000' '0x58026500 32 8'     '0x5802640c 32 0
     step=$((step + 150000))
 done
 status=0
-target/release/penv run --script "$work/boot.resc" \
+"$penv" run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" > "$work/hsem-uart.log" 2> "$work/hsem-penv.log" || status=$?
 expected=$(printf '%s\n' 0x8000032a 0x0 0x8 0x20000000 0x0 0x0 0x80000300)
@@ -140,7 +143,7 @@ for command in '0x52007000 32 3' '0x5200703c 32 4' '0x5200700c 32 0x1108' \
     step=$((step + 150000))
 done
 status=0
-target/release/penv run --script "$work/boot.resc" \
+"$penv" run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" > "$work/sdmmc-uart.log" 2> "$work/sdmmc-penv.log" || status=$?
 expected=$(printf '%s\n' 0x80004 0x20000 0x80000 0x0 0x4 0x4f54310a)
@@ -172,7 +175,7 @@ for command in '0x580244d4 32 0x10' '0x52001038 32 0x1234abcd' \
     step=$((step + 200000))
 done
 status=0
-target/release/penv run --script "$work/fill.resc" \
+"$penv" run --script "$work/fill.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" --framebuffer-out "$work/frame.ppm" \
     > "$work/ltdc-uart.log" 2> "$work/ltdc-penv.log" || status=$?
@@ -202,7 +205,7 @@ for command in '0x48021030 32 0x00010203' '0x48021034 32 0x04050607' \
     step=$((step + 150000))
 done
 status=0
-target/release/penv run --script "$work/boot.resc" \
+"$penv" run --script "$work/boot.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" --stats > "$work/cryp-uart.log" 2> "$work/cryp-penv.log" || status=$?
 expected=$(printf '%s\n' 0x2 0x69c4e0d8 0x6a7b0430 0xd8cdb780 0x70b4c55a 0x0)

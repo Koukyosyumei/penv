@@ -16,9 +16,13 @@ fi
 exec > >(tee "$out/verification.log") 2>&1
 revision=$(git rev-parse HEAD)
 printf 'penv %s\nRenode %s\n' "$revision" "$(git -C "$renode" rev-parse HEAD)"
-cargo test --locked > "$out/cargo-test.log" 2>&1
-cargo build --locked --release > "$out/cargo-build.log" 2>&1
-penv=$PWD/target/release/penv
+if [[ -n ${PENV_BIN:-} ]]; then
+    penv=$(realpath "$PENV_BIN")
+else
+    cargo test --locked > "$out/cargo-test.log" 2>&1
+    cargo build --locked --release > "$out/cargo-build.log" 2>&1
+    penv=$PWD/target/release/penv
+fi
 sha256sum "$penv"
 
 archive=$out/riscv-tests.tar.gz
