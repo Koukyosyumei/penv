@@ -24,7 +24,8 @@ robot = {
 }
 nunit = {
     **{'src/Emulator/Peripherals/Test/PeripheralsTests/' + name + '.cs': kind for name,kind in (
-        ('STM32H7_RCC','STM32H7'), ('SDCardEmmcTest','eMMC'), ('STMCANTest','bxCAN')
+        ('STM32H7_RCC','STM32H7'), ('SDCardEmmcTest','eMMC'), ('STMCANTest','bxCAN'),
+        ('FT5336Test','FT5336')
     )},
     **{'src/Emulator/Main/Tests/UnitTests/' + name + '.cs': 'review' for name in (
         'DmaEngineTests','GPIODetachingTests','GPIOTests','StorageTests','PacketTests',
@@ -111,9 +112,8 @@ def platform_variants():
     for path in files:
         configuration = path.relative_to(renode).as_posix()
         if inherits_h7(path, set()):
-            if configuration == 'platforms/boards/stm32h747-disco.repl':
-                yield configuration, 'OPEN', '固定 REPL は Input.FT5336（I2C4 0x38、GPIOK7 の IRQ）で停止'
-            elif configuration in {
+            if configuration in {
+                'platforms/boards/stm32h747-disco.repl',
                 'platforms/boards/nucleo_h753zi.repl',
                 'platforms/boards/stm32h7_renode_reference_board.repl',
                 'platforms/cpus/stm32h7.repl',
@@ -214,6 +214,18 @@ for file,kind in nunit.items():
         while k+1<len(lines) and not lines[k].rstrip().endswith(')'):
             k+=1
         args=line.strip()+' '+ ' '.join(l.strip() for l in lines[j:k+1])
+        if kind == 'FT5336':
+            fixtures = {
+                'NormalTest': ('false,false,false', '(50,60)', 'normal_test'),
+                'RotatedTest': ('true,false,false', '(60,50)', 'rotated_test'),
+                'InvertedTest': ('false,true,false', '(60,60)', 'inverted_test'),
+                'RotatedInvertedTest': ('true,false,true', '(90,50)', 'rotated_inverted_test'),
+            }
+            flags, coordinates, test = fixtures[name.group(1)]
+            binding = f'rotated,invertedX,invertedY={flags}; MaxX=110,MaxY=150; MoveTo(50,60),Press,Write([3]),Read(4)'
+            rows.append((repository, source, f'{i+1}-{k+1}', name.group(1), binding, 'PASS',
+                         f'上流と同じ状態値 2 と座標 {coordinates} を照合。ft5336::tests::{test}'))
+            continue
         if kind == 'eMMC':
             status,note='OUT','eMMC ハードウェアパーティションまたは eMMC 固有コマンド。対象の SDHC ソケットと異なる'
         elif kind == 'bxCAN':

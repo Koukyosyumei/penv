@@ -1,3 +1,4 @@
+use crate::ft5336::Ft5336;
 use crate::{
     designware_usb::DesignWareUsb,
     iis2mdc::Iis2mdc,
@@ -47,6 +48,7 @@ pub fn is_device(model: &str) -> bool {
                 | Fdcan::MODEL
                 | Veml7700::MODEL
                 | Iis2mdc::MODEL
+                | Ft5336::MODEL
                 | Tmp108::MODEL
                 | Lps25hb::MODEL
                 | Lsm6dso::MODEL
@@ -315,7 +317,12 @@ pub fn configure(
     for entry in entries.iter().filter(|entry| {
         matches!(
             entry.model.as_str(),
-            Veml7700::MODEL | Iis2mdc::MODEL | Tmp108::MODEL | Lps25hb::MODEL | Lsm6dso::MODEL
+            Veml7700::MODEL
+                | Iis2mdc::MODEL
+                | Tmp108::MODEL
+                | Lps25hb::MODEL
+                | Lsm6dso::MODEL
+                | Ft5336::MODEL
         )
     }) {
         let (parent, address) = entry
@@ -328,6 +335,15 @@ pub fn configure(
             .iter_mut()
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Ft5336::MODEL {
+            let device = parse_touch(entry, entries).map_err(|e| entry.error(&e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Touch(format!("sysbus.{parent}.{}", entry.name), device),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
         if entry.model == Lsm6dso::MODEL {
             let sensor = parse_imu(entry, entries).map_err(|e| entry.error(&e))?;
             bus.attach(
@@ -568,6 +584,44 @@ pub fn configure(
     }
 
     Ok(())
+}
+
+fn parse_touch(entry: &Entry, entries: &[Entry]) -> Result<Ft5336, String> {
+    let mut device = Ft5336::default();
+    let mut seen = std::collections::HashSet::new();
+    for (_, property) in &entry.body {
+        if property.contains("->") {
+            let (pin, name, target) = wire(property)?;
+            if !matches!(pin, "" | "IRQ") || device.irq.is_some() {
+                return Err("expected a single FT5336 GPIO route".into());
+            }
+            let port = entries
+                .iter()
+                .find(|port| port.name == name && port.model == crate::stm32h7_gpio_platform::GPIO)
+                .ok_or("unknown FT5336 GPIO route")?;
+            let (base, _, _) = crate::stm32h7_gpio_platform::registration(port, entries)?;
+            device.irq = Some((base, irq_index(target, 16)?));
+            continue;
+        }
+        let (key, value) = property.split_once(':').ok_or("expected FT5336 property")?;
+        let (key, value) = (key.trim(), value.trim());
+        if !seen.insert(key) {
+            return Err(format!("duplicate FT5336 property {key}"));
+        }
+        match key {
+            "isRotated" => device.rotated = value.parse().map_err(|_| "invalid isRotated")?,
+            "isInvertedX" => {
+                device.inverted_x = value.parse().map_err(|_| "invalid isInvertedX")?
+            }
+            "isInvertedY" => {
+                device.inverted_y = value.parse().map_err(|_| "invalid isInvertedY")?
+            }
+            "MaxX" => device.max_x = value.parse().map_err(|_| "invalid MaxX")?,
+            "MaxY" => device.max_y = value.parse().map_err(|_| "invalid MaxY")?,
+            _ => return Err(format!("unsupported FT5336 property {key}")),
+        }
+    }
+    Ok(device)
 }
 
 fn parse_imu(entry: &Entry, entries: &[Entry]) -> Result<Lsm6dso, String> {

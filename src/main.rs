@@ -7,6 +7,7 @@ mod designware_usb;
 mod dwt;
 mod ethernet;
 mod ethernet_switch;
+mod ft5336;
 mod iis2mdc;
 mod image;
 mod litex_ethernet;

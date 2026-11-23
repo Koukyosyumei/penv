@@ -641,3 +641,24 @@ target/release/penv run --script "$e/echo/echo.resc" --platform-root ../renode \
 target/release/penv run --platform ../renode/platforms/boards/nucleo_h753zi.repl \
     --platform-root ../renode --max-steps 3000000 "$PENV_ASSET_DIR"/cubemx--stm32h7-eth-test.elf-s_1231644-3e808bfc20a3a96ad304acbc94c7dbd6b06245e5
 ```
+
+### backlog-network-e51dff8e297b-1
+
+STM32H747 Disco の未変更 REPL が登録する FT5336 を実装しました。I²C4 の `0x38` に接続し、ボード指定の回転と Y 軸反転、接触・解放・座標の報告、ベンダー ID、GPIOK7 の割り込みパルスを扱います。入力にはモニターの `sysbus.i2c4.touchscreen MoveTo 50 60`、`Press`、`Release` を使います。
+
+- `Should Load Repls` の STM32H7 対象 7 構成が合格しました。以前失敗していた Disco を含みます。
+- 固定 Infrastructure の `FT5336Test.cs` 4 件を同じ回転・反転、最大座標、移動・押下、読み出し長、状態・座標の期待値で移植しました。4 件を台帳の分母に追加しました。対象 789 件のうち等価合格 11 件、部分検証 17 件、未達 761 件です。
+- Disco の未変更 REPL で公開 STM32H747 表示 ELF を実行し、モニターで I²C4 の送受信レジスターを操作しました。接触座標 `(420, 50)`、解放状態、ベンダー ID `0x51`、EXTI7 と NVIC23 の保留を確認しました。この試行の I²C 操作はモニターから行っています。表示 ELF の単独実行では最初の 1 仮想秒に UART 出力が得られず、ゲストドライバーからのタッチ処理と表示連携は未確認です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-board-smoke.sh
+target/release/penv run --script tests/stm32h7-ft5336.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1500000
+```
+
+モニター出力の末尾列は順に `0x00000080 0x00800000 0x00000081 0x000000a4 0x00000000 0x00000032 0x00000000 0x00000041 0x00000051` です。検証ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-ft5336.AQ9WNxRa` に保存しました。

@@ -40,6 +40,11 @@ pub enum Action {
         name: String,
         pressed: bool,
     },
+    Pointer {
+        node: usize,
+        name: String,
+        event: crate::ft5336::PointerEvent,
+    },
     ImuFeed {
         node: usize,
         sensor: String,
@@ -134,10 +139,21 @@ pub fn run(
                     name,
                     pressed,
                 } => {
+                    let bus = &mut simulation.nodes[node].machine.bus;
+                    let event = if pressed {
+                        crate::ft5336::PointerEvent::Press
+                    } else {
+                        crate::ft5336::PointerEvent::Release
+                    };
+                    if bus.touch_input(&format!("sysbus.{name}"), event).is_err() {
+                        bus.gpio_button(&name, pressed)?;
+                    }
+                }
+                Action::Pointer { node, name, event } => {
                     simulation.nodes[node]
                         .machine
                         .bus
-                        .gpio_button(&name, pressed)?;
+                        .touch_input(&name, event)?;
                 }
                 Action::ImuFeed { node, sensor, file } => {
                     simulation.nodes[node]

@@ -691,6 +691,20 @@ impl Bus {
             .ok_or_else(|| format!("unknown LSM6DSO sensor {name:?}"))
     }
 
+    pub fn touch_input(
+        &mut self,
+        name: &str,
+        event: crate::ft5336::PointerEvent,
+    ) -> Result<(), String> {
+        let device = self
+            .h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_touch(name))
+            .ok_or_else(|| format!("unknown touchscreen {name:?}"))?;
+        device.input(event);
+        Ok(())
+    }
+
     pub fn feed_imu_samples(&mut self, name: &str, file: &std::path::Path) -> Result<(), String> {
         let start = self.h7_step + u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND) / 10;
         self.find_imu(name)?.load_samples(file, start, 12)

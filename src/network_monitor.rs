@@ -172,6 +172,18 @@ impl Plan {
                 let fps = crate::platform::number(resolve(*value)?)?;
                 self.actions.push(Action::DisplayRate { node, fps });
             }
+            [touch, "MoveTo", x, y] if touch.starts_with("sysbus.") => {
+                let coordinate = |value| -> Result<i32, String> {
+                    resolve(value)?
+                        .parse()
+                        .map_err(|_| "invalid pointer coordinate".into())
+                };
+                self.actions.push(Action::Pointer {
+                    node: self.monitor_node()?,
+                    name: (*touch).into(),
+                    event: crate::ft5336::PointerEvent::Move(coordinate(*x)?, coordinate(*y)?),
+                });
+            }
             [button, verb @ ("Press" | "Release")] if button.contains('.') => {
                 let node = self.monitor_node()?;
                 let name = button.strip_prefix("sysbus.").unwrap_or(button).to_owned();

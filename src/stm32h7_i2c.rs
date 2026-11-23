@@ -1,3 +1,4 @@
+use crate::ft5336::Ft5336;
 use crate::{iis2mdc::Iis2mdc, stm32_uart::Stm32Irq, tmp108::Tmp108, veml7700::Veml7700};
 use crate::{lps25hb::Lps25hb, lsm6dso::Lsm6dso};
 
@@ -23,6 +24,7 @@ pub enum Target {
     Temperature(Tmp108),
     Pressure(Lps25hb),
     Imu(String, Box<Lsm6dso>),
+    Touch(String, Ft5336),
 }
 
 impl Target {
@@ -31,7 +33,7 @@ impl Target {
             Self::Light(sensor) => sensor.stop(),
             Self::Temperature(sensor) => sensor.stop(),
             Self::Pressure(sensor) => sensor.stop(),
-            Self::Magnetometer(_) | Self::Imu(..) => {}
+            Self::Magnetometer(_) | Self::Imu(..) | Self::Touch(..) => {}
         }
     }
 }
@@ -96,6 +98,15 @@ impl I2c {
             })
     }
 
+    pub fn find_touch(&mut self, name: &str) -> Option<&mut Ft5336> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Touch(path, touch) if path == name => Some(touch),
+                _ => None,
+            })
+    }
+
     pub fn sample_sensor_outputs(
         &mut self,
         step: u64,
@@ -105,6 +116,7 @@ impl I2c {
             .filter_map(move |(_, target)| match target {
                 Target::Magnetometer(sensor) => sensor.tick(step),
                 Target::Imu(_, sensor) => sensor.tick(step),
+                Target::Touch(_, device) => device.tick(),
                 _ => None,
             })
     }
@@ -136,6 +148,11 @@ impl I2c {
                     Some(Target::Magnetometer(sensor)) => sensor.read_byte(),
                     Some(Target::Pressure(sensor)) => sensor.read_byte(),
                     Some(Target::Imu(_, sensor)) => sensor.read_byte(),
+                    Some(Target::Touch(_, device)) => device
+                        .response()
+                        .get(self.position)
+                        .copied()
+                        .unwrap_or(0xff),
                     Some(Target::Light(_) | Target::Temperature(_)) if self.position < 2 => {
                         self.data[self.position]
                     }
@@ -229,7 +246,10 @@ impl I2c {
                 let bytes = match &mut self.targets[target].1 {
                     Target::Light(sensor) => Some(sensor.read()),
                     Target::Temperature(sensor) => Some(sensor.read()),
-                    Target::Magnetometer(_) | Target::Pressure(_) | Target::Imu(..) => None,
+                    Target::Magnetometer(_)
+                    | Target::Pressure(_)
+                    | Target::Imu(..)
+                    | Target::Touch(..) => None,
                 };
                 if let Some(bytes) = bytes {
                     self.data[..2].copy_from_slice(&bytes);
@@ -271,6 +291,7 @@ impl I2c {
             && !self.reading
         {
             match &mut self.targets[target].1 {
+                Target::Touch(_, device) if self.position != 0 => device.select(self.data[0]),
                 Target::Light(sensor) if (1..=3).contains(&self.position) => {
                     sensor.write(&self.data[..self.position])
                 }
