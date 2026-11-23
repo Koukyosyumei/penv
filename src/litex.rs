@@ -255,6 +255,8 @@ impl SocController {
 
 #[derive(Default)]
 pub struct Spi {
+    pub name: Option<String>,
+    pub card: Option<Box<crate::litex_sd::SpiCard>>,
     bits_per_word: u8,
     start: bool,
     mosi: u8,
@@ -293,6 +295,11 @@ impl Spi {
                         || self.loopback_slave && self.chip_select && self.bits_per_word == 8
                     {
                         self.mosi
+                    } else if self.chip_select
+                        && self.bits_per_word == 8
+                        && let Some(card) = self.card.as_mut()
+                    {
+                        card.transfer(self.mosi)
                     } else {
                         0xff
                     };
@@ -300,7 +307,14 @@ impl Spi {
             }
             0x0c => self.mosi = value as u8,
             0x10 => self.miso = value as u8,
-            0x14 => self.chip_select = value & 1 != 0,
+            0x14 => {
+                self.chip_select = value & 1 != 0;
+                if !self.chip_select
+                    && let Some(card) = self.card.as_mut()
+                {
+                    card.deselect();
+                }
+            }
             0x18 => self.loopback = value & 1 != 0,
             _ => {}
         }
@@ -318,6 +332,7 @@ pub struct Gpio {
     irq_enabled: bool,
     pub irq: Option<(usize, u8)>,
     buttons: Vec<crate::litex_panel::Button>,
+    leds: Vec<(String, u8)>,
     input: u32,
     output: u32,
     interrupt_mode: u32,
@@ -332,12 +347,14 @@ impl Gpio {
         irq_enabled: bool,
         irq: Option<(usize, u8)>,
         buttons: Vec<crate::litex_panel::Button>,
+        leds: Vec<(String, u8)>,
     ) -> Self {
         let mut gpio = Self {
             mode,
             irq_enabled,
             irq,
             buttons,
+            leds,
             input: 0,
             output: 0,
             interrupt_mode: 0,
@@ -380,6 +397,13 @@ impl Gpio {
             .ok_or_else(|| format!("unknown LiteX GPIO button {name:?}"))?;
         self.apply_button(index, action);
         Ok(())
+    }
+
+    pub fn led_state(&self, name: &str) -> Option<bool> {
+        self.leds
+            .iter()
+            .find(|(path, _)| path == name)
+            .map(|(_, pin)| self.output & (1 << pin) != 0)
     }
 
     pub fn has_button(&self, name: &str) -> bool {

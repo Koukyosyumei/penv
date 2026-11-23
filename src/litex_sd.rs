@@ -291,6 +291,114 @@ impl Card {
     }
 }
 
+/// SPI-mode SD transport for BIOS initialization and single-block reads.
+pub struct SpiCard {
+    card: Card,
+    packet: [u8; 6],
+    received: usize,
+    response: std::collections::VecDeque<u8>,
+    idle: bool,
+    application: bool,
+}
+
+impl SpiCard {
+    pub fn new(card: Card) -> Self {
+        Self {
+            card,
+            packet: [0; 6],
+            received: 0,
+            response: std::collections::VecDeque::new(),
+            idle: true,
+            application: false,
+        }
+    }
+
+    pub fn deselect(&mut self) {
+        self.received = 0;
+        self.response.clear();
+    }
+
+    pub fn transfer(&mut self, byte: u8) -> u8 {
+        if let Some(response) = self.response.pop_front() {
+            return response;
+        }
+        if self.received == 0 && byte & 0xc0 != 0x40 {
+            return 0xff;
+        }
+        self.packet[self.received] = byte;
+        self.received += 1;
+        if self.received == self.packet.len() {
+            self.received = 0;
+            self.command();
+        }
+        0xff
+    }
+
+    fn command(&mut self) {
+        let cmd = self.packet[0] & 63;
+        let arg = u32::from_be_bytes(self.packet[1..5].try_into().unwrap());
+        let app = std::mem::take(&mut self.application);
+        let status = u8::from(self.idle);
+        match cmd {
+            0 => {
+                self.idle = true;
+                self.response.push_back(1);
+            }
+            1 => {
+                self.idle = false;
+                self.response.push_back(0);
+            }
+            8 => {
+                self.response.push_back(status);
+                self.response.extend((arg & 0xfff).to_be_bytes());
+            }
+            41 if app => {
+                self.idle = false;
+                self.response.push_back(0);
+            }
+            55 => {
+                self.application = true;
+                self.response.push_back(status);
+            }
+            58 => {
+                self.response.push_back(status);
+                let ocr = 0x00ff_8000
+                    | (u32::from(!self.idle) << 31)
+                    | (u32::from(self.card.high_capacity()) << 30);
+                self.response.extend(ocr.to_be_bytes());
+            }
+            16 if !self.idle && arg == SECTOR as u32 => self.response.push_back(0),
+            9 | 10 if !self.idle => {
+                let (_, register) = self.card.command(cmd, arg).unwrap();
+                self.data(&register.to_be_bytes());
+            }
+            17 if !self.idle => {
+                self.card.command(cmd, arg);
+                let mut block = [0; SECTOR as usize];
+                if self.card.read(&mut block).is_ok() {
+                    self.data(&block);
+                } else {
+                    self.response.push_back(0x20);
+                }
+            }
+            _ => self.response.push_back(status | 4),
+        }
+    }
+
+    fn data(&mut self, bytes: &[u8]) {
+        self.response.extend([0, 0xff, 0xfe]);
+        self.response.extend(bytes);
+        let mut crc = 0u16;
+        for &byte in bytes {
+            crc ^= u16::from(byte) << 8;
+            for _ in 0..8 {
+                crc = (crc << 1) ^ if crc & 0x8000 != 0 { 0x1021 } else { 0 };
+            }
+        }
+        self.response.extend(crc.to_be_bytes());
+    }
+}
+
 pub struct Controller {
     pub name: String,
     pub registrations: Vec<Registration>,

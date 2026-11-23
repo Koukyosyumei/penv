@@ -60,7 +60,8 @@ Options:
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
   --litex-phy-event STEP:NAME:VALUE  Set PHY VendorSpecific1 at a step (repeatable)
-  --litex-led-assert STEP:NAME:STATE  Assert a wired panel LED is on or off (repeatable)
+  --litex-temperature-event STEP:NAME:CELSIUS  Set an SI70xx temperature (repeatable)
+  --litex-led-assert STEP:NAME:STATE  Assert a wired LiteX LED is on or off (repeatable)
   --litex-button-event STEP:NAME:ACTION  Press, Release, or Toggle at a step
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
@@ -121,6 +122,7 @@ fn run() -> Result<ExitCode, String> {
     let mut platform_root = None;
     let mut uart_input = None;
     let mut uart_input_at = None;
+    let mut temperature_events = Vec::new();
     let mut phy_events = Vec::new();
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
@@ -175,6 +177,25 @@ fn run() -> Result<ExitCode, String> {
                 let value = u16::try_from(parse_address(value)?)
                     .map_err(|_| "--litex-phy-event requires a 16-bit register value")?;
                 phy_events.push((step, name.to_string(), value));
+            }
+            Some("--litex-temperature-event") => {
+                const FORMAT: &str = "--litex-temperature-event requires STEP:NAME:CELSIUS";
+                let argument = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let (step, sensor) = argument.split_once(':').ok_or(FORMAT)?;
+                let (name, value) = sensor
+                    .split_once(':')
+                    .filter(|(name, _)| !name.is_empty())
+                    .ok_or(FORMAT)?;
+                let step = step.parse::<u64>().map_err(|_| FORMAT)?;
+                let value = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| (-40.0..=85.0).contains(value))
+                    .ok_or("--litex-temperature-event requires -40 to 85 degrees Celsius")?;
+                temperature_events.push((step, name.to_string(), (value * 100.0).round() as i32));
             }
             Some("--litex-led-assert") => {
                 const FORMAT: &str = "--litex-led-assert requires STEP:NAME:on|off";
@@ -537,6 +558,9 @@ fn run() -> Result<ExitCode, String> {
     }
     for (step, name, expected) in led_assertions {
         machine.schedule_led_assertion(step, name, expected)?;
+    }
+    for (step, name, value) in temperature_events {
+        machine.schedule_sensor_temperature(step, name, value)?;
     }
     for (step, name, value) in phy_events {
         machine.schedule_phy_vendor_specific1(step, name, value)?;

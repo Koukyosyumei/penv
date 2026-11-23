@@ -533,12 +533,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 true
             }
         });
+        let mut controller = Spi::default().with_loopback_slave(loopback);
+        controller.name = Some(spi.name.clone());
         machine
             .bus
-            .map_litex_io(
-                spi.addresses()?,
-                IoDevice::Spi(Spi::default().with_loopback_slave(loopback)),
-            )
+            .map_litex_io(spi.addresses()?, IoDevice::Spi(controller))
             .map_err(|e| spi.error(&e))?;
     }
     if let Some(entry) = spi_loopbacks.first() {
@@ -1400,6 +1399,7 @@ fn parse_si70xx(entry: &Entry, controller: &Entry) -> Result<Sensor, String> {
     }
     let model = model.ok_or_else(|| entry.error("expected SI70xx model"))?;
     Ok(Sensor {
+        name: format!("{parent}.{}", entry.name),
         address,
         model,
         temperature,
@@ -1545,6 +1545,7 @@ fn map_litex_gpio(
         return Err(gpio.error("LiteX GPIO IRQ requires an input and enableIrq"));
     }
     let mut buttons = Vec::new();
+    let mut leds = Vec::new();
     let mut input_pins = HashSet::new();
     for part in parts {
         let pin = gpio_attachment(part, gpio, 32)?;
@@ -1553,7 +1554,11 @@ fn map_litex_gpio(
             if matches!(mode, GpioMode::In) {
                 return Err(part.error("LED requires GPIO output"));
             }
+            let wires_before = led_wires.len();
             led_wires.retain(|&(output, name)| output != pin || name != part.name);
+            if led_wires.len() != wires_before {
+                leds.push((format!("{}.{}", gpio.name, part.name), pin));
+            }
         } else {
             if matches!(mode, GpioMode::Out) || !input_pins.insert(pin) {
                 return Err(part.error("button requires an available GPIO input"));
@@ -1566,7 +1571,7 @@ fn map_litex_gpio(
     }
     bus.map_litex_io(
         gpio.addresses()?,
-        IoDevice::Gpio(Gpio::new(mode, irq_enabled, irq, buttons)),
+        IoDevice::Gpio(Gpio::new(mode, irq_enabled, irq, buttons, leds)),
     )
     .map_err(|e| gpio.error(&e))
 }

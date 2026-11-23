@@ -703,13 +703,23 @@ impl Bus {
 
     pub fn attach_litex_sd(&mut self, name: &str, card: Card) -> Result<(), String> {
         let name = name.strip_prefix("sysbus.").unwrap_or(name);
-        let controller = self
+        if let Some(controller) = self
             .litex_sd
             .as_mut()
             .filter(|controller| controller.name == name)
-            .ok_or_else(|| format!("unknown LiteX SD controller {name:?}"))?;
-        controller.card = Some(card);
-        Ok(())
+        {
+            controller.card = Some(card);
+            return Ok(());
+        }
+        for (_, device) in &mut self.litex_io {
+            if let litex::IoDevice::Spi(spi) = device
+                && spi.name.as_deref() == Some(name)
+            {
+                spi.card = Some(Box::new(crate::litex_sd::SpiCard::new(card)));
+                return Ok(());
+            }
+        }
+        Err(format!("unknown LiteX SD controller {name:?}"))
     }
 
     pub fn map_litex_panel(&mut self, panel: Panel) -> Result<(), String> {
@@ -722,7 +732,28 @@ impl Bus {
         self.litex_panel
             .as_ref()
             .and_then(|panel| panel.led_state(name))
-            .ok_or_else(|| format!("unknown wired LiteX panel LED {name:?}"))
+            .or_else(|| {
+                let path = name.strip_prefix("sysbus.").unwrap_or(name);
+                self.litex_io.iter().find_map(|(_, device)| match device {
+                    litex::IoDevice::Gpio(gpio) => gpio.led_state(path),
+                    _ => None,
+                })
+            })
+            .ok_or_else(|| format!("unknown wired LiteX LED {name:?}"))
+    }
+
+    pub fn litex_sensor_mut(
+        &mut self,
+        name: &str,
+    ) -> Result<&mut crate::litex_i2c::Sensor, String> {
+        let path = name.strip_prefix("sysbus.").unwrap_or(name);
+        self.litex_io
+            .iter_mut()
+            .find_map(|(_, device)| match device {
+                litex::IoDevice::I2c(controller) => controller.sensor_mut(path),
+                _ => None,
+            })
+            .ok_or_else(|| format!("unknown LiteX I2C sensor {name:?}"))
     }
 
     pub fn has_litex_button(&self, name: &str) -> bool {
@@ -1432,6 +1463,7 @@ mod tests {
                 litex::GpioMode::InOut,
                 false,
                 None,
+                Vec::new(),
                 Vec::new(),
             )),
         )

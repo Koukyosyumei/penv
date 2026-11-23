@@ -262,6 +262,9 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | --- | --- | --- |
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
 | RV32 カウンタ | `unit-tests/riscv-priv.robot` の MCYCLE / MINSTRET の増加・停止・書き込み確定境界（RV32 各 3 ケース） | `scripts/firmware/rv32-counters.S` で 6 ケースを実 ELF 化 |
+| LiteX Linux 入出力 | `platforms/LiteX/LiteX_Linux_VexRiscv.robot` の起動・LED・ボタン・SPI・I²C | Robot と同じ REPL と起動ファイルで、GPIO、SPI 受信列、I²C 列挙、温度値の変化を検証 |
+| Nexys4DDR | `platforms/LiteX/Nexys4DDR_LiteX_VexRiscv.robot` の `Should Boot` / `Should List Readme File` | 上流 BIOS と FAT16 で、ブート中断、`spisdcardboot`、ディレクトリ列挙を検証 |
+| LiteX TFTP | `network-server/NetworkServer.robot` の `Download File Over TFTP` | 同じ BIOS と MicroPython を上流の TFTP デモ RESC で使い、ブート中断後の `netboot`、転送バイト数、UART の `2 + 3` → `5` を検証 |
 | LiteX SD | `platforms/LiteX/LiteX_VexRiscv_Linux_SDCard.robot` の `Should Load RootFS From SD Card` / `Should Mount Filesystem From SD Card` | 上流 RESC の ext4 起動・ログイン・`linuxrc` と、Robot 由来の FAT16 構成で読み出し・書き込み・再マウントを検証 |
 | LiteX Tock | `platforms/LiteX/LiteX_Tock.robot` の `Should Run Tock` | 上流 RESC と ELF で起動行と `D1 → D2` の 3 組を UART から照合 |
 | CLINT | `unit-tests/timer-reconfiguration.robot` の `Should Tick At Exact Time` | `clint_traps_at_the_exact_reprogrammed_compare_tick`。ゲストが `mtimecmp` の上下ワードを書き換え、5 ティックでは未発火、6 ティック目で機械タイマー例外に入る。virt の 10 MHz に合わせて 59 ステップと 60 ステップに適応 |
@@ -292,7 +295,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
 ```
 
-`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、Nexys4DDR の SPI SD は未移植です。Tock の UART 出力は下記の回帰で確認します。
+`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX の個別ケースは対応表と下記の回帰で確認します。
 
 ## RV32 の権限切り替えと仮想メモリ操作
 
@@ -395,6 +398,20 @@ RV32 ELF は 6 ケース通過の行を出力し、待機ループのステッ�
 ### LiteX の SD rootfs と FAT16 の再現
 
 `scripts/validate-riscv-upstream.sh` は上流 `litex_vexriscv_sdcard.resc` を使い、ext4 の root mount、`/sbin/init`、ログイン後の `linuxrc -> bin/busybox` を検査します。ここで使う上流デモの報告容量は 512 MiB です。FAT16 には `scripts/fixtures/litex-sd-fat.resc` を使い、上流 Robot と同じ 64 MiB の構成で `readme.txt` を読み、`readme2.txt` を書き込んで同期・再マウント後に読み戻します。書き込み先は実行中のオーバーレイであり、終了後にも元のカードイメージの SHA-1 が一致することを確認します。
+
+### LiteX Linux 入出力と Nexys4DDR SPI SD の再現
+
+```sh
+cargo test --locked
+cargo build --locked --release
+bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
+```
+
+旧 LiteX Linux の起動は、機械モード SBI の `csrs sip, STIP` が無視され、スーパーバイザーへのタイマー通知が届かないため I²C 初期化後に停止していました。VexRiscv の内蔵割り込みコントローラーを使う M モードに限って、この SBI の `sip.STIP` セットとクリアを反映します。標準 RV32 と S モードの書き込み制限は Rust テストで確認しました。実ファームウェアはログイン、SPI ループバック、GPIO の消灯・点灯・消灯とボタンの `0 → 1 → 0` を通過しました。`--litex-led-assert` は REPL で配線された GPIO の LED も検証できます。`--litex-temperature-event STEP:NAME:CELSIUS` で `i2c.si7021` を 36 °C に変え、Linux が読む値が `4368 → 7724` になることを確認しました。
+
+Nexys4DDR は変更前に `unknown LiteX SD controller "spisdcard"` で停止しました。LiteX SPI へのカード接続、初期化、単一ブロック読み出しを実装し、実 BIOS が `Q` で起動を中断した後、`spisdcardboot` で FAT16 の `README  .TXT` を列挙することを確認しました。SPI SD の書き込み、マルチブロック転送、入力 CRC 検査は残課題です。TFTP の再現では、ダウンロードした 218,608 バイトの MicroPython が UART からの式に `5` と応答します。
+
+今回の優先範囲は、RV32 のカウンタと上記の LiteX 機能ケースです。全互換ケースの通過判定は保留です。RV32 アーキテクチャスイートには `riscv-arch-tests.robot` が指定するリビジョンのコンパイル済み ELF 一式（`RISCV_ARCH_TESTS_PATH`）と `tohost` 判定の適応が必要です。この環境では既定の `/riscv-arch-test/work` がありません。Robot の直接実行に必要な Renode Infrastructure サブモジュールは参照ツリーで未展開です。Verilated CFU は別途ネイティブモデルと実行アダプターが必要です。Microwatt は RV32 の対象外です。
 
 ## Renode / penv 共通計測ハーネス
 

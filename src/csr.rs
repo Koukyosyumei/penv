@@ -246,7 +246,7 @@ impl Csr {
         let previous = self.read(address).ok_or_else(error)?;
         // A hardware SEIP level is visible to CSR reads but must not become
         // latched as a software-injected interrupt by CSRRS/CSRRC.
-        let writable_previous = if address == 0x344 {
+        let writable_previous = if matches!(address, 0x144 | 0x344) {
             self.supervisor
                 .as_ref()
                 .map_or(0, |s| s.injected_interrupts)
@@ -332,7 +332,17 @@ impl Csr {
                 self.interrupt_enable = (self.interrupt_enable & !mask) | (value & mask);
             }
             0x144 if let Some(supervisor) = self.supervisor.as_mut() => {
-                let mask = supervisor.interrupt_delegation & SSIP;
+                // The legacy LiteX machine-mode SBI forwards MTIP by writing STIP
+                // through SIP on VexRiscv's built-in interrupt controller.
+                let writable = if self.vex
+                    && self.local_irq_mask.is_some()
+                    && self.privilege == Privilege::Machine
+                {
+                    SSIP | STIP
+                } else {
+                    SSIP
+                };
+                let mask = supervisor.interrupt_delegation & writable;
                 supervisor.injected_interrupts =
                     (supervisor.injected_interrupts & !mask) | (value & mask);
             }
@@ -571,4 +581,32 @@ fn vector_target(vector: u32, cause: u32) -> u32 {
         0
     };
     (vector & !3).wrapping_add(offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_vex_machine_sbi_can_forward_a_timer_interrupt_through_sip() {
+        for legacy_vex in [false, true] {
+            let mut csr = Csr::default();
+            csr.enable_supervisor_mode();
+            csr.vex = legacy_vex;
+            csr.local_irq_mask = legacy_vex.then_some(0);
+            csr.access(0x3030_9073, STIP).unwrap();
+            csr.access(0x1440_a073, STIP).unwrap(); // csrs sip, ra
+            assert_eq!(
+                csr.access(0x1440_2073, 0).unwrap(),
+                if legacy_vex { STIP } else { 0 }
+            );
+
+            csr.access(0x1440_b073, STIP).unwrap(); // csrc sip, ra
+            assert_eq!(csr.access(0x1440_2073, 0).unwrap(), 0);
+            csr.access(0x3000_9073, 1 << 11).unwrap(); // MPP=S
+            csr.return_from_trap().unwrap();
+            csr.access(0x1440_a073, STIP).unwrap();
+            assert_eq!(csr.access(0x1440_2073, 0).unwrap(), 0);
+        }
+    }
 }

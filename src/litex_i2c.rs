@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 pub struct Sensor {
+    pub name: String,
     pub address: u8,
     pub model: u8,
     pub temperature: i32,
@@ -46,6 +47,10 @@ impl I2c {
             sensor,
             response: Vec::new(),
         }
+    }
+
+    pub fn sensor_mut(&mut self, name: &str) -> Option<&mut Sensor> {
+        self.sensor.as_mut().filter(|sensor| sensor.name == name)
     }
 
     pub fn read(&self, offset: u32) -> u32 {

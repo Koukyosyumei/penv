@@ -24,6 +24,7 @@ enum Input {
     Uart(Vec<u8>),
     Button(String, ButtonAction),
     PhyVendorSpecific1 { name: String, value: u16 },
+    SensorTemperature { name: String, value: i32 },
     LedAssertion { name: String, expected: bool },
     FramebufferCapture(PathBuf),
     FrameWait(Box<ReferenceFrame>),
@@ -271,6 +272,17 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_sensor_temperature(
+        &mut self,
+        step: u64,
+        name: String,
+        value: i32,
+    ) -> Result<(), String> {
+        self.bus.litex_sensor_mut(&name)?;
+        self.schedule_input(step, Input::SensorTemperature { name, value });
+        Ok(())
+    }
+
     pub fn schedule_led_assertion(
         &mut self,
         step: u64,
@@ -340,6 +352,9 @@ impl Machine {
                     Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
                     Input::PhyVendorSpecific1 { name, value } => {
                         self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+                    }
+                    Input::SensorTemperature { name, value } => {
+                        self.bus.litex_sensor_mut(&name)?.temperature = value;
                     }
                     Input::FrameWait(reference) => {
                         let video = self

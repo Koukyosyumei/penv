@@ -38,7 +38,7 @@ prepare_assets() {
             variables["$" $2] = $3
         }
         ($1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary" || $2 == "LoadFdt")) ||
-        ($1 == "machine" && $2 == "SdCardFromFile") || $2 == "LoadPCM" {
+        ($1 == "machine" && $2 == "SdCardFromFile") || $2 == "LoadPCM" || $2 == "ServeFile" {
             path = $3 in variables ? variables[$3] : $3
             if (path ~ /^@https:\/\//)
                 print substr(path, 2)
@@ -268,4 +268,65 @@ diff -u <(printf 'This is a test file\nThis is a write test\n') <(
 )
 # The file-backed card writes into a process-local overlay.
 prepare_assets "$sd_fat"
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, Nexys Video framebuffer, and LiteX SD root and FAT16 verified. Logs are in %s\n' "$artifacts"
+linux_io=$(dirname -- "$0")/fixtures/litex-linux-io.resc
+prepare_assets "$linux_io"
+printf 'spidev_test -D /dev/spidev0.0 --speed 1000000\r' > "$artifacts/linux-io-spi.input"
+printf 'i2cdetect -y 0\r' > "$artifacts/linux-io-i2c.input"
+printf 'cat /sys/class/i2c-dev/i2c-0/device/0-0005/iio:device0/in_temp_raw\r' > "$artifacts/linux-io-temp.input"
+printf 'echo 508 > /sys/class/gpio/export; echo 504 > /sys/class/gpio/export\r' > "$artifacts/linux-io-gpio.input"
+printf 'echo 1 > /sys/class/gpio/gpio508/value\r' > "$artifacts/linux-io-led-on.input"
+printf 'echo 0 > /sys/class/gpio/gpio508/value\r' > "$artifacts/linux-io-led-off.input"
+printf 'cat /sys/class/gpio/gpio504/value\r' > "$artifacts/linux-io-button.input"
+run_to_step_limit litex-linux-io "$linux_io" --max-steps 730000000 \
+    --uart-event "490000000:$artifacts/sd-login.input" \
+    --uart-event "520000000:$artifacts/linux-io-spi.input" \
+    --uart-event "550000000:$artifacts/linux-io-i2c.input" \
+    --uart-event "580000000:$artifacts/linux-io-temp.input" \
+    --litex-temperature-event 600000000:i2c.si7021:36 \
+    --uart-event "610000000:$artifacts/linux-io-temp.input" \
+    --uart-event "630000000:$artifacts/linux-io-gpio.input" \
+    --litex-led-assert 640000000:gpio_out.led:off \
+    --uart-event "650000000:$artifacts/linux-io-led-on.input" \
+    --litex-led-assert 660000000:gpio_out.led:on \
+    --uart-event "670000000:$artifacts/linux-io-led-off.input" \
+    --litex-led-assert 680000000:gpio_out.led:off \
+    --uart-event "685000000:$artifacts/linux-io-button.input" \
+    --litex-button-event 695000000:gpio_in.button:Toggle \
+    --uart-event "700000000:$artifacts/linux-io-button.input" \
+    --litex-button-event 710000000:gpio_in.button:Toggle \
+    --uart-event "720000000:$artifacts/linux-io-button.input"
+for marker in "root login on 'console'" 'spi mode: 0x0' 'bits per word: 8' 'max speed: 1000000 Hz (1000 KHz)' \
+    'RX | FF FF FF FF FF FF 40 00 00 00 00 95 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF F0 0D' \
+    '00:          -- -- UU -- -- -- -- -- -- -- -- -- --'; do
+    rg -aqF "$marker" "$artifacts/litex-linux-io.uart.log"
+done
+diff -u <(printf '4368\n7724\n0\n1\n0\n') <(
+    tr -d '\r' < "$artifacts/litex-linux-io.uart.log" | rg '^(4368|7724|[01])$'
+)
+nexys4ddr=$(dirname -- "$0")/fixtures/nexys4ddr-spi-sd.resc
+prepare_assets "$nexys4ddr"
+printf Q > "$artifacts/nexys4ddr-abort.input"
+printf 'spisdcardboot\r' > "$artifacts/nexys4ddr-boot.input"
+run_to_step_limit nexys4ddr-spi-sd "$nexys4ddr" --max-steps 100000000 \
+    --litex-uart-legacy-console \
+    --uart-event "35000000:$artifacts/nexys4ddr-abort.input" \
+    --uart-event "80000000:$artifacts/nexys4ddr-boot.input"
+for marker in 'Press Q or ESC to abort boot completely.' 'Cancelled' '> spisdcardboot' \
+    'SD Card via SPI Initialising' 'Read FAT16 Boot Sector' '[mkfs.fat]' 'Root Directory' 'File 1 [README  .TXT]'; do
+    rg -aqF "$marker" "$artifacts/nexys4ddr-spi-sd.uart.log"
+done
+tftp=$renode_root/scripts/single-node/litex_vexriscv_tftp.resc
+prepare_assets "$tftp"
+printf 'netboot\r' > "$artifacts/tftp-netboot.input"
+printf '2 + 3\r' > "$artifacts/tftp-expr.input"
+run_to_step_limit litex-tftp "$tftp" --max-steps 170000000 \
+    --litex-uart-legacy-console \
+    --uart-event "35000000:$artifacts/nexys4ddr-abort.input" \
+    --uart-event "80000000:$artifacts/tftp-netboot.input" \
+    --uart-event "150000000:$artifacts/tftp-expr.input"
+for marker in 'Cancelled' '> netboot' 'Downloaded 218608 bytes from boot.bin over TFTP to 0x40000000' \
+    'MicroPython v1.9.4-1431' '>>> 2 + 3'; do
+    rg -aqF "$marker" "$artifacts/litex-tftp.uart.log"
+done
+tr -d '\r' < "$artifacts/litex-tftp.uart.log" | rg -a '^5$' > /dev/null
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, Nexys Video framebuffer, LiteX SD root and FAT16, LiteX Linux GPIO/SPI/I2C, Nexys4DDR SPI SD, and LiteX TFTP verified. Logs are in %s\n' "$artifacts"
