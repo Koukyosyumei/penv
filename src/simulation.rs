@@ -51,6 +51,12 @@ pub enum Action {
         axis: usize,
         value: f64,
     },
+    TimerInput {
+        node: usize,
+        name: String,
+        channel: u8,
+        high: bool,
+    },
     DisplayRate {
         node: usize,
         fps: u32,
@@ -150,6 +156,17 @@ pub fn run(
                         .bus
                         .find_imu(&sensor)?
                         .set_input(axis, value);
+                }
+                Action::TimerInput {
+                    node,
+                    name,
+                    channel,
+                    high,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .set_timer_input(&name, channel, high)?;
                 }
                 Action::DisplayRate { node, fps } => {
                     simulation.nodes[node]

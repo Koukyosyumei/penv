@@ -654,6 +654,18 @@ impl Bus {
         Ok(())
     }
 
+    pub fn set_timer_input(&mut self, name: &str, channel: u8, high: bool) -> Result<(), String> {
+        let timer = self
+            .h7_timers
+            .iter_mut()
+            .find(|timer| timer.name == name)
+            .ok_or_else(|| format!("unknown STM32 timer {name:?}"))?;
+        if timer_clocked(self.h7_network_control.as_ref(), timer) {
+            timer.set_input(channel, high);
+        }
+        Ok(())
+    }
+
     pub fn map_h7_timer(&mut self, timer: H7Timer) -> Result<(), String> {
         self.check_peripheral_range(timer.base, H7Timer::SIZE)?;
         self.h7_timers.push(timer);
@@ -1074,7 +1086,7 @@ impl Bus {
                     self.h7_timers
                         .iter()
                         .filter(|timer| timer_clocked(control, timer))
-                        .filter_map(H7Timer::interrupt),
+                        .flat_map(H7Timer::interrupts),
                 )
             {
                 match route {

@@ -5,7 +5,7 @@ use crate::{
     lsm6dso::Lsm6dso,
     machine::Machine,
     nvic::IRQ_LINES,
-    platform::{Entry, irq_index, number},
+    platform::{Entry, irq_index, irq_list, number},
     stm32_crc::Stm32Crc,
     stm32_iwdg::Iwdg,
     stm32_uart::Stm32Irq,
@@ -20,7 +20,7 @@ use crate::{
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
     stm32h7_sdmmc::Sdmmc,
-    stm32h7_timer::{Timer, TimerClock},
+    stm32h7_timer::{Timer, TimerClock, TimerOutput},
     tmp108::Tmp108,
     veml7700::Veml7700,
 };
@@ -619,7 +619,7 @@ fn parse_timer(
     let clock = alias.map(TimerClock::from_alias).transpose()?;
     let mut frequency = None;
     let mut limit = None;
-    let mut irq = None;
+    let mut routes = Vec::new();
     for (_, text) in &entry.body {
         if let Some((key, value)) = text.split_once(':') {
             let value = number(value.trim())?;
@@ -655,27 +655,39 @@ fn parse_timer(
                 continue;
             }
             let (output, target, input) = wire(text)?;
-            if !matches!(output, "" | "IRQ") || irq.is_some() {
-                return Err("expected one STM32 timer IRQ".into());
-            }
-            irq = Some(
-                if nvic.is_some_and(|controller| controller.name == target) {
-                    Stm32Irq::Nvic(irq_index(input, IRQ_LINES as u32)?)
-                } else if exti.is_some_and(|controller| controller.name == target) {
-                    Stm32Irq::Exti(irq_index(input, exti_lines)?)
+            let outputs = output
+                .strip_prefix('[')
+                .and_then(|list| list.strip_suffix(']'))
+                .unwrap_or(output);
+            let outputs = outputs
+                .split(',')
+                .map(TimerOutput::parse)
+                .collect::<Result<Vec<_>, _>>()?;
+            let (count, route): (_, fn(u8) -> Stm32Irq) =
+                if nvic.is_some_and(|nvic| nvic.name == target) {
+                    (IRQ_LINES as u32, Stm32Irq::Nvic)
+                } else if exti.is_some_and(|exti| exti.name == target) {
+                    (exti_lines, Stm32Irq::Exti)
                 } else {
                     return Err("expected STM32 timer IRQ connected to NVIC or EXTI".into());
-                },
-            );
+                };
+            let inputs = irq_list(input, count)?;
+            if outputs.len() != inputs.len() {
+                return Err("STM32 timer output and destination list lengths differ".into());
+            }
+            routes.extend(outputs.into_iter().zip(inputs.into_iter().map(route)));
         }
     }
     let mut timer = Timer::new(
+        entry.name.clone(),
         base,
         frequency.ok_or("missing STM32 timer frequency")?,
         limit.unwrap_or(0xffff),
         clock,
     );
-    timer.irq = irq;
+    for (output, irq) in routes {
+        timer.route(output, irq)?;
+    }
     Ok(timer)
 }
 

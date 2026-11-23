@@ -144,6 +144,19 @@ impl Plan {
                     value,
                 });
             }
+            [timer, "OnGPIO", channel, level] => {
+                let node = self.monitor_node()?;
+                let channel = crate::platform::irq_index(resolve(*channel)?, 4)?;
+                let high = resolve(*level)?
+                    .parse::<bool>()
+                    .map_err(|_| "expected GPIO level")?;
+                self.actions.push(Action::TimerInput {
+                    node,
+                    name: timer.strip_prefix("sysbus.").unwrap_or(timer).to_owned(),
+                    channel,
+                    high,
+                });
+            }
             ["sysbus", "WriteDoubleWord", address, value] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;

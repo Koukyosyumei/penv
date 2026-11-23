@@ -529,3 +529,31 @@ Robot の `Should Load Repls` は Linux x64 のブラックリスト条件で 22
 固定 STM32F746G のボタン割り込みと STM32L072 ELF のシンボルケースは、必要なボード・ファームウェア・観測点を記録して適用外としました。一方、F4 の REPL を足場にした共通 Cortex-M の WFE・BASEPRI・SysTick と、Cortex-M4F の CMSIS-DSP は H7 に移植可能なため対象です。繰り返し指定とテスト本文のループは、同一構成での回数・刺激・順序として判定条件に残します。同一リポジトリ・ファイル・ケース・構成の重複だけを除くよう生成器を更新し、今回の生成結果には重複がありませんでした。
 
 再生成には `full-upstream-network` 節の固定アーカイブ取得と `inventory-stm32h7.py` の手順を使います。`cargo test` と Shell・I/O・表示/SD・LSM6DSO の診断スモークを実行しました。固定上流との差分を残す部分移植は等価合格数に含まれません。対象ケースの実装・等価検証は残っています。
+
+### full-h7-tim8-upstream
+
+固定上流 `stm32h7.repl` の TIM8 登録を APB2ENR/APB2RSTR のビット 1 に接続しました。名前付き IRQ と出力・入力リストを読み込み、Break は NVIC 43、Update は 44、Trigger/Commutation は 45、CaptureCompare は 46 に接続します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクトリ
+target/release/penv run \
+    --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```
+
+TIM8 スモークは上流の登録と GPIO 出力追記をそのまま診断 REPL に加え、上流参照の Zephyr ELF を起動します。固定 `STM32_Timer.cs` の `EventGeneration`、`HandleResetMode`、`UpdateInterrupts` と照合した刺激・観測点は次のとおりです。
+
+| 刺激 | 実測した TIM8 SR と NVIC ISPR1 |
+| --- | --- |
+| EGR の CCxG/COMG/TG と予約ビット | SR 0、関連 IRQ 保留なし |
+| DIER.UIE と EGR.UG | SR `0x1`、IRQ 44 の `0x1000` |
+| TI1 入力・slave reset mode・DIER.TIE | CNT 0、SR `0x40`、IRQ 45 の `0x2000` |
+| タイマーの CC1 比較一致・DIER.CC1IE | SR `0x2`、IRQ 46 の `0x4000` |
+
+固定モデルでは Break・Commutation の出力は低レベルです。スモークでは APB1L が TIM8 を有効にしないことと、APB2 リセット後に ARR が `0xffff`、DIER が 0 に戻ることも確認します。証拠は `monitor.log`、`0.uart.log`、`boot.resc` です。今回の刺激は固定モデルのソースから導出しました。固定 Renode の直接実行や既存 Robot の等価実行は未確認なので、上流ケース台帳の合格数には加えていません。外部トリガーは `timer8 OnGPIO` を使用し、GPIO ポートからタイマーへの代替入力配線は残件です。
+
+未変更 RESC は TIM8 を通過し、`platforms/cpus/stm32h7.repl:316` の `timer1: unsupported STM32 timer RCC alias TIM1` で停止します。上流 TIM1 は APB2 のビット 0、IRQ 24〜27 と GPIO 代替機能の追記を使用します。

@@ -14,7 +14,7 @@ pub enum TimerClock {
 }
 
 impl TimerClock {
-    pub const ALIASES: [(&str, Self); 12] = [
+    pub const ALIASES: [(&str, Self); 13] = [
         ("TIM2", Self::Apb1Low(0)),
         ("TIM3", Self::Apb1Low(1)),
         ("TIM4", Self::Apb1Low(2)),
@@ -24,6 +24,7 @@ impl TimerClock {
         ("TIM12", Self::Apb1Low(6)),
         ("TIM13", Self::Apb1Low(7)),
         ("TIM14", Self::Apb1Low(8)),
+        ("TIM8", Self::Apb2(1)),
         ("TIM15", Self::Apb2(16)),
         ("TIM16", Self::Apb2(17)),
         ("TIM17", Self::Apb2(18)),
@@ -46,11 +47,48 @@ impl TimerClock {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum TimerOutput {
+    Combined,
+    Break,
+    Update,
+    Trigger,
+    Commutation,
+    CaptureCompare,
+}
+
+impl TimerOutput {
+    pub fn parse(output: &str) -> Result<Self, String> {
+        match output.trim() {
+            "" | "IRQ" => Ok(Self::Combined),
+            "BreakInterrupt" => Ok(Self::Break),
+            "UpdateInterrupt" => Ok(Self::Update),
+            "TriggerInterrupt" => Ok(Self::Trigger),
+            "CommutationInterrupt" => Ok(Self::Commutation),
+            "CaptureCompareInterrupt" => Ok(Self::CaptureCompare),
+            _ => Err(format!("unsupported STM32 timer output {output}")),
+        }
+    }
+
+    fn mask(self) -> u32 {
+        match self {
+            Self::Combined => 0x5f,
+            Self::Update => 1,
+            Self::Trigger => 1 << 6,
+            Self::CaptureCompare => 0x1e,
+            // The upstream model wires these outputs but always drives them low.
+            Self::Break | Self::Commutation => 0,
+        }
+    }
+}
+
 /// STM32 general-purpose timer counter, update and output-compare registers.
 pub struct Timer {
+    pub name: String,
     pub base: u32,
     pub clock: Option<TimerClock>,
-    pub irq: Option<Stm32Irq>,
+    routes: [Option<Stm32Irq>; 6],
+    inputs: [bool; 4],
     frequency: u32,
     limit: u32,
     phase: u64,
@@ -65,13 +103,21 @@ impl Timer {
     pub const MODEL: &str = "Timers.STM32_Timer";
     pub const SIZE: u32 = 0x400;
 
-    pub fn new(base: u32, frequency: u32, limit: u32, clock: Option<TimerClock>) -> Self {
+    pub fn new(
+        name: String,
+        base: u32,
+        frequency: u32,
+        limit: u32,
+        clock: Option<TimerClock>,
+    ) -> Self {
         let mut timer = Self {
+            name,
             base,
             frequency,
             limit,
             clock,
-            irq: None,
+            routes: [None; 6],
+            inputs: [false; 4],
             phase: 0,
             divider: 0,
             counter: 0,
@@ -84,18 +130,77 @@ impl Timer {
     }
 
     pub fn reset(&mut self) {
-        let irq = self.irq;
-        *self = Self::new(self.base, self.frequency, self.limit, self.clock);
-        self.irq = irq;
+        let routes = self.routes;
+        *self = Self::new(
+            std::mem::take(&mut self.name),
+            self.base,
+            self.frequency,
+            self.limit,
+            self.clock,
+        );
+        self.routes = routes;
     }
 
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
-    pub fn interrupt(&self) -> Option<Stm32Irq> {
-        self.irq
-            .filter(|_| self.registers[3] & self.registers[4] & 0xff != 0)
+    pub fn route(&mut self, output: TimerOutput, irq: Stm32Irq) -> Result<(), String> {
+        let route = &mut self.routes[output as usize];
+        if route.is_some() {
+            return Err("duplicate STM32 timer output".into());
+        }
+        *route = Some(irq);
+        Ok(())
+    }
+
+    fn uses_advanced_events(&self) -> bool {
+        matches!(self.clock, Some(TimerClock::Apb2(0 | 1)))
+    }
+
+    pub fn interrupts(&self) -> impl Iterator<Item = Stm32Irq> + '_ {
+        let pending = self.registers[3] & self.registers[4];
+        [
+            TimerOutput::Combined,
+            TimerOutput::Break,
+            TimerOutput::Update,
+            TimerOutput::Trigger,
+            TimerOutput::Commutation,
+            TimerOutput::CaptureCompare,
+        ]
+        .into_iter()
+        .zip(self.routes)
+        .filter_map(move |(output, irq)| {
+            irq.filter(|_| {
+                let mask =
+                    if matches!(output, TimerOutput::Combined) && !self.uses_advanced_events() {
+                        0xff
+                    } else {
+                        output.mask()
+                    };
+                mask & pending != 0
+            })
+        })
+    }
+
+    pub fn set_input(&mut self, channel: u8, high: bool) {
+        let channel = usize::from(channel);
+        let mode = self.registers[6 + channel / 2] >> (channel % 2 * 8);
+        if mode & 3 == 0 || std::mem::replace(&mut self.inputs[channel], high) == high {
+            return;
+        }
+        let selected = (self.registers[2] >> 4) & 7;
+        let falling = self.registers[8] & (2 << (channel * 4)) != 0;
+        if channel < 2
+            && selected == 5 + channel as u32
+            && self.registers[2] & 7 == 4
+            && high != falling
+        {
+            self.counter = 0;
+            if self.registers[3] & (1 << 6) != 0 {
+                self.registers[4] |= 1 << 6;
+            }
+        }
     }
 
     fn pwm_config(&self, channel: u8) -> Option<(u32, bool)> {
@@ -154,8 +259,12 @@ impl Timer {
             }
             0x10 => self.registers[index] &= value,
             0x14 => {
-                self.registers[4] |= value & 0xfe;
-                if value & 1 != 0 {
+                // Advanced-timer EGR sources other than UG are tagged fields upstream.
+                let advanced = self.uses_advanced_events();
+                if !advanced {
+                    self.registers[4] |= value & 0xfe;
+                }
+                if value & 1 != 0 && (!advanced || self.registers[0] & UDIS == 0) {
                     self.divider = 0;
                     self.reload_period();
                     self.counter = if self.registers[0] & DIR == 0 {
@@ -163,7 +272,9 @@ impl Timer {
                     } else {
                         self.active_arr
                     };
-                    if self.registers[0] & (UDIS | URS) == 0 {
+                    if self.registers[0] & (UDIS | URS) == 0
+                        && (!advanced || self.registers[3] & 1 != 0)
+                    {
                         self.registers[4] |= 1;
                     }
                 }
@@ -229,7 +340,10 @@ impl Timer {
             }
             for channel in 0..4 {
                 let mode = self.registers[6 + channel / 2] >> (channel % 2 * 8);
-                if mode & 3 == 0 && self.counter == self.registers[13 + channel] {
+                if mode & 3 == 0
+                    && self.counter == self.registers[13 + channel]
+                    && (!self.uses_advanced_events() || self.registers[3] & (2 << channel) != 0)
+                {
                     self.registers[4] |= 2 << channel;
                 }
             }
