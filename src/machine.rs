@@ -922,6 +922,102 @@ mod tests {
         assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
     }
 
+    fn check_lazy_fp_fault(original_hard_fault: bool) {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        for (address, value) in [(8, 0x381), (12, 0x341), (0xe000_ed88, 0xf00000)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for (address, opcode) in [
+            (0x340, 0xeeb0),
+            (0x342, 0x0a40),
+            (0x344, 0xe7fe),
+            (0x380, 0xbf00),
+            (0x382, 0xeeb0),
+            (0x384, 0x0a40),
+            (0x386, 0xe7fe),
+        ] {
+            machine.bus.write(address, 2, opcode, &mut out).unwrap();
+        }
+        if original_hard_fault {
+            for (address, opcode) in [(0x200, 0x6802), (0x202, 0x2122), (0x204, 0xe7fe)] {
+                machine.bus.write(address, 2, opcode, &mut out).unwrap();
+            }
+            machine.primary.registers[0] = 0x100000;
+            machine.primary.registers[1] = 0x11;
+            machine.primary.registers[2] = 0xa5a5_a5a5;
+            assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+            assert_eq!(machine.primary.pc, 0x340);
+            machine
+                .bus
+                .write(0xe000_ed28, 4, u32::MAX, &mut out)
+                .unwrap();
+            machine
+                .bus
+                .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+                .unwrap();
+        } else {
+            machine.bus.write(0x200, 2, 0xeeb0, &mut out).unwrap();
+            machine.bus.write(0x202, 2, 0x0a40, &mut out).unwrap();
+            machine.bus.write(0x204, 2, 0xe7fe, &mut out).unwrap();
+        }
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
+        machine.bus.set_mock_fault_offset(0x100000, 0x20);
+        machine.primary.registers[13] = 0x100068;
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(2, &mut out).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, 0x382);
+        assert_eq!(machine.bus.read::<4>(0xe000_ef38).unwrap(), 0x100020);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ef34).unwrap() & 0x11,
+            if original_hard_fault { 1 } else { 0x11 }
+        );
+        machine.run(1, &mut out).unwrap();
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 13);
+        let thumb = machine.primary.thumb.as_ref().unwrap();
+        assert_eq!(thumb.lockup_state().0, original_hard_fault);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ef34).unwrap() & 1,
+            u32::from(original_hard_fault)
+        );
+        if original_hard_fault {
+            assert_eq!(machine.primary.pc, 0xefff_fffe);
+            assert_eq!(machine.primary.registers[13], 0x100000);
+            assert_eq!(thumb.lockup_state().2, 2);
+            assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+            let dhcsr = crate::nvic::DHCSR;
+            assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+            assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+            machine
+                .bus
+                .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+                .unwrap();
+            assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+            assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+            assert_eq!(
+                machine.bus.read::<4>(0xe000_ed24).unwrap(),
+                (1 << 2) | (1 << 5)
+            );
+        } else {
+            assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 1 << 30);
+            assert_ne!(machine.bus.read::<4>(0xe000_ed24).unwrap() & (1 << 21), 0);
+        }
+    }
+
+    #[test]
+    fn upstream_lazy_fp_fault_pends_hard_fault_when_ready() {
+        check_lazy_fp_fault(false);
+    }
+
+    #[test]
+    fn upstream_lazy_fp_fault_locks_over_hard_fault() {
+        check_lazy_fp_fault(true);
+    }
+
     fn unstack_fixture(nmi: &[u32]) -> Machine {
         let mut machine = exception_vector_fault_machine(None);
         let mut out = std::io::sink();

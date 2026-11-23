@@ -207,6 +207,9 @@ mod tests {
         };
         bus.thumb_write(0xe000_ed88, 4, 0x00f0_0000, &mut output)
             .unwrap();
+        // Exercise eager preservation explicitly.
+        bus.thumb_write(0xe000_ef34, 4, 0x8000_0000, &mut output)
+            .unwrap();
         thumb.fp[0] = 2.0f32.to_bits();
         thumb.fp[17] = 3.0f32.to_bits();
         assert!(multiply(&mut thumb, &mut registers, &mut bus).unwrap());

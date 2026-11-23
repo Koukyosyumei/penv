@@ -516,3 +516,54 @@ for budget in 1 2; do
 done
 grep -Fxq 'penv: instruction limit reached at pc=0x00000000' "$out/invalid-reset-1.log"
 grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/invalid-reset-2.log"
+
+# Robot 733-766: reserve the lazy frame in Thread, then fault in NMI.
+sed '/^faultingPeripheral:/a\    FaultOffset: 0x20' "$out/bus-fault.repl" >"$out/lazy-fp.repl"
+cat >"$out/lazy-fp.s" <<'ASM'
+.syntax unified
+.thumb
+.global reset
+.word 0x100068, reset, nmi
+.thumb_func
+reset:
+    ldr r0, =0xe000ed88
+    mov.w r1, #0xf00000
+    str r1, [r0]
+    vmov.f32 s0, s0
+    ldr r0, =0xe000ed04
+    mov.w r1, #0x80000000
+    str r1, [r0]
+    b .
+.thumb_func
+nmi:
+    ldr r0, =0xe000ef34
+    ldr r1, [r0]
+    and r1, #0x11
+    cmp r1, #0x11
+    bne failed
+    ldr r1, [r0, #4]
+    ldr r2, =0x100020
+    cmp r1, r2
+    bne failed
+    vmov.f32 s0, s0
+    ldr r1, [r0]
+    tst r1, #1
+    bne failed
+    ldr r0, =0xe000ed24
+    ldr r1, [r0]
+    tst r1, #0x200000
+    beq failed
+    ldr r1, [r0, #4]
+    cmp.w r1, #0x2000
+    bne failed
+    ldr r1, [r0, #8]
+    cmp.w r1, #0x40000000
+    bne failed
+    bkpt 0
+failed:
+    b .
+ASM
+clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/lazy-fp.s" -o "$out/lazy-fp.o"
+ld.lld -N -Ttext=0 --entry=reset "$out/lazy-fp.o" -o "$out/lazy-fp.elf"
+"$penv" run --platform "$out/lazy-fp.repl" --max-steps 100 "$out/lazy-fp.elf" >"$out/lazy-fp.log" 2>&1
+printf 'lazy FP: all preservation fault checks passed\n'

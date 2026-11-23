@@ -9,6 +9,7 @@ const MPU_RASR: u32 = BASE + 0xda0;
 const STIR: u32 = BASE + 0xf00;
 pub const DHCSR: u32 = BASE + 0xdf0;
 const DEMCR: u32 = BASE + 0xdfc;
+const FPCAR: u32 = BASE + 0xf38;
 const FPCCR: u32 = BASE + 0xf34;
 const CPACR: u32 = BASE + 0xd88;
 const AIRCR: u32 = BASE + 0xd0c;
@@ -62,6 +63,7 @@ pub struct Nvic {
     bfar: u32,
     cpacr: u32,
     fpccr: u32,
+    fpcar: u32,
     demcr: u32,
     div_zero_trap: bool,
     ignore_negative_priority_bus_fault: bool,
@@ -92,6 +94,7 @@ impl Nvic {
             bfar: 0,
             cpacr: 0,
             fpccr: 0xc000_0000,
+            fpcar: 0,
             demcr: 0,
             div_zero_trap: false,
             ignore_negative_priority_bus_fault: false,
@@ -112,7 +115,7 @@ impl Nvic {
             cortex_m4.then_some((CCR, HFSR + 4)),
             cortex_m4.then_some((BFAR, BFAR + 4)),
             cortex_m4.then_some((CPACR, CPACR + 4)),
-            cortex_m4.then_some((FPCCR, FPCCR + 4)),
+            cortex_m4.then_some((FPCCR, FPCAR + 4)),
             cortex_m4.then_some((DHCSR, DHCSR + 4)),
             cortex_m4.then_some((DEMCR, DEMCR + 4)),
             cortex_m4.then_some((STIR, STIR + 4)),
@@ -203,6 +206,34 @@ impl Nvic {
     pub fn record_precise_bus_fault(&mut self, address: u32, escalate: bool) {
         self.cfsr |= PRECISERR | BFARVALID;
         self.bfar = address;
+        if escalate {
+            self.hfsr |= FORCED;
+        }
+    }
+
+    pub fn lazy_fp_enabled(&self) -> bool {
+        self.fpccr & 0xc000_0000 == 0xc000_0000
+    }
+
+    pub fn reserve_lazy_fp(&mut self, address: u32, hard_fault_ready: bool) {
+        self.fpcar = address;
+        self.fpccr = (self.fpccr & !(1 << 4)) | 1 | (u32::from(hard_fault_ready) << 4);
+    }
+
+    pub fn lazy_fp_address(&self) -> Option<u32> {
+        (self.fpccr & 1 != 0).then_some(self.fpcar)
+    }
+
+    pub fn finish_lazy_fp(&mut self) {
+        self.fpccr &= !1;
+    }
+
+    pub fn lazy_fp_hard_fault_ready(&self) -> bool {
+        self.fpccr & (1 << 4) != 0
+    }
+
+    pub fn record_lazy_fp_bus_fault(&mut self, escalate: bool) {
+        self.cfsr |= 1 << 13; // LSPERR
         if escalate {
             self.hfsr |= FORCED;
         }
@@ -307,6 +338,7 @@ impl Nvic {
             (AIRCR, 4) => 0xfa05_0000,
             (CPACR, 4) if self.cortex_m4 => self.cpacr,
             (FPCCR, 4) if self.cortex_m4 => self.fpccr,
+            (FPCAR, 4) if self.cortex_m4 => self.fpcar,
             (DHCSR, 4) if self.cortex_m4 => u32::from(self.lockup) << 19,
             (DEMCR, 4) if self.cortex_m4 => self.demcr,
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => return self.mpu.read(address - MPU_TYPE),
@@ -320,6 +352,7 @@ impl Nvic {
                 self.fault_enables
                     | (u32::from(self.hard_fault_active) << 2)
                     | (u32::from(self.active & (1 << 2) != 0) << 5)
+                    | (u32::from(self.hard_fault_pending) << 21)
             }
             (CFSR..=CFSR_END, 1 | 2 | 4) if self.cortex_m4 && address + width as u32 <= HFSR => {
                 let mask = u32::MAX >> (32 - width * 8);
@@ -373,7 +406,9 @@ impl Nvic {
                 return self.mpu.write(address - MPU_TYPE, value);
             }
             (CPACR, 4) if self.cortex_m4 => self.cpacr = value & 0x00f0_0000,
-            (FPCCR, 4) if self.cortex_m4 => self.fpccr = value & 0xc000_0000,
+            (FPCCR, 4) if self.cortex_m4 => {
+                self.fpccr = (self.fpccr & 0x11) | (value & 0xc000_0000)
+            }
             (DHCSR, 4) if self.cortex_m4 => {}
             (DEMCR, 4) if self.cortex_m4 => self.demcr = value,
             (CCR, 4) if self.cortex_m4 && value & !(STKALIGN | BFHFNMIGN | 0x18) == 0 => {

@@ -239,6 +239,16 @@ impl Bus {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_mock_fault_offset(&mut self, base: u32, offset: usize) {
+        let device = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.base == base)
+            .unwrap();
+        device.fault_offset = Some(offset);
+    }
+
     pub fn set_mock_fault_on_writes(&mut self, base: u32, enabled: bool) {
         if let Some(device) = self
             .faulting_peripherals

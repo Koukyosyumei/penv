@@ -412,13 +412,15 @@ impl Thumb {
             | ((it & 3) << 25)
             | ((it & 0xfc) << 8)
             | u32::from(self.active_exception);
+        let lazy_fp = self.fp_active && bus.nvic.as_ref().is_some_and(Nvic::lazy_fp_enabled);
         let mut frame = [0; 26];
         frame[..8].copy_from_slice(&[r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr]);
         if self.fp_active {
             frame[8..24].copy_from_slice(&self.fp[..16]);
             frame[24] = self.fpscr;
         }
-        match bus.write_cortex_m_exception_stack(stack, &frame[..frame_size / 4]) {
+        let words = if lazy_fp { 8 } else { frame_size / 4 };
+        match bus.write_cortex_m_exception_stack(stack, &frame[..words]) {
             Ok(()) => {}
             Err(BusError::SlaveFault(_)) if self.thumb2 => {
                 let nvic = bus
@@ -476,6 +478,11 @@ impl Thumb {
                     && !bus.fault_on_unmapped_thumb_data => {}
             Err(error) => return Err(error.to_string()),
         }
+        if lazy_fp && let Some(nvic) = bus.nvic.as_mut() {
+            let hard_fault_ready =
+                !matches!(self.active_exception, NMI | HARD_FAULT) && !self.faultmask;
+            nvic.reserve_lazy_fp(stack.wrapping_add(32), hard_fault_ready);
+        }
         if self.uses_psp() {
             self.psp = stack;
             r[13] = self.msp;
@@ -508,6 +515,39 @@ impl Thumb {
         }
         self.invalid_thumb_state = handler.is_some_and(|address| address & 1 == 0);
         Ok(handler.map_or(LOCKUP_PC, |address| address & !1))
+    }
+
+    // Returns false when preservation enters lockup before the FP instruction.
+    fn preserve_lazy_fp(&mut self, bus: &mut Bus) -> Result<bool, String> {
+        let Some(address) = bus.nvic.as_ref().and_then(Nvic::lazy_fp_address) else {
+            return Ok(true);
+        };
+        let mut frame = [0; 17];
+        frame[..16].copy_from_slice(&self.fp[..16]);
+        frame[16] = self.fpscr;
+        match bus.write_cortex_m_exception_stack(address, &frame) {
+            Ok(()) => {}
+            Err(BusError::SlaveFault(_)) => {
+                let nvic = bus.nvic.as_mut().unwrap();
+                if nvic.bus_fault_enabled() || self.active_exception != NMI {
+                    return Err(
+                        "lazy FP BusFault outside NMI with BusFault disabled is unsupported".into(),
+                    );
+                }
+                let ready = nvic.lazy_fp_hard_fault_ready();
+                nvic.record_lazy_fp_bus_fault(ready);
+                if !ready {
+                    self.locked_up = true;
+                    self.sleep = Sleep::Running;
+                    nvic.lockup = true;
+                    return Ok(false);
+                }
+                nvic.set_hard_fault_pending(true);
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        bus.nvic.as_mut().unwrap().finish_lazy_fp();
+        Ok(true)
     }
 
     fn exception_return_fault(
@@ -593,7 +633,10 @@ impl Thumb {
             bus.check_thumb_access(stack, frame_size, false, false)?;
             let remaining = self.active_exceptions & !(1 << self.active_exception);
             let mut frame = [0; 25];
-            let words = if extended { 25 } else { 8 };
+            let lazy_fp = extended
+                && bus.nvic.as_ref().and_then(Nvic::lazy_fp_address)
+                    == Some(stack.wrapping_add(32));
+            let words = if extended && !lazy_fp { 25 } else { 8 };
             for (index, word) in frame[..words].iter_mut().enumerate() {
                 match bus.read_cortex_m_ram_or_mock_word(stack.wrapping_add(index as u32 * 4)) {
                     Ok(value) => *word = value,
@@ -624,7 +667,9 @@ impl Thumb {
                     "invalid Cortex-M exception return frame: pc={pc:#x} xpsr={xpsr:#x} target={target:#x}"
                 ));
             }
-            if extended {
+            if lazy_fp {
+                bus.nvic.as_mut().unwrap().finish_lazy_fp();
+            } else if extended {
                 self.fp[..16].copy_from_slice(&frame[8..24]);
                 self.fpscr = frame[24];
             }
@@ -1266,6 +1311,11 @@ impl Thumb {
                     {
                         self.itstate = original_itstate;
                         *pc = self.no_coprocessor(*pc, r, bus)?;
+                        return Ok(ThumbStep::Fault);
+                    }
+                    if Self::is_fpu_instruction(inst, low) && !self.preserve_lazy_fp(bus)? {
+                        self.itstate = original_itstate;
+                        *pc = LOCKUP_PC;
                         return Ok(ThumbStep::Fault);
                     }
                     if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {

@@ -131,6 +131,7 @@ fn nocp_escalates_and_stacks_an_active_fp_context_even_with_cpacr_closed() {
     bus.memory(0x1103a, 2)
         .unwrap()
         .copy_from_slice(&0x4770u16.to_le_bytes());
+    bus.write(0xe000_ef34, 4, 0x8000_0000, &mut out).unwrap();
     cpu.fp_active = true;
     cpu.fp[0] = 0x1234_5678;
     cpu.fpscr = 0x4000_0000;

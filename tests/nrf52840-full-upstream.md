@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 95 | 5 | 90 |
+| 監査した共有・混成 Robot | 190 | 97 | 5 | 88 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **112** | **5** | **104** |
+| 合計 | **221** | **114** | **5** | **102** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -183,7 +183,7 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
 
-BusFault の適用対象31ケースのうち28件が合格、1件が部分移植、2件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
+BusFault の適用対象31ケースのうち30件が合格、1件が部分移植、未達0件。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
 
 ### 未マップのデータアクセス
 
@@ -252,3 +252,9 @@ BusFault の適用対象31ケースのうち28件が合格、1件が部分移植
 `arm-cortex-m-bus-fault.robot:311–321` を移植した。ゼロ化したベクタテーブルで初期 T ビットを保持し、1ステップ目の HardFault 入口と、2ステップ目の lockup を個別に確認した。CFSR.INVSTATE、HFSR.FORCED、CPU とデバッガでの DHCSR の違いを照合した。MSP が 0 のこの起動条件では、上流の既定アクセス方針に合わせ、未マップの例外スタック書き込みを破棄する。Cortex-M0 の既存の不正ベクタ診断も回帰確認した。
 
 `cargo test` と上記の BusFault ELF・FPU・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/invalid-thumb.gvVTxj2I/` の `cargo-test.final`、`elf`、`fpu`、`shell` に保存した。BusFault スイートでは遅延 FP 保存の2ケースと、連続 fault の monitor ステップ境界の部分移植が残る。
+
+### 遅延 FP 保存時の BusFault
+
+`arm-cortex-m-bus-fault.robot:733–806` の2ケースを移植した。固定命令とアドレスを使い、FPCAR と予約時の HFRDY、保存時の LSPERR、HardFault の保留または lockup、LSPACT と SCB を照合した。Thread 由来のケースは生成 ELF でも検証した。既存の即時 FP 保存テストは LSPEN を明示的に無効化して実行する。
+
+`cargo test` と上記の BusFault ELF・FPU・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/lazy-fp.cjsLEghf/` の `cargo-test.verified`、`elf`、`fpu`、`shell` に保存した。BusFault スイートには連続 fault の monitor ステップ境界の部分移植が残る。今回の遅延保存障害処理は、BusFault が無効な NMI 内の障害を対象とする。
