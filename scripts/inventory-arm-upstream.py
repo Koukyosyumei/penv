@@ -364,13 +364,13 @@ def classify_nunit(name, case, attrs, parameter):
         if case in grants:
             return PASS, COMMON, f"renode_time_source_should_{grants[case]}; same complete-grant boundaries, sink round counts and elapsed virtual time"
         blocked = {
-            "ShouldUpdateExecutedTimeAfterBlocking": ("updates_executed_time_after_blocking", "5 and 10 ticks"),
-            "ShouldHandleTwoBlockingSinks": ("handles_two_blocking_sinks", "4, 6, 8 and 10 ticks"),
-            "ShouldHandleBlockingAtTheEndOfGrantedInterval": ("handles_blocking_at_end_of_grant", "10 and 20 ticks, zero-length resume"),
+            "ShouldUpdateExecutedTimeAfterBlocking": ("dispatches_updates_after_blocking", "5 and 10 ticks"),
+            "ShouldHandleTwoBlockingSinks": ("dispatches_two_blocking_sinks", "4, 6, 8 and 10 ticks"),
+            "ShouldHandleBlockingAtTheEndOfGrantedInterval": ("dispatches_blocking_at_end_of_grant", "10 and 20 ticks, zero-length resume"),
         }
         if case in blocked:
             check, observation = blocked[case]
-            return PARTIAL, COMMON, f"renode_time_source_{check}; {observation}; progress publication and nested round completion, automatic master/slave dispatch remains"
+            return PASS, COMMON, f"renode_time_source_{check}; {observation}; threaded requests and reports drive both clocks and the next grant automatically"
         if case == "ShouldNotSleepOnAdvanceImmediately":
             return OPEN, COMMON, "Requires host stopwatch comparison for a paced versus immediate time source; deferred to explicit performance work"
         return OPEN, COMMON, "Requires blocked-sink grant and report synchronization or record/replay; serial complete grants are implemented"
