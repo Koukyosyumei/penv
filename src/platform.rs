@@ -2145,28 +2145,99 @@ pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
     Ok(index as u8)
 }
 
-pub(crate) fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
-    let value = value.trim();
-    let Some(list) = value
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-    else {
-        return irq_index(value, count).map(|index| vec![index]);
-    };
-    let mut indices = Vec::new();
-    for item in list.split(',') {
-        if let Some((start, end)) = item.split_once('-') {
-            let start = irq_index(start, count)?;
-            let end = irq_index(end, count)?;
-            if start > end {
-                return Err("descending IRQ range".into());
-            }
-            indices.extend(start..=end);
+#[derive(Debug, PartialEq, Eq)]
+enum IrqEndpoint<'a> {
+    Number(u8),
+    Named(&'a str),
+}
+
+fn irq_range(value: &str, count: u32) -> Result<impl Iterator<Item = u8>, String> {
+    let (start, end) = value.split_once('-').ok_or("expected IRQ range")?;
+    let start = irq_index(start, count)?;
+    let end = irq_index(end, count)?;
+    if start == end {
+        return Err("IRQ range endpoints must differ".into());
+    }
+    let length = start.abs_diff(end);
+    Ok((0..=length).map(move |offset| {
+        if start < end {
+            start + offset
         } else {
-            indices.push(irq_index(item, count)?);
+            start - offset
+        }
+    }))
+}
+
+fn irq_endpoints(value: &str, count: u32) -> Result<Vec<IrqEndpoint<'_>>, String> {
+    let value = value.trim();
+    let list = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'));
+    let mut endpoints = Vec::new();
+    for item in list.unwrap_or(value).split(',').map(str::trim) {
+        if item.contains('-') {
+            endpoints.extend(irq_range(item, count)?.map(IrqEndpoint::Number));
+        } else if item.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && item
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            endpoints.push(IrqEndpoint::Named(item));
+        } else {
+            endpoints.push(IrqEndpoint::Number(irq_index(item, count)?));
         }
     }
-    Ok(indices)
+    if list.is_none() && value.contains(',') {
+        return Err("expected brackets around IRQ list".into());
+    }
+    Ok(endpoints)
+}
+
+pub(crate) fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
+    irq_endpoints(value, count)?
+        .into_iter()
+        .map(|endpoint| match endpoint {
+            IrqEndpoint::Number(index) => Ok(index),
+            IrqEndpoint::Named(name) => Err(format!("expected numbered IRQ, got {name:?}")),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod irq_primitive_tests {
+    use super::*;
+
+    #[test]
+    fn renode_irq_primitive_ascending_range() {
+        assert_eq!(
+            irq_range("3 - 5", 256).unwrap().collect::<Vec<_>>(),
+            [3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn renode_irq_primitive_descending_range() {
+        assert_eq!(
+            irq_range("7 - 4", 256).unwrap().collect::<Vec<_>>(),
+            [7, 6, 5, 4]
+        );
+    }
+
+    #[test]
+    fn renode_irq_primitive_mixed_sources() {
+        use IrqEndpoint::{Named, Number};
+        assert_eq!(
+            irq_endpoints("[1,2, 4-6, IRQ]", 256).unwrap(),
+            [
+                Number(1),
+                Number(2),
+                Number(4),
+                Number(5),
+                Number(6),
+                Named("IRQ")
+            ]
+        );
+    }
 }
 
 fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
