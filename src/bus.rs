@@ -92,6 +92,12 @@ struct BusTag {
     throws: bool,
 }
 
+#[derive(Clone, Copy)]
+pub enum UartWatch {
+    Port(usize),
+    Tester(usize),
+}
+
 struct Region {
     base: u32,
     bytes: Vec<u8>,
@@ -115,6 +121,8 @@ pub struct Bus {
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
     stm32_uart_history: Vec<Option<UartHistory>>,
+    uart_testers: Vec<(usize, UartHistory)>,
+    default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
@@ -1120,29 +1128,81 @@ impl Bus {
         }
     }
 
+    pub fn create_uart_tester(&mut self, target: &str) -> Result<usize, String> {
+        let port = self
+            .stm32_usart_index(target)
+            .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))?;
+        if let Some(id) = self
+            .uart_testers
+            .iter()
+            .position(|(index, _)| *index == port)
+        {
+            return Ok(id);
+        }
+        let id = self.uart_testers.len();
+        self.uart_testers.push((port, UartHistory::default()));
+        Ok(id)
+    }
+
+    pub fn set_default_uart_tester(&mut self, id: Option<usize>) -> Result<(), String> {
+        if let Some(id) = id
+            && id >= self.uart_testers.len()
+        {
+            return Err(format!(
+                "Tester #{id} was not found. Create a tester before setting it as default"
+            ));
+        }
+        self.default_uart_tester = id;
+        Ok(())
+    }
+
+    pub fn watch_uart_tester(
+        &mut self,
+        id: Option<usize>,
+        pattern: &str,
+    ) -> Result<UartWatch, String> {
+        let id = match id.or(self.default_uart_tester) {
+            Some(id) => id,
+            None if self.uart_testers.len() == 1 => 0,
+            None if self.uart_testers.is_empty() => return Err("There are no testers available.".into()),
+            None => return Err("There is more than one tester available - please specify ID of the desired tester.".into()),
+        };
+        let (_, history) = self
+            .uart_testers
+            .get_mut(id)
+            .ok_or_else(|| format!("Tester for given ID={id} was not found."))?;
+        history.begin_wait(pattern, UartWaitMode::Lf);
+        Ok(UartWatch::Tester(id))
+    }
+
     pub fn watch_stm32_uart(
         &mut self,
         target: &str,
         pattern: &str,
         end: UartWaitMode,
-    ) -> Result<usize, String> {
+    ) -> Result<UartWatch, String> {
         let index = self.stm32_usart_index(target)?;
         self.stm32_uart_history[index]
             .as_mut()
             .expect("a script wait enables history before execution")
             .begin_wait(pattern, end);
-        Ok(index)
+        Ok(UartWatch::Port(index))
     }
 
-    pub fn stm32_uart_matched(&self, index: usize) -> bool {
-        self.stm32_uart_history[index]
-            .as_ref()
-            .is_some_and(UartHistory::matched)
+    pub fn stm32_uart_matched(&self, watch: UartWatch) -> bool {
+        match watch {
+            UartWatch::Port(index) => self.stm32_uart_history[index].as_ref().unwrap().matched(),
+            UartWatch::Tester(id) => self.uart_testers[id].1.matched(),
+        }
     }
 
-    pub fn finish_stm32_uart_watch(&mut self, index: usize) {
-        if let Some(history) = &mut self.stm32_uart_history[index] {
-            history.finish_wait();
+    pub fn finish_stm32_uart_watch(&mut self, watch: UartWatch) {
+        match watch {
+            UartWatch::Port(index) => self.stm32_uart_history[index]
+                .as_mut()
+                .unwrap()
+                .finish_wait(),
+            UartWatch::Tester(id) => self.uart_testers[id].1.finish_wait(),
         }
     }
 
@@ -1692,6 +1752,11 @@ impl Bus {
                     if let Some(Some(history)) = self.stm32_uart_history.get_mut(index) {
                         history.receive(byte);
                     }
+                    for (port, history) in &mut self.uart_testers {
+                        if *port == index {
+                            history.receive(byte);
+                        }
+                    }
                     Ok(())
                 })
                 .map_err(BusError::Output);
@@ -2040,6 +2105,37 @@ mod tests {
             bus.write_stm32_uart_line("sysbus.usart3", "A", b"\r")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn uart_tester_starts_at_attachment_and_has_an_independent_cursor() {
+        let mut bus = Bus::default();
+        let mut output = io::sink();
+        let base = 0x4001_3800;
+        bus.map_stm32_usart(Stm32Usart::new("usart1".into(), base, None, false))
+            .unwrap();
+        bus.record_stm32_uart("usart1");
+        bus.write(base, 4, 9, &mut output).unwrap();
+        for byte in b"before\n" {
+            bus.write(base + 0x28, 1, u32::from(*byte), &mut output)
+                .unwrap();
+        }
+        assert_eq!(bus.create_uart_tester("usart1").unwrap(), 0);
+        assert_eq!(bus.create_uart_tester("sysbus.usart1").unwrap(), 0);
+        let watch = bus.watch_uart_tester(None, "before").unwrap();
+        assert!(!bus.stm32_uart_matched(watch));
+        bus.finish_stm32_uart_watch(watch);
+        for byte in b"after\n" {
+            bus.write(base + 0x28, 1, u32::from(*byte), &mut output)
+                .unwrap();
+        }
+        let watch = bus.watch_uart_tester(None, "after").unwrap();
+        assert!(bus.stm32_uart_matched(watch));
+        bus.finish_stm32_uart_watch(watch);
+        let direct = bus
+            .watch_stm32_uart("usart1", "after", UartWaitMode::Lf)
+            .unwrap();
+        assert!(bus.stm32_uart_matched(direct));
     }
 
     #[test]

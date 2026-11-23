@@ -397,6 +397,122 @@ sysbus ReadByte 0xabcd1234
 }
 
 #[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
+fn upstream_stm32f072_uart_tester_id_overrides_default() {
+    let result = run_upstream_stm32f072_script("stm32f072-uart-testers.resc", "1000000");
+    assert!(result.status.success(), "{result:?}");
+    assert!(result.stdout.starts_with(b"0\n1\n"), "{result:?}");
+    assert!(
+        result
+            .stdout
+            .ends_with(b"Hello World! stm32f072b_disco\r\n"),
+        "{result:?}"
+    );
+    let timeout = run_upstream_stm32f072_script("stm32f072-uart-tester-timeout.resc", "101000000");
+    assert_eq!(timeout.status.code(), Some(1), "{timeout:?}");
+    assert!(timeout.stdout.starts_with(b"0\n1\n"), "{timeout:?}");
+    assert!(
+        timeout
+            .stdout
+            .ends_with(b"Hello World! stm32f072b_disco\r\n"),
+        "{timeout:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&timeout.stderr).contains("Terminal tester failed!"),
+        "{timeout:?}"
+    );
+}
+
+#[test]
+fn renode_resc_uart_testers_follow_identity_and_default_selection() {
+    use std::fmt::Write;
+    let directory = std::env::temp_dir().join(format!("penv-resc-testers-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+uart0: UART.STM32F7_USART @ sysbus 0x40013800
+uart1: UART.STM32F7_USART @ sysbus 0x40004400
+"#,
+    )
+    .unwrap();
+    let mut image = vec![0; 0x20];
+    image[..4].copy_from_slice(&0x800u32.to_le_bytes());
+    image[4..8].copy_from_slice(&0x21u32.to_le_bytes());
+    image.extend_from_slice(&0xbf30u16.to_le_bytes()); // wfi
+    fs::write(directory.join("firmware.bin"), image).unwrap();
+    let boot = "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n";
+    let first = "CreateTerminalTester sysbus.uart0\n";
+    let second = "CreateTerminalTester sysbus.uart1\n";
+    let mut output = String::from("sysbus WriteDoubleWord 0x40013800 9\n");
+    for byte in b"ZEPHYR\r\n" {
+        writeln!(output, "sysbus WriteByte 0x40013828 {byte}").unwrap();
+    }
+    let run = |setup: &str, selection: &str| {
+        let script = directory.join("boot.resc");
+        fs::write(&script, format!("{boot}{setup}{output}{selection}")).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1000", "--script"])
+            .arg(script)
+            .output()
+            .unwrap()
+    };
+    let both = format!("{first}{second}");
+    let wait = "WaitForLineOnUart \"ZEPHYR\"";
+    for (setup, selection, error) in [
+        (
+            "CreateTerminalTester sysbus.non_existing_uart\n",
+            String::new(),
+            Some("not found or of wrong type"),
+        ),
+        (first, wait.into(), None),
+        (
+            &both,
+            wait.into(),
+            Some("There is more than one tester available"),
+        ),
+        (&both, format!("{wait} testerId=0"), None),
+        (&both, format!("SetDefaultTester 0\n{wait}"), None),
+        (
+            &both,
+            format!("SetDefaultTester 1\n{wait} testerId=0"),
+            None,
+        ),
+        (
+            &both,
+            format!("SetDefaultTester 1\n{wait} timeout=1"),
+            Some("Terminal tester failed!"),
+        ),
+        (
+            &both,
+            format!("SetDefaultTester 1\nSetDefaultTester 0\n{wait}"),
+            None,
+        ),
+        (
+            &both,
+            format!("SetDefaultTester 0\nSetDefaultTester null\n{wait}"),
+            Some("There is more than one tester available"),
+        ),
+    ] {
+        let result = run(setup, &selection);
+        if let Some(error) = error {
+            assert_eq!(result.status.code(), Some(1), "{result:?}");
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains(error),
+                "{result:?}"
+            );
+        } else {
+            assert!(result.status.success(), "{result:?}");
+            assert!(result.stdout.ends_with(b"ZEPHYR\r\n"), "{result:?}");
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_nvic_gpio_wakes_wfe_with_sevonpend() {
     let directory = std::env::temp_dir().join(format!("penv-resc-nvic-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

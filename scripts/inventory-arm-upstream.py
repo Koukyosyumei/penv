@@ -454,6 +454,19 @@ def classify_robot(name, case, body, parameter):
     if name == "host-uart":
         return OPEN, V6, "Mi-V RESC supplies UART; host serial adapter and bidirectional host I/O contract can use an F072 UART"
     if name == "uart-tester":
+        selectors = {
+            "Should Fail On Non-Existing UART",
+            "Should Not Require Tester Id When Single Tester",
+            "Should Require Tester Id When Two Testers",
+            "Should Respect Tester Id In The Keyword When Two Testers",
+            "Should Respect The Default Tester Id",
+            "Should Use Tester Id Selected By Keyword",
+            "Should Respect The Default Tester Id 2",
+            "Should Overwrite The Default Tester Id",
+            "Should Allow To Clear The Default Tester Id",
+        }
+        if case in selectors:
+            return PASS, F072, "renode_resc_uart_testers_follow_identity_and_default_selection; same tester creation/selection, ZEPHYR line and error contract with synthetic USART stream; one-second wrong-port wait also exercised by public F072 ELF"
         if "Create Trivial Machine" in body:
             fixture = "TrivialUart with injected 0x00..0xff"
         elif "Create Tock Machine" in body:

@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    bus::{CORTEX_M_STEP_HZ, UnhandledAccess},
+    bus::{CORTEX_M_STEP_HZ, UartWatch, UnhandledAccess},
     machine::{Machine, Stop},
     uart::{UartHistory, UartWaitMode},
 };
@@ -59,6 +59,9 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
+    CreateUartTester(String),
+    DefaultUartTester(Option<usize>),
+    WaitForTester(Option<usize>, String, u64),
     WriteUartLine(String, String, &'static [u8]),
 }
 
@@ -226,6 +229,28 @@ pub fn run(
                 .bus
                 .set_named_adc_input(name, *channel, *volts)
                 .map(|()| None),
+            Action::CreateUartTester(target) => machine
+                .bus
+                .create_uart_tester(target)
+                .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
+                .map(|()| None),
+            Action::DefaultUartTester(id) => {
+                machine.bus.set_default_uart_tester(*id).map(|()| None)
+            }
+            Action::WaitForTester(id, pattern, timeout) => {
+                let start = machine.elapsed_steps();
+                machine.bus.watch_uart_tester(*id, pattern).and_then(|watch| {
+                    run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
+                }).and_then(|(stop, count)| {
+                    retired += count;
+                    budget -= machine.elapsed_steps().wrapping_sub(start);
+                    if stop == Stop::OutputMatch {
+                        Ok(None)
+                    } else {
+                        Err(format!("Terminal tester failed! Line containing {pattern:?} was not received ({stop:?})"))
+                    }
+                })
+            }
             Action::WaitForUart(target, pattern, end, timeout) => {
                 let start = machine.elapsed_steps();
                 wait_for_uart(
@@ -357,6 +382,21 @@ fn wait_for_led(
     Ok(retired + count)
 }
 
+fn run_uart_watch(
+    machine: &mut Machine,
+    watch: UartWatch,
+    budget: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    let result = if machine.bus.stm32_uart_matched(watch) {
+        Ok((Stop::OutputMatch, 0))
+    } else {
+        machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(watch))
+    };
+    machine.bus.finish_stm32_uart_watch(watch);
+    result
+}
+
 fn wait_for_uart(
     machine: &mut Machine,
     target: Option<&str>,
@@ -366,14 +406,8 @@ fn wait_for_uart(
     output: &mut ScriptOutput<'_, impl Write>,
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
-        let index = machine.bus.watch_stm32_uart(target, pattern, end)?;
-        let result = if machine.bus.stm32_uart_matched(index) {
-            Ok((Stop::OutputMatch, 0))
-        } else {
-            machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(index))
-        };
-        machine.bus.finish_stm32_uart_watch(index);
-        result
+        let watch = machine.bus.watch_stm32_uart(target, pattern, end)?;
+        run_uart_watch(machine, watch, budget, output)
     } else {
         let history = output
             .history
@@ -500,6 +534,48 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
+        ["CreateTerminalTester", target] => {
+            Some(Action::CreateUartTester(resolve(target)?.to_owned()))
+        }
+        ["SetDefaultTester", id] => {
+            let id = resolve(id)?;
+            Some(Action::DefaultUartTester(
+                (id != "null")
+                    .then(|| crate::parse_address(id).map(|id| id as usize))
+                    .transpose()?,
+            ))
+        }
+        ["WaitForLineOnUart", ..] => {
+            let (pattern, options) = quoted_argument(
+                text["WaitForLineOnUart".len()..].trim_start(),
+            )
+            .filter(|(pattern, _)| !pattern.is_empty())
+            .ok_or(
+                "expected WaitForLineOnUart \"literal text\" [testerId=number] [timeout=seconds]",
+            )?;
+            let mut id = None;
+            let mut timeout = None;
+            for option in options.split_whitespace() {
+                match option.split_once('=') {
+                    Some(("testerId", value)) if id.is_none() => {
+                        id = Some(crate::parse_address(resolve(value)?)? as usize);
+                    }
+                    Some(("timeout", value)) if timeout.is_none() => {
+                        timeout = Some(duration_steps(resolve(value)?)?);
+                    }
+                    _ => {
+                        return Err(format!(
+                            "unsupported or duplicate UART tester option {option:?}"
+                        ));
+                    }
+                }
+            }
+            Some(Action::WaitForTester(
+                id,
+                pattern.to_owned(),
+                timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
+            ))
+        }
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
             let expected = format!("expected {command} [USART] \"literal text\" [timeout=seconds]");
