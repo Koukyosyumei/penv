@@ -48,6 +48,12 @@ static void radio_irq(void)
 void reset(void)
 {
     ends = good_crc = disabled = 0;
+    CHECK(REG(RADIO + 0x66c) == 0x052d0000);
+    REG(RADIO + 0x66c) = 0x123456ff;
+    CHECK(REG(RADIO + 0x66c) == 0x052d0007);
+    REG(RADIO + 0xffc) = 0;
+    REG(RADIO + 0xffc) = 1;
+    CHECK(REG(RADIO + 0x66c) == 0x052d0000);
     REG(TX) = 0x22110342;
     BYTE(TX + 4) = 0x33;
     BYTE(RX + 5) = 0xee;

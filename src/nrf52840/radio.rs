@@ -73,6 +73,7 @@ pub(super) struct Radio {
     tx_power: u32,
     errata: u32,
     mode_config: u32,
+    cca_mode: u32,
     link_config: [u32; 11],
     device_addresses: [u32; 17],
     device_match_index: u32,
@@ -100,6 +101,7 @@ impl Radio {
             tx_power: 0,
             errata: 0,
             mode_config: 0x200,
+            cca_mode: 0,
             link_config: [0; 11],
             device_addresses: [0; 17],
             device_match_index: 0,
@@ -382,6 +384,7 @@ impl Radio {
             0x560 => self.bit_compare,
             0x600..=0x640 => self.device_addresses[((offset - 0x600) / 4) as usize],
             0x650 => self.mode_config,
+            0x66c => 0x052d_0000 | self.cca_mode,
             0x774 => self.errata,
             0xffc => self.powered.into(),
             _ => (self.events & Self::event(offset)? != 0).into(),
@@ -439,6 +442,7 @@ impl Radio {
                 };
             }
             0x650 => self.mode_config = value & 0x301,
+            0x66c => self.cca_mode = value & 7,
             0x51c..=0x53c => {
                 const MASKS: [u32; 9] = [
                     u32::MAX,

@@ -675,3 +675,18 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 Python パケットフックの固定手順は `target/debug/penv run --script "$ARTIFACT_DIR/packet.resc"` で `CreateIEEE802_15_4Medium` に、固定 RV32 の REPL は `validate-platform "$ARTIFACT_DIR/fixture.repl"` で `Wireless.NRF52840_Radio` の登録に阻まれる。7診断中の既存6件は再確認した。共有入口は `nrf52-packet-hook-b02d214.md` で ARM 担当に渡した。ATSAMD51 の2件も `UART.SAMD5_UART` で停止することを再確認し、個別 Reset と仮想時間の共有要件を `nrf52-clock-reset-b02d214.md` にまとめた。3件とも部分移植を維持する。
 
 再現ファイル、ログ、終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/radio-pcnf.SVa5OjX5` に保存した。
+
+### RADIO CCA 設定と Mi-V フック
+
+上流 `NRF52840_Radio.cs` の CCACTRL（`0x66c`）を実装した。固定上流と同様に、操作可能な CCAMODE は下位3ビット。予約ビットを除き、上流でタグのみのしきい値フィールドはリセット値を返す。検証 ELF で `0x052d0000` の初期値、`0x123456ff` 書き込み後の `0x052d0007`、RADIO 電源サイクル後のリセット値を確認した。CCA の判定タスクは今回の検証範囲外。
+
+```sh
+cargo test --locked
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-monitor-hook-upstream.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF" "$ARTIFACT_DIR/hook"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+`hooks.robot:13–22` の固定 Mi-V Shell ELF は `UART.MiV_CoreUART` で停止する。共有フックを単独で切り分けた `target/debug/penv run --script "$ARTIFACT_DIR/rv32.resc" --max-steps 10` では Cortex-M 専用のエラーで停止した。固定コマンドと既存 Cortex-M 差分を `nrf52-miv-hook-7a643b8.md` で ARM 担当に渡した。この上流ケースは部分移植を維持する。
+
+固定入力の再現ファイル、回帰ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/radio-cca.gdQZpvTO` に保存した。
