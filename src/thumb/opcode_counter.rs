@@ -61,9 +61,10 @@ impl OpcodeCounters {
 
 #[cfg(test)]
 mod tests {
+    use super::HookPhase;
     use crate::machine::{Machine, Stop};
 
-    fn check(opcodes: [u16; 2], patterns: &[(&str, &str, u64)], end: u32) {
+    fn machine_with_opcodes(opcodes: &[u16]) -> Machine {
         let mut machine = Machine::new(0x1000).unwrap();
         machine.bus.map_ram(0, 0x1000).unwrap();
         machine.bus.map_nvic(0xe0, None, true).unwrap();
@@ -71,12 +72,18 @@ mod tests {
         machine.primary.configure_cortex_m(Some(0), true);
         machine.primary.pc = 0;
         let mut output = std::io::sink();
-        for (index, opcode) in opcodes.into_iter().enumerate() {
+        for (index, &opcode) in opcodes.iter().enumerate() {
             machine
                 .bus
                 .write(index as u32 * 2, 2, u32::from(opcode), &mut output)
                 .unwrap();
         }
+        machine
+    }
+
+    fn check(opcodes: [u16; 2], patterns: &[(&str, &str, u64)], end: u32) {
+        let mut machine = machine_with_opcodes(&opcodes);
+        let mut output = std::io::sink();
         for &(name, pattern, _) in patterns {
             machine.bus.thumb_opcodes.install(name, pattern).unwrap();
         }
@@ -107,5 +114,74 @@ mod tests {
             &[("nop", "00000000000000001011111100000000", 1)],
             2,
         );
+    }
+    fn check_hooks(words: &[u16], opcode: u32, end: u32) {
+        let mut machine = machine_with_opcodes(words);
+        for (phase, value, label) in [
+            (HookPhase::Pre, opcode, "pre"),
+            (HookPhase::Post, opcode, "post"),
+            (HookPhase::Post, opcode + (1 << 16), "unexpected"),
+        ] {
+            machine
+                .bus
+                .thumb_opcode_hooks
+                .install(phase, u32::MAX, value, label.into());
+        }
+        let mut logs = Vec::new();
+        assert_eq!(machine.run(1, &mut logs).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, end);
+        assert_eq!(
+            String::from_utf8(logs).unwrap(),
+            format!(
+                "pre: PC 0x00000000 op {opcode:#010x}\npost: PC 0x00000000 op {opcode:#010x}\n"
+            )
+        );
+    }
+
+    #[test]
+    fn upstream_hooks_receive_32_bit_thumb_opcode() {
+        check_hooks(&[0xf241, 0x2034], 0xf2412034, 4);
+    }
+
+    #[test]
+    fn upstream_hooks_receive_16_bit_thumb_opcode() {
+        check_hooks(&[0xbf00], 0xbf00, 2);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HookPhase {
+    Pre,
+    Post,
+}
+
+#[derive(Default)]
+pub struct OpcodeLogHooks {
+    hooks: Vec<(HookPhase, u32, u32, String)>,
+}
+
+impl OpcodeLogHooks {
+    pub fn install(&mut self, phase: HookPhase, mask: u32, pattern: u32, label: String) {
+        self.hooks.push((phase, mask, pattern, label));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+    }
+
+    pub fn emit(
+        &self,
+        phase: HookPhase,
+        pc: u32,
+        opcode: u32,
+        output: &mut impl std::io::Write,
+    ) -> Result<(), String> {
+        for (when, mask, pattern, label) in &self.hooks {
+            if *when == phase && opcode & mask == *pattern {
+                writeln!(output, "{label}: PC {pc:#010x} op {opcode:#010x}")
+                    .map_err(|error| format!("opcode hook output: {error}"))?;
+            }
+        }
+        Ok(())
     }
 }

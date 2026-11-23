@@ -20,6 +20,7 @@ pub struct Boot {
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
     pub opcode_queries: Vec<String>,
+    pub opcode_hooks: Vec<(crate::thumb::opcode_counter::HookPhase, u32, u32, String)>,
     pub semihosting_arguments: Option<String>,
     pub semihosting_directory: Option<PathBuf>,
     pub semihosting_temporary_directory: Option<String>,
@@ -157,6 +158,26 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "EnableOpcodesCounting", enabled] if boot.platform.is_some() => {
             boot.opcode_counting = Some(enabled.parse().map_err(|_| "expected true or false")?);
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            command @ ("AddPreOpcodeExecutionLogHook" | "AddPostOpcodeExecutionLogHook"),
+            mask,
+            pattern,
+            label,
+        ] if boot.platform.is_some() => {
+            use crate::thumb::opcode_counter::HookPhase;
+            let phase = if *command == "AddPreOpcodeExecutionLogHook" {
+                HookPhase::Pre
+            } else {
+                HookPhase::Post
+            };
+            boot.opcode_hooks.push((
+                phase,
+                crate::parse_address(resolve(mask)?)?,
+                crate::parse_address(resolve(pattern)?)?,
+                label.trim_matches('"').into(),
+            ));
         }
         ["cpu" | "sysbus.cpu", "GetOpcodeCounter", name] if boot.platform.is_some() => {
             boot.opcode_queries.push(name.trim_matches('"').into());

@@ -387,6 +387,7 @@ fn run() -> Result<ExitCode, String> {
     let mut opcode_counters = Vec::new();
     let mut opcode_counting = None;
     let mut opcode_queries = Vec::new();
+    let mut opcode_hooks = Vec::new();
     let mut semihosting_arguments = None;
     let mut semihosting_directory = None;
     let mut semihosting_temporary_directory = None;
@@ -427,6 +428,7 @@ fn run() -> Result<ExitCode, String> {
         opcode_counters = boot.opcode_counters;
         opcode_counting = boot.opcode_counting;
         opcode_queries = boot.opcode_queries;
+        opcode_hooks = boot.opcode_hooks;
         semihosting_arguments = boot.semihosting_arguments;
         semihosting_directory = boot.semihosting_directory;
         semihosting_temporary_directory = boot.semihosting_temporary_directory;
@@ -589,14 +591,24 @@ fn run() -> Result<ExitCode, String> {
     }
     machine.validate_entry()?;
 
-    if !opcode_counters.is_empty() || opcode_counting.is_some() || !opcode_queries.is_empty() {
+    if !opcode_counters.is_empty()
+        || opcode_counting.is_some()
+        || !opcode_queries.is_empty()
+        || !opcode_hooks.is_empty()
+    {
         if !machine.has_cortex_m4() || ble_peer.is_some() {
-            return Err("opcode counters require a single Cortex-M4 machine".into());
+            return Err("opcode instrumentation requires a single Cortex-M4 machine".into());
         }
         for (name, pattern) in opcode_counters {
             machine.bus.thumb_opcodes.install(&name, &pattern)?;
         }
         machine.bus.thumb_opcodes.enabled = opcode_counting.unwrap_or(false);
+        for (phase, mask, opcode, label) in opcode_hooks {
+            machine
+                .bus
+                .thumb_opcode_hooks
+                .install(phase, mask, opcode, label);
+        }
         for name in &opcode_queries {
             machine.bus.thumb_opcodes.get(name)?;
         }

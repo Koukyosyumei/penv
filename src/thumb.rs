@@ -904,9 +904,26 @@ impl Thumb {
             *pc = self.synchronous_fault(SynchronousFault::InvalidState, *pc, r, bus)?;
             return Ok(ThumbStep::Fault);
         }
+        let address = *pc;
+        let inst = bus.thumb_fetch(address)?;
+        let opcode = if bus.thumb_opcodes.enabled || !bus.thumb_opcode_hooks.is_empty() {
+            let opcode = if inst >= 0xe800 {
+                (inst << 16) | bus.thumb_fetch(address.wrapping_add(2))?
+            } else {
+                inst
+            };
+            if bus.thumb_opcodes.enabled {
+                bus.thumb_opcodes.record(opcode);
+            }
+            bus.thumb_opcode_hooks
+                .emit(opcode_counter::HookPhase::Pre, address, opcode, output)?;
+            Some(opcode)
+        } else {
+            None
+        };
         let original_itstate = self.itstate;
         bus.thumb_negative_priority = matches!(self.active_exception, NMI | HARD_FAULT);
-        let result = self.step_instruction(pc, r, bus, output);
+        let result = self.step_instruction(inst, pc, r, bus, output);
         bus.thumb_negative_priority = false;
         if let Some(address) = bus.take_thumb_data_fault() {
             self.itstate = original_itstate;
@@ -916,25 +933,27 @@ impl Thumb {
         if std::mem::take(&mut self.return_fault_taken) && result.is_ok() {
             return Ok(ThumbStep::Fault);
         }
+        if let Some(opcode) = opcode
+            && matches!(result, Ok(ThumbStep::Retired))
+        {
+            bus.thumb_opcode_hooks.emit(
+                opcode_counter::HookPhase::Post,
+                address,
+                opcode,
+                output,
+            )?;
+        }
         result
     }
 
     fn step_instruction(
         &mut self,
+        inst: u32,
         pc: &mut u32,
         r: &mut [u32; 32],
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
-        let inst = bus.thumb_fetch(*pc)?;
-        if bus.thumb_opcodes.enabled {
-            let opcode = if inst >= 0xe800 {
-                (inst << 16) | bus.thumb_fetch(pc.wrapping_add(2))?
-            } else {
-                inst
-            };
-            bus.thumb_opcodes.record(opcode);
-        }
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);

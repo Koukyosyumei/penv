@@ -18,8 +18,8 @@ REPL
 
 for name in movw nop; do
     case "$name" in
-        movw) instruction='movw r0, #0x1234'; pattern=11110010010000010010000000110100; pc=0x00000104 ;;
-        nop) instruction='nop; nop'; pattern=00000000000000001011111100000000; pc=0x00000102 ;;
+        movw) opcode=0xf2412034; unexpected=0xf2422034; instruction='movw r0, #0x1234'; pattern=11110010010000010010000000110100; pc=0x00000104 ;;
+        nop) opcode=0x0000bf00; unexpected=0x0001bf00; instruction='nop; nop'; pattern=00000000000000001011111100000000; pc=0x00000102 ;;
     esac
     cat >"$out/$name.s" <<ASM
 .syntax unified
@@ -40,12 +40,18 @@ cpu InstallOpcodeCounterPattern "unexpected" "11110010010000010010000000110101"
 cpu EnableOpcodesCounting true
 cpu GetOpcodeCounter "$name"
 cpu GetOpcodeCounter "unexpected"
+cpu AddPreOpcodeExecutionLogHook 0xffffffff $opcode pre
+cpu AddPostOpcodeExecutionLogHook 0xffffffff $opcode post
+cpu AddPostOpcodeExecutionLogHook 0xffffffff $unexpected unexpected
 RESC
     clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/$name.s" -o "$out/$name.o"
     ld.lld -N -Ttext=0 --entry=reset "$out/$name.o" -o "$out/$name.elf"
     status=0
     "$penv" run --script "$out/$name.resc" --max-steps 1 >"$out/$name.log" 2>&1 || status=$?
     [ "$status" -eq 2 ]
+    printf 'pre: PC 0x00000100 op %s\npost: PC 0x00000100 op %s\n' "$opcode" "$opcode" >"$out/$name.expected"
+    grep -E '^(pre|post|unexpected):' "$out/$name.log" >"$out/$name.hooks"
+    cmp "$out/$name.expected" "$out/$name.hooks"
     grep -Fxq "opcode $name: 1" "$out/$name.log"
     grep -Fxq 'opcode unexpected: 0' "$out/$name.log"
     grep -Fxq "penv: instruction limit reached at pc=$pc" "$out/$name.log"
