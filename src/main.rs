@@ -82,6 +82,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
        penv check-platform PATH [--platform-root PATH]
+       penv check-platform --from-string REPL [--platform-root PATH]
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
@@ -130,7 +131,16 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("check-platform")) => {
-            let path = args.next().ok_or("expected a platform path")?;
+            let input = args
+                .next()
+                .ok_or("expected a platform path or --from-string REPL")?;
+            let from_string = input == "--from-string";
+            let input = if from_string {
+                args.next()
+                    .ok_or("expected REPL text after --from-string")?
+            } else {
+                input
+            };
             let root = match args.next() {
                 None => None,
                 Some(flag) if flag == "--platform-root" => Some(PathBuf::from(
@@ -141,7 +151,14 @@ fn run() -> Result<ExitCode, String> {
             if args.next().is_some() {
                 return Err("unexpected check-platform argument".into());
             }
-            platform::load(&PathBuf::from(path), root.as_deref())?;
+            if from_string {
+                platform::check_text(
+                    input.to_str().ok_or("REPL text must be UTF-8")?,
+                    root.as_deref(),
+                )?;
+            } else {
+                platform::load(&PathBuf::from(input), root.as_deref())?;
+            }
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}

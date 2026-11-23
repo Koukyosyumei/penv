@@ -158,6 +158,26 @@ fn parse(
         ));
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
+    let result = parse_text(
+        &content,
+        path,
+        canonical.parent().unwrap(),
+        root,
+        visiting,
+        entries,
+    );
+    visiting.remove(&canonical);
+    result
+}
+
+fn parse_text(
+    content: &str,
+    path: &Path,
+    include_dir: &Path,
+    root: &Path,
+    visiting: &mut HashSet<PathBuf>,
+    entries: &mut Vec<Entry>,
+) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
@@ -219,13 +239,19 @@ fn parse(
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            let local = canonical.parent().unwrap().join(filename);
+            let local = include_dir.join(filename);
             let include_path = if local.is_file() {
                 local
             } else {
                 root.join(filename)
             };
-            parse(&include_path, root, visiting, entries).map_err(|e| error(&e))?;
+            match parse(&include_path, root, visiting, entries) {
+                Err(_) if matches!(include_path.try_exists(), Ok(false)) => {
+                    return Err(error(&format!("Using '{filename}' does not exist")));
+                }
+                Err(detail) => return Err(error(&detail)),
+                Ok(()) => {}
+            }
             continue;
         }
         let (name, declaration) = text
@@ -265,7 +291,6 @@ fn parse(
         return Err(current.unwrap().error("unterminated Ethernet registration"));
     }
     entries.extend(current);
-    visiting.remove(&canonical);
     Ok(())
 }
 
@@ -373,6 +398,28 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut HashSet::new(),
         &mut entries,
     )?;
+    build_machine(entries, path)
+}
+
+pub fn check_text(content: &str, root: Option<&Path>) -> Result<(), String> {
+    let mut entries = Vec::new();
+    let source = Path::new("<inline REPL>");
+    let root = root.unwrap_or(Path::new("."));
+    parse_text(
+        content,
+        source,
+        root,
+        root,
+        &mut HashSet::new(),
+        &mut entries,
+    )?;
+    if !entries.is_empty() {
+        build_machine(entries, source)?;
+    }
+    Ok(())
+}
+
+fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
     let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
@@ -405,6 +452,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             return Err(entry.error(detail));
         }
         match entry.model.as_str() {
+            "CPU.TranslationCPU" => {
+                return Err(entry.error(
+                    "Antmicro.Renode.Peripherals.CPU.TranslationCPU is an abstract type. Try constructing one of the following concrete types: CPU.CortexM, CPU.RiscV32, CPU.VexRiscv",
+                ));
+            }
             "CPU.RiscV32" | "CPU.VexRiscv" | "CPU.CortexM" => {
                 if entry.sysbus()?.is_some() {
                     return Err(entry.error("expected CPU registered on sysbus without an address"));

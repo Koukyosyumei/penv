@@ -920,3 +920,19 @@ bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
 ```
 
 ログと終了状態は上記の証拠ディレクトリに保存しました。台帳は対象 789 件のうち等価合格 59 件、部分検証 10 件、未達 720 件です。
+
+### backlog-network-d77017f82834-1
+
+`penv check-platform --from-string REPL` を追加し、ファイル入力と同じ REPL パーサーと構築処理を使うようにしました。上流 `tests/unit-tests/platform_descriptions.robot` のインライン 3 ケースを移植しました。空文字列は正常終了し、存在しない `using "invalid"` と抽象 `CPU.TranslationCPU` は上流の期待診断を含むエラーで終了します。上流ではモニターコマンドで渡す 3 つの入力を、移植版は CLI のインライン検証に渡します。既存マシンにインライン定義を追加するモニター操作は残件です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+インラインから有効な STM32H743 REPL を `using` する経路、固定上流 REPL のロード 7 構成、公開 Nucleo Zephyr ELF の Blinky と Button も通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-errors.6QAE3tnn` に保存しました。台帳は対象 789 件のうち等価合格 62 件、部分検証 10 件、未達 717 件です。
