@@ -575,14 +575,7 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
             Ok((declaration, Vec::new()))
         };
     };
-    // A brace immediately after @ begins a registration expression.
-    let prefix = declaration[..begin].trim_end();
-    if prefix.ends_with('@')
-        || prefix.ends_with(TYPED_BUS_RANGE)
-        || prefix
-            .split_once('@')
-            .is_some_and(|(_, registration)| registration.trim_start().starts_with("sysbus new "))
-    {
+    if registration_brace(declaration, begin) {
         return Ok((declaration, Vec::new()));
     }
 
@@ -600,12 +593,36 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
         .chain([text.len()])
     {
         let item = text[start..end].trim();
-        if !item.is_empty() {
+        if item.is_empty() {
+            if end != text.len() {
+                return Err("empty attribute before semicolon");
+            }
+        } else if item.contains("->") || scalar_property(item).is_some() {
             body.push((lineno, item.into()));
+        } else {
+            return Err("expected attribute or IRQ wiring in braces");
         }
         start = end + 1;
     }
     Ok((&declaration[..begin], body))
+}
+
+fn registration_brace(declaration: &str, begin: usize) -> bool {
+    let prefix = declaration[..begin].trim_end();
+    prefix.ends_with('@')
+        || prefix.ends_with(TYPED_BUS_RANGE)
+        || prefix
+            .split_once('@')
+            .is_some_and(|(_, registration)| registration.trim_start().starts_with("sysbus new "))
+}
+
+fn enum_token(value: &str) -> Option<(Option<&str>, &str)> {
+    let (kind, member) = value.rsplit_once('.')?;
+    if !is_repl_identifier(member) || (!kind.is_empty() && !kind.split('.').all(is_repl_identifier))
+    {
+        return None;
+    }
+    Some(((!kind.is_empty()).then_some(kind), member))
 }
 
 fn parse(
@@ -740,6 +757,27 @@ fn parse_content(
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
+        let mut multiline;
+        let declaration = if let Some((begin, '{')) =
+            unquoted_delimiters(declaration, &['{', '}']).next()
+            && !registration_brace(declaration, begin)
+            && brace_depth(declaration) > 0
+        {
+            multiline = declaration.to_owned();
+            let mut depth = brace_depth(declaration);
+            while depth > 0 {
+                let (_, next) = lines
+                    .next()
+                    .ok_or_else(|| error("unterminated attribute block"))?;
+                let next = comments.line(next).map_err(error)?;
+                depth += brace_depth(&next);
+                multiline.push('\n');
+                multiline.push_str(&next);
+            }
+            multiline.as_str()
+        } else {
+            declaration
+        };
         let (declaration, body) = inline_body(declaration, lineno).map_err(error)?;
         let (declaration, alias) = match unquoted_delimiters(declaration, &[' '])
             .find(|&(index, _)| declaration[index..].starts_with(" as "))
@@ -1159,9 +1197,9 @@ fn validate_mock_cpu_properties(
             "EnumValue"
                 if number_token(value).is_some()
                     || is_repl_identifier(value)
-                    || value
-                        .strip_prefix("TwoStateEnum.")
-                        .is_some_and(is_repl_identifier) =>
+                    || enum_token(value).is_some_and(|(kind, _)| {
+                        kind.is_none() || kind == Some("TwoStateEnum")
+                    }) =>
             {
                 continue;
             }

@@ -857,3 +857,164 @@ fn renode_registration_syntax_fail_on_multiple_registration_points_with_non_iden
         .is_err()
     );
 }
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_many_attributes_with_semicolons() {
+    let entry = attribute_syntax(
+        "\nother: Display @ sysbus <0x0, +0x100> { refreshMode: Automatic; -> ic@3; }\n",
+    )
+    .unwrap();
+    assert_eq!(entry.body.len(), 2);
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_one_attribute() {
+    let entry = attribute_syntax("\nuart:\n    baudRate: BaudRate.B9600\n").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.name, "uart");
+    assert_eq!(entry.body.len(), 1);
+    let (key, value) = entry.body[0].1.split_once(':').unwrap();
+    assert_eq!(key, "baudRate");
+    let (kind, value) = enum_token(value.trim()).unwrap();
+    assert_eq!(value, "B9600");
+    assert_eq!(kind, Some("BaudRate"));
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_no_attrbutes() {
+    let entry = attribute_syntax("\nuart: {}").unwrap();
+    assert!(entry.body.is_empty());
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_entry_with_no_attrbutes_and_semicolon() {
+    assert!(attribute_syntax("\nuart: {;}").is_err());
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_non_identifier_in_braces() {
+    assert!(attribute_syntax("\nuart: {_nonIdentifier}").is_err());
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_non_identifier_in_braces_and_semicolon() {
+    assert!(attribute_syntax("\nuart: {;_nonIdentifier}").is_err());
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_one_attribute_in_braces() {
+    let entry = attribute_syntax("\nuart: {baudRate: BaudRate.B9600}\n").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.name, "uart");
+    assert_eq!(entry.body.len(), 1);
+    let (key, value) = entry.body[0].1.split_once(':').unwrap();
+    assert_eq!(key, "baudRate");
+    let (kind, value) = enum_token(value.trim()).unwrap();
+    assert_eq!(value, "B9600");
+    assert_eq!(kind, Some("BaudRate"));
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_one_attribute_in_braces_with_semicolon() {
+    let entry = attribute_syntax("\nuart: {baudRate: BaudRate.B9600;}\n").unwrap();
+    assert!(entry.model.is_empty());
+    assert_eq!(entry.name, "uart");
+    assert_eq!(entry.body.len(), 1);
+    let (key, value) = entry.body[0].1.split_once(':').unwrap();
+    assert_eq!(key, "baudRate");
+    let (kind, value) = enum_token(value.trim()).unwrap();
+    assert_eq!(value, "B9600");
+    assert_eq!(kind, Some("BaudRate"));
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_entry_with_one_attribute_in_braces_with_multiple_semicolons() {
+    assert!(attribute_syntax("\nuart: {baudRate: BaudRate.B9600;;}\n").is_err());
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_non_identifier_with_with_multiple_semicolons() {
+    assert!(attribute_syntax("\nuart: {_nonIdentifier;;}\n").is_err());
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_entry_with_empty_statement_and_one_attribute_in_braces_with_semicolon()
+ {
+    assert!(attribute_syntax("\nuart: {; baudRate: BaudRate.B9600;}\n").is_err());
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_shorthand_enum_value() {
+    let entry = attribute_syntax("\nuart:\n    baudRate: .B9600\n").unwrap();
+    assert_eq!(entry.body.len(), 1);
+    let (key, value) = entry.body[0].1.split_once(':').unwrap();
+    assert_eq!(key, "baudRate");
+    let (kind, value) = enum_token(value.trim()).unwrap();
+    assert_eq!(value, "B9600");
+    assert_eq!(kind, None);
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_two_attributes() {
+    let entry =
+        attribute_syntax("\nuart:\n    friendlyName: \"some name\"\n    size: 0x1000\n").unwrap();
+    assert_eq!(entry.body.len(), 2);
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_two_attributes_in_braces_and_one_semicolon() {
+    let entry =
+        attribute_syntax("\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000\n}")
+            .unwrap();
+    assert_eq!(entry.body.len(), 2);
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_entry_with_attribute_and_non_identifier_in_braces() {
+    assert!(
+        attribute_syntax("\nuart: {\n    friendlyName: \"some name\";\n    _nonIdentifier\n}")
+            .is_err()
+    );
+}
+
+#[test]
+fn renode_attribute_syntax_parse_entry_with_two_attributes_in_braces_and_all_semicolons() {
+    let entry =
+        attribute_syntax("\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000;\n}")
+            .unwrap();
+    assert_eq!(entry.body.len(), 2);
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_entry_with_two_attributes_in_braces_with_trailing_semicolon() {
+    assert!(
+        attribute_syntax("\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000;\n};")
+            .is_err()
+    );
+}
+
+#[test]
+fn renode_attribute_syntax_fail_on_entry_with_two_attributes_and_non_identifier_in_braces_and_semicolons()
+ {
+    assert!(
+        attribute_syntax(
+            "\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000;\n    _nonIdentifier\n}"
+        )
+        .is_err()
+    );
+}
+
+fn attribute_syntax(source: &str) -> Result<Entry, String> {
+    let mut entries = Vec::new();
+    let path = Path::new("<platform string>");
+    parse_content(
+        path,
+        Path::new("."),
+        source,
+        Path::new("."),
+        &mut HashSet::new(),
+        &mut entries,
+    )?;
+    assert_eq!(entries.len(), 1);
+    Ok(entries.pop().unwrap())
+}
