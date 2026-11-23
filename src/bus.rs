@@ -314,6 +314,59 @@ impl Bus {
         Ok(bytes)
     }
 
+    pub(crate) fn find_memory_bytes(
+        &self,
+        pattern: &[u8],
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<u32>, String> {
+        const CHUNK: usize = 1 << 20;
+        if pattern.is_empty() || pattern.len() > CHUNK {
+            return Err("SystemBus search requires a pattern of 1 to 1048576 bytes".into());
+        }
+
+        let mut ranges = self
+            .regions
+            .iter()
+            .filter_map(|region| {
+                let base = u64::from(region.base);
+                let first = base.max(u64::from(start));
+                let limit = (base + region.bytes.len() as u64).min(u64::from(end) + 1);
+                (first < limit).then_some(first..limit)
+            })
+            .collect::<Vec<_>>();
+        ranges.sort_unstable_by_key(|range| range.start);
+        let mut combined: Vec<std::ops::Range<u64>> = Vec::new();
+        for range in ranges {
+            if let Some(previous) = combined.last_mut()
+                && previous.end == range.start
+            {
+                previous.end = range.end;
+            } else {
+                combined.push(range);
+            }
+        }
+
+        let mut addresses = Vec::new();
+        for range in combined {
+            let mut address = range.start;
+            while range.end - address >= pattern.len() as u64 {
+                let count = (range.end - address).min((CHUNK + pattern.len() - 1) as u64);
+                let bytes = self.read_memory_bytes(address as u32, count as usize)?;
+                for (offset, window) in bytes.windows(pattern.len()).enumerate() {
+                    if window == pattern {
+                        addresses.push((address + offset as u64) as u32);
+                    }
+                }
+                if range.end - address <= CHUNK as u64 {
+                    break;
+                }
+                address += CHUNK as u64;
+            }
+        }
+        Ok(addresses)
+    }
+
     pub(crate) fn write_memory_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), String> {
         let request = memory_byte_range(address, bytes.len())?;
         for region in &mut self.regions {
@@ -2780,6 +2833,35 @@ mod memory_segment_cases {
             bus.read_memory_bytes(address, bytes.len()).unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn upstream_find_byte_pattern() {
+        const BUFFER: u32 = 1 << 20;
+        let mut bus = Bus::default();
+        bus.map_ram(0, BUFFER as usize).unwrap();
+        bus.map_ram(BUFFER, BUFFER as usize).unwrap();
+        bus.write_memory_bytes(0, &BYTES).unwrap();
+        bus.write_memory_bytes(BUFFER - 4, &BYTES).unwrap();
+        assert_eq!(
+            bus.find_memory_bytes(&BYTES, 0, u32::MAX).unwrap(),
+            [0, BUFFER - 4]
+        );
+    }
+
+    #[test]
+    fn byte_search_skips_holes_and_respects_inclusive_end() {
+        let mut bus = Bus::default();
+        bus.map_ram(10, 2).unwrap();
+        bus.map_ram(13, 2).unwrap();
+        bus.write_memory_bytes(10, &[1, 2, 0, 3, 4]).unwrap();
+        assert!(
+            bus.find_memory_bytes(&[2, 0, 3], 10, 14)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(bus.find_memory_bytes(&[3, 4], 13, 14).unwrap(), [13]);
+        assert!(bus.find_memory_bytes(&[3, 4], 13, 13).unwrap().is_empty());
     }
 
     #[test]

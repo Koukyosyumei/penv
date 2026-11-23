@@ -1433,3 +1433,21 @@ target/release/penv run --script "$e/bytes.resc" --platform-root ../renode
 ```
 
 `cargo test` 191件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。上記にケース別結果と終了状態を保存しました。台帳は対象786件のうち等価合格174件、部分検証17件、未達595件です。`ShouldReadBytes` の残り3構成にはバイト幅の周辺機器転送が必要です。今回の CLI コマンドは RAM 転送に限り、上流が `onlyMemory` 指定時に行う周辺機器交差の診断と RAM の別名登録は残っています。
+
+### backlog-network-d749d8e280de-1
+
+SystemBus の `FindBytes` を実装しました。隣接する RAM を連続した範囲として検索し、バッファー境界をまたぐ一致を拾います。未マップの穴は検索範囲から外します。固定上流 `ShouldFindBytePattern` と同じ 1 MiB RAM 二領域とバイト列で、全一致位置を照合しました。STM32H743 の CLI プローブでは、初回の RAM アドレスが LTDC と重なったため空き範囲に移し、`0x54000000` と `0x540ffffc` を確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-find-bytes.vgeb8aAf
+target/release/penv run --script "$e/find.resc" --platform-root ../renode
+```
+
+`cargo test` 193件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記にあります。台帳は対象786件のうち等価合格175件、部分検証17件、未達594件です。CPU コンテキスト別の検索と、周辺機器を含む一括読み書きの上流ケースは残っています。

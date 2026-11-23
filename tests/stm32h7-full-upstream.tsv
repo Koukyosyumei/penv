@@ -690,7 +690,7 @@ infrastructure	src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs	458-459	Shoul
 infrastructure	src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs	469-470	ShouldHandleWriteToAHoleBetweenMemorySegments	[Test] public void ShouldHandleWriteToAHoleBetweenMemorySegments()	PASS	固定アドレス・入力・RAM 範囲で同じ書き込みと読み取りを実行し、転送列と穴のゼロ埋めを照合。src/bus.rs
 infrastructure	src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs	480-481	ShouldHandleWriteOverlappingMemorySegment	[Test] public void ShouldHandleWriteOverlappingMemorySegment()	PASS	固定アドレス・入力・RAM 範囲で同じ書き込みと読み取りを実行し、転送列と穴のゼロ埋めを照合。src/bus.rs
 infrastructure	src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs	492-493	ShouldFailToRegisterNonClusteredCpuOnNull	[Test] public void ShouldFailToRegisterNonClusteredCpuOnNull()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
-infrastructure	src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs	500-501	ShouldFindBytePattern	[Test] public void ShouldFindBytePattern()	OPEN	共有 DMA・バス・時刻・GPIO 等の契約として対象。等価性未確認
+infrastructure	src/Emulator/Main/Tests/UnitTests/SystemBusTests.cs	500-501	ShouldFindBytePattern	[Test] public void ShouldFindBytePattern()	PASS	固定上流と同じ連続する 1 MiB RAM 二領域と境界をまたぐ入力で、全検索一致位置を照合。src/bus.rs
 infrastructure	src/Emulator/Main/Tests/UnitTests/MultiCPUTests.cs	24-25	ShouldEnumerateCPUs	[Test] public void ShouldEnumerateCPUs()	OPEN	汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持
 infrastructure	src/Emulator/Main/Tests/UnitTests/MultiCPUTests.cs	46-47	ShouldGuardPeripheralReads	cpuCount=1	OPEN	汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持
 infrastructure	src/Emulator/Main/Tests/UnitTests/MultiCPUTests.cs	46-47	ShouldGuardPeripheralReads	cpuCount=2	OPEN	汎用 ICPU モックのシステムバス契約。台数は実機コア数の要求ではないため全構成を維持

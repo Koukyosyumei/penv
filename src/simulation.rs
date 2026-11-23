@@ -137,6 +137,12 @@ pub enum Action {
         address: u32,
         count: usize,
     },
+    FindMemoryBytes {
+        node: usize,
+        pattern: Vec<u8>,
+        start: u32,
+        end: u32,
+    },
     WriteMemoryBytes {
         node: usize,
         address: u32,
@@ -443,6 +449,17 @@ pub fn run(
                         node.name
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::FindMemoryBytes {
+                    node,
+                    pattern,
+                    start,
+                    end,
+                } => {
+                    let node = &simulation.nodes[node];
+                    let addresses = node.machine.bus.find_memory_bytes(&pattern, start, end)?;
+                    writeln!(output, "{}: sysbus matches = {addresses:#x?}", node.name)
+                        .map_err(|error| format!("sysbus search output: {error}"))?;
                 }
                 Action::WriteMemoryBytes {
                     node,

@@ -20,6 +20,24 @@ pub struct Plan {
     configured: usize,
 }
 
+fn byte_array(bytes: &[&str]) -> Result<Vec<u8>, String> {
+    let bytes = bytes.join(" ");
+    let list = bytes
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .ok_or("expected bracketed SystemBus byte array")?;
+    Ok(if list.trim().is_empty() {
+        Vec::new()
+    } else {
+        list.split(',')
+            .map(|value| {
+                let value = crate::platform::number(value.trim())?;
+                u8::try_from(value).map_err(|_| "SystemBus byte value exceeds 255".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    })
+}
+
 impl Plan {
     pub fn load(path: &Path, root: &Path) -> Result<Self, String> {
         let mut plan = Self::default();
@@ -317,25 +335,34 @@ impl Plan {
                     count,
                 });
             }
+            ["sysbus", "FindBytes", args @ ..] => {
+                let node = self.monitor_node()?;
+                let end_of_array = args
+                    .iter()
+                    .position(|word| word.ends_with(']'))
+                    .ok_or("expected bracketed SystemBus byte array")?;
+                let (pattern, bounds) = args.split_at(end_of_array + 1);
+                let (start, end) = match bounds {
+                    [] => (0, u32::MAX),
+                    [start] => (crate::platform::number(resolve(*start)?)?, u32::MAX),
+                    [start, end] => (
+                        crate::platform::number(resolve(*start)?)?,
+                        crate::platform::number(resolve(*end)?)?,
+                    ),
+                    _ => return Err("expected at most two SystemBus search bounds".into()),
+                };
+                let pattern = byte_array(pattern)?;
+                self.actions.push(Action::FindMemoryBytes {
+                    node,
+                    pattern,
+                    start,
+                    end,
+                });
+            }
             ["sysbus", "WriteBytes", bytes @ .., address, "true" | "True"] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;
-                let bytes = bytes.join(" ");
-                let list = bytes
-                    .strip_prefix('[')
-                    .and_then(|value| value.strip_suffix(']'))
-                    .ok_or("expected bracketed SystemBus byte array")?;
-                let bytes = if list.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    list.split(',')
-                        .map(|value| {
-                            let value = crate::platform::number(value.trim())?;
-                            u8::try_from(value)
-                                .map_err(|_| "SystemBus byte value exceeds 255".to_owned())
-                        })
-                        .collect::<Result<Vec<_>, _>>()?
-                };
+                let bytes = byte_array(bytes)?;
                 self.actions.push(Action::WriteMemoryBytes {
                     node,
                     address,
