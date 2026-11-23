@@ -17,7 +17,7 @@ REVISIONS = {
     "infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85",
     "ui": "5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f",
 }
-MAX_ISA_BLOCKER = "upstream CPU creation requires V, Zfh, Smepmp"
+MAX_ISA_BLOCKER = "upstream CPU creation requires V, Smepmp"
 BOARD_REGRESSION = {
     "Arty_LiteX_VexRiscv.robot",
     "LiteX_Linux_VexRiscv.robot",
@@ -97,6 +97,13 @@ def robot_cases(root, isa, act):
                                 basis += "; F/D diagnostic passed with 1 MiB RAM"
                         if key == "TESTS_32" and re.match(r"rv32u[fd]-[pv]-", portable):
                             basis += "; F/D ISA diagnostic passed with 2 MiB RAM"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zfh(?:min)?D?/[^/]+\.elf", portable):
+                            if re.fullmatch(r".*/Zfh/Zfh-f(?:(?:add|div|mul|sub)\.h-01|n?m(?:add|sub)\.h-0[12])\.elf", portable):
+                                basis += "; Zfh diagnostic: exceeds 1 MiB RAM, passes with 2 MiB"
+                            else:
+                                basis += "; Zfh diagnostic passed with 1 MiB RAM"
+                        if key == "TESTS_32" and re.match(r"rv32uzfh-[pv]-", portable):
+                            basis += "; Zfh ISA diagnostic passed with 2 MiB RAM"
                         yield ("Renode", name, case.lineno, case.name, portable, "target",
                                "blocked-cpu", basis)
                     continue

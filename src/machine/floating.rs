@@ -13,6 +13,7 @@ impl Hart {
         match encoding {
             0 if self.csr.f_extension => Some(Format::Single),
             1 if self.csr.d_extension => Some(Format::Double),
+            2 if self.zfh => Some(Format::Half),
             _ => None,
         }
     }
@@ -36,6 +37,7 @@ impl Hart {
         let funct3 = (insn >> 12) & 7;
         let format = match opcode {
             0x07 | 0x27 => match funct3 {
+                1 => self.format(2),
                 2 => self.format(0),
                 3 => self.format(1),
                 _ => None,
@@ -49,10 +51,10 @@ impl Hart {
         let floating = self.floating.as_ref().unwrap();
         if opcode == 0x07 {
             let address = self.registers[rs1].wrapping_add(sign(insn >> 20, 12));
-            let bits = if matches!(format, Format::Single) {
-                u64::from(self.load::<4>(bus, address)?)
-            } else {
-                self.fp_load_double(bus, address)?
+            let bits = match format {
+                Format::Half => u64::from(self.load::<2>(bus, address)?),
+                Format::Single => u64::from(self.load::<4>(bus, address)?),
+                Format::Double => self.fp_load_double(bus, address)?,
             };
             self.fp_write(rd, format, bits);
             return Ok(None);
@@ -61,10 +63,11 @@ impl Hart {
             let immediate = ((insn >> 25) << 5) | ((insn >> 7) & 31);
             let address = self.registers[rs1].wrapping_add(sign(immediate, 12));
             let bits = floating[rs2];
-            if matches!(format, Format::Single) {
-                self.store(bus, address, 4, bits as u32, output)?;
-            } else {
-                self.fp_store_double(bus, address, bits, output)?;
+            match format {
+                Format::Half | Format::Single => {
+                    self.store(bus, address, format.width(), bits as u32, output)?;
+                }
+                Format::Double => self.fp_store_double(bus, address, bits, output)?,
             }
             return Ok(None);
         }
@@ -104,16 +107,19 @@ impl Hart {
                 0x1c if rs2 == 0 => {
                     integer_result = true;
                     let bits = match funct3 {
+                        0 if matches!(format, Format::Half) => u64::from(sign(lhs as u32, 16)),
                         0 if matches!(format, Format::Single) => lhs,
                         1 => format.class(lhs),
                         _ => return Err(illegal()),
                     };
                     ResultBits { bits, flags: 0 }
                 }
-                0x1e if rs2 == 0 && funct3 == 0 && matches!(format, Format::Single) => ResultBits {
-                    bits: u64::from(self.registers[rs1]),
-                    flags: 0,
-                },
+                0x1e if rs2 == 0 && funct3 == 0 && !matches!(format, Format::Double) => {
+                    ResultBits {
+                        bits: u64::from(self.registers[rs1]),
+                        flags: 0,
+                    }
+                }
                 _ => return Err(illegal()),
             }
         } else {

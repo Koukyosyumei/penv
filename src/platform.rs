@@ -874,7 +874,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             "CPU.VexRiscv" => Some((true, false, false)),
             _ => None,
         };
-        let mut floating = (false, false);
+        let mut floating = (false, false, false);
         let mut zicond = false;
         let mut zacas = false;
         let mut bitmanip = BitManip::default();
@@ -902,11 +902,13 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     let mut base = architecture.as_str();
                     zicond = false;
                     zacas = false;
+                    let mut zfh = false;
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
                             "zacas" if !zacas => zacas = true,
+                            "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
                             "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
@@ -925,7 +927,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                         "rv32imafdc" | "rv32gc" => ("rv32imac", (true, true)),
                         _ => (letters, (false, false)),
                     };
-                    floating = flags;
+                    floating = (flags.0, flags.1, zfh);
                     if floating.0 && !matches!(suffix, "" | "zicsr" | "zifencei" | "zicsr_zifencei")
                     {
                         return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
@@ -974,6 +976,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             {
                 let (multiply, atomic, compressed) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
+                if floating.2 && !floating.0 {
+                    return Err(entry.error("Zfh requires the RV32 F extension"));
+                }
                 if zacas && !atomic {
                     return Err(entry.error("Zacas requires the RV32 A extension"));
                 }
@@ -1017,7 +1022,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         hart.set_zacas(zacas);
         hart.set_bitmanip(bitmanip);
         if floating.0 {
-            hart.enable_floating(floating.1);
+            hart.enable_floating(floating.1, floating.2);
         }
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
@@ -1945,7 +1950,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
         missing.extend(parts.filter(|extension| {
             !matches!(
                 *extension,
-                "zicsr" | "zifencei" | "zicond" | "zba" | "zbb" | "zbc" | "zbs" | "zacas"
+                "zicsr" | "zifencei" | "zicond" | "zba" | "zbb" | "zbc" | "zbs" | "zacas" | "zfh"
             )
         }));
     }
@@ -1963,7 +1968,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
 type RiscvConfig<'a> = (
     usize,
     &'a Entry,
-    (bool, bool, bool, bool, bool, BitManip, (bool, bool)),
+    (bool, bool, bool, bool, bool, BitManip, (bool, bool, bool)),
     usize,
 );
 

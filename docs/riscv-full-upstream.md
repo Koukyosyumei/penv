@@ -211,3 +211,41 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 ```
 
 V・Zfh・Smepmp の実装、上流構成での再検証、上流の RAM 容量と生成 ELF の整合確認が残っています。
+
+## RV32 Zfh
+
+`full-rv32-zfh` では既存 F/D の演算・丸め・フラグ処理に半精度形式を追加しました。`_zfh` には F が必要です。半精度の NaN ボックス化、FLH/FSH、FMV.H.X と FMV.X.H、半精度演算、比較・分類、整数および F/D との変換を同じ浮動小数点状態と CSR に接続しました。Zfh 無効時の FLH は違法命令になり、F を欠く `rv32imac_zfh` は作成時に拒否されます。
+
+| 固定 ACT ケース | 縮小 ISA | RAM 1 MiB | RAM 2 MiB |
+| --- | --- | ---: | ---: |
+| Zfh | `rv32imafc_zfh` | 41/53 | 53/53 |
+| ZfhD | `rv32gc_zfh` | 30/30 | 30/30 |
+| Zfhmin | `rv32imafc_zfh` | 6/6 | 6/6 |
+| ZfhminD | `rv32gc_zfh` | 6/6 | 6/6 |
+
+Zfh の残り 12 件はロードセグメントが 1 MiB の RAM 範囲を超えます。2 MiB で全件が自己検証を通過しました。Zfhmin 系の ELF も Zfh を有効にした構成で検証しました。公開 ISA の Zfh 22 件は `rv32gc_zfh` と 2 MiB で全件が `tohost=0` を返し、既存 F/D ACT は 38/38 と 64/64 を維持しました。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+for spec in fh:rv32imafc_zfh fdh:rv32gc_zfh; do
+  profile=${spec%:*}
+  sed "s/rv32gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp/${spec#*:}/" \
+    "$work/act-upstream.repl" > "$work/$profile.repl"
+  sed 's/size: 0x100000/size: 0x200000/' "$work/$profile.repl" > "$work/$profile-2m.repl"
+done
+for group in Zfh ZfhD Zfhmin ZfhminD; do
+  profile=fh
+  [[ $group != *D ]] || profile=fdh
+  for size in '' -2m; do
+    python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+      --max-steps 10000000 --platform "$work/$profile$size.repl" --artifacts "$work/$group$size" \
+      "$work"/act/work/spike-rv32-max/elfs/rv32i/"$group"/*.elf || test "$?" -eq 1
+  done
+done
+mapfile -t zfh_isa < <(find "$work/isa" -maxdepth 1 -type f -name 'rv32uzfh-*' ! -name '*.dump' | sort)
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$work/fdh-2m.repl" --artifacts "$work/isa-zfh" "${zfh_isa[@]}"
+```
+
+上流の最大構成では ACT 0/510、ISA 0/290 です。V と Smepmp が引き続き CPU 作成を阻んでいます。縮小構成の結果と RAM 差は台帳に残し、最大構成の等価合格数に含めていません。

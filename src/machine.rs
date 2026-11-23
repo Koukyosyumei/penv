@@ -41,6 +41,7 @@ pub struct Hart {
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    zfh: bool,
     floating: Option<Box<[u64; 32]>>,
     unaligned_accesses: bool,
     zicond: bool,
@@ -169,6 +170,7 @@ impl Machine {
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                zfh: false,
                 floating: None,
                 unaligned_accesses: false,
                 zicond: false,
@@ -472,9 +474,10 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
-    pub fn enable_floating(&mut self, double: bool) {
+    pub fn enable_floating(&mut self, double: bool, half: bool) {
         self.csr.f_extension = true;
         self.csr.d_extension = double;
+        self.zfh = half;
         self.floating = Some(Box::new([0; 32]));
     }
 
