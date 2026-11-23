@@ -102,8 +102,14 @@ impl ReplComments {
                         "Multiline comment in indent mode can only finish at the end of the line.",
                     );
                 }
-                result.extend(std::iter::repeat_n(' ', rest[..end + 2].chars().count()));
                 self.in_block = false;
+                if self.braces == 0 {
+                    break;
+                }
+                result.extend(std::iter::repeat_n(
+                    ' ',
+                    rest[..end + 2].encode_utf16().count(),
+                ));
                 rest = tail;
             }
             let mut quoted = false;
@@ -127,8 +133,10 @@ impl ReplComments {
                                     "Single line multiline comment cannot precede code in indent mode.",
                                 );
                             }
-                            result
-                                .extend(std::iter::repeat_n(' ', rest[index..end].chars().count()));
+                            result.extend(std::iter::repeat_n(
+                                ' ',
+                                rest[index..end].encode_utf16().count(),
+                            ));
                             next = Some(&rest[end..]);
                         } else {
                             self.in_block = true;
@@ -2421,6 +2429,99 @@ mod comment_cases {
     fn lines(source: &str) -> Result<Vec<String>, &'static str> {
         let mut comments = ReplComments::default();
         source.lines().map(|line| comments.line(line)).collect()
+    }
+
+    #[test]
+    fn upstream_correct_line_comments() {
+        assert_eq!(
+            lines("\nline1 { // something\n    line2 }").unwrap(),
+            ["", "line1 { ", "    line2 }"]
+        );
+    }
+
+    #[test]
+    fn upstream_unrecognized_line_comments() {
+        assert_eq!(
+            lines("\nline1 {// something\n    line2 }").unwrap(),
+            ["", "line1 {// something", "    line2 }"]
+        );
+    }
+
+    #[test]
+    fn upstream_beginning_line_comment() {
+        assert_eq!(
+            lines("\n// something\nline1 {\n    line2 }").unwrap(),
+            ["", "", "line1 {", "    line2 }"]
+        );
+    }
+
+    #[test]
+    fn upstream_line_comments_and_strings() {
+        let source = "\nline1 \"something with //\" \"another // pseudo comment\" { // and here goes real comment\n    line2 }";
+        assert_eq!(
+            lines(source).unwrap(),
+            [
+                "",
+                "line1 \"something with //\" \"another // pseudo comment\" { ",
+                "    line2 }"
+            ]
+        );
+    }
+
+    #[test]
+    fn upstream_same_line_block_comments() {
+        let source = "\nline1 used as a ruler1234            123456789                1234\nline 2/* first comment*/ \"string with /*\" /* second comment */ something";
+        assert_eq!(
+            lines(source).unwrap(),
+            [
+                "",
+                "line1 used as a ruler1234            123456789                1234",
+                "line 2                   \"string with /*\"                      something"
+            ]
+        );
+    }
+
+    #[test]
+    fn upstream_multiline_comments() {
+        let source =
+            "\nline1/* here we begin\n    here it goes\nmore\nmore\n    here we finish*/\nline2";
+        assert_eq!(
+            lines(source).unwrap(),
+            ["", "line1", "", "", "", "", "line2"]
+        );
+    }
+
+    #[test]
+    fn upstream_multiline_comments_within_braces() {
+        let source =
+            "\nline1 { /* here we begin\n    here it goes\nhere the comment ends*/ x: 5 }\nline2";
+        assert_eq!(
+            lines(source).unwrap(),
+            [
+                "",
+                "line1 { ",
+                "",
+                "                        x: 5 }",
+                "line2"
+            ]
+        );
+    }
+
+    #[test]
+    fn upstream_brace_in_string() {
+        let source = "\nline1 \"{ \\\" {\"\nline2";
+        let mut comments = ReplComments::default();
+        let output: Vec<_> = source
+            .lines()
+            .map(|line| comments.line(line).unwrap())
+            .collect();
+        assert_eq!(output, ["", "line1 \"{ \\\" {\"", "line2"]);
+        assert_eq!(comments.braces, 0);
+    }
+
+    #[test]
+    fn comment_columns_follow_utf16() {
+        assert_eq!(lines("name/* 🦀 */value").unwrap(), ["name        value"]);
     }
 
     #[test]

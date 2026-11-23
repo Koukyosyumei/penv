@@ -1276,3 +1276,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 150件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-parser-remaining.36hNSlvg` に保存しました。台帳全体は対象786件のうち等価合格144件、部分検証10件、未達632件です。汎用オブジェクトのインスタンス化、型付き参照の解決、ファイル単位のローカルスコープは残っています。
+
+### backlog-network-47aff51c222c-1
+
+REPL のコメント処理で、字下げモードにある複数行コメントの終端行を空行として扱い、波括弧内では後続コードの UTF-16 列を保持します。固定上流 `PreLexerTests.cs` の8件を同じバイナリで個別実行し、コメント除去後の行、空白、引用符内のコメント記号と波括弧を照合しました。上流プリレクサが後段で挿入するセミコロンは、行境界を直接処理する実装の観測点に合わせて正規化しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 159件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-comment-cases.1rP2Az0a` にあります。台帳は対象786件のうち等価合格152件、部分検証10件、未達624件です。字下げと複数段のアウトデントを扱うプリレクサケースは残っています。

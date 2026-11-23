@@ -394,11 +394,19 @@ def triage(row):
     }:
         status, reason = 'PASS', '固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs'
     elif suite == 'PreLexerTests.cs' and name in {
+        'ShouldHandleCorrectLineComments',
+        'ShouldHandleUncorrectLineComments',
+        'ShouldHandleBeginningLineComment',
+        'ShouldHandleLineCommentsAndStrings',
+        'ShouldHandleMultilineCommentsInOneLine',
+        'ShouldHandleMultilineComments',
+        'ShouldHandleMultilineCommentsWithinBraces',
+        'ShouldProcessBraceInString',
         'ShouldFailOnUnterminatedString',
         'ShouldFailIfTheMultilineCommentFinishesBeforeEndOfLine',
         'ShouldFailOnSingleLineMultilineComment',
     }:
-        status, reason = 'PASS', '固定上流の入力文字列でコメント・文字列処理の構文エラーを照合。src/platform.rs'
+        status, reason = 'PASS', '固定上流の入力でコメント除去後の行と列、引用符の扱い、または対応する構文エラーを照合。上流が後段で生成する行区切りは正規化。src/platform.rs'
     elif suite == 'UsingTests.cs':
         if name in {f'ShouldFollowAttributeOverrideOrder{index}' for index in range(5)}:
             status, reason = 'PASS', '固定上流と同じ REPL・インクルード順・Placeholder 期待値を合成結果で照合。MockCPU の Placeholder は単純な文字列プロパティ。実 H743 GPIO でも合成値を観測'
