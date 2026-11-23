@@ -24,7 +24,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
-mod resd_illuminance;
+mod resd;
 mod simulation;
 mod stm32_crc;
 mod stm32_ethernet;

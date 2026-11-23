@@ -306,11 +306,12 @@ def triage(row):
             reason = '同一 ELF・元の CSV 12 Hz・100 ms オフセット・3 区間と終端復帰を同順 UART で照合。RESD コンテナー、元の REPL、Robot timeout は未移植'
         else:
             reason = '同一 ELF と同順の実行時プロパティ刺激を UART で照合。元の REPL と Robot timeout の等価性は未確認'
-    elif suite == 'LPS25HB.robot' and name != 'Should Read Samples From RESD':
-        status, reason = 'PARTIAL', {
-            'Should Read Temperature And Pressure': '同一 v4.2 ELF の初期値と正負の入力を別実行で照合。稼働中の入力変更と順序は未移植',
-            'Should Correctly Calculate Pressure': 'I²C サブアドレスで上流の 3 バイトを確認。Robot のプロパティ getter と直接 Read は未移植',
-            'Should Work After Errata Driver Update': '同一 v4.4 ELF の UART 期待値を確認。元のプラットフォーム構成と操作順の等価性は未確定',
+    elif suite == 'LPS25HB.robot':
+        status, reason = 'PASS', {
+            'Should Read Temperature And Pressure': '固定 v4.2 ELF・Nucleo REPL と同じ I2C 登録。既定値・正負・範囲外を含む全刺激と USART3 の全期待値を上流順に照合',
+            'Should Correctly Calculate Pressure': 'Pressure=1023.346923828125 の getter と直接 Read(0x28, 3) の 8D F5 3F を照合。src/lps25hb.rs',
+            'Should Read Samples From RESD': '固定 v4.2 ELF と上流 CSV から同じ 25 Hz・開始 70 ms の RESD を生成。3 サンプルと終端復帰 2 回を USART3 で照合',
+            'Should Work After Errata Driver Update': '固定 v4.4 ELF、Nucleo REPL と同じ I2C 登録および実行前の温度・気圧設定で USART3 の上流期待値を照合',
         }[name]
     elif status == 'REVIEW':
         if suite == 'monitor-tests.robot' and name == 'Should Fail to Find Unix-only Method on Windows':

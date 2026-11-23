@@ -377,8 +377,11 @@ pub fn configure(
                     return Err(entry.error("LPS25HB input is outside operating range"));
                 }
             }
-            bus.attach(u16::from(address), Target::Pressure(sensor))
-                .map_err(|e| entry.error(e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Pressure(format!("sysbus.{parent}.{}", entry.name), sensor),
+            )
+            .map_err(|e| entry.error(e))?;
             continue;
         }
         if entry.model == Tmp108::MODEL {

@@ -789,3 +789,24 @@ target/release/penv run --script "$e/shell-wait/case.resc" \
 ```
 
 RESD、UART、終了状態は `~/.local/state/penv-dispatch/evidence/h7-veml.QF6dq3bd` に保存しました。台帳は対象 789 件のうち等価合格 29 件、部分検証 17 件、未達 743 件です。
+
+### backlog-network-a8bb256e028f-1
+
+上流 `LPS25HB.robot` の 4 ケースを移植しました。公開 Zephyr 4.2/4.4 ELF を未変更の Nucleo REPL と上流と同じ `i2c1 0x5D` のセンサー登録で実行しました。実行時の温度・気圧変更、範囲外の入力で前の値が維持される動作、各段階の USART3 出力を上流順に照合しました。圧力プロパティの設定と読み戻しは `1023.346923828125`、直接レジスター読み出しは `8D F5 3F` を確認しました。
+
+共有 RESD v1 デコーダーでチャンネル 0 の温度・気圧を読み、固定モデルと同じセンサー出力データレートでサンプルの反映時刻を求めます。上流変換器が生成した 25 Hz・開始 70 ms の RESD で、3 組のサンプルと終端後の既定値への復帰 2 回を確認しました。RESD はサンプル種別ごとに単一ブロックを扱い、LPS25HB の終端復帰は定周期ブロックで検証しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test upstream_pressure_property_and_direct_read
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-veml7700-robot.sh "$(mktemp -d)"
+```
+
+検証ログ、RESD、終了状態は `~/.local/state/penv-dispatch/evidence/h7-lps-live.w4haoFY7` にあります。LPS25HB の最終ログは `paced/` にあり、VEML7700 ポーリング 4 件と参照 Zephyr Shell の回帰も通過しました。台帳は対象 789 件のうち等価合格 33 件、部分検証 14 件、未達 742 件です。

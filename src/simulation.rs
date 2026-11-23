@@ -45,6 +45,22 @@ pub enum Action {
         name: String,
         event: crate::ft5336::PointerEvent,
     },
+    PressureFeed {
+        node: usize,
+        sensor: String,
+        temperature: bool,
+        file: std::path::PathBuf,
+    },
+    PressureInput {
+        node: usize,
+        sensor: String,
+        temperature: bool,
+        value: f64,
+    },
+    ReadPressure {
+        node: usize,
+        sensor: String,
+    },
     IlluminanceFeed {
         node: usize,
         sensor: String,
@@ -198,6 +214,42 @@ pub fn run(
                         .machine
                         .bus
                         .touch_input(&name, event)?;
+                }
+                Action::PressureFeed {
+                    node,
+                    sensor,
+                    temperature,
+                    file,
+                } => {
+                    simulation.nodes[node].machine.bus.feed_pressure(
+                        &sensor,
+                        &file,
+                        temperature,
+                    )?;
+                }
+                Action::PressureInput {
+                    node,
+                    sensor,
+                    temperature,
+                    value,
+                } => {
+                    let device = simulation.nodes[node].machine.bus.find_pressure(&sensor)?;
+                    let accepted = if temperature {
+                        device.set_temperature(value)
+                    } else {
+                        device.set_pressure(value)
+                    };
+                    if !accepted {
+                        eprintln!("{sensor}: out-of-range input {value} ignored");
+                    }
+                }
+                Action::ReadPressure { node, sensor } => {
+                    let pressure = simulation.nodes[node]
+                        .machine
+                        .bus
+                        .find_pressure(&sensor)?
+                        .pressure();
+                    writeln!(output, "{sensor} pressure: {pressure}").map_err(|e| e.to_string())?;
                 }
                 Action::IlluminanceFeed { node, sensor, file } => {
                     simulation.nodes[node]

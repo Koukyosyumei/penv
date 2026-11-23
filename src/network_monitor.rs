@@ -116,6 +116,44 @@ impl Plan {
                     resolve(*switch)?,
                 )?;
             }
+            [
+                sensor,
+                command @ ("FeedTemperatureSamplesFromRESD" | "FeedPressureSamplesFromRESD"),
+                file,
+            ] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                let path = resolve(*file)?
+                    .strip_prefix('@')
+                    .ok_or("expected @RESD path")?;
+                let file = monitor::asset_path(path.trim_matches('"'), source, root, None)?;
+                self.actions.push(Action::PressureFeed {
+                    node,
+                    sensor: (*sensor).into(),
+                    temperature: *command == "FeedTemperatureSamplesFromRESD",
+                    file,
+                });
+            }
+            [sensor, property @ ("Pressure" | "Temperature"), value]
+                if sensor.starts_with("sysbus.") =>
+            {
+                let node = self.monitor_node()?;
+                let value = resolve(*value)?
+                    .parse()
+                    .map_err(|_| "invalid pressure or temperature")?;
+                self.actions.push(Action::PressureInput {
+                    node,
+                    sensor: (*sensor).into(),
+                    temperature: *property == "Temperature",
+                    value,
+                });
+            }
+            [sensor, "Pressure"] if sensor.starts_with("sysbus.") => {
+                let node = self.monitor_node()?;
+                self.actions.push(Action::ReadPressure {
+                    node,
+                    sensor: (*sensor).into(),
+                });
+            }
             [sensor, "FeedIlluminanceSamplesFromRESD", file] if sensor.starts_with("sysbus.") => {
                 let node = self.monitor_node()?;
                 let value = resolve(*file)?;

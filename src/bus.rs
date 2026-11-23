@@ -691,6 +691,26 @@ impl Bus {
             .ok_or_else(|| format!("unknown LSM6DSO sensor {name:?}"))
     }
 
+    pub fn feed_pressure(
+        &mut self,
+        name: &str,
+        path: &std::path::Path,
+        temperature: bool,
+    ) -> Result<(), String> {
+        let nanoseconds = self
+            .h7_step
+            .saturating_mul(1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND));
+        self.find_pressure(name)?
+            .feed_samples(path, temperature, nanoseconds)
+    }
+
+    pub fn find_pressure(&mut self, name: &str) -> Result<&mut crate::lps25hb::Lps25hb, String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_pressure(name))
+            .ok_or_else(|| format!("unknown pressure sensor {name:?}"))
+    }
+
     pub fn feed_illuminance(&mut self, name: &str, path: &std::path::Path) -> Result<(), String> {
         self.h7_i2c
             .iter_mut()

@@ -22,7 +22,7 @@ pub enum Target {
     Light(String, Veml7700),
     Magnetometer(Iis2mdc),
     Temperature(Tmp108),
-    Pressure(Lps25hb),
+    Pressure(String, Lps25hb),
     Imu(String, Box<Lsm6dso>),
     Touch(String, Ft5336),
 }
@@ -32,7 +32,7 @@ impl Target {
         match self {
             Self::Light(_, sensor) => sensor.stop(),
             Self::Temperature(sensor) => sensor.stop(),
-            Self::Pressure(sensor) => sensor.stop(),
+            Self::Pressure(_, sensor) => sensor.stop(),
             Self::Magnetometer(_) | Self::Imu(..) | Self::Touch(..) => {}
         }
     }
@@ -89,6 +89,15 @@ impl I2c {
         }
         self.targets.push((address, target));
         Ok(())
+    }
+
+    pub fn find_pressure(&mut self, name: &str) -> Option<&mut Lps25hb> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Pressure(path, sensor) if path == name => Some(sensor),
+                _ => None,
+            })
     }
 
     pub fn find_light(&mut self, name: &str) -> Option<&mut Veml7700> {
@@ -158,7 +167,7 @@ impl I2c {
                 }
                 let value = match self.active.map(|target| &mut self.targets[target].1) {
                     Some(Target::Magnetometer(sensor)) => sensor.read_byte(),
-                    Some(Target::Pressure(sensor)) => sensor.read_byte(),
+                    Some(Target::Pressure(_, sensor)) => sensor.read_byte(),
                     Some(Target::Imu(_, sensor)) => sensor.read_byte(),
                     Some(Target::Touch(_, device)) => device
                         .response()
@@ -255,15 +264,17 @@ impl I2c {
         if let Some(target) = selected {
             self.status |= BUSY;
             if self.reading {
+                let nanoseconds = self.step.saturating_mul(
+                    1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND),
+                );
                 let bytes = match &mut self.targets[target].1 {
-                    Target::Light(_, sensor) => Some(sensor.read(self.step.saturating_mul(
-                        1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND),
-                    ))),
+                    Target::Light(_, sensor) => Some(sensor.read(nanoseconds)),
+                    Target::Pressure(_, sensor) => {
+                        sensor.start_read(nanoseconds);
+                        None
+                    }
                     Target::Temperature(sensor) => Some(sensor.read()),
-                    Target::Magnetometer(_)
-                    | Target::Pressure(_)
-                    | Target::Imu(..)
-                    | Target::Touch(..) => None,
+                    Target::Magnetometer(_) | Target::Imu(..) | Target::Touch(..) => None,
                 };
                 if let Some(bytes) = bytes {
                     self.data[..2].copy_from_slice(&bytes);
@@ -315,7 +326,7 @@ impl I2c {
                 Target::Imu(_, sensor) if self.position <= self.data.len() => {
                     sensor.write(&self.data[..self.position])
                 }
-                Target::Pressure(sensor) if self.position <= self.data.len() => {
+                Target::Pressure(_, sensor) if self.position <= self.data.len() => {
                     sensor.write(&self.data[..self.position])
                 }
                 Target::Magnetometer(sensor) if self.position <= self.data.len() => {
