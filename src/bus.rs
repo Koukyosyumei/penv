@@ -136,6 +136,7 @@ struct ByteSpan {
 pub(crate) enum FixtureValue {
     Enums([u8; 2]),
     Integer(i32),
+    ConstructorCounter(u32),
     Text(Option<String>),
     Boolean(bool),
     Range(u64, u64),

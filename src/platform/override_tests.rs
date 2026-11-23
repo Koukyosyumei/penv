@@ -2247,3 +2247,30 @@ fn renode_cpu_enum_default_does_not_replace_explicit_value() {
     let machine = mock_registration_machine(source).unwrap();
     assert_eq!(machine.bus.fixture_cpu_enum("sysbus.cpu"), Some(1));
 }
+
+#[test]
+fn renode_constructor_default_none_removes_prior_argument() {
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>\n    value: 1\n\nperipheral:\n    value: none";
+    let machine = mock_registration_machine(source).unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.peripheral"),
+        Some(&FixtureValue::ConstructorCounter(1))
+    );
+}
+
+#[test]
+fn renode_constructor_default_rejects_injected_machine_assignment() {
+    let source = "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral @ sysbus <0, 1>\n    mach: empty\n    machine: empty\n";
+    let error = mock_registration_machine(source).err().unwrap();
+    assert!(error.contains("NoCtor:"), "{error}");
+}
+
+#[test]
+fn renode_constructor_default_accepts_integer_named_machine() {
+    let source = "\nperipheral: Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral @ sysbus <0, 1>\n    machine: empty\n";
+    let machine = mock_registration_machine(source).unwrap();
+    assert_eq!(
+        machine.bus.fixture_value("sysbus.peripheral"),
+        Some(&FixtureValue::Integer(0))
+    );
+}

@@ -2100,13 +2100,35 @@ fn bind_fixture_enums(entry: &Entry) -> Result<[u8; 2], String> {
     Ok(values)
 }
 
+const MOCK_MACHINE: &str = "Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral";
+
+fn bind_machine_fixture(entry: &Entry, _machine: &Machine) -> Result<FixtureValue, String> {
+    let properties = keys(entry, &["mach", "machine"])?;
+    let [("machine", value)] = properties.as_slice() else {
+        return Err(entry.error("NoCtor: machine context is supplied by the loader"));
+    };
+    match (*value, scalar_value(value)) {
+        ("empty", _) => Ok(FixtureValue::Integer(0)),
+        (_, Some(ScalarValue::Number(number))) => number
+            .parse::<i32>()
+            .map(FixtureValue::Integer)
+            .map_err(|_| entry.error("NoCtor: expected integer machine argument")),
+        _ => Err(entry.error("NoCtor: expected integer machine argument")),
+    }
+}
+
 const EMPTY_PERIPHERAL: &str = "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
 
 fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
     let attributes: Vec<_> = entry
         .body
         .iter()
-        .filter(|(_, attribute)| script_commands(attribute).is_none())
+        .filter(|(_, attribute)| {
+            script_commands(attribute).is_none()
+                && !attribute
+                    .split_once(':')
+                    .is_some_and(|(key, value)| key.trim() == "value" && value.trim() == "none")
+        })
         .collect();
     for (_, attribute) in &attributes {
         if let Some((_, value)) = attribute.split_once(':')
@@ -2302,16 +2324,33 @@ fn build_entries_with_scripts(
             "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor" => {
                 return Err(entry.error("NoCtor: model has no public constructor"));
             }
+            MOCK_MACHINE if check_only => {
+                let value = bind_machine_fixture(entry, &machine)?;
+                machine
+                    .bus
+                    .register_fixture_value(
+                        format!("sysbus.{}", entry.registered_name()),
+                        entry.bus_range()?,
+                        value,
+                    )
+                    .map_err(|error| entry.error(&error))?;
+            }
+
             EMPTY_PERIPHERAL => {
                 validate_empty_peripheral_constructor(entry)?;
                 if !matches!(entry.registration.as_deref(), None | Some("none")) {
-                    machine
-                        .bus
-                        .register_empty_peripheral(
-                            format!("sysbus.{}", entry.registered_name()),
-                            entry.bus_ranges()?,
+                    let name = format!("sysbus.{}", entry.registered_name());
+                    let ranges = entry.bus_ranges()?;
+                    if let [range] = ranges.as_slice() {
+                        machine.bus.register_fixture_value(
+                            name,
+                            *range,
+                            FixtureValue::ConstructorCounter(1),
                         )
-                        .map_err(|error| entry.error(&error))?;
+                    } else {
+                        machine.bus.register_empty_peripheral(name, ranges)
+                    }
+                    .map_err(|error| entry.error(&error))?;
                 }
                 for (_, attribute) in &entry.body {
                     if let Some((phase, _, commands)) = script_commands(attribute)
@@ -2523,6 +2562,7 @@ fn build_entries_with_scripts(
                         | MOCK_CPU
                         | MOCK_DEPENDENCY
                         | MOCK_ENUM
+                        | MOCK_MACHINE
                         | MOCK_COLLECTION
                         | MOCK_INTEGER
                         | MOCK_STRING
