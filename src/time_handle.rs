@@ -22,6 +22,13 @@ pub struct TimeHandle {
     enabled: bool,
     source_active: bool,
     disposed: bool,
+    latch_depth: u32,
+    disabled_grant_latched: bool,
+    deferred_enabled: Option<bool>,
+    elapsed: u64,
+    carried: u64,
+    accounted_carry: u64,
+    reported: u64,
 }
 
 impl Default for TimeHandle {
@@ -33,6 +40,13 @@ impl Default for TimeHandle {
             enabled: true,
             source_active: true,
             disposed: false,
+            latch_depth: 0,
+            disabled_grant_latched: false,
+            deferred_enabled: None,
+            elapsed: 0,
+            carried: 0,
+            accounted_carry: 0,
+            reported: 0,
         }
     }
 }
@@ -45,8 +59,10 @@ impl TimeHandle {
     pub fn dispose(&mut self) {
         self.disposed = true;
         self.set_source_active(false);
-        self.set_enabled(false);
+        self.apply_enabled(false);
         self.grant = Grant::Idle;
+        self.disabled_grant_latched = false;
+        self.deferred_enabled = None;
     }
 
     pub fn set_source_active(&mut self, active: bool) {
@@ -56,18 +72,49 @@ impl TimeHandle {
         }
     }
 
-    pub fn set_enabled(&mut self, enabled: bool) {
+    pub fn latch(&mut self) {
+        self.latch_depth += 1;
+    }
+
+    pub fn unlatch(&mut self) -> Result<(), &'static str> {
+        self.latch_depth = self
+            .latch_depth
+            .checked_sub(1)
+            .ok_or("time handle is not latched")?;
+        if self.latch_depth == 0
+            && let Some(enabled) = self.deferred_enabled.take()
+        {
+            self.apply_enabled(enabled);
+        }
+        Ok(())
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) -> Poll<()> {
+        if self.disposed || self.enabled == enabled {
+            return Poll::Ready(());
+        }
+        if self.latch_depth != 0 {
+            self.deferred_enabled = Some(enabled);
+            return Poll::Pending;
+        }
+        self.apply_enabled(enabled);
+        Poll::Ready(())
+    }
+
+    fn apply_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
         if !enabled {
             self.waiting_to_unblock = false;
             self.recently_unblocked = false;
-            match self.grant {
-                Grant::Blocked(left)
-                | Grant::ResumeOffered(left)
-                | Grant::Interrupted { left, .. } => {
-                    self.grant = Grant::Reported(left);
-                }
-                _ => {}
+            let unfinished = match self.grant {
+                Grant::Blocked(left) | Grant::ResumeOffered(left) => Some(left),
+                Grant::Interrupted { used, left } => Some(used + left),
+                _ => None,
+            };
+            if let Some(ticks) = unfinished {
+                self.carried = 0;
+                self.accounted_carry = 0;
+                self.grant = Grant::Reported(ticks);
             }
         }
     }
@@ -79,6 +126,8 @@ impl TimeHandle {
         self.grant = if self.enabled {
             Grant::Offered(ticks)
         } else {
+            self.latch();
+            self.disabled_grant_latched = true;
             Grant::Reported(ticks)
         };
         Ok(())
@@ -104,17 +153,51 @@ impl TimeHandle {
                 Ok(Poll::Ready(Some(ticks)))
             }
             Grant::Offered(ticks) => {
+                let available = ticks
+                    .checked_add(self.carried)
+                    .ok_or("time grant plus residuum overflow")?;
+                self.accounted_carry = std::mem::take(&mut self.carried);
                 self.grant = Grant::Running(ticks);
-                Ok(Poll::Ready(Some(ticks)))
+                Ok(Poll::Ready(Some(available)))
             }
             _ => Err("time handle already has a request"),
         }
     }
 
-    pub fn report_continue(&mut self) -> Result<(), &'static str> {
+    pub fn elapsed(&self) -> u64 {
+        self.elapsed
+    }
+
+    pub fn report_progress(&mut self, progress: u64) -> Result<(), &'static str> {
         let Grant::Running(ticks) = self.grant else {
             return Err("no requested time grant to report");
         };
+        let overlap = progress.min(self.accounted_carry);
+        let new = progress - overlap;
+        if new > ticks - self.reported {
+            return Err("progress exceeds the grant");
+        }
+        self.elapsed = self
+            .elapsed
+            .checked_add(new)
+            .ok_or("elapsed time overflow")?;
+        self.accounted_carry -= overlap;
+        self.reported += new;
+        Ok(())
+    }
+
+    pub fn report_continue(&mut self) -> Result<(), &'static str> {
+        self.report_continue_with_remaining(0)
+    }
+
+    pub fn report_continue_with_remaining(&mut self, remaining: u64) -> Result<(), &'static str> {
+        let Grant::Running(ticks) = self.grant else {
+            return Err("no requested time grant to report");
+        };
+        if remaining > (ticks - self.reported).saturating_add(self.accounted_carry) {
+            return Err("remaining time exceeds the grant");
+        }
+        self.carried = remaining;
         self.grant = Grant::Reported(ticks);
         Ok(())
     }
@@ -126,6 +209,9 @@ impl TimeHandle {
         let used = ticks
             .checked_sub(time_left)
             .ok_or("remaining time exceeds the grant")?;
+        if used < self.reported {
+            return Err("used time is less than previous progress");
+        }
         self.grant = Grant::Interrupted {
             used,
             left: time_left,
@@ -163,6 +249,20 @@ impl TimeHandle {
                 (true, ticks)
             }
         };
+        if ticks != 0 || done {
+            let delta = ticks
+                .checked_sub(self.reported)
+                .ok_or("used time is less than previous progress")?;
+            self.elapsed = self
+                .elapsed
+                .checked_add(delta)
+                .ok_or("elapsed time overflow")?;
+            self.reported = 0;
+            self.accounted_carry = 0;
+        }
+        if std::mem::take(&mut self.disabled_grant_latched) {
+            self.unlatch()?;
+        }
         Ok(Poll::Ready((
             done,
             std::mem::take(&mut self.recently_unblocked),
@@ -398,7 +498,7 @@ mod tests {
     #[test]
     fn renode_time_handle_request_returns_without_grant_when_disabled() {
         let mut handle = TimeHandle::default();
-        handle.set_enabled(false);
+        assert_eq!(handle.set_enabled(false), Poll::Ready(()));
         assert_eq!(handle.request(), Ok(Poll::Ready(None)));
     }
 
@@ -406,7 +506,7 @@ mod tests {
     fn renode_time_handle_disabling_sink_resolves_pending_request() {
         let mut handle = TimeHandle::default();
         assert_eq!(handle.request(), Ok(Poll::Pending));
-        handle.set_enabled(false);
+        assert_eq!(handle.set_enabled(false), Poll::Ready(()));
         assert_eq!(handle.request(), Ok(Poll::Ready(None)));
     }
 
@@ -455,7 +555,7 @@ mod tests {
     fn renode_time_handle_wait_on_disabled_handle_reports_grant_used() {
         let mut handle = TimeHandle::default();
         assert_eq!(handle.request(), Ok(Poll::Pending));
-        handle.set_enabled(false);
+        assert_eq!(handle.set_enabled(false), Poll::Ready(()));
         assert_eq!(handle.request(), Ok(Poll::Ready(None)));
         handle.grant(INTERVAL).unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
@@ -464,8 +564,8 @@ mod tests {
     #[test]
     fn renode_time_handle_reenabled_sink_waits_without_consuming_unrequested_grant() {
         let mut handle = TimeHandle::default();
-        handle.set_enabled(false);
-        handle.set_enabled(true);
+        assert_eq!(handle.set_enabled(false), Poll::Ready(()));
+        assert_eq!(handle.set_enabled(true), Poll::Ready(()));
         handle.grant(INTERVAL).unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, 0))));
     }
@@ -475,15 +575,66 @@ mod tests {
         let mut handle = running();
         handle.report_break(500).unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, 500))));
-        handle.set_enabled(false);
+        assert_eq!(handle.set_enabled(false), Poll::Ready(()));
         assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, 500))));
         handle.grant(INTERVAL).unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
-        handle.set_enabled(true);
+        assert_eq!(handle.set_enabled(true), Poll::Ready(()));
         handle.grant(INTERVAL).unwrap();
         assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
         handle.report_continue().unwrap();
         assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+    }
+
+    #[test]
+    fn renode_time_handle_reports_progress_without_counting_residuum_twice() {
+        let mut handle = running();
+        handle.report_continue_with_remaining(100).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+        assert_eq!(handle.elapsed(), INTERVAL);
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(1100))));
+        handle.report_progress(1100).unwrap();
+        assert_eq!(handle.elapsed(), 2000);
+        handle.report_continue().unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+        assert_eq!(handle.elapsed(), 2000);
+    }
+
+    #[test]
+    fn renode_time_handle_break_finishes_wait_grant_first() {
+        let mut handle = running();
+        assert_eq!(handle.wait(), Ok(Poll::Pending));
+        handle.report_break(0).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, INTERVAL))));
+    }
+
+    #[test]
+    fn renode_time_handle_break_finishes_wait_request_first() {
+        let mut handle = TimeHandle::default();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Ready(Some(INTERVAL))));
+        assert_eq!(handle.wait(), Ok(Poll::Pending));
+        handle.report_break(0).unwrap();
+        assert_eq!(handle.wait(), Ok(Poll::Ready((false, false, INTERVAL))));
+    }
+
+    #[test]
+    fn renode_time_handle_defers_enable_change_until_unlatched() {
+        let mut handle = TimeHandle::default();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
+        handle.set_source_active(false);
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+        handle.set_source_active(true);
+        assert_eq!(handle.set_enabled(false), Poll::Ready(()));
+        handle.latch();
+        handle.grant(INTERVAL).unwrap();
+        assert_eq!(handle.set_enabled(true), Poll::Pending);
+        assert_eq!(handle.wait(), Ok(Poll::Ready((true, false, INTERVAL))));
+        assert_eq!(handle.request(), Ok(Poll::Ready(None)));
+        handle.unlatch().unwrap();
+        assert_eq!(handle.request(), Ok(Poll::Pending));
     }
 
     fn running() -> TimeHandle {

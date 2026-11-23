@@ -333,6 +333,10 @@ def classify_nunit(name, case, attrs, parameter):
             "WaitShouldNotBlockOnDisabledHandle": (PARTIAL, "wait_on_disabled_handle_reports_grant_used"),
             "WaitShouldNotBlockAfterGrantingOnReEnabledHandleS": (PASS, "reenabled_sink_waits_without_consuming_unrequested_grant"),
             "ShouldHandleDisablingBlockedHandle": (PASS, "disabling_blocked_sink_completes_the_remaining_grant"),
+            "ShouldHandleProgressIncludingResiduum": (PASS, "reports_progress_without_counting_residuum_twice"),
+            "BreakingShouldFinishWaiting": (PARTIAL, "break_finishes_wait_grant_first"),
+            "BreakingShouldFinishWaiting2": (PARTIAL, "break_finishes_wait_request_first"),
+            "DisableSinkSideShouldBlockOnLatchedHandle": (PARTIAL, "defers_enable_change_until_unlatched"),
         })
         if case in checks:
             status, check = checks[case]

@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 61 | 41 | 11 | 239 |
-| Renode Infrastructure NUnit | 134 | 88 | 20 | 26 | 9 |
-| 合計 | **247** | **149** | **61** | **37** | **248** |
+| Renode Infrastructure NUnit | 134 | 89 | 23 | 22 | 9 |
+| 合計 | **247** | **150** | **64** | **33** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -497,4 +497,15 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-unblock-verification
 ```sh
 cargo test --locked renode_time_handle
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-lifecycle-verification
+```
+
+## TimeHandle のラッチと残余を含む進捗
+
+固定 Infrastructure の TimeHandle 4件を一括移植した。1000 tick の継続報告で100 tick を残し、次の要求で1100 tick を取得して進捗を報告する。既に計上した100 tick を除き、仮想時刻は2000 tick になる。このケースを等価合格とした。
+
+ラッチ中に有効状態の変更を要求すると、最後のラッチを解除するまで保留する。無効中の量子は Wait で完了として報告する。Break の報告待ち2件と、ラッチ中の再有効化1件は直列の `Pending` / `Ready` と戻り値を確認した。固定上流の別スレッドでの実際の待機と起床が残るため、この3件は部分移植。RESC の実行は従来どおり単一スレッドの量子を使う。
+
+```sh
+cargo test --locked renode_time_handle
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-latch-verification
 ```
