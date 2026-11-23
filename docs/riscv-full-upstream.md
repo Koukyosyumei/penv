@@ -643,3 +643,20 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 Rust テスト 83 件と公開 RV32 A ELF 20 件が通過し、virt の `mhartid=32` で実 ELF の LR/SC も確認しました。LiteX SMP Linux の実イメージでも 4 ハート起動、ログイン、CPU 一覧を確認しました。上流等価合格は累計 113 件です。公開 ISA ELF は virt 上での回帰結果です。最大 ISA 構成での上流実行と台帳の未確定ケースが残っています。
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-d7dd072-k4czxK/` に保存しました。
+
+### 固定 Robot の RV32 RORI
+
+固定 `riscv-zbb-extension.robot` の RV32 ケースを Rust へ等価移植しました。元の `rv32imac_zicsr_zba_zbb` フィクスチャと PC 0 を使い、2 個の圧縮命令と 2 個の RORI を元の配置で実行します。各ステップの `a0` は順に 1、2、1、0x80000000 でした。既存の命令実装で一致したため、変更は検証の追加と台帳更新です。
+
+```bash
+cargo test --locked upstream_rv32_rori -- --nocapture
+cargo test --locked
+cargo build --locked --release
+sed '/cpuType:/s/rv32imac/rv32imac_zicsr_zba_zbb/' ../renode/platforms/cpus/riscv_virt.repl > "$evidence/zbb.repl"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$evidence/zbb.repl" --artifacts "$evidence/zbb-rerun" "$work"/isa/rv32uzbb-[pv]-*
+```
+
+Rust テスト 84 件、公開 Zbb ELF 36 件、同じ virt 構成の UART・CLINT・PLIC プローブが通過しました。台帳の上流等価合格は累計 114 件です。公開 ELF を実行する固定上流スイートの最大 ISA 構成には V が必要で、今回の virt 回帰結果はその合格には算入していません。
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-89b1d87-y10EU4/` に保存しました。

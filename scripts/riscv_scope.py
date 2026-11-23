@@ -93,6 +93,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         selection = re.search(r"Create Machine\s+\$\{(32|64)bit_cpu}", source)
         if selection:
             bits = selection[1]
+            if bits == "32" and case == "Should Handle RORI Properly on 32 Bit CPU":
+                return "target", "ported", "fixed RV32 fixture and four instruction encodings; a0 checked after each step"
             scope, status = ("target", "pending") if bits == "32" else ("outside", "outside")
             return scope, status, f"fixed CPU.RiscV{bits} rv{bits}imac_zicsr_zba_zbb fixture"
     if filename == "riscv-andestar-v5.robot":

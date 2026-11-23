@@ -1560,6 +1560,47 @@ mtvec: Memory.MappedMemory @ sysbus 0x1000
     }
 
     #[test]
+    fn upstream_rv32_rori() {
+        // Renode riscv-zbb-extension.robot: Should Handle RORI Properly on 32 Bit CPU.
+        let directory = std::env::temp_dir().join(format!("penv-rv32-rori-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"cpu: CPU.RiscV32 @ sysbus { cpuType: "rv32imac_zicsr_zba_zbb"; timeProvider: empty }
+mem: Memory.MappedMemory @ sysbus 0x0 { size: 0x1000 }
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None).unwrap();
+        machine.monitor_pc("cpu", Some(0)).unwrap();
+        for (address, opcode) in [(0, 0x4505u16), (2, 0x0505)] {
+            machine
+                .bus
+                .memory(address, 2)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+        }
+        for address in [4, 8] {
+            machine
+                .bus
+                .memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&0x6015_5513u32.to_le_bytes());
+        }
+        let mut output = std::io::sink();
+        for (pc, expected) in [(2, 1), (4, 2), (8, 1), (12, 0x8000_0000)] {
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+            assert_eq!(machine.primary.pc, pc);
+            assert_eq!(
+                machine.primary.monitor_integer_register(10, None).unwrap(),
+                Some(expected)
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn upstream_rv32_zbkb() {
         // Renode riscv-bkb.robot: exact RV32 input, result and non-trap checks.
         let directory = std::env::temp_dir().join(format!("penv-rv32-zbkb-{}", std::process::id()));
