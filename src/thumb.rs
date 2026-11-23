@@ -2,6 +2,8 @@ mod fpu;
 mod thumb2;
 
 #[cfg(test)]
+mod exception_return_tests;
+#[cfg(test)]
 mod it_status_tests;
 #[cfg(test)]
 mod stack_fault_tests;
@@ -699,11 +701,18 @@ impl Thumb {
             }
             return Ok(pc & !1);
         }
-        if target & 1 == 0 {
+        self.branch_exchange(target)
+    }
+
+    fn branch_exchange(&mut self, target: u32) -> Result<u32, String> {
+        if target & 1 == 0 && !self.thumb2 {
             return Err(format!(
                 "branch target {target:#010x} does not select Thumb state"
             ));
         }
+        // Exchange instructions install the target state. A Cortex-M3/M4
+        // fetch in ARM state then faults at the new PC.
+        self.invalid_thumb_state = target & 1 == 0;
         Ok(target & !1)
     }
 
@@ -1149,14 +1158,8 @@ impl Thumb {
                 let rm = ((inst >> 3) & 15) as usize;
                 let target = if rm == 15 { architectural_pc } else { r[rm] };
                 if inst & 0x80 != 0 {
-                    if target & 1 == 0 {
-                        return Err(format!(
-                            "branch target {target:#010x} does not select Thumb state"
-                        )
-                        .into());
-                    }
-                    r[14] = next | 1;
-                    next = target & !1;
+                    next = self.branch_exchange(target)?;
+                    r[14] = (pc.wrapping_add(2)) | 1;
                 } else {
                     next = self.branch(target, r, bus)?;
                 }

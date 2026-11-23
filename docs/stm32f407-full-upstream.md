@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 71 | 0 | 442 | 237 |
+| Renode | 513 | 75 | 0 | 438 | 237 |
 | Infrastructure | 217 | 16 | 0 | 201 | 7 |
-| **合計** | **730** | **87** | **0** | **643** | **244** |
+| **合計** | **730** | **91** | **0** | **639** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 643 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 639 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -473,3 +473,36 @@ cargo test thumb::stack_fault_tests
 期待結果は全 Rust テスト 120 件、フォールト ELF 16 件、FreeRTOS の FPU・IWDG 回帰の
 合格です。Fault 後の NMI からロックアップ元に戻る経路や、TrustZone の診断別名を使う
 上流ケースはこの 3 件の範囲外です。
+
+## Cortex-M4F の BX・BLX と例外復帰
+
+固定上流 `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone
+適用ケース 4 件を移植しました。上流と同じ RAM、初期 SP、リセット／NMI ハンドラー
+アドレス、Thumb 命令列とステップ順序を使用します。NMI の LR には ARMv7-M の
+`0xfffffff9` が入るため、`BLX LR` 後の PC は `0xfffffff8` です。
+`BX LR` は `0x20` に戻り、元のスタックを復元します。
+Thread モードの `BX 0xffffffb8` では指定 PC を観測した後、次のフェッチで
+`INVSTATE` とスタック上の障害 PC を検査します。`BX 0xfeffffff` は
+通常の Thumb 分岐として `0xfefffffe` に到達します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-exc-return
+mkdir -p "$work"
+cargo test thumb::exception_return_tests
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/cortex-m4f-faults.sh "$work/faults" >"$work/fault-elf.log" 2>&1
+    echo "$?" >"$work/fault-elf.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+期待結果は対象 4 件、全 Rust テスト 124 件、フォールト ELF 16 件、
+FreeRTOS の FPU・IWDG 回帰の合格です。Armv8-M 固有の PMSAv8 ベクターケース、
+`BXNS`／`BLXNS`、`FNC_RETURN` は台帳の対象外理由に従います。
+汎用的な例外復帰トークンの検証や MPU の上流群は別の未達として残ります。
