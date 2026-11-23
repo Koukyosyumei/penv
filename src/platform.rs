@@ -34,6 +34,7 @@ impl std::fmt::Display for SourceLine {
 pub(crate) struct Entry {
     pub(crate) name: String,
     pub(crate) model: String,
+    local: bool,
     pub(crate) registration: Option<String>,
     pub(crate) body: Properties,
     source: PathBuf,
@@ -517,6 +518,10 @@ fn parse_text(
             .split_once(':')
             .ok_or_else(|| error("expected a platform declaration"))?;
         let name = name.trim();
+        let local_name = name
+            .strip_prefix("local")
+            .filter(|tail| tail.starts_with(char::is_whitespace));
+        let name = local_name.map_or(name, str::trim_start);
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
@@ -562,6 +567,7 @@ fn parse_text(
         current = Some(Entry {
             name: name.into(),
             model: model.into(),
+            local: local_name.is_some(),
             registration,
             body,
             source: path.into(),
@@ -760,6 +766,9 @@ pub fn check_text(content: &str, root: Option<&Path>) -> Result<(), String> {
 }
 
 fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
+    if let Some(entry) = entries.iter().find(|entry| entry.local) {
+        return Err(entry.error("file-local peripheral scope is unsupported"));
+    }
     let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
@@ -2399,6 +2408,58 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    #[test]
+    fn upstream_parse_empty_file() {
+        assert!(parse("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn upstream_parse_simple_entry() {
+        let entries = parse("\nuart: UART").unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        assert_eq!((&*entry.name, &*entry.model), ("uart", "UART"));
+    }
+
+    #[test]
+    fn upstream_parse_two_entries() {
+        let source = r#"
+uart1: UART @ sysbus <0x1000, +0x100>
+    someProperty: someValue
+
+uart2: UART @ sysbus <0x2000, +0x100>
+    otherProperty: "otherValue"
+"#;
+        assert_eq!(parse(source).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn upstream_parse_two_short_entries() {
+        assert_eq!(
+            parse("\nuart: UART\n\nuart: @sysbus <0x100, +0x100>\n")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn upstream_parse_local_and_nonlocal_entry() {
+        let entries = parse("\nperipheral: SomeHub\nlocal other: Other").unwrap();
+        assert_eq!(
+            entries.iter().map(|entry| entry.local).collect::<Vec<_>>(),
+            [false, true]
+        );
+    }
+
+    #[test]
+    fn upstream_parse_mixed_line_endings() {
+        let source =
+            "peripheral: SomeHub\nlocal first_other: Other\r\nlocal second_other: Other\r\n";
+        assert_eq!(parse(source).unwrap().len(), 3);
     }
 
     #[test]
