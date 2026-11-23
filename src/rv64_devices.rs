@@ -10,6 +10,7 @@ use crate::{
     rv64_mpfs::{DdrMock, Sysreg},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
+    rv64_mpfs_wdog::Watchdog,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
@@ -23,6 +24,7 @@ pub struct Devices {
     pub fire_ihc: Option<Box<FireIhc>>,
     pub fire_media_controller: Option<usize>,
     pub mpfs_sd: Vec<rv64_mpfs_sd::Controller>,
+    pub mpfs_watchdogs: Vec<Watchdog>,
     pub mpfs_ddr: Vec<DdrMock>,
     pub mpfs_sysreg: Option<Sysreg>,
     pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
@@ -124,6 +126,12 @@ impl Devices {
         }
     }
 
+    pub fn advance_watchdogs(&mut self, steps: u64) {
+        for watchdog in &mut self.mpfs_watchdogs {
+            self.reset_requested |= watchdog.advance(steps);
+        }
+    }
+
     pub fn tick(&mut self, hart: usize) -> u64 {
         self.lines.fill(0);
         for uart in &self.uarts {
@@ -144,6 +152,16 @@ impl Devices {
             for sd in &self.mpfs_sd {
                 let (source, pending) = sd.interrupt();
                 plic.line(source, pending);
+            }
+        }
+        for watchdog in &self.mpfs_watchdogs {
+            for (output, active) in watchdog.outputs.iter().zip(watchdog.levels()) {
+                for &(hart, pin) in &output.harts {
+                    self.lines[hart] |= u64::from(active) << pin;
+                }
+                if let Some(plic) = &mut self.plic {
+                    plic.line(output.plic, active);
+                }
             }
         }
         self.lines[hart] | self.plic.as_ref().map_or(0, |plic| plic.outputs(hart))
@@ -220,6 +238,13 @@ impl Devices {
                 return Some(value);
             }
         }
+        if let Some(value) = self
+            .mpfs_watchdogs
+            .iter()
+            .find_map(|watchdog| watchdog.read(address, width))
+        {
+            return Some(value);
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -285,6 +310,13 @@ impl Devices {
             if value <= 1 {
                 self.mpfs_sd[index].select_sd(value == 1);
             }
+            return Some(Ok(()));
+        }
+        if self
+            .mpfs_watchdogs
+            .iter_mut()
+            .any(|watchdog| watchdog.write(address, width, value).is_some())
+        {
             return Some(Ok(()));
         }
         let plic = self.plic.as_mut()?;

@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証まで通過。U-Boot と Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 の Fire モデル表示まで到達。Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -352,6 +352,10 @@ target/release/penv run --script "$fire_probe" --platform-root ../renode \
 ```
 
 公開 HSS がカードを初期化し、GPT ヘッダーとパーティション表を検証しました。起動パーティションから 701,624 バイトを DDR の `0x103fc00000` に読み込み、`Boot image passed CRC` と `Boot image set name: "PolarFire-SoC-HSS::U-Boot"` を出力しました。U-Boot 本体の起動と Linux は未到達です。ユニットテストは SDMA の複数ブロック転送と未マップ宛先のエラーも検証します。
+
+#### Fire の OpenSBI と U-Boot 起動
+
+HSS がペイロード登録後に `0x2000100c` を読み出すため、PolarFire のウォッチドッグの設定・ステータス、リフレッシュウィンドウ、IRQ とリセット要求を実装しました。前節と同じ公開素材とコマンドで、実行中の OpenSBI v1.2、U-Boot 2023.07.02、`Model: BeagleBoard BeagleV-Fire` を UART で確認しました。U-Boot は MMC 列挙中の `0x200082fe` の 16 ビット読み出しでロードアクセス例外になります。[Renode MPFS_Watchdog](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Timers/MPFS_Watchdog.cs)
 
 ## Cortex-M0 / Cortex-M0+
 

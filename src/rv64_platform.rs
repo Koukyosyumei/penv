@@ -9,6 +9,7 @@ use crate::{
     rv64_mpfs::{DdrMock, Sysreg},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
+    rv64_mpfs_wdog::{Output as WatchdogOutput, Watchdog},
     rv64_priv::Pmp,
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
@@ -222,6 +223,56 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         machine.bus.rv64_devices.uarts.push(uart);
     }
     for entry in &entries {
+        if entry.model == "Timers.MPFS_Watchdog" && entry.registration.as_deref() != Some("none") {
+            let base = entry.address()?;
+            check_mapping(&machine, entry, base, Watchdog::SIZE)?;
+            let frequency = required_number(entry, "frequency")?;
+            if frequency == 0 {
+                return Err(entry.error("watchdog frequency must be nonzero"));
+            }
+            let mut outputs: [WatchdogOutput; 2] = Default::default();
+            for (_, line) in &entry.body {
+                let Some((name, targets)) = line.split_once("->") else {
+                    continue;
+                };
+                let output = match name.trim() {
+                    "RefreshEnable" => &mut outputs[0],
+                    "Trigger" => &mut outputs[1],
+                    _ => return Err(entry.error("unsupported watchdog output")),
+                };
+                for target in targets.split('|') {
+                    let (controller, pin) = endpoint(entry, target)?;
+                    let pin = number(entry, pin)?;
+                    if plic.is_some_and(|plic| plic.name == controller) {
+                        if output.plic != 0 || !(1..=sources).contains(&pin) {
+                            return Err(entry.error("invalid watchdog PLIC route"));
+                        }
+                        output.plic = pin as usize;
+                    } else {
+                        let hart = hart_by_name(&cpus, entry, controller)?;
+                        if !(16..64).contains(&pin) {
+                            return Err(entry.error("invalid watchdog hart interrupt"));
+                        }
+                        machine
+                            .hart_mut(hart)
+                            .rv64
+                            .as_mut()
+                            .unwrap()
+                            .privilege
+                            .add_interrupt(pin as u32);
+                        output.harts.push((hart, pin as u32));
+                    }
+                }
+            }
+            let steps_per_second = 100_000_000 * cpus.len() as u64;
+            machine.bus.rv64_devices.mpfs_watchdogs.push(Watchdog::new(
+                base,
+                frequency,
+                steps_per_second,
+                outputs,
+            ));
+            continue;
+        }
         if entry.model == "SD.MPFS_SDController" && entry.registration.as_deref() != Some("none") {
             let base = entry.address()?;
             check_mapping(&machine, entry, base, rv64_mpfs_sd::Controller::SIZE)?;
@@ -673,6 +724,10 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         || devices.mpfs_sd.iter().any(|device| {
             start < u64::from(device.base) + rv64_mpfs_sd::Controller::SIZE
                 && u64::from(device.base) < end
+        });
+    let overlaps = overlaps
+        || devices.mpfs_watchdogs.iter().any(|device| {
+            start < u64::from(device.base) + Watchdog::SIZE && u64::from(device.base) < end
         });
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));

@@ -201,6 +201,7 @@ impl Rv64 {
         if hart == 0 {
             pending |= bus.tick_plic();
         }
+        bus.rv64_devices.advance_watchdogs(elapsed);
         let pending = u64::from(pending) | bus.rv64_devices.tick(hart);
         let count_retired = self.privilege.tick(pending, time);
         if let Some(target) = self.privilege.interrupt(self.pc) {

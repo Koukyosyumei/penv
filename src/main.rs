@@ -20,6 +20,7 @@ mod rv64_float;
 mod rv64_mpfs;
 mod rv64_mpfs_ihc;
 mod rv64_mpfs_sd;
+mod rv64_mpfs_wdog;
 mod rv64_platform;
 mod rv64_priv;
 mod rv64_starfive;
