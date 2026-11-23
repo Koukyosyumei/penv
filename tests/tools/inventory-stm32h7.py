@@ -323,6 +323,15 @@ def triage(row):
             status, reason = 'OPEN', '汎用 ComparingTimer の Compare setter 拒否条件は STM32 TIM の CCR で観測できない。汎用 API の等価移植が残る'
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
+    elif suite == 'SystemBusTests.cs' and name in {
+        'ShouldThrowBusAccessExceptionAtNonExistingDeviceWhenConfigured',
+        'ShouldThrowBusAccessExceptionAtNonExistingDeviceWhenConfiguredToThrowIfNotTagged',
+        'ShouldNotThrowBusAccessExceptionAtTaggedDeviceWhenConfiguredToThrowIfNotTagged',
+        'ShouldThrowBusAccessExceptionOnAccessToTagWithThrowException',
+        'ShouldNotThrowBusAccessExceptionOnAccessToTagWithoutThrowException',
+        'ShouldThrowBusAccessExceptionOnAccessToTagWithThrowExceptionEvenWhenReportingIsDisabled',
+    }:
+        status, reason = 'PASS', '固定上流と同じ方針・タグ・アドレスへのバイトアクセスで、既定値、書き込み受理またはアドレス例外を照合。src/bus.rs'
     elif suite == 'VerificationTests.cs' and name == 'ShouldFailOnDoubleAttribute':
         status, reason = 'PASS', '固定上流と同じ宣言内の属性重複を構築前に検出し、2回目の属性を診断。src/platform.rs'
     elif suite == 'VerificationTests.cs' and name in {

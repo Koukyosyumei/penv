@@ -1376,3 +1376,22 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 176件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-property-validation.E48XqaDp` にあります。対象786件のうち等価合格161件、部分検証17件、未達608件です。
+
+### backlog-network-3d3a3ae16697-1
+
+SystemBus の未マップアクセス方針とタグ単位の例外を REPL から設定できます。固定上流 `SystemBusTests.cs` の6件を個別テストとして同じバイナリで実行し、同じアドレスへのバイト読み書き、タグ既定値、アドレス例外を照合しました。STM32H743 の CLI プローブは初回に上流とローカルの `sysbus:` 追記が重複扱いになったため、両方を読み込み順に適用するよう修正しました。再実行ではタグ値 `0x42`、タグなしの `0`、例外タグのアドレスエラーを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-unhandled.IKQerYGw
+target/release/penv run --script "$e/read.resc" --platform-root ../renode
+target/release/penv run --script "$e/fault.resc" --platform-root ../renode
+```
+
+最後のコマンドは意図したアドレスエラーで終了します。`cargo test` 182件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格167件、部分検証17件、未達602件です。既定未マップ方針の差、上流の報告ログ、タグ分割時の例外保持は残っています。UART の失敗文字列群は固定 Tock 構成を使い、正規表現と失敗文字列の登録解除も必要なため、今回の検証は SystemBus に切り替えました。

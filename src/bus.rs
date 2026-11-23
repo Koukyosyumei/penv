@@ -97,6 +97,21 @@ struct PwmLed {
 }
 
 #[derive(Default)]
+pub(crate) enum UnhandledAccess {
+    ThrowException,
+    #[default]
+    ThrowExceptionIfNotTagged,
+    DoNotReport,
+    Report,
+}
+
+struct BusTag {
+    range: std::ops::RangeInclusive<u32>,
+    value: u32,
+    throw_exception: bool,
+}
+
+#[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
     constant_mmio: Vec<ConstantMmio>,
@@ -136,7 +151,8 @@ pub struct Bus {
     h7_crypto: Vec<Crypto>,
     h7_dsi: Vec<Dsi>,
     designware_usb: Vec<DesignWareUsb>,
-    tags: Vec<(std::ops::RangeInclusive<u32>, u32)>,
+    tags: Vec<BusTag>,
+    pub(crate) unhandled_access: UnhandledAccess,
     h7_ltdc: Option<Ltdc>,
     h7_step: u64,
     gpio_exti_outputs: [Option<u8>; 16],
@@ -491,16 +507,37 @@ impl Bus {
     }
 
     pub fn tag(&mut self, range: std::ops::RangeInclusive<u32>, value: u32) {
-        self.tags.push((range, value));
+        self.tag_with_policy(range, value, false);
     }
 
-    fn tag_value(&self, address: u32, width: usize) -> Option<u32> {
+    pub(crate) fn tag_with_policy(
+        &mut self,
+        range: std::ops::RangeInclusive<u32>,
+        value: u32,
+        throw_exception: bool,
+    ) {
+        self.tags.push(BusTag {
+            range,
+            value,
+            throw_exception,
+        });
+    }
+
+    fn unhandled_value(&self, address: u32, width: usize) -> Option<u32> {
         let end = address.checked_add(width as u32 - 1)?;
-        self.tags
+        let tag = self
+            .tags
             .iter()
             .rev()
-            .find(|(range, _)| range.contains(&address) && range.contains(&end))
-            .map(|(_, value)| value & (u32::MAX >> (32 - width * 8)))
+            .find(|tag| tag.range.contains(&address) && tag.range.contains(&end));
+        if tag.is_some_and(|tag| tag.throw_exception) {
+            return None;
+        }
+        match self.unhandled_access {
+            UnhandledAccess::ThrowException => None,
+            UnhandledAccess::ThrowExceptionIfNotTagged if tag.is_none() => None,
+            _ => Some(tag.map_or(0, |tag| tag.value) & (u32::MAX >> (32 - width * 8))),
+        }
     }
 
     pub fn map_h7_dsi(&mut self, device: Dsi) -> Result<(), String> {
@@ -1903,7 +1940,7 @@ impl Bus {
             return Ok(device.read(address));
         }
         match self.read_ram::<N>(address) {
-            Err(error @ BusError::Unmapped(..)) => self.tag_value(address, N).ok_or(error),
+            Err(error @ BusError::Unmapped(..)) => self.unhandled_value(address, N).ok_or(error),
             result => result,
         }
     }
@@ -2434,7 +2471,7 @@ impl Bus {
             Ok(memory) => memory.copy_from_slice(&value.to_le_bytes()[..width]),
             Err(error) => {
                 if !matches!(error, BusError::Unmapped(..))
-                    || self.tag_value(address, width).is_none()
+                    || self.unhandled_value(address, width).is_none()
                 {
                     return Err(error);
                 }
@@ -2538,4 +2575,69 @@ fn gpio_clocked(control: Option<&NetworkControl>, port: &Stm32Gpio) -> bool {
 
 fn rtc_clocked(control: Option<&NetworkControl>, rtc: &Stm32Rtc) -> bool {
     !rtc.rcc_bound || control.is_none_or(NetworkControl::rtc_enabled)
+}
+
+#[cfg(test)]
+mod unhandled_access_cases {
+    use super::*;
+
+    fn address_error(bus: &mut Bus, address: u32) {
+        assert!(matches!(bus.read::<1>(address), Err(BusError::Unmapped(a, 1)) if a == address));
+        assert!(
+            matches!(bus.write(address, 1, 0, &mut std::io::sink()), Err(BusError::Unmapped(a, 1)) if a == address)
+        );
+    }
+
+    #[test]
+    fn upstream_unmapped_throw_exception() {
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::ThrowException,
+            ..Bus::default()
+        };
+        address_error(&mut bus, 0xabcd1234);
+    }
+
+    #[test]
+    fn upstream_unmapped_throw_if_not_tagged() {
+        address_error(&mut Bus::default(), 0xabcd1234);
+    }
+
+    #[test]
+    fn upstream_tagged_throw_if_not_tagged() {
+        let mut bus = Bus::default();
+        bus.tag(0xabcd1200..=0xabcd12ff, 0x42);
+        bus.write(0xabcd1234, 1, 0, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<1>(0xabcd1234).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn upstream_tag_forces_exception() {
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::Report,
+            ..Bus::default()
+        };
+        bus.tag_with_policy(0x1000..=0x10ff, 0, true);
+        address_error(&mut bus, 0x1000);
+    }
+
+    #[test]
+    fn upstream_tag_without_exception() {
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::Report,
+            ..Bus::default()
+        };
+        bus.tag(0x1000..=0x10ff, 0x42);
+        bus.write(0x1000, 1, 0, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<1>(0x1000).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn upstream_tag_exception_reporting_disabled() {
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::DoNotReport,
+            ..Bus::default()
+        };
+        bus.tag_with_policy(0x1000..=0x10ff, 0, true);
+        address_error(&mut bus, 0x1000);
+    }
 }

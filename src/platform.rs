@@ -1029,11 +1029,25 @@ fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
 }
 
 fn configure_sysbus_tags(entry: &Entry, bus: &mut crate::bus::Bus) -> Result<(), String> {
-    let Some(((_, init), commands)) = entry.body.split_first() else {
-        return Err(entry.error("expected sysbus init"));
-    };
-    if init != "init:" || entry.registration.is_some() {
-        return Err(entry.error("expected sysbus init"));
+    use crate::bus::UnhandledAccess;
+    if entry.registration.is_some() {
+        return Err(entry.error("expected sysbus configuration"));
+    }
+    let init = entry.body.iter().position(|(_, text)| text == "init:");
+    let (properties, commands) = init.map_or((entry.body.as_slice(), &[][..]), |index| {
+        (&entry.body[..index], &entry.body[index + 1..])
+    });
+    for (_, property) in properties {
+        let value = property
+            .strip_prefix("UnhandledAccessBehaviour:")
+            .ok_or_else(|| entry.error("unknown sysbus property"))?;
+        bus.unhandled_access = match value.trim() {
+            "ThrowException" => UnhandledAccess::ThrowException,
+            "ThrowExceptionIfNotTagged" => UnhandledAccess::ThrowExceptionIfNotTagged,
+            "DoNotReport" => UnhandledAccess::DoNotReport,
+            "Report" => UnhandledAccess::Report,
+            _ => return Err(entry.error("unsupported UnhandledAccessBehaviour")),
+        };
     }
     for (source, command) in commands {
         let invalid =
@@ -1053,16 +1067,20 @@ fn configure_sysbus_tags(entry: &Entry, bus: &mut crate::bus::Bus) -> Result<(),
             .strip_prefix('"')
             .and_then(|text| text.split_once('"'))
             .ok_or_else(invalid)?;
-        let mut arguments: Vec<_> = arguments.split_whitespace().collect();
-        if matches!(arguments.last(), Some(&"silent=True" | &"silent=False")) {
-            arguments.pop();
+        let mut value = None;
+        let mut throw_exception = false;
+        for argument in arguments.split_whitespace() {
+            if let Some(flag) = argument.strip_prefix("throwException=") {
+                throw_exception = boolean_value(flag).ok_or_else(invalid)?;
+            } else if let Some(flag) = argument.strip_prefix("silent=") {
+                boolean_value(flag).ok_or_else(invalid)?;
+            } else if value.is_none() {
+                value = Some(number(argument).map_err(|e| format!("{source}: {e}"))?);
+            } else {
+                return Err(invalid());
+            }
         }
-        let value = match arguments.as_slice() {
-            [] => 0,
-            [value] => number(value).map_err(|e| format!("{source}: {e}"))?,
-            _ => return Err(invalid()),
-        };
-        bus.tag(start..=end, value);
+        bus.tag_with_policy(start..=end, value.unwrap_or(0), throw_exception);
     }
     Ok(())
 }
@@ -1150,14 +1168,14 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
+        if entry.model.is_empty() && entry.name == "sysbus" {
+            configure_sysbus_tags(entry, &mut machine.bus)?;
+            continue;
+        }
         if !names.insert(&entry.name) {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
         if entry.model.is_empty() {
-            if entry.name == "sysbus" {
-                configure_sysbus_tags(entry, &mut machine.bus)?;
-                continue;
-            }
             let detail = if entry.registration.is_some() {
                 "REPL registration overrides are unsupported"
             } else {
