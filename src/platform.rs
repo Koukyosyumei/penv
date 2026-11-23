@@ -917,6 +917,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut blocks = Vec::new();
     for mut entry in entries {
         validate_entry_attributes(&entry)?;
+        validate_entry_irq_shape(&entry)?;
         if entry.model.is_empty() && entry.name != "sysbus" {
             blocks.push(entry);
             continue;
@@ -1018,6 +1019,42 @@ fn is_repl_identifier(text: &str) -> bool {
         && text
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn validate_entry_irq_shape(entry: &Entry) -> Result<(), String> {
+    let mut used = HashSet::new();
+    for (_, text) in &entry.body {
+        let Some((source, destination)) = text.split_once("->") else {
+            continue;
+        };
+        if source.contains(':') {
+            continue;
+        }
+        let source = source.trim();
+        let explicit = !source.is_empty();
+        let sources = if explicit {
+            let Ok(sources) = irq_endpoints(source, 256) else {
+                continue;
+            };
+            sources
+        } else {
+            vec![IrqEndpoint::Named("")]
+        };
+        if explicit
+            && !destination.contains('|')
+            && let Some((_, pins)) = destination.split_once('@')
+            && let Ok(pins) = irq_endpoints(pins, 256)
+            && sources.len() != pins.len()
+        {
+            return Err(entry.error("WrongIrqArity: IRQ source and destination counts differ"));
+        }
+        for source in sources {
+            if !used.insert(source) {
+                return Err(entry.error("IrqSourceUsedMoreThanOnce: duplicate IRQ source"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_entry_attributes(entry: &Entry) -> Result<(), String> {
@@ -2496,7 +2533,7 @@ pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
     Ok(index as u8)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 enum IrqEndpoint<'a> {
     Number(u8),
     Named(&'a str),

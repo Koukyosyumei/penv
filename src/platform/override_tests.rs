@@ -299,3 +299,21 @@ fn renode_reference_missing_registration_point() {
     let error = check_string(source, None).unwrap_err();
     assert!(error.contains("MissingReference:"));
 }
+
+#[test]
+fn renode_irq_validation_wrong_arity() {
+    let error = check_string("\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    [Irq] -> receiver@[0,1]\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver", None).unwrap_err();
+    assert!(error.contains("WrongIrqArity:"));
+}
+
+#[test]
+fn renode_irq_validation_overlapping_numbered_source() {
+    let error = check_string("\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver\nsender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral\n    gpios: 2\n    2 -> receiver@6\n    [0, 1-3, 7] -> receiver@[5-9]", None).unwrap_err();
+    assert!(error.contains("IrqSourceUsedMoreThanOnce:"));
+}
+
+#[test]
+fn renode_irq_validation_duplicate_default_source() {
+    let error = check_string("\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    -> receiver@0\n    -> receiver @1", None).unwrap_err();
+    assert!(error.contains("IrqSourceUsedMoreThanOnce:"));
+}
