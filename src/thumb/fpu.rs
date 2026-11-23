@@ -5,6 +5,10 @@ use crate::bus::Bus;
 use super::Thumb;
 
 impl Thumb {
+    pub(super) fn is_fpu_instruction(high: u32, low: u32) -> bool {
+        matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00) && matches!(low & 0xf00, 0xa00 | 0xb00)
+    }
+
     pub(super) fn execute_fpu(
         &mut self,
         high: u32,
@@ -14,13 +18,8 @@ impl Thumb {
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<bool, String> {
-        if !matches!(high & 0xff00, 0xec00 | 0xed00 | 0xee00)
-            || !matches!(low & 0xf00, 0xa00 | 0xb00)
-        {
+        if !Self::is_fpu_instruction(high, low) {
             return Ok(false);
-        }
-        if !bus.nvic.as_ref().is_some_and(|nvic| nvic.fpu_access()) {
-            return Err("Cortex-M FPU access is disabled by CPACR".into());
         }
 
         let sd = ((low >> 12) * 2 + ((high >> 6) & 1)) as usize;
@@ -204,7 +203,6 @@ mod tests {
         let multiply = |thumb: &mut Thumb, registers: &mut [u32; 32], bus: &mut Bus| {
             thumb.execute_fpu(0xee20, 0x0a28, 0, registers, bus, &mut std::io::sink())
         };
-        assert!(multiply(&mut thumb, &mut registers, &mut bus).is_err());
         bus.thumb_write(0xe000_ed88, 4, 0x00f0_0000, &mut output)
             .unwrap();
         thumb.fp[0] = 2.0f32.to_bits();

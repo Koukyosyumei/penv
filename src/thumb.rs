@@ -17,6 +17,13 @@ enum Sleep {
     Event,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThumbStep {
+    Retired,
+    Fault,
+    Breakpoint,
+}
+
 #[derive(Clone, Default)]
 pub struct Thumb {
     vectors: Option<u32>,
@@ -40,6 +47,7 @@ pub struct Thumb {
     event: bool,
     pending: u128,
     thread_uses_psp: bool,
+    thread_unprivileged: bool,
     msp: u32,
     psp: u32,
 }
@@ -227,7 +235,11 @@ impl Thumb {
             16 => u32::from(self.interrupts_masked),
             17 if self.thumb2 => u32::from(self.basepri),
             19 if self.thumb2 => self.faultmask.into(),
-            20 => (u32::from(self.fp_active) << 2) | (u32::from(self.uses_psp()) << 1),
+            20 => {
+                (u32::from(self.fp_active) << 2)
+                    | (u32::from(self.uses_psp()) << 1)
+                    | u32::from(self.thread_unprivileged)
+            }
             _ => return None,
         })
     }
@@ -250,14 +262,44 @@ impl Thumb {
             }
             19 if self.thumb2 => self.faultmask = value & 1 != 0,
             20 => {
-                self.select_thread_stack(value & 2 != 0, r);
                 if self.thumb2 {
+                    if self.active_exception == 0 && self.thread_unprivileged {
+                        return true;
+                    }
+                    self.thread_unprivileged = value & 1 != 0;
                     self.fp_active = value & 4 != 0;
                 }
+                self.select_thread_stack(value & 2 != 0, r);
             }
             _ => return false,
         }
         true
+    }
+
+    fn no_coprocessor(&mut self, pc: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
+        const HARD_FAULT: u8 = 3;
+        const USAGE_FAULT: u8 = 6;
+        let nvic = bus.nvic.as_mut().ok_or("Cortex-M NOCP requires an NVIC")?;
+        let priority = nvic.priority(USAGE_FAULT);
+        let can_preempt = self.active_exception == 0
+            || (self.active_exception > HARD_FAULT
+                && priority < nvic.priority(self.active_exception));
+        let use_usage_fault = nvic.usage_fault_enabled()
+            && can_preempt
+            && !self.interrupts_masked
+            && !self.faultmask
+            && (self.basepri == 0 || priority < self.basepri);
+        nvic.record_no_coprocessor_fault(!use_usage_fault);
+        if !use_usage_fault && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask)
+        {
+            return Err(format!("Cortex-M lockup on NOCP at {pc:#010x}"));
+        }
+        let exception = if use_usage_fault {
+            USAGE_FAULT
+        } else {
+            HARD_FAULT
+        };
+        self.exception_entry(exception, pc, r, bus)
     }
 
     fn exception_entry(
@@ -564,14 +606,15 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
         output: &mut impl Write,
-    ) -> Result<bool, String> {
+    ) -> Result<ThumbStep, String> {
         let inst = bus.thumb_fetch(*pc)?;
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);
         let rd = (inst & 7) as usize;
         let rn = ((inst >> 3) & 7) as usize;
-        let in_it = self.itstate != 0;
+        let original_itstate = self.itstate;
+        let in_it = original_itstate != 0;
         if in_it {
             let condition = self.condition(u32::from(self.itstate >> 4));
             self.itstate = if self.itstate & 7 == 0 {
@@ -581,7 +624,7 @@ impl Thumb {
             };
             if !condition {
                 *pc = pc.wrapping_add(if inst >= 0xe800 { 4 } else { 2 });
-                return Ok(true);
+                return Ok(ThumbStep::Retired);
             }
         }
         let saved_flags = self.apsr();
@@ -783,7 +826,7 @@ impl Thumb {
             }
             // Renode reports failure from semihosting calls without a registered handler.
             0xbeab => r[0] = u32::MAX,
-            0xbe00..=0xbeff => return Ok(false),
+            0xbe00..=0xbeff => return Ok(ThumbStep::Breakpoint),
             0xbf00 | 0xbf10 => {} // NOP and scheduler yield.
             0xbf20 => {
                 if !std::mem::take(&mut self.event) {
@@ -928,8 +971,21 @@ impl Thumb {
                     && (low & (1 << 15) == 0 || (inst == 0xe8bd && low & (1 << 14) == 0))
                 {
                     self.stack_transfer(low, inst == 0xe8bd, &mut next, r, bus)?;
-                } else if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
-                    self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
+                } else {
+                    let privileged = self.active_exception != 0 || !self.thread_unprivileged;
+                    if Self::is_fpu_instruction(inst, low)
+                        && !bus
+                            .nvic
+                            .as_ref()
+                            .is_some_and(|nvic| nvic.fpu_access(privileged))
+                    {
+                        self.itstate = original_itstate;
+                        *pc = self.no_coprocessor(*pc, r, bus)?;
+                        return Ok(ThumbStep::Fault);
+                    }
+                    if !self.execute_fpu(inst, low, architectural_pc, r, bus, output)? {
+                        self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
+                    }
                 }
             }
             _ => return Err(unsupported()),
@@ -941,7 +997,7 @@ impl Thumb {
             self.set_apsr(saved_flags);
         }
         *pc = next;
-        Ok(true)
+        Ok(ThumbStep::Retired)
     }
 }
 
@@ -1056,13 +1112,19 @@ mod tests {
         let mut pc = 0x60;
         let mut output = std::io::sink();
         for _ in 0..3 {
-            assert!(thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap());
+            assert_eq!(
+                thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap(),
+                ThumbStep::Retired
+            );
         }
         assert_eq!((pc, r[13], r[14]), (0x80, 0x2000_0200, 0xffff_fffd));
         assert_eq!(thumb.system_read(9, &r), Some(0x2000_0060));
         assert_eq!(bus.read_ram::<4>(0x2000_0078).unwrap(), 0x6a);
         assert_eq!(bus.read_ram::<4>(0x2000_01e0).unwrap(), 0);
-        assert!(thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap());
+        assert_eq!(
+            thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap(),
+            ThumbStep::Retired
+        );
         assert_eq!((pc, r[13]), (0x6a, 0x2000_0084));
         assert_eq!(thumb.system_read(8, &r), Some(0x2000_0200));
         assert_eq!(thumb.system_read(20, &r), Some(2));
@@ -1086,10 +1148,11 @@ mod tests {
         r[13] = 0x80;
         let mut pc = 0;
         for _ in 0..6 {
-            assert!(
+            assert_eq!(
                 thumb
                     .step(&mut pc, &mut r, &mut bus, &mut std::io::sink())
-                    .unwrap()
+                    .unwrap(),
+                ThumbStep::Retired
             );
         }
         assert_eq!(&r[..8], &[0x48, 1, 42, 0x48, 1, 42, 1, 0x80]);
@@ -1116,10 +1179,11 @@ mod tests {
         registers[3] = 32;
         let mut pc = 0;
         for _ in 0..5 {
-            assert!(
+            assert_eq!(
                 thumb
                     .step(&mut pc, &mut registers, &mut bus, &mut std::io::sink())
-                    .unwrap()
+                    .unwrap(),
+                ThumbStep::Retired
             );
         }
         assert_eq!(registers[8], 0xffff_ff81);
@@ -1227,26 +1291,29 @@ mod tests {
         let mut pc = 0x60;
         let mut output = std::io::sink();
 
-        assert!(
+        assert_eq!(
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
-                .unwrap()
+                .unwrap(),
+            ThumbStep::Retired
         );
         assert_eq!(pc, 0x80);
         assert_eq!(registers[13], 0x2000_00e0);
         assert_eq!(registers[14], 0xffff_fff9);
         assert_eq!(bus.read_ram::<4>(registers[13] + 24).unwrap(), 0x62);
         assert_eq!(bus.read_ram::<4>(registers[13] + 28).unwrap(), 0x8100_0200);
-        assert!(
+        assert_eq!(
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
-                .unwrap()
+                .unwrap(),
+            ThumbStep::Retired
         );
         assert!(thumb.zero);
-        assert!(
+        assert_eq!(
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
-                .unwrap()
+                .unwrap(),
+            ThumbStep::Retired
         );
         assert_eq!(pc, 0x62);
         assert_eq!(registers[0], 42);
@@ -1275,10 +1342,11 @@ mod wait_tests {
         };
         let mut pc = 0;
         let mut registers = [0; 32];
-        assert!(
+        assert_eq!(
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
-                .unwrap()
+                .unwrap(),
+            ThumbStep::Retired
         );
         assert_eq!(pc, 2);
         assert!(thumb.sleeping());

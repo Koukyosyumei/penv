@@ -53,7 +53,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 ## 共有 CPU・周辺部品の適用性
 
 - `tests/unit-tests/arm-dsp-examples-cortex-m4.robot` は Cortex-M4F の汎用フィクスチャのため対象。13 ケースで上流の UART 判定を確認。ELF と期待値は `nrf52840-dsp-upstream.sh` を参照。
-- `tests/unit-tests/arm-cortex-m-fpu.robot` の `Should Pass Context Stacking Preservation Test v7-M` は元の ELF と fixture で `Test succeeded` を確認。FRDM-K64F 用 ELF の generic sharing は固定 NXP プラットフォーム、v8-M stacking は TrustZone を要求する。NOCP の FPU 有効側は Cortex-M4 で元の命令列から `OK` を確認。無効側では CPACR で拒否された命令がシミュレータを止めるため、ゲスト UsageFault と `NOCP` 出力が未検証。
+- `tests/unit-tests/arm-cortex-m-fpu.robot` の `Should Pass Context Stacking Preservation Test v7-M` は元の ELF と fixture で `Test succeeded` を確認。FRDM-K64F 用 ELF の generic sharing は固定 NXP プラットフォーム、v8-M stacking は TrustZone を要求する。NOCP の FPU 有効側は Cortex-M4 で元の命令列から `OK` を確認。無効側はゲスト UsageFault と `NOCP` を確認。上流の UFSR 読み出しは Cortex-M4 の整列半語アクセスに移植した。
 - `tests/unit-tests/arm-ge-flag.robot` は同じ Armv7E-M 命令列を Cortex-M4 で実行し、R4 の期待値 6 件を確認。usub8 という名前の行も、上流本文が実際に実行する ssub8 を使用。
 - `tests/unit-tests/it-status.robot` は元の Cortex-M4 命令列と判定を Rust に移植し、条件コード、IT 状態とシフト、命令の条件実行、NMI 復帰、IT ブロック内フラグ更新の 6 ケースが合格。NMI は上流の monitor 注入と同じ例外番号を ICSR でペンドする。保存・復元と block begin/end hook の 3 ケースは未移植。
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 41 | 4 | 145 |
+| 監査した共有・混成 Robot | 190 | 42 | 4 | 144 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **58** | **4** | **159** |
+| 合計 | **221** | **59** | **4** | **158** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -122,3 +122,11 @@ BLE 実行時の `--uart-steps` は、改行済みの UART 行を観測した同
 HCI の回帰は上流 RESC と同じ4台・2本の HCI 接続と無線媒体を CLI から構成する。任意の複数マシン RESC 構文と物理 RF は別の対応範囲。
 
 固定 ELF で両ケースの11件が合格した。心拍ケースの中央通知行は仮想 1.02091 秒、周辺側の HRS 確認後に照合が完了したのは 1.62088 秒。HCI UART の最後の通知は仮想 2.37966 秒に照合した。Renode 1.17.0 でも固定チェックアウトの Robot ケース本文を走らせ、両ケースが通過した。心拍 peripheral の取得 URL は同じ SHA-1 のハイフン表記を用いた。
+
+## Cortex-M4 NOCP と例外フレーム
+
+`nrf52840-fpu-upstream.sh` は上流の Armv7-M スタック確認 ELF の SHA-1 を照合し、`Test succeeded` を確認する。同じランナーで固定 `arm-cortex-m-fpu.robot` の `NOCP_ASSEMBLY` を Cortex-M4 向け ELF に組み立て、`NOCP` を確認する。上流の `0xe000ed2a` への非整列ワード `LDR` は、同じ UFSR と NOCP ビットを読む整列半語 `LDRH` に置換する。試験には Python 3、clang、ld.lld が必要。
+
+CPACR で拒否された命令を実行すると、許可された UsageFault または昇格先の HardFault に入り、CFSR.NOCP と該当時の HFSR.FORCED を記録する。Cortex-M4 のテストは、故障命令の PC、MSP/PSP と EXC_RETURN、スタックの整列、復帰時の ITSTATE と命令再試行を確認する。FP コンテキストがアクティブなら、CPACR を閉じた後の例外でも拡張フレームから S レジスタと FPSCR を復元する。
+
+lazy FP 保存、スタックまたはベクタアクセス自体の BusFault、lockup 状態の継続実行は残課題。NOCP が HardFault に昇格できず lockup に達した場合は診断を返す。

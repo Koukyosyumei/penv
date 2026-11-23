@@ -6,7 +6,7 @@ use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
     sv32::TranslationCache,
-    thumb::Thumb,
+    thumb::{Thumb, ThumbStep},
 };
 
 pub const MAX_HARTS: usize = 8;
@@ -596,12 +596,10 @@ impl Hart {
             }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
-                .map(|retired| {
-                    if retired {
-                        Step::Retired
-                    } else {
-                        Step::Stop(Stop::Ebreak)
-                    }
+                .map(|step| match step {
+                    ThumbStep::Retired => Step::Retired,
+                    ThumbStep::Fault => Step::Trap,
+                    ThumbStep::Breakpoint => Step::Stop(Stop::Ebreak),
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }

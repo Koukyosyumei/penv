@@ -21,7 +21,11 @@ const PRIORITY: u32 = BASE + 0x400;
 const SHPR1: u32 = BASE + 0xd18;
 const SHCSR: u32 = BASE + 0xd24;
 const CFSR: u32 = BASE + 0xd28;
+const CFSR_END: u32 = CFSR + 3;
 const HFSR: u32 = BASE + 0xd2c;
+const USGFAULTENA: u32 = 1 << 18;
+const NOCP: u32 = 1 << 19;
+const FORCED: u32 = 1 << 30;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd1c;
 const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 7;
 const PRIORITY_END: u32 = PRIORITY + 63;
@@ -41,6 +45,8 @@ pub struct Nvic {
     priority: [u8; 64],
     system_priority: [u8; 12],
     fault_enables: u32,
+    cfsr: u32,
+    hfsr: u32,
     cpacr: u32,
     fpccr: u32,
     demcr: u32,
@@ -63,6 +69,8 @@ impl Nvic {
             priority: [0; 64],
             system_priority: [0; 12],
             fault_enables: 0,
+            cfsr: 0,
+            hfsr: 0,
             cpacr: 0,
             fpccr: 0xc000_0000,
             demcr: 0,
@@ -121,8 +129,23 @@ impl Nvic {
         std::mem::take(&mut self.reset_requested)
     }
 
-    pub fn fpu_access(&self) -> bool {
-        (self.cpacr >> 20) & 3 == (self.cpacr >> 22) & 3 && self.cpacr & 0x0010_0000 != 0
+    pub fn fpu_access(&self, privileged: bool) -> bool {
+        match self.cpacr >> 20 {
+            0xf => true,
+            0x5 => privileged,
+            _ => false,
+        }
+    }
+
+    pub fn usage_fault_enabled(&self) -> bool {
+        self.fault_enables & USGFAULTENA != 0
+    }
+
+    pub fn record_no_coprocessor_fault(&mut self, escalate: bool) {
+        self.cfsr |= NOCP;
+        if escalate {
+            self.hfsr |= FORCED;
+        }
     }
 
     pub fn reset(&mut self) {
@@ -210,7 +233,11 @@ impl Nvic {
                     | (u32::from(self.unalign_trap) << 3)
             }
             (SHCSR, 4) if self.cortex_m4 => self.fault_enables,
-            (CFSR | HFSR, 4) if self.cortex_m4 => 0,
+            (CFSR..=CFSR_END, 1 | 2 | 4) if self.cortex_m4 && address + width as u32 <= HFSR => {
+                let mask = u32::MAX >> (32 - width * 8);
+                (self.cfsr >> ((address - CFSR) * 8)) & mask
+            }
+            (HFSR, 4) if self.cortex_m4 => self.hfsr,
             (SCR, 4) => self.sleep_control,
             (VTOR, 4) => self.vector_base.unwrap_or(0),
             (ENABLE | DISABLE, 4) => self.enabled as u32,
@@ -262,7 +289,11 @@ impl Nvic {
                 self.unalign_trap = value & 8 != 0
             }
             (SHCSR, 4) if self.cortex_m4 && value & !0x70000 == 0 => self.fault_enables = value,
-            (CFSR | HFSR, 4) if self.cortex_m4 => {}
+            (CFSR..=CFSR_END, 1 | 2 | 4) if self.cortex_m4 && address + width as u32 <= HFSR => {
+                let mask = u32::MAX >> (32 - width * 8);
+                self.cfsr &= !((value & mask) << ((address - CFSR) * 8));
+            }
+            (HFSR, 4) if self.cortex_m4 => self.hfsr &= !value,
             (AIRCR, 4) => {
                 self.reset_requested |= value >> 16 == 0x05fa && value & (1 << 2) != 0;
             }
