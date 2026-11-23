@@ -1360,3 +1360,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 174件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-alias-validation.4RXZtf3f` に保存しました。台帳は対象786件のうち等価合格160件、部分検証17件、未達609件です。
+
+### backlog-network-aea5570f5fc1-1
+
+REPL は同じ宣言内の重複属性を、追記の合成や周辺機器の構築より前に診断します。固定上流の `ShouldFailOnDoubleAttribute` で、同じ入力の2回目の属性を指す診断を照合しました。後続の追記が同名の属性を設定する場合にも元の重複を検出し、既存テストで正常な追記の上書きも確認しました。NVIC の同一宣言内の重複は、モデル固有の診断から属性名と行を示す共通診断に変わります。属性の存在・可書性・型の検証にはモデルの属性情報が必要です。正当なエイリアスの実行時公開には、宣言名とバス上の名前を分ける処理が残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 176件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-property-validation.E48XqaDp` にあります。対象786件のうち等価合格161件、部分検証17件、未達608件です。

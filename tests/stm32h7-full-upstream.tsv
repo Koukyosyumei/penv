@@ -1179,7 +1179,7 @@ renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	93-
 renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	105-106	ShouldFailOnNonWritableProperty	[Test] public void ShouldFailOnNonWritableProperty()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	116-117	ShouldFailOnNumericEnumMismatch	[Test] public void ShouldFailOnNumericEnumMismatch()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	127-128	ShouldFailOnNonExistingInlineType	[Test] public void ShouldFailOnNonExistingInlineType()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
-renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	138-139	ShouldFailOnDoubleAttribute	[Test] public void ShouldFailOnDoubleAttribute()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
+renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	138-139	ShouldFailOnDoubleAttribute	[Test] public void ShouldFailOnDoubleAttribute()	PASS	固定上流と同じ宣言内の属性重複を構築前に検出し、2回目の属性を診断。src/platform.rs
 renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	150-151	ShouldFailOnNonExistingProperty	[Test] public void ShouldFailOnNonExistingProperty()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	161-162	ShouldCheckTypeOfAReference	[Test] public void ShouldCheckTypeOfAReference()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認
 renode	tests/unit-tests/RenodeTests/PlatformDescription/VerificationTests.cs	174-175	ShouldFailOnIncorrectInlineObjectType	[Test] public void ShouldFailOnIncorrectInlineObjectType()	OPEN	上流 H7 REPL の読み込み・検証に関わる共有契約。等価性未確認

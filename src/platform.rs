@@ -1118,6 +1118,22 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
             return Err(entry.error("duplicate declarations and overrides are unsupported"));
         }
     }
+    for entry in &entries {
+        let mut properties = HashSet::new();
+        for (source, text) in &entry.body {
+            if matches!(text.as_str(), "init:" | "init add:") {
+                break;
+            }
+            if let Some(key) = property_key(text)
+                && !properties.insert(key)
+            {
+                return Err(format!(
+                    "{source}: {}: duplicate REPL property {key:?}",
+                    entry.name
+                ));
+            }
+        }
+    }
     let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
@@ -2118,7 +2134,7 @@ ram:
             ),
             (
                 "nvic:\n    systickFrequency: 1\n    systickFrequency: 2\n",
-                "unsupported or duplicate NVIC property",
+                "duplicate REPL property \"systickFrequency\"",
             ),
         ] {
             fs::write(&overlay, format!("{valid}{addition}")).unwrap();
@@ -2963,6 +2979,30 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    #[test]
+    fn upstream_verify_double_attribute() {
+        let error = check_text(
+            "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    EnumValue: One\n    EnumValue: Two",
+            None,
+        ).unwrap_err();
+        assert!(
+            error.contains(":4: external: duplicate REPL property \"EnumValue\""),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn duplicate_property_is_reported_even_when_an_overlay_replaces_it() {
+        let error = check_text(
+            "ram: Memory.MappedMemory @ sysbus 0x20000000\n    size: 8\n    size: 16\nram:\n    size: 32\n",
+            None,
+        ).unwrap_err();
+        assert!(
+            error.contains(":3: ram: duplicate REPL property \"size\""),
+            "{error}"
+        );
     }
 
     #[test]
