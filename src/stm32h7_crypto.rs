@@ -11,29 +11,77 @@ const BLOCK_WORDS: usize = 4;
 
 struct Gcm {
     hash_key: u128,
-    hash: u128,
     counter: [u8; 16],
     tag_mask: u128,
-    header_bits: u64,
-    payload_bits: u64,
+    header: GhashStream,
+    payload: GhashStream,
+}
+
+#[derive(Default)]
+struct GhashStream {
+    hash: u128,
+    last: Option<[u8; 16]>,
+    blocks: u64,
+}
+
+impl GhashStream {
+    fn push(&mut self, key: u128, block: [u8; 16]) {
+        if let Some(previous) = self.last.replace(block) {
+            self.hash = ghash_multiply(self.hash ^ u128::from_be_bytes(previous), key);
+        }
+        self.blocks += 1;
+    }
+
+    fn finish(self, key: u128, bits: u64) -> Option<u128> {
+        if bits % 8 != 0 || bits.div_ceil(128) != self.blocks {
+            return None;
+        }
+        let Some(mut last) = self.last else {
+            return Some(0);
+        };
+        let valid_bytes = ((bits - 1) % 128 / 8 + 1) as usize;
+        last[valid_bytes..].fill(0);
+        Some(ghash_multiply(self.hash ^ u128::from_be_bytes(last), key))
+    }
+}
+
+fn ghash_multiply(left: u128, mut right: u128) -> u128 {
+    let mut product = 0;
+    for bit in (0..128).rev() {
+        if left & (1 << bit) != 0 {
+            product ^= right;
+        }
+        let low = right & 1;
+        right >>= 1;
+        if low != 0 {
+            right ^= 0xe1 << 120;
+        }
+    }
+    product
 }
 
 impl Gcm {
-    fn hash_block(&mut self, block: [u8; 16]) {
-        let operand = self.hash ^ u128::from_be_bytes(block);
-        let mut key = self.hash_key;
-        let mut product = 0;
-        for bit in (0..128).rev() {
-            if operand & (1 << bit) != 0 {
-                product ^= key;
+    fn finish(self, lengths: [u8; 16]) -> Option<[u8; 16]> {
+        let key = self.hash_key;
+        let header_bits = u64::from_be_bytes(lengths[..8].try_into().unwrap());
+        let payload_bits = u64::from_be_bytes(lengths[8..].try_into().unwrap());
+        let mut header = self.header.finish(key, header_bits)?;
+        let mut blocks = self.payload.blocks;
+        let payload = self.payload.finish(key, payload_bits)?;
+        // Shift the AAD contribution forward by the number of ciphertext blocks.
+        let mut power = key;
+        while blocks != 0 {
+            if blocks & 1 != 0 {
+                header = ghash_multiply(header, power);
             }
-            let low = key & 1;
-            key >>= 1;
-            if low != 0 {
-                key ^= 0xe1 << 120;
+            blocks >>= 1;
+            if blocks != 0 {
+                power = ghash_multiply(power, power);
             }
         }
-        self.hash = product;
+        let tag =
+            ghash_multiply(header ^ payload ^ u128::from_be_bytes(lengths), key) ^ self.tag_mask;
+        Some(tag.to_be_bytes())
     }
 }
 
@@ -181,11 +229,10 @@ impl Crypto {
         counter[15] = 2;
         self.gcm = Some(Gcm {
             hash_key: u128::from_be_bytes(hash_key),
-            hash: 0,
             counter,
             tag_mask: u128::from_be_bytes(tag_mask),
-            header_bits: 0,
-            payload_bits: 0,
+            header: GhashStream::default(),
+            payload: GhashStream::default(),
         });
     }
 
@@ -206,13 +253,12 @@ impl Crypto {
             let mut state = self.gcm.take().unwrap();
             match phase {
                 1 => {
-                    state.hash_block(block);
-                    state.header_bits += 128;
+                    state.header.push(state.hash_key, block);
                 }
                 2 => {
                     let decrypt = self.control & 4 != 0;
                     if decrypt {
-                        state.hash_block(block);
+                        state.payload.push(state.hash_key, block);
                     }
                     let mut mask = state.counter;
                     if !self.encrypt_gcm_block(&mut mask) {
@@ -220,19 +266,15 @@ impl Crypto {
                     }
                     xor_block(&mut block, &mask);
                     if !decrypt {
-                        state.hash_block(block);
+                        state.payload.push(state.hash_key, block);
                     }
                     let counter = u32::from_be_bytes(state.counter[12..].try_into().unwrap());
                     state.counter[12..].copy_from_slice(&counter.wrapping_add(1).to_be_bytes());
-                    state.payload_bits += 128;
                     self.push_gcm_output(block);
                 }
                 3 => {
-                    let header_bits = u64::from_be_bytes(block[..8].try_into().unwrap());
-                    let payload_bits = u64::from_be_bytes(block[8..].try_into().unwrap());
-                    if (header_bits, payload_bits) == (state.header_bits, state.payload_bits) {
-                        state.hash_block(block);
-                        self.push_gcm_output((state.hash ^ state.tag_mask).to_be_bytes());
+                    if let Some(tag) = state.finish(block) {
+                        self.push_gcm_output(tag);
                     }
                     return;
                 }
@@ -357,6 +399,63 @@ fn xor_block(block: &mut [u8; 16], mask: &[u8; 16]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aes_gcm_partial_payload_uses_final_bit_length() {
+        let mut crypto = Crypto::new(0, None);
+        let control = ENABLE | (1 << 19);
+        crypto.write(0x4c, 2);
+        crypto.write(0, control);
+        crypto.write(0, control | (2 << 16));
+        for word in [0u32, 0x000000ff, 0xffffffff, 0xffffffff] {
+            crypto.write(8, word);
+        }
+        let output: [u32; 4] = std::array::from_fn(|_| crypto.read(0xc));
+        assert_eq!(output[0], 0x0388dace);
+        assert_eq!(output[1] >> 8, 0x60b6a3);
+
+        crypto.write(0, control | (3 << 16));
+        for word in [0, 0, 0, 56] {
+            crypto.write(8, word);
+        }
+        assert_eq!(
+            std::array::from_fn(|_| crypto.read(0xc)),
+            [0xf191b0a7, 0x0de636f1, 0x48bed5be, 0xa5b55615]
+        );
+    }
+
+    #[test]
+    fn aes_gcm_partial_header_and_multiblock_decrypt() {
+        let mut crypto = Crypto::new(0, Some(79));
+        let control = ENABLE | (1 << 19) | 4;
+        crypto.write(0x4c, 2);
+        crypto.write(0x14, 2);
+        crypto.write(0, control);
+        crypto.write(0, control | (1 << 16));
+        for word in [0x68656164, 0x6572ffff, 0xffffffff, 0xffffffff] {
+            crypto.write(8, word);
+        }
+        crypto.write(0, control | (2 << 16));
+        for input in [
+            [0x0388dace, 0x60b6a392, 0xf328c2b9, 0x71b2fe78],
+            [0xf795aaff, 0xffffffff, 0xffffffff, 0xffffffff],
+        ] {
+            for word in input {
+                crypto.write(8, word);
+            }
+            assert_eq!(crypto.interrupt(), Some(79));
+            let output: [u32; 4] = std::array::from_fn(|_| crypto.read(0xc));
+            assert_eq!(output[0] >> 8, 0);
+        }
+        crypto.write(0, control | (3 << 16));
+        for word in [0, 48, 0, 152] {
+            crypto.write(8, word);
+        }
+        assert_eq!(
+            std::array::from_fn(|_| crypto.read(0xc)),
+            [0xa3148393, 0x54956b13, 0x30a077d8, 0x807e35c7]
+        );
+    }
 
     fn aes_gcm_fixture(decrypt: bool, use_interrupt: bool) {
         let mut crypto = Crypto::new(0, Some(79));
