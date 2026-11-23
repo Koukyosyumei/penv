@@ -680,7 +680,7 @@ fn parse_content(
                 ));
             }
 
-            let filename = quoted_string(include)
+            let filename = quoted_string(include.trim_end().strip_suffix(';').unwrap_or(include))
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
             if !imports.insert(filename.clone()) {
@@ -880,36 +880,64 @@ fn declarations(path: &Path, root: Option<&Path>) -> Result<Vec<Entry>, String> 
 }
 
 fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
-    let mut declarations: Vec<Entry> = Vec::new();
-    let mut declared = HashMap::<String, usize>::new();
-    for entry in entries {
+    let mut declared = HashMap::new();
+    let mut declarations = Vec::new();
+    let mut blocks = Vec::new();
+    for mut entry in entries {
         if entry.model.is_empty() && entry.name != "sysbus" {
-            let target = declared
-                .get(&entry.name)
-                .and_then(|&index| declarations.get_mut(index))
-                .ok_or_else(|| entry.error("extension has no earlier declaration"))?;
-            if !matches!(
-                target.model.as_str(),
-                stm32h7_gpio_platform::GPIO
-                    | crate::stm32h7_timer::Timer::MODEL
-                    | stm32h7_rtc_platform::RTC
-            ) || entry.registration.is_some()
-            {
+            if entry.registration.is_some() {
                 return Err(entry.error("unsupported declaration extension"));
             }
-            target.body.extend(entry.body);
-        } else {
-            if declared
-                .insert(entry.name.clone(), declarations.len())
-                .is_some()
-            {
-                return Err(entry.error("duplicate declarations are unsupported"));
-            }
-            declarations.push(entry);
+            blocks.push(entry);
+            continue;
         }
+        if declared
+            .insert(entry.name.clone(), declarations.len())
+            .is_some()
+        {
+            return Err(entry.error("duplicate declarations are unsupported"));
+        }
+        blocks.push(Entry {
+            name: entry.name.clone(),
+            model: String::new(),
+            registration: None,
+            body: std::mem::take(&mut entry.body),
+            source: entry.source.clone(),
+            line: entry.line,
+        });
+        declarations.push(entry);
+    }
+    for block in blocks {
+        let index = *declared
+            .get(&block.name)
+            .ok_or_else(|| block.error("extension has no declaration"))?;
+        let target = &mut declarations[index];
+        let replaced: HashSet<_> = block
+            .body
+            .iter()
+            .filter_map(|(_, text)| scalar_property(text))
+            .collect();
+        target
+            .body
+            .retain(|(_, text)| !scalar_property(text).is_some_and(|key| replaced.contains(key)));
+        target.body.extend(block.body);
     }
     Ok(declarations)
 }
+
+fn scalar_property(text: &str) -> Option<&str> {
+    let (key, value) = text.split_once(':')?;
+    let key = key.trim();
+    (!value.trim().is_empty()
+        && !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'))
+    .then_some(key)
+}
+
+#[cfg(test)]
+mod override_tests;
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     load_with_timing(path, root, false)
