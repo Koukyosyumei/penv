@@ -1667,7 +1667,7 @@ Ethernet はハッシュ固定の ELF 内の成功カウンターを合格判定
 
 ### nRF52840 の上流 Zephyr Shell
 
-[受け入れ対応表と一括再現手順](tests/nrf52840-acceptance.md)
+[従来の受け入れ対応表](tests/nrf52840-acceptance.md) · [固定上流の全件台帳と追加検証](tests/nrf52840-full-upstream.md)
 
 nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、UART/UARTE0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモードと ADXL372、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNG、ECB、EGU0–5 と、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 

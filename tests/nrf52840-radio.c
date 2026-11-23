@@ -48,15 +48,26 @@ static void radio_irq(void)
 void reset(void)
 {
     ends = good_crc = disabled = 0;
+    CHECK(REG(RADIO + 0x66c) == 0x052d0000);
+    REG(RADIO + 0x66c) = 0x123456ff;
+    CHECK(REG(RADIO + 0x66c) == 0x052d0007);
+    REG(RADIO + 0xffc) = 0;
+    REG(RADIO + 0xffc) = 1;
+    CHECK(REG(RADIO + 0x66c) == 0x052d0000);
     REG(TX) = 0x22110342;
     BYTE(TX + 4) = 0x33;
     BYTE(RX + 5) = 0xee;
     REG(0xe000e100u) = 1u << 1;
     REG(RADIO + 0x304) = (1u << 3) | (1u << 4) | (1u << 12);
-    REG(RADIO + 0x514) = 0x108; /* One S0 byte and an 8-bit LENGTH. */
-    REG(RADIO + 0x518) = 8;
+    /* Reserved bits must read as zero without discarding valid fields.
+     * Keep one S0 byte, an 8-bit LENGTH, and an 8-byte MAXLEN. */
+    REG(RADIO + 0x514) = 0x80000108;
+    REG(RADIO + 0x518) = 0x80000008;
+    CHECK(REG(RADIO + 0x514) == 0x108);
+    CHECK(REG(RADIO + 0x518) == 8);
     REG(RADIO + 0x504) = TX;
-    REG(RADIO + 0x200) = 3; /* READY -> START; END -> DISABLE. */
+    REG(RADIO + 0x200) = 0x80000003; /* READY -> START; END -> DISABLE. */
+    CHECK(REG(RADIO + 0x200) == 3);
     REG(RADIO + 0x000) = 1;
     CHECK(ends == 1 && disabled == 1 && good_crc == 0);
     CHECK(REG(RADIO + 0x100) == 1 && REG(RADIO + 0x154) == 1);

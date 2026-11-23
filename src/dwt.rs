@@ -6,6 +6,7 @@ pub struct Dwt {
     phase: u64,
     words: [u32; 23],
     demcr: u32,
+    clocked: bool,
 }
 
 impl Dwt {
@@ -18,6 +19,7 @@ impl Dwt {
             phase: 0,
             words: [0; 23],
             demcr: 0,
+            clocked: true,
         }
     }
 
@@ -35,8 +37,12 @@ impl Dwt {
         ]
     }
 
+    pub fn set_clocked(&mut self, clocked: bool) {
+        self.clocked = clocked;
+    }
+
     pub fn tick(&mut self, step_hz: u32) {
-        if self.words[0] & 1 == 0 {
+        if !self.clocked || self.words[0] & 1 == 0 {
             return;
         }
         let step_hz = u64::from(step_hz);

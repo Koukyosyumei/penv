@@ -296,6 +296,10 @@ impl Thumb {
                     (r[rn] & 0xffff_0000) | (shifted as u32 & 0xffff)
                 };
             }
+            // MOV.W with SP shares the shifted-register ORR encoding.
+            0xea4f if low & 0xf0f0 == 0 && (rd == 13 || rm == 13) && rd < 15 && rm < 15 => {
+                r[rd] = if rd == 13 { r[rm] & !3 } else { r[rm] };
+            }
             0xea00..=0xea9f
                 if rt < 8
                     && rm < 15
@@ -392,23 +396,41 @@ impl Thumb {
                 let high = ((base >> 16) as u16).wrapping_add(extend((value >> 16) as u8));
                 r[rd] = u32::from(low) | (u32::from(high) << 16);
             }
-            0xfa80..=0xfa8e
+            0xfa80..=0xfa8e | 0xfa90..=0xfa9e | 0xfac0..=0xface | 0xfad0..=0xfade
                 if rt == 15
-                    && low & 0xf0 == 0x40
+                    && matches!(low & 0xf0, 0 | 0x40)
                     && rn != 13
                     && !matches!(rd, 13 | 15)
                     && !matches!(rm, 13 | 15) =>
             {
-                let a = r[rn].to_le_bytes();
-                let b = r[rm].to_le_bytes();
-                let mut value = [0; 4];
+                let width = if high & 0x10 == 0 { 8 } else { 16 };
+                let mask = (1 << width) - 1;
+                let subtract = high & 0x40 != 0;
+                let signed = low & 0x40 == 0;
+                let operand = |value: u32, shift| {
+                    let raw = ((value >> shift) & mask) as i32;
+                    if signed {
+                        (raw << (32 - width)) >> (32 - width)
+                    } else {
+                        raw
+                    }
+                };
+                let mut value = 0;
                 self.greater_equal = 0;
-                for index in 0..4 {
-                    let (sum, carry) = a[index].overflowing_add(b[index]);
-                    value[index] = sum;
-                    self.greater_equal |= u32::from(carry) << index;
+                for shift in (0..32).step_by(width) {
+                    let lhs = operand(r[rn], shift);
+                    let rhs = operand(r[rm], shift);
+                    let result = if subtract { lhs - rhs } else { lhs + rhs };
+                    value |= (result as u32 & mask) << shift;
+                    if if signed || subtract {
+                        result >= 0
+                    } else {
+                        result as u32 > mask
+                    } {
+                        self.greater_equal |= ((1 << (width / 8)) - 1) << (shift / 8);
+                    }
                 }
-                r[rd] = u32::from_le_bytes(value);
+                r[rd] = value;
             }
             0xfa80..=0xfa8e | 0xfa90..=0xfa9e | 0xfac0..=0xface | 0xfad0..=0xfade
                 if rt == 15
@@ -462,6 +484,33 @@ impl Thumb {
                         b[index]
                     }
                 }));
+            }
+            0xfa90..=0xfa9e | 0xfaa0..=0xfaae | 0xfad0..=0xfade | 0xfae0..=0xfaee
+                if rt == 15
+                    && matches!(low & 0xf0, 0x10 | 0x20)
+                    && rn != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = r[rn] as i16 as i32;
+                let b = (r[rn] >> 16) as i16 as i32;
+                let c = r[rm] as i16 as i32;
+                let d = (r[rm] >> 16) as i16 as i32;
+                let (lo, hi) = match high & 0xf0 {
+                    0x90 => (a + c, b + d),
+                    0xa0 => (a - d, b + c),
+                    0xd0 => (a - c, b - d),
+                    _ => (a + d, b - c),
+                };
+                let lane = |value: i32| {
+                    let value = if low & 0x20 != 0 {
+                        value >> 1
+                    } else {
+                        value.clamp(-32768, 32767)
+                    };
+                    u32::from(value as u16)
+                };
+                r[rd] = lane(lo) | (lane(hi) << 16);
             }
             0xfa90..=0xfa9e
                 if low & 0xf0c0 == 0xf080 && rn == rm && !matches!(rd, 13 | 15) && rn != 13 =>
@@ -563,7 +612,7 @@ impl Thumb {
                     self.saturation |= overflow;
                 }
             }
-            0xfb20..=0xfb2e
+            0xfb20..=0xfb2e | 0xfb40..=0xfb4e
                 if rn != 13
                     && low & 0xe0 == 0
                     && rt != 13
@@ -575,7 +624,11 @@ impl Thumb {
                 let lower = i32::from(a as i16) * i32::from(b as i16);
                 let upper = i32::from((a >> 16) as i16) * i32::from((b >> 16) as i16);
                 let acc = if rt == 15 { 0 } else { r[rt] as i32 };
-                let (product, q1) = lower.overflowing_add(upper);
+                let (product, q1) = if high & 0x40 != 0 {
+                    lower.overflowing_sub(upper)
+                } else {
+                    lower.overflowing_add(upper)
+                };
                 let (sum, q2) = product.overflowing_add(acc);
                 self.saturation |= q1 || q2;
                 r[rd] = sum as u32;
@@ -820,5 +873,37 @@ mod tests {
         assert_eq!((pc, registers[3]), (4, 24));
         assert_eq!(bus.read_ram::<4>(16).unwrap(), registers[0]);
         assert_eq!(bus.read_ram::<4>(20).unwrap(), registers[1]);
+    }
+
+    #[test]
+    fn upstream_mov_w_transfers_sp_as_an_unshifted_register() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = std::io::sink();
+        for (address, opcode) in [(0, 0xea4f), (2, 0x000d), (4, 0xea4f), (6, 0x0d01)] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        let mut thumb = Thumb::new(Some(0));
+        thumb.thumb2 = true;
+        let mut registers = [0; 32];
+        let mut pc = 0;
+        registers[13] = 0xfeedc0d0;
+        registers[1] = 0xbadcaff0;
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 8);
+        assert_eq!(registers[0], 0xfeedc0d0);
+        assert_eq!(registers[13], 0xbadcaff0);
+
+        pc = 4;
+        registers[1] |= 3;
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(registers[13], 0xbadcaff0);
     }
 }

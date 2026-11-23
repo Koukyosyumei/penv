@@ -1,10 +1,23 @@
+use std::collections::VecDeque;
+
+use super::{arducam::Ov2640, lsm9ds1::Lsm9ds1};
 use crate::stm32_i2c::Eeprom;
 
-use super::{Adxl372, Spi};
+use super::{
+    Adxl372, Spi, bme280::Bme280, bmp180::Bmp180, lis2ds12::Lis2ds12, lsm303::Lsm303,
+    lsm330::Lsm330,
+};
 
 pub(super) enum Target {
     Eeprom(Eeprom),
     Adxl372(Box<Adxl372>),
+    Bme280(Box<Bme280>),
+    Lis2ds12(Box<Lis2ds12>),
+    Lsm330(Lsm330),
+    Lsm303(Lsm303),
+    Bmp180(Bmp180),
+    Lsm9ds1(Lsm9ds1),
+    Ov2640(Ov2640),
 }
 
 impl Target {
@@ -12,6 +25,13 @@ impl Target {
         match self {
             Self::Eeprom(device) => device.start_write(),
             Self::Adxl372(device) => device.start_write(),
+            Self::Bme280(device) => device.start_write(),
+            Self::Lis2ds12(device) => device.start_write(),
+            Self::Lsm330(device) => device.start_write(),
+            Self::Lsm303(device) => device.start_write(),
+            Self::Bmp180(device) => device.start_write(),
+            Self::Lsm9ds1(device) => device.start_write(),
+            Self::Ov2640(device) => device.start_write(),
         }
     }
 
@@ -19,6 +39,13 @@ impl Target {
         match self {
             Self::Eeprom(device) => device.write(value),
             Self::Adxl372(device) => device.write(value),
+            Self::Bme280(device) => device.write(value),
+            Self::Lis2ds12(device) => device.write(value),
+            Self::Lsm330(device) => device.write(value),
+            Self::Lsm303(device) => device.write(value),
+            Self::Bmp180(device) => device.write(value),
+            Self::Lsm9ds1(device) => device.write(value),
+            Self::Ov2640(device) => device.write(value),
         }
     }
 
@@ -26,6 +53,13 @@ impl Target {
         match self {
             Self::Eeprom(device) => device.read(),
             Self::Adxl372(device) => device.read(),
+            Self::Bme280(device) => device.read(),
+            Self::Lis2ds12(device) => device.read(),
+            Self::Lsm330(device) => device.read(),
+            Self::Lsm303(device) => device.read(),
+            Self::Bmp180(device) => device.read(),
+            Self::Lsm9ds1(device) => device.read(),
+            Self::Ov2640(device) => device.read(),
         }
     }
 }
@@ -96,10 +130,58 @@ impl Twi {
         Ok(())
     }
 
+    pub(super) fn adxl(&mut self, name: &str) -> Option<&mut Adxl372> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Adxl372(device) if device.name == name => Some(device.as_mut()),
+                _ => None,
+            })
+    }
+
+    pub(super) fn lsm9ds1_samples(&mut self) -> Option<&mut VecDeque<[f64; 3]>> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Lsm9ds1(device) => device.imu_samples(),
+                _ => None,
+            })
+    }
+
+    pub(super) fn sensor_irqs(&self) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+        self.targets.iter().flat_map(|(_, target)| {
+            match target {
+                Target::Lis2ds12(device) => [Some(device.irq()), None],
+                Target::Lsm303(device) => device.irqs(),
+                _ => [None; 2],
+            }
+            .into_iter()
+            .flatten()
+        })
+    }
+
+    fn finish_current_write(&mut self) {
+        if let Some((index, Direction::Write)) = self.active {
+            match &mut self.targets[index].1 {
+                Target::Lis2ds12(device) => device.finish_write(),
+                Target::Lsm303(device) => device.finish_write(),
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn reset(&mut self) {
         for (_, target) in &mut self.targets {
-            if let Target::Adxl372(device) = target {
-                device.reset();
+            match target {
+                Target::Adxl372(device) => device.reset(),
+                Target::Lis2ds12(device) => device.reset(),
+                Target::Lsm330(device) => device.reset(),
+                Target::Lsm303(device) => device.reset(),
+                Target::Bmp180(device) => device.reset(),
+                Target::Lsm9ds1(device) => device.reset(),
+                Target::Ov2640(device) => *device = Ov2640::default(),
+                Target::Bme280(device) => **device = Bme280::default(),
+                _ => {}
             }
         }
         *self = Self {
@@ -127,6 +209,7 @@ impl Twi {
     }
 
     fn start(&mut self, direction: Direction) {
+        self.finish_current_write();
         self.suspended = false;
         self.rx = None;
         self.active = None;
@@ -148,6 +231,7 @@ impl Twi {
     }
 
     fn stop(&mut self) {
+        self.finish_current_write();
         self.active = None;
         self.suspended = false;
         self.raise(STOPPED);

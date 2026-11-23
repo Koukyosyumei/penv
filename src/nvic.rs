@@ -11,6 +11,7 @@ const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
 const PRIORITY: u32 = BASE + 0x400;
+pub const DHCSR: u32 = 0xe000_edf0;
 const CPACR: u32 = BASE + 0xd88;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd18;
 const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 11;
@@ -55,6 +56,10 @@ pub struct Nvic {
     fpccr: Option<u32>,
     scr: u32,
     reset_requested: bool,
+    pub lockup: bool,
+    active_system: u16,
+    bus_fault_status: u32,
+    bus_fault_address: u32,
     ccr: u32,
     cpacr: u32,
     fault_enables: u32,
@@ -130,6 +135,10 @@ impl Nvic {
             fpccr: None,
             scr: 0,
             reset_requested: false,
+            lockup: false,
+            active_system: 0,
+            bus_fault_status: 0,
+            bus_fault_address: 0,
             ccr: 1 << 9,
             cpacr: 0,
             fault_enables: 0,
@@ -200,6 +209,27 @@ impl Nvic {
 
     pub fn send_event_on_pending(&self) -> bool {
         self.scr & (1 << 4) != 0
+    }
+
+    pub fn set_active_exceptions(&mut self, active: u128) {
+        self.active_system = active as u16;
+    }
+    pub fn has_debug_status(&self) -> bool {
+        self.has_fpu()
+    }
+    pub fn ignores_negative_priority_bus_fault(&self) -> bool {
+        self.ccr & (1 << 8) != 0
+    }
+    pub fn record_precise_bus_fault(&mut self, address: u32, escalate: bool) {
+        self.bus_fault_status |= (1 << 9) | (1 << 15);
+        self.bus_fault_address = address;
+        if escalate {
+            self.hardfault_pending = true;
+        }
+    }
+
+    pub fn set_hard_fault_pending(&mut self, pending: bool) {
+        self.set_hardfault_pending(pending);
     }
 
     pub fn set_hardfault_pending(&mut self, pending: bool) {
@@ -417,6 +447,15 @@ impl Nvic {
             }
             if offset == 0xf34 {
                 return self.fpccr;
+            }
+            if address == DHCSR && self.has_debug_status() {
+                return Some(u32::from(self.lockup) << 19);
+            }
+            if address == BASE + 0xd38 {
+                return Some(self.bus_fault_address);
+            }
+            if address == BASE + 0xd28 {
+                return Some(self.bus_fault_status);
             }
             if address == AIRCR {
                 return Some(0xfa05_0000 | (u32::from(self.priority_group) << 8));

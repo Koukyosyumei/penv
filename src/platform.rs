@@ -1,3 +1,4 @@
+mod nrf52840;
 use crate::repl_syntax::{quoted_string, unquoted_delimiters, without_comment};
 
 mod stm32f0;
@@ -134,6 +135,81 @@ impl Entry {
         self.sysbus()?
             .ok_or_else(|| self.error("expected a sysbus address"))
     }
+}
+
+struct BusPoint<'a> {
+    address: u32,
+    condition: &'a str,
+}
+
+fn conditional_bus_point(entry: &Entry) -> Result<Option<BusPoint<'_>>, String> {
+    let Some(registration) = entry
+        .registration
+        .as_deref()
+        .and_then(|value| value.strip_prefix("sysbus new Bus.BusPointRegistration"))
+    else {
+        return Ok(None);
+    };
+    let fields = registration
+        .trim()
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+        .ok_or_else(|| entry.error("expected a bus point registration body"))?;
+    let mut address = None;
+    let mut condition = None;
+    for field in fields
+        .split(';')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        match field
+            .split_once(':')
+            .map(|(key, value)| (key.trim(), value.trim()))
+        {
+            Some(("address", value)) if address.is_none() => {
+                address = Some(number(value).map_err(|e| entry.error(&e))?);
+            }
+            Some(("condition", value)) if condition.is_none() => {
+                condition = Some(
+                    value
+                        .strip_prefix('"')
+                        .and_then(|value| value.strip_suffix('"'))
+                        .filter(|value| !value.trim().is_empty() && !value.contains('"'))
+                        .ok_or_else(|| entry.error("expected a nonempty quoted bus condition"))?,
+                );
+            }
+            _ => return Err(entry.error("unsupported or duplicate bus point property")),
+        }
+    }
+    let address = address.ok_or_else(|| entry.error("expected a bus point address"))?;
+    let condition = condition.ok_or_else(|| entry.error("expected a bus point condition"))?;
+    Ok(Some(BusPoint { address, condition }))
+}
+
+fn validate_bus_point(
+    entry: &Entry,
+    point: &BusPoint<'_>,
+    entries: &[Entry],
+) -> Result<(), String> {
+    for term in point.condition.split("&&") {
+        if let Some((field, name)) = term.split_once("==")
+            && field.trim() == "initiator"
+        {
+            let name = name.trim();
+            if !entries.iter().any(|peer| peer.name == name) {
+                return Err(entry.error(&format!("Invalid initiator: {name}")));
+            }
+        }
+    }
+    // In an otherwise empty platform the newly registered peripheral is
+    // a bus target. There is no initiator that could supply state bits.
+    if entries.len() == 1 && !entry.model.starts_with("CPU.") {
+        return Err(entry.error(&format!(
+            "Conditions provided ({}) but there are no peripherals implementing IPeripheralWithTransactionState or they have no common state bits",
+            point.condition
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn number(value: &str) -> Result<u32, String> {

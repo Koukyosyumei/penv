@@ -24,6 +24,7 @@ pub struct SysTick {
     steps_per_second: u64,
     phase: u64,
     clock_gated: bool,
+    current_initialized: bool,
     counting: bool,
     zero_state_reload: bool,
     noisy: bool,
@@ -43,6 +44,7 @@ impl Default for SysTick {
             steps_per_second: CORTEX_M_STEP_HZ,
             phase: 0,
             clock_gated: false,
+            current_initialized: false,
             counting: false,
             zero_state_reload: false,
             noisy: false,
@@ -176,6 +178,7 @@ impl SysTick {
         Some(match address {
             CSR => 4 | self.control | (u32::from(std::mem::take(&mut self.count_flag)) << 16),
             RELOAD => self.reload,
+            CURRENT if !self.current_initialized => 0xff_ffff,
             CURRENT => self.current,
             CALIBRATION => 1 << 31, // No separate reference clock.
             ICSR => {
@@ -187,12 +190,17 @@ impl SysTick {
         })
     }
 
+    pub fn enabling_with_zero_reload(&self, address: u32, value: u32) -> bool {
+        address == CSR && value & 1 != 0 && self.control & 1 == 0 && self.reload == 0
+    }
+
     pub fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
             CSR if self.zero_state_reload => self.control = value & 3,
             RELOAD if self.zero_state_reload => self.reload = value & 0xff_ffff,
             CURRENT if self.zero_state_reload => {
                 self.current = 0;
+                self.current_initialized = true;
                 self.count_flag = false;
             }
             CSR => {
@@ -241,6 +249,7 @@ impl SysTick {
                 if value & (1 << 28) != 0 {
                     self.pendsv_pending = true;
                 }
+                self.nmi_pending |= value & (1 << 31) != 0;
             }
             _ => return false,
         }

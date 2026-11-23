@@ -1,4 +1,4 @@
-//! Cortex-M7 encodings and R4 assertions from Renode tests/unit-tests/arm-ge-flag.robot.
+//! Cortex-M4 and Cortex-M7 encodings from Renode tests/unit-tests/arm-ge-flag.robot.
 
 use super::*;
 

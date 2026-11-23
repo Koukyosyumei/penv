@@ -8,6 +8,12 @@ pub struct GpioLed {
 }
 
 impl GpioLed {
+    pub fn for_nrf(name: String, parent: Option<String>, invert: bool) -> Self {
+        let mut led = Self::new(name, 0, invert);
+        led.parent = parent;
+        led
+    }
+
     pub fn new(name: String, pin: u8, invert: bool) -> Self {
         Self {
             name,
@@ -19,8 +25,17 @@ impl GpioLed {
         }
     }
 
+    #[cfg(test)]
+    pub fn is_on(&self) -> bool {
+        self.state
+    }
+
     pub fn sample(&mut self, levels: u16, report: bool) {
-        let state = (levels & (1 << self.pin) != 0) ^ self.invert;
+        self.sample_level(levels & (1 << self.pin) != 0, report);
+    }
+
+    pub fn sample_level(&mut self, level: bool, report: bool) {
+        let state = level ^ self.invert;
         if state == self.state {
             return;
         }

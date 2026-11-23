@@ -40,12 +40,14 @@ mod network_platform;
 mod network_repl;
 mod network_resc;
 mod nrf52840;
+mod nrf_monitor;
 mod nrf_repl;
 mod ns16550;
 mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod pydev;
 mod repl_parser;
 mod repl_syntax;
 mod resd;
@@ -63,6 +65,7 @@ mod rv64_platform;
 mod rv64_priv;
 mod rv64_starfive;
 mod rv64_vm;
+mod semihosting;
 mod simulation;
 mod stm32_adc;
 mod stm32_can;
@@ -116,6 +119,7 @@ mod sv32;
 mod sync_action;
 mod systick;
 mod thumb;
+mod thumb_llvm;
 pub mod time_handle;
 pub mod time_source;
 mod tmp108;
@@ -146,6 +150,12 @@ Usage: penv run [OPTIONS] IMAGE
        penv switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]
        penv check-platform PATH [--platform-root PATH]
        penv check-platform --from-string REPL [--platform-root PATH]
+       penv validate-platform REPL
+       penv thumb-assemble SOURCE
+       penv thumb-disassemble ADDRESS HEXBYTES
+       penv thumb-disassemble-memory REPL ELF ADDRESS SIZE
+
+Thumb assembly tools require llvm-mc on PATH. HEXBYTES are in memory order.
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
@@ -188,6 +198,8 @@ Options:
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --button-event STEP:NAME:STATE  Schedule a button press or release (repeatable)
   --led-events       Print board LED transitions to stderr
+  --uart-steps       Prefix UART lines with their first output step
+  --adxl-event STEP:NAME:X:Y:Z  Set nRF52840 ADXL372 acceleration in g at a step
   --adc-input CHANNEL:VOLTS  Set the initial STM32 ADC channel voltage (repeatable)
   --adc-event STEP:CHANNEL:VOLTS  Change an STM32 ADC channel voltage at a step (repeatable)
   --stm32f0-console  Require an STM32F0 REPL (legacy console option)
@@ -206,6 +218,13 @@ Options:
   --uart-stdin       Forward stdin to the platform UART while running
   --uart-stdin-reset  Enable Ctrl-] r to reload the machine on the UART session
   --uart-device NAME  Select the RV64 platform UART that receives input
+  --ble-hci-controller PATH  Use two external HCI controllers with --ble-peer
+  --ble-peer PATH    Run a second nRF52840 ELF on an in-process RADIO medium
+  --i2s-input PATH   Feed PCM bytes to nRF52840 I2S
+  --i2s-output PATH  Save PCM bytes transmitted by nRF52840 I2S
+  --nrf-camera-image PATH  Preload a JPEG into nRF52840 ArduCAM
+  --lsm9ds1-samples PATH  Load nRF52840 accelerometer samples in g
+  --pdm-input PATH   Feed signed 16-bit little-endian PCM to nRF52840 PDM
   --uart-input-at N Delay UART input until execution step N
   --ethernet-loopback LOCAL:PEER  Link BeagleV MACs over localhost UDP ports
   --litex-uart-stdio  Bridge stdin to LiteX UART at 115200 baud and flush UART output
@@ -521,6 +540,22 @@ fn run() -> Result<ExitCode, String> {
             }
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Some(
+            command @ ("thumb-assemble" | "thumb-disassemble" | "thumb-disassemble-memory"),
+        )) => {
+            thumb_llvm::run(command, args)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Some("validate-platform")) => {
+            let path = args
+                .next()
+                .ok_or("validate-platform requires one REPL path")?;
+            if args.next().is_some() {
+                return Err("validate-platform requires one REPL path".into());
+            }
+            platform::load(std::path::Path::new(&path), None, false)?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Some("run")) => {}
         _ => return Err("expected 'run' or 'check-platform'; see --help".into()),
     }
@@ -557,13 +592,13 @@ fn run() -> Result<ExitCode, String> {
     let mut stm32f0_console = false;
     let mut adc_inputs = Vec::new();
     let mut adc_events = Vec::new();
+    let mut adxl_events = Vec::new();
     let mut led_events = false;
     let mut uart_input = None;
     let mut uart_stdin = false;
     let mut uart_stdin_reset = false;
     let mut ethernet_loopback = None;
     let mut uart_device = None;
-    let mut uart_input_at = None;
     let mut temperature_events = Vec::new();
     let mut uart_actions = Vec::new();
     let mut phy_events = Vec::new();
@@ -575,7 +610,8 @@ fn run() -> Result<ExitCode, String> {
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
     let mut cli_mips = None;
-    let mut reset_steps = Vec::new();
+    let mut camera_image = None;
+    let mut lsm9ds1_samples = None;
     let mut i2s_input = None;
     let mut i2s_output = None;
     let mut pdm_input = None;
@@ -583,7 +619,12 @@ fn run() -> Result<ExitCode, String> {
     let mut sd_image = None;
     let mut uart_log_dir = None;
     let mut memory_setup = Vec::new();
+    let mut ble_hci_controller = None;
+    let mut uart_input_at = None;
+    let mut uart_events = Vec::new();
+    let mut reset_steps = Vec::new();
     let mut path = None;
+    let mut uart_steps = false;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
             Some("-h" | "--help") => {
@@ -647,9 +688,21 @@ fn run() -> Result<ExitCode, String> {
                 }
             }
             Some(
-                option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--framebuffer-out" | "--sd-image" | "--uart-log-dir"
-                | "--i2s-input" | "--i2s-output" | "--pdm-input" | "--ble-peer"),
+                option @ ("--platform"
+                | "--platform-root"
+                | "--script"
+                | "--uart-input"
+                | "--asset-dir"
+                | "--framebuffer-out"
+                | "--sd-image"
+                | "--uart-log-dir"
+                | "--i2s-input"
+                | "--i2s-output"
+                | "--pdm-input"
+                | "--nrf-camera-image"
+                | "--lsm9ds1-samples"
+                | "--ble-hci-controller"
+                | "--ble-peer"),
             ) => {
                 let path = args
                     .next()
@@ -658,6 +711,7 @@ fn run() -> Result<ExitCode, String> {
                 let target = match option {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
+                    "--uart-input" => &mut uart_input,
                     "--asset-dir" => &mut asset_dir,
                     "--platform-root" => &mut platform_root,
                     "--pdm-input" => &mut pdm_input,
@@ -667,6 +721,9 @@ fn run() -> Result<ExitCode, String> {
                     "--sd-image" => &mut sd_image,
                     "--uart-log-dir" => &mut uart_log_dir,
                     "--framebuffer-out" => &mut framebuffer_out,
+                    "--ble-hci-controller" => &mut ble_hci_controller,
+                    "--nrf-camera-image" => &mut camera_image,
+                    "--lsm9ds1-samples" => &mut lsm9ds1_samples,
                     _ => &mut uart_input,
                 };
                 if target.replace(path).is_some() {
@@ -674,6 +731,28 @@ fn run() -> Result<ExitCode, String> {
                 }
             }
             Some("--led-events") => led_events = true,
+            Some("--uart-steps") => uart_steps = true,
+            Some("--adxl-event") => {
+                let usage = "--adxl-event requires STEP:NAME:X:Y:Z";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(usage)?;
+                let fields: Vec<_> = value.split(':').collect();
+                let [step, name, x, y, z] = fields.as_slice() else {
+                    return Err(usage.into());
+                };
+                let step = step.parse().map_err(|_| "invalid --adxl-event step")?;
+                let mut acceleration = [0; 3];
+                for (axis, value) in acceleration.iter_mut().zip([x, y, z]) {
+                    let gs: f64 = value.parse().map_err(|_| "invalid ADXL372 acceleration")?;
+                    if !(-200.0..=200.0).contains(&gs) {
+                        return Err("ADXL372 acceleration must be within ±200 g".into());
+                    }
+                    *axis = (gs * 10.0).round() as i16;
+                }
+                adxl_events.push((step, (*name).to_string(), acceleration));
+            }
             Some(option @ ("--adc-input" | "--adc-event")) => {
                 let usage = || {
                     format!(
@@ -1264,6 +1343,19 @@ fn run() -> Result<ExitCode, String> {
         let root = platform_root
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
+        if let Ok(content) = fs::read_to_string(script)
+            && content
+                .lines()
+                .any(|line| line.trim_start().starts_with("machine PyDevFromString"))
+        {
+            if path.is_some() {
+                return Err("CPU-less PyDev scripts do not accept a firmware override".into());
+            }
+            if let Some(pydev) = nrf_monitor::load(script, root)?.pydev {
+                pydev.run(&mut io::stdout().lock())?;
+                return Ok(ExitCode::SUCCESS);
+            }
+        }
         let boot = match monitor::load(script, root) {
             Ok(boot) if uart_log_dir.is_none() => boot,
             result => {
@@ -1451,6 +1543,20 @@ fn run() -> Result<ExitCode, String> {
                 Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
             }
         };
+        machine.report_uart_steps(uart_steps);
+        if let Some(path) = &camera_image {
+            machine.bus.set_nrf_camera_image(
+                fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            )?;
+        }
+        if let Some(path) = &lsm9ds1_samples {
+            machine.bus.set_nrf_lsm9ds1_samples(
+                &fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            )?;
+        }
+        for (step, name, acceleration) in &adxl_events {
+            machine.schedule_adxl_input(*step, name.clone(), *acceleration)?;
+        }
         machine.bus.report_led_events(led_events);
         for (channel, volts) in &adc_inputs {
             machine.bus.set_stm32f0_adc_input(*channel, *volts)?;
@@ -2027,9 +2133,20 @@ fn run() -> Result<ExitCode, String> {
         image::load(&mut peer, image, false, None, false)
             .map_err(|e| format!("{}: {e}", peer_path.display()))?;
         peer.validate_entry()?;
-        machine.run_radio_pair(&mut peer, limit, &mut output)
-    } else if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
-        monitor::run(&mut machine, script, &runtime, limit, &mut output)
+        if let Some(controller_path) = ble_hci_controller {
+            let load_controller = || -> Result<_, String> {
+                let mut controller = platform::load(platform, platform_root.as_deref(), false)?;
+                let file = File::open(&controller_path)
+                    .map_err(|e| format!("{}: {e}", controller_path.display()))?;
+                image::load(&mut controller, file, false, None, false)?;
+                controller.validate_entry()?;
+                Ok(controller)
+            };
+            let mut controllers = [load_controller()?, load_controller()?];
+            machine.run_hci_radio_pair(&mut peer, &mut controllers, limit, &mut output)
+        } else {
+            machine.run_radio_pair(&mut peer, limit, &mut output)
+        }
     } else {
         run_machine(
             &mut machine,
@@ -2093,6 +2210,9 @@ fn run() -> Result<ExitCode, String> {
     if let Stop::FrameMatched(step) = stop {
         eprintln!("penv: framebuffer matched at step {step}");
     }
+    if let Some(trace) = machine.bus.thumb_trace.take() {
+        trace.finish()?;
+    }
     if stats {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",
@@ -2105,6 +2225,12 @@ fn run() -> Result<ExitCode, String> {
         for (name, on) in machine.bus.h7_gpio_led_states() {
             eprintln!("{name}={}", if on { "on" } else { "off" });
         }
+    }
+    if stop == Stop::Paused {
+        eprintln!("penv: machine paused at pc={:#010x}", machine.primary.pc);
+    }
+    if let Stop::Semihosting(exit) = stop {
+        eprintln!("cpu.semihosting: {exit}");
     }
     if machine.cortex_m_locked_up() {
         eprintln!("penv: Cortex-M lockup at pc={:#010x}", machine.primary.pc);

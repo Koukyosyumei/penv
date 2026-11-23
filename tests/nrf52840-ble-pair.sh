@@ -10,26 +10,8 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 status=0
-"$1" run --platform "$2/platforms/cpus/nrf52840.repl" --platform-root "$2" \
-    --ble-peer "$4" --max-steps 180000000 "$3" > "$work/uart" 2> "$work/stderr" || status=$?
-cat "$work/uart" "$work/stderr"
-if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
-    exit "$status"
-fi
-for message in 'primary: Bluetooth initialized' 'peer: Bluetooth initialized' \
-    'primary: Scanning successfully started' 'peer: Advertising successfully started' \
-    'primary: Connected:' 'peer: Connected' \
-    'primary: [SUBSCRIBED]'; do
-    if ! grep -Fq "$message" "$work/uart"; then
-        echo "Missing Bluetooth milestone: $message" >&2
-        exit 1
-    fi
-done
-if ! grep -Eq '^peer: .*HRS notifications enabled' "$work/uart"; then
-    echo "Missing peripheral subscription confirmation" >&2
-    exit 1
-fi
-if ! grep -Eq '^primary: \[NOTIFICATION\].*length 2' "$work/uart"; then
-    echo "Missing two-byte Heart Rate Measurement" >&2
-    exit 1
-fi
+python3 "$(dirname "$0")/nrf52840-ble-uart.py" heart-rate "$work/uart" -- \
+    "$1" run --platform "$2/platforms/cpus/nrf52840.repl" --platform-root "$2" \
+    --uart-steps --ble-peer "$4" --max-steps 8800000000 "$3" || status=$?
+cat "$work/uart"
+exit "$status"

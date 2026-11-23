@@ -1,13 +1,23 @@
 use std::collections::VecDeque;
 
-use super::Adxl372;
+use super::{Adxl372, arducam::ArduCam};
 
 pub(super) const READY: u32 = 1 << 2;
+
+pub(crate) struct SpiMuxPort {
+    pub gpio: u32,
+    pub pin: u32,
+    pub active_low: bool,
+    pub responses: VecDeque<u8>,
+}
 
 pub(super) struct Spi {
     loopback: bool,
     adxl: Option<(u32, u32, Box<Adxl372>)>,
+    camera: Option<(u32, u32, ArduCam)>,
     selected: bool,
+    mux: Vec<SpiMuxPort>,
+    mux_selection: Option<usize>,
     enabled: bool,
     ready: bool,
     interrupts: u32,
@@ -24,7 +34,10 @@ impl Spi {
         Self {
             loopback,
             adxl: None,
+            camera: None,
             selected: false,
+            mux: Vec::new(),
+            mux_selection: None,
             enabled: false,
             ready: false,
             interrupts: 0,
@@ -42,24 +55,77 @@ impl Spi {
         if let Some((_, _, device)) = &mut adxl {
             device.reset();
         }
+        let mut camera = self.camera.take();
+        if let Some((_, _, device)) = &mut camera {
+            device.reset();
+        }
+        let mut mux = std::mem::take(&mut self.mux);
+        for port in &mut mux {
+            port.responses.clear();
+        }
         *self = Self::new(self.loopback);
+        self.mux = mux;
         self.adxl = adxl;
+        self.camera = camera;
     }
 
     pub(super) fn attach_adxl(&mut self, gpio: u32, pin: u32, device: Adxl372) {
         self.adxl = Some((gpio, pin, Box::new(device)));
     }
 
+    pub(super) fn attach_camera(&mut self, gpio: u32, pin: u32) {
+        self.camera = Some((gpio, pin, ArduCam::default()));
+    }
+
+    pub(super) fn set_camera_image(&mut self, image: &mut Option<Vec<u8>>) -> bool {
+        if let Some((_, _, camera)) = &mut self.camera
+            && let Some(image) = image.take()
+        {
+            camera.load_image(image);
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn attach_mux(&mut self, ports: Vec<SpiMuxPort>) {
+        self.mux = ports;
+    }
+
+    pub(super) fn adxl(&mut self, name: &str) -> Option<&mut Adxl372> {
+        let (_, _, device) = self.adxl.as_mut()?;
+        (device.name == name).then_some(device)
+    }
+
     pub(super) fn sample_cs(&mut self, bus: &crate::bus::Bus) {
+        let mut selected = self.mux.iter().enumerate().filter(|(_, port)| {
+            let high = bus.nrf_gpio_driven_high(port.gpio) & (1 << port.pin) != 0;
+            high != port.active_low
+        });
+        self.mux_selection = selected
+            .next()
+            .filter(|_| selected.next().is_none())
+            .map(|(index, _)| index);
         if let Some((gpio, pin, device)) = &mut self.adxl {
             self.selected = bus.nrf_gpio_driven_high(*gpio) & (1 << *pin) == 0;
             if !self.selected {
                 device.exchange(0, false);
             }
         }
+        if let Some((gpio, pin, camera)) = &mut self.camera {
+            self.selected = bus.nrf_gpio_driven_high(*gpio) & (1 << *pin) == 0;
+            if !self.selected {
+                camera.release();
+            }
+        }
     }
 
     pub(super) fn release_cs(&mut self, gpio: u32, pins: u32) {
+        if let Some((base, pin, camera)) = &mut self.camera
+            && *base == gpio
+            && pins & (1 << *pin) != 0
+        {
+            camera.release();
+        }
         if let Some((base, pin, device)) = &mut self.adxl
             && *base == gpio
             && pins & (1 << *pin) != 0
@@ -111,6 +177,16 @@ impl Spi {
                 if self.enabled && self.receive.len() < 2 {
                     let response = if let Some((_, _, device)) = &mut self.adxl {
                         device.exchange(self.transmit, self.selected)
+                    } else if let Some((_, _, camera)) = &mut self.camera {
+                        if self.selected {
+                            camera.transmit(self.transmit)
+                        } else {
+                            0
+                        }
+                    } else if !self.mux.is_empty() {
+                        self.mux_selection.map_or(0xff, |index| {
+                            self.mux[index].responses.pop_front().unwrap_or(0)
+                        })
                     } else if self.loopback {
                         self.transmit
                     } else {

@@ -1,6 +1,8 @@
 pub(super) struct Gpio {
     out: u32,
     direction: u32,
+    external_mask: u32,
+    external_high: u32,
     config: [u32; 32],
     latch: u32,
     detect_mode: u32,
@@ -12,6 +14,8 @@ impl Gpio {
         Self {
             out: 0,
             direction: 0,
+            external_mask: 0,
+            external_high: 0,
             config: [2; 32],
             latch: 0,
             detect_mode: 0,
@@ -20,7 +24,9 @@ impl Gpio {
     }
 
     pub(super) fn reset(&mut self) {
+        let external = (self.external_mask, self.external_high);
         *self = Self::new(self.pins);
+        (self.external_mask, self.external_high) = external;
     }
 
     fn mask(&self) -> u32 {
@@ -36,11 +42,20 @@ impl Gpio {
                 let high = cfg & 2 == 0
                     && if self.direction & bit != 0 {
                         self.out & bit != 0
+                    } else if self.external_mask & bit != 0 {
+                        self.external_high & bit != 0
                     } else {
                         cfg & 12 == 12
                     };
                 input | if high { bit } else { 0 }
             })
+    }
+
+    pub(super) fn set_external(&mut self, pin: u8, high: bool) {
+        let bit = 1 << pin;
+        self.external_mask |= bit;
+        self.external_high = (self.external_high & !bit) | (u32::from(high) << pin);
+        self.latch |= self.detect();
     }
 
     fn detect(&self) -> u32 {
@@ -228,5 +243,32 @@ impl Gpiote {
             _ => return false,
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{bus::Bus, nrf52840::Peripheral, stm32_gpio_board::GpioButton};
+
+    #[test]
+    fn upstream_should_respect_pull_up_configuration() {
+        let mut bus = Bus::default();
+        let base = 0x5000_0500;
+        bus.map_nrf_peripheral(Peripheral::gpio(base, "gpio0".into(), 32))
+            .unwrap();
+        assert_eq!(bus.read::<4>(base + 0x10).unwrap(), 0);
+        bus.write(base + 0x214, 4, 0xc, &mut std::io::sink())
+            .unwrap();
+        assert_eq!(bus.read::<4>(base + 0x10).unwrap(), 0x20);
+
+        let mut endpoints = crate::stm32_gpio_board::GpioEndpoints::default();
+        endpoints.connect(base, "nRF52840 GPIO", 5, 32).unwrap();
+        bus.add_gpio_button(GpioButton::new("button".into(), None, endpoints, false));
+        assert_eq!(bus.read::<4>(base + 0x10).unwrap(), 0);
+        let button = bus.board_button("button").unwrap();
+        bus.set_button(button, true);
+        assert_eq!(bus.read::<4>(base + 0x10).unwrap(), 0x20);
+        bus.set_button(button, false);
+        assert_eq!(bus.read::<4>(base + 0x10).unwrap(), 0);
     }
 }

@@ -11,6 +11,7 @@ const RSSI_END: u32 = 1 << 7;
 const BIT_MATCH: u32 = 1 << 10;
 const CRC_OK: u32 = 1 << 12;
 const TX_READY: u32 = 1 << 21;
+const RATE_BOOST: u32 = 1 << 20;
 const RX_READY: u32 = 1 << 22;
 const PHY_END: u32 = 1 << 27;
 const EVENTS: u32 = READY
@@ -23,9 +24,12 @@ const EVENTS: u32 = READY
     | RSSI_END
     | BIT_MATCH
     | CRC_OK
+    | RATE_BOOST
     | TX_READY
     | RX_READY
     | PHY_END;
+// Defined fields include shortcuts whose task or event is not modeled.
+const DEFINED_SHORTS: u32 = 0x003f_f97f;
 const SHORTS: u32 =
     (1 << 0) | (1 << 1) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 18) | (1 << 19) | (1 << 20);
 
@@ -71,6 +75,7 @@ pub(super) struct Radio {
     tx_power: u32,
     errata: u32,
     mode_config: u32,
+    cca_mode: u32,
     link_config: [u32; 11],
     device_addresses: [u32; 17],
     device_match_index: u32,
@@ -98,6 +103,7 @@ impl Radio {
             tx_power: 0,
             errata: 0,
             mode_config: 0x200,
+            cca_mode: 0,
             link_config: [0; 11],
             device_addresses: [0; 17],
             device_match_index: 0,
@@ -380,6 +386,7 @@ impl Radio {
             0x560 => self.bit_compare,
             0x600..=0x640 => self.device_addresses[((offset - 0x600) / 4) as usize],
             0x650 => self.mode_config,
+            0x66c => 0x052d_0000 | self.cca_mode,
             0x774 => self.errata,
             0xffc => self.powered.into(),
             _ => (self.events & Self::event(offset)? != 0).into(),
@@ -421,7 +428,7 @@ impl Radio {
             0x14 if trigger => self.raise(RSSI_END),
             0x1c | 0x20 if trigger => self.bit_counter = offset == 0x1c,
             offset if Self::task(offset) => {}
-            0x200 if value & !SHORTS == 0 => self.shorts = value,
+            0x200 if value & DEFINED_SHORTS & !SHORTS == 0 => self.shorts = value & SHORTS,
             0x304 => self.interrupts |= value & EVENTS,
             0x308 => self.interrupts &= !value,
             0x504 => self.pointer = value,
@@ -437,6 +444,7 @@ impl Radio {
                 };
             }
             0x650 => self.mode_config = value & 0x301,
+            0x66c => self.cca_mode = value & 7,
             0x51c..=0x53c => {
                 const MASKS: [u32; 9] = [
                     u32::MAX,
@@ -456,8 +464,8 @@ impl Radio {
             0x554 => self.link_config[10] = value & 127,
             0x560 => self.bit_compare = value,
             0x510 => self.config[1] = value & 15,
-            0x514 if value & !0x67df_010f == 0 => self.config[2] = value,
-            0x518 if value & !0x0307_ffff == 0 => self.config[3] = value,
+            0x514 => self.config[2] = value & 0x67df_010f,
+            0x518 => self.config[3] = value & 0x0307_ffff,
             0xffc => {
                 if value & 1 == 0 {
                     self.reset();

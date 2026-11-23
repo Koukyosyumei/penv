@@ -1,3 +1,5 @@
+mod ble;
+
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
@@ -132,6 +134,12 @@ pub struct Machine {
     halted: u8,
     pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
+    cpu_paused: bool,
+    cpu_halted: bool,
+    cpu_clock_stopped: bool,
+    pub reset_log: Option<String>,
+    uart_step_prefix: bool,
+    uart_line_start: bool,
     reset_steps: VecDeque<u64>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
@@ -147,6 +155,7 @@ pub struct Machine {
     recorder: Option<Recorder>,
     replay: VecDeque<(u64, ExternalEvent)>,
     profile: Option<CollapsedProfile>,
+    adxl_events: VecDeque<(u64, String, [i16; 3])>,
 }
 
 #[derive(Clone, Copy)]
@@ -221,13 +230,22 @@ pub enum Stop {
     TestExit(u64),
     AllHalted,
     Reset,
+    Semihosting(crate::semihosting::Exit),
+    Paused,
     Limit,
     ScriptComplete,
     OutputMatch,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CpuResetKind {
+    Cpu,
+    Machine,
+}
+
 pub(crate) enum Step {
     Retired,
+    RetiredAndPaused,
     Trap,
     Stop(Stop),
 }
@@ -261,7 +279,8 @@ impl Fault {
                 ),
                 BusError::Unmapped(address, _)
                 | BusError::Denied(address)
-                | BusError::AddressError(address) => (
+                | BusError::AddressError(address)
+                | BusError::SlaveFault(address) => (
                     match access {
                         Access::Fetch => 1,
                         Access::Load => 5,
@@ -277,7 +296,10 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) | BusError::AudioOutput(_) | BusError::CommandError(_) => {
+                BusError::Output(_)
+                | BusError::AudioOutput(_)
+                | BusError::CommandError(_)
+                | BusError::Python(_) => {
                     return None;
                 }
             },
@@ -379,6 +401,12 @@ impl Machine {
             halted: 0,
             stop_when_halted: false,
             elapsed_steps: 0,
+            cpu_paused: false,
+            cpu_halted: false,
+            cpu_clock_stopped: false,
+            reset_log: None,
+            uart_step_prefix: false,
+            uart_line_start: true,
             reset_steps: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
@@ -394,6 +422,7 @@ impl Machine {
             recorder: None,
             replay: VecDeque::new(),
             profile: None,
+            adxl_events: VecDeque::new(),
         }
     }
 
@@ -530,6 +559,24 @@ impl Machine {
         }
         let hart = self.named_hart(name)?;
         Ok(Some(hart.pc))
+    }
+
+    pub fn set_cortex_m_monitor_pc(
+        &mut self,
+        name: &str,
+        entry: u32,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        if self.primary.name.as_deref() != Some(name) {
+            return Err(format!("unknown CPU {name:?}"));
+        }
+        let thumb = self
+            .primary
+            .thumb
+            .as_mut()
+            .ok_or("expected a Cortex-M CPU")?;
+        self.primary.pc = thumb.patch_monitor_pc(entry, name, output)?;
+        Ok(())
     }
 
     pub fn set_entry(&mut self, entry: u32) {
@@ -774,11 +821,27 @@ impl Machine {
         let button = self
             .bus
             .board_button(name)
-            .ok_or_else(|| format!("unknown STM32 board button {name:?}"))?;
+            .ok_or_else(|| format!("unknown board button {name:?}"))?;
         let index = self
             .button_events
             .partition_point(|(scheduled, _, _)| *scheduled <= step);
         self.button_events.insert(index, (step, button, pressed));
+        Ok(())
+    }
+
+    pub fn schedule_adxl_input(
+        &mut self,
+        step: u64,
+        name: String,
+        acceleration: [i16; 3],
+    ) -> Result<(), String> {
+        if self.bus.nrf_adxl_input(&name).is_none() {
+            return Err(format!("unknown nRF52840 ADXL372 {name:?}"));
+        }
+        let index = self
+            .adxl_events
+            .partition_point(|(scheduled, _, _)| *scheduled <= step);
+        self.adxl_events.insert(index, (step, name, acceleration));
         Ok(())
     }
 
@@ -1003,62 +1066,104 @@ impl Machine {
         Ok(())
     }
 
-    pub fn run_radio_pair(
+    fn run_steps(
         &mut self,
-        peer: &mut Self,
         limit: u64,
         output: &mut impl Write,
+        mut frames: Option<&mut Vec<crate::nrf52840::AirFrame>>,
     ) -> Result<(Stop, u64), String> {
-        self.bus.attach_radio_medium()?;
-        peer.bus.attach_radio_medium()?;
+        let Some(frames) = frames.as_mut() else {
+            return self.run(limit, output);
+        };
         let mut retired = 0;
-        let mut primary_uart = Vec::new();
-        let mut peer_uart = Vec::new();
         for _ in 0..limit {
-            let result = self
-                .run(1, &mut primary_uart)
-                .map_err(|e| format!("primary: {e}"));
-            let (stop, count) =
-                Self::flush_radio_uart(result, "primary", &mut primary_uart, output)?;
+            let (stop, count) = self.run(1, output)?;
             retired += count;
+            if let Some(frame) = self.bus.tick_radio_air() {
+                frames.push(frame);
+            }
             if stop != Stop::Limit {
                 return Ok((stop, retired));
-            }
-            let result = peer
-                .run(1, &mut peer_uart)
-                .map_err(|e| format!("peer: {e}"));
-            let (stop, count) = Self::flush_radio_uart(result, "peer", &mut peer_uart, output)?;
-            retired += count;
-            if stop != Stop::Limit {
-                return Ok((stop, retired));
-            }
-            let primary_frame = self.bus.tick_radio_air();
-            let peer_frame = peer.bus.tick_radio_air();
-            if let Some(frame) = primary_frame {
-                peer.bus
-                    .receive_radio_air(frame)
-                    .map_err(|e| format!("peer RADIO: {e}"))?;
-            }
-            if let Some(frame) = peer_frame {
-                self.bus
-                    .receive_radio_air(frame)
-                    .map_err(|e| format!("primary RADIO: {e}"))?;
             }
         }
         Ok((Stop::Limit, retired))
     }
 
-    fn flush_radio_uart(
-        result: Result<(Stop, u64), String>,
-        node: &str,
-        uart: &mut Vec<u8>,
+    pub fn report_uart_steps(&mut self, enabled: bool) {
+        self.uart_step_prefix = enabled;
+    }
+
+    pub fn pause_cpu(&mut self) {
+        self.cpu_paused = true;
+    }
+
+    pub fn resume_cpu(&mut self) {
+        self.cpu_paused = false;
+    }
+
+    pub fn set_cpu_halted(&mut self, halted: bool) {
+        self.cpu_halted = halted;
+    }
+
+    pub fn set_cpu_clocked(&mut self, clocked: bool) {
+        self.cpu_clock_stopped = !clocked;
+    }
+
+    pub fn reset_cpu_control(
+        &mut self,
+        kind: CpuResetKind,
         output: &mut impl Write,
-    ) -> Result<(Stop, u64), String> {
-        while let Some(end) = uart.iter().position(|&byte| byte == b'\n') {
-            write!(output, "{node}: ").map_err(|e| e.to_string())?;
-            output.write_all(&uart[..=end]).map_err(|e| e.to_string())?;
-            uart.drain(..=end);
+    ) -> Result<(), String> {
+        if !self.is_cortex_m() {
+            return Err("CPU reset control requires a Cortex-M CPU".into());
         }
+        if kind == CpuResetKind::Machine {
+            self.bus.reset_cortex_m_if_requested(true);
+        }
+        self.primary.reset_cortex_m(&mut self.bus)?;
+        self.cpu_halted = false;
+        self.cpu_paused = kind == CpuResetKind::Cpu;
+        if kind == CpuResetKind::Machine
+            && let Some(message) = self.reset_log.as_deref()
+        {
+            writeln!(output, "{message}").map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    // Monitor steps count completed instructions. A precise fault redirects the
+    // CPU without completing the access, so stepping continues in the handler.
+    pub fn monitor_step_cortex_m(
+        &mut self,
+        count: u64,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        if !self.is_cortex_m() || count == 0 {
+            return Err("Step requires a Cortex-M CPU and a positive instruction count".into());
+        }
+        self.resume_cpu();
+        let result = (|| {
+            let mut remaining = count;
+            let mut missed = 0;
+            while remaining != 0 {
+                match self.run(1, output)? {
+                    (Stop::Limit, 1) => {
+                        remaining -= 1;
+                        missed = 0;
+                    }
+                    (Stop::Limit, 0) => {
+                        missed += 1;
+                        if missed == 256 || self.cpu_halted || self.cpu_clock_stopped {
+                            return Err("Cortex-M Step could not retire an instruction".into());
+                        }
+                    }
+                    (Stop::Paused | Stop::Ebreak, _) => break,
+                    (stop, _) => return Err(format!("Cortex-M Step stopped with {stop:?}")),
+                }
+            }
+            Ok(())
+        })();
+        self.pause_cpu();
         result
     }
 
@@ -1226,6 +1331,17 @@ impl Machine {
                 self.bus.reset_cortex_m_devices();
                 self.primary.reset_cortex_m(&mut self.bus)?;
             }
+            while self
+                .adxl_events
+                .front()
+                .is_some_and(|(step, _, _)| *step <= self.elapsed_steps)
+            {
+                let (_, name, acceleration) = self.adxl_events.pop_front().unwrap();
+                *self
+                    .bus
+                    .nrf_adxl_input(&name)
+                    .ok_or_else(|| format!("unknown ADXL372 {name:?}"))? = acceleration;
+            }
             let index = selected.unwrap_or_else(|| {
                 let index = self.next_hart;
                 if index == self.secondary.len() {
@@ -1316,6 +1432,7 @@ impl Machine {
             match hart.execute_step(
                 &mut self.bus,
                 self.elapsed_steps,
+                self.cpu_halted,
                 output,
                 self.function_symbols.as_ref(),
             )? {
@@ -1343,8 +1460,14 @@ impl Machine {
                         }
                     }
                 }
+                Step::RetiredAndPaused => return Ok((Stop::Paused, retired + 1)),
                 Step::Trap => {}
-                Step::Stop(stop) => return Ok((stop, retired)),
+                Step::Stop(stop) => {
+                    if stop == Stop::Paused {
+                        self.pause_cpu();
+                    }
+                    return Ok((stop, retired));
+                }
             }
             if matched(&self.bus, output) {
                 return Ok((Stop::OutputMatch, retired));
@@ -1377,9 +1500,33 @@ impl Machine {
         hart.execute_step(
             &mut self.bus,
             self.elapsed_steps,
+            self.cpu_halted,
             output,
             self.function_symbols.as_ref(),
         )
+    }
+}
+
+struct StepUart<'a, W> {
+    output: &'a mut W,
+    step: u64,
+    line_start: &'a mut bool,
+}
+
+impl<W: Write> Write for StepUart<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+            if *self.line_start {
+                write!(self.output, "[step {}] ", self.step)?;
+            }
+            self.output.write_all(line)?;
+            *self.line_start = line.last() == Some(&b'\n');
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
     }
 }
 
@@ -1422,6 +1569,8 @@ impl Hart {
         }
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
+            nvic.lockup = false;
+            nvic.set_active_exceptions(0);
         }
         self.registers.fill(0);
         self.registers[13] = sp;
@@ -1790,6 +1939,7 @@ impl Hart {
         &mut self,
         bus: &mut Bus,
         elapsed_steps: u64,
+        halted: bool,
         output: &mut impl Write,
         symbols: Option<&BTreeMap<u32, String>>,
     ) -> Result<Step, String> {
@@ -1814,7 +1964,7 @@ impl Hart {
         }
         if let Some(thumb) = self.thumb.as_mut() {
             bus.tick_stm32_uarts();
-            if self.monitor_halted {
+            if self.monitor_halted || halted {
                 thumb.sample_interrupts(bus);
                 return Ok(Step::Trap);
             }
@@ -1879,6 +2029,7 @@ impl Hart {
                     ThumbStep::Retired => Step::Retired,
                     ThumbStep::Breakpoint => Step::Stop(Stop::Ebreak),
                     ThumbStep::Exception => Step::Trap,
+                    ThumbStep::Semihosting(exit) => Step::Stop(Stop::Semihosting(exit)),
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }
@@ -2414,6 +2565,1122 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn started_cortex_m() -> Machine {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut output = Vec::new();
+        for (address, value) in [(0, 0x800), (4, 0x101)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        // nop; nop; nop; jump: nop; b jump.
+        for (address, value) in [
+            (0x100, 0xbf00),
+            (0x102, 0xbf00),
+            (0x104, 0xbf00),
+            (0x106, 0xbf00),
+            (0x108, 0xe7fd),
+        ] {
+            machine.bus.write(address, 2, value, &mut output).unwrap();
+        }
+        machine
+            .bus
+            .cpu_hooks
+            .insert(0x104, vec![crate::bus::CpuHook::Log("PC moved".into())]);
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(3, &mut output).unwrap(), (Stop::Limit, 3));
+        assert_eq!(output, b"PC moved\n");
+        machine
+    }
+
+    fn clock_test_setup() -> (Machine, Vec<u8>) {
+        let mut machine = started_cortex_m();
+        let mut output = Vec::new();
+        machine.bus.map_dwt(0xe0001000, 72_000_000).unwrap();
+        machine
+            .bus
+            .systick
+            .as_mut()
+            .unwrap()
+            .set_frequency(100_000_000);
+        for (address, value) in [(0xe000e014, 0xff_ffff), (0xe000e010, 1), (0xe0001000, 1)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        (machine, output)
+    }
+
+    fn clock_test_values(machine: &mut Machine) -> (u32, u32) {
+        (
+            machine.bus.read::<4>(0xe000e018).unwrap(),
+            machine.bus.read::<4>(0xe0001004).unwrap(),
+        )
+    }
+
+    #[test]
+    fn upstream_cortex_m_independent_systick_dwt_clocks() {
+        let (mut machine, mut output) = clock_test_setup();
+        machine.run(100_000, &mut output).unwrap();
+        let before = clock_test_values(&mut machine);
+        machine.run(100_000, &mut output).unwrap();
+        let running = clock_test_values(&mut machine);
+        assert_ne!(before.0, running.0);
+        assert_eq!(running.1 - before.1, 72_000);
+
+        machine.bus.systick.as_mut().unwrap().set_clocked(false);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(false);
+        machine.run(100_000, &mut output).unwrap();
+        assert_eq!(clock_test_values(&mut machine), running);
+
+        machine.bus.systick.as_mut().unwrap().set_clocked(true);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(true);
+        machine.run(100_000, &mut output).unwrap();
+        let resumed = clock_test_values(&mut machine);
+        assert_ne!(resumed.0, running.0);
+        assert_eq!(resumed.1 - running.1, 72_000);
+
+        machine.bus.systick.as_mut().unwrap().set_clocked(false);
+        machine.run(100_000, &mut output).unwrap();
+        let independent = clock_test_values(&mut machine);
+        assert_eq!(independent.0, resumed.0);
+        assert_eq!(independent.1 - resumed.1, 72_000);
+    }
+
+    #[test]
+    fn upstream_cortex_m_clock_gate_persists_across_reset() {
+        let (mut machine, mut output) = clock_test_setup();
+        machine.run(100_000, &mut output).unwrap();
+        machine.set_cpu_clocked(false);
+        machine.bus.systick.as_mut().unwrap().set_clocked(false);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(false);
+        machine
+            .reset_cpu_control(CpuResetKind::Machine, &mut output)
+            .unwrap();
+        assert_eq!(clock_test_values(&mut machine), (0xff_ffff, 0));
+        assert_eq!(machine.run(100_000, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x100);
+        assert_eq!(clock_test_values(&mut machine), (0xff_ffff, 0));
+
+        for (address, value) in [(0xe000e014, 0xff_ffff), (0xe000e010, 1), (0xe0001000, 1)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        machine.run(100_000, &mut output).unwrap();
+        assert_eq!(clock_test_values(&mut machine), (0xff_ffff, 0));
+
+        machine.set_cpu_clocked(true);
+        machine.bus.systick.as_mut().unwrap().set_clocked(true);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(true);
+        assert_eq!(
+            machine.run(100_000, &mut output).unwrap(),
+            (Stop::Limit, 100_000)
+        );
+        let resumed = clock_test_values(&mut machine);
+        assert_ne!(resumed.0, 0xff_ffff);
+        assert_eq!(resumed.1, 72_000);
+    }
+
+    fn check_cpu_flow(machine: &mut Machine, paused: bool, halted: bool) {
+        assert_eq!(machine.cpu_paused, paused);
+        assert_eq!(machine.cpu_halted, halted);
+        let before = machine.elapsed_steps;
+        let pc = machine.primary.pc;
+        let (stop, retired) = machine.run(4, &mut std::io::sink()).unwrap();
+        assert_eq!(machine.elapsed_steps, before + if paused { 0 } else { 4 });
+        assert_eq!(stop, if paused { Stop::Paused } else { Stop::Limit });
+        assert_eq!(retired, if paused || halted { 0 } else { 4 });
+        if paused || halted {
+            assert_eq!(machine.primary.pc, pc);
+        }
+    }
+
+    #[test]
+    fn upstream_cpu_control_starts() {
+        check_cpu_flow(&mut started_cortex_m(), false, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_pauses() {
+        let mut machine = started_cortex_m();
+        machine.pause_cpu();
+        check_cpu_flow(&mut machine, true, false);
+        machine.resume_cpu();
+        check_cpu_flow(&mut machine, false, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_halts() {
+        let mut machine = started_cortex_m();
+        machine.set_cpu_halted(true);
+        check_cpu_flow(&mut machine, false, true);
+        machine.resume_cpu();
+        check_cpu_flow(&mut machine, false, true);
+    }
+
+    fn check_cpu_control_reset(paused: bool, halted: bool, kind: CpuResetKind) {
+        let mut machine = started_cortex_m();
+        if paused {
+            machine.pause_cpu();
+        }
+        machine.set_cpu_halted(halted);
+        machine.reset_log = Some("Machine resetting".into());
+        let mut output = Vec::new();
+        machine.reset_cpu_control(kind, &mut output).unwrap();
+        assert_eq!(machine.primary.pc, 0x100);
+        assert!(!machine.cpu_halted);
+        match kind {
+            CpuResetKind::Machine => {
+                assert!(!machine.cpu_paused);
+                assert_eq!(machine.run(3, &mut output).unwrap(), (Stop::Limit, 3));
+                assert_eq!(output, b"Machine resetting\nPC moved\n");
+                check_cpu_flow(&mut machine, false, false);
+            }
+            CpuResetKind::Cpu => {
+                assert!(output.is_empty());
+                check_cpu_flow(&mut machine, true, false);
+            }
+        }
+    }
+
+    #[test]
+    fn upstream_cpu_reset_running_cpu() {
+        check_cpu_control_reset(false, false, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_running_machine() {
+        check_cpu_control_reset(false, false, CpuResetKind::Machine);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_cpu() {
+        check_cpu_control_reset(false, true, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_machine() {
+        check_cpu_control_reset(false, true, CpuResetKind::Machine);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_paused_cpu() {
+        check_cpu_control_reset(true, false, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_paused_machine() {
+        check_cpu_control_reset(true, false, CpuResetKind::Machine);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_paused_cpu() {
+        check_cpu_control_reset(true, true, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_paused_machine() {
+        check_cpu_control_reset(true, true, CpuResetKind::Machine);
+    }
+
+    fn check_pause_halt(pause_first: bool, resume_first: bool) {
+        let mut machine = started_cortex_m();
+        if pause_first {
+            machine.pause_cpu();
+            machine.set_cpu_halted(true);
+        } else {
+            machine.set_cpu_halted(true);
+            machine.pause_cpu();
+        }
+        check_cpu_flow(&mut machine, true, true);
+        if resume_first {
+            machine.resume_cpu();
+            check_cpu_flow(&mut machine, false, true);
+            machine.set_cpu_halted(false);
+        } else {
+            machine.set_cpu_halted(false);
+            check_cpu_flow(&mut machine, true, false);
+            machine.resume_cpu();
+        }
+        check_cpu_flow(&mut machine, false, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_pause_first_resume_first() {
+        check_pause_halt(true, true);
+    }
+
+    #[test]
+    fn upstream_cpu_control_pause_first_unhalt_first() {
+        check_pause_halt(true, false);
+    }
+
+    #[test]
+    fn upstream_cpu_control_halt_first_resume_first() {
+        check_pause_halt(false, true);
+    }
+
+    #[test]
+    fn upstream_cpu_control_halt_first_unhalt_first() {
+        check_pause_halt(false, false);
+    }
+
+    #[test]
+    fn upstream_invalid_reset_state_locks_on_second_step() {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        machine.validate_entry().unwrap();
+        let mut out = std::io::sink();
+
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (false, 0, 3)
+        );
+        assert!(!machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 17);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 1 << 30);
+
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert!(machine.primary.thumb.as_ref().unwrap().lockup_state().0);
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 17);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 1 << 30);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_sets_and_clears_page_access_via_io() {
+        const PC: u32 = 0x800000;
+        const PAGES: [u32; 3] = [0x31000000, 0x32000000, 0x33000000];
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(PC, 0x40000).unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(PC), true);
+        machine
+            .bus
+            .write(PC, 2, 0x6808, &mut std::io::sink())
+            .unwrap();
+        for (index, page) in PAGES.into_iter().enumerate() {
+            let name = format!("test_mem{}", index + 1);
+            machine.bus.map_named_ram(&name, page, 0x1000).unwrap();
+            machine.bus.log_ram_access(&name).unwrap();
+        }
+        machine.primary.name = Some("cpu".into());
+        let mut setup = Vec::new();
+        machine
+            .set_cortex_m_monitor_pc("cpu", PC, &mut setup)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(setup).unwrap(),
+            "cpu: Patching PC 0x800000 for Thumb mode.\n"
+        );
+        let phases: &[(&[(usize, bool)], u8)] = &[
+            (&[], 0),
+            (&[(0, true)], 1),
+            (&[(1, true)], 3),
+            (&[(2, true)], 7),
+            (&[(0, false)], 6),
+            (&[(1, false)], 4),
+            (&[(2, false)], 0),
+            (&[(1, true)], 2),
+            (&[(0, true), (1, false), (2, true)], 5),
+        ];
+        for (changes, expected_pages) in phases {
+            for &(index, enabled) in *changes {
+                machine.bus.set_page_access_via_io(PAGES[index], enabled);
+            }
+            for (index, page) in PAGES.into_iter().enumerate() {
+                machine.primary.registers[1] = page;
+                machine
+                    .set_cortex_m_monitor_pc("cpu", PC, &mut std::io::sink())
+                    .unwrap();
+                let mut output = Vec::new();
+                assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+                assert_eq!(machine.primary.registers[0], 0);
+                if expected_pages & (1 << index) == 0 {
+                    assert!(output.is_empty());
+                } else {
+                    assert_eq!(
+                        String::from_utf8(output).unwrap(),
+                        format!(
+                            "test_mem{}: [cpu: 0x800000] ReadUInt32 from 0x0 (unknown), returned 0x0\n",
+                            index + 1
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn upstream_vtor_reads_privileged_vectors_without_trustzone() {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_privileged_ram(0x10000, 0x1000).unwrap();
+        machine.bus.map_ram(0x20000, 0x1000).unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0x10000), true);
+        let mut output = std::io::sink();
+        machine.bus.write(0x10000, 4, 0x20100, &mut output).unwrap();
+        machine.bus.write(0x10004, 4, 0x20201, &mut output).unwrap();
+        machine.bus.write(0x20200, 2, 0xe7fe, &mut output).unwrap();
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, 0x20200);
+        assert_eq!(machine.primary.registers[13], 0x20100);
+
+        machine.bus.thumb_unprivileged = true;
+        assert!(
+            machine
+                .bus
+                .thumb_read::<4>(0x10000)
+                .unwrap_err()
+                .contains("registration denied")
+        );
+        assert!(machine.bus.thumb_write(0x10004, 4, 0, &mut output).is_err());
+        assert!(machine.bus.thumb_fetch(0x10000).is_err());
+        assert_eq!(machine.bus.read::<4>(0x10004).unwrap(), 0x20201);
+    }
+
+    fn check_lazy_fp_fault(original_hard_fault: bool) {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        for (address, value) in [(8, 0x381), (12, 0x341), (0xe000_ed88, 0xf00000)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for (address, opcode) in [
+            (0x340, 0xeeb0),
+            (0x342, 0x0a40),
+            (0x344, 0xe7fe),
+            (0x380, 0xbf00),
+            (0x382, 0xeeb0),
+            (0x384, 0x0a40),
+            (0x386, 0xe7fe),
+        ] {
+            machine.bus.write(address, 2, opcode, &mut out).unwrap();
+        }
+        if original_hard_fault {
+            for (address, opcode) in [(0x200, 0x6802), (0x202, 0x2122), (0x204, 0xe7fe)] {
+                machine.bus.write(address, 2, opcode, &mut out).unwrap();
+            }
+            machine.primary.registers[0] = 0x100000;
+            machine.primary.registers[1] = 0x11;
+            machine.primary.registers[2] = 0xa5a5_a5a5;
+            assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+            assert_eq!(machine.primary.pc, 0x340);
+            machine
+                .bus
+                .write(0xe000_ed28, 4, u32::MAX, &mut out)
+                .unwrap();
+            machine
+                .bus
+                .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+                .unwrap();
+        } else {
+            machine.bus.write(0x200, 2, 0xeeb0, &mut out).unwrap();
+            machine.bus.write(0x202, 2, 0x0a40, &mut out).unwrap();
+            machine.bus.write(0x204, 2, 0xe7fe, &mut out).unwrap();
+        }
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
+        machine.bus.set_mock_fault_offset(0x100000, 0x20);
+        machine.primary.registers[13] = 0x100068;
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(2, &mut out).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, 0x382);
+        assert_eq!(machine.bus.read::<4>(0xe000_ef38).unwrap(), 0x100020);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ef34).unwrap() & 0x11,
+            if original_hard_fault { 1 } else { 0x11 }
+        );
+        machine.run(1, &mut out).unwrap();
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 13);
+        let thumb = machine.primary.thumb.as_ref().unwrap();
+        assert_eq!(thumb.lockup_state().0, original_hard_fault);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ef34).unwrap() & 1,
+            u32::from(original_hard_fault)
+        );
+        if original_hard_fault {
+            assert_eq!(machine.primary.pc, 0xefff_fffe);
+            assert_eq!(machine.primary.registers[13], 0x100000);
+            assert_eq!(thumb.lockup_state().2, 2);
+            assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+            let dhcsr = crate::nvic::DHCSR;
+            assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+            assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+            machine
+                .bus
+                .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+                .unwrap();
+            assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+            assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+            assert_eq!(
+                machine.bus.read::<4>(0xe000_ed24).unwrap(),
+                (1 << 2) | (1 << 5)
+            );
+        } else {
+            assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 1 << 30);
+            assert_ne!(machine.bus.read::<4>(0xe000_ed24).unwrap() & (1 << 21), 0);
+        }
+    }
+
+    #[test]
+    fn upstream_lazy_fp_fault_pends_hard_fault_when_ready() {
+        check_lazy_fp_fault(false);
+    }
+
+    #[test]
+    fn upstream_lazy_fp_fault_locks_over_hard_fault() {
+        check_lazy_fp_fault(true);
+    }
+
+    fn unstack_fixture(nmi: &[u32]) -> Machine {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        for (address, value) in [(8, 0x381), (12, 0x341), (20, 0x301)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        machine.bus.write(0x300, 2, 0xe7fe, &mut out).unwrap();
+        for (index, &opcode) in nmi.iter().enumerate() {
+            machine
+                .bus
+                .write(0x380 + index as u32 * 2, 2, opcode, &mut out)
+                .unwrap();
+        }
+        machine
+    }
+
+    #[test]
+    fn upstream_unstack_fault_locks_over_hard_fault() {
+        let mut machine = unstack_fixture(&[0xf44f, 0x1080, 0xf380, 0x8808, 0x4770]);
+        let mut out = std::io::sink();
+        machine.bus.write(0x200, 2, 0x6802, &mut out).unwrap();
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        machine
+            .bus
+            .write(0xe000_ed28, 4, u32::MAX, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(4, &mut out).unwrap(), (Stop::Limit, 2));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0x100020);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 3)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 11);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
+    }
+
+    #[test]
+    fn upstream_retpsr_integrity_failure_locks_over_hard_fault() {
+        let mut machine = unstack_fixture(&[0x2000, 0x9007, 0x4770]);
+        let mut out = std::io::sink();
+        for (address, opcode) in [(0x200, 0x6802), (0x202, 0x2122), (0x204, 0xe7fe)] {
+            machine.bus.write(address, 2, opcode, &mut out).unwrap();
+        }
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        machine
+            .bus
+            .write(0xe000_ed28, 4, u32::MAX, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(4, &mut out).unwrap(), (Stop::Limit, 2));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 3)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 18);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
+    }
+
+    fn check_unstack_tail_chain(fp: bool) {
+        let mut machine = unstack_fixture(if fp {
+            &[0xeeb0, 0x0a40, 0x4770]
+        } else {
+            &[0xbf00, 0x4770]
+        });
+        let mut out = std::io::sink();
+        machine.bus.set_mock_fault_on_writes(0x100000, false);
+        machine
+            .bus
+            .write(0xe000_ed24, 4, 1 << 17, &mut out)
+            .unwrap();
+        if fp {
+            machine
+                .bus
+                .write(0xe000_ed88, 4, 0xf00000, &mut out)
+                .unwrap();
+        }
+        machine.primary.registers[13] = 0x100020;
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(2, &mut out).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, if fp { 0x384 } else { 0x382 });
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().fp_context_active(),
+            fp
+        );
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x300);
+        assert_eq!(machine.primary.registers[13], 0x100000);
+        assert_eq!(machine.primary.registers[14], 0xffff_fff9);
+        let thumb = machine.primary.thumb.as_ref().unwrap();
+        assert_eq!(thumb.lockup_state(), (false, 0, 5));
+        assert!(!thumb.fp_context_active());
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 11);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_unstack_fault_tail_chains_to_bus_fault() {
+        check_unstack_tail_chain(false);
+    }
+
+    #[test]
+    fn upstream_unstack_fault_tail_chain_clears_fpca() {
+        check_unstack_tail_chain(true);
+    }
+
+    fn check_nmi_entry_lockup(vector_fault: bool) {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0);
+        for (address, value) in [(8, 0x381), (12, 0x341)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for (address, opcode) in [
+            (0x200, 0x6802),
+            (0x202, 0x2122),
+            (0x204, 0xe7fe),
+            (0x340, 0x2d00),
+            (0x342, 0xbf04),
+            (0x344, 0x2101),
+            (0x346, 0x2202),
+            (0x348, 0xe7fe),
+            (0x380, 0xe7fe),
+        ] {
+            machine.bus.write(address, 2, opcode, &mut out).unwrap();
+        }
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        machine
+            .bus
+            .write(0xe000_ed28, 4, u32::MAX, &mut out)
+            .unwrap();
+        machine
+            .bus
+            .write(0xe000_ed2c, 4, 1 << 30, &mut out)
+            .unwrap();
+        if vector_fault {
+            machine.bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+        } else {
+            assert_eq!(machine.run(2, &mut out).unwrap(), (Stop::Limit, 2));
+            assert_ne!(machine.primary.thumb.as_ref().unwrap().lockup_state().1, 0);
+        }
+        machine.primary.registers[13] = 0x100020;
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0x100000);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 2)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 12);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ed2c).unwrap(),
+            if vector_fault { 2 } else { 0 }
+        );
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ed24).unwrap(),
+            (1 << 2) | (1 << 5)
+        );
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_nmi_stacking_fault_locks_over_hard_fault() {
+        check_nmi_entry_lockup(false);
+    }
+
+    #[test]
+    fn upstream_nmi_stacking_lockup_records_vector_fault() {
+        check_nmi_entry_lockup(true);
+    }
+
+    fn check_upstream_stacking_bus_fault(exception: u8, bus_fault_enabled: bool, handler: u8) {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut out = std::io::sink();
+        for (address, value) in [
+            (0, 0x100020),
+            (4, 0x201),
+            (8, 0x381),
+            (12, 0x341),
+            (20, 0x301),
+            (64, 0x3c1),
+        ] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for address in [0x200, 0x300, 0x340, 0x380, 0x3c0] {
+            machine.bus.write(address, 2, 0xe7fe, &mut out).unwrap();
+        }
+        machine.validate_entry().unwrap();
+        if bus_fault_enabled {
+            machine
+                .bus
+                .write(0xe000_ed24, 4, 1 << 17, &mut out)
+                .unwrap();
+        }
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.primary.pc, 0x200);
+        if exception == 2 {
+            machine
+                .bus
+                .write(0xe000_ed04, 4, 1 << 31, &mut out)
+                .unwrap();
+        } else {
+            machine.bus.write(0xe000_e100, 4, 1, &mut out).unwrap();
+            machine.bus.write(0xe000_e200, 4, 1, &mut out).unwrap();
+        }
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(
+            machine.primary.pc,
+            match handler {
+                2 => 0x380,
+                3 => 0x340,
+                5 => 0x300,
+                _ => unreachable!(),
+            }
+        );
+        assert_eq!(machine.primary.registers[13], 0x100000);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (false, 0, handler)
+        );
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 1 << 12);
+        assert_eq!(
+            machine.bus.read::<4>(0xe000_ed2c).unwrap(),
+            if bus_fault_enabled { 0 } else { 1 << 30 }
+        );
+        if exception == 2 {
+            assert_ne!(
+                machine.bus.nvic.as_ref().unwrap().hardfault_pending() as u32 * (1 << 3),
+                0
+            );
+        } else {
+            assert_eq!(machine.bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+            assert_eq!(machine.bus.read::<4>(0xe000_e300).unwrap() & 1, 0);
+        }
+    }
+
+    #[test]
+    fn upstream_nmi_stacking_fault_pends_hard_fault() {
+        check_upstream_stacking_bus_fault(2, false, 2);
+    }
+
+    #[test]
+    fn upstream_external_irq_stacking_fault_selects_hard_fault() {
+        check_upstream_stacking_bus_fault(16, false, 3);
+    }
+
+    #[test]
+    fn upstream_equal_priority_stacking_fault_selects_bus_fault() {
+        check_upstream_stacking_bus_fault(16, true, 5);
+    }
+
+    fn exception_vector_fault_machine(offset: Option<usize>) -> Machine {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, offset)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut out = std::io::sink();
+        for (address, value) in [(0, 0x1000), (4, 0x201)] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for address in [0x200, 0x340] {
+            machine.bus.write(address, 2, 0xe7fe, &mut out).unwrap();
+        }
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 1));
+        machine.bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+        machine
+    }
+
+    #[test]
+    fn upstream_external_irq_vector_bus_fault_selects_hard_fault() {
+        let mut machine = exception_vector_fault_machine(Some(0x40));
+        let mut out = std::io::sink();
+        machine.bus.write(0x10000c, 4, 0x341, &mut out).unwrap();
+        machine.bus.write(0xe000_e100, 4, 1, &mut out).unwrap();
+        machine.bus.write(0xe000_e200, 4, 1, &mut out).unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x340);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (false, 0, 3)
+        );
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+        assert_eq!(machine.bus.read::<4>(0xe000_e300).unwrap() & 1, 0);
+    }
+
+    #[test]
+    fn upstream_nmi_vector_bus_fault_locks_up() {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(machine.primary.registers[14], 0xffff_fff9); // Armv7-M thread/MSP.
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 2)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 1 << 5);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        machine.bus.write(0xe000_ed2c, 4, 2, &mut out).unwrap();
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_hard_fault_vector_bus_fault_locks_up() {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .nvic
+            .as_mut()
+            .unwrap()
+            .set_hard_fault_pending(true);
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(machine.primary.registers[14], 0xffff_fff9); // Armv7-M thread/MSP.
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 3)
+        );
+        let nvic = machine.bus.nvic.as_ref().unwrap();
+        assert!(nvic.lockup);
+        assert_eq!(nvic.hardfault_pending(), false);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 1 << 2);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+    }
+
+    fn check_reset_bus_fault(offset: usize) {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, Some(offset))
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0x100000), true);
+        machine.validate_entry().unwrap();
+        let mut out = std::io::sink();
+        assert_eq!(machine.run(100, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0);
+        assert_eq!(machine.primary.registers[14], u32::MAX);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 0)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(dhcsr).unwrap(), 1 << 19);
+    }
+
+    #[test]
+    fn upstream_reset_vector_bus_fault_locks_up() {
+        check_reset_bus_fault(4);
+    }
+
+    #[test]
+    fn upstream_initial_msp_bus_fault_locks_up() {
+        check_reset_bus_fault(0);
+    }
+
+    fn check_monitor_step_bus_fault(enable_bus_fault: bool) {
+        let mut machine = started_cortex_m();
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        for (address, value) in [
+            (0, 0x1000),
+            (4, 0x201),
+            (12, 0x341),
+            (20, 0x301),
+            (0xe000_ed24, u32::from(enable_bus_fault) << 17),
+        ] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for base in [0x200, 0x300] {
+            for (offset, word) in [(0, 0x6802), (2, 0x2122), (4, 0xe7fe)] {
+                machine.bus.write(base + offset, 2, word, &mut out).unwrap();
+            }
+        }
+        machine.bus.write(0x340, 2, 0xe7fe, &mut out).unwrap();
+        machine.validate_entry().unwrap();
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        machine.monitor_step_cortex_m(1, &mut out).unwrap();
+        assert_eq!(machine.primary.pc, 0x340);
+        assert_eq!(machine.primary.registers[1], 0x11);
+        assert_eq!(machine.primary.registers[2], 0xa5a5_a5a5);
+        let (stacked_pc_address, stacked_pc) = if enable_bus_fault {
+            (0xfd8, 0x300)
+        } else {
+            (0xff8, 0x200)
+        };
+        assert_eq!(
+            machine.bus.read::<4>(stacked_pc_address).unwrap(),
+            stacked_pc
+        );
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0x8200);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed38).unwrap(), 0x100000);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0x4000_0000);
+        assert!(machine.cpu_paused);
+    }
+
+    #[test]
+    fn upstream_monitor_step_escalates_nested_bus_fault() {
+        check_monitor_step_bus_fault(true);
+    }
+
+    #[test]
+    fn upstream_monitor_step_escalates_disabled_bus_fault() {
+        check_monitor_step_bus_fault(false);
+    }
+
+    fn enter_instruction_time_lockup() -> Machine {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        let mut out = std::io::sink();
+        for (address, value) in [
+            (0, 0x1000),
+            (4, 0x201),
+            (8, 0x381),
+            (12, 0x341),
+            (0x354, 0xe000_ed2c),
+        ] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        // The same READ_ASSEMBLY and LOCKUP_ASSEMBLY as the upstream Robot.
+        for (base, words) in [
+            (0x200, &[0x6802, 0x2122, 0xe7fe][..]),
+            (
+                0x340,
+                &[
+                    0x4b04, 0xf04f, 0x4480, 0x601c, 0x2d00, 0xbf04, 0x6802, 0x2122, 0xe7fe,
+                ][..],
+            ),
+            (0x380, &[0xe7fe][..]),
+        ] {
+            for (index, &word) in words.iter().enumerate() {
+                machine
+                    .bus
+                    .write(base + index as u32 * 2, 2, word, &mut out)
+                    .unwrap();
+            }
+        }
+        machine.primary.reset_cortex_m(&mut machine.bus).unwrap();
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        assert_eq!(machine.run(20, &mut out).unwrap(), (Stop::Limit, 5));
+        machine
+    }
+
+    #[test]
+    fn upstream_double_bus_fault_locks_until_reset() {
+        let mut machine = enter_instruction_time_lockup();
+        let mut out = std::io::sink();
+        let thumb = machine.primary.thumb.as_ref().unwrap();
+        let state = thumb.lockup_state();
+        assert!(state.0);
+        assert_ne!(state.1, 0);
+        assert!(!thumb.sleeping());
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[1], 0x11);
+        assert_eq!(machine.primary.registers[2], 0xa5a5_a5a5);
+        for (address, expected) in [
+            (0xe000_ed28, 0x8200),
+            (0xe000_ed38, 0x100000),
+            (0xe000_ed2c, 0),
+            (0xe000_ed24, 4),
+        ] {
+            assert_eq!(machine.bus.read::<4>(address).unwrap(), expected);
+        }
+        assert_eq!(machine.run(10, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            state
+        );
+        machine.primary.reset_cortex_m(&mut machine.bus).unwrap();
+        assert!(!machine.primary.thumb.as_ref().unwrap().lockup_state().0);
+        assert!(!machine.bus.nvic.as_ref().unwrap().lockup);
+    }
+
+    #[test]
+    fn upstream_nmi_preempts_instruction_time_lockup() {
+        let mut machine = enter_instruction_time_lockup();
+        let mut out = std::io::sink();
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        machine
+            .bus
+            .write(0xe000_ed04, 4, 1 << 31, &mut out)
+            .unwrap();
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x380);
+        assert_eq!(machine.bus.read::<4>(0xfd8).unwrap(), 0xefff_fffe);
+        assert!(!machine.primary.thumb.as_ref().unwrap().lockup_state().0);
+        assert!(!machine.bus.nvic.as_ref().unwrap().lockup);
+    }
 
     #[test]
     fn renode_precise_load_store_fault_without_single_step() {

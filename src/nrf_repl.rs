@@ -219,6 +219,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 })
             })
     });
+    let mut semihosting_handler = None;
+    let mut semihosting_uarts = Vec::new();
     let mut nrf_peripherals = Vec::new();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
@@ -256,6 +258,88 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
                 cpus.push(entry);
+            }
+            "CPU.SemihostingHandler" if cortex_m4 => {
+                keys(entry, &[])?;
+                if semihosting_handler.replace(entry).is_some() {
+                    return Err(entry.error("multiple semihosting handlers are unsupported"));
+                }
+            }
+            "UART.SemihostingUart" if cortex_m4 => {
+                keys(entry, &[])?;
+                semihosting_uarts.push(entry);
+            }
+            "Python.PythonPeripheral" if cortex_m4 => {
+                let mut size = None;
+                let mut filename = None;
+                let mut initable = false;
+                for (key, value) in keys(entry, &["size", "filename", "initable"])? {
+                    match key {
+                        "size" => size = Some(number(value).map_err(|e| entry.error(&e))?),
+                        "filename" => filename = Some(value.trim_matches('"')),
+                        "initable" => {
+                            initable = value
+                                .parse()
+                                .map_err(|_| entry.error("invalid initable flag"))?
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                let size = size.ok_or_else(|| entry.error("missing Python peripheral size"))?;
+                let filename =
+                    filename.ok_or_else(|| entry.error("missing Python peripheral filename"))?;
+                let source_path = root.unwrap_or(Path::new(".")).join(filename);
+                let source = std::fs::read_to_string(&source_path)
+                    .map_err(|e| entry.error(&format!("{}: {e}", source_path.display())))?;
+                machine
+                    .bus
+                    .map_pydev(&source, entry.address()?, size, initable)
+                    .map_err(|e| entry.error(&e))?;
+            }
+            "Miscellaneous.DWT" if cortex_m4 => {
+                let (_, frequency) = keys(entry, &["frequency"])?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| entry.error("missing DWT frequency"))?;
+                machine
+                    .bus
+                    .map_dwt(
+                        entry.address()?,
+                        number(frequency).map_err(|e| entry.error(&e))?,
+                    )
+                    .map_err(|e| entry.error(&e))?;
+            }
+            "Mocks.TrivialPeripheral" if cortex_m4 => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_trivial_peripheral(entry.address()?)
+                    .map_err(|e| entry.error(&e))?;
+            }
+            "Mocks.BusFaultingPeripheral" if cortex_m4 => {
+                let mut fault_offset = None;
+                let mut fault_on_writes = true;
+                for (key, value) in keys(entry, &["FaultOffset", "FaultOnWrites"])? {
+                    match key {
+                        "FaultOffset" => {
+                            fault_offset =
+                                Some(number(value).map_err(|e| entry.error(&e))? as usize)
+                        }
+                        _ => {
+                            fault_on_writes = value
+                                .parse()
+                                .map_err(|_| entry.error("invalid FaultOnWrites boolean"))?
+                        }
+                    }
+                }
+                let address = entry.address()?;
+                machine
+                    .bus
+                    .map_bus_faulting_peripheral(address, fault_offset)
+                    .map_err(|e| entry.error(&e))?;
+                machine
+                    .bus
+                    .set_mock_fault_on_writes(address, fault_on_writes);
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?
@@ -340,7 +424,28 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "Sensors.ArduCAMMini2MPPlus" if cortex_m4 => {
+                nrf52840::camera_routes(entry, &entries)?;
+            }
+            "Sensors.LSM9DS1_IMU" | "Sensors.LSM9DS1_Magnetic" if cortex_m4 => {
+                nrf52840::validate_lsm9ds1(entry, &entries)?;
+            }
+            "Sensors.BMP180" if cortex_m4 => {
+                nrf52840::bmp180_config(entry, &entries)?;
+            }
+            "Sensors.LSM303DLHC_Accelerometer" | "Sensors.LSM303DLHC_Gyroscope" if cortex_m4 => {
+                nrf52840::lsm303_config(entry, &entries)?;
+            }
+            "Sensors.LSM330_Accelerometer" | "Sensors.LSM330_Gyroscope" if cortex_m4 => {
+                nrf52840::lsm330_config(entry, &entries)?;
+            }
+            "Sensors.LIS2DS12" if cortex_m4 => {
+                nrf52840::lis2ds12_config(entry, &entries)?;
+            }
+            "I2C.BME280" if cortex_m4 => nrf52840::validate_bme280(entry, &entries)?,
             "Sensors.ADXL372" if cortex_m4 => nrf52840::validate_adxl(entry, &entries)?,
+            "SPI.SPIMultiplexer" if cortex_m4 => nrf52840::validate_mux(entry, &entries)?,
+            "Mocks.DummySPISlave" if cortex_m4 => nrf52840::validate_mux_slave(entry, &entries)?,
             "SPI.SPILoopback" if cortex_m4 => nrf52840::validate_spi_loopback(entry, &entries)?,
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
@@ -1274,6 +1379,48 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         machine.primary.name = Some(entry.name.clone());
         if cortex_m4 && let Some(timer) = &mut machine.bus.systick {
             timer.set_zero_state_reload();
+        }
+        if let Some(handler) = semihosting_handler {
+            if handler.registration.as_deref() != Some(entry.name.as_str()) {
+                return Err(handler.error("expected the Cortex-M CPU as parent"));
+            }
+            let mut model = crate::semihosting::Semihosting::default();
+            let mut combined = false;
+            for uart in semihosting_uarts {
+                let registration: Vec<_> = uart
+                    .registration
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .collect();
+                match registration.as_slice() {
+                    [parent, ".InputOutputError"]
+                        if *parent == handler.name && !model.console && !model.split_error =>
+                    {
+                        model.console = true;
+                        combined = true;
+                    }
+                    [parent, ".InputOutput"] if *parent == handler.name && !model.console => {
+                        model.console = true
+                    }
+                    [parent, ".Error"]
+                        if *parent == handler.name && !combined && !model.split_error =>
+                    {
+                        model.split_error = true
+                    }
+                    _ => {
+                        return Err(
+                            uart.error("invalid or duplicate semihosting UART registration")
+                        );
+                    }
+                }
+            }
+            if model.split_error && !model.console {
+                return Err(handler.error("a separate error UART requires an input/output UART"));
+            }
+            machine.bus.semihosting = Some(model);
+        } else if let Some(uart) = semihosting_uarts.first() {
+            return Err(uart.error("a semihosting UART requires a handler"));
         }
         machine.primary.configure_cortex_m(vectors, cortex_m4);
         return Ok(machine);

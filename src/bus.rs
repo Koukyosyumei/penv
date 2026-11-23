@@ -1,9 +1,12 @@
 use std::{
     alloc::{Layout, alloc_zeroed},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     fs::File,
     io::{self, Read, Write},
     path::Path,
+    rc::{Rc, Weak},
     sync::Arc,
 };
 
@@ -75,10 +78,12 @@ use crate::{
     },
 };
 
-// Cortex-M peripheral time advances by 10 ns per execution step.
+// Cortex-M peripheral clocks use a 10 ns time quantum.
 pub(crate) const CORTEX_M_STEP_HZ: u64 = 100_000_000;
 
 pub const RAM_BASE: u32 = 0x8000_0000;
+const TRIVIAL_PERIPHERAL_SIZE: u32 = 0x1000;
+
 pub const UART_TX: u32 = 0x1000_0000;
 
 #[derive(Debug)]
@@ -86,11 +91,13 @@ pub enum BusError {
     Unmapped(u32, usize),
     AddressError(u32),
     Denied(u32),
+    SlaveFault(u32),
     Page(u32),
     Misaligned(u32, usize),
     Output(io::Error),
     AudioOutput(io::Error),
     CommandError(Arc<dyn std::error::Error + Send + Sync>),
+    Python(String),
 }
 
 impl BusError {
@@ -117,6 +124,8 @@ impl fmt::Display for BusError {
                 f,
                 "Bus access failed with error: AddressError at {address:#010x}"
             ),
+            Self::Python(error) => f.write_str(error),
+            Self::SlaveFault(address) => write!(f, "bus slave fault at {address:#010x}"),
             Self::Page(address) => write!(f, "page fault at {address:#010x}"),
             Self::Denied(address) => write!(
                 f,
@@ -194,18 +203,21 @@ impl TesterHistory {
     }
 }
 
-pub(crate) struct Region {
-    base: u64,
-    mapped: usize,
-    aliases: Vec<u32>,
-    bytes: Vec<u8>,
-    flash_pages: Option<Vec<bool>>,
-}
-
 struct LiteXTimer {
     bases: Vec<u32>,
     timer: litex::Timer,
     vex_irq: Option<(usize, u8)>,
+}
+
+pub(crate) struct Region {
+    base: u64,
+    mapped: usize,
+    aliases: Vec<u32>,
+    privileged: bool,
+    name: Option<String>,
+    log_access: bool,
+    bytes: Vec<u8>,
+    flash_pages: Option<Vec<bool>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -249,6 +261,70 @@ impl Tohost {
     }
 }
 
+const FAULTING_PERIPHERAL_SIZE: usize = 0x1000;
+
+struct FaultingPeripheral {
+    base: u32,
+    fault_offset: Option<usize>,
+    fault_on_writes: bool,
+    bytes: Box<[u8; FAULTING_PERIPHERAL_SIZE]>,
+}
+
+impl FaultingPeripheral {
+    fn offset(&self, address: u32) -> Option<usize> {
+        let offset = address.wrapping_sub(self.base) as usize;
+        (offset < FAULTING_PERIPHERAL_SIZE).then_some(offset)
+    }
+
+    fn check_byte(&self, offset: usize, transaction: u32, write: bool) -> Result<(), BusError> {
+        if offset >= FAULTING_PERIPHERAL_SIZE
+            || ((!write || self.fault_on_writes)
+                && self.fault_offset.is_none_or(|fault| fault == offset))
+        {
+            return Err(BusError::SlaveFault(transaction));
+        }
+        Ok(())
+    }
+}
+
+struct RamIoRead {
+    name: String,
+    offset: usize,
+    width: usize,
+    value: u32,
+}
+
+#[derive(Clone)]
+pub enum CpuHook {
+    Write32(u32, u32),
+    Log(String),
+    Pause,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NrfGpioReceiver {
+    Led(usize),
+    Connector(usize),
+}
+
+type NrfGpioRoutes = crate::nrf52840::gpio_line::GpioRoutes<NrfGpioReceiver>;
+
+#[derive(Default)]
+struct OwnedNrfGpioRoutes(Rc<RefCell<NrfGpioRoutes>>);
+
+impl Drop for OwnedNrfGpioRoutes {
+    fn drop(&mut self) {
+        // External observers can retain the route table after the owning bus is gone.
+        *self.0.borrow_mut() = NrfGpioRoutes::default();
+    }
+}
+
+struct NrfGpioConnector {
+    name: String,
+    output: RefCell<crate::nrf52840::gpio_line::GpioLine<usize>>,
+    led: Weak<RefCell<GpioLed>>,
+}
+
 #[derive(Default)]
 pub struct Bus {
     #[cfg(test)]
@@ -283,7 +359,29 @@ pub struct Bus {
     pub(crate) renode_unmapped_data: bool,
     pub(crate) renode_lrsc: bool,
     trace_rcc: bool,
+    pydevs: Vec<crate::pydev::Peripheral>,
+    thumb_read_watchpoints: BTreeSet<(u32, usize)>,
+    pub thumb_read_watchpoint_hit: bool,
+    pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
+    pub thumb_block_pc_log: bool,
+    pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
+    pub thumb_trace: Option<crate::thumb::trace::Trace>,
+    pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
+    pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
+    pub semihosting: Option<crate::semihosting::Semihosting>,
+    ram_io_pages: BTreeSet<u32>,
+    ram_io_logs: Vec<RamIoRead>,
+    faulting_peripherals: Vec<FaultingPeripheral>,
+    thumb_data_fault: Option<u32>,
+    pub thumb_negative_priority: bool,
+    pub thumb_unprivileged: bool,
+    pub fault_on_unmapped_thumb_data: bool,
+    pub report_unmapped_thumb_data: bool,
+    trivial_peripherals: Vec<u32>,
+    nrf_cpu_hz: Option<u64>,
+    nrf_clock_remainder: u64,
     uart_tx: Option<u32>,
+    trivial_uart: Option<u32>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
@@ -310,6 +408,10 @@ pub struct Bus {
     stm32_gpios: Vec<Stm32Gpio>,
     gpio_exti_levels: u32,
     gpio_leds: Vec<(u32, GpioLed)>,
+    nrf_led_routes: OwnedNrfGpioRoutes,
+    nrf_gpio_connectors: Vec<Option<Rc<NrfGpioConnector>>>,
+    nrf_gpio_sinks: Vec<Weak<NrfGpioConnector>>,
+    nrf_leds: Vec<Option<Rc<RefCell<GpioLed>>>>,
     gpio_buttons: Vec<Option<GpioButton>>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
     gpio_links: Vec<(u32, u8, u32, u8)>,
@@ -520,6 +622,9 @@ impl Region {
             mapped,
             bytes,
             flash_pages: None,
+            privileged: false,
+            name: None,
+            log_access: false,
         })
     }
 
@@ -583,6 +688,27 @@ impl Region {
 }
 
 impl Bus {
+    pub fn set_nrf_cpu_mips(&mut self, mips: u32) -> Result<(), String> {
+        if mips == 0 {
+            return Err("PerformanceInMips requires a positive integer".into());
+        }
+        if self.nrf_peripherals.is_empty() {
+            return Err("PerformanceInMips requires an nRF52840 platform".into());
+        }
+        self.nrf_cpu_hz = Some(u64::from(mips) * 1_000_000);
+        self.nrf_clock_remainder = 0;
+        Ok(())
+    }
+
+    pub fn nrf_clock_ticks(&mut self) -> u64 {
+        let Some(hz) = self.nrf_cpu_hz else {
+            return 1;
+        };
+        // Accumulate clock fractions across instruction slots and system resets.
+        let elapsed = self.nrf_clock_remainder + CORTEX_M_STEP_HZ;
+        self.nrf_clock_remainder = elapsed % hz;
+        elapsed / hz
+    }
     pub fn new(size: usize) -> Result<Self, String> {
         let mut bus = Self {
             uart_tx: Some(UART_TX),
@@ -631,6 +757,50 @@ impl Bus {
 
     pub fn use_renode_unmapped_data(&mut self) {
         self.renode_unmapped_data = true;
+    }
+
+    pub fn map_bus_faulting_peripheral(
+        &mut self,
+        base: u32,
+        fault_offset: Option<usize>,
+    ) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + FAULTING_PERIPHERAL_SIZE as u64;
+        if end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping faulting peripheral at {base:#010x}"
+            ));
+        }
+        if fault_offset.is_some_and(|offset| offset >= FAULTING_PERIPHERAL_SIZE) {
+            return Err("FaultOffset is outside the faulting peripheral".into());
+        }
+        self.faulting_peripherals.push(FaultingPeripheral {
+            base,
+            fault_offset,
+            fault_on_writes: true,
+            bytes: Box::new([0; FAULTING_PERIPHERAL_SIZE]),
+        });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_mock_fault_offset(&mut self, base: u32, offset: usize) {
+        let device = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.base == base)
+            .unwrap();
+        device.fault_offset = Some(offset);
+    }
+
+    pub fn set_mock_fault_on_writes(&mut self, base: u32, enabled: bool) {
+        if let Some(device) = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.base == base)
+        {
+            device.fault_on_writes = enabled;
+        }
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -739,6 +909,96 @@ impl Bus {
             return Err(format!(
                 "overlapping RAM range at {base:#010x} ({size} bytes)"
             ));
+        }
+        Ok(())
+    }
+
+    pub fn map_trivial_peripheral(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(TRIVIAL_PERIPHERAL_SIZE);
+        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping trivial peripheral at {base:#010x}"
+            ));
+        }
+        self.trivial_peripherals.push(base);
+        Ok(())
+    }
+
+    fn trivial_peripheral_at(&self, address: u32) -> bool {
+        address & 3 == 0
+            && self
+                .trivial_peripherals
+                .iter()
+                .any(|base| address.wrapping_sub(*base) < TRIVIAL_PERIPHERAL_SIZE)
+    }
+
+    pub fn map_privileged_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
+        self.map_ram(base, size)?;
+        self.regions.last_mut().unwrap().privileged = true;
+        Ok(())
+    }
+
+    pub fn map_named_ram(&mut self, name: &str, base: u32, size: usize) -> Result<(), String> {
+        self.map_ram(base, size)?;
+        self.regions.last_mut().unwrap().name = Some(name.into());
+        Ok(())
+    }
+
+    pub fn log_ram_access(&mut self, name: &str) -> Result<(), String> {
+        let region = self
+            .regions
+            .iter_mut()
+            .find(|region| region.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("no named RAM peripheral {name:?}"))?;
+        region.log_access = true;
+        Ok(())
+    }
+
+    pub fn set_page_access_via_io(&mut self, address: u32, enabled: bool) {
+        let page = address & !0xfff;
+        if enabled {
+            self.ram_io_pages.insert(page);
+        } else {
+            self.ram_io_pages.remove(&page);
+        }
+    }
+
+    fn log_ram_io_read(&mut self, address: u32, width: usize, value: u32) {
+        if self.ram_io_pages.contains(&(address & !0xfff))
+            && let Some((name, offset)) = self.regions.iter().find_map(|region| {
+                if !region.log_access {
+                    return None;
+                }
+                Some((
+                    region.name.as_deref()?,
+                    region.offset(u64::from(address), width)?,
+                ))
+            })
+        {
+            self.ram_io_logs.push(RamIoRead {
+                name: name.into(),
+                offset,
+                width,
+                value,
+            });
+        }
+    }
+
+    pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
+        for RamIoRead {
+            name,
+            offset,
+            width,
+            value,
+        } in self.ram_io_logs.drain(..)
+        {
+            writeln!(
+                output,
+                "{name}: [cpu: {pc:#x}] ReadUInt{} from {offset:#x} (unknown), returned {value:#x}",
+                width * 8
+            )
+            .map_err(|error| format!("RAM I/O log: {error}"))?;
         }
         Ok(())
     }
@@ -2043,6 +2303,16 @@ impl Bus {
         Ok(())
     }
 
+    fn apply_nrf_input(&mut self, base: u32, pin: u8, high: bool) {
+        if let Some(port) = self
+            .nrf_peripherals
+            .iter_mut()
+            .find(|port| port.base == base)
+        {
+            port.set_gpio_input(pin, high);
+        }
+    }
+
     pub fn nrf_gpio_sample(&self, base: u32) -> (u32, bool) {
         self.nrf_peripherals
             .iter()
@@ -2067,13 +2337,51 @@ impl Bus {
         {
             device.gpio_task(pin, action);
             let high = device.gpio_driven_high().unwrap_or_default();
-            self.release_nrf_spi_cs(base, high);
+            self.sample_nrf_gpio_outputs(base, high);
         }
     }
 
-    pub fn release_nrf_spi_cs(&mut self, gpio: u32, pins: u32) {
+    pub fn sample_nrf_gpio_outputs(&mut self, gpio: u32, pins: u32) {
+        Self::sample_nrf_led_routes(
+            &self.nrf_led_routes.0.borrow(),
+            &self.nrf_gpio_connectors,
+            &self.nrf_leds,
+            gpio,
+            pins,
+            self.led_events,
+        );
         for device in &mut self.nrf_peripherals {
             device.release_spi_cs(gpio, pins);
+        }
+    }
+
+    fn sample_nrf_led_routes(
+        routes: &NrfGpioRoutes,
+        connectors: &[Option<Rc<NrfGpioConnector>>],
+        leds: &[Option<Rc<RefCell<GpioLed>>>],
+        gpio: u32,
+        pins: u32,
+        report: bool,
+    ) {
+        for (pin, line) in routes.lines(gpio) {
+            let high = pins & (1 << pin) != 0;
+            for endpoint in line.endpoints() {
+                match endpoint.receiver {
+                    NrfGpioReceiver::Led(index) => leds[index]
+                        .as_ref()
+                        .unwrap()
+                        .borrow_mut()
+                        .sample_level(high, report),
+                    NrfGpioReceiver::Connector(index) => {
+                        let connector = connectors[index].as_ref().unwrap();
+                        if !connector.output.borrow().endpoints().is_empty()
+                            && let Some(led) = connector.led.upgrade()
+                        {
+                            led.borrow_mut().sample_level(high, report);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2087,6 +2395,55 @@ impl Bus {
         self.nrf_peripherals
             .iter()
             .any(|device| device.ppi_task_supported(address))
+    }
+
+    pub fn nrf_adxl_input(&mut self, name: &str) -> Option<&mut [i16; 3]> {
+        self.nrf_peripherals
+            .iter_mut()
+            .find_map(|device| device.adxl_input(name))
+    }
+
+    pub fn set_nrf_camera_image(&mut self, image: Vec<u8>) -> Result<(), String> {
+        if image.len() > 0xff_ffff {
+            return Err("ArduCAM image exceeds the 24-bit FIFO size".into());
+        }
+        let mut image = Some(image);
+        if self
+            .nrf_peripherals
+            .iter_mut()
+            .any(|device| device.set_camera_image(&mut image))
+        {
+            Ok(())
+        } else {
+            Err("--nrf-camera-image requires an nRF52840 ArduCAM".into())
+        }
+    }
+
+    pub fn set_nrf_lsm9ds1_samples(&mut self, input: &str) -> Result<(), String> {
+        let samples = self
+            .nrf_peripherals
+            .iter_mut()
+            .find_map(NrfPeripheral::lsm9ds1_samples)
+            .ok_or("--lsm9ds1-samples requires an nRF52840 LSM9DS1 IMU")?;
+        let mut parsed = Vec::new();
+        for (index, line) in input.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let values = line
+                .split_whitespace()
+                .map(str::parse::<f64>)
+                .collect::<Result<Vec<_>, _>>();
+            match values.as_deref() {
+                Ok([x, y, z]) if [x, y, z].iter().all(|value| value.is_finite()) => {
+                    parsed.push([*x, *y, *z]);
+                }
+                _ => return Err(format!("invalid LSM9DS1 sample at line {}", index + 1)),
+            }
+        }
+        samples.extend(parsed);
+        Ok(())
     }
 
     pub fn set_nrf_pdm_input(&mut self, input: Vec<u8>) -> Result<(), String> {
@@ -2138,6 +2495,39 @@ impl Bus {
             }
         }
         Ok(())
+    }
+
+    pub fn attach_uart_link(&mut self, name: &str) -> Result<usize, String> {
+        let index = self
+            .nrf_peripherals
+            .iter()
+            .position(|device| device.is_uart() && device.name == name)
+            .ok_or_else(|| format!("unknown nRF52840 UART {name:?}"))?;
+        self.nrf_peripherals[index].link_uart();
+        Ok(index)
+    }
+
+    pub fn exchange_uart_link(
+        &mut self,
+        local: usize,
+        peer: &mut Self,
+        remote: usize,
+    ) -> Result<(), BusError> {
+        let local_tx = self.nrf_peripherals[local].take_uart_link_output();
+        let remote_tx = peer.nrf_peripherals[remote].take_uart_link_output();
+        self.receive_uart_link(local, remote_tx)?;
+        peer.receive_uart_link(remote, local_tx)
+    }
+
+    fn receive_uart_link(&mut self, index: usize, bytes: Vec<u8>) -> Result<(), BusError> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let mut device = self.nrf_peripherals.remove(index);
+        device.queue_uart_link_input(bytes);
+        let result = device.receive(self);
+        self.nrf_peripherals.insert(index, device);
+        result
     }
 
     pub fn attach_radio_medium(&mut self) -> Result<(), String> {
@@ -2199,6 +2589,18 @@ impl Bus {
             .any(|device| device.is_uart() && device.name == name)
     }
 
+    pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
+        let uart = self
+            .nrf_peripherals
+            .iter_mut()
+            .find(|device| device.is_uart() && device.name == name)
+            .ok_or_else(|| format!("unsupported UART IRQ target {name:?}"))?;
+        if let Some(level) = level {
+            uart.set_uart_irq(level);
+        }
+        Ok(uart.pending())
+    }
+
     pub(crate) fn memory_slice(&self, address: u32, length: usize) -> Result<&[u8], BusError> {
         self.regions
             .iter()
@@ -2232,11 +2634,32 @@ impl Bus {
                     .ranges()
                     .into_iter()
                     .any(|(base, limit)| start < limit && base < end)
+                    || self.pydevs.iter().any(|device| device.overlaps(start, end))
+                    || self.trivial_peripherals.iter().any(|&base| {
+                        let base = u64::from(base);
+                        start < base + u64::from(TRIVIAL_PERIPHERAL_SIZE) && base < end
+                    })
+                    || self.faulting_peripherals.iter().any(|device| {
+                        let base = u64::from(device.base);
+                        start < base + FAULTING_PERIPHERAL_SIZE as u64 && base < end
+                    })
+                    || self.nrf_peripherals.iter().any(|device| {
+                        let other = u64::from(device.base);
+                        start < other + u64::from(device.size()) && other < end
+                    })
+                    || self
+                        .nvic
+                        .as_ref()
+                        .is_some_and(|_| Nvic::overlaps(start, end))
             })
             || (self.systick.is_some() && SysTick::overlaps(start, end))
             || self
                 .uart_tx
                 .is_some_and(|address| (start..end).contains(&u64::from(address)))
+            || self.trivial_uart.is_some_and(|base| {
+                let base = u64::from(base);
+                start < base + 4 && base < end
+            })
             || self.uart.as_ref().is_some_and(|uart| {
                 let other = u64::from(uart.base);
                 start < other + MuraxUart::SIZE && other < end
@@ -2521,6 +2944,15 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        if self.trivial_uart.is_some() || base & 3 != 0 || self.overlaps(start, start + 4) {
+            return Err("invalid, duplicate, or overlapping TrivialUart".into());
+        }
+        self.trivial_uart = Some(base);
+        Ok(())
+    }
+
     pub fn map_uart(&mut self, base: u32, irq_connected: bool) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + MuraxUart::SIZE;
@@ -2777,7 +3209,13 @@ impl Bus {
     }
 
     fn reset_cortex_m_device_state(&mut self, reload: bool) {
+        if let Some(handler) = self.semihosting.as_mut() {
+            handler.reset();
+        }
         self.reservations.fill(None);
+        for device in &mut self.faulting_peripherals {
+            device.bytes.fill(0);
+        }
         for device in &mut self.nrf_peripherals {
             device.reset();
         }
@@ -2786,6 +3224,9 @@ impl Bus {
         }
         if let Some(systick) = self.systick.as_mut() {
             systick.reset();
+        }
+        if let Some(dwt) = self.dwt.as_mut() {
+            dwt.reset();
         }
         if let Some(uart) = self.litex_uart.as_mut() {
             *uart = LiteXUart::new(uart.bases.clone(), None);
@@ -3157,6 +3598,31 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_pydev(
+        &mut self,
+        source: &str,
+        base: u32,
+        size: u32,
+        initable: bool,
+    ) -> Result<(), String> {
+        let base = u64::from(base);
+        let end = base + u64::from(size);
+        if end > 1 << 32 || self.overlaps(base, end) {
+            return Err("overlapping or invalid Python peripheral range".into());
+        }
+        self.pydevs.push(crate::pydev::Peripheral::new(
+            source,
+            base,
+            u64::from(size),
+            initable,
+        )?);
+        Ok(())
+    }
+
+    pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
+        self.thumb_read_watchpoints.insert((address, width));
+    }
+
     pub fn map_systick(&mut self) -> Result<(), String> {
         if SysTick::RANGES
             .into_iter()
@@ -3396,6 +3862,152 @@ impl Bus {
         self.refresh_gpio_wiring();
     }
 
+    pub fn add_nrf_gpio_led(
+        &mut self,
+        base: u32,
+        mut led: GpioLed,
+        input: u32,
+    ) -> Result<(), String> {
+        self.nrf_led_routes
+            .0
+            .borrow_mut()
+            .line_mut(base, led.pin)
+            .connect(
+                NrfGpioReceiver::Led(self.nrf_leds.len()),
+                &led.name,
+                1,
+                input,
+            )?;
+        let driven = self.nrf_gpio_driven_high(base);
+        led.sample_level(driven & (1 << led.pin) != 0, self.led_events);
+        self.nrf_leds.push(Some(Rc::new(RefCell::new(led))));
+        Ok(())
+    }
+
+    pub fn bridge_nrf_led(&mut self, connector: &str, name: &str) -> Result<(), String> {
+        self.bridge_nrf_led_from(connector, name, None).map(|_| ())
+    }
+
+    fn bridge_nrf_led_from(
+        &mut self,
+        connector: &str,
+        name: &str,
+        source: Option<(&mut Bus, u32, u8)>,
+    ) -> Result<Rc<NrfGpioConnector>, String> {
+        let led = self
+            .nrf_leds
+            .iter()
+            .position(|led| led.as_ref().is_some_and(|led| led.borrow().name == name))
+            .ok_or_else(|| format!("unknown nRF GPIO LED {name:?}"))?;
+        let receiver = NrfGpioReceiver::Led(led);
+        let mut output = crate::nrf52840::gpio_line::GpioLine::default();
+        output.connect(led, name, 1, 0)?;
+        let bridge = Rc::new(NrfGpioConnector {
+            name: connector.into(),
+            output: RefCell::new(output),
+            led: Rc::downgrade(self.nrf_leds[led].as_ref().unwrap()),
+        });
+        if let Some((source_bus, base, pin)) = source {
+            source_bus.attach_nrf_gpio_connector(base, pin, &bridge)?;
+        } else {
+            let (base, pin) = self
+                .nrf_led_routes
+                .0
+                .borrow()
+                .source_of(&receiver)
+                .ok_or_else(|| format!("nRF GPIO LED {name:?} has no direct connection"))?;
+            self.attach_nrf_gpio_connector(base, pin, &bridge)?;
+        }
+        self.nrf_led_routes
+            .0
+            .borrow_mut()
+            .unregister_peripheral(None, Some(&receiver));
+        self.nrf_gpio_sinks.retain(|sink| sink.strong_count() != 0);
+        self.nrf_gpio_sinks.push(Rc::downgrade(&bridge));
+        Ok(bridge)
+    }
+
+    fn attach_nrf_gpio_connector(
+        &mut self,
+        base: u32,
+        pin: u8,
+        bridge: &Rc<NrfGpioConnector>,
+    ) -> Result<(), String> {
+        if pin >= 32
+            || !self
+                .nrf_peripherals
+                .iter()
+                .any(|device| device.base == base && device.gpio_driven_high().is_some())
+        {
+            return Err(format!("invalid nRF GPIO connector source {base:#x}:{pin}"));
+        }
+        if self
+            .nrf_gpio_connectors
+            .iter()
+            .flatten()
+            .any(|item| item.name == bridge.name)
+        {
+            return Err(format!("duplicate nRF GPIO connector {:?}", bridge.name));
+        }
+        self.nrf_led_routes
+            .0
+            .borrow_mut()
+            .line_mut(base, pin)
+            .connect(
+                NrfGpioReceiver::Connector(self.nrf_gpio_connectors.len()),
+                &bridge.name,
+                1,
+                0,
+            )?;
+        self.nrf_gpio_connectors.push(Some(bridge.clone()));
+        Ok(())
+    }
+
+    pub fn remove_nrf_gpio_connector(&mut self, name: &str) -> Result<(), String> {
+        let index = self
+            .nrf_gpio_connectors
+            .iter()
+            .position(|item| item.as_ref().is_some_and(|item| item.name == name))
+            .ok_or_else(|| format!("unknown nRF GPIO connector {name:?}"))?;
+        self.nrf_led_routes
+            .0
+            .borrow_mut()
+            .unregister_peripheral(None, Some(&NrfGpioReceiver::Connector(index)));
+        self.nrf_gpio_connectors[index] = None;
+        Ok(())
+    }
+
+    pub fn unregister_nrf_gpio_peripheral(&mut self, name: &str) -> Result<(), String> {
+        if let Some(receiver) = self
+            .nrf_leds
+            .iter()
+            .position(|led| led.as_ref().is_some_and(|led| led.borrow().name == name))
+        {
+            let endpoint = NrfGpioReceiver::Led(receiver);
+            self.nrf_led_routes
+                .0
+                .borrow_mut()
+                .unregister_peripheral(None, Some(&endpoint));
+            for connector in self.nrf_gpio_sinks.iter().filter_map(Weak::upgrade) {
+                connector.output.borrow_mut().disconnect_receiver(&receiver);
+            }
+            self.nrf_leds[receiver] = None;
+        } else if let Some(source) = self
+            .nrf_peripherals
+            .iter()
+            .position(|device| device.name == name && device.gpio_driven_high().is_some())
+        {
+            let port = self.nrf_peripherals.remove(source);
+            self.nrf_led_routes
+                .0
+                .borrow_mut()
+                .unregister_peripheral(Some(port.base), None);
+        } else {
+            return Err(format!("unknown nRF GPIO peripheral {name:?}"));
+        }
+        Ok(())
+    }
+
     pub fn gpio_led_index(&self, target: &str) -> Result<usize, String> {
         let path = target.strip_prefix("sysbus.").unwrap_or(target);
         self.gpio_leds
@@ -3449,10 +4061,15 @@ impl Bus {
             if let Some(port) = self.stm32_gpios.iter_mut().find(|port| port.base == base) {
                 port.set_external(pin, pressed ^ button.invert);
             }
+            if let Some(port) = self
+                .nrf_peripherals
+                .iter_mut()
+                .find(|port| port.base == base)
+            {
+                port.set_gpio_input(pin, pressed ^ button.invert);
+            }
         }
-        if !button.endpoints.as_slice().is_empty() {
-            self.refresh_gpio_wiring();
-        }
+        self.refresh_gpio_wiring();
     }
 
     pub(crate) fn refresh_gpio_wiring(&mut self) {
@@ -3503,6 +4120,18 @@ impl Bus {
         for (base, led) in &mut self.gpio_leds {
             if let Some(port) = self.stm32_gpios.iter().find(|port| port.base == *base) {
                 led.sample(port.pins(), self.led_events);
+            }
+        }
+        for port in &self.nrf_peripherals {
+            if let Some(high) = port.gpio_driven_high() {
+                Self::sample_nrf_led_routes(
+                    &self.nrf_led_routes.0.borrow(),
+                    &self.nrf_gpio_connectors,
+                    &self.nrf_leds,
+                    port.base,
+                    high,
+                    self.led_events,
+                );
             }
         }
     }
@@ -4086,6 +4715,10 @@ impl Bus {
             || !self.stm32_uarts.is_empty()
             || !self.rv64_devices.uarts.is_empty()
             || self.nrf_peripherals.iter().any(NrfPeripheral::is_uart)
+            || self
+                .semihosting
+                .as_ref()
+                .is_some_and(|handler| handler.console)
     }
 
     pub fn queue_uart_input(&mut self, bytes: Vec<u8>) -> Result<(), BusError> {
@@ -4106,6 +4739,8 @@ impl Bus {
             let result = device.receive(self);
             self.nrf_peripherals.insert(index, device);
             result?;
+        } else if let Some(handler) = self.semihosting.as_mut().filter(|handler| handler.console) {
+            handler.queue_input(bytes);
         } else {
             self.rv64_devices.queue_input(bytes);
         }
@@ -4859,23 +5494,71 @@ impl Bus {
         Ok(())
     }
 
+    fn check_thumb_bus_context(&self, address: u32, width: usize) -> Result<(), String> {
+        if self.thumb_unprivileged
+            && self.regions.iter().any(|region| {
+                region.privileged
+                    && (0..width).any(|offset| {
+                        region
+                            .offset(u64::from(address.wrapping_add(offset as u32)), 1)
+                            .is_some()
+                    })
+            })
+        {
+            return Err(format!(
+                "Cortex-M bus registration denied access at {address:#010x}"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
+        let Some(hooks) = self.cpu_hooks.get(&pc).cloned() else {
+            return Ok(false);
+        };
+        for hook in hooks {
+            match hook {
+                CpuHook::Write32(address, value) => self.write(address, 4, value, output)?,
+                CpuHook::Log(message) => writeln!(output, "{message}").map_err(BusError::Output)?,
+                CpuHook::Pause => {
+                    writeln!(output, "Machine paused").map_err(BusError::Output)?;
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub fn thumb_fetch(&self, address: u32) -> Result<u32, String> {
+        self.check_thumb_bus_context(address, 2)?;
         self.check_thumb_access(address, 2, false, true)?;
         self.read_ram::<2>(address)
             .map_err(|error| error.to_string())
     }
 
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
+        self.check_thumb_bus_context(address, N)?;
         self.check_thumb_access(address, N, false, false)?;
-        if address as usize & (N - 1) != 0
+        if N == 4
+            && address == crate::nvic::DHCSR
+            && self.nvic.as_ref().is_some_and(Nvic::has_debug_status)
+        {
+            return Ok(0);
+        }
+        let value = if address as usize & (N - 1) != 0
             && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
             && let Ok(slice) = self.memory_slice(address, N)
         {
             let mut value = [0; 4];
             value[..N].copy_from_slice(slice);
-            return Ok(u32::from_le_bytes(value));
-        }
-        self.read::<N>(address).map_err(|error| error.to_string())
+            u32::from_le_bytes(value)
+        } else {
+            self.read::<N>(address)
+                .or_else(|error| self.thumb_data_error(error, false))?
+        };
+        self.log_ram_io_read(address, N, value);
+        self.thumb_read_watchpoint_hit |= self.thumb_read_watchpoints.contains(&(address, N));
+        Ok(value)
     }
 
     pub fn thumb_write(
@@ -4885,6 +5568,7 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), String> {
+        self.check_thumb_bus_context(address, width)?;
         self.check_thumb_access(address, width, true, false)?;
         if address as usize & (width - 1) != 0
             && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
@@ -4894,7 +5578,75 @@ impl Bus {
             return Ok(());
         }
         self.write(address, width, value, uart)
-            .map_err(|error| error.to_string())
+            .or_else(|error| self.thumb_data_error(error, true))
+    }
+
+    fn thumb_data_error<T: Default>(&mut self, error: BusError, write: bool) -> Result<T, String> {
+        let address = match error {
+            BusError::SlaveFault(address) => address,
+            BusError::Unmapped(address, width)
+                if self.report_unmapped_thumb_data
+                    && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>
+            {
+                let access = if write { "Write" } else { "Read" };
+                let width = match width {
+                    1 => "Byte",
+                    2 => "Word",
+                    4 => "DoubleWord",
+                    _ => return Err(error.to_string()),
+                };
+                let direction = if write { "to" } else { "from" };
+                eprintln!(
+                    "sysbus: {access}{width} {direction} non existing peripheral at 0x{address:X}"
+                );
+                return Ok(T::default());
+            }
+            BusError::Unmapped(address, width)
+                if self.fault_on_unmapped_thumb_data
+                    && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>
+            {
+                address
+            }
+            _ => return Err(error.to_string()),
+        };
+        if self.thumb_negative_priority
+            && let Some(nvic) = self
+                .nvic
+                .as_mut()
+                .filter(|nvic| nvic.ignores_negative_priority_bus_fault())
+        {
+            nvic.record_precise_bus_fault(address, false);
+            return Ok(T::default());
+        }
+        self.thumb_data_fault = Some(address);
+        Err(error.to_string())
+    }
+
+    pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
+        self.thumb_data_fault.take()
+    }
+
+    fn read_faulting_peripheral<const N: usize>(
+        &self,
+        address: u32,
+    ) -> Option<Result<u32, BusError>> {
+        let (device, offset) = self
+            .faulting_peripherals
+            .iter()
+            .find_map(|device| Some((device, device.offset(address)?)))?;
+        Some((|| {
+            let mut value = [0; 4];
+            for (index, byte) in value[..N].iter_mut().enumerate() {
+                device.check_byte(offset + index, address, false)?;
+                *byte = device.bytes[offset + index];
+            }
+            Ok(u32::from_le_bytes(value))
+        })())
+    }
+
+    pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
+        self.read_faulting_peripheral::<4>(address)
+            .unwrap_or_else(|| self.read_ram::<4>(address))
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
@@ -4935,6 +5687,22 @@ impl Bus {
             return Ok(u32::from(value));
         }
         // Mapped devices cannot overlap RAM. Try the common RAM access first.
+        if let Some(device) = self
+            .pydevs
+            .iter_mut()
+            .find(|device| device.contains(address.into(), N as u32))
+        {
+            return device
+                .access(address.into(), N as u32, None)
+                .map(|value| value as u32)
+                .map_err(BusError::Python);
+        }
+        if N == 4 && self.trivial_peripheral_at(address) {
+            return Ok(0);
+        }
+        if let Some(result) = self.read_faulting_peripheral::<N>(address) {
+            return result;
+        }
         let ram_error = match self.read_ram::<N>(address) {
             Ok(value) => return Ok(value),
             Err(error) => error,
@@ -4946,7 +5714,12 @@ impl Bus {
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
-            return device.read(address).ok_or(BusError::Unmapped(address, N));
+            let value = device.read(address);
+            let signals: Vec<_> = device.sensor_irqs().collect();
+            for (gpio, pin, high) in signals {
+                self.apply_nrf_input(gpio, pin, high);
+            }
+            return value.ok_or(BusError::Unmapped(address, N));
         }
         if N == 4
             && let Some(system) = &self.f4_system
@@ -5036,6 +5809,11 @@ impl Bus {
             && soc.contains(address)
         {
             return Ok(soc.read(address));
+        }
+        if N == 4
+            && let Some(value) = self.dwt.as_ref().and_then(|dwt| dwt.read(address))
+        {
+            return Ok(value);
         }
         if N == 4
             && let Some(timer) = self.systick.as_mut()
@@ -5585,6 +6363,45 @@ impl Bus {
         Err(BusError::Unmapped(address, N))
     }
 
+    fn write_faulting_peripheral(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+    ) -> Option<Result<(), BusError>> {
+        let device = self
+            .faulting_peripherals
+            .iter_mut()
+            .find(|device| device.offset(address).is_some())?;
+        let offset = device.offset(address).unwrap();
+        Some((|| {
+            for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
+                device.check_byte(offset + index, address, true)?;
+                device.bytes[offset + index] = *byte;
+            }
+            Ok(())
+        })())
+    }
+
+    pub fn write_cortex_m_exception_stack(
+        &mut self,
+        stack: u32,
+        frame: &[u32],
+    ) -> Result<(), BusError> {
+        if let Ok(memory) = self.memory(stack, frame.len() * 4) {
+            for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
+                *word = value.to_le_bytes();
+            }
+            return Ok(());
+        }
+        for (index, &value) in frame.iter().enumerate() {
+            let address = stack.wrapping_add(index as u32 * 4);
+            self.write_faulting_peripheral(address, 4, value)
+                .ok_or(BusError::Unmapped(address, 4))??;
+        }
+        Ok(())
+    }
+
     pub fn write(
         &mut self,
         address: u32,
@@ -5633,6 +6450,25 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        if let Some(device) = self
+            .pydevs
+            .iter_mut()
+            .find(|device| device.contains(address.into(), width as u32))
+        {
+            return device
+                .access(address.into(), width as u32, Some(value.into()))
+                .map(|_| ())
+                .map_err(BusError::Python);
+        }
+        if width == 4 && self.trivial_peripheral_at(address) {
+            return Ok(());
+        }
+        if let Some(result) = self.write_faulting_peripheral(address, width, value) {
+            return result;
+        }
+        if self.trivial_uart == Some(address) && matches!(width, 1 | 2 | 4) {
+            return uart.write_all(&[value as u8]).map_err(BusError::Output);
+        }
         #[cfg(test)]
         if self
             .faulting_device
@@ -5684,6 +6520,9 @@ impl Bus {
         {
             let mut device = self.nrf_peripherals.remove(index);
             let result = device.write(address, value, self, uart);
+            for (gpio, pin, high) in device.sensor_irqs() {
+                self.apply_nrf_input(gpio, pin, high);
+            }
             self.nrf_peripherals.insert(index, device);
             return result;
         }
@@ -5785,6 +6624,18 @@ impl Bus {
                     && let Some(nvic) = &mut self.nvic
                 {
                     nvic.signal_pending_event();
+                }
+                return Ok(());
+            }
+        }
+        if width == 4
+            && let Some(timer) = self.systick.as_mut()
+        {
+            let zero_reload = timer.enabling_with_zero_reload(address, value);
+            if timer.write(address, value) {
+                if zero_reload {
+                    writeln!(uart, "Systick_NS enabled but it won't be started as long as the reload value is zero")
+                        .map_err(BusError::Output)?;
                 }
                 return Ok(());
             }
@@ -7578,5 +8429,143 @@ mod gpio_detaching_cases {
         assert_eq!(gpio.timer_endpoints(0).count(), 0);
         assert!(gpio.timer_endpoints(1).eq([(0x800, 2)]));
         assert!(gpio.timer_endpoints(2).eq([(0xc00, 3)]));
+    }
+}
+
+#[cfg(test)]
+mod gpio_connector_tests {
+    use super::*;
+
+    fn fixture() -> Bus {
+        let mut bus = Bus::default();
+        bus.map_nrf_peripheral(NrfPeripheral::gpio(0x50000500, "gpio0".into(), 32))
+            .unwrap();
+        bus.add_nrf_gpio_led(0x50000500, GpioLed::new("led".into(), 0, false), 0)
+            .unwrap();
+        bus.bridge_nrf_led("connector", "led").unwrap();
+        assert_eq!(
+            bus.nrf_led_routes
+                .0
+                .borrow()
+                .lines(0x50000500)
+                .next()
+                .unwrap()
+                .1
+                .endpoints()
+                .len(),
+            1
+        );
+        assert_eq!(
+            bus.nrf_gpio_connectors[0]
+                .as_ref()
+                .unwrap()
+                .output
+                .borrow()
+                .endpoints()
+                .len(),
+            1
+        );
+        bus
+    }
+
+    #[test]
+    fn upstream_gpio_source_machine_disposal_preserves_external_destination() {
+        let mut source = crate::machine::Machine::without_default_ram();
+        let mut destination = crate::machine::Machine::without_default_ram();
+        source
+            .bus
+            .map_nrf_peripheral(NrfPeripheral::gpio(0, "sender".into(), 1))
+            .unwrap();
+        destination
+            .bus
+            .add_nrf_gpio_led(0x10, GpioLed::new("receiver".into(), 0, false), 0)
+            .unwrap();
+
+        let connector = destination
+            .bus
+            .bridge_nrf_led_from("connector", "receiver", Some((&mut source.bus, 0, 0)))
+            .unwrap();
+        let routes = source.bus.nrf_led_routes.0.clone();
+        let source_endpoints = || {
+            routes
+                .borrow()
+                .lines(0)
+                .flat_map(|(_, line)| line.endpoints())
+                .count()
+        };
+        assert_eq!(source_endpoints(), 1);
+        assert_eq!(connector.output.borrow().endpoints().len(), 1);
+
+        let mut output = std::io::sink();
+        source.bus.write(24, 4, 1, &mut output).unwrap(); // DIRSET
+        source.bus.write(8, 4, 1, &mut output).unwrap(); // OUTSET
+        assert!(
+            destination.bus.nrf_leds[0]
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .is_on()
+        );
+
+        drop(source);
+
+        assert_eq!(source_endpoints(), 0);
+        assert_eq!(connector.output.borrow().endpoints().len(), 1);
+        assert!(
+            destination.bus.nrf_leds[0]
+                .as_ref()
+                .unwrap()
+                .borrow()
+                .is_on()
+        );
+        destination
+            .bus
+            .unregister_nrf_gpio_peripheral("receiver")
+            .unwrap();
+        assert!(connector.output.borrow().endpoints().is_empty());
+    }
+
+    #[test]
+    fn upstream_gpio_external_removal_disconnects_source_endpoint() {
+        let mut bus = fixture();
+        bus.remove_nrf_gpio_connector("connector").unwrap();
+        assert!(
+            bus.nrf_led_routes
+                .0
+                .borrow()
+                .lines(0x50000500)
+                .next()
+                .unwrap()
+                .1
+                .endpoints()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn upstream_gpio_source_unregister_preserves_external_destination() {
+        let mut bus = fixture();
+        bus.unregister_nrf_gpio_peripheral("gpio0").unwrap();
+        assert!(
+            bus.nrf_led_routes
+                .0
+                .borrow()
+                .lines(0x50000500)
+                .next()
+                .unwrap()
+                .1
+                .endpoints()
+                .is_empty()
+        );
+        assert_eq!(
+            bus.nrf_gpio_connectors[0]
+                .as_ref()
+                .unwrap()
+                .output
+                .borrow()
+                .endpoints()
+                .len(),
+            1
+        );
     }
 }

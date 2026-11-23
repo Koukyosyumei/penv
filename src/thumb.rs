@@ -1,5 +1,7 @@
 mod fpu;
+pub(crate) mod opcode_counter;
 mod thumb2;
+pub(crate) mod trace;
 
 use std::io::Write;
 
@@ -74,10 +76,11 @@ pub struct Thumb {
 const LOCKUP_PC: u32 = 0xefff_fffe;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum ThumbStep {
+pub enum ThumbStep {
     Retired,
     Breakpoint,
     Exception,
+    Semihosting(crate::semihosting::Exit),
 }
 
 enum InstructionError {
@@ -134,6 +137,20 @@ impl Thumb {
 
     pub fn vector_base(&self) -> u32 {
         self.vectors.unwrap_or(0)
+    }
+
+    pub fn patch_monitor_pc(
+        &mut self,
+        address: u32,
+        cpu: &str,
+        output: &mut impl Write,
+    ) -> Result<u32, String> {
+        if address & 1 == 0 {
+            writeln!(output, "{cpu}: Patching PC {address:#x} for Thumb mode.")
+                .map_err(|error| error.to_string())?;
+        }
+        self.invalid_thumb_state = false;
+        Ok(address & !1)
     }
 
     pub fn set_vector_base(&mut self, base: u32) {
@@ -272,6 +289,17 @@ impl Thumb {
         self.apsr()
             | (u32::from(!self.invalid_thumb_state) << 24)
             | u32::from(self.active_exception)
+    }
+
+    pub fn lockup_state(&self) -> (bool, u8, u8) {
+        (
+            self.locked_up,
+            self.active_exceptions.depth() as u8,
+            self.active_exception,
+        )
+    }
+    pub fn fp_context_active(&self) -> bool {
+        self.fp_active
     }
 
     pub fn locked_up(&self) -> bool {
