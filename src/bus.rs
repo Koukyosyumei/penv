@@ -3411,6 +3411,64 @@ impl Bus {
         None
     }
 
+    pub fn find_bytes(&self, pattern: &[u8], start: u64, end: u64) -> Result<Vec<u64>, String> {
+        if pattern.is_empty() || pattern.len() > 1 << 20 {
+            return Err("FindBytes pattern must contain 1 to 1048576 bytes".into());
+        }
+
+        let advance = |mut matched: usize, byte, prefix: &[usize]| {
+            while matched != 0 && pattern[matched] != byte {
+                matched = prefix[matched - 1];
+            }
+            matched + usize::from(pattern[matched] == byte)
+        };
+        let mut prefix = vec![0; pattern.len()];
+        for index in 1..pattern.len() {
+            prefix[index] = advance(prefix[index - 1], pattern[index], &prefix);
+        }
+
+        let mut mappings = Vec::new();
+        for region in &self.regions {
+            let bytes = &region.bytes[..region.mapped];
+            mappings.push((region.base, bytes));
+            mappings.extend(region.aliases.iter().map(|&base| (u64::from(base), bytes)));
+        }
+        for alias in &self.aliases {
+            mappings.push((
+                alias.base,
+                &self.regions[alias.backing].bytes[..alias.length],
+            ));
+        }
+        mappings.sort_unstable_by_key(|&(base, _)| base);
+
+        let mut locations = Vec::new();
+        let mut matched = 0;
+        let mut previous_end = None;
+        for (base, bytes) in mappings {
+            let low = start.max(base);
+            let high = end.saturating_add(1).min(base + bytes.len() as u64);
+            if low >= high {
+                continue;
+            }
+            // Carry a partial match only across adjacent mapped memory.
+            if previous_end != Some(low) {
+                matched = 0;
+            }
+            for (offset, &byte) in bytes[(low - base) as usize..(high - base) as usize]
+                .iter()
+                .enumerate()
+            {
+                matched = advance(matched, byte, &prefix);
+                if matched == pattern.len() {
+                    locations.push(low + offset as u64 + 1 - matched as u64);
+                    matched = prefix[matched - 1];
+                }
+            }
+            previous_end = Some(high);
+        }
+        Ok(locations)
+    }
+
     pub fn ram64(&self, address: u64, width: usize) -> Option<&[u8]> {
         let (index, offset) = self.ram_location64(address, width)?;
         Some(&self.regions[index].bytes[offset..offset + width])
@@ -5453,4 +5511,28 @@ fn gpio_clocked(control: Option<&NetworkControl>, port: &H7Gpio) -> bool {
 
 fn rtc_clocked(control: Option<&NetworkControl>, rtc: &H7Rtc) -> bool {
     !rtc.rcc_bound || control.is_none_or(NetworkControl::rtc_enabled)
+}
+
+#[cfg(test)]
+mod find_bytes_tests {
+    use super::Bus;
+
+    #[test]
+    fn find_bytes_covers_aliases_high_addresses_and_holes() {
+        const HIGH: u64 = 1 << 32;
+        let mut bus = Bus::default();
+        bus.map_ram_views(&[0, 8], 3).unwrap();
+        bus.memory64(0, 3).unwrap().copy_from_slice(b"aaa");
+        let backing = bus.map_ram_backing64(HIGH, 6, 2).unwrap();
+        bus.map_alias64(backing, 11, 2).unwrap();
+        bus.memory64(HIGH, 2).unwrap().copy_from_slice(b"ab");
+        assert_eq!(
+            bus.find_bytes(b"aa", 0, u64::MAX).unwrap(),
+            [0, 1, 8, 9, 10]
+        );
+        assert_eq!(bus.find_bytes(b"ab", 0, u64::MAX).unwrap(), [11, HIGH]);
+        assert!(bus.find_bytes(b"ab", HIGH, HIGH).unwrap().is_empty());
+        assert!(bus.find_bytes(b"ab", 12, 11).unwrap().is_empty());
+        assert!(bus.find_bytes(b"", 0, u64::MAX).is_err());
+    }
 }

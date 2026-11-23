@@ -140,6 +140,11 @@ impl Plan {
                     pressed: *verb == "Press",
                 });
             }
+            ["sysbus", "FindBytes", ..] => {
+                let node = self.monitor_node()?;
+                let search = crate::monitor::FindBytes::parse(text, resolve)?;
+                self.actions.push(Action::FindBytes { node, search });
+            }
             ["sysbus", "ReadDoubleWord", address] => {
                 let node = self.monitor_node()?;
                 let address = crate::network_repl::number(resolve(*address)?)?;

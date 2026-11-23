@@ -50,6 +50,7 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    FindBytes(FindBytes),
     Button(String, bool),
     ButtonPulse(String),
     NvicGpio(String, u8, bool),
@@ -107,6 +108,9 @@ pub fn run(
     let mut retired = 0;
     for command in commands {
         let result = match &command.action {
+            Action::FindBytes(search) => search
+                .write_matches(&machine.bus, "", output.output)
+                .map(|()| None),
             Action::RunFor(steps) if machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
                 machine.run(chunk, &mut output).map(|(stop, count)| {
@@ -566,6 +570,7 @@ fn execute(
     }
     let resolve = |value| resolve(variables, value);
     let action = match words {
+        ["sysbus", "FindBytes", ..] => Some(Action::FindBytes(FindBytes::parse(text, resolve)?)),
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
             let expected = format!("expected {command} [USART] \"literal text\"");
@@ -950,6 +955,90 @@ fn execute(
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+pub(crate) struct FindBytes {
+    pattern: Vec<u8>,
+    start: u64,
+    end: u64,
+}
+
+impl FindBytes {
+    pub(crate) fn parse<'a>(
+        text: &'a str,
+        resolve: impl Fn(&'a str) -> Result<&'a str, String>,
+    ) -> Result<Self, String> {
+        let args = text["sysbus".len()..].trim_start()["FindBytes".len()..].trim();
+        let (pattern, bounds) = if let Some(args) = args.strip_prefix('[') {
+            let (list, bounds) = args
+                .split_once(']')
+                .ok_or("expected closing byte list bracket")?;
+            let pattern = if list.trim().is_empty() {
+                Vec::new()
+            } else {
+                list.split(',')
+                    .map(|value| {
+                        let value = crate::parse_address(resolve(value.trim())?)?;
+                        u8::try_from(value).map_err(|_| format!("byte value out of range: {value}"))
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+            (pattern, bounds)
+        } else {
+            let (hex, bounds) = quoted_argument(args)
+                .ok_or("expected sysbus FindBytes \"hex bytes\" or [byte, ...]")?;
+            let hex: String = hex
+                .chars()
+                .filter(|c| !matches!(c, ' ' | '\r' | '\n'))
+                .collect();
+            if !hex.is_ascii() || hex.len() % 2 != 0 {
+                return Err("FindBytes requires complete hexadecimal bytes".into());
+            }
+            let pattern = (0..hex.len())
+                .step_by(2)
+                .map(|index| {
+                    u8::from_str_radix(&hex[index..index + 2], 16)
+                        .map_err(|_| "FindBytes requires complete hexadecimal bytes")
+                })
+                .collect::<Result<_, _>>()?;
+            (pattern, bounds)
+        };
+        let mut bounds = bounds.split_whitespace();
+        let parse_bound = |value| crate::parse_address64(resolve(value)?);
+        let start = bounds.next().map(parse_bound).transpose()?.unwrap_or(0);
+        let end = bounds
+            .next()
+            .filter(|&value| value != "null")
+            .map(parse_bound)
+            .transpose()?
+            .unwrap_or(u64::MAX);
+        if bounds.next().is_some() {
+            return Err("expected sysbus FindBytes pattern [start [end]]".into());
+        }
+        Ok(Self {
+            pattern,
+            start,
+            end,
+        })
+    }
+
+    pub(crate) fn write_matches(
+        &self,
+        bus: &crate::bus::Bus,
+        prefix: &str,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        let addresses = bus.find_bytes(&self.pattern, self.start, self.end)?;
+        let render = || -> io::Result<()> {
+            write!(output, "{prefix}[")?;
+            for (index, address) in addresses.into_iter().enumerate() {
+                let separator = if index == 0 { "" } else { ", " };
+                write!(output, "{separator}{address:#010x}")?;
+            }
+            writeln!(output, "]")
+        };
+        render().map_err(|error| format!("sysbus search output: {error}"))
+    }
 }
 
 fn quoted_argument(value: &str) -> Option<(&str, &str)> {

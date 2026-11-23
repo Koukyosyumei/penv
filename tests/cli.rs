@@ -1400,3 +1400,65 @@ cpu PC 0x80000000
         [&[0xf7, 1, 0xf7, 0xc0, 0x40, 0xff], &sector[..], &[0x23, 0]].concat()
     );
 }
+
+#[test]
+fn renode_find_bytes_uses_shared_single_and_multi_machine_monitor() {
+    let directory = std::env::temp_dir().join(format!("penv-find-bytes-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("find.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ramA: Memory.MappedMemory @ sysbus 0
+    size: 0x100000
+ramB: Memory.MappedMemory @ sysbus 0x100000
+    size: 0x100000
+"#,
+    )
+    .unwrap();
+    fs::write(directory.join("first.bin"), [0, 1, 2, 3]).unwrap();
+    fs::write(directory.join("second.bin"), [4, 5, 6, 7]).unwrap();
+    fs::write(
+        directory.join("vectors.bin"),
+        [0, 8, 0, 0, 9, 0, 0, 0, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("find.resc");
+    fs::write(
+        &script,
+        r#"mach create "search"
+machine LoadPlatformDescription @find.repl
+sysbus LoadBinary @vectors.bin 0
+sysbus LoadBinary @first.bin 0xffffc
+sysbus LoadBinary @second.bin 0x100000
+sysbus FindBytes "00 01 02 03 04 05 06 07"
+sysbus FindBytes [3, 4] 0xfffff 0x100000
+sysbus FindBytes [3, 4] 0xfffff 0xfffff
+emulation RunFor "0"
+"#,
+    )
+    .unwrap();
+    fs::create_dir(directory.join("uart")).unwrap();
+    for simulation in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+        command
+            .args(["run", "--max-steps", "1", "--script"])
+            .arg(&script);
+        if simulation {
+            command.arg("--uart-log-dir").arg(directory.join("uart"));
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let expected = if simulation {
+            "search: sysbus matches = [0x000ffffc]\nsearch: sysbus matches = [0x000fffff]\nsearch: sysbus matches = []\n"
+        } else {
+            "[0x000ffffc]\n[0x000fffff]\n[]\n"
+        };
+        assert_eq!(stdout, expected);
+    }
+    fs::remove_dir_all(directory).unwrap();
+}

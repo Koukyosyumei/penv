@@ -48,6 +48,10 @@ pub enum Action {
         address: u32,
         value: u32,
     },
+    FindBytes {
+        node: usize,
+        search: crate::monitor::FindBytes,
+    },
     ReadWord {
         node: usize,
         address: u32,
@@ -139,6 +143,14 @@ pub fn run(
                         node.machine.bus.write(address, 4, value, &mut output)
                     }
                     .map_err(|e| format!("{}: {e}", node.name))?;
+                }
+                Action::FindBytes { node, search } => {
+                    let node = &simulation.nodes[node];
+                    search.write_matches(
+                        &node.machine.bus,
+                        &format!("{}: sysbus matches = ", node.name),
+                        &mut output,
+                    )?;
                 }
                 Action::ReadWord { node, address } => {
                     let node = &mut simulation.nodes[node];
