@@ -17,6 +17,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Rv64 {
     pub(crate) hart_id: usize,
+    pub(crate) trace_custom_csr: bool,
     pub pc: u64,
     registers: [u64; 32],
     floating: [u64; 32],
@@ -141,6 +142,7 @@ impl Rv64 {
         privilege.vector = isa.vector.then(Box::<vector::VectorState>::default);
         Self {
             hart_id: 0,
+            trace_custom_csr: false,
             pc: u64::from(RAM_BASE),
             registers: [0; 32],
             floating: [0; 32],
@@ -328,10 +330,21 @@ impl Rv64 {
         };
         let misa = self.misa();
         let alignment_mask = if self.isa.compressed { !1 } else { !3 };
-        let old = if index == 0xf14 && self.privilege.mode == Mode::Machine {
+        let operation = mode & 3;
+        if operation == 0 {
+            return None;
+        }
+        let trace = self.trace_custom_csr && index == 0x7c0;
+        let old = if operation == 1 && instruction.rd() == 0 {
+            0
+        } else if index == 0xf14 && self.privilege.mode == Mode::Machine {
             hart as u64
         } else {
-            self.privilege.read(index, misa, alignment_mask)?
+            let value = self.privilege.read(index, misa, alignment_mask)?;
+            if trace {
+                eprintln!("penv: CSR read! {index:#05x}");
+            }
+            value
         };
         let value = match mode & 3 {
             1 => Some(operand),
@@ -343,6 +356,9 @@ impl Rv64 {
         if let Some(value) = value {
             if !self.privilege.write(index, value, misa) {
                 return None;
+            }
+            if trace {
+                eprintln!("penv: CSR written! {index:#05x}");
             }
             if matches!(index, 0x3a0..=0x3ef | 0x747) {
                 self.translations.clear();
@@ -1037,7 +1053,7 @@ mod tests {
         let seip = 1 << 9;
         let stip = 1 << 5;
         let instruction =
-            |operation: u32| Instruction((0x344 << 20) | (1 << 15) | (operation << 12));
+            |operation: u32| Instruction((0x344 << 20) | (1 << 15) | (operation << 12) | (2 << 7));
 
         cpu.privilege.tick(seip, 0);
         assert_eq!(cpu.csr(instruction(2), stip, 0), Some(seip));

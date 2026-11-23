@@ -326,6 +326,11 @@ def disposition(path, name, context):
         "Should Keep SEPC First Bit As Zero",
     }:
         return "pass", "Fixed RV64 ISA, two steps and monitor EPC value 0xfe verified by ELF"
+    if path.name == "riscv-unit-tests.robot" and name in {
+        "Should Not Read From Csr When CSRRW RD Is Zero",
+        "Should Not Read From Csr When CSRRWI RD Is Zero",
+    }:
+        return "pass", "Fixed ISA and single-step ELF produced only the expected custom CSR write notification"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(
