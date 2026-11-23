@@ -636,6 +636,10 @@ impl Hart {
         self.translations.clear();
     }
 
+    pub fn configure_interrupt_mode(&mut self, mode: crate::csr::InterruptMode) {
+        self.csr.configure_interrupt_mode(mode);
+    }
+
     pub fn set_mtvec(&mut self, value: u32) {
         self.csr.set_vector(value);
     }

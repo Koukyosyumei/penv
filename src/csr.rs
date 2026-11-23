@@ -28,6 +28,23 @@ const FS: u32 = 3 << 13;
 const SD: u32 = 1 << 31;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
 
+#[derive(Clone, Copy)]
+pub enum InterruptMode {
+    Auto,
+    Direct,
+    Vectored,
+}
+
+impl InterruptMode {
+    fn correct(self, value: u32) -> u32 {
+        match self {
+            Self::Auto => value & !2,
+            Self::Direct => value & !3,
+            Self::Vectored => (value & !3) | 1,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Privilege {
     User = 0,
@@ -121,6 +138,7 @@ pub struct Csr {
     local_irq_levels: u64,
     vex_dcache_info: u32,
     vector: Option<u32>,
+    interrupt_mode: Option<InterruptMode>,
     scratch: u32,
     exception_pc: u32,
     cause: u32,
@@ -157,6 +175,7 @@ impl Default for Csr {
             local_irq_levels: 0,
             vex_dcache_info: 0,
             vector: None,
+            interrupt_mode: None,
             scratch: 0,
             exception_pc: 0,
             cause: 0,
@@ -477,11 +496,14 @@ impl Csr {
             0x303 if let Some(supervisor) = self.supervisor.as_mut() => {
                 supervisor.interrupt_delegation = value & SUPERVISOR_INTERRUPTS;
             }
-            0x105 | 0x140..=0x143 | 0x180 | 0x302 if self.supervisor.is_some() => {
+            0x105 if self.supervisor.is_some() => {
+                let vector = self.correct_vector("STVEC", value, true);
+                self.supervisor.as_mut().unwrap().vector = vector;
+            }
+            0x140..=0x143 | 0x180 | 0x302 if self.supervisor.is_some() => {
                 let alignment = self.epc_mask();
                 let supervisor = self.supervisor.as_mut().unwrap();
                 match address {
-                    0x105 => supervisor.vector = vector_value(value),
                     0x140 => supervisor.scratch = value,
                     0x141 => supervisor.epc = value & alignment,
                     0x142 => supervisor.cause = value,
@@ -513,7 +535,7 @@ impl Csr {
                 };
                 self.interrupt_enable = value & (MACHINE_INTERRUPTS | supervisor_mask);
             }
-            0x305 => self.set_vector(value),
+            0x305 => self.vector = Some(self.correct_vector("MTVEC", value, true)),
             0x306 => self.counters.machine_enable = value & COUNTER_ENABLE,
             0x106 if self.supervisor.is_some() => {
                 self.counters.supervisor_enable = value & COUNTER_ENABLE;
@@ -589,8 +611,39 @@ impl Csr {
         self.write(0x300, value);
     }
 
+    pub fn configure_interrupt_mode(&mut self, mode: InterruptMode) {
+        self.interrupt_mode = Some(mode);
+        let machine = mode.correct(0x1010);
+        let supervisor = mode.correct(0);
+        if matches!(mode, InterruptMode::Vectored) {
+            eprintln!("Vectored interrupt mode set - updating MTVEC from 0x1010 to {machine:#x}");
+            eprintln!("Vectored interrupt mode set - updating STVEC from 0x0 to {supervisor:#x}");
+        }
+        self.vector = Some(machine);
+        if let Some(state) = self.supervisor.as_mut() {
+            state.vector = supervisor;
+        }
+    }
+
+    fn correct_vector(&self, register: &str, value: u32, software: bool) -> u32 {
+        let Some(mode) = self.interrupt_mode else {
+            return value & !2;
+        };
+        let corrected = mode.correct(value);
+        if corrected != value {
+            if software {
+                eprintln!(
+                    "{register} value written to CSR corrected from {value:#x} to {corrected:#x}"
+                );
+            } else {
+                eprintln!("modifying {register} from {value:#x} to {corrected:#x}");
+            }
+        }
+        corrected
+    }
+
     pub fn set_vector(&mut self, value: u32) {
-        self.vector = Some(vector_value(value));
+        self.vector = Some(self.correct_vector("MTVEC", value, false));
     }
 
     pub fn trap(&mut self, pc: u32, cause: u32, value: u32) -> Option<u32> {
@@ -722,10 +775,6 @@ impl Csr {
             (self.status & !(SPP | SPIE | SIE | MPRV)) | ((self.status & SPIE) >> 4) | SPIE;
         Some(epc)
     }
-}
-
-fn vector_value(value: u32) -> u32 {
-    (value & !3) | (value & 1)
 }
 
 fn vector_target(vector: u32, cause: u32) -> u32 {

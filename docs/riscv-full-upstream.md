@@ -364,3 +364,19 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 ベクトルレジスター、演算・ロード／ストア、上流のベクトル演算ケースの生成・検証が残ります。二つの診断結果を台帳へ記録し、上流最大構成の合格には算入していません。
+
+## RV32 割り込みモードの CSR 書き込み
+
+固定 `tests/unit-tests/riscv-interrupt-mode.robot` のソフトウェア書き込み 6 件を移植しました。上流 REPL の `CPU.RiscV32`、`rv32imac`、Priv1_10、`timeProvider: empty` と、Auto・Direct・Vectored の設定を使用します。明示モードに従って MTVEC/STVEC の下位ビットを補正し、CSR 書き込み値を変更したときに警告を出します。モード指定を省略した既存構成は従来の動作です。
+
+検証器は固定 Robot の命令語、初期値、5 回の書き込み後の読み戻し値、各回の警告条件を取り出します。各ケースを一つの ELF として実行し、全読み戻しが一致した場合の `tohost=0` と、余分な補正警告がないことを確認します。6 件が通過しました。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$work/interrupt-mode"
+```
+
+モニター書き込み 6 件は、実行中の設定・照会とログの順序を検査する等価な実行経路が残っています。今回の ELF 検証はソフトウェア書き込み 6 件に対応します。公開 M/S 特権 ISA 22 件と、virt の CLINT・PLIC・NS16550 実 ELF も通過しました。上流最大 ISA の V と、共有ケースの適用・展開判定は引き続き残件です。
+
+台帳で適用を確認済みの下限は 1,079 件で、上流等価合格 7 件、部分移植 31 件、未達 1,041 件です。

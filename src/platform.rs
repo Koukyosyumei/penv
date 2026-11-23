@@ -7,6 +7,7 @@ use std::{
 use crate::{
     bitmanip::BitManip,
     bus::Bus,
+    csr::InterruptMode,
     litex::{Gpio, GpioMode, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     litex_i2c::{I2c, Sensor},
@@ -897,6 +898,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "builtInIrqController",
                 "allowUnalignedAccesses",
                 "vectorBootstrap",
+                "interruptMode",
             ],
         )? {
             match (key, value) {
@@ -969,6 +971,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     if entry.model == "CPU.VexRiscv" => {}
                 ("allowUnalignedAccesses", "true" | "false" | "True" | "False")
                     if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") => {}
+                (
+                    "interruptMode",
+                    "InterruptMode.Auto" | "InterruptMode.Direct" | "InterruptMode.Vectored",
+                ) if entry.model == "CPU.RiscV32" => {}
+                ("timeProvider", "empty") if entry.model == "CPU.RiscV32" => {}
                 ("vectorBootstrap", "true") if entry.model == "CPU.RiscV32" => {}
                 ("pmpEntryCount", "0") => pmp = 0,
                 ("pmpEntryCount", "16") => pmp = 16,
@@ -1064,6 +1071,20 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             })
         }) {
             hart.enable_vector_bootstrap();
+        }
+        if let Some(mode) = split_rv32_init(entry).0.iter().find_map(|(_, text)| {
+            let (key, value) = text.split_once(':')?;
+            if key.trim() != "interruptMode" {
+                return None;
+            }
+            match value.trim() {
+                "InterruptMode.Auto" => Some(InterruptMode::Auto),
+                "InterruptMode.Direct" => Some(InterruptMode::Direct),
+                "InterruptMode.Vectored" => Some(InterruptMode::Vectored),
+                _ => None,
+            }
+        }) {
+            hart.configure_interrupt_mode(mode);
         }
         if let Some(commands) = split_rv32_init(entry).1 {
             let [(_, command)] = commands else {
