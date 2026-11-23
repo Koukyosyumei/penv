@@ -417,3 +417,17 @@ python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$work
 ```
 
 RV32E・V・Andes 拡張を必要とする構築ケースは、それぞれ未実装の機能を要求するため台帳の対象に残しています。混在 RV32/RV64 のケースは既存の範囲判定を維持します。上流等価合格は累計 47 件です。
+
+### RV32 Zicond の固定 Robot ケース
+
+既存 Zicond 実装の RV32 ケース 7 件を、固定上流から実行可能な ELF に移植しました。RV32 REPL の `init:` に `MTVEC VALUE` を追加し、既存の `MSTATUS VALUE` と同じブロックで記述順に適用します。これにより、上流と同じ `0x1010` のトラップ先をゲストの実行前に設定できます。
+
+`validate-rv32-zicond.py` は上流のオペランド、期待値、例外番号、PC を使います。上流の停止中の 2 番目の CPU はアセンブル用なので、移植では同じ命令語を ELF に格納します。命令命中時の結果レジスターと、拡張無効時のトラップ位置・`mcause`・`mepc` を ELF 内で確認します。7 件が通過し、公開 Zicond ELF 4 件および既存の `MSTATUS` 初期化を使う Sm ACT 診断も通過しました。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-zicond.py target/release/penv ../renode "$work/zicond-robot"
+```
+
+上流等価合格は累計 54 件です。RV64 専用の同スイートのケースは既存の対象外判定を維持しています。上流最大 ISA と最終分母の確定は残っています。

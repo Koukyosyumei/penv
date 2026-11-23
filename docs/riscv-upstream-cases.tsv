@@ -2996,24 +2996,24 @@ Renode	tests/unit-tests/riscv-zcb-zcmp-zcmt-extensions.robot	794	Zcmp Extension 
 Renode	tests/unit-tests/riscv-zcb-zcmp-zcmt-extensions.robot	808	Zcmt JT Instruction Test		outside	outside	selected inline fixture instantiates CPU.CV32E40P; separate core from CPU.RiscV32/VexRiscv
 Renode	tests/unit-tests/riscv-zcb-zcmp-zcmt-extensions.robot	858	Zcmt JALT Instruction Test		outside	outside	selected inline fixture instantiates CPU.CV32E40P; separate core from CPU.RiscV32/VexRiscv
 Renode	tests/unit-tests/riscv-zcb-zcmp-zcmt-extensions.robot	928	Zcmt Extension Gating Test		outside	outside	selected inline fixture instantiates CPU.CV32E40P; separate core from CPU.RiscV32/VexRiscv
-Renode	tests/unit-tests/riscv-zicond-extension.robot	68	Czero.eqz Should Pass Through On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-zicond-extension.robot	68	Czero.eqz Should Pass Through On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
 Renode	tests/unit-tests/riscv-zicond-extension.robot	72	Czero.eqz Should Pass Through On RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-zicond-extension.robot	76	Czero.eqz Should Handle Nonzero Selector With Low 32 Bits Zeroed		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-zicond-extension.robot	80	Czero.eqz Should Zero On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-zicond-extension.robot	80	Czero.eqz Should Zero On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
 Renode	tests/unit-tests/riscv-zicond-extension.robot	84	Czero.eqz Should Zero On RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-zicond-extension.robot	88	Should Trap With Czero.Eqz When Zicond Extension Is Disabled On RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-zicond-extension.robot	92	Should Trap With Czero.Eqz When Zicond Extension Is Disabled On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-zicond-extension.robot	98	Czero.nez Should Pass Through On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-zicond-extension.robot	92	Should Trap With Czero.Eqz When Zicond Extension Is Disabled On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
+Renode	tests/unit-tests/riscv-zicond-extension.robot	98	Czero.nez Should Pass Through On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
 Renode	tests/unit-tests/riscv-zicond-extension.robot	102	Czero.nez Should Pass Through On RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-zicond-extension.robot	106	Czero.nez Should Zero On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-zicond-extension.robot	106	Czero.nez Should Zero On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
 Renode	tests/unit-tests/riscv-zicond-extension.robot	110	Czero.nez Should Zero On RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-zicond-extension.robot	114	Czero.nez Should Handle Nonzero Selector With Low 32 Bits Zeroed		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-zicond-extension.robot	118	Should Trap With Czero.Nez When Zicond Extension Is Disabled On RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-zicond-extension.robot	122	Should Trap With Czero.Nez When Zicond Extension Is Disabled On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-zicond-extension.robot	122	Should Trap With Czero.Nez When Zicond Extension Is Disabled On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
 Renode	tests/unit-tests/riscv-zicond-extension.robot	128	Should Handle Destination Aliased With Rs1 For Czero.Eqz		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-zicond-extension.robot	140	Should Handle Destination Aliased With Rs1 For Czero.Nez		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-zicond-extension.robot	155	Should Not Truncate Full 64 Bit Value On RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-zicond-extension.robot	162	Should Preserve Sign Extended Value On RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-zicond-extension.robot	162	Should Preserve Sign Extended Value On RV32		target	ported	pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF
 Renode	tests/unit-tests/robot-integration.robot	2	Should Fail On Loading Nonexisting Script		review-shared	pending	-
 Renode	tests/unit-tests/robot-integration.robot	6	Should Fail On Builtin With Invalid Parameters		review-shared	pending	-
 Renode	tests/unit-tests/robot-integration.robot	10	Should Fail On Peripheral Method With Invalid Parameters		review-shared	pending	-

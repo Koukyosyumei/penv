@@ -1087,13 +1087,21 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             hart.configure_interrupt_mode(mode);
         }
         if let Some(commands) = split_rv32_init(entry).1 {
-            let [(_, command)] = commands else {
-                return Err(entry.error("expected one RV32 init command: MSTATUS VALUE"));
-            };
-            let value = command
-                .strip_prefix("MSTATUS ")
-                .ok_or_else(|| entry.error("expected RV32 init command MSTATUS VALUE"))?;
-            hart.set_mstatus(number(value.trim()).map_err(|error| entry.error(&error))?);
+            if commands.is_empty() {
+                return Err(entry.error("expected an RV32 init command"));
+            }
+            for (line, command) in commands {
+                let error = |detail: &str| format!("{}:{line}: {detail}", entry.source.display());
+                let (register, value) = command
+                    .split_once(char::is_whitespace)
+                    .ok_or_else(|| error("expected RV32 init command REGISTER VALUE"))?;
+                let value = number(value.trim()).map_err(|detail| error(&detail))?;
+                match register {
+                    "MSTATUS" => hart.set_mstatus(value),
+                    "MTVEC" => hart.set_mtvec(value),
+                    _ => return Err(error("expected RV32 init register MSTATUS or MTVEC")),
+                }
+            }
         }
     }
     let cpu = configs[0].1;
