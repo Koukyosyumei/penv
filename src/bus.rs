@@ -23,6 +23,7 @@ use crate::{
     stm32h7_bdma::Bdma,
     stm32h7_crypto::Crypto,
     stm32h7_dma2d::Dma2d,
+    stm32h7_dsi::Dsi,
     stm32h7_exti::H7Exti,
     stm32h7_fdcan::Fdcan,
     stm32h7_flash::FlashController,
@@ -122,6 +123,7 @@ pub struct Bus {
     h7_hsem: Option<Hsem>,
     h7_sdmmc: Vec<Sdmmc>,
     h7_crypto: Vec<Crypto>,
+    h7_dsi: Vec<Dsi>,
     designware_usb: Vec<DesignWareUsb>,
     tags: Vec<(std::ops::RangeInclusive<u32>, u32)>,
     h7_ltdc: Option<Ltdc>,
@@ -420,6 +422,12 @@ impl Bus {
             .map(|(_, value)| value & (u32::MAX >> (32 - width * 8)))
     }
 
+    pub fn map_h7_dsi(&mut self, device: Dsi) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Dsi::SIZE)?;
+        self.h7_dsi.push(device);
+        Ok(())
+    }
+
     pub fn map_h7_crypto(&mut self, device: Crypto) -> Result<(), String> {
         self.check_peripheral_range(device.base, Crypto::SIZE)?;
         self.h7_crypto.push(device);
@@ -523,6 +531,9 @@ impl Bus {
             device.reset();
         }
         for device in &mut self.designware_usb {
+            device.reset();
+        }
+        for device in &mut self.h7_dsi {
             device.reset();
         }
         for device in &mut self.h7_crypto {
@@ -741,6 +752,7 @@ impl Bus {
                         .iter()
                         .map(|device| (device.base, Crypto::SIZE)),
                 )
+                .chain(self.h7_dsi.iter().map(|device| (device.base, Dsi::SIZE)))
                 .chain(self.h7_hsem.iter().map(|device| (device.base, Hsem::SIZE)))
                 .chain(
                     self.h7_dma2d
@@ -1570,6 +1582,12 @@ impl Bus {
         {
             return Ok(device.read(address));
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self.h7_dsi.iter().find(|device| device.contains(address))
+        {
+            return Ok(device.read(address));
+        }
         match self.read_ram::<N>(address) {
             Err(error @ BusError::Unmapped(..)) => self.tag_value(address, N).ok_or(error),
             result => result,
@@ -2051,6 +2069,15 @@ impl Bus {
         if width == 4
             && let Some(device) = self
                 .h7_crypto
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
+            return Ok(());
+        }
+        if width == 4
+            && let Some(device) = self
+                .h7_dsi
                 .iter_mut()
                 .find(|device| device.contains(address))
         {

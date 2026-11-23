@@ -8,6 +8,7 @@ use crate::{
     stm32_uart::Stm32Irq,
     stm32h7_crypto::Crypto,
     stm32h7_dma2d::Dma2d,
+    stm32h7_dsi::Dsi,
     stm32h7_fdcan::Fdcan,
     stm32h7_hsem::Hsem,
     stm32h7_i2c::{I2C, I2c},
@@ -45,6 +46,7 @@ pub fn is_device(model: &str) -> bool {
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
                 | Crypto::MODEL
+                | Dsi::MODEL
         )
 }
 
@@ -102,6 +104,18 @@ pub fn configure(
         .map_err(|e| entry.error(&e))?;
     }
 
+    for entry in entries.iter().filter(|entry| entry.model == Dsi::MODEL) {
+        let base = entry
+            .sysbus()?
+            .ok_or_else(|| entry.error("missing DSI address"))?;
+        if !entry.body.is_empty() {
+            return Err(entry.error("unsupported DSI properties or connections"));
+        }
+        machine
+            .bus
+            .map_h7_dsi(Dsi::new(base))
+            .map_err(|e| entry.error(&e))?;
+    }
     for entry in entries.iter().filter(|entry| entry.model == Crypto::MODEL) {
         let base = entry
             .sysbus()?

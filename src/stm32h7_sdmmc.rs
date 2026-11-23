@@ -1,3 +1,5 @@
+const COMMAND_SENT: u32 = 1 << 7;
+const WAIT_RESPONSE: u32 = 3 << 8;
 const COMMAND_TIMEOUT: u32 = 1 << 2;
 const START_COMMAND: u32 = 1 << 12;
 
@@ -59,8 +61,12 @@ impl Sdmmc {
             0x0c => {
                 self.registers[register] = value & (0x1ffff & !START_COMMAND);
                 if value & START_COMMAND != 0 {
-                    // The reference board has no card attached. No command can get a response.
-                    self.status |= COMMAND_TIMEOUT;
+                    self.status |= if value & WAIT_RESPONSE == 0 {
+                        COMMAND_SENT
+                    } else {
+                        // An empty slot cannot return a response.
+                        COMMAND_TIMEOUT
+                    };
                 }
             }
             0x38 => self.status &= !value,
@@ -80,6 +86,9 @@ mod tests {
     fn empty_slot_times_out_commands_and_clears_the_masked_irq() {
         let mut controller = Sdmmc::new(0, Some(49));
         controller.write(0, 3);
+        controller.write(0x0c, START_COMMAND);
+        assert_eq!(controller.read(0x34), COMMAND_SENT);
+        controller.write(0x38, COMMAND_SENT);
         controller.write(0x0c, START_COMMAND | (1 << 8) | 8);
         assert_eq!(controller.read(0x34), COMMAND_TIMEOUT);
         assert_eq!(controller.read(0x0c) & START_COMMAND, 0);

@@ -122,10 +122,12 @@ impl Ltdc {
             format => return Err(format!("unsupported LTDC pixel format {format}")),
         };
         let pitch = (layer[11] >> 16) as usize;
-        let row_bytes = ((layer[11] & 0x1fff) as usize).saturating_sub(3);
+        let row_bytes = ((layer[11] & 0x1fff) as usize).saturating_sub(7);
         let height = layer[12] as usize;
         if row_bytes == 0 || row_bytes % bytes_per_pixel != 0 || row_bytes > pitch || height == 0 {
-            return Err("invalid LTDC framebuffer length, pitch or line count".into());
+            return Err(format!(
+                "invalid LTDC framebuffer geometry: {row_bytes} bytes per row, pitch {pitch}, {height} rows, {bytes_per_pixel} bytes per pixel"
+            ));
         }
         let rows = (0..height)
             .map(|line| {
@@ -196,7 +198,7 @@ mod tests {
             .copy_from_slice(&[0x00, 0xf8, 0xaa, 0xaa, 0x1f, 0x00, 0xbb, 0xbb]);
         for (offset, value) in [
             (0xac, RAM),
-            (0xb0, (4 << 16) | 5),
+            (0xb0, (4 << 16) | 9),
             (0xb4, 2),
             (0x94, 2),
             (0x84, 1),

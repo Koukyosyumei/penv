@@ -271,6 +271,7 @@ impl NetworkControl {
                 | 0x50
                 | 0x54
                 | 0x58
+                | 0xa0
                 | 0xd4
                 | 0xdc
                 | 0xe4
@@ -288,6 +289,13 @@ impl NetworkControl {
             .is_some_and(|base| address.wrapping_sub(base) == 0x2c)
         {
             return Some(self.syscfg_power);
+        }
+        if self
+            .syscfg_base
+            .is_some_and(|base| address.wrapping_sub(base) == 0x304)
+        {
+            // UR1 reflects the boot option bytes. The single-core platform leaves M4 boot disabled.
+            return Some(0);
         }
         if self.syscfg_mode_address(address) {
             return Some(self.syscfg_mode);
@@ -360,6 +368,7 @@ impl NetworkControl {
                     (value & !(((ENABLES & !1) << 1) | 4)) | ready
                 }
                 0x10 => (value & !(7 << 3)) | ((value & 7) << 3),
+                0xa0 => value & 0xf, // GCR boot requests are latched without a second CPU.
                 _ => value,
             };
             return Some(Change::None);

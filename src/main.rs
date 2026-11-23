@@ -33,6 +33,7 @@ mod stm32h7_bdma;
 mod stm32h7_board_platform;
 mod stm32h7_crypto;
 mod stm32h7_dma2d;
+mod stm32h7_dsi;
 mod stm32h7_ethernet;
 mod stm32h7_exti;
 mod stm32h7_fdcan;

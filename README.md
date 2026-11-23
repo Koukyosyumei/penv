@@ -228,13 +228,13 @@ target/release/penv run --script "$work/fill.resc" \
 
 ### LTDC のフレームバッファ読み取り
 
-`Video.STM32LTDC` は `0x50001000` の 32 ビット MMIO、APB3 のクロック・リセット、即時シャドーレジスター再読み込みと NVIC IRQ 88 の配線に対応します。`--framebuffer-out PATH` は単一マシンの実行終了時に、有効化して再読み込み済みのレイヤー 1 を P6 RGB PPM に保存します。ゲスト RAM から、CFBLL − 3 バイトの各行を CFBP バイト間隔で CFBLNBR 行読み、そのままレイヤーの画像寸法に使います。ARGB8888、RGB888、RGB565 に対応します。 [Renode の LTDC モデル](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Peripherals/Peripherals/Video/STM32LTDC.cs)
+`Video.STM32LTDC` は `0x50001000` の 32 ビット MMIO、APB3 のクロック・リセット、即時シャドーレジスター再読み込みと NVIC IRQ 88 の配線に対応します。`--framebuffer-out PATH` は単一マシンの実行終了時に、有効化して再読み込み済みのレイヤー 1 を P6 RGB PPM に保存します。ゲスト RAM から、CFBLL − 7 バイトの各行を CFBP バイト間隔で CFBLNBR 行読み、そのままレイヤーの画像寸法に使います。ARGB8888、RGB888、RGB565 に対応します。 [Renode の LTDC モデル](https://github.com/renode/renode-infrastructure/blob/master/src/Emulator/Peripherals/Peripherals/Video/STM32LTDC.cs)
 
 前節の DMA2D 手順で作った `events` と `step` に、以下の LTDC 設定を追加します。同じ公開 Zephyr ELF の Shell が DMA2D で RAM にピクセルを書き、LTDC が同じアドレスから読み出します。
 
 ```bash
 for command in '0x580244e4 32 0x8' '0x500010ac 32 0x60000000' \
-    '0x500010b0 32 0x00040007' '0x500010b4 32 1' '0x50001084 32 1' \
+    '0x500010b0 32 0x0004000b' '0x500010b4 32 1' '0x50001084 32 1' \
     '0x50001024 32 1' '0x50001018 32 1'; do
     printf 'devmem %s\r' "$command" > "$work/ltdc-$step.txt"
     events+=(--uart-event "$step:$work/ltdc-$step.txt")
@@ -358,3 +358,19 @@ STM32H753 の `Miscellaneous.Crypto.STM32H7_CRYPTO` は AES-ECB の 128、192、
 上流 `STM32SDMMC.robot` の ELF と ext2 イメージは取得し、SHA-1 を照合しました。USART1 と SDRAM を追加した診断構成で、ファイルシステム用 ELF は `stm32h7_m4_wakeup` の `pc=0x080011dc` で `0x58000704` の未マップアクセスに到達しました。カードを接続する RESC コマンドと、マウント・ファイル一覧の移植も残っています。
 
 `cargo test` はユニット 56 件と CLI 5 件が通過しました。個別の STM32H7 DMA と LiteX CSR32 の双方向フレーム交換も通過し、上流 LiteX SMP の実イメージは 4 CPU の起動と `Run /init as init process` に到達しました。未変更の STM32H7 RESC は CRYP と RGB LED の宣言を通過し、`platforms/boards/stm32h7_renode_reference_board.repl:9` の `pwmled0: Miscellaneous.PWMLED` で停止します。公開 Zephyr Shell から GPIOD 13 をセットし、`--stats` で `redRgbLed=on`、`greenRgbLed=off`、`blueRgbLed=off` を確認しました。PWM のデューティ比、追加 I²C センサー、タイマー代替機能配線、未変更構成でのファームウェア起動と実ゲスト間 Ethernet は残件です。
+
+### STM32H747I の display と SD ファイルシステム ELF
+
+上流 Robot が指定する 2 本の ELF を使います。スモークテストが公開 URL から取得し、SHA-1 を照合します。第 2 スクリプトの引数には、第 1 スクリプトが出力するログディレクトリを指定します。診断 REPL に USART1、外部 SDRAM、DSI ホストを追加します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-display-sd-smoke.sh /tmp/第1スクリプトのログディレクトリ
+```
+
+- **Display**。DSI ラッパーはレギュレーターの準備完了、PLL のロック、PHY のレーン停止状態を制御レジスターに応じて返します。実 ELF で DSI ホスト初期化を通過し、UART に `Display starts` と `Display updated` が出ました。LTDC の行長を H7 HAL に合わせて `CFBLL − 7` として解釈し、複数色を含む 800×480 RGB PPM を検証しました。NT35510 のパネル ID 読み取り、ボタン入力、FIFO アンダーランは残件です。 [STM32H747 CMSIS](https://github.com/STMicroelectronics/cmsis_device_h7/blob/master/Include/stm32h747xx.h) [STM32H7 LTDC HAL](https://github.com/STMicroelectronics/stm32h7xx-hal-driver/blob/master/Src/stm32h7xx_hal_ltdc.c)
+- **SD**。単一 Cortex-M7 構成で `SYSCFG_UR1.BCM4` は 0 を返し、`RCC_GCR.BOOT_C2` への要求を保持します。SDMMC は応答不要の `CMD0` に送信完了を返し、応答を要求するコマンドにはカード未接続時にタイムアウトを返します。実 ELF は Zephyr を起動し、UART に `Error mounting disk.` を出しました。Cortex-M4 の実行、SD イメージ接続、カード応答と転送、ext2 マウントは残件です。
+- **回帰**。ユニット 57 件と CLI 5 件、公開 STM32H7 Shell、VEML7700、DMA2D から LTDC への 1×1 PPM とシャドーレジスターの検証が通過しました。
