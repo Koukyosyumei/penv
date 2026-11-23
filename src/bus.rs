@@ -19,6 +19,7 @@ use crate::{
     stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
+    stm32f4_spi::F4Spi,
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -106,6 +107,7 @@ pub struct Bus {
     h7_gpio: Vec<Stm32Gpio>,
     h7_rtc: Vec<Stm32Rtc>,
     h7_spi: Vec<Spi>,
+    f4_spi: Vec<F4Spi>,
     h7_i2c: Vec<I2c>,
     h7_rng: Vec<Rng>,
     h7_qspi: Vec<Qspi>,
@@ -450,6 +452,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_f4_spi(&mut self, spi: F4Spi) -> Result<(), String> {
+        self.check_peripheral_range(spi.base, F4Spi::SIZE)?;
+        self.f4_spi.push(spi);
+        Ok(())
+    }
+
     pub fn map_h7_spi(&mut self, spi: Spi) -> Result<(), String> {
         self.check_peripheral_range(spi.base, Spi::SIZE)?;
         self.h7_spi.push(spi);
@@ -582,6 +590,7 @@ impl Bus {
                 .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
                 .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE)))
+                .chain(self.f4_spi.iter().map(|spi| (spi.base, F4Spi::SIZE)))
                 .chain(self.h7_spi.iter().map(|spi| (spi.base, Spi::SIZE)))
                 .chain(self.h7_i2c.iter().map(|i2c| (i2c.base, I2c::SIZE)))
                 .chain(self.h7_rng.iter().map(|rng| (rng.base, Rng::SIZE)))
@@ -759,6 +768,7 @@ impl Bus {
                         .filter(|device| rtc_clocked(control, device))
                         .flat_map(Stm32Rtc::interrupts),
                 )
+                .chain(self.f4_spi.iter().filter_map(F4Spi::interrupt))
                 .chain(
                     self.h7_spi
                         .iter()
@@ -1260,6 +1270,11 @@ impl Bus {
                 0
             });
         }
+        if address as usize & (N - 1) == 0
+            && let Some(spi) = self.f4_spi.iter_mut().find(|spi| spi.contains(address))
+        {
+            return Ok(spi.read(address, N));
+        }
         if matches!(N, 1 | 2 | 4)
             && address as usize & (N - 1) == 0
             && let Some(spi) = self.h7_spi.iter_mut().find(|spi| spi.contains(address))
@@ -1656,6 +1671,24 @@ impl Bus {
         {
             if rtc_clocked(self.h7_network_control.as_ref(), rtc) {
                 rtc.write(address, value);
+            }
+            return Ok(());
+        }
+        if let Some(spi) = self.f4_spi.iter_mut().find(|spi| spi.contains(address)) {
+            spi.write(address, width, value);
+            if let Some(target) = spi.dma
+                && let Some(value) = spi.dma_value()
+                && request_h7_stream(
+                    target,
+                    spi.base + F4Spi::DATA,
+                    value,
+                    self.h7_network_control.as_ref(),
+                    &mut self.h7_adc_dma,
+                    &mut self.h7_bdma,
+                    &mut dma,
+                )
+            {
+                spi.consume_rx();
             }
             return Ok(());
         }

@@ -15,7 +15,11 @@
 .word 0
 .word xPortPendSVHandler
 .word xPortSysTickHandler
-.rept 19
+.rept 14
+.word firmware_fault
+.endr
+.word dma1_stream3_irq
+.rept 4
 .word firmware_fault
 .endr
 .word can1_tx_irq
@@ -26,7 +30,11 @@
 .word firmware_fault
 .endr
 .word tim2_irq
-.rept 23
+.rept 6
+.word firmware_fault
+.endr
+.word spi1_irq
+.rept 16
 .word firmware_fault
 .endr
 .word uart4_irq

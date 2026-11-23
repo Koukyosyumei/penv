@@ -35,6 +35,7 @@ struct event {
 static QueueHandle_t events;
 
 void firmware_can_test(void);
+void firmware_spi_test(void);
 
 static void enable_irq(unsigned irq)
 {
@@ -44,9 +45,11 @@ static void enable_irq(unsigned irq)
 
 static void uart_init(void)
 {
-    REG(0x40023830) = 1U << 2;   /* RCC AHB1ENR: GPIOC */
-    REG(0x40023840) = (1U << 28) | (3U << 25) | (1U << 19) | 1U;  /* PWR, CAN1/2, UART4, TIM2 */
-    (void)REG(0x40023840);
+    REG(0x40023830) = (1U << 21) | (1U << 2);  /* RCC AHB1ENR: DMA1, GPIOC */
+    /* RCC APB1ENR: PWR, CAN1/2, UART4, SPI2/3, TIM2 */
+    REG(0x40023840) = (1U << 28) | (3U << 25) | (1U << 19) | (3U << 14) | 1U;
+    REG(0x40023844) = 1U << 12;  /* RCC APB2ENR: SPI1 */
+    (void)REG(0x40023844);
     REG(0x40020824) = 0x8800;    /* GPIOC AFRH: PC10/PC11 AF8 */
     REG(0x40020800) = 0xa00000;  /* GPIOC MODER: PC10/PC11 alternate function */
     UART4_BRR = 139;             /* HSI 16 MHz, 115200 baud */
@@ -212,6 +215,8 @@ void firmware_main(void)
     uart_text("PWR ready OK\n");
     firmware_can_test();
     uart_text("CAN loopback OK\n");
+    firmware_spi_test();
+    uart_text("SPI IRQ and DMA OK\n");
     configASSERT(xTaskCreateStatic(task, "A", configMINIMAL_STACK_SIZE, &workers[0],
                                    2, stacks[0], &tasks[0]) != NULL);
     configASSERT(xTaskCreateStatic(task, "B", configMINIMAL_STACK_SIZE, &workers[1],

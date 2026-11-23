@@ -38,11 +38,31 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
 
 pwr: Miscellaneous.STM32_PWR @ sysbus 0x40007000
 
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+    series: STM32Series.F4
+    IRQ->nvic@35
+
+spi2: SPI.STM32SPI @ sysbus 0x40003800
+    series: STM32Series.F4
+    IRQ->nvic@36
+    DMAReceive->dma1@3
+
+spi3: SPI.STM32SPI @ sysbus 0x40003C00
+    series: STM32Series.F4
+    IRQ->nvic@51
+
+spi1Loopback: SPI.SPILoopback @ spi1
+spi2Loopback: SPI.SPILoopback @ spi2
+spi3Loopback: SPI.SPILoopback @ spi3
+
+dma1: DMA.STM32DMA @ sysbus 0x40026000
+    [0-7] -> nvic@[11-17,47]
+
 gpioPortC: GPIOPort.STM32_GPIOPort @ sysbus <0x40020800, +0x400>
     numberOfAFs: 16
 
-// CAN, UART, GPIO, PWR and TIM2 run without clock gates in this fixture. Accept the hardware
-// startup writes to RCC_AHB1ENR and RCC_APB1ENR.
+// The peripherals run without clock gates in this fixture. Accept the hardware
+// startup writes to RCC_AHB1ENR, RCC_APB1ENR and RCC_APB2ENR.
 rcc: Python.PythonPeripheral @ sysbus 0x40023800
     size: 0x400
     initable: false
@@ -50,6 +70,7 @@ rcc: Python.PythonPeripheral @ sysbus 0x40023800
 if request.Offset in (
     0x30,
     0x40,
+    0x44,
 ):
     request.Value = 0
 '''

@@ -12,6 +12,7 @@ use crate::{
     stm32_uart::{Stm32Irq, UsartLayout},
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
+    stm32f4_spi::F4Spi,
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -416,6 +417,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 || stm32h7_adc_platform::is_device(&entry.model)
                 || stm32h7_gpio_platform::is_device(&entry.model)
                 || entry.model == stm32h7_rtc_platform::RTC
+                || matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL)
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
@@ -538,6 +540,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
         }
         configure_stm32_can(&stm32_can, nvic, &mut machine)?;
+        configure_f4_spi(&entries, nvic, &mut machine)?;
         let mut uart_irq = None;
         if let Some(uart) = uart {
             if uart.model != "UART.LiteX_UART" {
@@ -723,6 +726,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             nvic.map(|entry| entry.name.as_str()),
         )?;
         return Ok(machine);
+    }
+    if let Some(entry) = entries
+        .iter()
+        .find(|entry| matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL))
+    {
+        return Err(entry.error("STM32F4 SPI requires a Cortex-M CPU"));
     }
     if let Some(entry) = entries.iter().find(|entry| {
         stm32h7_adc_platform::is_device(&entry.model)
@@ -986,6 +995,84 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
     crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+fn configure_f4_spi(
+    entries: &[Entry],
+    nvic: Option<&Entry>,
+    machine: &mut Machine,
+) -> Result<(), String> {
+    use crate::{
+        stm32h7_adc_dma::{AdcDma, StreamTarget},
+        stm32h7_board_platform::{registration, wire},
+    };
+
+    let mut loopbacks = HashSet::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == F4Spi::LOOPBACK_MODEL)
+    {
+        keys(entry, &[])?;
+        let parent = entry
+            .registration
+            .as_deref()
+            .filter(|name| {
+                entries
+                    .iter()
+                    .any(|spi| spi.name == *name && spi.model == F4Spi::MODEL)
+            })
+            .ok_or_else(|| entry.error("expected loopback attached to STM32F4 SPI"))?;
+        if !loopbacks.insert(parent) {
+            return Err(entry.error("duplicate SPI loopback"));
+        }
+    }
+    for entry in entries.iter().filter(|entry| entry.model == F4Spi::MODEL) {
+        let mut spi = F4Spi::new(entry.address()?);
+        spi.loopback = loopbacks.contains(entry.name.as_str());
+        let mut series = false;
+        for (_, text) in &entry.body {
+            if text.split_once(':').is_some_and(|(key, value)| {
+                key.trim() == "series" && value.trim() == "STM32Series.F4"
+            }) && !series
+            {
+                series = true;
+                continue;
+            }
+            let (output, target, input) = wire(text).map_err(|error| entry.error(error))?;
+            match output {
+                "IRQ" if spi.irq.is_none() && nvic.is_some_and(|nvic| nvic.name == target) => {
+                    let irq =
+                        irq_index(input, IRQ_LINES as u32).map_err(|error| entry.error(&error))?;
+                    spi.irq = Some(Stm32Irq::Nvic(irq));
+                }
+                "DMAReceive" if spi.dma.is_none() => {
+                    let dma = entries
+                        .iter()
+                        .find(|dma| dma.name == target && dma.model == "DMA.STM32DMA")
+                        .ok_or_else(|| {
+                            entry.error("expected SPI receive DMA connected to STM32 DMA")
+                        })?;
+                    let (base, _) =
+                        registration(dma, entries).map_err(|error| dma.error(&error))?;
+                    let stream = irq_index(input, AdcDma::STREAMS as u32)
+                        .map_err(|error| entry.error(&error))?;
+                    spi.dma = Some(StreamTarget {
+                        base,
+                        stream: usize::from(stream),
+                    });
+                }
+                _ => return Err(entry.error("unsupported or duplicate STM32F4 SPI output")),
+            }
+        }
+        if !series {
+            return Err(entry.error("expected series: STM32Series.F4"));
+        }
+        machine
+            .bus
+            .map_f4_spi(spi)
+            .map_err(|error| entry.error(&error))?;
+    }
+    Ok(())
 }
 
 fn configure_stm32_can(

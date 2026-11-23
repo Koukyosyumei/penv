@@ -227,6 +227,7 @@ target/release/penv run --script "$work/boot.resc" --max-steps 36000 \
 STM32F407 FreeRTOS V11.1.0
 PWR ready OK
 CAN loopback OK
+SPI IRQ and DMA OK
 task A tick=01
 task B tick=03
 TIM2 queue=1
@@ -249,11 +250,11 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 48 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 49 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `c9c80debbaed3450d6e3b0b11c6ef8d5241f416390b838a2739957b683e033ed` です。
+  SHA-256 は `b238a3f9924fcf803dabcb65a42cfa8266d93b50b1444a533c21fdeb5a866c6b` です。
 
 ### CAN1/CAN2 のローカル検証
 
@@ -286,6 +287,25 @@ CWUF と CSBF は対応する状態フラグをクリアします。
 RCC のクロックゲートとリセット、RTC・バックアップ SRAM への DBP の伝播、
 PVD・WKUP の入力、Stop/Standby 遷移、レギュレーターの安定化時間は残課題です。
 
+### STM32F407 の SPI
+
+上流と同じ `SPI.STM32SPI` の `STM32Series.F4` 宣言を使用します。SPI1/2/3 の
+割り込みは NVIC 35/36/51 に、SPI2 の `DMAReceive` は既存の STM32 DMA モデルの
+DMA1 ストリーム 3 に配線します。マスターの全二重転送は 8/16 ビットに対応します。
+接続先がない SPI はゼロを受信し、検証用 REPL に接続した `SPI.SPILoopback` は送信値を返します。
+[Renode の STM32SPI モデル](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SPI/STM32SPI.cs)
+[RM0090 の SPI 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32bit-mcus-stmicroelectronics.pdf)
+
+スモークテストの ELF は SPI1 の TXE 割り込みで `0xa5` を送信し、RXNE 割り込みで
+同じ値を読み出します。続けてオーバーラン割り込みを発生させ、最初のフレームを保持し、
+DR、SR の順に読んでフラグが消えることを検査します。SPI2 では `0x3c` と `0xc3` が
+DMA1 の完了割り込み後に SRAM に並ぶことを、SPI3 では 16 ビットの `0x12ab` が戻る
+ことを確認します。すべて通過すると `SPI IRQ and DMA OK` を出力します。
+
+SPI は転送を同期完了として扱います。SCK/NSS とビット時間、RCC のクロックゲート、
+スレーブ、片方向・受信専用モード、CRC 計算、I2S、ループバック以外の SPI 接続先、
+送信 DMA、DMA の CHSEL による要求の選択は残課題です。
+
 ### 未変更の上流 REPL
 
 `../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` で確認しました。
@@ -311,10 +331,10 @@ target/release/penv run --script "$work/upstream.repro.resc" \
     --platform-root ../renode --max-steps 36000
 ```
 
-`10cea9f` では `stm32f4.repl:31` の `CAN.STMCAN`、`2fb7018` では
-`stm32f4.repl:47` の `Miscellaneous.STM32_PWR` で停止しました。現在は PWR の宣言を通過し、
-`stm32f4.repl:130: spi1: unsupported platform model "SPI.STM32SPI"` で終了コード 1 に
-なります。上流 REPL での ELF 起動には SPI 以降の対応が必要です。
+`10cea9f` では `stm32f4.repl:31` の CAN、`2fb7018` では 47 行目の PWR、
+`ddd976f` では 130 行目の `SPI.STM32SPI` で停止しました。現在は SPI1〜3 の宣言を通過し、
+`stm32f4.repl:143: i2c1: unsupported platform model "I2C.STM32F1_I2C"` で終了コード 1 に
+なります。上流 REPL での ELF 起動には I2C 以降の対応が必要です。
 
 残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
 浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの
