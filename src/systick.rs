@@ -1,12 +1,13 @@
 use crate::bus::CORTEX_M_STEP_HZ;
 
+pub const NMI: u8 = 2;
 pub const PENDSV: u8 = 14;
 pub const SYSTICK: u8 = 15;
 const CSR: u32 = 0xe000_e010;
 const RELOAD: u32 = 0xe000_e014;
 const CURRENT: u32 = 0xe000_e018;
 const CALIBRATION: u32 = 0xe000_e01c;
-const ICSR: u32 = 0xe000_ed04;
+pub const ICSR: u32 = 0xe000_ed04;
 
 pub struct SysTick {
     control: u32,
@@ -15,12 +16,14 @@ pub struct SysTick {
     count_flag: bool,
     pending: bool,
     pendsv_pending: bool,
+    nmi_pending: bool,
     frequency: Option<u32>,
     steps_per_second: u64,
     phase: u64,
     clock_gated: bool,
     counting: bool,
     zero_state_reload: bool,
+    noisy: bool,
 }
 
 impl Default for SysTick {
@@ -32,12 +35,14 @@ impl Default for SysTick {
             count_flag: false,
             pending: false,
             pendsv_pending: false,
+            nmi_pending: false,
             frequency: None,
             steps_per_second: CORTEX_M_STEP_HZ,
             phase: 0,
             clock_gated: false,
             counting: false,
             zero_state_reload: false,
+            noisy: false,
         }
     }
 }
@@ -58,6 +63,7 @@ impl SysTick {
             clock_gated: self.clock_gated,
             zero_state_reload: self.zero_state_reload,
             current: if self.zero_state_reload { 0 } else { 0xff_ffff },
+            noisy: self.noisy,
             ..Self::default()
         };
     }
@@ -74,6 +80,10 @@ impl SysTick {
     pub fn set_zero_state_reload(&mut self) {
         self.zero_state_reload = true;
         self.current = 0;
+    }
+
+    pub fn set_noisy(&mut self) {
+        self.noisy = true;
     }
 
     pub fn set_clocked(&mut self, clocked: bool) {
@@ -136,11 +146,14 @@ impl SysTick {
     }
 
     pub fn pending_exceptions(&self) -> u64 {
-        (u64::from(self.pending) << SYSTICK) | (u64::from(self.pendsv_pending) << PENDSV)
+        (u64::from(self.nmi_pending) << NMI)
+            | (u64::from(self.pending) << SYSTICK)
+            | (u64::from(self.pendsv_pending) << PENDSV)
     }
 
     pub fn pending(&self, exception: u8) -> bool {
         match exception {
+            NMI => self.nmi_pending,
             PENDSV => self.pendsv_pending,
             SYSTICK => self.pending,
             _ => false,
@@ -149,6 +162,7 @@ impl SysTick {
 
     pub fn acknowledge(&mut self, exception: u8) {
         match exception {
+            NMI => self.nmi_pending = false,
             PENDSV => self.pendsv_pending = false,
             SYSTICK => self.pending = false,
             _ => unreachable!(),
@@ -161,7 +175,11 @@ impl SysTick {
             RELOAD => self.reload,
             CURRENT => self.current,
             CALIBRATION => 1 << 31, // No separate reference clock.
-            ICSR => (u32::from(self.pending) << 26) | (u32::from(self.pendsv_pending) << 28),
+            ICSR => {
+                (u32::from(self.pending) << 26)
+                    | (u32::from(self.pendsv_pending) << 28)
+                    | (u32::from(self.nmi_pending) << 31)
+            }
             _ => return None,
         })
     }
@@ -179,6 +197,11 @@ impl SysTick {
                 let enabled = value & 1 != 0;
                 if (self.control & 1 != 0) != enabled {
                     self.counting = enabled && self.reload != 0;
+                    if self.noisy && enabled && !self.counting {
+                        eprintln!(
+                            "Systick_NS enabled but it won't be started as long as the reload value is zero"
+                        );
+                    }
                     if self.counting && self.current == 0 {
                         self.current = self.reload;
                     }
@@ -202,6 +225,7 @@ impl SysTick {
             }
             CALIBRATION => {}
             ICSR => {
+                self.nmi_pending |= value & (1 << 31) != 0;
                 if value & (1 << 25) != 0 {
                     self.pending = false;
                 }

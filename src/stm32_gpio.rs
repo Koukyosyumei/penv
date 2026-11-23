@@ -1,8 +1,10 @@
 pub struct Stm32Gpio {
     pub base: u32,
+    pub name: Option<String>,
     pub size: u32,
     pub exti_routes: [u32; 16],
     external: u16,
+    pub wired_inputs: u16,
     af_driver: [u16; 16],
     af_levels: [u16; 16],
     af_inverted: [u16; 16],
@@ -31,9 +33,11 @@ impl Stm32Gpio {
     pub fn new(base: u32, size: u32, [mode, speed, pull]: [u32; 3], alternate_count: u32) -> Self {
         Self {
             base,
+            name: None,
             size,
             exti_routes: [0; 16],
             external: 0,
+            wired_inputs: 0,
             af_driver: [0; 16],
             af_levels: [0; 16],
             af_inverted: [0; 16],
@@ -73,13 +77,13 @@ impl Stm32Gpio {
         for pin in 0..16 {
             let mask = 1 << pin;
             match (self.mode >> (pin * 2)) & 3 {
-                0 => pins |= self.external & mask,
+                0 => pins |= (self.external | self.wired_inputs) & mask,
                 2 => {
                     let function = ((self.alternate[pin / 8] >> ((pin % 8) * 4)) & 15) as usize;
                     let levels = if self.af_driver[function] & mask != 0 {
                         self.af_levels[function] ^ self.af_inverted[function]
                     } else {
-                        self.external
+                        self.external | self.wired_inputs
                     };
                     pins |= levels & mask;
                 }
@@ -88,6 +92,24 @@ impl Stm32Gpio {
             }
         }
         pins
+    }
+
+    pub fn driven_pins(&self) -> u16 {
+        let mut driven = 0;
+        for pin in 0..16 {
+            let mask = 1 << pin;
+            match (self.mode >> (pin * 2)) & 3 {
+                1 => driven |= self.output as u16 & mask,
+                2 => {
+                    let function = ((self.alternate[pin / 8] >> ((pin % 8) * 4)) & 15) as usize;
+                    driven |= (self.af_levels[function] ^ self.af_inverted[function])
+                        & self.af_driver[function]
+                        & mask;
+                }
+                _ => {}
+            }
+        }
+        driven
     }
 
     pub fn alternate_count(&self) -> u32 {

@@ -24,7 +24,7 @@ use crate::{
     stm32_can::Stm32Can,
     stm32_dma::Stm32Dma,
     stm32_gpio::Stm32Gpio,
-    stm32_gpio_board::{GpioButton, GpioLed},
+    stm32_gpio_board::{GpioButton, GpioEndpoints, GpioLed},
     stm32_i2c::{Eeprom, Stm32I2c},
     stm32_rtc::Stm32Rtc,
     stm32_spi::{Stm32F0Spi, Stp08},
@@ -56,6 +56,13 @@ impl Entry {
     }
 
     fn sysbus(&self) -> Result<Option<u32>, String> {
+        self.sysbus_address()?
+            .map(number)
+            .transpose()
+            .map_err(|e| self.error(&e))
+    }
+
+    fn sysbus_address(&self) -> Result<Option<&str>, String> {
         let registration = self
             .registration
             .as_deref()
@@ -67,7 +74,7 @@ impl Entry {
             .strip_prefix("sysbus")
             .filter(|s| s.starts_with(char::is_whitespace))
             .ok_or_else(|| self.error("unsupported bus registration"))?;
-        number(address.trim()).map(Some).map_err(|e| self.error(&e))
+        Ok(Some(address.trim()))
     }
 
     fn registration_list(&self) -> Option<Vec<&str>> {
@@ -433,7 +440,12 @@ pub fn check(path: &Path) -> Result<(), String> {
     load_platform(path, None, false, false).map(|_| ())
 }
 
-fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_console: bool) -> Result<Machine, String> {
+fn load_platform(
+    path: &Path,
+    root: Option<&Path>,
+    require_ram: bool,
+    stm32f0_console: bool,
+) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -490,6 +502,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
     let mut i2c_eeproms = Vec::new();
     let mut stm32_adc = None;
     let mut stm32_rtc = None;
+    let mut stm32f4_rcc = None;
     let mut stm32_dma = None;
     let mut plic = None;
     let mut timer = None;
@@ -693,6 +706,11 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                     .map_stm32f0_rcc(entry.address()?)
                     .map_err(|e| entry.error(&e))?;
             }
+            "Miscellaneous.STM32F4_RCC" => {
+                if stm32f4_rcc.replace(entry).is_some() {
+                    return Err(entry.error("only one STM32F4 RCC is supported"));
+                }
+            }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
             "SPI.STM32SPI" => stm32_spis.push(entry),
             "SPI.STP08ShiftRegister" => spi_shifts.push(entry),
@@ -714,7 +732,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                     return Err(entry.error("only one STM32F0 ADC is supported"));
                 }
             }
-            "UART.STM32F7_USART" => stm32_uarts.push(entry),
+            "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
@@ -738,6 +756,23 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
             }
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
+    }
+    let extended_nvic = stm32_uarts
+        .iter()
+        .any(|uart| uart.model == "UART.STM32_UART");
+    let irq_lines = if extended_nvic { 48 } else { 32 };
+    if let Some(rcc) = stm32f4_rcc {
+        let options = keys(rcc, &["rtcPeripheral"])?;
+        if !options
+            .iter()
+            .any(|(_, target)| stm32_rtc.is_some_and(|rtc| rtc.name == *target))
+        {
+            return Err(rcc.error("STM32F4 RCC requires an attached STM32 RTC"));
+        }
+        machine
+            .bus
+            .map_stm32f4_rcc(rcc.address()?)
+            .map_err(|e| rcc.error(&e))?;
     }
     for spi in litex_spis {
         keys(spi, &[])?;
@@ -856,17 +891,24 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
         }
         let mut cpu_type = None;
         let mut vectors = None;
+        let mut cpu_wait = false;
         for (key, value) in keys(
             entry,
             &[
                 "cpuType",
                 "vectorTableOffset",
                 "InitVectorTableOffset",
+                "isCpuWaitSignalSet",
                 "nvic",
             ],
         )? {
             match key {
                 "cpuType" => cpu_type = Some(value),
+                "isCpuWaitSignalSet" => {
+                    cpu_wait = value
+                        .parse()
+                        .map_err(|_| entry.error("invalid isCpuWaitSignalSet"))?;
+                }
                 "nvic" if nvic.is_some_and(|controller| controller.name == value) => {}
                 "nvic" => return Err(entry.error("unknown NVIC reference")),
                 "vectorTableOffset" | "InitVectorTableOffset" if vectors.is_none() => {
@@ -1038,7 +1080,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
         };
         let mut gpio_ports = HashMap::new();
         let mut led_inputs = HashMap::new();
-        for entry in stm32_gpios {
+        for &entry in &stm32_gpios {
             let mut port = make_stm32_gpio(entry)?;
             for (_, text) in &entry.body {
                 let Some((outputs, destinations)) = text.split_once("->") else {
@@ -1070,6 +1112,17 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                             machine
                                 .bus
                                 .route_gpio_timer_input(port.base, pin, base, channel);
+                        }
+                    } else if let Some(receiver) =
+                        stm32_gpios.iter().find(|gpio| gpio.name == target)
+                    {
+                        let (base, _) = sysbus_range(receiver, 0x400)?;
+                        let inputs = irq_list(inputs, 16).map_err(|e| entry.error(&e))?;
+                        if inputs.len() != outputs.len() {
+                            return Err(entry.error("mismatched GPIO link widths"));
+                        }
+                        for (&output, input) in outputs.iter().zip(inputs) {
+                            machine.bus.route_gpio_pin(port.base, output, base, input);
                         }
                     } else if gpio_leds.iter().any(|led| led.name == target) {
                         if inputs.trim() != "0"
@@ -1135,20 +1188,27 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
             let pin = irq_index(pin, 8).map_err(|e| led.error(&e))?;
             shift.leds.push(GpioLed::new(led.name.clone(), pin, invert));
         }
+        machine.bus.refresh_gpio_wiring();
         for button in gpio_buttons {
             let mut invert = None;
-            let mut target = None;
+            let mut endpoints = GpioEndpoints::default();
             for (_, text) in &button.body {
                 if let Some((source, destination)) = text.split_once("->")
                     && matches!(source.trim(), "" | "0" | "IRQ")
-                    && let Some((port, pin)) = destination.split_once('@')
-                    && target.is_none()
                 {
-                    let (base, _) = gpio_ports
-                        .get(port.trim())
-                        .ok_or_else(|| button.error("unknown button GPIO port"))?;
-                    let pin = irq_index(pin, 16).map_err(|e| button.error(&e))?;
-                    target = Some((*base, pin));
+                    for target in destination.split('|') {
+                        let (port, pin) = target
+                            .split_once('@')
+                            .ok_or_else(|| button.error("expected button target port@pin"))?;
+                        let port = port.trim();
+                        let (base, _) = gpio_ports
+                            .get(port)
+                            .ok_or_else(|| button.error("unknown button GPIO port"))?;
+                        let pin = irq_index(pin, 256).map_err(|e| button.error(&e))?;
+                        endpoints
+                            .connect(*base, port, pin, 16)
+                            .map_err(|e| button.error(&e))?;
+                    }
                 } else if let Some(value) = text.strip_prefix("invert:")
                     && invert.is_none()
                 {
@@ -1159,11 +1219,11 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                             .map_err(|_| button.error("invalid button invert property"))?,
                     );
                 } else {
-                    return Err(button.error("unsupported or duplicate button property or wiring"));
+                    return Err(button.error(
+                        "unsupported button wiring or invalid or duplicate button property",
+                    ));
                 }
             }
-            let (port, pin) =
-                target.ok_or_else(|| button.error("expected button wired to a GPIO input"))?;
             machine.bus.add_gpio_button(GpioButton::new(
                 button.name.clone(),
                 button
@@ -1171,8 +1231,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                     .as_deref()
                     .and_then(|registration| registration.split_whitespace().next())
                     .map(str::to_owned),
-                port,
-                pin,
+                endpoints,
                 invert.unwrap_or(false),
             ));
         }
@@ -1194,7 +1253,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                         return Err(rtc.error("duplicate STM32 RTC output"));
                     }
                     *slot = Some(if nvic.is_some_and(|nvic| nvic.name == target.trim()) {
-                        Stm32Irq::Nvic(irq_index(pin, 32).map_err(|e| rtc.error(&e))?)
+                        Stm32Irq::Nvic(irq_index(pin, irq_lines).map_err(|e| rtc.error(&e))?)
                     } else if exti.is_some_and(|exti| exti.name == target.trim()) {
                         Stm32Irq::Exti(irq_index(pin, exti_lines).map_err(|e| rtc.error(&e))?)
                     } else if let Some(&(count, irq)) = combined_routes.get(target.trim()) {
@@ -1589,7 +1648,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                     let value = number(value.trim()).map_err(|e| timer.error(&e))?;
                     match key.trim() {
                         "frequency" if frequency.is_none() && value != 0 => frequency = Some(value),
-                        "initialLimit" if limit.is_none() => limit = Some(value),
+                        "initialLimit" if limit.is_none() && value != 0 => limit = Some(value),
                         _ => {
                             return Err(timer
                                 .error("unsupported, duplicate, or invalid STM32 timer property"));
@@ -1605,6 +1664,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                 limit.ok_or_else(|| timer.error("missing STM32 timer initialLimit"))?,
                 routes,
             );
+            device.name = Some(timer.name.clone());
             device.dma_routes = dma_routes;
             device.gpio_outputs = gpio_outputs;
             machine
@@ -1642,7 +1702,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
                             );
                         }
                         irq = Some(if nvic.is_some_and(|controller| controller.name == name) {
-                            Stm32Irq::Nvic(irq_index(line, 32).map_err(|e| uart.error(&e))?)
+                            Stm32Irq::Nvic(irq_index(line, irq_lines).map_err(|e| uart.error(&e))?)
                         } else if exti.is_some_and(|controller| controller.name == name) {
                             Stm32Irq::Exti(irq_index(line, exti_lines).map_err(|e| uart.error(&e))?)
                         } else if let Some(&(pins, output)) = combined_routes.get(name) {
@@ -1676,10 +1736,16 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
             }
             let mut device = Stm32Usart::new(
                 uart.name.clone(),
-                uart.address()?,
+                sysbus_range(
+                    uart,
+                    crate::stm32_uart::UsartLayout::F7 { low_power: false }.size(),
+                )?
+                .0,
                 irq,
                 low_power.unwrap_or(false),
             );
+            device.legacy_layout = uart.model == "UART.STM32_UART";
+            device.frequency = frequency;
             device.dma_rx = dma_rx;
             device.dma_tx = dma_tx;
             machine
@@ -1691,11 +1757,18 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_co
             .bus
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
+        machine
+            .bus
+            .nvic
+            .as_mut()
+            .unwrap()
+            .set_external_lines(irq_lines as usize);
         if let Some(controller) = nvic {
             machine.bus.set_nvic_name(controller.name.clone());
         }
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors, false);
+        machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
         return Ok(machine);
     }
     if let Some(nvic) = nvic {
@@ -2947,6 +3020,7 @@ fn make_stm32_gpio(entry: &Entry) -> Result<Stm32Gpio, String> {
         }
     }
     let mut port = Stm32Gpio::new(base, size, reset, alternate_count);
+    port.name = Some(entry.name.clone());
     if let Some(pins) = inverted_pins {
         let mut remaining = pins
             .strip_prefix('[')

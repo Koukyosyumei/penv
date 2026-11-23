@@ -10,12 +10,18 @@ use std::{
 use crate::{
     bitmanip::BitManip,
     bus::{Bus, BusError, RAM_BASE},
+    collapsed_profile::CollapsedProfile,
     csr::{Csr, EXTERNAL},
+    event_trace::{self, ExternalEvent, Recorder},
     litex_panel::ButtonAction,
     litex_video::ReferenceFrame,
+    nvic::ActiveExceptions,
+    rtc_clock::RtcClock,
     rv64::{AtomicTrace, Rv64},
     sv32::TranslationCache,
-    thumb::Thumb,
+    sync_action::SyncAction,
+    thumb::{Thumb, ThumbStep},
+    time_source::TimeSource,
     zephyr_boot::BusyWait,
 };
 
@@ -136,6 +142,11 @@ pub struct Machine {
     frame_wait_budget: Option<u64>,
     frame_wait_deadline: Option<u64>,
     intermediate_frame_matches: Vec<u64>,
+    time_source: TimeSource<1>,
+    pub rtc_clock: RtcClock,
+    recorder: Option<Recorder>,
+    replay: VecDeque<(u64, ExternalEvent)>,
+    profile: Option<CollapsedProfile>,
 }
 
 #[derive(Clone, Copy)]
@@ -181,10 +192,24 @@ pub struct Hart {
     zaamo: bool,
     zalrsc: bool,
     bitmanip: BitManip,
+    cpu_wait_asserted: bool,
+    pub monitor_paused: bool,
+    pub monitor_halted: bool,
+    pub monitor_hooks: Vec<(u32, CpuHook)>,
+    reset_held: bool,
+    reset_release: Option<SyncAction<()>>,
+    reset_pc_written: bool,
     pub pc: u32,
     reset_vector: u32,
     pc_written: bool,
     pub registers: [u32; 32],
+}
+
+#[derive(Clone)]
+pub enum CpuHook {
+    Log(String),
+    WriteDoubleWord(u32, u32),
+    Pause,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -234,7 +259,9 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Unmapped(address, _) | BusError::Denied(address) => (
+                BusError::Unmapped(address, _)
+                | BusError::Denied(address)
+                | BusError::AddressError(address) => (
                     match access {
                         Access::Fetch => 1,
                         Access::Load => 5,
@@ -250,7 +277,9 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) | BusError::AudioOutput(_) => return None,
+                BusError::Output(_) | BusError::AudioOutput(_) | BusError::CommandError(_) => {
+                    return None;
+                }
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),
@@ -331,6 +360,13 @@ impl Machine {
                 zaamo: false,
                 zalrsc: false,
                 bitmanip: BitManip::default(),
+                cpu_wait_asserted: false,
+                monitor_paused: false,
+                monitor_halted: false,
+                monitor_hooks: Vec::new(),
+                reset_held: false,
+                reset_release: None,
+                reset_pc_written: false,
                 pc: RAM_BASE,
                 reset_vector: RAM_BASE,
                 pc_written: false,
@@ -353,6 +389,11 @@ impl Machine {
             frame_wait_budget: None,
             frame_wait_deadline: None,
             intermediate_frame_matches: Vec::new(),
+            time_source: TimeSource::default(),
+            rtc_clock: RtcClock::default(),
+            recorder: None,
+            replay: VecDeque::new(),
+            profile: None,
         }
     }
 
@@ -439,6 +480,7 @@ impl Machine {
             return Err("Zephyr busy-wait hooks currently require Cortex-M".into());
         }
         hart.busy_wait = BusyWait::new(entries);
+        hart.reset_pc_written |= hart.reset_held;
         Ok(())
     }
 
@@ -460,7 +502,7 @@ impl Machine {
         }
         thumb.set_vector_base(address);
         Ok(())
-}
+    }
 
     pub fn monitor_external_pmp(
         &mut self,
@@ -540,12 +582,62 @@ impl Machine {
                 continue;
             }
             if hart.thumb.is_some() {
+                let explicit_pc = hart.pc_written.then_some(hart.pc);
                 hart.reset_cortex_m(&mut self.bus)?;
+                if let Some(pc) = explicit_pc {
+                    hart.pc = pc;
+                    hart.reset_pc_written = hart.reset_held;
+                }
                 continue;
             }
             hart.fetch(&mut self.bus)
                 .map_err(|error| format!("hart {}: {error}", hart.csr.hart_id))?;
         }
+        Ok(())
+    }
+
+    pub fn cortex_m_cpu(&mut self, name: &str) -> Result<&Thumb, String> {
+        self.named_hart(name)?
+            .thumb
+            .as_ref()
+            .ok_or_else(|| format!("{name:?} is not a Cortex-M CPU"))
+    }
+
+    pub fn cortex_m_monitor_cpu(&mut self, name: &str) -> Result<&mut Hart, String> {
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_none() {
+            return Err(format!("{name:?} is not a Cortex-M CPU"));
+        }
+        Ok(hart)
+    }
+
+    pub fn set_cortex_m_cpu_wait(&mut self, name: &str, asserted: bool) -> Result<(), String> {
+        let boundary = self.elapsed_steps().saturating_add(1);
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_none() {
+            return Err("CpuWaitSignal requires a Cortex-M CPU".into());
+        }
+        hart.cpu_wait_asserted = asserted;
+        hart.reset_release = (hart.reset_held && !asserted).then(|| SyncAction::new(boundary, ()));
+        Ok(())
+    }
+
+    pub fn reset_named_cortex_m(&mut self, name: &str) -> Result<(), String> {
+        if self.primary.name.as_deref() != Some(name) || !self.is_cortex_m() {
+            return Err(format!("unknown Cortex-M CPU {name:?}"));
+        }
+        self.primary.reset_cortex_m(&mut self.bus)?;
+        self.primary.monitor_paused = !self.primary.reset_held;
+        Ok(())
+    }
+
+    pub fn reset_cortex_m_machine(&mut self) -> Result<(), String> {
+        if !self.is_cortex_m() {
+            return Err("machine Reset requires a Cortex-M CPU".into());
+        }
+        self.bus.reset_cortex_m_devices();
+        self.primary.monitor_paused = false;
+        self.primary.reset_cortex_m(&mut self.bus)?;
         Ok(())
     }
 
@@ -572,7 +664,7 @@ impl Machine {
     pub fn clear_memory_snapshot(&mut self) -> Result<(), String> {
         self.check_memory_snapshot()?;
         self.bus.clear_memory();
-        Ok(())
+        self.reset_cortex_m_machine()
     }
 
     pub fn load_memory_snapshot(&mut self, path: &Path) -> Result<(), String> {
@@ -619,6 +711,50 @@ impl Machine {
             self.reset_steps.insert(index, step);
         }
         Ok(())
+    }
+
+    pub fn record_to(&mut self, path: &Path) -> Result<(), String> {
+        if !self.replay.is_empty() {
+            return Err("cannot start recording while replay is pending".into());
+        }
+        self.recorder = Some(Recorder::create(path)?);
+        Ok(())
+    }
+
+    pub fn play_from(&mut self, path: &Path) -> Result<(), String> {
+        if self.recorder.is_some() || !self.replay.is_empty() {
+            return Err("external event recording or replay is already active".into());
+        }
+        let trace = event_trace::read(path)?;
+        if trace
+            .front()
+            .is_some_and(|(step, _)| *step < self.elapsed_steps())
+        {
+            return Err("event trace begins before the current emulation time".into());
+        }
+        self.replay = trace;
+        Ok(())
+    }
+
+    pub fn external_event(&mut self, event: ExternalEvent) -> Result<(), String> {
+        self.apply_external_event(&event)?;
+        let step = self.elapsed_steps();
+        if let Some(recorder) = &mut self.recorder {
+            recorder.record(step, &event)?;
+        }
+        Ok(())
+    }
+
+    fn apply_external_event(&mut self, event: &ExternalEvent) -> Result<(), String> {
+        match event {
+            ExternalEvent::Button(name, pressed) => self.bus.set_named_button(name, *pressed),
+            ExternalEvent::Adc(name, channel, volts) => {
+                self.bus.set_named_adc_input(name, *channel, *volts)
+            }
+            ExternalEvent::UartLine(name, text, ending) => {
+                self.bus.write_stm32_uart_line(name, text, ending)
+            }
+        }
     }
 
     pub fn schedule_uart_input(&mut self, step: u64, bytes: Vec<u8>) -> Result<(), String> {
@@ -770,6 +906,31 @@ impl Machine {
         Ok(())
     }
 
+    pub fn start_profile(
+        &mut self,
+        cpu: &str,
+        path: &Path,
+        flush: bool,
+        limit: Option<u64>,
+    ) -> Result<(), String> {
+        let pc = self.cortex_m_monitor_cpu(cpu)?.pc;
+        if self.profile.is_some() {
+            return Err("CPU already has an active profiler".into());
+        }
+        self.profile = Some(
+            CollapsedProfile::new(path, pc, flush, limit)
+                .map_err(|e| format!("{}: {e}", path.display()))?,
+        );
+        Ok(())
+    }
+
+    pub fn finish_profile(&mut self) -> Result<(), String> {
+        if let Some(profile) = self.profile.take() {
+            profile.finish().map_err(|e| format!("profiler: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn intermediate_frame_matches(&self) -> &[u64] {
         &self.intermediate_frame_matches
     }
@@ -905,8 +1066,12 @@ impl Machine {
         self.run_until(limit, output, |_, _| false)
     }
 
+    pub fn cortex_m_locked_up(&self) -> bool {
+        self.primary.thumb.as_ref().is_some_and(Thumb::locked_up)
+    }
+
     pub fn elapsed_steps(&self) -> u64 {
-        self.elapsed_steps
+        self.time_source.elapsed()
     }
 
     pub fn run_until<W: Write>(
@@ -915,6 +1080,9 @@ impl Machine {
         output: &mut W,
         matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
+        if self.primary.monitor_paused {
+            return Ok((Stop::Limit, 0));
+        }
         self.run_selected(limit, None, output, matched)
     }
 
@@ -943,6 +1111,16 @@ impl Machine {
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
+            while self
+                .replay
+                .front()
+                .is_some_and(|(step, _)| *step <= self.elapsed_steps())
+            {
+                let (_, event) = self.replay.pop_front().unwrap();
+                self.apply_external_event(&event)?;
+            }
+            self.time_source
+                .grant_until(self.time_source.elapsed().saturating_add(1));
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
             while let Some(index) = self
                 .uart_device_events
@@ -1098,6 +1276,19 @@ impl Machine {
                 let (_, channel, volts) = self.adc_events.pop_front().unwrap();
                 self.bus.set_stm32f0_adc_input(channel, volts)?;
             }
+            let pc = hart.pc;
+            let profiled_instruction = if index == 0 && self.profile.is_some() {
+                self.bus.read_ram::<2>(pc).ok().map(|high| {
+                    let low = if (0xf000..=0xf7ff).contains(&high) {
+                        self.bus.read_ram::<2>(pc.wrapping_add(2)).unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    (high as u16, low as u16)
+                })
+            } else {
+                None
+            };
             self.bus
                 .tick_litex_uart(self.elapsed_steps, output)
                 .map_err(|error| format!("UART: {error}"))?;
@@ -1116,16 +1307,29 @@ impl Machine {
                 continue;
             }
             let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
-            let pc = trace.map(|_| {
+            let trace_pc = trace.map(|_| {
                 hart.rv64
                     .as_ref()
                     .expect("trace targets a named RV64 CPU")
                     .pc
             });
-            match hart.execute_step(&mut self.bus, self.elapsed_steps, output, self.function_symbols.as_ref())? {
+            match hart.execute_step(
+                &mut self.bus,
+                self.elapsed_steps,
+                output,
+                self.function_symbols.as_ref(),
+            )? {
                 Step::Retired => {
                     retired += 1;
-                    if let (Some((_, trace)), Some(pc)) = (trace, pc) {
+                    if index == 0
+                        && let Some(profile) = &mut self.profile
+                        && !profile
+                            .retired(pc, profiled_instruction, hart.pc)
+                            .map_err(|e| format!("profiler: {e}"))?
+                    {
+                        self.profile = None;
+                    }
+                    if let (Some((_, trace)), Some(pc)) = (trace, trace_pc) {
                         if trace.amo {
                             if let Some(record) =
                                 hart.rv64.as_mut().and_then(|cpu| cpu.atomic_trace.take())
@@ -1153,6 +1357,9 @@ impl Machine {
             }
             if self.bus.rv64_devices.reset_requested {
                 return Ok((Stop::Reset, retired));
+            }
+            if hart.monitor_paused {
+                break;
             }
         }
         Ok((Stop::Limit, retired))
@@ -1195,9 +1402,21 @@ impl Hart {
 
     pub(crate) fn reset_cortex_m(&mut self, bus: &mut Bus) -> Result<(), String> {
         let thumb = self.thumb.as_mut().ok_or("Reset requires Cortex-M")?;
-        let (sp, pc) = thumb.reset(bus)?;
+        self.monitor_halted = false;
+        self.reset_held = self.cpu_wait_asserted;
+        self.reset_release = None;
+        self.reset_pc_written = false;
+        let (sp, pc, lr) = if self.reset_held {
+            thumb.reset_state();
+            (0, 0, 0)
+        } else if thumb.thumb2 {
+            let (sp, pc) = thumb.reset(bus)?;
+            thumb.reset_state();
+            (sp, pc, 0)
+        } else {
+            thumb.reset_m0(bus)
+        };
         let vectors = thumb.vector_base();
-        thumb.reset_state();
         if let Some(wait) = &mut self.busy_wait {
             wait.reset();
         }
@@ -1206,6 +1425,7 @@ impl Hart {
         }
         self.registers.fill(0);
         self.registers[13] = sp;
+        self.registers[14] = lr;
         self.pc = pc;
         Ok(())
     }
@@ -1517,7 +1737,7 @@ impl Hart {
             return Err("RISC-V trap vector command requires a RISC-V CPU".into());
         }
         self.csr.monitor_trap_vector(register, value)
-}
+    }
 
     pub fn program_counter(&self) -> u64 {
         self.rv64.as_ref().map_or(u64::from(self.pc), |cpu| cpu.pc)
@@ -1579,7 +1799,25 @@ impl Hart {
         if self.thumb.is_some() && bus.reset_cortex_m_if_requested(false) {
             self.reset_cortex_m(bus)?;
         }
+        if self.thumb.is_some() && self.reset_held {
+            bus.sample_nvic(&ActiveExceptions::default(), false);
+            bus.tick_systick();
+            if SyncAction::take_due(&mut self.reset_release, elapsed_steps).is_some() {
+                if self.reset_pc_written {
+                    self.reset_held = false;
+                    self.reset_pc_written = false;
+                } else {
+                    self.reset_cortex_m(bus)?;
+                }
+            }
+            return Ok(Step::Trap);
+        }
         if let Some(thumb) = self.thumb.as_mut() {
+            bus.tick_stm32_uarts();
+            if self.monitor_halted {
+                thumb.sample_interrupts(bus);
+                return Ok(Step::Trap);
+            }
             bus.advance_nrf_audio()
                 .and_then(|()| bus.advance_nrf_ppi(output))
                 .and_then(|()| bus.advance_stm32_dma(output))
@@ -1617,14 +1855,30 @@ impl Hart {
                     return Ok(Step::Trap);
                 }
             }
-            return thumb
-                .step(&mut self.pc, &mut self.registers, bus, output)
-                .map(|retired| {
-                    if retired {
-                        Step::Retired
-                    } else {
-                        Step::Stop(Stop::Ebreak)
+            if !thumb.locked_up() {
+                for (_, hook) in self
+                    .monitor_hooks
+                    .iter()
+                    .filter(|(address, _)| *address == self.pc)
+                {
+                    match hook {
+                        CpuHook::Log(message) => eprintln!("{message}"),
+                        CpuHook::WriteDoubleWord(address, value) => bus
+                            .write_scalar(*address, 4, *value, output, true)
+                            .map_err(|error| format!("CPU hook at {:#010x}: {error}", self.pc))?,
+                        CpuHook::Pause => {
+                            self.monitor_paused = true;
+                            eprintln!("Machine paused");
+                        }
                     }
+                }
+            }
+            return thumb
+                .execute_guest(&mut self.pc, &mut self.registers, bus, output)
+                .map(|retired| match retired {
+                    ThumbStep::Retired => Step::Retired,
+                    ThumbStep::Breakpoint => Step::Stop(Stop::Ebreak),
+                    ThumbStep::Exception => Step::Trap,
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }
@@ -2162,6 +2416,174 @@ mod tests {
     use super::*;
 
     #[test]
+    fn renode_precise_load_store_fault_without_single_step() {
+        for opcode in [0x6803, 0x6003] {
+            // ldr/str r3, [r0]
+            let mut machine = Machine::without_default_ram();
+            let mut output = std::io::sink();
+            machine.bus.map_ram(0, 0x1000).unwrap();
+            machine.bus.map_ram(0x100000, 0x1000).unwrap();
+            machine.bus.faulting_device = Some(0x100000..=0x100fff);
+            machine.primary.configure_cortex_m(Some(0), false);
+            for (addr, value) in [(0, 0x1000), (4, 0x101), (12, 0x201), (0x114, 0x100000)] {
+                machine.bus.write(addr, 4, value, &mut output).unwrap();
+            }
+            for (addr, opcode) in [
+                (0x100, 0x4804), // ldr r0, =0x100000
+                (0x102, 0xa101), // adr r1, fault_instr
+                (0x104, 0x468a), // mov r10, r1
+                (0x106, 0x2355), // movs r3, #0x55
+                (0x108, opcode),
+                (0x10a, 0x2100), // movs r1, #0
+                (0x10c, 0x468a), // mov r10, r1
+                (0x10e, 0xbf30), // wfi
+                (0x110, 0xe7fd), // b 0x10e
+                (0x200, 0x9906), // ldr r1, [sp, #24]
+                (0x202, 0x468b), // mov r11, r1
+                (0x204, 0xbf30), // wfi
+                (0x206, 0xe7fd), // b 0x204
+            ] {
+                machine.bus.write(addr, 2, opcode, &mut output).unwrap();
+            }
+            machine.validate_entry().unwrap();
+            machine.run(100, &mut output).unwrap();
+            assert_eq!(machine.primary.registers[10], 0x108);
+            assert_eq!(machine.primary.registers[11], 0x108);
+            assert_eq!(machine.primary.registers[13], 0xfe0);
+            assert_eq!(machine.primary.pc, 0x206);
+        }
+    }
+
+    fn cpuwait_fixture(asserted: bool) -> Machine {
+        let mut machine = Machine::without_default_ram();
+        machine.primary.name = Some("cpu".into());
+        machine.primary.configure_cortex_m(Some(0x80), false);
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine.bus.map_nvic(0xc0, None).unwrap();
+        let mut output = std::io::sink();
+        for (address, width, value) in [
+            (0x80, 4, 0x800),
+            (0x84, 4, 0x101),
+            (0x100, 2, 0x2004), // movs r0, #4
+            (0x102, 2, 0x6801), // ldr r1, [r0]
+            (0x104, 2, 0x3101), // adds r1, #1
+            (0x106, 2, 0x6001), // str r1, [r0]
+            (0x108, 2, 0xe7fb), // b 0x102
+        ] {
+            machine
+                .bus
+                .write(address, width, value, &mut output)
+                .unwrap();
+        }
+        machine.set_cortex_m_cpu_wait("cpu", asserted).unwrap();
+        machine.validate_entry().unwrap();
+        machine
+    }
+
+    #[test]
+    fn renode_cpuwait_latches_only_at_reset_and_releases_at_sync_point() {
+        let mut machine = cpuwait_fixture(false);
+        let mut output = std::io::sink();
+        let interval = crate::bus::CORTEX_M_STEP_HZ / 10;
+        machine.run(interval, &mut output).unwrap();
+        let before = machine.bus.read::<4>(4).unwrap();
+        machine.set_cortex_m_cpu_wait("cpu", true).unwrap();
+        machine.run(interval, &mut output).unwrap();
+        let after = machine.bus.read::<4>(4).unwrap();
+        assert!(after > before);
+        machine.reset_named_cortex_m("cpu").unwrap();
+        assert!(machine.primary.cpu_wait_asserted);
+        assert!(machine.primary.reset_held);
+        machine.run(interval, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(4).unwrap(), after);
+        assert_eq!((machine.primary.pc, machine.primary.registers[13]), (0, 0));
+
+        // Change the vectors while held to prove that release reads them
+        // then, without retiring the first handler instruction yet.
+        machine.bus.write(0x80, 4, 0x900, &mut output).unwrap();
+        machine.bus.write(0x84, 4, 0x103, &mut output).unwrap();
+        machine.set_cortex_m_cpu_wait("cpu", false).unwrap();
+        assert!(machine.primary.reset_held);
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert!(!machine.primary.reset_held);
+        assert_eq!(
+            (machine.primary.pc, machine.primary.registers[13]),
+            (0x102, 0x900)
+        );
+    }
+
+    #[test]
+    fn renode_initial_cpuwait_prevents_execution_after_machine_reset() {
+        let mut machine = cpuwait_fixture(true);
+        machine.reset_cortex_m_machine().unwrap();
+        machine.set_named_entry("cpu", 0xdead_beef).unwrap();
+        assert_eq!(
+            machine.run(100, &mut std::io::sink()).unwrap(),
+            (Stop::Limit, 0)
+        );
+        assert!(!machine.cortex_m_locked_up());
+        assert!(machine.primary.reset_held);
+        assert_eq!(machine.primary.pc, 0xdead_beef);
+    }
+
+    #[test]
+    fn renode_cpuwait_releases_with_an_explicit_pc() {
+        let mut machine = cpuwait_fixture(false);
+        machine.set_cortex_m_cpu_wait("cpu", true).unwrap();
+        machine.reset_named_cortex_m("cpu").unwrap();
+        machine.set_named_entry("cpu", 0x100).unwrap();
+        assert!(machine.primary.reset_held);
+        machine.set_cortex_m_cpu_wait("cpu", false).unwrap();
+        assert_eq!(
+            machine.run(1, &mut std::io::sink()).unwrap(),
+            (Stop::Limit, 0)
+        );
+        assert!(!machine.primary.reset_held);
+        assert_eq!(
+            (machine.primary.pc, machine.primary.registers[13]),
+            (0x100, 0)
+        );
+    }
+
+    #[test]
+    fn stm32_usart_frame_and_idle_irq_progress_while_cortex_m_sleeps() {
+        use crate::stm32_uart::{Stm32Irq, Stm32Usart};
+
+        let mut machine = Machine::without_default_ram();
+        let mut output = std::io::sink();
+        let base = 0x4001_3800;
+        let ispr = 0xe000_e200;
+        let irq = 27;
+        let mut uart = Stm32Usart::new("usart1".into(), base, Some(Stm32Irq::Nvic(irq)), false);
+        uart.frequency = Some(16_000_000);
+        machine.bus.map_stm32_usart(uart).unwrap();
+        machine.bus.map_nvic(0xc0, None).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine.bus.write(0, 2, 0xbf30, &mut output).unwrap(); // WFI
+        machine.primary.pc = 0;
+        machine.primary.configure_cortex_m(None, false);
+        machine.bus.write(base, 4, 0x15, &mut output).unwrap(); // UE | RE | IDLEIE
+        machine
+            .bus
+            .write(base + 0x0c, 4, 0x10, &mut output)
+            .unwrap();
+        machine
+            .bus
+            .write_stm32_uart_line("sysbus.usart1", "A", b"")
+            .unwrap();
+
+        assert_eq!(machine.run(900, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.bus.read::<4>(base + 0x1c).unwrap() & 0x30, 0);
+        assert_eq!(machine.run(100, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.bus.read::<4>(base + 0x1c).unwrap() & 0x30, 0x20);
+        assert_eq!(machine.bus.read::<4>(base + 0x24).unwrap(), u32::from(b'A'));
+        assert_eq!(machine.run(900, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.bus.read::<4>(ispr).unwrap(), 0);
+        machine.run(100, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(ispr).unwrap(), 1 << irq);
+    }
+
+    #[test]
     fn renode_cortex_m_reset_observation_via_sysresetreq() {
         // cpu-pause-halt.robot: adapt the Cortex-M reset observation to WFI/AIRCR.
         const AIRCR: u32 = 0xe000_ed0c;
@@ -2218,7 +2640,7 @@ mod tests {
         }
         assert_eq!(machine.bus.read::<4>(CSR).unwrap(), 4);
         assert_eq!(machine.bus.read_ram::<4>(0x80).unwrap(), 0xdead_beef);
-}
+    }
 
     fn upstream_rv32_writes_invalidate_other_harts_reservations() {
         // riscv-lr-sc-strong-atomicity.robot runs only the two selected RV32 harts.

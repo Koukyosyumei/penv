@@ -1,6 +1,7 @@
 mod mpu;
 
 pub const BASE: u32 = 0xe000_e000;
+pub const HARDFAULT: u8 = 3;
 pub const VTOR: u32 = BASE + 0xd08;
 pub const IRQ_LINES: usize = 240;
 const BANKS: usize = IRQ_LINES.div_ceil(32);
@@ -42,6 +43,7 @@ impl ActiveExceptions {
 
 pub struct Nvic {
     vector_base: Option<u32>,
+    external_lines: usize,
     enabled: [u32; BANKS],
     pending: [u32; BANKS],
     priority: [u8; IRQ_LINES],
@@ -49,6 +51,7 @@ pub struct Nvic {
     priority_mask: u8,
     priority_group: u8,
     pending_event: bool,
+    hardfault_pending: bool,
     fpccr: Option<u32>,
     scr: u32,
     reset_requested: bool,
@@ -113,6 +116,7 @@ impl Nvic {
     pub fn new(priority_mask: u8, uart_irq: Option<u8>) -> Self {
         Self {
             vector_base: None,
+            external_lines: IRQ_LINES,
             enabled: [0; BANKS],
             pending: [0; BANKS],
             priority: [0; IRQ_LINES],
@@ -120,6 +124,7 @@ impl Nvic {
             priority_mask,
             priority_group: 0,
             pending_event: false,
+            hardfault_pending: false,
             fpccr: None,
             scr: 0,
             reset_requested: false,
@@ -164,10 +169,12 @@ impl Nvic {
     }
 
     pub fn reset(&mut self) {
+        let external_lines = self.external_lines;
         let has_fpu = self.fpccr.is_some();
         let has_nrf_mpu = self.nrf_mpu.is_some();
         let mpu_count = self.mpu.as_ref().map(|mpu| mpu.count);
         *self = Self::new(self.priority_mask, self.uart_irq);
+        self.external_lines = external_lines;
         if has_fpu {
             self.enable_fpu();
         }
@@ -189,6 +196,14 @@ impl Nvic {
 
     pub fn send_event_on_pending(&self) -> bool {
         self.scr & (1 << 4) != 0
+    }
+
+    pub fn set_hardfault_pending(&mut self, pending: bool) {
+        self.hardfault_pending = pending;
+    }
+
+    pub fn hardfault_pending(&self) -> bool {
+        self.hardfault_pending
     }
 
     pub fn pending_exceptions(&self) -> [u32; BANKS] {
@@ -281,8 +296,16 @@ impl Nvic {
         }
     }
 
+    pub fn set_external_lines(&mut self, lines: usize) {
+        self.external_lines = lines.min(IRQ_LINES);
+    }
+
+    pub fn enable_extended_lines(&mut self) {
+        self.set_external_lines(48);
+    }
+
     pub fn set_line(&mut self, line: u8, high: bool, active: &ActiveExceptions) {
-        if high && usize::from(line) < IRQ_LINES && !active.contains(16 + line) {
+        if high && usize::from(line) < self.external_lines && !active.contains(16 + line) {
             self.pend(usize::from(line / 32), 1 << (line % 32));
         }
     }
@@ -339,7 +362,7 @@ impl Nvic {
         if width == 4 {
             let offset = address.wrapping_sub(BASE);
             if offset == 4 {
-                return Some((BANKS - 1) as u32);
+                return Some((self.external_lines.div_ceil(32).saturating_sub(1)) as u32);
             }
             if self.mpu.is_some() {
                 match offset {
@@ -395,6 +418,9 @@ impl Nvic {
                 return Some(self.vector_base.unwrap_or(0));
             }
             if let Some((base, bank)) = Self::bank(address) {
+                if bank * 32 >= self.external_lines {
+                    return None;
+                }
                 return Some(if matches!(base, ENABLE | DISABLE) {
                     self.enabled[bank]
                 } else {
@@ -409,7 +435,7 @@ impl Nvic {
         let priority = if system {
             &self.system_priority[..]
         } else {
-            &self.priority[..]
+            &self.priority[..self.external_lines]
         };
         let bytes = priority.get(offset..offset + width)?;
         let mut word = [0; 4];
@@ -421,7 +447,7 @@ impl Nvic {
         let offset = address.wrapping_sub(BASE);
         if width == 4 && offset == 0xf00 && self.has_fpu() {
             let irq = (value & 0x1ff) as usize;
-            if irq < IRQ_LINES {
+            if irq < self.external_lines {
                 self.pend(irq / 32, 1 << (irq % 32));
             }
             return true;
@@ -494,6 +520,11 @@ impl Nvic {
         if width == 4
             && let Some((base, bank)) = Self::bank(address)
         {
+            if bank * 32 >= self.external_lines {
+                return false;
+            }
+            let value = value & (u32::MAX >> (32 - (self.external_lines - bank * 32).min(32)));
+
             let value = if bank + 1 == BANKS {
                 value & 0xffff
             } else {
@@ -517,7 +548,7 @@ impl Nvic {
         let registers = if system {
             &mut self.system_priority[..]
         } else {
-            &mut self.priority[..]
+            &mut self.priority[..self.external_lines]
         };
         let Some(bytes) = registers.get_mut(offset..offset + width) else {
             return false;
@@ -546,5 +577,30 @@ mod tests {
         assert_eq!(nvic.preemption_priority(0x50), 0x40);
         nvic.reset();
         assert_eq!(nvic.preemption_priority(0x70), 0x70);
+    }
+
+    #[test]
+    fn renode_neonkey_nvic_routes_second_bank_irqs() {
+        let mut nvic = Nvic::new(0xf0, None);
+        nvic.set_external_lines(32);
+        assert!(!nvic.write(ENABLE + 4, 4, 1 << 5));
+        nvic.enable_extended_lines();
+        assert!(nvic.write(ENABLE + 4, 4, (1 << 5) | (1 << 9)));
+        assert!(nvic.write(PRIORITY + 37, 1, 0x71));
+        assert!(nvic.write(PRIORITY + 41, 1, 0x21));
+        nvic.set_line(37, true, &ActiveExceptions::default());
+        nvic.set_line(41, true, &ActiveExceptions::default());
+        assert_eq!(nvic.read(SET_PENDING + 4, 4), Some((1 << 5) | (1 << 9)));
+        assert_eq!(
+            nvic.next_irq(&ActiveExceptions::default()),
+            Some((41, 0x20))
+        );
+        nvic.acknowledge(41);
+        assert_eq!(
+            nvic.next_irq(&ActiveExceptions::default()),
+            Some((37, 0x70))
+        );
+        nvic.reset();
+        assert_eq!(nvic.read(ENABLE + 4, 4), Some(0));
     }
 }

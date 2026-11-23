@@ -1,9 +1,13 @@
 use std::{collections::VecDeque, io};
 
+use crate::bus::CORTEX_M_STEP_HZ;
+
+const UE: u32 = 1;
 const F7_UE: u32 = 1;
 const F4_UE: u32 = 1 << 13;
 const RE: u32 = 1 << 2;
 const TE: u32 = 1 << 3;
+const IDLE: u32 = 1 << 4;
 const RXNE: u32 = 1 << 5;
 const TC: u32 = 1 << 6;
 const TXE: u32 = 1 << 7;
@@ -36,9 +40,16 @@ pub struct Stm32Usart {
     pub base: u32,
     pub irq: Option<Stm32Irq>,
     receive: VecDeque<u8>,
+    pending_receive: VecDeque<u8>,
+    // Counts down to delivery of the next byte, or IDLE when the queue is empty.
+    receive_deadline: Option<u64>,
+    idle: bool,
+    pub frequency: Option<u32>,
     registers: [u32; 12],
     complete: bool,
     layout: UsartLayout,
+    pub legacy_layout: bool,
+    legacy_rxne_cleared: bool,
 }
 
 impl Stm32Usart {
@@ -59,16 +70,25 @@ impl Stm32Usart {
             base,
             irq,
             receive: VecDeque::new(),
+            pending_receive: VecDeque::new(),
+            receive_deadline: None,
+            idle: false,
+            frequency: None,
             registers: [0; 12],
             complete: true,
             layout,
+            legacy_layout: false,
+            legacy_rxne_cleared: false,
         }
     }
 
     pub fn reset(&mut self) {
         self.receive.clear();
+        self.cancel_receive();
+        self.idle = false;
         self.registers.fill(0);
         self.complete = true;
+        self.legacy_rxne_cleared = false;
     }
 
     pub fn size(&self) -> u32 {
@@ -86,16 +106,96 @@ impl Stm32Usart {
         address.wrapping_sub(self.base) < self.size()
     }
 
-    pub fn queue_input(&mut self, bytes: impl IntoIterator<Item = u8>) {
+    fn receiver_enabled(&self) -> bool {
         let enables = self.enable_bit() | RE;
-        if self.registers[0] & enables == enables {
+        self.registers[0] & enables == enables
+    }
+
+    fn frame_ticks(&self) -> Option<u64> {
+        let low_power = matches!(self.layout, UsartLayout::F7 { low_power: true });
+        let frequency = u64::from(self.frequency?);
+        let control = self.registers[0];
+        let brr = if low_power {
+            self.registers[3] & 0x000f_ffff
+        } else {
+            self.registers[3] & 0xffff
+        };
+        if brr == 0 {
+            return None;
+        }
+        let (divisor, multiplier) = if low_power {
+            (brr, 256)
+        } else if control & (1 << 15) != 0 {
+            ((brr & !0xf) | ((brr & 7) << 1), 2)
+        } else {
+            (brr, 1)
+        };
+        if divisor == 0 {
+            return None;
+        }
+        let word_bits = match (control & (1 << 28) != 0, control & (1 << 12) != 0) {
+            (false, true) => 9,
+            (true, false) => 7,
+            _ => 8,
+        };
+        // The programmed word length includes parity. Use half-bit units
+        // so the calculation also covers fractional stop-bit settings.
+        let stop_half_bits = [2, 1, 4, 3][(self.registers[1] >> 12 & 3) as usize];
+        let frame_half_bits = 2 + 2 * word_bits + stop_half_bits;
+        let ticks = (CORTEX_M_STEP_HZ * u64::from(divisor) * frame_half_bits)
+            .div_ceil(2 * frequency * multiplier);
+        Some(ticks)
+    }
+
+    fn cancel_receive(&mut self) {
+        self.pending_receive.clear();
+        self.receive_deadline = None;
+    }
+
+    pub fn queue_input(&mut self, bytes: impl IntoIterator<Item = u8>) {
+        if !self.receiver_enabled() {
+            return;
+        }
+        let mut bytes = bytes.into_iter().peekable();
+        if bytes.peek().is_none() {
+            return;
+        }
+        if let Some(ticks) = self.frame_ticks() {
+            if self.pending_receive.is_empty() {
+                self.receive_deadline = Some(ticks);
+            }
+            self.pending_receive.extend(bytes);
+        } else {
             self.receive.extend(bytes);
+            self.legacy_rxne_cleared = false;
+        }
+    }
+
+    pub fn tick(&mut self) {
+        let Some(remaining) = &mut self.receive_deadline else {
+            return;
+        };
+        *remaining -= 1;
+        if *remaining != 0 {
+            return;
+        }
+        if let Some(byte) = self.pending_receive.pop_front() {
+            self.receive.push_back(byte);
+            self.legacy_rxne_cleared = false;
+            // The same interval measures the next queued frame or the
+            // idle period that starts after the last byte is delivered.
+            self.receive_deadline = self.frame_ticks();
+        } else {
+            self.idle = true;
+            self.receive_deadline = None;
         }
     }
 
     fn status(&self) -> u32 {
-        let flags =
-            TXE | (u32::from(self.complete) * TC) | (u32::from(!self.receive.is_empty()) * RXNE);
+        let flags = TXE
+            | (u32::from(self.complete) * TC)
+            | (u32::from(self.idle) * IDLE)
+            | (u32::from(!self.receive.is_empty() && !self.legacy_rxne_cleared) * RXNE);
         let control = self.registers[0];
         match self.layout {
             UsartLayout::F4 => flags,
@@ -114,6 +214,7 @@ impl Stm32Usart {
             return false;
         }
         self.status() & control & (RXNE | TXE | TC) != 0
+            || (self.receiver_enabled() && self.idle && control & IDLE != 0)
     }
 
     fn f4_register(offset: u32) -> Option<usize> {
@@ -168,8 +269,31 @@ impl Stm32Usart {
         rx | tx
     }
 
+    fn legacy_register(&self, offset: u32) -> u32 {
+        match offset {
+            0x08 => self.registers[3],
+            0x0c => (self.registers[0] & !(UE | (1 << 13))) | ((self.registers[0] & UE) << 13),
+            0x10 => self.registers[1],
+            0x14 => self.registers[2],
+            0x18 => self.registers[5],
+            _ => 0,
+        }
+    }
+
     pub fn read(&mut self, address: u32, width: usize) -> u32 {
         let offset = address - self.base;
+        if self.legacy_layout {
+            let value = match offset & !3 {
+                0 => self.status() & 0xff,
+                4 if offset & 3 == 0 => {
+                    self.idle = false;
+                    self.legacy_rxne_cleared = false;
+                    u32::from(self.receive.pop_front().unwrap_or(0))
+                }
+                _ => self.legacy_register(offset & !3),
+            };
+            return (value >> ((offset & 3) * 8)) & width_mask(width);
+        }
         let value = if matches!(self.layout, UsartLayout::F4) {
             match offset & !3 {
                 0 => self.status(),
@@ -194,9 +318,50 @@ impl Stm32Usart {
         address: u32,
         width: usize,
         value: u32,
-        send: impl FnOnce(u8) -> io::Result<()>,
+        transmit: impl FnOnce(u8) -> io::Result<()>,
     ) -> io::Result<()> {
         let offset = address - self.base;
+        if self.legacy_layout {
+            let shift = (offset & 3) * 8;
+            let mask = width_mask(width) << shift;
+            let value = (value << shift) & mask;
+            let aligned = offset & !3;
+            match aligned {
+                0 => {
+                    self.complete &= mask & !value & TC == 0;
+                    self.legacy_rxne_cleared |= mask & !value & RXNE != 0;
+                    return Ok(());
+                }
+                4 => {
+                    if offset & 3 == 0 && self.registers[0] & (UE | TE) != 0 {
+                        transmit(value as u8)?;
+                        self.complete = true;
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
+            let merged = (self.legacy_register(aligned) & !mask) | value;
+            let (offset, value) = match aligned {
+                0x08 => (0x0c, merged & 0xffff),
+                0x0c => (0x00, (merged & 0x9ffc) | ((merged >> 13) & UE)),
+                0x10 => (0x04, merged),
+                0x14 => (0x08, merged),
+                0x18 => (0x14, merged & 0xffff),
+                _ => return Ok(()),
+            };
+            return self.write_modern(offset, 4, value, transmit);
+        }
+        self.write_modern(offset, width, value, transmit)
+    }
+
+    fn write_modern(
+        &mut self,
+        offset: u32,
+        width: usize,
+        value: u32,
+        transmit: impl FnOnce(u8) -> io::Result<()>,
+    ) -> io::Result<()> {
         let shift = (offset & 3) * 8;
         let mask = width_mask(width) << shift;
         let value = (value << shift) & mask;
@@ -210,7 +375,7 @@ impl Stm32Usart {
                         self.receive_byte();
                     }
                 }
-                4 if offset == 4 => self.transmit(value, send)?,
+                4 if offset == 4 => self.transmit(value, transmit)?,
                 _ => {
                     if let Some(index) = Self::f4_register(offset & !3) {
                         self.write_register(index, mask, value);
@@ -220,12 +385,36 @@ impl Stm32Usart {
             return Ok(());
         }
         match offset & !3 {
-            0x00 | 0x04 | 0x08 | 0x0c | 0x14 | 0x2c => {
-                self.write_register((offset / 4) as usize, mask, value);
+            0x00 | 0x04 | 0x0c => {
+                let old_ticks = self.frame_ticks();
+                let register = &mut self.registers[(offset / 4) as usize];
+                *register = (*register & !mask) | value;
+                if !self.receiver_enabled() {
+                    self.cancel_receive();
+                } else {
+                    let ticks = self.frame_ticks();
+                    if ticks != old_ticks && self.receive_deadline.is_some() {
+                        self.receive_deadline = ticks;
+                        if ticks.is_none() {
+                            self.receive.append(&mut self.pending_receive);
+                        }
+                    }
+                }
+            }
+            0x08 | 0x14 | 0x2c => {
+                let register = &mut self.registers[(offset / 4) as usize];
+                *register = (*register & !mask) | value;
             }
             0x18 if value & (1 << 3) != 0 => self.receive.clear(),
-            0x20 if value & TC != 0 => self.complete = false,
-            0x28 if offset & 3 == 0 => self.transmit(value, send)?,
+            0x20 => {
+                if value & TC != 0 {
+                    self.complete = false;
+                }
+                if value & IDLE != 0 {
+                    self.idle = false;
+                }
+            }
+            0x28 if offset & 3 == 0 => self.transmit(value, transmit)?,
             _ => {}
         }
         Ok(())
@@ -272,6 +461,159 @@ mod tests {
             .unwrap();
         assert_eq!(output, b"Y");
         assert_eq!(uart.read(0, 4), TXE | TC);
+    }
+
+    const CR1: u32 = 0;
+    const BRR: u32 = 0x0c;
+    const ISR: u32 = 0x1c;
+    const ICR: u32 = 0x20;
+    const RDR: u32 = 0x24;
+    const US: u64 = CORTEX_M_STEP_HZ / 1_000_000;
+
+    #[test]
+    fn renode_neonkey_legacy_uart_data_and_status() {
+        let mut uart = Stm32Usart::new("usart1".into(), 0, None, false);
+        uart.legacy_layout = true;
+        assert_eq!(uart.read(0, 4), 0xc0);
+        write(&mut uart, 8, 0x8b);
+        write(&mut uart, 0x0c, (1 << 13) | RE | TE | RXNE);
+        assert_eq!(uart.read(0x0c, 4), (1 << 13) | RE | TE | RXNE);
+        assert_eq!(uart.read(8, 4), 0x8b);
+        uart.queue_input([b'a', b'b']);
+        assert!(uart.interrupt_pending());
+        write(&mut uart, 0, !RXNE);
+        assert!(!uart.interrupt_pending());
+        assert_eq!(uart.read(4, 4), u32::from(b'a'));
+        assert!(uart.interrupt_pending());
+        assert_eq!(uart.read(4, 4), u32::from(b'b'));
+        assert!(!uart.interrupt_pending());
+        uart.write(4, 1, b'!' as u32, |byte| {
+            assert_eq!(byte, b'!');
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(uart.read(0, 4), 0xc0);
+    }
+
+    fn configured_uart(control: u32) -> Stm32Usart {
+        let mut uart = Stm32Usart::new("uart".into(), 0, None, false);
+        uart.frequency = Some(16_000_000);
+        write(&mut uart, CR1, control);
+        write(&mut uart, BRR, 0x10);
+        uart
+    }
+
+    fn write(uart: &mut Stm32Usart, addr: u32, value: u32) {
+        uart.write(addr, 4, value, |_| Ok(())).unwrap();
+    }
+
+    fn run_us(uart: &mut Stm32Usart, us: u64) {
+        for _ in 0..us * US {
+            uart.tick();
+        }
+    }
+
+    fn assert_empty(uart: &mut Stm32Usart) {
+        assert_eq!(uart.read(ISR, 4) & RXNE, 0);
+    }
+
+    // STM32_UART.robot, with CR1/ISR/RDR translated to the F072 layout.
+    #[test]
+    fn renode_stm32_usart_receives_at_configured_baud_rate_and_detects_idle() {
+        let mut uart = configured_uart(UE | RE);
+        uart.queue_input([0x12, 0x34]);
+        for byte in [0x12, 0x34] {
+            assert_empty(&mut uart);
+            run_us(&mut uart, 9);
+            assert_empty(&mut uart);
+            run_us(&mut uart, 1);
+            assert_ne!(uart.read(ISR, 4) & RXNE, 0);
+            assert_eq!(uart.read(RDR, 4), byte);
+        }
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        run_us(&mut uart, 9);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        run_us(&mut uart, 1);
+        assert_ne!(uart.read(ISR, 4) & IDLE, 0);
+        assert!(!uart.interrupt_pending());
+        write(&mut uart, CR1, UE | RE | IDLE);
+        assert!(uart.interrupt_pending());
+        write(&mut uart, ICR, IDLE);
+        assert!(!uart.interrupt_pending());
+        run_us(&mut uart, 10);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+    }
+
+    #[test]
+    fn renode_stm32_usart_parity_is_part_of_the_programmed_word_length() {
+        let mut uart = configured_uart(UE | RE | (1 << 10));
+        uart.queue_input([0x12]);
+        run_us(&mut uart, 9);
+        assert_empty(&mut uart);
+        run_us(&mut uart, 1);
+        assert_eq!(uart.read(RDR, 4), 0x12);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        run_us(&mut uart, 9);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        run_us(&mut uart, 1);
+        assert_ne!(uart.read(ISR, 4) & IDLE, 0);
+    }
+
+    #[test]
+    fn renode_stm32_usart_cancels_idle_when_the_next_frame_starts() {
+        let mut uart = configured_uart(UE | RE);
+        uart.queue_input([0x12]);
+        run_us(&mut uart, 10);
+        assert_eq!(uart.read(RDR, 4), 0x12);
+        run_us(&mut uart, 9);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        uart.queue_input([0x34]);
+        run_us(&mut uart, 1);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        run_us(&mut uart, 9);
+        assert_eq!(uart.read(RDR, 4), 0x34);
+        run_us(&mut uart, 10);
+        assert_ne!(uart.read(ISR, 4) & IDLE, 0);
+    }
+
+    #[test]
+    fn renode_stm32_usart_drops_input_if_either_enable_is_clear() {
+        let mut uart = configured_uart(UE | RE);
+        for (control, byte) in [(UE, 0x12), (RE, 0x34)] {
+            write(&mut uart, CR1, control);
+            uart.queue_input([byte]);
+            run_us(&mut uart, 10);
+            assert_empty(&mut uart);
+            write(&mut uart, CR1, UE | RE);
+            run_us(&mut uart, 10);
+            assert_empty(&mut uart);
+            assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+        }
+    }
+
+    #[test]
+    fn renode_stm32_usart_drops_an_in_flight_byte_when_re_is_cleared() {
+        let mut uart = configured_uart(UE | RE);
+        uart.queue_input([0x12]);
+        write(&mut uart, CR1, UE);
+        run_us(&mut uart, 10);
+        assert_empty(&mut uart);
+        write(&mut uart, CR1, UE | RE);
+        run_us(&mut uart, 10);
+        assert_empty(&mut uart);
+        assert_eq!(uart.read(ISR, 4) & IDLE, 0);
+    }
+
+    #[test]
+    fn renode_stm32_usart_preserves_receive_order_when_brr_becomes_zero() {
+        let mut uart = configured_uart(UE | RE);
+        uart.queue_input([0x12]);
+        assert_empty(&mut uart);
+        write(&mut uart, BRR, 0);
+        uart.queue_input([0x34]);
+        assert_eq!(uart.read(RDR, 4), 0x12);
+        assert_eq!(uart.read(RDR, 4), 0x34);
+        assert_empty(&mut uart);
     }
 
     #[test]

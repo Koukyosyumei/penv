@@ -2,6 +2,7 @@ mod andes_csr;
 mod bitmanip;
 mod bus;
 mod clint;
+mod collapsed_profile;
 mod compressed;
 mod constant_mmio;
 mod csr;
@@ -9,8 +10,10 @@ mod designware_usb;
 mod dwt;
 mod ethernet;
 mod ethernet_switch;
-mod iis2mdc;
+mod event_trace;
 mod float;
+mod host_pty;
+mod iis2mdc;
 mod image;
 mod image64;
 mod litex;
@@ -40,6 +43,7 @@ mod platform;
 mod plic;
 mod pmp;
 mod repl_syntax;
+mod rtc_clock;
 mod rv64;
 mod rv64_devices;
 mod rv64_ethernet;
@@ -103,13 +107,16 @@ mod stm32h7_sdmmc;
 mod stm32h7_spi;
 mod stm32h7_timer;
 mod sv32;
+mod sync_action;
 mod systick;
 mod thumb;
+pub mod time_handle;
+pub mod time_source;
 mod uart;
 mod uart_trigger;
+mod vector_bootstrap;
 mod veml7700;
 mod zephyr_boot;
-mod vector_bootstrap;
 
 use std::{
     env,
@@ -1075,7 +1082,8 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or_else(error)?;
-                if matches!(option, "--write-memory" | "--read-memory-now") && !value.contains('@') {
+                if matches!(option, "--write-memory" | "--read-memory-now") && !value.contains('@')
+                {
                     memory_setup.push(memory_setup::MemorySetup::parse(option, &value)?);
                     continue;
                 }
@@ -1340,7 +1348,12 @@ fn run() -> Result<ExitCode, String> {
     let has_firmware = path.is_some() || !binaries.is_empty();
     let setup_only = max_steps == Some(0) && !memory_setup.is_empty();
     let static_memory_script = monitor::is_static_memory_script(&runtime);
-    if max_steps == Some(0) && !setup_only && !static_memory_script && !sd_setup_only && platform_path.is_none() {
+    if max_steps == Some(0)
+        && !setup_only
+        && !static_memory_script
+        && !sd_setup_only
+        && platform_path.is_none()
+    {
         return Err("--max-steps requires a positive integer outside memory setup".into());
     }
     let memory_only = !has_firmware
@@ -1349,7 +1362,8 @@ fn run() -> Result<ExitCode, String> {
     let inspect_only = path.is_none()
         && binaries.is_empty()
         && (!cpu_control.is_empty() || !cpu_registers.is_empty());
-    if !has_firmware && !memory_only && !inspect_only {
+    let configuration_only = !has_firmware && monitor::is_configuration_only(&runtime);
+    if !has_firmware && !memory_only && !inspect_only && !configuration_only {
         return Err("missing firmware image; see run --help".into());
     }
     if rv64 && (!raw || platform_path.is_some()) {
@@ -1541,39 +1555,51 @@ fn run() -> Result<ExitCode, String> {
                 }
             }
         }
-    let reset_state = cpu_control
-        .iter()
-        .any(|command| matches!(command, monitor::CpuControl::Reset))
-        .then(|| machine.primary.clone());
-    for command in cpu_registers.iter().cloned() {
-        match command {
-            monitor::CpuRegisterCommand::TrapVector(register, value) => {
-                if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
-                    eprintln!("{} {readback:#x}", register.name());
+        let reset_state = cpu_control
+            .iter()
+            .any(|command| matches!(command, monitor::CpuControl::Reset))
+            .then(|| machine.primary.clone());
+        for command in cpu_registers.iter().cloned() {
+            match command {
+                monitor::CpuRegisterCommand::TrapVector(register, value) => {
+                    if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
+                        eprintln!("{} {readback:#x}", register.name());
+                    }
                 }
-            }
-            monitor::CpuRegisterCommand::ExternalPmp(path, config, index, value) => {
-                if let Some(readback) = machine.monitor_external_pmp(&path, config, index, value)? {
-                    eprintln!("{readback:#x}");
+                monitor::CpuRegisterCommand::ExternalPmp(path, config, index, value) => {
+                    if let Some(readback) =
+                        machine.monitor_external_pmp(&path, config, index, value)?
+                    {
+                        eprintln!("{readback:#x}");
+                    }
                 }
-            }
-            monitor::CpuRegisterCommand::Integer(index, value) => {
-                if let Some(readback) = machine.primary.monitor_integer_register(index, value)? {
-                    eprintln!("{readback:#x}");
+                monitor::CpuRegisterCommand::Integer(index, value) => {
+                    if let Some(readback) =
+                        machine.primary.monitor_integer_register(index, value)?
+                    {
+                        eprintln!("{readback:#x}");
+                    }
                 }
             }
         }
-    }
         if let Some(value) = vex_supervisor_irq_mask {
             machine.primary.set_vex_supervisor_irq_mask(value)?;
         }
-        if log_function_names { machine.enable_function_logging()?; }
+        if log_function_names {
+            machine.enable_function_logging()?;
+        }
         if let Some(path) = path.as_deref() {
             let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             let loaded = if hex {
                 image::load_hex(&mut machine, file)
             } else {
-                image::load(&mut machine, file, raw, script_elf_addresses, renode_elf_load)
+                image::load(
+                    &mut machine,
+                    file,
+                    raw,
+                    script_elf_addresses,
+                    renode_elf_load,
+                )
             };
             loaded.map_err(|e| format!("{}: {e}", path.display()))?;
         }
@@ -1810,26 +1836,28 @@ fn run() -> Result<ExitCode, String> {
         for access in &memory_setup {
             access.apply(&mut machine.bus)?;
         }
-    for command in cpu_control.iter().cloned() {
-        match command {
-            monitor::CpuControl::Pc(cpu, value) => {
-                if let Some(pc) = machine.monitor_pc(&cpu, value)? {
-                    eprintln!("{pc:#x}");
+        for command in cpu_control.iter().cloned() {
+            match command {
+                monitor::CpuControl::Pc(cpu, value) => {
+                    if let Some(pc) = machine.monitor_pc(&cpu, value)? {
+                        eprintln!("{pc:#x}");
+                    }
                 }
+                monitor::CpuControl::ResetVector(address) => {
+                    machine.primary.monitor_reset_vector(address)?
+                }
+                monitor::CpuControl::Reset => machine
+                    .primary
+                    .monitor_reset(reset_state.as_ref().unwrap())?,
             }
-            monitor::CpuControl::ResetVector(address) => {
-                machine.primary.monitor_reset_vector(address)?
-            }
-            monitor::CpuControl::Reset => machine
-                .primary
-                .monitor_reset(reset_state.as_ref().unwrap())?,
         }
-    }
         if inspect_only || memory_only || max_steps == Some(0) {
             return Ok(machine);
         }
         zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
-        machine.validate_entry()?;
+        if !configuration_only {
+            machine.validate_entry()?;
+        }
         if let Some((local, peer)) = ethernet_loopback {
             machine.bus.connect_rv64_ethernet(local, peer)?;
         }
@@ -1841,22 +1869,31 @@ fn run() -> Result<ExitCode, String> {
             let option = option.as_str();
             if machine.primary.rv64.is_some() {
                 match option {
-                    "--robot-tohost" if machine.hart_count() == 1 => machine.bus.watch_robot_tohost(address)?,
-                    "--robot-tohost" => return Err("--robot-tohost requires a single RV64 hart".into()),
+                    "--robot-tohost" if machine.hart_count() == 1 => {
+                        machine.bus.watch_robot_tohost(address)?
+                    }
+                    "--robot-tohost" => {
+                        return Err("--robot-tohost requires a single RV64 hart".into());
+                    }
                     "--tohost-act" => return Err("--tohost-act requires an RV32 machine".into()),
                     _ => machine.bus.watch_rv64_tohost(address)?,
                 }
             } else if machine.is_cortex_m() || option == "--robot-tohost" {
                 return Err("tohost mode requires a compatible RISC-V machine".into());
             } else {
-                let address = u32::try_from(address).map_err(|_| "RV32 tohost address exceeds 32 bits")?;
-                machine.bus.watch_tohost(address, option == "--tohost-act")?;
+                let address =
+                    u32::try_from(address).map_err(|_| "RV32 tohost address exceeds 32 bits")?;
+                machine
+                    .bus
+                    .watch_tohost(address, option == "--tohost-act")?;
             }
         }
         Ok(machine)
     };
     let mut machine = boot_machine()?;
-    if inspect_only { return Ok(ExitCode::SUCCESS); }
+    if inspect_only {
+        return Ok(ExitCode::SUCCESS);
+    }
     let mut uart_triggers = Vec::new();
     for (matches, name, action, pattern) in uart_actions {
         let trigger = UartTrigger::new(pattern, matches);
@@ -1975,6 +2012,7 @@ fn run() -> Result<ExitCode, String> {
             .map_err(|error| format!("RV64 PC trace: {error}"))?;
     }
     let (stop, steps) = result?;
+    machine.finish_profile()?;
     if let Some(path) = i2s_output
         && let Some(pcm) = machine.bus.nrf_i2s_pcm_output()
     {
@@ -2032,13 +2070,20 @@ fn run() -> Result<ExitCode, String> {
             eprintln!("{name}={}", if on { "on" } else { "off" });
         }
     }
+    if machine.cortex_m_locked_up() {
+        eprintln!("penv: Cortex-M lockup at pc={:#010x}", machine.primary.pc);
+    }
     for read in &memory_reads {
         report_ram(&machine, read)?;
     }
     report_registers(&mut machine, &register_reads)?;
     if let Stop::TestExit(code) = stop {
         eprintln!("penv: TEST FINISHED");
-        return Ok(if code == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) });
+        return Ok(if code == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        });
     }
     if let Stop::Tohost(code) = stop {
         eprintln!("penv: tohost exit code {code}");
@@ -2248,6 +2293,15 @@ fn run_machine(
         }
     }
     Ok((Stop::Limit, retired))
+}
+
+fn parse_bus_address(value: &str) -> Result<u64, String> {
+    let digits = value.replace('_', "");
+    let parsed = match digits.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => digits.parse(),
+    };
+    parsed.map_err(|_| format!("invalid bus address: {value}"))
 }
 
 fn parse_address(value: &str) -> Result<u32, String> {

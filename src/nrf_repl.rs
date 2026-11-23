@@ -735,11 +735,12 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             }
             let (port, pin) =
                 target.ok_or_else(|| button.error("expected button wired to a GPIO input"))?;
+            let mut endpoints = crate::stm32_gpio_board::GpioEndpoints::default();
+            endpoints.connect(port, &button.name, pin, 32)?;
             machine.bus.add_gpio_button(GpioButton::new(
                 button.name.clone(),
                 None,
-                port,
-                pin,
+                endpoints,
                 invert.unwrap_or(false),
             ));
         }

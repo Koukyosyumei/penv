@@ -43,6 +43,24 @@ fn upstream_stm32f072_hello_world_boots_elf_and_hex() {
 }
 
 #[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
+fn upstream_stm32f072_cpuwait_defers_elf_boot_until_released() {
+    let fixture = "stm32f072-cpuwait.resc";
+    let held = run_upstream_stm32f072_script(fixture, "1000000");
+    assert_eq!(held.status.code(), Some(2), "{held:?}");
+    assert!(held.stdout.is_empty(), "{held:?}");
+
+    let released = run_upstream_stm32f072_script(fixture, "11000000");
+    assert!(released.status.success(), "{released:?}");
+    assert!(
+        released
+            .stdout
+            .ends_with(b"Hello World! stm32f072b_disco\r\n"),
+        "{released:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires the upstream Renode tree and the public STM32F0 CRC ELF"]
 fn upstream_stm32f072_crc_firmware_passes_840_cases() {
     let result = run_upstream_stm32f072_script("stm32f072-crc.resc", "150000000");
@@ -133,16 +151,14 @@ fn upstream_stm32f072_adc_waits_for_uart_between_voltage_changes() {
 #[test]
 #[ignore = "requires the upstream Renode tree and the public STM32F072 Console Echo ELF"]
 fn upstream_stm32f072_console_echo_accepts_resc_uart_input() {
-    let completed = run_upstream_stm32f072_script("stm32f072-echo.resc", "3000000");
+    let completed = run_upstream_stm32f072_script("stm32f072-echo.resc", "1600000000");
     assert!(completed.status.success(), "{completed:?}");
-    let uart = String::from_utf8(completed.stdout).unwrap();
-    let mut lines = uart.lines();
     assert!(
-        lines.any(|line| line == "Start typing characters to see them echoed back"),
-        "{uart}"
+        completed
+            .stdout
+            .ends_with(b"Start typing characters to see them echoed back\r\nEcho working?"),
+        "{completed:?}"
     );
-    assert_eq!(lines.next(), Some("Echo working?"), "{uart}");
-    assert_eq!(lines.next(), None, "{uart}");
 }
 
 #[test]
@@ -155,6 +171,1218 @@ fn upstream_stm32f072_console_echo_replies_after_uart_prompt() {
         uart.ends_with("Start typing characters to see them echoed back\r\nEcho working?\r\n"),
         "{uart}"
     );
+}
+
+#[test]
+fn renode_resc_systick_counts_at_100_hz_for_both_write_orders() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-systick-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    systickFrequency: 48000000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let mut image = vec![0; 0x20];
+    image[..4].copy_from_slice(&0x800u32.to_le_bytes());
+    image[4..8].copy_from_slice(&0x21u32.to_le_bytes());
+    // The idle core leaves the SysTick observations to the monitor.
+    image.extend_from_slice(&0xbf30u16.to_le_bytes()); // wfi
+    image.extend_from_slice(&0xe7fdu16.to_le_bytes()); // b 0x20
+    fs::write(directory.join("firmware.bin"), image).unwrap();
+    let path = directory.join("boot.resc");
+    let run = |commands: &str, limit: &str| {
+        fs::write(&path, format!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n{commands}"
+        )).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", limit, "--script"])
+            .arg(&path)
+            .output()
+            .unwrap()
+    };
+    let reload = "sysbus WriteDoubleWord 0xe000e014 10";
+    let current = "sysbus WriteDoubleWord 0xe000e018 0";
+    for (first, second) in [(current, reload), (reload, current)] {
+        let result = run(
+            &format!(
+                "nvic Frequency 100\nsysbus WriteDoubleWord 0xe000e010 0\n{first}\n{second}\n{}",
+                concat!(
+                    "sysbus WriteDoubleWord 0xe000e010 5\n",
+                    "sysbus ReadDoubleWord 0xe000e018\n",
+                    "emulation RunFor \"0.09\"\nsysbus ReadDoubleWord 0xe000e018\n",
+                    "emulation RunFor \"0.01\"\nsysbus ReadDoubleWord 0xe000e018\n",
+                    "emulation RunFor \"0.01\"\nsysbus ReadDoubleWord 0xe000e018\n",
+                ),
+            ),
+            "11000000",
+        );
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            result.stdout,
+            b"0x0000000a\n0x00000001\n0x0000000a\n0x00000009\n"
+        );
+    }
+    for (commands, diagnostic) in [
+        ("nvic Frequency 0\n", "NVIC Frequency must be positive"),
+        ("other Frequency 100\n", "unknown Cortex-M NVIC"),
+    ] {
+        let result = run(commands, "1");
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(diagnostic),
+            "{result:?}"
+        );
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+fn run_collapsed_stack_profile(
+    fixture: &str,
+    limit: Option<usize>,
+    instructions: &[u16],
+    stack: &str,
+) {
+    let directory = std::env::temp_dir().join(format!(
+        "penv-collapsed-stack-{fixture}-{}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let mut firmware = vec![0; 0x20];
+    firmware[..8].copy_from_slice(&[0, 8, 0, 0, 0x21, 0, 0, 0]);
+    for instruction in instructions {
+        firmware.extend(instruction.to_le_bytes());
+    }
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("profile.resc");
+    let limit_arg = limit.map_or_else(String::new, |value| value.to_string());
+    fs::write(&script, format!(
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\ncpu EnableProfilerCollapsedStack \"trace.txt\" true {limit_arg}\nemulation RunFor \"0.001\"\n"
+    )).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "100000", "--script"])
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let profile = fs::read_to_string(directory.join("trace.txt")).unwrap();
+    assert!(profile.contains(stack), "{profile}");
+    if let Some(limit) = limit {
+        assert!(profile.len() <= limit);
+        assert_eq!(
+            output.stderr,
+            b"Profiler: Maximum file size exceeded, removing profiler\n"
+        );
+    } else {
+        assert!(profile.len() > 100);
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_collapsed_stack_stops_at_file_limit() {
+    run_collapsed_stack_profile(
+        "bounded",
+        Some(100),
+        &[0xf000, 0xf801, 0xe7fc, 0x4770],
+        "0x00000020;0x00000026",
+    );
+}
+
+#[test]
+fn renode_resc_collapsed_stack_is_unlimited_without_limit() {
+    run_collapsed_stack_profile(
+        "unlimited",
+        None,
+        &[0xf000, 0xf801, 0xe7fc, 0x4770],
+        "0x00000020;0x00000026",
+    );
+}
+
+#[test]
+fn renode_resc_collapsed_stack_disables_during_chained_calls() {
+    run_collapsed_stack_profile(
+        "chained",
+        Some(1000),
+        &[0xf000, 0xf800, 0xf000, 0xf800, 0xf000, 0xf800, 0xe7f8],
+        "0x00000020;0x00000024;0x00000028;0x0000002c",
+    );
+}
+
+#[test]
+fn renode_resc_array_memory_save_clear_load_restores_boot_state() {
+    let directory = std::env::temp_dir().join(format!("penv-array-save-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0+"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+flash: Memory.ArrayMemory @ sysbus 0x08000000
+    size: 0x80000
+sram: Memory.ArrayMemory @ sysbus 0x20000000
+    size: 0x20000
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0, 8, 0, 0x20, 9, 0, 0, 8, 0, 0xbf, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("save.resc");
+    let run = |commands: &str| {
+        fs::write(&script, format!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0x08000000\ncpu VectorTableOffset 0x08000000\n{commands}"
+        )).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "10", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let saved = run(r#"sysbus WriteDoubleWord 0x20000000 0x12345678
+Save @test.save
+sysbus WriteDoubleWord 0x20000000 0x87654321
+Clear
+Load @test.save
+mach set 0
+sysbus ReadDoubleWord 0x20000000
+cpu PC
+cpu Step 1
+cpu PC
+"#);
+    assert!(saved.status.success(), "{saved:?}");
+    assert_eq!(saved.stdout, b"0x12345678\n0x08000008\n0x0800000a\n");
+    let after_run = run("cpu Step 1\nSave @too-late.save\n");
+    assert_eq!(after_run.status.code(), Some(1), "{after_run:?}");
+    assert!(!directory.join("too-late.save").exists());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(directory.join("test.save"))
+        .unwrap()
+        .set_len(20)
+        .unwrap();
+    let truncated = run("Clear\nLoad @test.save\n");
+    assert_eq!(truncated.status.code(), Some(1), "{truncated:?}");
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[test]
+fn renode_resc_machine_rtc_modes_share_one_creation_time() {
+    let directory = std::env::temp_dir().join(format!("penv-rtc-modes-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let script = directory.join("rtc-modes.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+machine RealTimeClockDateTime
+machine RealTimeClockMode HostTimeLocal
+machine RealTimeClockDateTime
+machine RealTimeClockMode HostTimeUTC
+machine RealTimeClockDateTime
+machine RealTimeClockMode Epoch
+machine RealTimeClockDateTime
+"#,
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .env("TZ", "UTC0")
+        .args(["run", "--script"])
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let stdout = String::from_utf8(result.stdout).unwrap();
+    let values: Vec<_> = stdout.lines().collect();
+    assert_eq!(values.len(), 4);
+    assert_eq!(values[0], "1970-01-01 00:00:00");
+    assert_eq!(values[1], values[2]);
+    assert_ne!(values[1], values[0]);
+    assert_eq!(values[3], values[0]);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn renode_resc_opens_host_uart_pty_without_booting() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-pty-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let link = directory.join("allocated tty");
+    fs::write(&link, b"allocated file").unwrap();
+    let script = directory.join("host-uart.resc");
+    let run = |force: bool| {
+        fs::write(&script, format!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\nemulation CreateUartPtyTerminal \"tmp\" \"{}\" {force}\n",
+            link.display()
+        )).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let refused = run(false);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert_eq!(fs::read(&link).unwrap(), b"allocated file");
+    let created = run(true);
+    assert!(created.status.success(), "{created:?}");
+    assert!(fs::symlink_metadata(&link).is_err());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_global_array_memory_above_32bit_preserves_guest_writes() {
+    let directory = std::env::temp_dir().join(format!("penv-high-ram-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+vectors: Memory.MappedMemory @ sysbus 0
+    size: 8
+ram: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x8000
+high: Memory.ArrayMemory @ sysbus 0x8_0000_0000
+    size: 0x8000
+first: Memory.ArrayMemory @ sysbus 1000
+    size: 100
+second: Memory.ArrayMemory @ sysbus 2000
+    size: 100
+third: Memory.ArrayMemory @ sysbus 3000
+    size: 100
+"#,
+    )
+    .unwrap();
+    let mut program = Vec::new();
+    for instruction in [
+        0x4803_u16, 0x4904, 0x6000, 0x3004, 0x4288, 0xd3fb, 0xe7f8, 0xbf00,
+    ] {
+        program.extend(instruction.to_le_bytes());
+    }
+    program.extend(0x40000000_u32.to_le_bytes());
+    program.extend(0x40007000_u32.to_le_bytes());
+    fs::write(directory.join("loop.bin"), program).unwrap();
+    fs::write(
+        directory.join("vectors.bin"),
+        [0, 0x80, 0, 0x40, 1, 0x70, 0, 0x40],
+    )
+    .unwrap();
+    let script = directory.join("high-ram.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @vectors.bin 0
+sysbus LoadBinary @loop.bin 0x40007000
+sysbus WriteDoubleWord 1000 0x666
+sysbus WriteDoubleWord 2000 0x667
+sysbus WriteDoubleWord 3000 0x668
+sysbus ReadDoubleWord 1000
+sysbus ReadDoubleWord 2000
+sysbus ReadDoubleWord 3000
+sysbus WriteDoubleWord 0x8_0000_0000 0x12345678
+emulation RunFor "0.001"
+sysbus ReadDoubleWord 0x40000000
+sysbus ReadDoubleWord 0x40006ffc
+sysbus ReadDoubleWord 0x8_0000_0000
+sysbus ReadWord 0x8_0000_0002
+sysbus ReadByte 0x8_0000_0003
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "100000", "--script"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"0x00000666\n0x00000667\n0x00000668\n0x40000000\n0x40006ffc\n0x12345678\n0x1234\n0x12\n"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Invalidating memory fragment"));
+    // The single-registration upstream fixture uses a 1000-byte range.
+    fs::write(
+        directory.join("single.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+vectors: Memory.MappedMemory @ sysbus 0
+    size: 8
+ram: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x8000
+first: Memory.ArrayMemory @ sysbus 1000
+    size: 1000
+"#,
+    )
+    .unwrap();
+    let single = directory.join("single.resc");
+    fs::write(
+        &single,
+        r#"mach create
+machine LoadPlatformDescription @single.repl
+sysbus LoadBinary @vectors.bin 0
+sysbus LoadBinary @loop.bin 0x40007000
+sysbus WriteDoubleWord 1000 0x666
+sysbus ReadDoubleWord 1000
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "1", "--script"])
+        .arg(single)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"0x00000666\n");
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_cortex_m_hook_logs_at_current_pc() {
+    let directory = std::env::temp_dir().join(format!("penv-cpu-hook-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0, 8, 0, 0, 9, 0, 0, 0, 0, 0xbf, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("hook.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @firmware.bin 0
+cpu AddHook `cpu PC` "monitor.Parse('log \"message from the cpu hook\"')"
+sysbus.cpu AddHook 0x0a "monitor.Parse('log \"second PC\"')"
+cpu Pause
+emulation RunFor "0.00000001"
+cpu Resume
+emulation RunFor "0.00000002"
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "2", "--script"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"message from the cpu hook\nsecond PC\n");
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_cortex_m_hook_enables_systick_and_pauses() {
+    let directory = std::env::temp_dir().join(format!("penv-systick-hook-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x10000
+"#,
+    )
+    .unwrap();
+    let mut firmware = [0; 0x30];
+    firmware[..8].copy_from_slice(&[0, 8, 0, 0, 9, 0, 0, 0]);
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("systick-hook.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @firmware.bin 0
+cpu PC 0
+logLevel -1 nvic
+nvic WriteDoubleWord 0x14 0
+cpu AddHook 0x10 "machine.SystemBus.WriteDoubleWord(0xe000e010, 0x1)"
+cpu AddHook 0x20 "machine.PauseAndRequestEmulationPause()"
+emulation RunFor "0.001"
+cpu IsPaused
+cpu PC
+sysbus ReadDoubleWord 0xe000e010
+emulation RunFor "0.001"
+cpu PC
+cpu Resume
+emulation RunFor "0.00000001"
+cpu PC
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "18", "--script"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"True\n0x00000022\n0x00000005\n0x00000022\n0x00000024\n"
+    );
+    assert_eq!(
+        output.stderr,
+        b"Systick_NS enabled but it won't be started as long as the reload value is zero\nMachine paused\n"
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_gpio_button_fans_out_to_distinct_pins() {
+    let directory = std::env::temp_dir().join(format!("penv-gpio-fanout-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let repl = directory.join("board.repl");
+    let platform = r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+gpioA: GPIOPort.STM32_GPIOPort @ sysbus 0x48000000
+gpioB: GPIOPort.STM32_GPIOPort @ sysbus 0x48000400
+button: Miscellaneous.Button @ none
+    -> gpioA@2 | gpioB@3 | gpioA@2
+unused: Miscellaneous.Button @ none
+"#;
+    fs::write(&repl, platform).unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0, 8, 0, 0, 9, 0, 0, 0, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("fanout.resc");
+    fs::write(
+        &script,
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n\
+         unused PressAndRelease\nbutton Press\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
+         button Release\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
+         sysbus Unregister sysbus.gpioA\nbutton Press\nsysbus ReadDoubleWord 0x48000010\nsysbus ReadDoubleWord 0x48000410\n\
+         machine UnregisterFromParent sysbus.gpioB\nbutton Release\nsysbus ReadDoubleWord 0x48000410\n",
+    ).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let output = run();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"0x00000004\n0x00000008\n0x00000000\n0x00000000\n0x00000000\n0x00000008\n0x00000000\n"
+    );
+    fs::write(&repl, platform.replace("gpioB@3", "gpioB@16")).unwrap();
+    let invalid = run();
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("Cannot connect 16th input of gpioB; it has only 16 GPIO inputs.")
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_cortex_m_pause_halt_and_virtual_time() {
+    let directory = std::env::temp_dir().join(format!("penv-cpu-flow-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 100000000
+    initialLimit: 0xffffffff
+"#,
+    )
+    .unwrap();
+    let mut firmware = vec![0; 0x100];
+    firmware[..8].copy_from_slice(&[0, 8, 0, 0, 1, 1, 0, 0]);
+    // Upstream nop; nop; nop; jump: nop; b jump.
+    firmware.extend([0, 0xbf, 0, 0xbf, 0, 0xbf, 0, 0xbf, 0xfd, 0xe7]);
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("flow.resc");
+    let run_and_observe = concat!(
+        "emulation RunFor \"0.00000001\"\n",
+        "cpu IsPaused\ncpu IsHalted\ncpu PC\nsysbus ReadDoubleWord 0x40000024\n",
+    );
+    let run_case = |phases: &[(&str, bool, bool, u32, u32)]| {
+        let mut commands = String::from(concat!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\n",
+            "sysbus LoadBinary @firmware.bin 0\nsysbus WriteDoubleWord 0x40000000 1\n",
+            "macro reset \"\"\" sleep 0.5; log \"Machine resetting\" \"\"\"\n",
+            "emulation RunFor \"0.00000002\"\n",
+        ));
+        let mut expected = String::new();
+        for &(change, paused, halted, pc, ticks) in phases {
+            use std::fmt::Write as _;
+            commands.push_str(change);
+            if change == "machine Reset\n" {
+                commands.push_str("cpu PC\nsysbus WriteDoubleWord 0x40000000 1\n");
+                expected.push_str("Machine resetting\n0x00000100\n");
+            }
+            commands.push_str("emulation SynchroniseQuantum\n");
+            commands.push_str(run_and_observe);
+            let flag = |state| if state { "True" } else { "False" };
+            writeln!(
+                expected,
+                "{}\n{}\n0x{pc:08x}\n0x{ticks:08x}",
+                flag(paused),
+                flag(halted)
+            )
+            .unwrap();
+        }
+        fs::write(&script, commands).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "10", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            expected,
+            "{phases:?}"
+        );
+    };
+    run_case(&[("", false, false, 0x106, 3)]);
+    run_case(&[
+        ("cpu Pause\n", true, false, 0x104, 2),
+        ("cpu Resume\n", false, false, 0x106, 3),
+    ]);
+    run_case(&[
+        ("cpu IsHalted true\n", false, true, 0x104, 3),
+        ("cpu Resume\n", false, true, 0x104, 4),
+    ]);
+    for first in [
+        "cpu Pause\ncpu IsHalted true\n",
+        "cpu IsHalted true\ncpu Pause\n",
+    ] {
+        for resume_first in [true, false] {
+            let (middle, last, ticks) = if resume_first {
+                (
+                    ("cpu Resume\n", false, true, 0x104, 3),
+                    "cpu IsHalted false\n",
+                    4,
+                )
+            } else {
+                (
+                    ("cpu IsHalted false\n", true, false, 0x104, 2),
+                    "cpu Resume\n",
+                    3,
+                )
+            };
+            run_case(&[
+                (first, true, true, 0x104, 2),
+                middle,
+                (last, false, false, 0x106, ticks),
+            ]);
+        }
+    }
+    for (before_reset, paused, halted, ticks) in [
+        ("", false, false, 3),
+        ("cpu IsHalted true\n", false, true, 3),
+        ("cpu Pause\n", true, false, 2),
+        ("cpu Pause\ncpu IsHalted true\n", true, true, 2),
+    ] {
+        run_case(&[
+            (
+                before_reset,
+                paused,
+                halted,
+                if paused || halted { 0x104 } else { 0x106 },
+                ticks,
+            ),
+            ("cpu Reset\n", true, false, 0x100, ticks),
+            ("cpu Resume\n", false, false, 0x102, ticks + 1),
+        ]);
+        run_case(&[
+            (
+                before_reset,
+                paused,
+                halted,
+                if paused || halted { 0x104 } else { 0x106 },
+                ticks,
+            ),
+            ("machine Reset\n", false, false, 0x102, 1),
+            ("", false, false, 0x104, 2),
+            ("", false, false, 0x106, 3),
+        ]);
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_stm32_timer_frequency_changes_counter_rate_and_resets() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-timer-frequency-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 1000000
+    initialLimit: 0xffffffff
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0x00, 0x08, 0, 0, 9, 0, 0, 0, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("timer.resc");
+    let setup = "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n";
+    let run = |commands: &str| {
+        fs::write(&script, format!("{setup}{commands}")).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1000", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let result = run(r#"sysbus WriteDoubleWord 0x40000000 1
+emulation RunFor "0.00000125"
+sysbus ReadDoubleWord 0x40000024
+sysbus.timer2 Frequency 4000000
+emulation RunFor "0.00000020"
+sysbus ReadDoubleWord 0x40000024
+emulation RunFor "0.00000080"
+sysbus ReadDoubleWord 0x40000024
+machine Reset
+sysbus WriteDoubleWord 0x40000000 1
+emulation RunFor "0.000001"
+sysbus ReadDoubleWord 0x40000024
+"#);
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(
+        result.stdout,
+        b"0x00000001\n0x00000001\n0x00000005\n0x00000001\n"
+    );
+    let invalid = run("timer2 Frequency 0\n");
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr).contains("STM32 timer Frequency must be positive")
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn renode_resc_cortex_m_evaluates_condition_codes() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-resc-condition-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let mut image = vec![0; 0x100];
+    image[..4].copy_from_slice(&0x800u32.to_le_bytes());
+    image[4..8].copy_from_slice(&0x101u32.to_le_bytes());
+    for instruction in [
+        0x267fu16, // movs r6, #127
+        0x2e81,    // cmp r6, #129
+        0x2e7f,    // cmp r6, #127
+        0x2e7e,    // cmp r6, #126
+        0x2101,    // movs r1, #1
+        0x07ca,    // lsls r2, r1, #31
+        0x1892,    // adds r2, r2, r2
+    ] {
+        image.extend_from_slice(&instruction.to_le_bytes());
+    }
+    fs::write(directory.join("firmware.bin"), image).unwrap();
+
+    let mut script = String::from(
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n",
+    );
+    let mut expected = String::new();
+    for (step, conditions, flags) in [
+        (
+            2,
+            [false, false, true, false, false, false, false, true],
+            "0x81000000",
+        ),
+        (
+            1,
+            [true, true, false, false, false, true, false, true],
+            "0x61000000",
+        ),
+        (
+            1,
+            [false, true, false, false, true, true, true, true],
+            "0x21000000",
+        ),
+        (
+            3,
+            [true, true, false, true, false, false, false, true],
+            "0x71000000",
+        ),
+    ] {
+        use std::fmt::Write;
+        writeln!(script, "cpu Step {step}").unwrap();
+        for (code, result) in (0..=14).step_by(2).zip(conditions) {
+            writeln!(script, "cpu EvaluateConditionCode {code}").unwrap();
+            writeln!(expected, "{}", if result { "True" } else { "False" }).unwrap();
+        }
+        writeln!(script, "cpu GetRegister \"CPSR\"").unwrap();
+        writeln!(expected, "{flags}").unwrap();
+    }
+    let path = directory.join("boot.resc");
+    fs::write(&path, script).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "7", "--script"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, expected.as_bytes());
+}
+
+#[test]
+fn renode_resc_systembus_bulk_memory_commands() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-bulk-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x10
+extra: Memory.MappedMemory @ sysbus 0xc0000000
+    size: 0x10
+"#,
+    )
+    .unwrap();
+    let script = directory.join("boot.resc");
+    fs::write(directory.join("firmware.bin"), [0u8; 8]).unwrap();
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @firmware.bin 0
+sysbus WriteBytes [0x11, 0x22, 0x33, 0x44] 0x0e
+sysbus ReadBytes 0x0e 4
+sysbus WriteBytes [0, 1, 2, 3, 4, 5, 6, 7] 0xbffffffc
+sysbus ReadBytes 0xbffffffc 8
+sysbus ReadBytes 0 0
+sysbus FindBytes "11 22"
+sysbus FindBytes [0x04, 0x05, 0x06, 0x07] 0xc0000000 0xc0000003
+sysbus FindBytes "04050607" 0xc0000000 0xc0000002
+sysbus ReadByte 0xabcd1234
+sysbus WriteDoubleWord 0xc0000008 0x12345678
+sysbus ReadWord 0xc000000a
+sysbus ReadDoubleWord 0xc0000008
+sysbus UnhandledAccessBehaviour ThrowExceptionIfNotTagged
+sysbus Tag <0xabcd1200, 0x100> "parent" throwException=True
+sysbus Tag <0xabcd1230 0x10> "child tag" 0x142
+sysbus WriteByte 0xabcd1234 0
+sysbus ReadByte 0xabcd1234
+"#,
+    )
+    .unwrap();
+    let invoke = || {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .arg("run")
+            .arg("--script")
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let run = invoke();
+    assert!(run.status.success(), "{run:?}");
+    assert_eq!(
+        run.stdout,
+        concat!(
+            "[0x11, 0x22, 0x00, 0x00]\n",
+            "[0x00, 0x00, 0x00, 0x00, 0x04, 0x05, 0x06, 0x07]\n",
+            "[]\n[0x0000000e]\n[0xc0000000]\n[]\n0x00\n0x1234\n0x12345678\n0x42\n",
+        )
+        .as_bytes()
+    );
+    let source = fs::read_to_string(&script).unwrap();
+    fs::write(
+        &script,
+        source + "sysbus UnhandledAccessBehaviour DoNotReport\nsysbus WriteByte 0xabcd1240 0\n",
+    )
+    .unwrap();
+    let fault = invoke();
+    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(fault.status.code(), Some(1), "{fault:?}");
+    assert!(
+        String::from_utf8_lossy(&fault.stderr).contains("AddressError at 0xabcd1240"),
+        "{fault:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
+fn upstream_stm32f072_uart_binary_waits_for_adjacent_output() {
+    let result = run_upstream_stm32f072_script("stm32f072-uart-binary.resc", "1000000");
+    assert!(result.status.success(), "{result:?}");
+    let output = String::from_utf8(result.stdout).unwrap();
+    assert!(
+        output.contains(
+            "Hello World![0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21]"
+        ),
+        "{output:?}"
+    );
+    assert!(output.contains(" stm32f072b_disco\r\n[0x20, 0x73, 0x74, 0x6d, 0x33, 0x32, 0x66, 0x30, 0x37, 0x32, 0x62, 0x5f, 0x64, 0x69, 0x73, 0x63, 0x6f, 0x0d, 0x0a]"), "{output:?}");
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
+fn upstream_stm32f072_uart_tester_id_overrides_default() {
+    let result = run_upstream_stm32f072_script("stm32f072-uart-testers.resc", "1000000");
+    assert!(result.status.success(), "{result:?}");
+    assert!(result.stdout.starts_with(b"0\n1\n"), "{result:?}");
+    assert!(
+        result
+            .stdout
+            .ends_with(b"Hello World! stm32f072b_disco\r\n"),
+        "{result:?}"
+    );
+    let timeout = run_upstream_stm32f072_script("stm32f072-uart-tester-timeout.resc", "101000000");
+    assert_eq!(timeout.status.code(), Some(1), "{timeout:?}");
+    assert!(timeout.stdout.starts_with(b"0\n1\n"), "{timeout:?}");
+    assert!(
+        timeout
+            .stdout
+            .ends_with(b"Hello World! stm32f072b_disco\r\n"),
+        "{timeout:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&timeout.stderr).contains("Terminal tester failed!"),
+        "{timeout:?}"
+    );
+}
+
+#[test]
+fn renode_resc_uart_testers_follow_identity_and_default_selection() {
+    use std::fmt::Write;
+    let directory = std::env::temp_dir().join(format!("penv-resc-testers-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+uart0: UART.STM32F7_USART @ sysbus 0x40013800
+uart1: UART.STM32F7_USART @ sysbus 0x40004400
+"#,
+    )
+    .unwrap();
+    let mut image = vec![0; 0x20];
+    image[..4].copy_from_slice(&0x800u32.to_le_bytes());
+    image[4..8].copy_from_slice(&0x21u32.to_le_bytes());
+    image.extend_from_slice(&0xbf30u16.to_le_bytes()); // wfi
+    fs::write(directory.join("firmware.bin"), image).unwrap();
+    let boot = "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n";
+    let first = "CreateTerminalTester sysbus.uart0\n";
+    let second = "CreateTerminalTester sysbus.uart1\n";
+    let mut output = String::from("sysbus WriteDoubleWord 0x40013800 9\n");
+    for byte in b"ZEPHYR\r\n" {
+        writeln!(output, "sysbus WriteByte 0x40013828 {byte}").unwrap();
+    }
+    let run = |setup: &str, output: &str, selection: &str| {
+        let script = directory.join("boot.resc");
+        fs::write(&script, format!("{boot}{setup}{output}{selection}")).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1000", "--script"])
+            .arg(script)
+            .output()
+            .unwrap()
+    };
+    let both = format!("{first}{second}");
+    let wait = "WaitForLineOnUart \"ZEPHYR\"";
+    for (setup, selection, error) in [
+        (
+            "CreateTerminalTester sysbus.non_existing_uart\n",
+            String::new(),
+            Some("not found or of wrong type"),
+        ),
+        (first, wait.into(), None),
+        (
+            &both,
+            wait.into(),
+            Some("There is more than one tester available"),
+        ),
+        (&both, format!("{wait} testerId=0"), None),
+        (&both, format!("SetDefaultTester 0\n{wait}"), None),
+        (
+            &both,
+            format!("SetDefaultTester 1\n{wait} testerId=0"),
+            None,
+        ),
+        (
+            &both,
+            format!("SetDefaultTester 1\n{wait} timeout=1"),
+            Some("Terminal tester failed!"),
+        ),
+        (
+            &both,
+            format!("SetDefaultTester 1\nSetDefaultTester 0\n{wait}"),
+            None,
+        ),
+        (
+            &both,
+            format!("SetDefaultTester 0\nSetDefaultTester null\n{wait}"),
+            Some("There is more than one tester available"),
+        ),
+    ] {
+        let result = run(setup, &output, &selection);
+        if let Some(error) = error {
+            assert_eq!(result.status.code(), Some(1), "{result:?}");
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains(error),
+                "{result:?}"
+            );
+        } else {
+            assert!(result.status.success(), "{result:?}");
+            assert!(result.stdout.ends_with(b"ZEPHYR\r\n"), "{result:?}");
+        }
+    }
+    let binary = "CreateTerminalTester sysbus.uart0 binaryMode=true defaultPauseEmulation=true\n";
+    let stream = |data: &[u8]| {
+        let mut commands = String::from("sysbus WriteDoubleWord 0x40013800 9\n");
+        for byte in data {
+            writeln!(commands, "sysbus WriteByte 0x40013828 {byte}").unwrap();
+        }
+        commands
+    };
+    let banner = stream(b"ZEPHYR OS\r\n****\r\nshell");
+    let spanning = run(
+        binary,
+        &banner,
+        "WaitForBytesOnUart \"2a 2a 2a 2a 0d 0a 73 68\"",
+    );
+    assert!(spanning.status.success(), "{spanning:?}");
+    assert!(
+        spanning
+            .stdout
+            .ends_with(b"[0x2a, 0x2a, 0x2a, 0x2a, 0x0d, 0x0a, 0x73, 0x68]\n")
+    );
+    let adjacent = run(
+        binary,
+        &banner,
+        concat!(
+            "WaitForBytesOnUart \"5a4550485952\"\n",
+            "WaitForBytesOnUart \"20 4f 53\" matchStart=true timeout=0\n",
+            "WaitForBytesOnUart \"2a2a2a2a0d0a7368\" timeout=0\n",
+            "WaitForBytesOnUart \"656c6c\" matchStart=true timeout=0",
+        ),
+    );
+    assert!(adjacent.status.success(), "{adjacent:?}");
+    assert!(adjacent.stdout.ends_with(b"[0x65, 0x6c, 0x6c]\n"));
+    for (setup, command, message) in [
+        (
+            first,
+            "WaitForBytesOnUart \"59 52 20 4f 53\" timeout=1",
+            "Attempt to wait for bytes on a tester configured in text mode",
+        ),
+        (
+            binary,
+            "WaitForLineOnUart \"ZEPHYR\" timeout=1",
+            "Attempt to wait for text on a tester configured in binary mode",
+        ),
+        (
+            binary,
+            "WaitForBytesOnUart \"5a4550485952\"\nWaitForBytesOnUart \"52 20 4f 53\" timeout=0",
+            "Terminal tester failed!",
+        ),
+        (
+            binary,
+            "WaitForBytesOnUart \"5a4550485952\"\nWaitForBytesOnUart \"4f 53\" matchStart=true timeout=0",
+            "Terminal tester failed!",
+        ),
+    ] {
+        let result = run(setup, &banner, command);
+        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(message),
+            "{result:?}"
+        );
+    }
+    let all: Vec<u8> = (0..=255).collect();
+    let hex = all
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let list = all
+        .iter()
+        .map(|byte| format!("0x{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let result = run(
+        binary,
+        &stream(&all),
+        &format!("WaitForBytesOnUart \"{hex}\" matchStart=true"),
+    );
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(
+        result.stdout,
+        [b"0\n", all.as_slice(), format!("[{list}]\n").as_bytes()].concat()
+    );
+
+    let expression: String = all.iter().map(|byte| format!(r"\x{byte:02x}")).collect();
+    let tripled = all.repeat(3);
+    let captures = run(
+        binary,
+        &stream(&tripled),
+        &format!(
+            "WaitForBytesOnUart \"{expression}\" matchStart=true treatAsRegex=true\n{}",
+            concat!(
+                "WaitForBytesOnUart \"\\x00.*?\\xff\" matchStart=true treatAsRegex=true\n",
+                "WaitForBytesOnUart \"(\\x11.*)\\x41.*?([\\x50-\\x5f]+).*?\\xfd\" treatAsRegex=true\n",
+                "WaitForBytesOnUart \"feff\" matchStart=true timeout=0",
+            ),
+        ),
+    );
+    assert!(captures.status.success(), "{captures:?}");
+    let hex_list = |bytes: &[u8]| {
+        let items = bytes
+            .iter()
+            .map(|byte| format!("0x{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{items}]\n")
+    };
+    let expected: String = [
+        &all[..],
+        &all[..],
+        &all[0x11..0xfe],
+        &all[0x11..0x41],
+        &all[0x50..0x60],
+        &all[0xfe..],
+    ]
+    .into_iter()
+    .map(hex_list)
+    .collect();
+    assert_eq!(
+        captures.stdout,
+        [b"0\n", tripled.as_slice(), expected.as_bytes()].concat()
+    );
+
+    for (setup, data, query) in [
+        (
+            first,
+            &b"D2\r\nEntering test loop\r\n"[..],
+            "RegisterFailingUartString \"Entering.*loop\" treatAsRegex=true\nWaitForLineOnUart \"D2\"",
+        ),
+        (
+            &format!("{second}{first}")[..],
+            &b"D1\r\n"[..],
+            "RegisterFailingUartString \"D1\" testerId=1\nWaitForLineOnUart \"D1\" testerId=1",
+        ),
+    ] {
+        let received = run(setup, &stream(data), query);
+        assert_eq!(received.status.code(), Some(1), "{received:?}");
+        assert!(
+            String::from_utf8_lossy(&received.stderr).contains("Test failing entry"),
+            "{received:?}"
+        );
+    }
+    let unregistered = run(
+        first,
+        &stream(b"D1\r\n"),
+        concat!(
+            "RegisterFailingUartString \"D1\"\n",
+            "UnregisterFailingUartString \"D1\"\n",
+            "WaitForLineOnUart \"D1\"",
+        ),
+    );
+    assert!(unregistered.status.success(), "{unregistered:?}");
+
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -256,6 +1484,18 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         "emulation RunFor \"0.00000005s\"\nwaitForUartPrompt sysbus.usart1 \"A\"",
         "5",
     );
+    let timed_out = run(
+        "waitForUartPrompt sysbus.usart1 \"A\" timeout=0.00000004s",
+        "10",
+    );
+    let timed_cr = run(
+        "waitForUart sysbus.usart1 \"A\" CR timeout=0.00000007s",
+        "10",
+    );
+    let buffered_poll = run(
+        "emulation RunFor \"0.00000007s\"\nwaitForUart sysbus.usart1 \"A\" CR timeout=0s",
+        "10",
+    );
     let merged = run("waitForUart \"A\" CR", "10");
     let default = run("waitForUart sysbus.usart1 \"A\"", "10");
     let backlog = "emulation RunFor \"0.00000007s\"\nwaitForUart sysbus.usart1 \"A\" CR";
@@ -266,7 +1506,14 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         "7",
     );
     fs::remove_dir_all(directory).unwrap();
-    for result in [selected, merged, buffered, independent] {
+    for result in [
+        selected,
+        merged,
+        buffered,
+        independent,
+        timed_cr,
+        buffered_poll,
+    ] {
         assert!(result.status.success(), "{result:?}");
         assert_eq!(result.stdout, b"A\r");
         assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete"));
@@ -276,6 +1523,9 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         assert_eq!(result.stdout, b"A");
         assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete, 5 instructions"));
     }
+    assert_eq!(timed_out.status.code(), Some(1), "{timed_out:?}");
+    assert!(timed_out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&timed_out.stderr).contains("(Limit)"));
     assert_eq!(default.status.code(), Some(1), "{default:?}");
     assert!(String::from_utf8_lossy(&default.stderr).contains("(Ebreak)"));
     assert_eq!(consumed.status.code(), Some(1), "{consumed:?}");
@@ -644,7 +1894,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     fs::write(&firmware, &image).unwrap();
     let invoke = || {
         Command::new(env!("CARGO_BIN_EXE_penv"))
-            .args(["run", "--raw", "--platform"])
+            .args(["run", "--max-steps", "1000", "--raw", "--platform"])
             .arg(&board)
             .arg(&firmware)
             .output()
@@ -756,8 +2006,8 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     assert_eq!(subroutine.stdout, b"A");
     assert!(arm_elf.status.success(), "{arm_elf:?}");
     assert_eq!(arm_elf.stdout, b"E");
-    assert!(!invalid.status.success());
-    assert!(String::from_utf8_lossy(&invalid.stderr).contains("must select Thumb state"));
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("Cortex-M lockup at pc=0xeffffffe"));
 }
 
 #[test]
