@@ -140,6 +140,7 @@ pub struct Bus {
     faulting_regions: Vec<(u32, Option<u32>, bool, bool)>,
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
+    fixture_cpus: HashMap<String, String>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
@@ -460,6 +461,34 @@ impl Bus {
 
     pub fn empty_peripheral_ranges(&self, name: &str) -> Option<&[(u32, u32)]> {
         self.empty_peripherals.get(name).map(Vec::as_slice)
+    }
+
+    pub fn register_fixture_cpu(
+        &mut self,
+        parent: &str,
+        name: &str,
+        variable: &str,
+    ) -> Result<(), String> {
+        if !self.empty_peripherals.contains_key(parent) {
+            return Err(format!(
+                "RegistrationException: unregistered parent {parent:?}"
+            ));
+        }
+        let path = format!("{parent}.{name}");
+        match self.fixture_cpus.entry(path) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(variable.to_owned());
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                Err("NameSettingException: duplicate child name".into())
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn fixture_cpu_name(&self, path: &str) -> Option<&str> {
+        self.fixture_cpus.get(path).map(String::as_str)
     }
 
     pub fn map_constant_mmio(&mut self, peripheral: ConstantMmio) -> Result<(), String> {

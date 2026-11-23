@@ -1488,6 +1488,47 @@ fn construct_dependency(entry: &Entry) -> Result<(), String> {
     Ok(())
 }
 
+const MOCK_REGISTER: &str = "Antmicro.Renode.UnitTests.Mocks.MockRegister";
+const NULL_REGISTER: &str = "Antmicro.Renode.UnitTests.Mocks.NullRegister";
+
+fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(), String> {
+    let mut occupied = HashSet::new();
+    for entry in entries.iter().filter(|entry| entry.model == MOCK_CPU) {
+        let Some(registration) = entry
+            .registration
+            .as_deref()
+            .filter(|value| *value != "none")
+        else {
+            continue;
+        };
+        let parents = if registration.starts_with('{') {
+            registration_items(registration).map_err(|error| entry.error(error))?
+        } else {
+            vec![registration]
+        };
+        for name in parents {
+            let parent = entries
+                .iter()
+                .find(|parent| {
+                    parent.name == name
+                        && matches!(parent.model.as_str(), MOCK_REGISTER | NULL_REGISTER)
+                })
+                .ok_or_else(|| {
+                    entry.error("MissingReference: unknown fixture CPU registration parent")
+                })?;
+            let path = format!("sysbus.{}", parent.registered_name());
+            if parent.model == MOCK_REGISTER && !occupied.insert(parent.name.as_str()) {
+                return Err(entry.error("RegistrationException: parent already has a child"));
+            }
+            machine
+                .bus
+                .register_fixture_cpu(&path, entry.registered_name(), &entry.name)
+                .map_err(|error| entry.error(&error))?;
+        }
+    }
+    Ok(())
+}
+
 const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 
 fn validate_mock_cpu_properties(
@@ -1987,9 +2028,27 @@ fn build_entries_with_scripts(
             MOCK_DEPENDENCY if check_only && entry.registration.is_none() => {
                 construct_dependency(entry)?;
             }
-            MOCK_CPU if check_only && entry.registration.is_none() => {
+            MOCK_CPU if check_only => {
                 // This upstream fixture has no execution role when unregistered.
                 keys(entry, &["OtherCpu", "Placeholder", "EnumValue"])?;
+            }
+            MOCK_REGISTER | NULL_REGISTER if check_only => {
+                keys(entry, &[])?;
+                if matches!(entry.registration.as_deref(), None | Some("none")) {
+                    continue;
+                }
+                let mapping = if entry.model == MOCK_REGISTER {
+                    vec![(entry.address()?, 4)]
+                } else {
+                    entry.bus_ranges()?
+                };
+                machine
+                    .bus
+                    .register_empty_peripheral(
+                        format!("sysbus.{}", entry.registered_name()),
+                        mapping,
+                    )
+                    .map_err(|error| entry.error(&error))?;
             }
             MOCK_EXTERNAL => {
                 keys(entry, &[])?;
@@ -2218,10 +2277,16 @@ fn build_entries_with_scripts(
             entry.name == "sysbus"
                 || matches!(
                     entry.model.as_str(),
-                    EMPTY_PERIPHERAL | MOCK_EXTERNAL | MOCK_CPU | MOCK_DEPENDENCY
+                    EMPTY_PERIPHERAL
+                        | MOCK_EXTERNAL
+                        | MOCK_CPU
+                        | MOCK_DEPENDENCY
+                        | MOCK_REGISTER
+                        | NULL_REGISTER
                 )
         })
     {
+        register_fixture_cpus(entries, &mut machine)?;
         return Ok(machine);
     }
     if cpus.is_empty() || !ram {

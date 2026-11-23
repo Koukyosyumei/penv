@@ -137,61 +137,42 @@ fn renode_override_4() {
     );
 }
 
-fn mock_registrations(source: &str) -> HashSet<String> {
-    let mut entries = Vec::new();
+fn mock_registration_machine(source: &str) -> Result<Machine, String> {
     let path = Path::new("<platform string>");
-    parse_content(
-        path,
-        Path::new("."),
-        source,
-        Path::new("."),
-        &mut HashSet::new(),
-        &mut entries,
-    )
-    .unwrap();
-    let entries = merge_declarations(entries).unwrap();
-
-    // Model the fixed upstream NullRegister and MockCPU fixtures. Named
-    // registration parents are instantiated before registering the CPU.
-    let mut names = HashSet::new();
-    for parent in entries
-        .iter()
-        .filter(|entry| entry.model == "Antmicro.Renode.UnitTests.Mocks.NullRegister")
-    {
-        let expected = if parent.name == "register2" {
-            (100, 100)
-        } else {
-            (0, 100)
-        };
-        assert_eq!(parent.bus_range().unwrap(), expected);
-        names.insert(format!("sysbus.{}", parent.name));
-    }
-    let cpu = entries.iter().find(|entry| entry.name == "cpu").unwrap();
-    assert_eq!(cpu.model, "Antmicro.Renode.UnitTests.Mocks.MockCPU");
-    let target = cpu.registration.as_deref().unwrap();
-    if target != "none" {
-        let path = format!("sysbus.{target}");
-        assert!(names.contains(&path));
-        names.insert(format!("{path}.{}", cpu.name));
-    }
-    names
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    build_entries(path, &entries, false, true)
 }
 
 #[test]
 fn renode_registration_updates_target() {
-    let names = mock_registrations(
+    let machine = mock_registration_machine(
         "\nregister1: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>\nregister2: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus new Antmicro.Renode.Peripherals.Bus.BusRangeRegistration { range: <100, +100> }\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register1\ncpu: @register2",
+    ).unwrap();
+    assert!(
+        machine
+            .bus
+            .fixture_cpu_name("sysbus.register2.cpu")
+            .is_some()
     );
-    assert!(names.contains("sysbus.register2.cpu"));
-    assert!(!names.contains("sysbus.register1.cpu"));
+    assert!(
+        machine
+            .bus
+            .fixture_cpu_name("sysbus.register1.cpu")
+            .is_none()
+    );
 }
 
 #[test]
 fn renode_registration_cancels_target() {
-    let names = mock_registrations(
+    let machine = mock_registration_machine(
         "\nregister: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register\ncpu: @none",
+    ).unwrap();
+    assert!(
+        machine
+            .bus
+            .fixture_cpu_name("sysbus.register.cpu")
+            .is_none()
     );
-    assert!(!names.contains("sysbus.register.cpu"));
 }
 
 #[test]
@@ -1817,4 +1798,40 @@ fn renode_peripheral_registration_failure_rolls_back() {
     bus.register_empty_peripheral("sysbus.test".into(), vec![(0x100, 0x100)])
         .unwrap();
     assert_eq!(bus.read::<1>(0x100).unwrap(), 0);
+}
+
+#[test]
+fn renode_named_registration_reverse() {
+    let result = mock_registration_machine(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ register\nregister: Antmicro.Renode.UnitTests.Mocks.NullRegister @ sysbus <0, 100>\n",
+    );
+    let machine = result.unwrap();
+    assert_eq!(
+        machine.bus.fixture_cpu_name("sysbus.register.cpu"),
+        Some("cpu")
+    );
+}
+
+#[test]
+fn renode_named_registration_repeated() {
+    let result = mock_registration_machine(
+        "\nmockRegister1: Antmicro.Renode.UnitTests.Mocks.MockRegister @ sysbus 0x0\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ {\n    mockRegister1;\n    mockRegister2\n}\nmockRegister2: Antmicro.Renode.UnitTests.Mocks.MockRegister @ sysbus 0x100\n",
+    );
+    let machine = result.unwrap();
+    assert_eq!(
+        machine.bus.fixture_cpu_name("sysbus.mockRegister1.cpu"),
+        Some("cpu")
+    );
+    assert_eq!(
+        machine.bus.fixture_cpu_name("sysbus.mockRegister2.cpu"),
+        Some("cpu")
+    );
+}
+
+#[test]
+fn renode_named_registration_unregistered() {
+    let result = mock_registration_machine(
+        "\nunregisteredParent: Antmicro.Renode.UnitTests.Mocks.MockRegister\n\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ unregisteredParent\n",
+    );
+    assert!(result.err().unwrap().contains("RegistrationException:"));
 }
