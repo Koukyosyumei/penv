@@ -188,12 +188,19 @@ fn parse(
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    if visiting.len() >= 64 || !visiting.insert(canonical.clone()) {
+    if visiting.contains(&canonical) {
         return Err(format!(
-            "{}: recursive or excessively deep platform include",
+            "{}: RecurringUsing: There is a cycle in using file dependency. (recursive or excessively deep platform include)",
             path.display()
         ));
     }
+    if visiting.len() >= 64 {
+        return Err(format!(
+            "{}: platform include depth exceeds 64",
+            path.display()
+        ));
+    }
+    visiting.insert(canonical.clone());
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
     parse_content(
         path,
@@ -215,6 +222,7 @@ fn parse_content(
     visiting: &mut HashSet<PathBuf>,
     entries: &mut Vec<Entry>,
 ) -> Result<(), String> {
+    let mut imports = HashSet::new();
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
     let mut lines = content.lines().enumerate();
@@ -271,6 +279,9 @@ fn parse_content(
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
+            if !imports.insert(filename) {
+                return Err(error("DuplicateUsing: Duplicate using entry."));
+            }
             let local = directory.join(filename);
             let include_path = if local.is_file() {
                 local
@@ -278,7 +289,9 @@ fn parse_content(
                 root.join(filename)
             };
             if !include_path.exists() {
-                return Err(error(&format!("Using '{filename}' does not exist")));
+                return Err(error(&format!(
+                    "UsingFileNotFound: Using '{filename}' does not exist"
+                )));
             }
             parse(&include_path, root, visiting, entries).map_err(|e| error(&e))?;
             continue;
