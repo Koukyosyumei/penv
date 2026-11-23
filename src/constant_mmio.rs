@@ -1,10 +1,14 @@
-use crate::network_repl::{Entry, number};
+use crate::{
+    network_repl::{Entry, number},
+    platform::multiline_value,
+};
 
 pub struct ConstantMmio {
     pub base: u32,
     pub size: u32,
     values: Vec<(u32, u32)>,
     warn_unhandled: bool,
+    doubleword_only: bool,
 }
 
 impl ConstantMmio {
@@ -30,7 +34,8 @@ impl ConstantMmio {
             .ok_or("missing Python peripheral size")?;
         let base = entry.sized_sysbus_address(size)?;
         let script = script.ok_or("missing Python peripheral script")?;
-        let (mut values, warn_unhandled) = parse(script, size)?;
+        let decoded = multiline_value(script);
+        let (mut values, warn_unhandled) = parse(decoded.as_deref().unwrap_or(script), size)?;
         values.sort_unstable_by_key(|&(offset, _)| offset);
         if values.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err("duplicate Python peripheral offset".into());
@@ -40,10 +45,37 @@ impl ConstantMmio {
             size,
             values,
             warn_unhandled,
+            doubleword_only: false,
+        })
+    }
+
+    pub fn zeroed(base: u32, size: u32) -> Self {
+        Self {
+            base,
+            size,
+            values: Vec::new(),
+            warn_unhandled: false,
+            doubleword_only: false,
+        }
+    }
+
+    pub fn doubleword(base: u32, size: u32, value: u32) -> Result<Self, String> {
+        if size < 4 || base % 4 != 0 {
+            return Err("expected an aligned doubleword peripheral range".into());
+        }
+        Ok(Self {
+            base,
+            size,
+            values: vec![(0, value)],
+            warn_unhandled: false,
+            doubleword_only: true,
         })
     }
 
     pub fn offset(&self, address: u32, width: usize) -> Option<u32> {
+        if self.doubleword_only && width != 4 {
+            return None;
+        }
         let offset = address.checked_sub(self.base)?;
         (u64::from(offset) + width as u64 <= u64::from(self.size)).then_some(offset)
     }

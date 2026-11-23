@@ -87,8 +87,24 @@ const TRIVIAL_PERIPHERAL_SIZE: u32 = 0x1000;
 pub const UART_TX: u32 = 0x1000_0000;
 
 #[derive(Debug)]
+pub struct CommandError;
+
+struct CommandErrorPeripheral {
+    base: u32,
+    size: u32,
+    error: Arc<CommandError>,
+}
+
+impl CommandErrorPeripheral {
+    fn read_doubleword(&self, address: u32) -> Option<BusError> {
+        (address == self.base).then(|| BusError::Command(address, Arc::clone(&self.error)))
+    }
+}
+
+#[derive(Debug)]
 pub enum BusError {
     Unmapped(u32, usize),
+    Command(u32, Arc<CommandError>),
     AddressError(u32),
     Denied(u32),
     SlaveFault(u32),
@@ -108,6 +124,7 @@ impl BusError {
     pub fn at_virtual(self, address: u32) -> Self {
         match self {
             Self::Unmapped(_, width) => Self::Unmapped(address, width),
+            Self::Command(_, fault) => Self::Command(address, fault),
             Self::AddressError(_) => Self::AddressError(address),
             _ => self,
         }
@@ -120,6 +137,7 @@ impl fmt::Display for BusError {
             Self::Unmapped(address, width) => {
                 write!(f, "unmapped RAM access at {address:#010x} ({width} bytes)")
             }
+            Self::Command(address, _) => write!(f, "peripheral CommandError at {address:#010x}"),
             Self::AddressError(address) => write!(
                 f,
                 "Bus access failed with error: AddressError at {address:#010x}"
@@ -340,6 +358,7 @@ pub struct Bus {
     pub faulting_stack_writes: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
     byte_peripheral: std::collections::BTreeMap<u32, u8>,
+    command_error_peripherals: Vec<CommandErrorPeripheral>,
     mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
     regions: Vec<Region>,
     silencers: Vec<(u32, u32)>,
@@ -2901,6 +2920,10 @@ impl Bus {
                     let base = u64::from(mapping.base);
                     start < base + u64::from(mapping.size) && base < end
                 })
+            || self
+                .command_error_peripherals
+                .iter()
+                .any(|device| overlaps_range(start, end, device.base, device.size))
             || self.constant_mmio.iter().any(|peripheral| {
                 let base = u64::from(peripheral.base);
                 start < base + u64::from(peripheral.size) && base < end
@@ -4936,6 +4959,31 @@ impl Bus {
         Ok(())
     }
 
+    pub fn permits_unmapped_binary_bytes(&self) -> bool {
+        matches!(
+            self.unhandled_access,
+            Some(UnhandledAccess::Report | UnhandledAccess::DoNotReport)
+        )
+    }
+
+    pub fn map_command_error_peripheral(
+        &mut self,
+        base: u32,
+        size: u32,
+        error: Arc<CommandError>,
+    ) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(size);
+        if base & 3 != 0 || size < 4 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping command-error peripheral at {base:#010x}"
+            ));
+        }
+        self.command_error_peripherals
+            .push(CommandErrorPeripheral { base, size, error });
+        Ok(())
+    }
+
     pub fn save_memory(&self, output: &mut impl Write) -> io::Result<()> {
         output.write_all(&(self.regions.len() as u64).to_le_bytes())?;
         for region in &self.regions {
@@ -5665,6 +5713,14 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4
+            && let Some(error) = self
+                .command_error_peripherals
+                .iter()
+                .find_map(|device| device.read_doubleword(address))
+        {
+            return Err(error);
+        }
         #[cfg(test)]
         if N == 4
             && let Some((region, error)) = &self.command_fault_device

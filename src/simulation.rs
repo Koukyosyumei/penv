@@ -736,7 +736,7 @@ impl Node {
         }
         for (value, address) in boot.binaries {
             let (file, path) = open(&value)?;
-            image::load_binary(&mut machine, file, address.into())
+            image::load_script_binary(&mut machine, file, address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         for (cpu, address) in boot.boot_pcs {

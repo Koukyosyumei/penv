@@ -137,6 +137,9 @@ impl F4Flash {
             let sector = (self.control >> 3) & 15;
             (self.sector(sector)?, 1 << sector)
         } else {
+            eprintln!(
+                "flash_controller: Tried to erase flash, but MER and SER are reset. This should be forbidden, ignoring..."
+            );
             return None;
         };
         if (self.option_bytes >> 16) & sectors != sectors {
@@ -163,6 +166,39 @@ impl F4Flash {
 mod tests {
     use super::*;
     use crate::bus::Bus;
+
+    #[test]
+    fn renode_f407_flash_ignores_erase_without_mer_or_ser() {
+        let mut bus = if let Some(root) = std::env::var_os("PENV_F407_TIMED_RENODE_ROOT") {
+            let root = std::path::Path::new(&root);
+            crate::network_repl::load(
+                &root.join("platforms/boards/stm32f4_discovery-kit.repl"),
+                Some(root),
+            )
+            .unwrap()
+            .bus
+        } else {
+            let mut bus = Bus::default();
+            bus.map_ram(0x0800_0000, F4Flash::BANK_SIZE as usize)
+                .unwrap();
+            bus.map_f4_flash(F4Flash::new(
+                0x4002_3c00,
+                0x1fff_c000,
+                0x100,
+                0x0800_0000..0x0810_0000,
+            ))
+            .unwrap();
+            bus
+        };
+        let mut output = std::io::sink();
+        bus.write(0x0800_0000, 4, 0xdead_beef, &mut output).unwrap();
+        assert_eq!(bus.read::<4>(0x0800_0000).unwrap(), 0xdead_beef);
+        bus.write(0x4002_3c04, 4, 0x4567_0123, &mut output).unwrap();
+        bus.write(0x4002_3c04, 4, 0xcdef_89ab, &mut output).unwrap();
+        bus.write(0x4002_3c10, 4, 0x0001_0000, &mut output).unwrap();
+        assert_eq!(bus.read::<4>(0x0800_0000).unwrap(), 0xdead_beef);
+        println!("FLASH[0x08000000] = 0xDEADBEEF before and after erase request");
+    }
 
     // Port the start-without-erase-mode and mass-erase cases from stm32f4-erase.robot.
     #[test]
@@ -207,13 +243,20 @@ mod tests {
             FLASH..FLASH + F4Flash::BANK_SIZE,
         ))
         .unwrap();
-        let mut write =
-            |address, value| bus.write(address, 4, value, &mut std::io::sink()).unwrap();
-        write(FLASH, 0xdead_beef);
-        write(LAST_SECTOR, 0xcafe_babe);
-        write(0x4002_3c04, 0x4567_0123);
-        write(0x4002_3c04, 0xcdef_89ab);
-        write(0x4002_3c10, CR_START | CR_SECTOR_ERASE | (11 << 3));
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut std::io::sink()).unwrap();
+        };
+        write(&mut bus, FLASH, 0xdead_beef);
+        write(&mut bus, LAST_SECTOR, 0xcafe_babe);
+        assert_eq!(bus.read::<4>(FLASH).unwrap(), 0xdead_beef);
+        assert_eq!(bus.read::<4>(LAST_SECTOR).unwrap(), 0xcafe_babe);
+        write(&mut bus, 0x4002_3c04, 0x4567_0123);
+        write(&mut bus, 0x4002_3c04, 0xcdef_89ab);
+        write(
+            &mut bus,
+            0x4002_3c10,
+            CR_START | CR_SECTOR_ERASE | (11 << 3),
+        );
         assert_eq!(bus.read::<4>(FLASH).unwrap(), 0xdead_beef);
         assert_eq!(bus.read::<4>(LAST_SECTOR).unwrap(), u32::MAX);
     }

@@ -98,7 +98,7 @@ impl From<String> for InstructionError {
 impl From<BusError> for InstructionError {
     fn from(error: BusError) -> Self {
         match error {
-            BusError::Unmapped(..) | BusError::Misaligned(..) | BusError::AddressError(_) => {
+            BusError::Command(..) | BusError::Unmapped(..) | BusError::Misaligned(..) | BusError::AddressError(_) => {
                 Self::GuestFault
             }
             other => Self::Host(other.to_string()),
@@ -789,6 +789,7 @@ impl Thumb {
         self.fp_active = false;
         bus.clear_reservation(0);
         self.active_exceptions.insert(exception);
+        if let Some(nvic) = bus.nvic.as_mut() { nvic.set_active(self.active_exceptions); }
         self.active_exception = exception;
         self.itstate = 0;
         Ok(handler & !1)

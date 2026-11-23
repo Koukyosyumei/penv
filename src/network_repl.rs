@@ -3,7 +3,7 @@ use crate::repl_syntax::{quoted_string, unquoted_delimiters, without_comment};
 use crate::platform::{property_key, validate_entry_properties};
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -20,7 +20,7 @@ use crate::{
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
     stm32f4_rcc::F4Rcc,
-    stm32f4_spi::F4Spi,
+    stm32f4_spi::{Ad4011, F4Spi},
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -1328,10 +1328,12 @@ fn configure_f1_i2c(
         }
         controllers.push((entry, i2c));
     }
-    for entry in entries
-        .iter()
-        .filter(|entry| entry.model == F1I2c::ECHO_MODEL)
-    {
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry.model.as_str(),
+            F1I2c::ECHO_MODEL | F1I2c::HS3001_MODEL
+        )
+    }) {
         keys(entry, &[])?;
         let (parent, address) = entry
             .registration
@@ -1341,9 +1343,14 @@ fn configure_f1_i2c(
         let (_, controller) = controllers
             .iter_mut()
             .find(|(entry, _)| entry.name == parent)
-            .ok_or_else(|| entry.error("expected echo attached to STM32F1 I2C"))?;
+            .ok_or_else(|| entry.error("expected target attached to STM32F1 I2C"))?;
         let address = irq_index(address, 128).map_err(|error| entry.error(&error))?;
-        if !controller.attach_echo(address) {
+        let attached = if entry.model == F1I2c::HS3001_MODEL {
+            controller.attach_hs3001(address)
+        } else {
+            controller.attach_echo(address)
+        };
+        if !attached {
             return Err(entry.error("duplicate I2C target address"));
         }
     }
@@ -1354,6 +1361,14 @@ fn configure_f1_i2c(
             .map_err(|error| entry.error(&error))?;
     }
     Ok(())
+}
+
+fn adc_registration(entry: &Entry) -> Result<(&str, &str), String> {
+    entry
+        .registration
+        .as_deref()
+        .and_then(|registration| registration.split_once(char::is_whitespace))
+        .ok_or_else(|| entry.error("expected ADC source parent and channel"))
 }
 
 fn configure_f4_spi(
@@ -1385,9 +1400,179 @@ fn configure_f4_spi(
             return Err(entry.error("duplicate SPI loopback"));
         }
     }
+    let mut inputs = HashMap::new();
+    let mut wire_sources = HashMap::<_, BTreeMap<_, _>>::new();
+    for source in entries
+        .iter()
+        .filter(|entry| entry.model == Ad4011::SOURCE_MODEL)
+    {
+        let (parent, channel) = adc_registration(source)?;
+        let channel = number(channel).map_err(|error| source.error(&error))?;
+        let target = entries
+            .iter()
+            .find(|entry| entry.name == parent)
+            .ok_or_else(|| source.error("missing ADC source parent"))?;
+        let mut voltage = 0;
+        let mut floating = false;
+        for (key, value) in keys(source, &["defaultValueMicroVolts", "IsFloating"])? {
+            if key == "IsFloating" {
+                floating = value
+                    .parse()
+                    .map_err(|_| source.error("expected IsFloating boolean"))?;
+            } else {
+                voltage = number(value).map_err(|error| source.error(&error))?;
+            }
+        }
+        let sample = (!floating).then_some(voltage);
+        match target.model.as_str() {
+            Ad4011::WIRE_MODEL => {
+                if wire_sources
+                    .entry(parent)
+                    .or_default()
+                    .insert(channel, sample)
+                    .is_some()
+                {
+                    return Err(source.error("duplicate analog wire input"));
+                }
+            }
+            Ad4011::MUX_INPUT | Ad4011::MUX_OUTPUT
+                if channel < 16 && (target.model == Ad4011::MUX_INPUT || channel == 0) =>
+            {
+                if wire_sources
+                    .entry(parent)
+                    .or_default()
+                    .insert(channel, sample)
+                    .is_some()
+                {
+                    return Err(source.error("duplicate analog multiplexer input"));
+                }
+            }
+            Ad4011::MODEL if channel == 0 => {
+                if inputs.insert(parent, voltage).is_some() {
+                    return Err(source.error("duplicate AD4011 ADC channel 0"));
+                }
+            }
+            _ => {
+                return Err(
+                    source.error("expected AD4011 channel 0, analog wire or multiplexer input")
+                );
+            }
+        }
+    }
+    for wire in entries
+        .iter()
+        .filter(|entry| entry.model == Ad4011::WIRE_MODEL)
+    {
+        keys(wire, &[])?;
+        let (parent, channel) = adc_registration(wire)?;
+        if number(channel).ok() != Some(0)
+            || !entries
+                .iter()
+                .any(|adc| adc.name == parent && adc.model == Ad4011::MODEL)
+        {
+            return Err(wire.error("expected analog wire attached to AD4011 channel 0"));
+        }
+        let voltage = wire_sources
+            .get(wire.name.as_str())
+            .and_then(|sources| sources.values().copied().flatten().next())
+            .unwrap_or(0);
+        if inputs.insert(parent, voltage).is_some() {
+            return Err(wire.error("duplicate AD4011 ADC channel 0"));
+        }
+    }
+    for mux in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), Ad4011::MUX_INPUT | Ad4011::MUX_OUTPUT))
+    {
+        let output_mux = mux.model == Ad4011::MUX_OUTPUT;
+        let properties = if output_mux {
+            &["selectedChannel", "enabled", "outputAdc", "outputChannel"][..]
+        } else {
+            &["selectedChannel", "enabled"][..]
+        };
+        let props: HashMap<_, _> = keys(mux, properties)?.into_iter().collect();
+        let selected = number(props.get("selectedChannel").copied().unwrap_or("0"))
+            .ok()
+            .filter(|index| *index < 16)
+            .ok_or_else(|| mux.error("expected multiplexer channel 0 through 15"))?;
+        let enabled = props
+            .get("enabled")
+            .copied()
+            .unwrap_or("false")
+            .parse::<bool>()
+            .map_err(|_| mux.error("expected multiplexer enabled boolean"))?;
+        let (adc, input_channel) = if output_mux {
+            if mux.registration.as_deref() != Some("sysbus") {
+                return Err(mux.error("expected output multiplexer on sysbus"));
+            }
+            let Some(adc) = props.get("outputAdc").copied() else {
+                if props.contains_key("outputChannel") {
+                    return Err(mux.error("outputChannel requires outputAdc"));
+                }
+                continue;
+            };
+            let channel = props
+                .get("outputChannel")
+                .and_then(|channel| number(channel).ok())
+                .filter(|index| *index < 16)
+                .ok_or_else(|| mux.error("expected outputChannel from 0 through 15"))?;
+            (adc, (enabled && selected == channel).then_some(0))
+        } else {
+            let (adc, channel) = adc_registration(mux)?;
+            if number(channel).ok() != Some(0) {
+                return Err(mux.error("expected AD4011 ADC channel 0"));
+            }
+            (adc, enabled.then_some(selected))
+        };
+        if !entries
+            .iter()
+            .any(|entry| entry.name == adc && entry.model == Ad4011::MODEL)
+        {
+            return Err(mux.error("expected output connected to AD4011"));
+        }
+        let voltage = input_channel
+            .and_then(|channel| {
+                wire_sources
+                    .get(mux.name.as_str())?
+                    .get(&channel)
+                    .copied()
+                    .flatten()
+            })
+            .unwrap_or(0);
+        if inputs.insert(adc, voltage).is_some() {
+            return Err(mux.error("duplicate AD4011 ADC channel 0"));
+        }
+    }
+    let mut converters = HashMap::new();
+    for adc in entries.iter().filter(|entry| entry.model == Ad4011::MODEL) {
+        let parent = adc
+            .registration
+            .as_deref()
+            .filter(|name| {
+                entries
+                    .iter()
+                    .any(|spi| spi.name == *name && spi.model == F4Spi::MODEL)
+            })
+            .ok_or_else(|| adc.error("expected AD4011 attached to STM32F4 SPI"))?;
+        let props = keys(adc, &["referenceVoltage"])?;
+        let reference = props
+            .first()
+            .and_then(|(_, value)| value.parse::<f64>().ok())
+            .filter(|volts| (2.4..=5.1).contains(volts))
+            .ok_or_else(|| adc.error("expected referenceVoltage between 2.4 and 5.1 V"))?;
+        let input = inputs.remove(adc.name.as_str()).unwrap_or(0);
+        if loopbacks.contains(parent)
+            || converters
+                .insert(parent, Ad4011::new((reference * 1e6).round() as u32, input))
+                .is_some()
+        {
+            return Err(adc.error("duplicate SPI target"));
+        }
+    }
     for entry in entries.iter().filter(|entry| entry.model == F4Spi::MODEL) {
         let mut spi = F4Spi::new(entry.address()?);
         spi.loopback = loopbacks.contains(entry.name.as_str());
+        spi.adc = converters.remove(entry.name.as_str());
         let mut series = false;
         for (_, text) in &entry.body {
             if text.split_once(':').is_some_and(|(key, value)| {

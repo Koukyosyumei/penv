@@ -161,6 +161,26 @@ pub fn load_rv64_dtb(machine: &mut Machine, mut file: File, address: u64) -> Res
     Ok(())
 }
 
+pub fn load_script_binary(
+    machine: &mut Machine,
+    mut file: File,
+    address: u32,
+) -> Result<(), String> {
+    if !machine.bus.permits_unmapped_binary_bytes() {
+        return load_binary(machine, file, u64::from(address));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.is_empty() {
+        return Err("empty raw image".into());
+    }
+    machine
+        .bus
+        .write_bytes(address, &bytes, &mut std::io::sink())
+        .map_err(|error| error.to_string())
+}
+
 pub fn load(
     machine: &mut Machine,
     mut file: File,
@@ -171,6 +191,7 @@ pub fn load(
     if raw && renode_elf_load {
         return Err("--renode-elf-load requires an RV64 ELF".into());
     }
+
     if raw {
         return load_binary(machine, file, u64::from(machine.raw_load_address()));
     }

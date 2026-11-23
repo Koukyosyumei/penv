@@ -3100,3 +3100,58 @@ uart: UART.NS16550 @ sysbus 0x10000000
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"Q");
 }
+
+#[test]
+fn uart_plan_enforces_virtual_time_and_detects_unfinished_output() {
+    let directory = std::env::temp_dir().join(format!("penv-uart-check-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("board.repl");
+    let firmware = directory.join("firmware.bin");
+    let plan = directory.join("uart.tsv");
+    fs::write(
+        &board,
+        r#"mem: Memory.MappedMemory @ sysbus 0 { size: 0x1000 }
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000 { -> cpu@0 }
+cpu: CPU.CortexM @ sysbus { cpuType: "cortex-m4"; nvic: nvic }
+uart: UART.NS16550 @ sysbus 0x40000000
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &firmware,
+        [
+            0x00, 0x10, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, // MSP and reset vector.
+            0x4f, 0xf0, 0x80, 0x40, // mov.w r0, #0x40000000
+            0x41, 0x21, 0x01, 0x70, // Write 'A'.
+            0x0a, 0x21, 0x01, 0x70, // Write the line ending.
+            0x30, 0xbf, 0xfd, 0xe7, // Wait for interrupts in a loop.
+        ],
+    )
+    .unwrap();
+    let run = |commands: &str| {
+        fs::write(&plan, commands).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--raw", "--platform"])
+            .arg(&board)
+            .arg("--uart-check")
+            .arg(&plan)
+            .arg(&firmware)
+            .output()
+            .unwrap()
+    };
+    let complete = run("wait\t8\tA\nsecond\t0\nidle\t1\nsecond\t1\n");
+    let idle_violation = run("idle\t1\n");
+    let timeout = run("wait\t8\tmissing\n");
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(complete.status.success(), "{complete:?}");
+    assert_eq!(complete.stdout, b"A\n");
+    assert!(!idle_violation.status.success(), "{idle_violation:?}");
+    assert_eq!(idle_violation.stdout, b"A");
+    assert!(
+        String::from_utf8_lossy(&idle_violation.stderr)
+            .contains("UART output during 1 s idle window")
+    );
+    assert!(!timeout.status.success(), "{timeout:?}");
+    assert!(String::from_utf8_lossy(&timeout.stderr).contains("UART timeout after 8 s"));
+}

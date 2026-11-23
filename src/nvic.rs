@@ -58,6 +58,8 @@ pub struct Nvic {
     reset_requested: bool,
     pub lockup: bool,
     active_system: u16,
+    active: ActiveExceptions,
+    fpcar: u32,
     bus_fault_status: u32,
     bus_fault_address: u32,
     ccr: u32,
@@ -137,6 +139,8 @@ impl Nvic {
             reset_requested: false,
             lockup: false,
             active_system: 0,
+            active: ActiveExceptions::default(),
+            fpcar: 0,
             bus_fault_status: 0,
             bus_fault_address: 0,
             ccr: 1 << 9,
@@ -410,6 +414,80 @@ impl Nvic {
         }
     }
 
+    pub fn set_active(&mut self, active: ActiveExceptions) {
+        self.active = active;
+    }
+
+    pub fn enter_lockup(&mut self) {
+        self.lockup = true;
+    }
+
+    pub fn leave_lockup(&mut self) {
+        self.lockup = false;
+    }
+
+    pub fn ignores_negative_priority_data_fault(&self) -> bool {
+        self.ccr & (1 << 8) != 0
+    }
+
+    pub fn record_stacking_fault(&mut self) {
+        self.bus_fault_status |= 1 << 12; // STKERR
+    }
+
+    pub fn record_unstacking_fault(&mut self) {
+        self.bus_fault_status |= 1 << 11;
+    }
+
+    pub fn record_lazy_fault(&mut self) {
+        self.bus_fault_status |= 1 << 13;
+    }
+
+    pub fn pend_hardfault(&mut self) {
+        self.hardfault_pending = true;
+    }
+
+    pub fn take_pending_hardfault(&mut self) -> bool {
+        std::mem::take(&mut self.hardfault_pending)
+    }
+
+    pub fn lazy_fp_enabled(&self) -> bool {
+        self.fpccr.is_some_and(|value| value & (1 << 30) != 0)
+    }
+
+    pub fn reserve_lazy_fp(&mut self, address: u32, hardfault_ready: bool) {
+        self.fpcar = address;
+        if let Some(fpccr) = &mut self.fpccr {
+            *fpccr = (*fpccr & (3 << 30)) | (u32::from(hardfault_ready) << 4) | 1;
+        }
+    }
+
+    pub fn clear_lazy_fp(&mut self) {
+        if let Some(fpccr) = &mut self.fpccr {
+            *fpccr &= !1;
+        }
+    }
+
+    pub fn record_vector_fault(&mut self) {
+        self.hfsr |= 1 << 1; // VECTTBL
+    }
+
+    pub fn record_instruction_fault(&mut self, invalid_state: bool) {
+        self.bus_fault_status |= if invalid_state { 1 << 17 } else { 1 << 8 }; // INVSTATE or IBUSERR
+    }
+
+    pub fn record_fault(&mut self, address: Option<u32>) {
+        if let Some(address) = address {
+            self.bus_fault_address = address;
+            self.bus_fault_status |= (1 << 9) | (1 << 15); // PRECISERR | BFARVALID
+        } else {
+            self.bus_fault_status |= 1 << 19; // NOCP
+        }
+    }
+
+    pub fn fault_enabled(&self, exception: u8) -> bool {
+        self.fault_enables & (1 << (exception + 12)) != 0
+    }
+
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         if width == 4 {
             let offset = address.wrapping_sub(BASE);
@@ -450,6 +528,12 @@ impl Nvic {
             }
             if address == DHCSR && self.has_debug_status() {
                 return Some(u32::from(self.lockup) << 19);
+            }
+            if address == BASE + 0xd2c {
+                return Some(self.hfsr);
+            }
+            if address == BASE + 0xf38 {
+                return Some(self.fpcar);
             }
             if address == BASE + 0xd38 {
                 return Some(self.bus_fault_address);

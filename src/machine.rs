@@ -279,6 +279,7 @@ impl Fault {
                 ),
                 BusError::Unmapped(address, _)
                 | BusError::Denied(address)
+                | BusError::Command(address, _)
                 | BusError::AddressError(address)
                 | BusError::SlaveFault(address) => (
                     match access {
