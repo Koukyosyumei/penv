@@ -1369,3 +1369,100 @@ fn renode_dict_missing_colon() {
             .contains("unexpected '0'")
     );
 }
+
+fn description_syntax(source: &str, root: &Path) -> Result<Vec<Entry>, String> {
+    let mut entries = Vec::new();
+    parse_content(
+        Path::new("<platform string>"),
+        root,
+        source,
+        root,
+        &mut HashSet::new(),
+        &mut entries,
+    )?;
+    Ok(entries)
+}
+
+#[test]
+fn renode_description_parse_object_value() {
+    let entries = description_syntax(
+        "\ndisplay: Display\n    resolution: new Point\n        x: 640\n        y: 480\n",
+        Path::new("."),
+    )
+    .unwrap();
+    assert_eq!(
+        typed_attributes(&entries[0]),
+        [(
+            "resolution",
+            ScalarValue::Object(
+                "Point",
+                vec![
+                    ("x", ScalarValue::Number("640".into())),
+                    ("y", ScalarValue::Number("480".into()))
+                ]
+            )
+        )]
+    );
+}
+
+#[test]
+fn renode_description_parse_two_entries() {
+    let entries = description_syntax("\nuart1: UART @ sysbus <0x1000, +0x100>\n    someProperty: someValue\n\nuart2: UART @ sysbus <0x2000, +0x100>\n    otherProperty: \"otherValue\"\n", Path::new(".")).unwrap();
+    assert_eq!(entries.len(), 2);
+}
+
+#[test]
+fn renode_description_parse_local_and_non_local_entry() {
+    let entries =
+        description_syntax("\nperipheral: SomeHub\nlocal other: Other", Path::new(".")).unwrap();
+    assert_eq!(
+        entries.iter().map(|entry| entry.local).collect::<Vec<_>>(),
+        [false, true]
+    );
+}
+
+#[test]
+fn renode_description_parse_example() {
+    let entries = description_syntax("\nscreen: Display@graphicsCard1\n    resolution: new Point { x: 5; y: 6 }\n    refreshMode: Automatic\n    model: \"SuperDisplay\"\n    -> ic@3\n    init:\n        DrawCircle 20 20\n        DrawCircle 30 40\n\nscreen:\n    init:\n        DrawRect 40 50 1\n\nscreen:\n    init:\n        base init\n        DrawRect 40 50 1\n\nother: Display @ sysbus <0x0, +0x100> { refreshMode: Automatic; -> ic@3 }\n", Path::new(".")).unwrap();
+    assert_eq!(entries.len(), 4);
+}
+
+#[test]
+fn renode_description_parse_two_short_entries() {
+    let entries = description_syntax(
+        "\nuart: UART\n\nuart: @sysbus <0x100, +0x100>\n",
+        Path::new("."),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 2);
+}
+
+#[test]
+fn renode_description_parse_using_and_entry() {
+    let source = "\nusing \"other_file\"\n\ndevice: SomeDevice";
+    let directory =
+        std::env::temp_dir().join(format!("penv-using-and-entry-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("other_file"), "").unwrap();
+    let parsed = description_syntax(source, &directory);
+    fs::remove_dir_all(directory).unwrap();
+    assert_eq!(
+        parse_using_statement(source.lines().nth(1).unwrap())
+            .unwrap()
+            .as_deref(),
+        Some("other_file")
+    );
+    let entries = parsed.unwrap();
+    assert_eq!(entries[0].name, "device");
+    assert_eq!(entries[0].model, "SomeDevice");
+}
+
+#[test]
+fn renode_description_mixed_line_endings() {
+    let entries = description_syntax(
+        "peripheral: SomeHub\nlocal first_other: Other\r\nlocal second_other: Other\r\n",
+        Path::new("."),
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 3);
+}

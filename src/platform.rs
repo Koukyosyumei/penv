@@ -183,13 +183,11 @@ fn parse_value(value: &str, nesting: usize) -> Option<ScalarValue<'_>> {
             Some(ScalarValue::List(items))
         }
         _ if value.starts_with("new ") => {
-            let (model, body) = value.strip_prefix("new ")?.split_once('{')?;
-            let model = model.trim();
+            let (model, attributes) = object_value_parts(value.strip_prefix("new ")?)?;
             if !model.split('.').all(is_repl_identifier) {
                 return None;
             }
-            let body = body.strip_suffix('}')?;
-            let properties = value_items(body, ';')?
+            let properties = attributes
                 .into_iter()
                 .map(|attribute| {
                     let (key, value) = attribute.split_once(':')?;
@@ -211,6 +209,21 @@ fn parse_value(value: &str, nesting: usize) -> Option<ScalarValue<'_>> {
             .map(ScalarValue::Number)
             .or_else(|| enum_token(value).map(|(kind, member)| ScalarValue::Enum(kind, member))),
     }
+}
+
+fn object_value_parts(value: &str) -> Option<(&str, Vec<&str>)> {
+    if let Some((model, body)) = value.split_once('{')
+        && !model.contains('\n')
+    {
+        return Some((model.trim(), value_items(body.strip_suffix('}')?, ';')?));
+    }
+    let (model, body) = value.split_once('\n')?;
+    let attributes = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    Some((model.trim(), attributes))
 }
 
 fn parse_dictionary(value: &str, nesting: usize) -> Result<ScalarValue<'_>, String> {
