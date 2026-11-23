@@ -39,6 +39,11 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter == "RV32I_Smepmp":
         return "target", "partial", "CPU.RiscV32 Smepmp creation and CSR execution tested; Robot equivalence pending"
+    if (filename, case) in {
+        ("riscv-isa-string.robot", "Should Throw Construction Exception"),
+        ("riscv-extensions.robot", "Should Fail On Unsupported ISA"),
+    }:
+        return "target", "ported", "fixed CPU.RiscV32 construction rejected with expected diagnostic"
     if filename in {"riscv-isa-string.robot", "riscv-extensions.robot"} and parameter.lower().startswith("rv32"):
         return "target", status, "CPU.RiscV32 construction keyword; " + (basis or "fixed ISA argument")
     if filename == "pmp.robot":

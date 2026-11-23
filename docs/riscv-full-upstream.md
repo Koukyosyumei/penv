@@ -388,3 +388,17 @@ python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$
 上段の `validate-rv32-interrupt-mode.py` は固定上流からモニター 6 件も読み込みます。各ケースで上流と同じ初期値、5 回の書き込み、読み戻し、警告の有無と順序、Vectored の初期化メッセージを一つの起動スクリプトで照合し、前回移植したゲスト CSR 書き込み 6 件も再実行します。全 12 件が通過しました。実ファームウェアでは `cpu MTVEC` を設定する上流 Murax RESC の UART エコーと、RV32 virt の CLINT・PLIC 割り込みを確認しました。
 
 このグループの 12 件は上流等価として台帳に記録しています。台帳全体は上流等価合格 13 件、部分移植 31 件、未達 1,035 件です。最終分母と、V を含む最大 ISA 構成は引き続き残件です。
+
+### RV32 ISA 構築時のエラー
+
+固定 Robot の `riscv-isa-string.robot` と `riscv-extensions.robot` から、無効な ISA を渡す 5 件を移植しました。I/E の同時指定、RV32E に対する無効な標準拡張、未定義の拡張名を区別します。変更前は 5 件とも汎用的な未対応 CPU 型の診断で、上流が要求する診断を含みませんでした。
+
+`validate-rv32-isa-errors.py` は上流から文字列と期待する診断を抽出し、CPU 作成が終了コード 1 と指定メッセージを返すことを検証します。CLI が構成チェックに必要とする最小 RAM とダミー入力を添えています。判定はファームウェアの実行前に行います。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$work/isa-errors"
+```
+
+正当な ISA 文字列の構築テストには、RV32E、V とベンダー拡張、区切りを省いた表記などの未対応行が残っています。これらは対象のままとし、拒否ケースの合格に含めていません。台帳全体は上流等価合格 18 件、部分移植 31 件、未達 1,030 件です。最終分母は未確定です。

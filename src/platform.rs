@@ -1992,12 +1992,28 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
     let base = parts.next().and_then(|part| part.strip_prefix("rv32"));
     let mut missing = Vec::new();
     if let Some(base) = base {
+        if base.contains('e') && base.chars().all(|letter| "iemafdcvbg".contains(letter)) {
+            if base.contains(['i', 'g']) {
+                return "ISA string cannot contain both I and E base instruction sets at the same time.".into();
+            }
+            if base.chars().any(|letter| !"emac".contains(letter)) {
+                return "RV32E can only have M, A and C standard extensions".into();
+            }
+        }
         for letter in base.chars() {
             match letter {
                 'i' | 'm' | 'a' | 'c' => {}
                 'g' | 'f' | 'd' => {}
                 'v' => missing.push("V"),
                 _ => return format!("unsupported CPU type {value}"),
+            }
+        }
+        for extension in parts.clone() {
+            let remainder = extension.trim_start_matches(|letter| "iemafdcvbgu".contains(letter));
+            if remainder.starts_with(|letter: char| {
+                letter.is_ascii_alphabetic() && !matches!(letter, 's' | 'x' | 'z')
+            }) {
+                return format!("Undefined instructions set extension: '{remainder}'");
             }
         }
         missing.extend(parts.filter(|extension| {

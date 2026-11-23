@@ -2485,7 +2485,7 @@ Renode	tests/unit-tests/riscv-extensions.robot	24	Should Create CPUs With Suppor
 Renode	tests/unit-tests/riscv-extensions.robot	25	Should Create CPUs With Supported ISAs	RV32I_Zve64x	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
 Renode	tests/unit-tests/riscv-extensions.robot	26	Should Create CPUs With Supported ISAs	RV32I_Zve64f	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
 Renode	tests/unit-tests/riscv-extensions.robot	27	Should Create CPUs With Supported ISAs	RV32I_Zve64d	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-extensions.robot	29	Should Fail On Unsupported ISA	RV32GC_invalid_ISA	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
+Renode	tests/unit-tests/riscv-extensions.robot	29	Should Fail On Unsupported ISA	RV32GC_invalid_ISA	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-external-pmp.robot	106	Should Access All 32-Bit Config Registers From Monitor		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
 Renode	tests/unit-tests/riscv-external-pmp.robot	109	Should Access All 64-Bit Config Registers From Monitor		outside	outside	Create RV 64 Machine; CPU.RiscV64 and RiscVExternalPMP with 16 entries
 Renode	tests/unit-tests/riscv-external-pmp.robot	112	Should Access All 32-Bit Address Registers From Monitor		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
@@ -2556,10 +2556,10 @@ Renode	tests/unit-tests/riscv-isa-string.robot	71	Should Parse All Valid ISA Str
 Renode	tests/unit-tests/riscv-isa-string.robot	72	Should Parse All Valid ISA Strings	rv32em_zicsr_zifencei	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
 Renode	tests/unit-tests/riscv-isa-string.robot	73	Should Parse All Valid ISA Strings	RV32EZifencei_Xandes	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
 Renode	tests/unit-tests/riscv-isa-string.robot	75	Should Handle Both 32 And 64 Bit Versions		outside	outside	requires mixed CPU.RiscV32 and CPU.RiscV64 construction
-Renode	tests/unit-tests/riscv-isa-string.robot	81	Should Throw Construction Exception	RV32IE | ISA string cannot contain both I and E base instruction sets at the same time	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	82	Should Throw Construction Exception	RV32EI | ISA string cannot contain both I and E base instruction sets at the same time	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	83	Should Throw Construction Exception	RV32EF | RV32E can only have M, A and C standard extensions	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
-Renode	tests/unit-tests/riscv-isa-string.robot	84	Should Throw Construction Exception	RV32FE | RV32E can only have M, A and C standard extensions	target	pending	CPU.RiscV32 construction keyword; fixed ISA argument
+Renode	tests/unit-tests/riscv-isa-string.robot	81	Should Throw Construction Exception	RV32IE | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
+Renode	tests/unit-tests/riscv-isa-string.robot	82	Should Throw Construction Exception	RV32EI | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
+Renode	tests/unit-tests/riscv-isa-string.robot	83	Should Throw Construction Exception	RV32EF | RV32E can only have M, A and C standard extensions	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
+Renode	tests/unit-tests/riscv-isa-string.robot	84	Should Throw Construction Exception	RV32FE | RV32E can only have M, A and C standard extensions	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-breakpoint	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-csr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
 Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-illegal	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
