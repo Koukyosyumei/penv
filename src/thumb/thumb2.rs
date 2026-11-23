@@ -1,3 +1,4 @@
+use super::ExecuteError;
 use super::{Bus, Thumb, Write};
 
 impl Thumb {
@@ -108,7 +109,7 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
         output: &mut impl Write,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecuteError> {
         let unsupported = || format!("unsupported Thumb instruction {high:#06x} {low:#06x}");
         let rn = (high & 15) as usize;
         let rt = (low >> 12) as usize;
@@ -124,8 +125,7 @@ impl Thumb {
                     bus.read::<1>(base.wrapping_add(r[rm]))
                 } else {
                     self.read_data::<2>(bus, base.wrapping_add(r[rm].wrapping_mul(2)))
-                }
-                .map_err(|error| error.to_string())?;
+                }?;
                 *next = next.wrapping_add(offset * 2);
             }
             _ if matches!(high & 0xffc0, 0xe880 | 0xe900)
@@ -148,10 +148,9 @@ impl Thumb {
                         continue;
                     }
                     if load {
-                        r[register] = bus.read::<4>(address).map_err(|error| error.to_string())?;
+                        r[register] = bus.read::<4>(address)?;
                     } else {
-                        bus.write(address, 4, r[register], output)
-                            .map_err(|error| error.to_string())?;
+                        bus.write(address, 4, r[register], output)?;
                     }
                     address = address.wrapping_add(4);
                 }
@@ -165,15 +164,11 @@ impl Thumb {
             }
             0xe850..=0xe85e if low & 0x0f00 == 0x0f00 && rt < 13 => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
-                r[rt] = bus
-                    .read_exclusive(address)
-                    .map_err(|error| error.to_string())?;
+                r[rt] = bus.read_exclusive(address)?;
             }
             0xe840..=0xe84e if rt < 13 && rd < 13 && rd != rt && rd != rn => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
-                r[rd] = bus
-                    .write_exclusive(address, r[rt], output)
-                    .map_err(|error| error.to_string())?;
+                r[rd] = bus.write_exclusive(address, r[rt], output)?;
             }
             _ if high & 0xfe40 == 0xe840
                 && high & 0x120 != 0
@@ -192,15 +187,13 @@ impl Thumb {
                 let address = if high & 0x100 != 0 { indexed } else { r[rn] };
                 let second = address.wrapping_add(4);
                 if high & 0x10 != 0 {
-                    let first = bus.read::<4>(address).map_err(|error| error.to_string())?;
-                    let second = bus.read::<4>(second).map_err(|error| error.to_string())?;
+                    let first = bus.read::<4>(address)?;
+                    let second = bus.read::<4>(second)?;
                     r[rt] = first;
                     r[rd] = second;
                 } else {
-                    bus.write(address, 4, r[rt], output)
-                        .map_err(|error| error.to_string())?;
-                    bus.write(second, 4, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.write(address, 4, r[rt], output)?;
+                    bus.write(second, 4, r[rd], output)?;
                 }
                 if high & 0x20 != 0 {
                     r[rn] = indexed;
@@ -236,7 +229,7 @@ impl Thumb {
                 let lsb = ((low & 0x7000) >> 10) | ((low & 0xc0) >> 6);
                 let width = (low & 31) + 1;
                 if lsb + width > 32 {
-                    return Err(unsupported());
+                    return Err(unsupported().into());
                 }
                 let field = (r[rn] >> lsb) << (32 - width);
                 r[rd] = if high & 0x80 != 0 {
@@ -249,7 +242,7 @@ impl Thumb {
                 let lsb = ((low >> 10) & 0x1c) | ((low >> 6) & 3);
                 let msb = low & 31;
                 if msb < lsb {
-                    return Err(unsupported());
+                    return Err(unsupported().into());
                 }
                 let mask = (u32::MAX >> (31 - msb + lsb)) << lsb;
                 let value = if rn == 15 { 0 } else { r[rn] };
@@ -260,7 +253,7 @@ impl Thumb {
                 let kind = (low >> 4) & 3;
                 let (shifted, carry) = self.shift_immediate(r[rm], kind, shift);
                 if !self.wide_alu(high, low, shifted, carry, r) {
-                    return Err(unsupported());
+                    return Err(unsupported().into());
                 }
             }
             0xfa00..=0xfa1f | 0xfa40..=0xfa5f if low & 0xf0c0 == 0xf080 && rd < 15 && rm < 15 => {
@@ -355,8 +348,7 @@ impl Thumb {
                 } else {
                     self.read_data::<2>(bus, address)
                         .map(|value| value as i16 as i32 as u32)
-                }
-                .map_err(|error| error.to_string())?;
+                }?;
             }
             0xf85f | 0xf8df => {
                 let base = *next & !3;
@@ -366,9 +358,7 @@ impl Thumb {
                 } else {
                     base.wrapping_add(offset)
                 };
-                let value = self
-                    .read_data::<4>(bus, address)
-                    .map_err(|error| error.to_string())?;
+                let value = self.read_data::<4>(bus, address)?;
                 if rt == 15 {
                     *next = self.branch(value, r, bus)?;
                 } else {
@@ -383,11 +373,9 @@ impl Thumb {
                         1 => self.read_data::<1>(bus, address),
                         2 => self.read_data::<2>(bus, address),
                         _ => self.read_data::<4>(bus, address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                    }?;
                 } else {
-                    self.write_data(bus, address, width, r[rt], output)
-                        .map_err(|error| error.to_string())?;
+                    self.write_data(bus, address, width, r[rt], output)?;
                 }
             }
             0xf800..=0xf85e | 0xf910..=0xf93e
@@ -401,11 +389,11 @@ impl Thumb {
                 let width = 1 << ((high >> 5) & 3);
                 let writeback = low & 0x100 != 0;
                 if writeback && rn == rt {
-                    return Err(unsupported());
+                    return Err(unsupported().into());
                 }
                 let register_offset = low & 0x800 == 0;
                 if register_offset && rm == 15 {
-                    return Err(unsupported());
+                    return Err(unsupported().into());
                 }
                 let offset = if register_offset {
                     r[rm] << ((low >> 4) & 3)
@@ -423,8 +411,7 @@ impl Thumb {
                     r[rn]
                 };
                 if high & 0x10 == 0 {
-                    self.write_data(bus, address, width, r[rt], output)
-                        .map_err(|error| error.to_string())?;
+                    self.write_data(bus, address, width, r[rt], output)?;
                 } else {
                     let signed = high & 0x100 != 0;
                     let value = match (width, signed) {
@@ -437,8 +424,7 @@ impl Thumb {
                         (1, false) => self.read_data::<1>(bus, address),
                         (2, false) => self.read_data::<2>(bus, address),
                         _ => self.read_data::<4>(bus, address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                    }?;
                     if writeback {
                         r[rn] = indexed;
                     }
@@ -452,7 +438,7 @@ impl Thumb {
                     r[rn] = indexed;
                 }
             }
-            _ => return Err(unsupported()),
+            _ => return Err(unsupported().into()),
         }
         Ok(())
     }

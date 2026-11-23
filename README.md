@@ -484,8 +484,8 @@ tests/stm32f407-upstream-smoke.sh target/close-f407-platform
 tests/stm32f407-freertos-smoke.sh target/stm32f407-cm4f --fpu
 ```
 
-残課題は FPv4-SP の算術命令、FPCCR の遅延スタック保存（現状は例外進入時に保存）、
-FPU アクセス違反時の UsageFault、一般の Python モニターコマンド、
+残課題は FPv4-SP の残りの算術命令、FPCCR の遅延スタック保存（現状は例外進入時に保存）、
+特権限定の FPU アクセス、一般の Python モニターコマンド、
 Contiki の DHCP リース取得と UDP 疎通の検証です。
 
 ### STM32F407 上流ケースの棚卸し
@@ -539,3 +539,5 @@ USB データ転送、汎用 SVD 展開、フラッシュ書き込み、CAN 通�
 Discovery 全 13 ケースと共有候補の個別台帳、確認済みの観測条件、再現手順と未達は
 [STM32F407 Discovery 上流ケース台帳](docs/stm32f407-full-upstream.md) に記録しています。
 Peripheral Export はこの照合の対象に含め、未変更の CPU REPL からファイルを書き出して検査します。
+
+Cortex-M4F の精密 BusFault と NOCP の ELF 検査は同じ台帳の「Cortex-M4F の精密 BusFault と NOCP」を参照してください。

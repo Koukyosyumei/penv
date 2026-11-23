@@ -50,6 +50,9 @@ pub struct Nvic {
     cpacr: u32,
     fpccr: Option<u32>,
     fault_enables: u32,
+    cfsr: u32,
+    hfsr: u32,
+    bfar: u32,
     mpu: Option<Mpu>,
     has_cache: bool,
     cache_selector: u32,
@@ -119,6 +122,9 @@ impl Nvic {
             cpacr: 0,
             fpccr: None,
             fault_enables: 0,
+            cfsr: 0,
+            hfsr: 0,
+            bfar: 0,
             mpu: None,
             has_cache: false,
             cache_selector: 0,
@@ -142,13 +148,14 @@ impl Nvic {
         self.fpccr.is_some_and(|value| value & (1 << 31) != 0)
     }
 
-    pub const RANGES: [(u32, u32); 10] = [
+    pub const RANGES: [(u32, u32); 11] = [
         (ENABLE, PRIORITY_END + 1),
         (CPUID, CPUID + 4),
         (VTOR, AIRCR + 4),
         (CPACR, CPACR + 4),
         (FPCCR, FPCCR + 4),
         (BASE + 0xd24, BASE + 0xd30),
+        (BASE + 0xd38, BASE + 0xd3c),
         (BASE + 0xd90, BASE + 0xdbc),
         (BASE + 0xd78, BASE + 0xd88),
         (BASE + 0xf50, BASE + 0xf78),
@@ -278,7 +285,28 @@ impl Nvic {
         }
     }
 
+    pub fn record_fault(&mut self, address: Option<u32>) {
+        if let Some(address) = address {
+            self.bfar = address;
+            self.cfsr |= (1 << 9) | (1 << 15); // PRECISERR | BFARVALID
+        } else {
+            self.cfsr |= 1 << 19; // NOCP
+        }
+    }
+
+    pub fn fault_enabled(&self, exception: u8) -> bool {
+        self.fault_enables & (1 << (exception + 12)) != 0
+    }
+
+    pub fn force_hard_fault(&mut self) {
+        self.hfsr |= 1 << 30;
+    }
+
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
+        let cfsr_offset = address.wrapping_sub(BASE + 0xd28);
+        if matches!(width, 1 | 2 | 4) && cfsr_offset <= 4 - width as u32 {
+            return Some((self.cfsr >> (cfsr_offset * 8)) & (u32::MAX >> (32 - width * 8)));
+        }
         if width == 4 {
             let offset = address.wrapping_sub(BASE);
             if self.has_cache {
@@ -308,8 +336,11 @@ impl Nvic {
             if address == BASE + 0xd24 {
                 return Some(self.fault_enables);
             }
-            if matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
-                return Some(0);
+            if address == BASE + 0xd2c {
+                return Some(self.hfsr);
+            }
+            if address == BASE + 0xd38 {
+                return Some(self.bfar);
             }
             if address == CPUID && self.has_fpu() {
                 return Some(0x410f_c241);
@@ -389,7 +420,17 @@ impl Nvic {
             self.fault_enables = value & (7 << 16);
             return true;
         }
-        if width == 4 && matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
+        let cfsr_offset = address.wrapping_sub(BASE + 0xd28);
+        if matches!(width, 1 | 2 | 4) && cfsr_offset <= 4 - width as u32 {
+            self.cfsr &= !((value & (u32::MAX >> (32 - width * 8))) << (cfsr_offset * 8));
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd2c {
+            self.hfsr &= !value;
+            return true;
+        }
+        if width == 4 && address == BASE + 0xd38 {
+            self.bfar = value;
             return true;
         }
         if width == 4

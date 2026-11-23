@@ -4,10 +4,41 @@ mod thumb2;
 use std::io::Write;
 
 use crate::{
-    bus::Bus,
+    bus::{Bus, BusError},
     nvic::ActiveExceptions,
     systick::{PENDSV, SYSTICK},
 };
+
+#[derive(Debug)]
+enum ExecuteError {
+    Other(String),
+    Data(BusError),
+    NoCoprocessor,
+}
+
+impl From<String> for ExecuteError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<&str> for ExecuteError {
+    fn from(error: &str) -> Self {
+        error.to_owned().into()
+    }
+}
+
+impl From<BusError> for ExecuteError {
+    fn from(error: BusError) -> Self {
+        Self::Data(error)
+    }
+}
+
+pub enum Instruction {
+    Retired,
+    Breakpoint,
+    Fault,
+}
 
 #[derive(Clone, Default)]
 pub struct Thumb {
@@ -565,13 +596,69 @@ impl Thumb {
         }
     }
 
-    pub fn step(
+    pub fn execute_instruction(
         &mut self,
         pc: &mut u32,
         r: &mut [u32; 32],
         bus: &mut Bus,
         output: &mut impl Write,
-    ) -> Result<bool, String> {
+    ) -> Result<Instruction, String> {
+        let it_state = self.it_state;
+        let (exception, address) = match self.step(pc, r, bus, output) {
+            Ok(true) => return Ok(Instruction::Retired),
+            Ok(false) => return Ok(Instruction::Breakpoint),
+            Err(ExecuteError::Data(BusError::Unmapped(address, _)))
+                if self.thumb2 && bus.nvic.is_some() =>
+            {
+                (5, Some(address))
+            }
+            Err(ExecuteError::NoCoprocessor) if bus.nvic.is_some() => (6, None),
+            Err(ExecuteError::NoCoprocessor) => {
+                return Err("FPv4-SP instruction with coprocessor access disabled".into());
+            }
+            Err(ExecuteError::Data(error)) => return Err(error.to_string()),
+            Err(ExecuteError::Other(error)) => return Err(error),
+        };
+        self.it_state = it_state;
+        let nvic = bus.nvic.as_mut().unwrap();
+        nvic.record_fault(address);
+        let priority = nvic.preemption_priority(nvic.priority(exception));
+        let can_preempt = self.active_exception == 0
+            || (self.active_exception > 3
+                && priority < nvic.preemption_priority(nvic.priority(self.active_exception)));
+        let exception = if nvic.fault_enabled(exception)
+            && can_preempt
+            && !self.interrupts_masked
+            && !self.faultmask
+            && (self.basepri == 0 || priority < nvic.preemption_priority(self.basepri))
+        {
+            exception
+        } else {
+            nvic.force_hard_fault();
+            if (1..=3).contains(&self.active_exception) || self.faultmask {
+                return Err("Cortex-M lockup after synchronous fault".into());
+            }
+            3
+        };
+        *pc = self
+            .exception_entry(exception, *pc, r, bus)
+            .map_err(|error| {
+                if let Some(address) = address {
+                    format!("precise BusFault at {address:#010x}: {error}")
+                } else {
+                    format!("NOCP UsageFault: {error}")
+                }
+            })?;
+        Ok(Instruction::Fault)
+    }
+
+    fn step(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<bool, ExecuteError> {
         let inst = bus.read_ram::<2>(*pc).map_err(|error| error.to_string())?;
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let in_it = self.it_state != 0;
@@ -673,7 +760,8 @@ impl Thumb {
                     if target & 1 == 0 {
                         return Err(format!(
                             "branch target {target:#010x} does not select Thumb state"
-                        ));
+                        )
+                        .into());
                     }
                     r[14] = next | 1;
                     next = target & !1;
@@ -683,9 +771,7 @@ impl Thumb {
             }
             0x4800..=0x4fff => {
                 let address = (architectural_pc & !3).wrapping_add((inst & 0xff) << 2);
-                r[((inst >> 8) & 7) as usize] = self
-                    .read_data::<4>(bus, address)
-                    .map_err(|error| error.to_string())?;
+                r[((inst >> 8) & 7) as usize] = self.read_data::<4>(bus, address)?;
             }
             0x5000..=0x5fff => {
                 let offset = ((inst >> 6) & 7) as usize;
@@ -693,15 +779,13 @@ impl Thumb {
                 let operation = (inst >> 9) & 7;
                 if operation < 3 {
                     let width = [4, 2, 1][operation as usize];
-                    self.write_data(bus, address, width, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    self.write_data(bus, address, width, r[rd], output)?;
                 } else {
                     let value = match operation {
                         3 | 6 => self.read_data::<1>(bus, address),
                         5 | 7 => self.read_data::<2>(bus, address),
                         _ => self.read_data::<4>(bus, address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                    }?;
                     r[rd] = match operation {
                         3 => (value as i8 as i32) as u32,
                         7 => (value as i16 as i32) as u32,
@@ -717,27 +801,22 @@ impl Thumb {
                 };
                 let address = r[rn].wrapping_add(((inst >> 6) & 31) * width);
                 if inst & 0x800 == 0 {
-                    self.write_data(bus, address, width as usize, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    self.write_data(bus, address, width as usize, r[rd], output)?;
                 } else {
                     r[rd] = match width {
                         1 => self.read_data::<1>(bus, address),
                         2 => self.read_data::<2>(bus, address),
                         _ => self.read_data::<4>(bus, address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                    }?;
                 }
             }
             0x9000..=0x9fff => {
                 let register = ((inst >> 8) & 7) as usize;
                 let address = r[13].wrapping_add((inst & 0xff) << 2);
                 if inst & 0x800 == 0 {
-                    self.write_data(bus, address, 4, r[register], output)
-                        .map_err(|error| error.to_string())?;
+                    self.write_data(bus, address, 4, r[register], output)?;
                 } else {
-                    r[register] = self
-                        .read_data::<4>(bus, address)
-                        .map_err(|error| error.to_string())?;
+                    r[register] = self.read_data::<4>(bus, address)?;
                 }
             }
             0xa000..=0xafff => {
@@ -793,7 +872,7 @@ impl Thumb {
                     0 => value.swap_bytes(),
                     1 => ((value & 0xff00_ff00) >> 8) | ((value & 0x00ff_00ff) << 8),
                     3 => ((value as u16).swap_bytes() as i16 as i32) as u32,
-                    _ => return Err(unsupported()),
+                    _ => return Err(unsupported().into()),
                 };
             }
             0xbe00..=0xbeff => return Ok(false),
@@ -811,28 +890,25 @@ impl Thumb {
                 let load = inst & 0x800 != 0;
                 let count = registers.count_ones();
                 if address & 3 != 0 {
-                    return Err(format!(
-                        "unaligned multiple-register transfer at {address:#010x}"
-                    ));
+                    return Err(
+                        format!("unaligned multiple-register transfer at {address:#010x}").into(),
+                    );
                 }
                 let selected = (0..8).filter(|register| registers & (1 << register) != 0);
                 if load {
                     let mut values = *r;
                     for (index, register) in selected.enumerate() {
-                        values[register] = bus
-                            .read_ram::<4>(address.wrapping_add(index as u32 * 4))
-                            .map_err(|error| error.to_string())?;
+                        values[register] =
+                            bus.read_ram::<4>(address.wrapping_add(index as u32 * 4))?;
                     }
                     *r = values;
                 } else {
                     if registers & (1 << base_register) != 0
                         && registers.trailing_zeros() as usize != base_register
                     {
-                        return Err(unsupported());
+                        return Err(unsupported().into());
                     }
-                    let memory = bus
-                        .guest_memory(address, count as usize * 4)
-                        .map_err(|error| error.to_string())?;
+                    let memory = bus.guest_memory(address, count as usize * 4)?;
                     for (word, register) in memory.as_chunks_mut::<4>().0.iter_mut().zip(selected) {
                         *word = r[register].to_le_bytes();
                     }
@@ -897,7 +973,7 @@ impl Thumb {
                         (0xf3ef, 0x8000..=0x8fff) => {
                             let register = ((low >> 8) & 15) as usize;
                             if matches!(register, 13 | 15) {
-                                return Err(unsupported());
+                                return Err(unsupported().into());
                             }
                             r[register] = self.system_read(sysm, r).ok_or_else(unsupported)?;
                         }
@@ -906,13 +982,13 @@ impl Thumb {
                             if matches!(register, 13 | 15)
                                 || !self.system_write(sysm, r[register], r, bus)
                             {
-                                return Err(unsupported());
+                                return Err(unsupported().into());
                             }
                         }
                         _ if self.thumb2 => {
                             self.execute_thumb2(inst, low, &mut next, r, bus, output)?
                         }
-                        _ => return Err(unsupported()),
+                        _ => return Err(unsupported().into()),
                     }
                 }
             }
@@ -929,7 +1005,7 @@ impl Thumb {
                     self.execute_thumb2(inst, low, &mut next, r, bus, output)?;
                 }
             }
-            _ => return Err(unsupported()),
+            _ => return Err(unsupported().into()),
         }
         if in_it
             && inst < 0x4400

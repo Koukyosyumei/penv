@@ -68,11 +68,42 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-共有台帳では、Cortex-M4F にも適用される精密 BusFault と NOCP を移植待ちとして残し、
+共有台帳では、Cortex-M4F に適用される精密 BusFault と NOCP を対象とし、
 TrustZone、MVE、ARMv8-M MPU や例外復帰トークンに依存するパラメーターには対象外理由を付けました。
 `expanded` 行の下には、元のケースに対応する命令別パラメーターがあります。
 
 フラッシュ消去はデータ結果を移植済みで、モードなしの消去要求に対する上流ログの検査が残ります。
-共有スイートでは Cortex-M4F の NOCP・Fault 配送、UART ビット時間・パリティー、
+共有スイートでは Cortex-M4F のベクター・スタックアクセス時の Fault 配送、UART ビット時間・パリティー、
 別ボードの FPU/DSP 公開 ELF の適用判定と実行、NUnit の残りのパラメーター展開が残ります。
 既存の FreeRTOS および Contiki の起動スモークは継続しますが、共有ケースの代替合格には数えません。
+
+### Cortex-M4F の精密 BusFault と NOCP
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/cortex-m4f-faults.sh target/cortex-m4f-faults
+tests/stm32f407-freertos-smoke.sh target/stm32f407-fault-upstream --upstream
+tests/stm32f407-freertos-smoke.sh target/stm32f407-fault-cm4f --fpu
+```
+
+Clang と LLD で上流のインラインアセンブリを Cortex-M4F 用 ELF に組み立てます。
+CPU モデルを ARMv7E-M に変更し、Robot がモニターから行っていた設定と検査を ELF 内で
+行います。13 個の ELF はそれぞれ UART に `BusFault OK`、`NOCP`、または `OK` を
+出し、レジスター・スタック値が違えば FAIL を出します。
+
+- 通常の精密 BusFault は命令アドレス `0x200`、SP `0xfe0`、R1 `0x11`、
+  R2 `0xa5a5a5a5`、CFSR `0x8200` を確認します。BFAR はモック周辺機器の
+  `0x100000`、未マップ読み出しでは `0x200000` です。
+- 無効化した BusFault と同じ優先度の実行中ハンドラーからの BusFault は HardFault に
+  エスカレーションし、HFSR は `0x40000000` です。後者は `0xfd8` に
+  BusFault ハンドラーの命令アドレス `0x300` が保存されます。前者は HFSR の W1C も確認します。
+- 連続実行の読み書きは R10 と R11 の PC が一致することを照合します。FPv4-SP の
+  `VSTR/VLDR`（S0/D0）は拡張フレームの SP `0xf98` と同じ精密フォールト値を検査します。
+- CPACR が初期値のときは UsageFault に入り、`0xe000ed2a` の半ワードが `0x0008`、
+  スタックに障害命令の PC が保存されることを確認します。フルアクセス設定時は
+  `VLDR → VCVT.S32.F32 → VCVT.F32.S32 → VSTR` が完了し、`OK` を出します。
+
+残件は、命令フェッチ・ベクター読み出し・スタックアクセス自体の BusFault、リセット時の
+INVSTATE とロックアップの状態保持、遅延 FP 保存中のフォールト、未実装の FP オペコードと
+特権限定 CPACR アクセスです。台帳で `review` としているケースと全体ゲートは継続課題です。

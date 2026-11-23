@@ -407,6 +407,18 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
+            "Mocks.BusFaultingPeripheral" => {
+                let properties = keys(entry, &["FaultOffset"])?;
+                let offset = properties
+                    .first()
+                    .map(|(_, value)| number(value))
+                    .transpose()
+                    .map_err(|error| entry.error(&error))?;
+                machine
+                    .bus
+                    .map_faulting_memory(entry.address()?, offset)
+                    .map_err(|error| entry.error(&error))?;
+            }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?
                     .into_iter()

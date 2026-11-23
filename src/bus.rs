@@ -90,6 +90,7 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    faulting_regions: Vec<(u32, Option<u32>)>,
     constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
@@ -250,6 +251,29 @@ impl Bus {
         };
         bus.map_ram(RAM_BASE, size)?;
         Ok(bus)
+    }
+
+    pub fn map_faulting_memory(&mut self, base: u32, offset: Option<u32>) -> Result<(), String> {
+        if offset.is_some_and(|offset| offset >= 0x1000) {
+            return Err("fault offset outside mock peripheral".into());
+        }
+        self.map_ram(base, 0x1000)?;
+        self.faulting_regions.push((base, offset));
+        Ok(())
+    }
+
+    fn faulting_address(&self, address: u32, width: usize) -> Option<u32> {
+        self.faulting_regions.iter().find_map(|&(base, offset)| {
+            let relative = address.wrapping_sub(base);
+            if relative >= 0x1000 {
+                return None;
+            }
+            match offset {
+                None => Some(address),
+                Some(offset) if offset.wrapping_sub(relative) < width as u32 => Some(base + offset),
+                _ => None,
+            }
+        })
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -1509,6 +1533,9 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if let Some(address) = self.faulting_address(address, N) {
+            return Err(BusError::Unmapped(address, N));
+        }
         if N == 4
             && let Some(system) = &self.f4_system
             && let Some(rcc) = &self.f4_rcc
@@ -1861,6 +1888,9 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        if let Some(address) = self.faulting_address(address, width) {
+            return Err(BusError::Unmapped(address, width));
+        }
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }

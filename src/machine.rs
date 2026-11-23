@@ -474,13 +474,11 @@ impl Hart {
                 }
             }
             return thumb
-                .step(&mut self.pc, &mut self.registers, bus, output)
-                .map(|retired| {
-                    if retired {
-                        Step::Retired
-                    } else {
-                        Step::Stop(Stop::Ebreak)
-                    }
+                .execute_instruction(&mut self.pc, &mut self.registers, bus, output)
+                .map(|instruction| match instruction {
+                    crate::thumb::Instruction::Retired => Step::Retired,
+                    crate::thumb::Instruction::Breakpoint => Step::Stop(Stop::Ebreak),
+                    crate::thumb::Instruction::Fault => Step::Trap,
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }

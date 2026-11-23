@@ -1,3 +1,4 @@
+use super::ExecuteError;
 use super::{Bus, Thumb};
 
 impl Thumb {
@@ -11,23 +12,25 @@ impl Thumb {
         r: &mut [u32; 32],
         bus: &mut Bus,
         output: &mut impl std::io::Write,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ExecuteError> {
         let core = (low >> 12) as usize;
         let move_single = high & 0xffe0 == 0xee00 && low & 0xf7f == 0xa10;
         let move_status = matches!(high, 0xeee1 | 0xeef1) && low & 0xfff == 0xa10;
         let multiple = matches!(high & 0xffb0, 0xed20 | 0xecb0) && low & 0xf00 == 0xa00;
-        let scalar = high & 0xff20 == 0xed00 && low & 0xf00 == 0xa00;
+        let scalar = high & 0xff20 == 0xed00 && low & 0xe00 == 0xa00;
         let convert = high & 0xffbf == 0xeebd && low & 0xfd0 == 0xac0;
+        let from_signed = high & 0xffbf == 0xeeb8 && low & 0xfd0 == 0xac0;
         let compare = high & 0xffbf == 0xeeb4 && low & 0xf50 == 0xa40;
-        if !(move_single || move_status || multiple || scalar || convert || compare) {
+        if !(move_single || move_status || multiple || scalar || convert || compare || from_signed)
+        {
             return Ok(false);
         }
         let nvic = bus
             .nvic
             .as_ref()
             .filter(|nvic| nvic.fpu_access())
-            .ok_or("FPv4-SP instruction with coprocessor access disabled")?;
-        let auto_preserve = nvic.fpu_auto_preserve();
+            .ok_or(ExecuteError::NoCoprocessor)?;
+        self.fp_active |= nvic.fpu_auto_preserve();
         if multiple {
             let base = (high & 0xf) as usize;
             let first = core * 2 + ((high >> 6) & 1) as usize;
@@ -48,14 +51,10 @@ impl Thumb {
             let registers = &mut self.fp[first..first + count];
             if load {
                 for (index, reg) in registers.iter_mut().enumerate() {
-                    *reg = bus
-                        .read_ram::<4>(address.wrapping_add(index as u32 * 4))
-                        .map_err(|e| e.to_string())?;
+                    *reg = bus.read_ram::<4>(address.wrapping_add(index as u32 * 4))?;
                 }
             } else {
-                let memory = bus
-                    .guest_memory(address, bytes as usize)
-                    .map_err(|e| e.to_string())?;
+                let memory = bus.guest_memory(address, bytes as usize)?;
                 for (word, reg) in memory.as_chunks_mut::<4>().0.iter_mut().zip(registers) {
                     *word = reg.to_le_bytes();
                 }
@@ -85,13 +84,47 @@ impl Thumb {
             if address & 3 != 0 {
                 return Err("unaligned FPv4-SP scalar transfer".into());
             }
-            let single = core * 2 + ((high >> 6) & 1) as usize;
-            if load {
-                self.fp[single] = bus.read::<4>(address).map_err(|e| e.to_string())?;
+            let extension = ((high >> 6) & 1) as usize;
+            let first = if low & 0x100 == 0 {
+                core * 2 + extension
             } else {
-                bus.write(address, 4, self.fp[single], output)
-                    .map_err(|e| e.to_string())?;
+                if extension != 0 {
+                    return Err("invalid FPv4-SP D register".into());
+                }
+                core * 2
+            };
+            let wide = low & 0x100 != 0;
+            if load {
+                let low_word = bus.read::<4>(address)?;
+                if wide {
+                    self.fp[first + 1] = bus.read::<4>(address.wrapping_add(4))?;
+                }
+                self.fp[first] = low_word;
+            } else {
+                bus.write(address, 4, self.fp[first], output)?;
+                if wide {
+                    bus.write(address.wrapping_add(4), 4, self.fp[first + 1], output)?;
+                }
             }
+        } else if from_signed {
+            let dest = core * 2 + ((high >> 6) & 1) as usize;
+            let source = ((low & 15) * 2 + ((low >> 5) & 1)) as usize;
+            let integer = self.fp[source] as i32;
+            let exact = f64::from(integer);
+            let nearest = integer as f32;
+            let rounded = match (self.fpscr >> 22) & 3 {
+                1 if f64::from(nearest) < exact => nearest.next_up(),
+                2 if f64::from(nearest) > exact => nearest.next_down(),
+                3 if nearest.is_sign_positive() && f64::from(nearest) > exact => {
+                    nearest.next_down()
+                }
+                3 if nearest.is_sign_negative() && f64::from(nearest) < exact => nearest.next_up(),
+                _ => nearest,
+            };
+            if f64::from(rounded) != exact {
+                self.fpscr |= 1 << 4;
+            }
+            self.fp[dest] = rounded.to_bits();
         } else if convert || compare {
             let dest = core * 2 + ((high >> 6) & 1) as usize;
             let source = ((low & 15) * 2 + ((low >> 5) & 1)) as usize;
@@ -141,7 +174,6 @@ impl Thumb {
                 self.fp[single] = r[core];
             }
         }
-        self.fp_active |= auto_preserve;
         Ok(true)
     }
 
