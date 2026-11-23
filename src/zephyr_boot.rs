@@ -83,6 +83,10 @@ impl BusyWait {
         })
     }
 
+    pub fn reset(&mut self) {
+        self.remaining = 0;
+    }
+
     pub fn waiting(&mut self) -> bool {
         if self.remaining == 0 {
             return false;

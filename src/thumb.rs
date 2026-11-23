@@ -36,6 +36,14 @@ impl Thumb {
         }
     }
 
+    pub fn reset_state(&mut self) {
+        *self = Self {
+            vectors: self.vectors,
+            thumb2: self.thumb2,
+            ..Self::default()
+        };
+    }
+
     pub fn vector_base(&self) -> u32 {
         self.vectors.unwrap_or(0)
     }

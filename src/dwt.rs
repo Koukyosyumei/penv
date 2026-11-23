@@ -25,6 +25,12 @@ impl Dwt {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.fraction = 0;
+        self.words.fill(0);
+        self.demcr = 0;
+    }
+
     pub fn ranges(&self) -> [(u64, u64); 2] {
         let base = u64::from(self.base);
         [

@@ -23,6 +23,7 @@ mod simulation;
 mod stm32_crc;
 mod stm32_ethernet;
 mod stm32_exti;
+mod stm32_iwdg;
 mod stm32_uart;
 mod stm32h7_adc;
 mod stm32h7_adc_dma;

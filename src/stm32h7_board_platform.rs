@@ -3,6 +3,7 @@ use crate::{
     nvic::IRQ_LINES,
     platform::{Entry, irq_index, number},
     stm32_crc::Stm32Crc,
+    stm32_iwdg::Iwdg,
     stm32_uart::Stm32Irq,
     stm32h7_dma2d::Dma2d,
     stm32h7_fdcan::Fdcan,
@@ -29,7 +30,11 @@ pub fn has_regions(model: &str) -> bool {
 }
 
 pub fn is_device(model: &str) -> bool {
-    has_regions(model) || matches!(model, Qspi::FLASH | Fdcan::MODEL | Veml7700::MODEL)
+    has_regions(model)
+        || matches!(
+            model,
+            Qspi::FLASH | Fdcan::MODEL | Veml7700::MODEL | Iwdg::MODEL
+        )
 }
 
 pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
@@ -59,6 +64,53 @@ pub fn configure(
     exti_lines: u32,
     machine: &mut Machine,
 ) -> Result<(), String> {
+    for entry in entries.iter().filter(|entry| entry.model == Iwdg::MODEL) {
+        let (base, alias) = registration(entry, entries).map_err(|e| entry.error(&e))?;
+        if alias.is_some() {
+            return Err(entry.error("IWDG uses an independent clock"));
+        }
+        let mut frequency = None;
+        let mut window = None;
+        let mut prescaler = None;
+        for (_, text) in &entry.body {
+            let (key, value) = text
+                .split_once(':')
+                .ok_or_else(|| entry.error("expected IWDG property"))?;
+            match key.trim() {
+                "frequency" if frequency.is_none() => {
+                    frequency = Some(number(value.trim()).map_err(|e| entry.error(&e))?);
+                }
+                "windowOption" if window.is_none() => {
+                    window = Some(
+                        value
+                            .trim()
+                            .parse()
+                            .map_err(|_| entry.error("invalid IWDG windowOption"))?,
+                    );
+                }
+                "defaultPrescaler" if prescaler.is_none() => {
+                    let value = number(value.trim()).map_err(|e| entry.error(&e))?;
+                    if value > 7 {
+                        return Err(entry.error("invalid IWDG defaultPrescaler"));
+                    }
+                    prescaler = Some(value as u8);
+                }
+                _ => return Err(entry.error("unsupported or duplicate IWDG property")),
+            }
+        }
+        let frequency = frequency
+            .filter(|&value| value != 0)
+            .ok_or_else(|| entry.error("expected nonzero IWDG frequency"))?;
+        machine
+            .bus
+            .map_iwdg(Iwdg::new(
+                base,
+                frequency,
+                window.unwrap_or(true),
+                prescaler.unwrap_or(0),
+            ))
+            .map_err(|e| entry.error(&e))?;
+    }
     for entry in entries
         .iter()
         .filter(|entry| matches!(entry.model.as_str(), Dma2d::MODEL | Ltdc::MODEL))

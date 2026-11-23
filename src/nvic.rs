@@ -140,6 +140,14 @@ impl Nvic {
         self.ccr & (1 << 4) != 0
     }
 
+    pub fn reset(&mut self) {
+        let mpu_count = self.mpu.as_ref().map(|mpu| mpu.count);
+        *self = Self::new(self.priority_mask, self.uart_irq);
+        if let Some(count) = mpu_count {
+            self.configure_mpu(count);
+        }
+    }
+
     pub fn configure_mpu(&mut self, count: u8) {
         self.mpu = Some(Mpu {
             count,

@@ -269,6 +269,21 @@ impl Machine {
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
+            self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            if self.bus.tick_watchdogs() {
+                let thumb = self
+                    .primary
+                    .thumb
+                    .as_mut()
+                    .ok_or("IWDG requires Cortex-M")?;
+                thumb.reset_state();
+                self.primary.registers.fill(0);
+                if let Some(wait) = self.primary.busy_wait.as_mut() {
+                    wait.reset();
+                }
+                self.bus.reset_cortex_m_devices();
+                self.validate_entry()?;
+            }
             let index = self.next_hart;
             if index == self.secondary.len() {
                 self.next_hart = 0;
@@ -280,7 +295,6 @@ impl Machine {
             } else {
                 &mut self.secondary[index - 1]
             };
-            self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
             self.bus.tick_h7_peripherals();
             if let Some(dwt) = &mut self.bus.dwt {
                 dwt.tick();

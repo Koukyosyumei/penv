@@ -49,6 +49,7 @@ awk -v RS='' -v ORS='\n\n' '
     $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|system_flash_ro|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|ltdc|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|lptimer[1-5]|crc|fdcan[12]|canMessageRAM):$/ &&
     $2 ~ /[A-Z]/ {print}
 ' "$cpu" >> "$work/boot.repl"
+awk -v RS='' -v ORS='\n\n' '$1 == "watchdog:" { sub(/frequency: [0-9_]+/, "frequency: 32000"); print }'     "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(qspiFlash|flashMem|phy):$/' "$board" >> "$work/boot.repl"
 awk '$1 == "veml7700:" {print}' "$board" >> "$work/boot.repl"
 printf '    Illuminance: 500\n' >> "$work/boot.repl"
@@ -75,5 +76,27 @@ if [[ "$status" != 2 ]] ||
     ! rg -aq 'channel type=18\(light\).*\(499\.000000\)' "$work/uart.log"; then
     cat "$work/penv.log" >&2
     cat "$work/uart.log" >&2
+    exit 1
+fi
+
+# Port the watchdog-reset check to the H7 reference ELF without reloading it.
+events=()
+for entry in '1000000:devmem 0x58004800 32 0x5555' '1150000:devmem 0x58004804 32 6'     '1300000:devmem 0x58004808 32 0x7f' '1450000:devmem 0x58004800 32 0xaaaa'     '1600000:devmem 0x58004800 32 0xcccc' '2200000:devmem 0x58004800 32 0xaaaa'     '2800000:kernel version' '4300000:kernel version'; do
+    step=${entry%%:*}
+    printf '%s\r' "${entry#*:}" > "$work/wdt-$step.txt"
+    events+=(--uart-event "$step:$work/wdt-$step.txt")
+done
+status=0
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 4900000 \
+    "${events[@]}" > "$work/watchdog-uart.log" 2> "$work/watchdog-penv.log" || status=$?
+if [[ "$status" != 2 ]] ||
+    ! awk '
+        /Booting STM32H7 Renode Platform Demo/ { boots++ }
+        /Zephyr version 4\.4\.99/ { replies[boots]++ }
+        END { exit !(boots == 2 && replies[1] == 1 && replies[2] == 1) }
+    ' "$work/watchdog-uart.log"; then
+    cat "$work/watchdog-penv.log" >&2
+    cat "$work/watchdog-uart.log" >&2
     exit 1
 fi

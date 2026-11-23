@@ -39,6 +39,10 @@ impl Stm32Usart {
         }
     }
 
+    pub fn reset(&mut self) {
+        *self = Self::new(self.base, self.irq, self.low_power);
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

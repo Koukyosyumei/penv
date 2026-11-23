@@ -15,6 +15,7 @@ use crate::{
     plic::Plic,
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
+    stm32_iwdg::Iwdg,
     stm32_uart::{Stm32Irq, Stm32Usart},
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
@@ -94,6 +95,7 @@ pub struct Bus {
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
+    iwdgs: Vec<Iwdg>,
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
     h7_adc: Vec<Adc>,
@@ -394,6 +396,86 @@ impl Bus {
         Ok(())
     }
 
+    pub fn map_iwdg(&mut self, device: Iwdg) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Iwdg::SIZE)?;
+        self.iwdgs.push(device);
+        Ok(())
+    }
+
+    pub fn tick_watchdogs(&mut self) -> bool {
+        self.iwdgs.iter_mut().any(Iwdg::tick)
+    }
+
+    pub fn reset_cortex_m_devices(&mut self) {
+        self.reservations.fill(None);
+        if let Some(nvic) = &mut self.nvic {
+            nvic.reset();
+        }
+        if let Some(timer) = &mut self.systick {
+            timer.reset();
+        }
+        if let Some(dwt) = &mut self.dwt {
+            dwt.reset();
+        }
+        if let Some(exti) = &mut self.h7_exti {
+            exti.reset();
+        }
+        if let Some(control) = &mut self.h7_network_control {
+            if let Some(nic) = control.nic
+                && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
+            {
+                device.reset();
+                device.set_clock(false);
+            }
+            *control = NetworkControl::new(control.rcc_base, control.syscfg_base, control.nic);
+        }
+        for uart in &mut self.stm32_uarts {
+            uart.reset();
+        }
+        for device in &mut self.iwdgs {
+            device.reset();
+        }
+        for device in &mut self.h7_lptimers {
+            device.reset();
+        }
+        for device in &mut self.h7_timers {
+            device.reset();
+        }
+        for device in &mut self.h7_gpio {
+            device.reset();
+        }
+        for device in &mut self.h7_spi {
+            device.reset();
+        }
+        for device in &mut self.h7_i2c {
+            device.reset();
+        }
+        for device in &mut self.h7_qspi {
+            device.reset();
+        }
+        for device in &mut self.h7_rng {
+            device.reset();
+        }
+        for device in &mut self.h7_crc {
+            device.reset();
+        }
+        for device in &mut self.h7_dma2d {
+            device.reset();
+        }
+        if let Some(device) = &mut self.h7_ltdc {
+            device.reset();
+        }
+        for device in &mut self.h7_adc {
+            device.reset();
+        }
+        for device in &mut self.h7_adc_dma {
+            device.reset();
+        }
+        for device in &mut self.h7_bdma {
+            device.reset();
+        }
+    }
+
     pub fn map_h7_lptim(&mut self, timer: LpTimer) -> Result<(), String> {
         self.check_peripheral_range(timer.base, LpTimer::SIZE)?;
         self.h7_lptimers.push(timer);
@@ -555,6 +637,7 @@ impl Bus {
                 .chain(self.h7_i2c.iter().map(|i2c| (i2c.base, I2c::SIZE)))
                 .chain(self.h7_rng.iter().map(|rng| (rng.base, Rng::SIZE)))
                 .chain(self.h7_qspi.iter().map(|qspi| (qspi.base, Qspi::SIZE)))
+                .chain(self.iwdgs.iter().map(|device| (device.base, Iwdg::SIZE)))
                 .chain(
                     self.h7_lptimers
                         .iter()
@@ -1345,6 +1428,12 @@ impl Bus {
                 0
             });
         }
+        if N == 4
+            && address & 3 == 0
+            && let Some(device) = self.iwdgs.iter().find(|device| device.contains(address))
+        {
+            return Ok(device.read(address));
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1776,6 +1865,15 @@ impl Bus {
             if lptim_clocked(self.h7_network_control.as_ref(), timer) {
                 timer.write(address, width, value);
             }
+            return Ok(());
+        }
+        if width == 4
+            && let Some(device) = self
+                .iwdgs
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
             return Ok(());
         }
         self.guest_memory(address, width)?
