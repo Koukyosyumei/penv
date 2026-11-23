@@ -228,15 +228,21 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
         return Err("GPIO alternate-function count must be in 1–16".into());
     }
     if let Some(inverted) = inverted {
-        let groups = inverted
-            .strip_prefix("[[")
-            .and_then(|text| text.strip_suffix("]]"))
-            .ok_or("expected GPIO inverted AF pin lists")?;
-        for group in groups.split("],") {
-            let mut values = group.trim().trim_start_matches('[').split(',');
-            irq_index(values.next().ok_or("missing inverted AF pin")?, 16)?;
+        use crate::platform::{ListItem, list_value};
+
+        let index = |item, count| match item {
+            ListItem::Number(number) => irq_index(number, count),
+            _ => Err("expected numeric GPIO inverted AF pin or function".into()),
+        };
+        let groups = list_value(inverted)?;
+        for group in groups {
+            let ListItem::List(values) = group else {
+                return Err("expected GPIO inverted AF pin lists".into());
+            };
+            let mut values = values.into_iter();
+            index(values.next().ok_or("missing inverted AF pin")?, 16)?;
             for value in values {
-                irq_index(value, alternate_count)?;
+                index(value, alternate_count)?;
             }
         }
     }

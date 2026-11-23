@@ -1228,3 +1228,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 141件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-dictionaries.5HgKaeRf` に保存しました。対象786件のうち等価合格135件、部分検証10件、未達641件です。入れ子の辞書・リスト・オブジェクトを辞書値に使う構文、波括弧付き属性ブロック内の辞書、辞書のモデルへの受け渡しは残っています。
+
+### backlog-network-ffda2a9e813b-1
+
+REPL のリスト値を解析し、STM32H7 GPIO の `invertedAFPins` に共通パーサーを適用しました。固定上流 `ParserTests.cs` の4件を個別のテストとして同じバイナリで実行し、空リスト、末尾カンマ、入れ子、数値・文字列・真偽値・参照・範囲の混在を照合しました。リスト内のインラインオブジェクトは、オブジェクトの属性ブロックを解析する処理が必要なため未達です。リストの入れ子は64レベルまでです。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 145件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、ログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-lists.pQCV9IG8` にあります。対象786件のうち等価合格139件、部分検証10件、未達637件です。

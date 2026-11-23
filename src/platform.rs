@@ -199,22 +199,7 @@ fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>
     let point = match value.as_bytes().first() {
         None => None,
         Some(b'<') => {
-            let (begin, end) = value[1..]
-                .strip_suffix('>')
-                .and_then(|range| range.split_once(','))
-                .ok_or("invalid registration range")?;
-            let base = range_number(begin.trim())?;
-            let end = end.trim();
-            let size = if let Some(length) = end.strip_prefix('+') {
-                let length = range_number(length.trim())?;
-                base.checked_add(length)
-                    .ok_or("registration range overflow")?;
-                length
-            } else {
-                range_number(end)?
-                    .checked_sub(base)
-                    .ok_or("reversed registration range")?
-            };
+            let (base, size) = range_value(value)?;
             Some(RegistrationValue::Range { base, size })
         }
         Some(b'"') => Some(RegistrationValue::String(quoted_value(value)?)),
@@ -222,6 +207,26 @@ fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>
         Some(_) => return Err("expected a registration point after register reference"),
     };
     Ok((register, point))
+}
+
+fn range_value(value: &str) -> Result<(u64, u64), &'static str> {
+    let (begin, end) = value[1..]
+        .strip_suffix('>')
+        .and_then(|range| range.split_once(','))
+        .ok_or("invalid registration range")?;
+    let base = range_number(begin.trim())?;
+    let end = end.trim();
+    let size = if let Some(length) = end.strip_prefix('+') {
+        let length = range_number(length.trim())?;
+        base.checked_add(length)
+            .ok_or("registration range overflow")?;
+        length
+    } else {
+        range_number(end)?
+            .checked_sub(base)
+            .ok_or("reversed registration range")?
+    };
+    Ok((base, size))
 }
 
 fn range_number(value: &str) -> Result<u64, &'static str> {
@@ -379,6 +384,84 @@ pub(crate) fn quoted_value(text: &str) -> Result<String, &'static str> {
         return Err("unexpected text after quoted string");
     }
     Ok(value)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ListItem<'a> {
+    List(Vec<ListItem<'a>>),
+    Number(&'a str),
+    String(String),
+    Symbol(SymbolicValue<'a>),
+    Range(u64, u64),
+}
+
+pub(crate) fn list_value(input: &str) -> Result<Vec<ListItem<'_>>, &'static str> {
+    let (items, tail) = list_prefix(input, 0)?;
+    if !tail.trim().is_empty() {
+        return Err("unexpected text after REPL list");
+    }
+    Ok(items)
+}
+
+fn list_prefix(input: &str, depth: usize) -> Result<(Vec<ListItem<'_>>, &str), &'static str> {
+    if depth >= 64 {
+        return Err("REPL list nesting exceeds 64 levels");
+    }
+    let mut input = input
+        .strip_prefix('[')
+        .ok_or("expected REPL list")?
+        .trim_start();
+    let mut items = Vec::new();
+    loop {
+        if let Some(tail) = input.strip_prefix(']') {
+            return Ok((items, tail));
+        }
+        let (item, tail) = match input.as_bytes().first() {
+            Some(b'[') => {
+                let (values, tail) = list_prefix(input, depth + 1)?;
+                (ListItem::List(values), tail)
+            }
+            Some(b'"') => {
+                let (value, tail) = quoted_prefix(input)?;
+                (ListItem::String(value), tail)
+            }
+            Some(b'<') => {
+                let end = input.find('>').ok_or("expected end of REPL range")? + 1;
+                let (base, size) = range_value(&input[..end])?;
+                (ListItem::Range(base, size), &input[end..])
+            }
+            _ => {
+                let end = input
+                    .find(|c: char| c.is_whitespace() || c == ',' || c == ']')
+                    .unwrap_or(input.len());
+                let (value, tail) = input.split_at(end);
+                let item = if let Some(symbol) = symbolic_value(value) {
+                    ListItem::Symbol(symbol)
+                } else if value.parse::<f64>().is_ok_and(f64::is_finite)
+                    || value
+                        .trim_start_matches(['+', '-'])
+                        .strip_prefix("0x")
+                        .is_some_and(|digits| {
+                            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit())
+                        })
+                {
+                    ListItem::Number(value)
+                } else {
+                    return Err("expected REPL list value");
+                };
+                (item, tail)
+            }
+        };
+        items.push(item);
+        let tail = tail.trim_start();
+        if let Some(rest) = tail.strip_prefix(',') {
+            input = rest.trim_start();
+        } else if tail.starts_with(']') {
+            input = tail;
+        } else {
+            return Err("expected comma or closing bracket in REPL list");
+        }
+    }
 }
 
 fn dictionary_value(value: &str) -> Result<Vec<(&str, &str)>, String> {
@@ -666,7 +749,7 @@ fn brace_depth(text: &str) -> i32 {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum SymbolicValue<'a> {
+pub(crate) enum SymbolicValue<'a> {
     Boolean(bool),
     Reference(&'a str),
     Enum(Option<&'a str>, &'a str),
@@ -2482,6 +2565,65 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    fn list_fixture(property: &str) -> Vec<ListItem<'_>> {
+        let (_, value) = property.split_once(':').unwrap();
+        list_value(value.trim()).unwrap()
+    }
+
+    fn assert_list_fixture(property: &str, expected: &[ListItem<'_>]) {
+        let source = format!("\ndevice: Something\n    {property}");
+        let entries = parse(&source).unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        let [(_, property)] = entry.body.as_slice() else {
+            panic!("expected one property")
+        };
+        assert_eq!(list_fixture(property), expected);
+    }
+
+    #[test]
+    fn upstream_parse_empty_list() {
+        assert_list_fixture("list: []", &[]);
+    }
+
+    #[test]
+    fn upstream_parse_list_of_numbers_with_trailing_comma() {
+        use ListItem::*;
+        assert_list_fixture(
+            "list: [1, 0x10, 3,]",
+            &[Number("1"), Number("0x10"), Number("3")],
+        );
+    }
+
+    #[test]
+    fn upstream_parse_nested_lists() {
+        use ListItem::*;
+        assert_list_fixture(
+            "eye: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]",
+            &[
+                List(vec![Number("1"), Number("0"), Number("0")]),
+                List(vec![Number("0"), Number("1"), Number("0")]),
+                List(vec![Number("0"), Number("0"), Number("1")]),
+            ],
+        );
+    }
+
+    #[test]
+    fn upstream_parse_list_with_mixed_simple_values() {
+        use ListItem::*;
+        assert_list_fixture(
+            r#"list: [1, "hello", true, other, <0, +10>]"#,
+            &[
+                Number("1"),
+                String("hello".into()),
+                Symbol(SymbolicValue::Boolean(true)),
+                Symbol(SymbolicValue::Reference("other")),
+                Range(0, 10),
+            ],
+        );
     }
 
     fn dictionary_fixture(value: &str) -> Result<Vec<Entry>, String> {
