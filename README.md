@@ -66,7 +66,7 @@ target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_sm
 
 LiteX のスイッチとボタンは `--litex-button-event STEP:NAME:ACTION` で実行中に操作できます。例えば `--litex-button-event 71000000:cas.switch0:Toggle` はステップ 71,000,000 で Arty のスイッチ 0 を反転します。`Press`、`Release`、`Toggle` を指定でき、同じステップのボタン操作は指定順に適用されます。指定した操作はそのステップのゲスト命令より先に反映されます。
 
-Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン・PHY ステータス、LiteX 単一ハート Linux の初期化、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Nexys Video の SD 起動・フレームバッファ、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
+Murax の UART エコー、LiteX Ibex BIOS のシェル、LiteX VexRiscv Zephyr のシェル、Arty の LED・スイッチ・ボタン・PHY ステータス、LiteX 単一ハート Linux の起動・ログイン・CPU 表示、LiteX SMP Linux の起動・ログイン・4 ハートの表示、Nexys Video の SD 起動・フレームバッファ、Zephyr I²S の PCM バイト一致、Minerva の UART ブートをまとめて検証できます。検証スクリプトは上流の RESC をそのまま使い、ファームウェアのサイズと SHA-1 を照合します。取得済みファイルは出力先の `assets/` に置くと再利用されます。Minerva の UART ブート確認には Python 3.10 以降を使います。
 
 ```sh
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
@@ -85,11 +85,27 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-
 | Arty の `debug cas switches` | 初期値 `0`、反転後 `1` |
 | Arty の `debug cas buttons read` | 押下後 `1 1`、解放後 `0 1`、ラッチクリア後 `0 0` |
 | Arty の PHY | 起動時は `10Mbps / link: down`。実行中の変更後に `mdio_status` が `100Mbps / link: up` を返す |
-| LiteX RV32 Linux | 単一ハートで `/init` に到達。SMP で Buildroot にログインし、`/proc/cpuinfo` に 4 ハートを確認 |
+| LiteX RV32 Linux | 単一ハートと SMP で Buildroot にログインし、`/proc/cpuinfo` でそれぞれ 1 ハートと 4 ハートを確認 |
 | Minerva UART | 上流 BIOS の SFL で RV32 検証ペイロードを `0x40000000` に転送し、ジャンプ後にペイロードが UART へ `~` を出力 |
 | Zephyr I²S | 入出力 793,344 バイトが `cmp` で一致。SHA-256 は `e8dca0ec23b1113e7d47e2fcd16ef64de6d8eec9cdd868dc86527d53d4bba116` |
 
 Minerva の検証では、BIOS が参照するタイマーアドレスを `--litex-timer-alias 0xe0002000` で追加し、`--litex-uart-legacy-console` と `--litex-uart-stdio` で SFL の応答を送受信します。
+
+### 対象 LiteX ケースの一括検証
+
+上流 Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` の RESC・REPL と公開イメージを使用しました。上記の `scripts/validate-riscv-upstream.sh` を一度実行すると、次のケースを照合し、ステップ上限を使うケースと成功終了を期待するケースの終了コードも区別します。
+
+| 対象 | 上流の出典 | 照合内容 |
+| --- | --- | --- |
+| 単一ハート Linux | `litex_vexriscv_linux.resc` | 75 MHz のカーネル時刻源、`/init`、`hvc0` ログイン、`/proc/cpuinfo` に CPU 0 のみ |
+| SMP Linux | `LiteX_VexRiscv_SMP.robot` の OpenSBI と Linux 起動 | OpenSBI と Linux の 4 ハート、Buildroot ログイン、CPU 0～3 |
+| Minerva UART | `litex_minerva.resc` の公開 BIOS | SFL で検証ペイロードを転送し、ジャンプ後にペイロード自身の `~` を UART で受信 |
+| Arty | `Arty_LiteX_VexRiscv.robot` | 4 灯の LED、全スイッチ・ボタンの遷移、起動時リンクダウンと実行中変更後のリンクアップ |
+| I²S | `LiteX_VexRiscv_I2S.robot` の `Should Echo Audio` | `RunFor "3.2"`、送信器の `Dispose`、793,344 バイトの PCM 完全一致 |
+| Nexys Video | `Nexys_Video_LiteX_VexRiscv.robot` の全画面・領域テスト | 公開 PNG を無変換で照合。全画面と左上 75×80 は別起動で同じ UART 入力を再生し、それぞれ終了コード 0 を確認 |
+| Nexys4DDR SPI SD | `Nexys4DDR_LiteX_VexRiscv.robot` の起動・README 列挙 | 公開 BIOS と FAT16 イメージで `Q`、`spisdcardboot`、`README  .TXT` の列挙 |
+
+単一ハート Linux はログインと CPU 表示まで通過します。ゲストログに出る tmpfs マウントとネットワーク初期化の失敗、Robot Framework API の直接互換、同一起動での連続フレーム待機、SPI SD の書き込みとマルチブロック転送は残課題です。
 
 ### Arty の LED 状態検証
 
@@ -135,7 +151,7 @@ cargo build --release
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode /tmp/penv-upstream
 ```
 
-回帰スクリプトは上流の BIOS ELF と SD イメージのサイズと SHA-1 を確認します。BIOS の自動起動を `Q` で中断し、`sdcardboot` を実行します。ステップ 675,000,000 でロゴを保存し、Buildroot にログインしてから `cat /etc/motd > /dev/tty0` を実行し、ステップ 720,000,000 で MOTD 画面を保存します。上流の参照 PNG を RGB に変換し、`penguin_logo.png` は左上 75×80 の ROI、`penguin_with_litex_logo.png` は 800×600 全体を SHA-256 で照合します。ロゴ撮影時はコンソールのカーソルが ROI 外の 16 ピクセルに影響するため、ロゴの照合範囲は上流テストと同じ ROI にしました。結果は `nexys-video.frames.log` と `nexys-video.uart.log` に出力されます。
+回帰スクリプトは上流の BIOS ELF と SD イメージのサイズと SHA-1 を確認します。BIOS の自動起動を `Q` で中断し、`sdcardboot` を実行します。ステップ 675,000,000 でロゴを保存し、Buildroot にログインしてから `cat /etc/motd > /dev/tty0` を実行し、公開 PNG と全画面が一致した時点で MOTD 画面を保存します。領域待機は同じ UART 入力を別の起動で再生します。上流の参照 PNG を RGB に変換し、`penguin_logo.png` は左上 75×80 の ROI、`penguin_with_litex_logo.png` は 800×600 全体を SHA-256 で照合します。ロゴ撮影時はコンソールのカーソルが ROI 外の 16 ピクセルに影響するため、ロゴの照合範囲は上流テストと同じ ROI にしました。結果は `nexys-video.frames.log` と `nexys-video.uart.log` に出力されます。
 
 ### Nexys Video のフレーム一致待機
 

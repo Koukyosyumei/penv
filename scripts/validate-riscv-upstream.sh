@@ -26,7 +26,7 @@ i2s=scripts/complex/litex_i2s/litex_vexriscv_i2s.resc
 git -C "$renode_root" rev-parse HEAD > "$artifacts/renode-revision"
 
 prepare_assets() {
-    local script=$1 url name size digest file
+    local script=$1
     local -a urls
     mapfile -t urls < <(awk '
         /^[[:space:]]*\$[a-zA-Z0-9_]+\??=@https:\/\// {
@@ -48,7 +48,12 @@ prepare_assets() {
         echo "No firmware URLs found in $script" >&2
         return 1
     fi
-    for url in "${urls[@]}"; do
+    prepare_urls "${urls[@]}"
+}
+
+prepare_urls() {
+    local url name size digest file
+    for url in "$@"; do
         name=${url##*/}
         if [[ ! $name =~ -s_([0-9]+)-([a-f0-9]{40})$ ]]; then
             echo "Expected a size and SHA-1 in $url" >&2
@@ -63,7 +68,7 @@ prepare_assets() {
         fi
         if [[ $(wc -c < "$file") != "$size" ]] ||
             ! printf '%s  %s\n' "$digest" "$file" | sha1sum --check --status; then
-            echo "Firmware size or checksum mismatch for $file" >&2
+            echo "Asset size or checksum mismatch for $file" >&2
             return 1
         fi
         if [[ $file == *.part ]]; then
@@ -72,17 +77,21 @@ prepare_assets() {
     done
 }
 
-run_to_step_limit() {
-    local name=$1 script=$2 status=0
-    shift 2
+run_expecting_status() {
+    local expected=$1 name=$2 script=$3 status=0
+    shift 3
     "$penv" run --script "$script" --platform-root "$renode_root" --asset-dir "$assets" \
         --stats "$@" > "$artifacts/$name.uart.log" 2> "$artifacts/$name.stderr.log" || status=$?
     printf '%s\n' "$status" > "$artifacts/$name.exit"
-    if (( status != 2 )); then
+    if (( status != expected )); then
         cat "$artifacts/$name.stderr.log" >&2
-        echo "$name exited $status, expected step limit (2)" >&2
+        echo "$name exited $status, expected $expected" >&2
         return 1
     fi
+}
+
+run_to_step_limit() {
+    run_expecting_status 2 "$@"
 }
 
 prepare_assets "$murax"
@@ -175,15 +184,21 @@ diff -u <(printf 'MDIO mode: 10Mbps / link: down\nMDIO mode: 100Mbps / link: up\
     tr -d '\r' < "$artifacts/litex-arty.uart.log" | rg '^MDIO mode:'
 )
 
-prepare_assets "$linux_single"
-run_to_step_limit litex-linux "$linux_single" --max-steps 140000000
-for marker in 'Linux version 5.0.14' 'sched_clock: 64 bits at 75MHz' 'Run /init as init process'; do
-    rg -aqF "$marker" "$artifacts/litex-linux.uart.log"
-done
-
-prepare_assets "$litex"
 printf 'root\r' > "$artifacts/litex-login.input"
 printf 'cat /proc/cpuinfo\r' > "$artifacts/litex-cpuinfo.input"
+prepare_assets "$linux_single"
+run_to_step_limit litex-linux "$linux_single" --max-steps 420000000 \
+    --uart-event "360000000:$artifacts/litex-login.input" \
+    --uart-event "390000000:$artifacts/litex-cpuinfo.input"
+for marker in 'Linux version 5.0.14' 'sched_clock: 64 bits at 75MHz' 'Run /init as init process' \
+    "root login on 'hvc0'"; do
+    rg -aqF "$marker" "$artifacts/litex-linux.uart.log"
+done
+diff -u <(printf 'processor\t: 0\n') <(
+    tr -d '\r' < "$artifacts/litex-linux.uart.log" | rg -a '^processor[[:blank:]]*:'
+)
+
+prepare_assets "$litex"
 run_to_step_limit litex-smp "$litex" --uart-event "600000000:$artifacts/litex-login.input" \
     --uart-event "675000000:$artifacts/litex-cpuinfo.input" --max-steps 725000000
 for marker in 'OpenSBI v0.6' 'Litex/VexRiscv SMP' 'Linux version 5.0.9' \
@@ -196,16 +211,10 @@ for hart in 0 1 2 3; do
 done
 prepare_assets "$renode_root/$i2s"
 pcm=$(awk -F= '/^\$input_file\?=@https:/ { print $2 }' "$renode_root/$i2s")
-printf '$output_file=@%s/echo.raw\ninclude @%s\n' "$(realpath "$artifacts")" "$i2s" \
+pcm_output=$(realpath "$artifacts")/echo.raw
+printf '$output_file=@%s\ninclude @%s\nsysbus.i2s_tx Dispose\n' "${pcm_output// /\\ }" "$i2s" \
     > "$artifacts/i2s.resc"
-status=0
-"$penv" run --script "$artifacts/i2s.resc" --platform-root "$renode_root" --asset-dir "$assets" \
-    --stats > "$artifacts/litex-i2s.uart.log" 2> "$artifacts/litex-i2s.stderr.log" || status=$?
-printf '%s\n' "$status" > "$artifacts/litex-i2s.exit"
-if (( status != 0 )); then
-    cat "$artifacts/litex-i2s.stderr.log" >&2
-    exit 1
-fi
+run_expecting_status 0 litex-i2s "$artifacts/i2s.resc"
 cmp "$assets/${pcm##*/}" "$artifacts/echo.raw"
 sha256sum "$assets/${pcm##*/}" "$artifacts/echo.raw" > "$artifacts/litex-i2s.sha256"
 prepare_assets "$minerva"
@@ -216,16 +225,28 @@ printf 'sdcardboot\r' > "$artifacts/nexys-video-sd.input"
 printf 'root\r' > "$artifacts/nexys-video-login.input"
 printf 'export PS1="$ "\r' > "$artifacts/nexys-video-prompt.input"
 printf 'cat /etc/motd > /dev/tty0\r' > "$artifacts/nexys-video-motd.input"
-run_to_step_limit nexys-video "$nexys_video" --max-steps 730000000 \
-    --uart-event "35000000:$artifacts/nexys-video-abort.input" \
-    --uart-event "40000000:$artifacts/nexys-video-sd.input" \
+nexys_robot=$renode_root/tests/platforms/LiteX/Nexys_Video_LiteX_VexRiscv.robot
+frame_url=$(awk '$1 == "Execute" && $4 == "WaitForFrame" { print substr($5, 2) }' "$nexys_robot")
+roi_url=$(awk '$1 == "Execute" && $4 == "WaitForFrameROI" { print substr($5, 2) }' "$nexys_robot")
+prepare_urls "$frame_url" "$roi_url"
+nexys_events=(
+    --uart-event "35000000:$artifacts/nexys-video-abort.input"
+    --uart-event "40000000:$artifacts/nexys-video-sd.input"
+    --uart-event "680000000:$artifacts/nexys-video-login.input"
+    --uart-event "690000000:$artifacts/nexys-video-prompt.input"
+    --uart-event "700000000:$artifacts/nexys-video-motd.input"
+)
+run_expecting_status 0 nexys-video "$nexys_video" --max-steps 730000000 "${nexys_events[@]}" \
     --framebuffer-event "675000000:$artifacts/nexys-video-logo.ppm" \
-    --uart-event "680000000:$artifacts/nexys-video-login.input" \
-    --uart-event "690000000:$artifacts/nexys-video-prompt.input" \
-    --uart-event "700000000:$artifacts/nexys-video-motd.input" \
-    --framebuffer-event "720000000:$artifacts/nexys-video-motd.ppm"
-for marker in 'Booting from SDCard in SD-Mode' "root login on 'console'"; do
-    rg -aqF "$marker" "$artifacts/nexys-video.uart.log"
+    --wait-for-frame "700000000:$assets/${frame_url##*/}" \
+    --framebuffer-out "$artifacts/nexys-video-motd.ppm"
+run_expecting_status 0 nexys-video-roi "$nexys_video" --max-steps 730000000 "${nexys_events[@]}" \
+    --wait-for-frame-roi "710000000:0:0:75:80:$assets/${roi_url##*/}"
+for name in nexys-video nexys-video-roi; do
+    for marker in 'Booting from SDCard in SD-Mode' "root login on 'console'"; do
+        rg -aqF "$marker" "$artifacts/$name.uart.log"
+    done
+    rg -aqF 'penv: framebuffer matched at step ' "$artifacts/$name.stderr.log"
 done
 # Compare the MOTD frame and the 75x80 top-left logo ROI to the reference PNGs' RGB.
 {
