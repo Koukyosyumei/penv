@@ -85,6 +85,13 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         return Err("RV64 platform has no mapped RAM".into());
     }
     cpus.sort_unstable_by_key(|&(hart, _)| hart);
+    let single_mhartid = if let [(hart, _)] = cpus.as_mut_slice() {
+        let id = *hart;
+        *hart = 0;
+        (id != 0).then_some(id as u64)
+    } else {
+        None
+    };
     if cpus.is_empty()
         || cpus.len() > MAX_HARTS
         || cpus
@@ -118,6 +125,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     for &(hart, entry) in &cpus {
         let mut cpu = create_cpu(entry, clint, external_pmps[hart])?;
         cpu.hart_id = hart;
+        cpu.mhartid_override = single_mhartid;
         let target = machine.hart_mut(hart);
         target.name = Some(entry.name.clone());
         target.rv64 = Some(Box::new(cpu));
@@ -1026,10 +1034,14 @@ fn registration_harts(
     entries: &[Entry],
     fields: &HashMap<&str, &str>,
 ) -> Result<u64, String> {
-    let mut cpus = entries
-        .iter()
-        .filter(|candidate| candidate.model == "CPU.RiscV64");
+    let mut cpus = entries.iter().filter(|candidate| {
+        candidate.model == "CPU.RiscV64" && candidate.registration.as_deref() != Some("none")
+    });
+    let single = cpus.clone().count() == 1;
     let mask = |cpu: &Entry| {
+        if single {
+            return Ok(1);
+        }
         let hart = property(cpu, "hartId").map_or(Ok(0), |value| number(cpu, value))?;
         if hart >= MAX_HARTS as u64 {
             return Err(cpu.error("hart ID exceeds supported limit"));

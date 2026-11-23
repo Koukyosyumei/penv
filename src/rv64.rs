@@ -17,6 +17,7 @@ use crate::{
 #[derive(Clone)]
 pub struct Rv64 {
     pub(crate) hart_id: usize,
+    pub(crate) mhartid_override: Option<u64>,
     pub(crate) trace_custom_csr: bool,
     pub pc: u64,
     reset_vector: u64,
@@ -144,6 +145,7 @@ impl Rv64 {
         privilege.vector = isa.vector.then(Box::<vector::VectorState>::default);
         Self {
             hart_id: 0,
+            mhartid_override: None,
             trace_custom_csr: false,
             pc: u64::from(RAM_BASE),
             reset_vector: u64::from(RAM_BASE),
@@ -178,7 +180,7 @@ impl Rv64 {
     }
 
     pub fn set_boot_arguments(&mut self, hart: usize, dtb: u64) {
-        self.registers[10] = hart as u64;
+        self.registers[10] = self.mhartid_override.unwrap_or(hart as u64);
         self.registers[11] = dtb;
     }
 
@@ -383,7 +385,7 @@ impl Rv64 {
         let old = if operation == 1 && instruction.rd() == 0 {
             0
         } else if index == 0xf14 && self.privilege.mode == Mode::Machine {
-            hart as u64
+            self.mhartid_override.unwrap_or(hart as u64)
         } else {
             let value = self.privilege.read(index, misa, alignment_mask)?;
             if trace {

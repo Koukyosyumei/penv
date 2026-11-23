@@ -252,7 +252,7 @@ def disposition(path, name, context):
             return "pass", "Fixed REPL and same stopped bus read/write assertions verified by verify-rv64-offset-bus.py"
     if path.name == "riscv-amo-instructions.robot":
         if "MMIO" in name:
-            return "pending", "ArrayMemory MMIO semantics"
+            return "pass", "Original CPU and ArrayMemory REPL with two ordered register and memory snapshots"
         return "pass", "amoadd_robot_single_and_page_spanning_ram"
     if path.name == "riscv-amocas.robot":
         if "On RV32" in name:

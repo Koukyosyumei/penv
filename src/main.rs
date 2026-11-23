@@ -66,6 +66,7 @@ Options:
   --read-register-now CPU@NAME  Report an RV64 register in setup argument order
   --set-reset-vector CPU:ADDRESS  Change a named RV64 reset vector during setup
   --set-pc CPU:ADDRESS  Set the named RV64 PC during setup
+  --step-cpu CPU     Execute one setup step on a named, single RV64 CPU
   --reset-cpu CPU    Restore a named RV64 CPU during setup, preserving the reset vector
   --write-memory [CPU@]BASE:WIDTH:VALUE  Write a little-endian RAM value during setup
   --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
@@ -106,6 +107,7 @@ enum SetupAction {
     SetPc(String, u64),
     SetResetVector(String, u64),
     ResetCpu(String),
+    StepCpu(String),
     SetMstatus(String, u64),
     SetFreg(String, usize, u64),
     SetGpr(String, usize, u64),
@@ -350,13 +352,17 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
-            Some("--reset-cpu") => {
+            Some(option @ ("--reset-cpu" | "--step-cpu")) => {
                 let cpu = args
                     .next()
                     .and_then(|arg| arg.into_string().ok())
                     .filter(|cpu| !cpu.is_empty())
-                    .ok_or("--reset-cpu requires CPU")?;
-                setup_actions.push(SetupAction::ResetCpu(cpu));
+                    .ok_or_else(|| format!("{option} requires CPU"))?;
+                setup_actions.push(if option == "--step-cpu" {
+                    SetupAction::StepCpu(cpu)
+                } else {
+                    SetupAction::ResetCpu(cpu)
+                });
             }
             Some(option @ ("--set-pc" | "--set-reset-vector")) => {
                 let error = || format!("{option} requires CPU:ADDRESS");
@@ -740,6 +746,16 @@ fn run() -> Result<ExitCode, String> {
                         cpu.set_reset_vector(*address);
                     }
                 }
+                SetupAction::StepCpu(cpu) => {
+                    machine.rv64_hart_by_name(cpu)?;
+                    if machine.hart_count() != 1 || harts.is_some_and(|count| count != 1) {
+                        return Err("--step-cpu requires a single RV64 CPU".into());
+                    }
+                    let (stop, _) = machine.run(1, &mut io::stdout().lock())?;
+                    if stop != Stop::Limit {
+                        return Err(format!("CPU setup step stopped: {stop:?}"));
+                    }
+                }
                 SetupAction::ResetCpu(cpu) => {
                     let hart = machine.rv64_hart_by_name(cpu)?;
                     let (_, initial) = reset_templates
@@ -809,6 +825,15 @@ fn run() -> Result<ExitCode, String> {
             }
             if machine.hart_count() != 1 {
                 return Err("--harts cannot override multiple CPU declarations".into());
+            }
+            if count != 1
+                && machine
+                    .primary
+                    .rv64
+                    .as_ref()
+                    .is_some_and(|cpu| cpu.mhartid_override.is_some())
+            {
+                return Err("--harts cannot override a nonzero single hart ID".into());
             }
             machine.configure_harts(count);
         }
