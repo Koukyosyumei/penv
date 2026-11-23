@@ -115,15 +115,149 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
     .map_err(|_| format!("invalid 32-bit number {value:?}"))
 }
 
-fn without_comment(line: &str) -> &str {
-    unquoted_delimiters(line, &['/'])
-        .find(|(index, _)| {
-            let prefix = &line[..*index];
-            line[*index..].starts_with("//")
-                && !prefix.ends_with("@http:")
-                && !prefix.ends_with("@https:")
-        })
-        .map_or(line, |(index, _)| &line[..index])
+#[derive(Default)]
+struct ReplComments {
+    braces: i32,
+    in_block: bool,
+}
+
+impl ReplComments {
+    fn line(&mut self, raw: &str) -> Result<String, &'static str> {
+        let mut line = raw.to_owned();
+        let mut cursor = 0;
+        if self.in_block {
+            let Some(close) = line.find("*/").map(|index| index + 2) else {
+                return Ok(String::new());
+            };
+            if self.braces == 0 && close != line.trim_end().len() {
+                return Err(
+                    "Multiline comment in indent mode can only finish at the end of the line.",
+                );
+            }
+            line.replace_range(..close, &" ".repeat(close));
+            self.in_block = false;
+            cursor = close;
+        }
+        while cursor < line.len() {
+            match line.as_bytes()[cursor] {
+                b'"' => {
+                    cursor += 1;
+                    loop {
+                        match line.as_bytes().get(cursor) {
+                            Some(b'\\') => cursor += 2,
+                            Some(b'"') => {
+                                cursor += 1;
+                                break;
+                            }
+                            Some(_) => cursor += 1,
+                            None => return Err("Unterminated string."),
+                        }
+                    }
+                    continue;
+                }
+                b'/' if line[cursor..].starts_with("//") => {
+                    if cursor == 0 || line.as_bytes()[cursor - 1] == b' ' {
+                        line.truncate(cursor);
+                        break;
+                    }
+                    cursor += 2;
+                    continue;
+                }
+                b'/' if line[cursor..].starts_with("/*") => {
+                    let Some(end) = line[cursor + 2..].find("*/") else {
+                        line.truncate(cursor);
+                        self.in_block = true;
+                        break;
+                    };
+                    let end = cursor + end + 4;
+                    if self.braces == 0
+                        && line[..cursor].trim().is_empty()
+                        && end != line.trim_end().len()
+                    {
+                        return Err(
+                            "A block comment at the start of an indented line must span to the end.",
+                        );
+                    }
+                    line.replace_range(cursor..end, &" ".repeat(end - cursor));
+                    cursor = end;
+                    continue;
+                }
+                _ => cursor += 1,
+            }
+        }
+        self.braces += brace_depth(&line);
+        Ok(line)
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::ReplComments;
+
+    fn scan(source: &str) -> Result<String, &'static str> {
+        let mut comments = ReplComments::default();
+        let lines: Result<Vec<_>, _> = source.split('\n').map(|line| comments.line(line)).collect();
+        lines.map(|lines| lines.join("\n"))
+    }
+
+    #[test]
+    fn renode_prelexer_correct_line_comment() {
+        assert_eq!(
+            scan("\nline1 { // something\n    line2 }"),
+            Ok("\nline1 { \n    line2 }".into())
+        );
+    }
+
+    #[test]
+    fn renode_prelexer_uncorrect_line_comment() {
+        let source = "\nline1 {// something\n    line2 }";
+        assert_eq!(scan(source), Ok(source.into()));
+    }
+
+    #[test]
+    fn renode_prelexer_beginning_line_comment() {
+        assert_eq!(
+            scan("\n// something\nline1 {\n    line2 }"),
+            Ok("\n\nline1 {\n    line2 }".into())
+        );
+    }
+
+    #[test]
+    fn renode_prelexer_line_comments_and_strings() {
+        assert_eq!(
+            scan(
+                "\nline1 \"something with //\" \"another // pseudo comment\" { // and here goes real comment\n    line2 }"
+            ),
+            Ok(
+                "\nline1 \"something with //\" \"another // pseudo comment\" { \n    line2 }"
+                    .into()
+            ),
+        );
+    }
+
+    #[test]
+    fn renode_prelexer_unterminated_string() {
+        assert_eq!(
+            scan("\nline1 \"i'm unterminated"),
+            Err("Unterminated string.")
+        );
+    }
+
+    #[test]
+    fn renode_prelexer_multiline_comment_closes_before_end_of_line() {
+        assert_eq!(
+            scan("\nline1 /* here we begin\n    here it goes\nhere the comment ends*/ x: 5\nline2"),
+            Err("Multiline comment in indent mode can only finish at the end of the line.")
+        );
+    }
+
+    #[test]
+    fn renode_prelexer_single_line_multiline_comment() {
+        assert_eq!(
+            scan("\nfirst line\n    /*something*/ second line"),
+            Err("A block comment at the start of an indented line must span to the end.")
+        );
+    }
 }
 
 fn unquoted_delimiters<'a>(
@@ -226,11 +360,14 @@ fn parse_content(
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
     let mut lines = content.lines().enumerate();
+    let mut comments = ReplComments::default();
     while let Some((index, raw)) = lines.next() {
-        let line = without_comment(raw);
-        let text = line.trim();
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
+        let line = comments
+            .line(raw)
+            .map_err(|e| error(&format!("SyntaxError: {e}")))?;
+        let text = line.trim();
         if text.is_empty() {
             continue;
         }
@@ -279,7 +416,7 @@ fn parse_content(
                 .and_then(|s| s.strip_suffix('"'))
                 .filter(|s| !s.is_empty() && !s.contains('"'))
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            if !imports.insert(filename) {
+            if !imports.insert(filename.to_owned()) {
                 return Err(error("DuplicateUsing: Duplicate using entry."));
             }
             let include_path = resolve_using(Path::new(filename), directory, root)
