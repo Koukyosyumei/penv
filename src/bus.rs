@@ -413,6 +413,23 @@ impl Bus {
         Ok(())
     }
 
+    pub fn nvic_register_address(&self, target: &str, offset: u32) -> Result<u32, String> {
+        self.validate_nvic_name(target)?;
+        if offset >= 0x1000 {
+            return Err(format!("NVIC register offset out of range: {offset:#x}"));
+        }
+        Ok(0xe000_e000 + offset)
+    }
+
+    pub fn enable_nvic_log(&mut self, target: &str) -> Result<(), String> {
+        self.validate_nvic_name(target)?;
+        self.systick
+            .as_mut()
+            .ok_or("NVIC logging requires SysTick")?
+            .set_noisy();
+        Ok(())
+    }
+
     fn validate_nvic_name(&self, target: &str) -> Result<(), String> {
         let name = target.strip_prefix("sysbus.").unwrap_or(target);
         if self.nvic.is_none() || self.nvic_name.as_deref() != Some(name) {

@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 59 | 39 | 15 | 239 |
+| Renode Robot | 113 | 60 | 38 | 15 | 239 |
 | Renode Infrastructure NUnit | 134 | 54 | 4 | 76 | 9 |
-| 合計 | **247** | **113** | **43** | **91** | **248** |
+| 合計 | **247** | **114** | **42** | **91** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -381,9 +381,9 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-pwm-gpio-verification
 
 固定上流の `hooks.robot` の `Should Parse Monitor in CPU Hook` を Cortex-M0 に移植した。上流と同じ `cpu AddHook` の現在 PC 式と `monitor.Parse` の `log` コマンドを使い、CPU を実行した時点で `message from the cpu hook` を観測する。RESC では有限の `emulation RunFor` を使う。数値アドレスの別フックと、Pause 中にログが発生しないことも確認する。フックのログは標準エラー、ゲスト UART は標準出力へ出す。
 
-SysTick の別ケースが必要とするフックからの SystemBus 書き込みやエミュレーション停止は未対応。汎用 LimitTimer の降順反転も専用モデルのゼロ到達イベントが必要なため、STM32 タイマーのアンダーフローとは別の残件。
+同じ `hooks.robot` の SysTick ケースも移植した。Cortex-M0 の RAM と NVIC を用意し、上流と同じ `nvic WriteDoubleWord 0x14 0`、PC 0x10 の `machine.SystemBus.WriteDoubleWord(0xe000e010, 0x1)`、PC 0x20 の `machine.PauseAndRequestEmulationPause()` を実行する。起動用バイナリにリセットベクターを持たせ、PC 0 から実行する点とフックのアドレスは上流と同じ。 `logLevel -1 nvic` で有効化した診断と `Machine paused` の順序を比較する。停止は命令境界で適用し、残りの実行予算で再開できることも確認した。フックの実行範囲はログ、32ビットバス書き込み、停止の3操作。汎用 Python フックと別 ISA のウォッチポイントは引き続き対象外。汎用 LimitTimer の降順反転も専用モデルのゼロ到達イベントが必要なため、STM32 タイマーのアンダーフローとは別の残件。
 
 ```sh
-cargo test --locked renode_resc_cortex_m_hook_logs_at_current_pc
+cargo test --locked renode_resc_cortex_m_hook
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-pc-hook-verification
 ```

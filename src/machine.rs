@@ -29,11 +29,18 @@ pub struct Hart {
     cpu_wait_asserted: bool,
     pub monitor_paused: bool,
     pub monitor_halted: bool,
-    pub monitor_log_hooks: Vec<(u32, String)>,
+    pub monitor_hooks: Vec<(u32, CpuHook)>,
     reset_held: bool,
     reset_pc_written: bool,
     pub pc: u32,
     pub registers: [u32; 32],
+}
+
+#[derive(Clone)]
+pub enum CpuHook {
+    Log(String),
+    WriteDoubleWord(u32, u32),
+    Pause,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -157,7 +164,7 @@ impl Machine {
                 cpu_wait_asserted: false,
                 monitor_paused: false,
                 monitor_halted: false,
-                monitor_log_hooks: Vec::new(),
+                monitor_hooks: Vec::new(),
                 reset_held: false,
                 reset_pc_written: false,
                 pc: RAM_BASE,
@@ -405,6 +412,9 @@ impl Machine {
             if matched(&self.bus, output) {
                 return Ok((Stop::OutputMatch, retired));
             }
+            if hart.monitor_paused {
+                break;
+            }
         }
         Ok((Stop::Limit, retired))
     }
@@ -588,9 +598,20 @@ impl Hart {
                 return Ok(Step::Trap);
             }
             if !thumb.locked_up() {
-                for (address, message) in &self.monitor_log_hooks {
-                    if *address == self.pc {
-                        eprintln!("{message}");
+                for (_, hook) in self
+                    .monitor_hooks
+                    .iter()
+                    .filter(|(address, _)| *address == self.pc)
+                {
+                    match hook {
+                        CpuHook::Log(message) => eprintln!("{message}"),
+                        CpuHook::WriteDoubleWord(address, value) => bus
+                            .write_scalar(*address, 4, *value, output, true)
+                            .map_err(|error| format!("CPU hook at {:#010x}: {error}", self.pc))?,
+                        CpuHook::Pause => {
+                            self.monitor_paused = true;
+                            eprintln!("Machine paused");
+                        }
                     }
                 }
             }

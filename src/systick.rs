@@ -21,6 +21,7 @@ pub struct SysTick {
     phase: u64,
     clock_gated: bool,
     counting: bool,
+    noisy: bool,
 }
 
 impl Default for SysTick {
@@ -37,6 +38,7 @@ impl Default for SysTick {
             phase: 0,
             clock_gated: false,
             counting: false,
+            noisy: false,
         }
     }
 }
@@ -54,6 +56,7 @@ impl SysTick {
         *self = Self {
             frequency: self.frequency,
             clock_gated: self.clock_gated,
+            noisy: self.noisy,
             ..Self::default()
         };
     }
@@ -61,6 +64,10 @@ impl SysTick {
     pub fn set_frequency(&mut self, frequency: u32) {
         self.frequency = Some(frequency);
         self.phase = 0;
+    }
+
+    pub fn set_noisy(&mut self) {
+        self.noisy = true;
     }
 
     pub fn set_clocked(&mut self, clocked: bool) {
@@ -144,6 +151,11 @@ impl SysTick {
                 let enabled = value & 1 != 0;
                 if (self.control & 1 != 0) != enabled {
                     self.counting = enabled && self.reload != 0;
+                    if self.noisy && enabled && !self.counting {
+                        eprintln!(
+                            "Systick_NS enabled but it won't be started as long as the reload value is zero"
+                        );
+                    }
                     if self.counting && self.current == 0 {
                         self.current = self.reload;
                     }

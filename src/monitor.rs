@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     bus::{CORTEX_M_STEP_HZ, UartWatch, UnhandledAccess},
-    machine::{Machine, Stop},
+    machine::{CpuHook, Machine, Stop},
     uart::{BinaryUartPattern, FailingUartPattern, UartHistory, UartWaitMode},
 };
 
@@ -44,7 +44,9 @@ enum Action {
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
-    CpuLogHook(String, Option<u32>, String),
+    AddCpuHook(String, Option<u32>, CpuHook),
+    NvicLog(String),
+    NvicWrite(String, u32, u32),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
@@ -154,10 +156,12 @@ pub fn run(
                         return Ok(None);
                     }
                     let chunk = (*steps).min(budget);
+                    let start = machine.elapsed_steps();
                     machine.run(chunk, &mut output).map(|(stop, count)| {
                         retired += count;
-                        budget -= chunk;
-                        (stop != Stop::Limit || chunk < *steps).then_some(stop)
+                        budget -= machine.elapsed_steps().wrapping_sub(start);
+                        (stop != Stop::Limit || (chunk < *steps && !machine.primary.monitor_paused))
+                            .then_some(stop)
                     })
                 })
             }
@@ -194,13 +198,24 @@ pub fn run(
                     }
                 })
             }
-            Action::CpuLogHook(cpu, address, message) => {
+            Action::AddCpuHook(cpu, address, hook) => {
                 machine.cortex_m_monitor_cpu(cpu).map(|hart| {
-                    hart.monitor_log_hooks
-                        .push((address.unwrap_or(hart.pc), message.clone()));
+                    hart.monitor_hooks
+                        .push((address.unwrap_or(hart.pc), hook.clone()));
                     None
                 })
             }
+            Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
+            Action::NvicWrite(target, offset, value) => machine
+                .bus
+                .nvic_register_address(target, *offset)
+                .and_then(|address| {
+                    machine
+                        .bus
+                        .write_scalar(address, 4, *value, &mut output, true)
+                        .map_err(|e| e.to_string())
+                })
+                .map(|()| None),
             Action::ReadCpuPc(cpu) => machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
                 writeln!(output.output, "0x{:08x}", hart.pc)
                     .map_err(|e| e.to_string())
@@ -1060,24 +1075,18 @@ fn execute(
                     .ok_or("expected AddHook address and body")?;
                 (Some(crate::parse_address(resolve(address)?)?), body)
             };
-            let body = body
-                .trim()
-                .strip_prefix("\"monitor.Parse('")
-                .and_then(|body| body.strip_suffix("')\""))
-                .and_then(|body| body.strip_prefix("log "))
-                .ok_or("AddHook supports monitor.Parse with a log command")?;
-            let body = body.replace("\\\"", "\"");
-            let (message, "") =
-                quoted_argument(&body).ok_or("expected quoted AddHook log message")?
-            else {
-                return Err("expected one AddHook log message".into());
-            };
-            Some(Action::CpuLogHook(
+            Some(Action::AddCpuHook(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
                 address,
-                message.to_owned(),
+                parse_cpu_hook(body.trim())?,
             ))
         }
+        ["logLevel", "-1", target] => Some(Action::NvicLog(resolve(target)?.to_owned())),
+        [target, "WriteDoubleWord", offset, value] => Some(Action::NvicWrite(
+            resolve(target)?.to_owned(),
+            crate::parse_address(resolve(offset)?)?,
+            crate::parse_address(resolve(value)?)?,
+        )),
         ["emulation", "SynchroniseQuantum"] => Some(Action::SynchroniseQuantum),
         [target, operation @ ("Pause" | "Resume" | "IsPaused")] => {
             let cpu = resolve(target)?;
@@ -1250,6 +1259,37 @@ fn execute(
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
     Ok(())
+}
+
+fn parse_cpu_hook(body: &str) -> Result<CpuHook, String> {
+    let body = body
+        .strip_prefix('"')
+        .and_then(|body| body.strip_suffix('"'))
+        .ok_or("expected quoted AddHook body")?;
+    if body == "machine.PauseAndRequestEmulationPause()" {
+        return Ok(CpuHook::Pause);
+    }
+    if let Some(arguments) = body
+        .strip_prefix("machine.SystemBus.WriteDoubleWord(")
+        .and_then(|body| body.strip_suffix(')'))
+    {
+        let (address, value) = arguments
+            .split_once(',')
+            .ok_or("expected hook write address and value")?;
+        return Ok(CpuHook::WriteDoubleWord(
+            crate::parse_address(address.trim())?,
+            crate::parse_address(value.trim())?,
+        ));
+    }
+    let log = body
+        .strip_prefix("monitor.Parse('log ")
+        .and_then(|body| body.strip_suffix("')"))
+        .ok_or("unsupported AddHook body")?
+        .replace("\\\"", "\"");
+    let (message, "") = quoted_argument(&log).ok_or("expected quoted AddHook log message")? else {
+        return Err("expected one AddHook log message".into());
+    };
+    Ok(CpuHook::Log(message.to_owned()))
 }
 
 fn parse_tester_bool(value: &str) -> Result<bool, String> {

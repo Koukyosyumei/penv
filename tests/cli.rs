@@ -291,6 +291,65 @@ emulation RunFor "0.00000002"
 }
 
 #[test]
+fn renode_resc_cortex_m_hook_enables_systick_and_pauses() {
+    let directory = std::env::temp_dir().join(format!("penv-systick-hook-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x10000
+"#,
+    )
+    .unwrap();
+    let mut firmware = [0; 0x30];
+    firmware[..8].copy_from_slice(&[0, 8, 0, 0, 9, 0, 0, 0]);
+    fs::write(directory.join("firmware.bin"), firmware).unwrap();
+    let script = directory.join("systick-hook.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @firmware.bin 0
+cpu PC 0
+logLevel -1 nvic
+nvic WriteDoubleWord 0x14 0
+cpu AddHook 0x10 "machine.SystemBus.WriteDoubleWord(0xe000e010, 0x1)"
+cpu AddHook 0x20 "machine.PauseAndRequestEmulationPause()"
+emulation RunFor "0.001"
+cpu IsPaused
+cpu PC
+sysbus ReadDoubleWord 0xe000e010
+emulation RunFor "0.001"
+cpu PC
+cpu Resume
+emulation RunFor "0.00000001"
+cpu PC
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "18", "--script"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"True\n0x00000022\n0x00000005\n0x00000022\n0x00000024\n"
+    );
+    assert_eq!(
+        output.stderr,
+        b"Systick_NS enabled but it won't be started as long as the reload value is zero\nMachine paused\n"
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_gpio_button_fans_out_to_distinct_pins() {
     let directory = std::env::temp_dir().join(format!("penv-gpio-fanout-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

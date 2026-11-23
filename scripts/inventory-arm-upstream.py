@@ -476,7 +476,7 @@ def classify_robot(name, case, body, parameter):
         raise ValueError(f"Unreviewed GDB setup for {case}")
     if name == "hooks":
         if "CortexM Hook" in case:
-            return PARTIAL, V6, "renode_systick_current_write_reloads_without_pend_and_zero_reload_stops; M0 zero reload and log hooks covered; hooks that write SystemBus or pause emulation and the corresponding log observations remain"
+            return PASS, V6, "renode_resc_cortex_m_hook_enables_systick_and_pauses; same zero reload, PC 0x10 write, PC 0x20 pause and both ordered logs"
         if "stm32l072.resc" in body:
             return OUT, "STM32L072 LRWAN1 / Cortex-M0+", "Asserts specific L072 firmware symbol names and translation block addresses"
         if "cortex-a9" in body:
