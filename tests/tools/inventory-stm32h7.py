@@ -204,7 +204,7 @@ for file, kind in robot.items():
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Not Run Out Of Ring Buffer Space When Writing Long Line To Uart':
             status, note = 'PARTIAL', '同一 ELF・長文・CR・50 ms 後のプロンプトを観測。ただし追加観測で RX ring buffer full が出るため未達'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Hear Loopback CAN Messages':
-            note = '公開 ELF は初期化を完了し、Counter received: 0 で8仮想秒タイムアウト。古典フレーム転送・標準IDフィルター・TX FIFO状態をデバイス単体で検証済み。共有バスの messageRAM 接続待ち'
+            note = '公開 ELF は初期化を完了し、Counter received: 0 で8仮想秒タイムアウト。古典フレーム転送・標準IDフィルター・TX FIFOと送信イベントをデバイス単体で検証済み。共有バスの messageRAM 接続待ち'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Interrupt Test':
             status, note = 'PARTIAL', '同一 ELF で test_arm_esf_collection が PASS。test_arm_interrupt は reason 2 の検証で FAIL、test_arm_user_interrupt は 0x08001c0c で Thumb 状態を持たない 0 への分岐で停止'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Blink Led':
@@ -326,7 +326,7 @@ def triage(row):
     }:
         status, reason = 'OPEN', '担当ローカルは hard-float ELF を拒否。ARM 統合 b023006 では最小構成で両 ELF ロード可。全 H753 の TIM17 と LED テスターが共有阻害点、CRYP 検証は未達'
     elif suite == 'MCAN.robot' and name == 'Should Run Zephyr CAN Counter Sample In Loopback Mode':
-        status, reason = 'OPEN', '固定上流 ELF と H753 REPL で初期化とフィルター登録まで到達。Counter received: 0 で8仮想秒タイムアウト。共有 messageRAM 接続待ち'
+        status, reason = 'OPEN', '固定上流 ELF と H753 REPL で初期化とフィルター登録まで到達。Counter received: 0 で8仮想秒タイムアウト。デバイス単体の送信イベント検証済み、共有 messageRAM 接続待ち'
     elif suite == 'SDCard.robot' and name in {
         'Should Be Able To Load Existing File',
         'Should Fail At Loading Nonexistent File',

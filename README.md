@@ -1757,3 +1757,25 @@ done
 ```
 
 `cargo test` 225件、STM32H7 REPL 7構成、Zephyr Blinky・Button、独立した SD 装着3件が通過しました。ログと終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-947817b5689c-1
+
+STM32H7 FDCAN の送信イベント FIFO を実装しました。固定上流 MCAN のイベント要素に従って ID・DLC・マーカーをメッセージ RAM に記録し、新規登録・ウォーターマーク・満杯・欠落と ACK 後の空状態を検証しました。タイムスタンプは固定上流モデルと同じゼロです。広幅マーカー用の外部タイムスタンプ機構は未対応です。
+
+Nucleo と `MCAN.robot` の公開ループバック ELF を再実行しました。両方とも最初の `Counter received: 0` で8仮想秒タイムアウトしたため、台帳は未達のままです。共有 message RAM の配線は ARM の既存依頼 `network-fdcan-417181b.md` で追跡しています。独立した SD ファイル装着3件も再実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-tx-events.rH2f7XFi
+for case in can mcan; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 10000000
+done
+```
+
+`cargo test` 227件、STM32H7 REPL 7構成、Zephyr Blinky・Button、SD ファイル装着3件が通過しました。上記にケース別結果、UART と終了状態を保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。

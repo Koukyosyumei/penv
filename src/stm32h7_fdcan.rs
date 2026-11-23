@@ -8,6 +8,10 @@ pub struct Fdcan {
     fifo0_put: u32,
     tx_fifo: std::collections::VecDeque<u32>,
     tx_put: u32,
+    tx_event_count: u32,
+    tx_event_get: u32,
+    tx_event_put: u32,
+    tx_event_lost: bool,
 }
 
 impl Fdcan {
@@ -28,6 +32,10 @@ impl Fdcan {
             fifo0_put: 0,
             tx_fifo: Default::default(),
             tx_put: 0,
+            tx_event_count: 0,
+            tx_event_get: 0,
+            tx_event_put: 0,
+            tx_event_lost: false,
         }
     }
 
@@ -49,6 +57,15 @@ impl Fdcan {
     }
 
     pub fn read(&self, address: u32) -> u32 {
+        if address - self.base == 0xf4 {
+            let capacity = self.tx_event_capacity();
+            let full = capacity != 0 && self.tx_event_count == capacity;
+            return self.tx_event_count
+                | (self.tx_event_get << 8)
+                | (self.tx_event_put << 16)
+                | (u32::from(full) << 24)
+                | (u32::from(self.tx_event_lost) << 25);
+        }
         if address - self.base == 0xc4 {
             return self.tx_status();
         }
@@ -65,6 +82,53 @@ impl Fdcan {
             .get(((address - self.base) / 4) as usize)
             .copied()
             .unwrap_or(0)
+    }
+
+    fn tx_event_capacity(&self) -> u32 {
+        ((self.registers[0xf0 / 4] >> 16) & 0x3f).min(32)
+    }
+
+    #[allow(dead_code)] // Called by the loopback service pending shared wiring.
+    fn store_tx_event(&mut self, ram: &mut [u8], identifier: u32, header: u32) {
+        if self.registers[0x18 / 4] & (1 << 11) != 0 {
+            return;
+        }
+        let config = self.registers[0xf0 / 4];
+        let capacity = self.tx_event_capacity();
+        let offset = (config & 0xfffc) as usize + self.tx_event_put as usize * 8;
+        let destination = ram
+            .get_mut(offset..offset + 8)
+            .filter(|_| self.tx_event_count < capacity);
+        let Some(destination) = destination else {
+            self.tx_event_lost = true;
+            self.registers[0x50 / 4] |= 1 << 15;
+            return;
+        };
+        destination[..4].copy_from_slice(&identifier.to_le_bytes());
+        let event_header = (header & 0xff3f0000) | (2 << 22);
+        destination[4..].copy_from_slice(&event_header.to_le_bytes());
+        self.tx_event_put = (self.tx_event_put + 1) % capacity;
+        self.tx_event_count += 1;
+        let watermark = (config >> 24) & 0x3f;
+        self.registers[0x50 / 4] |= (1 << 12)
+            | (u32::from(watermark != 0 && self.tx_event_count >= watermark) << 13)
+            | (u32::from(self.tx_event_count == capacity) << 14);
+    }
+
+    fn acknowledge_tx_event(&mut self, value: u32) {
+        let capacity = self.tx_event_capacity();
+        let index = value & 0x1f;
+        if index >= capacity || self.tx_event_count == 0 {
+            return;
+        }
+        let consumed = (index + capacity - self.tx_event_get) % capacity + 1;
+        if consumed <= self.tx_event_count {
+            self.tx_event_get = (index + 1) % capacity;
+            self.tx_event_count -= consumed;
+            if self.tx_event_count == 0 {
+                self.registers[0x50 / 4] |= 1 << 11;
+            }
+        }
     }
 
     fn tx_bounds(&self) -> (u32, u32) {
@@ -205,6 +269,7 @@ impl Fdcan {
                 self.registers[0x50 / 4] |= 1 << 9;
             }
             let identifier = u32::from_le_bytes(element[..4].try_into().unwrap());
+            self.store_tx_event(ram, identifier, header);
             let Some(filter_header) = self.fifo0_filter_header(ram, identifier) else {
                 continue;
             };
@@ -232,6 +297,10 @@ impl Fdcan {
 
     pub fn write(&mut self, address: u32, value: u32) {
         let offset = address - self.base;
+        if offset == 0xf8 {
+            self.acknowledge_tx_event(value);
+            return;
+        }
         if offset == 0xa8 {
             let capacity = self.fifo0_capacity();
             let acknowledged = value & 0x3f;
@@ -249,7 +318,7 @@ impl Fdcan {
             return;
         };
         match offset {
-            0x00 | 0x04 | 0x40 | 0x44 | 0xa4 | 0xc4 | 0xcc | 0xd8 | 0xdc => {}
+            0x00 | 0x04 | 0x40 | 0x44 | 0xa4 | 0xc4 | 0xcc | 0xd8 | 0xdc | 0xf4 => {}
             0x18 => {
                 let init = value & 1;
                 let changes = if *register & 1 != 0 && init != 0 {
@@ -259,7 +328,7 @@ impl Fdcan {
                 };
                 let sleep = value & (1 << 4);
                 let options = if initialized { value } else { *register };
-                *register = init | changes | sleep | (sleep >> 1) | (options & 0xf3e0);
+                *register = init | changes | sleep | (sleep >> 1) | (options & 0xfbe0);
             }
             0x50 => *register &= !value,
             0x54 | 0x58 | 0x5c => *register = value,
@@ -268,6 +337,13 @@ impl Fdcan {
                 self.tx_fifo.clear();
                 self.tx_put = self.tx_bounds().0;
                 self.registers[0xcc / 4] = 0;
+            }
+            0xf0 if initialized => {
+                *register = value;
+                self.tx_event_count = 0;
+                self.tx_event_get = 0;
+                self.tx_event_put = 0;
+                self.tx_event_lost = false;
             }
             0xd0 => self.request_tx(value),
             0xd4 => {
@@ -288,6 +364,58 @@ impl Fdcan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event_fifo_fixture() -> (Fdcan, [u8; 128]) {
+        let mut can = Fdcan::new(0, [Some(19), None]);
+        let mut ram = [0; 128];
+        can.write(0x18, 3);
+        can.write(0x18, 0xa3);
+        can.write(0x10, 1 << 4);
+        can.write(0xc0, (1 << 16) | 0x40);
+        can.write(0xf0, (1 << 24) | (2 << 16) | 0x60);
+        can.write(0x54, 1 << 12);
+        can.write(0x5c, 1);
+        can.write(0x18, 0xa0);
+        ram[0x40..0x44].copy_from_slice(&(0x123u32 << 18).to_le_bytes());
+        ram[0x44..0x48].copy_from_slice(&0x5a840000u32.to_le_bytes());
+        (can, ram)
+    }
+
+    #[test]
+    fn tx_event_fifo_stores_header_and_routes_new_entry_interrupt() {
+        let (mut can, mut ram) = event_fifo_fixture();
+        can.write(0xd0, 1);
+        can.service_loopback(&mut ram);
+        assert_eq!(&ram[0x60..0x64], &ram[0x40..0x44]);
+        assert_eq!(
+            u32::from_le_bytes(ram[0x64..0x68].try_into().unwrap()),
+            0x5a840000
+        );
+        assert_eq!(can.read(0xf4), (1 << 16) | 1);
+        assert_eq!(can.read(0x50) & 0xf000, 0x3000);
+        assert!(can.interrupts().eq([19]));
+        can.write(0xf8, 0);
+        can.write(0x50, 0x3000);
+        assert_eq!(can.read(0xf4), (1 << 16) | (1 << 8));
+        assert_eq!(can.read(0x50) & (1 << 11), 1 << 11);
+        assert_eq!(can.interrupts().count(), 0);
+    }
+
+    #[test]
+    fn tx_event_fifo_reports_full_and_loss_without_overwriting() {
+        let (mut can, mut ram) = event_fifo_fixture();
+        for marker in [1u8, 2, 3] {
+            ram[0x47] = marker;
+            can.write(0xd0, 1);
+            can.service_loopback(&mut ram);
+        }
+        assert_eq!(ram[0x67], 1);
+        assert_eq!(ram[0x6f], 2);
+        assert_eq!(can.read(0xf4), (3 << 24) | 2);
+        assert_eq!(can.read(0x50) & 0xf000, 0xf000);
+        can.write(0xf8, 1);
+        assert_eq!(can.read(0xf4) & 0x3f, 0);
+    }
 
     #[test]
     fn tx_fifo_wraps_and_releases_cancelled_slots() {
