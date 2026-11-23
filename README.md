@@ -729,3 +729,20 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 ログと終了状態は上記の証拠ディレクトリに保存しています。割り込み ELF の最終ログは `final/` にあります。台帳は対象 789 件のうち等価合格 17 件、部分検証 17 件、未達 755 件です。
+
+### backlog-network-53ae79821516-1
+
+共通 Cortex-M/NVIC モデルに WFE の待機と SEV のイベントを実装しました。SCR.SEVONPEND が有効な場合、無効化されている IRQ も保留への遷移でイベントを発生させます。WFE はイベントで再開し、IRQ の許可と優先度に基づく例外処理は従来どおりです。BASEPRI・PRIMASK・FAULTMASK から求める優先度の下限判定を共通化しました。
+
+上流 `arm-cortex-m-interrupts.robot` の残り 2 件を Rust テストに移植しました。WFE ケースは同じ `WFE; STR; B`、SCR=0x10、IRQ5 で、刺激前の対象メモリーが 0、刺激後 1 仮想秒以内に `0xDEADBEEF` になることを照合します。BASEPRI ケースは同じ `0x50` と優先度の比較を行い、リセット前の一致とリセット後の不一致を確認します。両ケースとも F4 固有の周辺機器を使わないため、H7 でも使用する共通モデルで検証しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test upstream_wfe` と `cargo test upstream_basepri` で個別に再現できます。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-wfe.Vp3mSKus` に保存しました。台帳は対象 789 件のうち等価合格 19 件、部分検証 17 件、未達 753 件です。Nucleo の公開割り込み ELF の後続サブテストには、前記の例外理由とユーザーモード分岐の未達が残っています。

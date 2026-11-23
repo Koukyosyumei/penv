@@ -39,7 +39,7 @@ use crate::{
     stm32h7_sdmmc::Sdmmc,
     stm32h7_spi::Spi,
     stm32h7_timer::Timer as H7Timer,
-    systick::SysTick,
+    systick::{PENDSV, SYSTICK, SysTick},
     uart::{LiteXUart, MuraxUart},
 };
 
@@ -1878,9 +1878,19 @@ impl Bus {
         }
         if width == 4
             && let Some(timer) = self.systick.as_mut()
-            && timer.write(address, value)
         {
-            return Ok(());
+            let pending = [PENDSV, SYSTICK].map(|exception| timer.pending(exception));
+            if timer.write(address, value) {
+                if [PENDSV, SYSTICK]
+                    .into_iter()
+                    .zip(pending)
+                    .any(|(exception, was_pending)| !was_pending && timer.pending(exception))
+                    && let Some(nvic) = &mut self.nvic
+                {
+                    nvic.signal_pending_event();
+                }
+                return Ok(());
+            }
         }
         if address == VTOR && width == 4 {
             let base = value & !0x7f;

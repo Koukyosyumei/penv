@@ -278,8 +278,10 @@ def triage(row):
     elif suite == 'arm-cortex-m-interrupts.robot':
         if name in {'Should Count Down SysTick With Reload Set Before Reset', 'Should Count Down SysTick With Reload Set After Reset'}:
             status, reason = 'PASS', '共通 SysTick モデルで上流と同じ 100 Hz・RELOAD=10・レジスター書込み順と 0/90/100/110 ms の CVR=10/1/10/9 を照合。src/systick.rs'
-        else:
-            status, reason = 'OPEN', 'F4 REPL はフィクスチャ。観測対象は H7 と共通の WFE/BASEPRI 契約で、専用 ELF なし'
+        elif name == 'Should Wake Up From WFE When SEVONPEND Is Set':
+            status, reason = 'PASS', '共通 Cortex-M/NVIC で同じ WFE/STR/B、SCR=0x10、IRQ5、1 ms 後のメモリー値 0 と IRQ 後 1 秒以内の 0xDEADBEEF を照合。src/thumb.rs'
+        elif name == 'NVIC Base Priority Mask Setting Should Not Survive Reset':
+            status, reason = 'PASS', '共通 Cortex-M の BASEPRI=0x50、優先度ブーストとの一致、CPU リセット後の不一致を同じ順序で照合。src/thumb.rs'
     elif suite == 'arm-dsp-examples-cortex-m4.robot':
         status, reason = 'OPEN', '汎用 Cortex-M4F と TrivialUart の CMSIS-DSP ELF。STM32H747 の副コアに適用'
     elif suite == 'arm-ge-flag.robot':

@@ -15,6 +15,8 @@ pub struct Thumb {
     basepri: u8,
     faultmask: bool,
     waiting_for_interrupt: bool,
+    waiting_for_event: bool,
+    event: bool,
     it_state: u8,
     negative: bool,
     zero: bool,
@@ -247,11 +249,21 @@ impl Thumb {
         true
     }
 
+    fn priority_boost(&self, ignore_primask: bool) -> i16 {
+        if self.faultmask {
+            -1
+        } else if self.interrupts_masked && !ignore_primask {
+            0
+        } else if self.basepri != 0 {
+            i16::from(self.basepri)
+        } else {
+            256
+        }
+    }
+
     fn can_take_sync_exception(&self, exception: u8, nvic: &crate::nvic::Nvic) -> bool {
         let priority = nvic.priority(exception);
-        !self.interrupts_masked
-            && !self.faultmask
-            && (self.basepri == 0 || priority < self.basepri)
+        i16::from(priority) < self.priority_boost(false)
             && (self.active_exception == 0
                 || (self.active_exception > 3 && priority < nvic.priority(self.active_exception)))
     }
@@ -362,7 +374,7 @@ impl Thumb {
     }
 
     pub fn sleeping(&self) -> bool {
-        self.waiting_for_interrupt
+        self.waiting_for_interrupt || self.waiting_for_event
     }
 
     pub fn service_interrupts(
@@ -373,7 +385,19 @@ impl Thumb {
     ) -> Result<bool, String> {
         bus.sample_nvic(&self.active_exceptions);
         if let Some(timer) = bus.systick.as_mut() {
+            let was_pending = timer.pending(SYSTICK);
             timer.tick();
+            if !was_pending
+                && timer.pending(SYSTICK)
+                && let Some(nvic) = &mut bus.nvic
+            {
+                nvic.signal_pending_event();
+            }
+        }
+        self.event |= bus.nvic.as_mut().is_some_and(|nvic| nvic.take_event());
+        if self.waiting_for_event && self.event {
+            self.event = false;
+            self.waiting_for_event = false;
         }
         if self.faultmask || (self.interrupts_masked && !self.waiting_for_interrupt) {
             return Ok(false);
@@ -406,9 +430,10 @@ impl Thumb {
         }
         if let Some((exception, _)) = selected.filter(|(_, priority)| {
             u16::from(*priority) < current_priority
-                && (self.basepri == 0 || *priority < self.basepri)
+                && i16::from(*priority) < self.priority_boost(true)
         }) {
             self.waiting_for_interrupt = false;
+            self.waiting_for_event = false;
             if self.interrupts_masked {
                 return Ok(false);
             }
@@ -742,7 +767,9 @@ impl Thumb {
             }
             0xbe00..=0xbeff => return Ok(false),
             0xbf00 | 0xbf10 => {}
+            0xbf20 => self.waiting_for_event = !std::mem::take(&mut self.event),
             0xbf30 => self.waiting_for_interrupt = true,
+            0xbf40 => self.event = true,
             0xbf01..=0xbfef if self.thumb2 && !in_it && inst & 15 != 0 => {
                 self.it_state = inst as u8;
             }
@@ -912,6 +939,61 @@ impl Thumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_wfe_wakes_from_disabled_irq_with_sevonpend() {
+        const START: u32 = 0x2000_0000;
+        const TARGET: u32 = 0x2000_1000;
+        let mut bus = Bus::default();
+        bus.map_ram(START, 0x40000).unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        let mut output = std::io::sink();
+        bus.write(0xe000ed10, 4, 0x10, &mut output).unwrap();
+        bus.memory(START, 6)
+            .unwrap()
+            .copy_from_slice(&[0x20, 0xbf, 0x01, 0x60, 0xfe, 0xe7]);
+        let mut thumb = Thumb::new(None);
+        thumb.thumb2 = true;
+        let mut r = [0; 32];
+        r[0] = TARGET;
+        r[1] = 0xdeadbeef;
+        r[13] = 0x2004_0000;
+        let mut pc = START;
+        let mut step = |thumb: &mut Thumb, bus: &mut Bus| {
+            if !thumb.service_interrupts(&mut pc, &mut r, bus).unwrap() && !thumb.sleeping() {
+                thumb.step(&mut pc, &mut r, bus, &mut output).unwrap();
+            }
+        };
+        for _ in 0..crate::machine::VIRTUAL_STEPS_PER_SECOND / 1000 {
+            step(&mut thumb, &mut bus);
+        }
+        assert_eq!(bus.read::<4>(TARGET).unwrap(), 0);
+        bus.nvic
+            .as_mut()
+            .unwrap()
+            .set_line(5, true, &ActiveExceptions::default());
+        for _ in 0..crate::machine::VIRTUAL_STEPS_PER_SECOND {
+            step(&mut thumb, &mut bus);
+            if bus.read::<4>(TARGET).unwrap() == 0xdeadbeef {
+                break;
+            }
+        }
+        assert_eq!(bus.read::<4>(TARGET).unwrap(), 0xdeadbeef);
+        assert_eq!(thumb.active_exception, 0);
+    }
+
+    #[test]
+    fn upstream_basepri_priority_boost_clears_on_reset() {
+        let mut thumb = Thumb::new(None);
+        thumb.thumb2 = true;
+        let mut registers = [0; 32];
+        assert!(thumb.system_write(17, 0x50, &mut registers));
+        let basepri = thumb.system_read(17, &registers).unwrap();
+        let before_reset = thumb.priority_boost(false);
+        assert_eq!(i16::try_from(basepri).unwrap(), before_reset);
+        thumb.reset_state();
+        assert_ne!(thumb.priority_boost(false), before_reset);
+    }
 
     #[test]
     fn udf_stacks_faulting_pc_and_sets_clearable_fault_status() {

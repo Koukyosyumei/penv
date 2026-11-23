@@ -41,6 +41,7 @@ pub struct Nvic {
     system_priority: [u8; 12],
     priority_mask: u8,
     scr: u32,
+    event: bool,
     ccr: u32,
     cpacr: u32,
     fault_enables: u32,
@@ -108,6 +109,7 @@ impl Nvic {
             system_priority: [0; 12],
             priority_mask,
             scr: 0,
+            event: false,
             ccr: 1 << 9,
             cpacr: 0,
             fault_enables: 0,
@@ -177,8 +179,23 @@ impl Nvic {
 
     pub fn set_line(&mut self, line: u8, high: bool, active: &ActiveExceptions) {
         if high && usize::from(line) < IRQ_LINES && !active.contains(16 + line) {
-            self.pending[usize::from(line / 32)] |= 1 << (line % 32);
+            self.pend(usize::from(line / 32), 1 << (line % 32));
         }
+    }
+
+    fn pend(&mut self, bank: usize, mask: u32) {
+        if mask & !self.pending[bank] != 0 {
+            self.signal_pending_event();
+        }
+        self.pending[bank] |= mask;
+    }
+
+    pub fn signal_pending_event(&mut self) {
+        self.event |= self.scr & (1 << 4) != 0;
+    }
+
+    pub fn take_event(&mut self) -> bool {
+        std::mem::take(&mut self.event)
     }
 
     pub fn record_undefined_instruction(&mut self, usage_fault_allowed: bool) -> u8 {
@@ -365,7 +382,7 @@ impl Nvic {
             match base {
                 ENABLE => self.enabled[bank] |= value,
                 DISABLE => self.enabled[bank] &= !value,
-                SET_PENDING => self.pending[bank] |= value,
+                SET_PENDING => self.pend(bank, value),
                 CLEAR_PENDING => self.pending[bank] &= !value,
                 _ => unreachable!(),
             }
