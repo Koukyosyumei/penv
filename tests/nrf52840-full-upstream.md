@@ -717,3 +717,18 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 保存した `final/gdb.resc` と `final/write-watch.resc` はそれぞれ StartGdbServer と書き込みフックで停止する。再現手順と期待値は `nrf52-gdb-pydev-6920dc6.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-pydev.m0jngGkG`。
+
+### ARM の起動前スナップショット候補の再検証
+
+候補 `b69d351b4f27ab3385cbfe443bb43d75a21a021a` を別ディレクトリへ展開し、担当ブランチは候補を取り込まず検証した。nRF52840 の固定 Shell ELF は `Save`、`Clear`、`Load`、`mach set 0` の後にプロンプトを出し、`demo ping` に `pong` を返した。候補の名前付き UART 待機は STM32 専用なので、nRF では無指定の待機と `--uart-event` を使った。実行後の `Save` は明示的に拒否された。
+
+```sh
+mkdir -p "$ARTIFACT_DIR/source"
+git archive b69d351b4f27ab3385cbfe443bb43d75a21a021a | tar -x -C "$ARTIFACT_DIR/source"
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo build --locked --manifest-path "$ARTIFACT_DIR/source/Cargo.toml"
+tests/nrf52840-boot-snapshot-candidate.sh "$ARTIFACT_DIR/source/target/debug/penv" ../renode "$SHELL_ELF" "$ARTIFACT_DIR/wrapper"
+```
+
+固定 Neonkey ELF は上流の SHA-1 を照合し、`_vector_table` を `0x08000000` に設定した。固定 REPL の `UART.STM32_UART` で停止したため、上流の `Hello World!` は未達。固定 ITSTATE の再現では候補が `cpu Step 4` で停止し、別の `RunFor` 付き再現で実行後保存が未達であることも確認した。2件とも台帳は未達を維持する。結果は `nrf52-snapshot-candidate-b69d351.md` で ARM 担当へ返した。
+
+ケース別 RESC・ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/snapshot-candidate.vnmB4wLl` に保存した。候補の CLI テストは20件合格。担当ブランチの `cargo test --locked` と Zephyr Shell の UART・リセット回帰も通過した。
