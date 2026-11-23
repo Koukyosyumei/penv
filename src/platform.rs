@@ -208,8 +208,14 @@ fn inline_body<'a>(
         .chain([text.len()])
     {
         let item = text[start..end].trim();
-        if !item.is_empty() {
+        if item.is_empty() {
+            if end != text.len() {
+                return Err("empty inline attribute");
+            }
+        } else if property_key(item).is_some() || item.contains("->") {
             body.push((source.clone(), item.into()));
+        } else {
+            return Err("expected an inline property or connection");
         }
         start = end + 1;
     }
@@ -381,6 +387,28 @@ fn parse_text(
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error("unsupported declaration name"));
         }
+        let mut block = String::new();
+        let mut depth = brace_depth(declaration);
+        let first_brace = unquoted_delimiters(declaration, &['{']).next();
+        let declaration = if depth > 0
+            && first_brace.is_some_and(|(index, _)| !declaration[..index].trim_end().ends_with('@'))
+        {
+            block.push_str(declaration);
+            while depth > 0 {
+                let (index, raw) = lines
+                    .next()
+                    .ok_or_else(|| error("expected a closing brace for inline properties"))?;
+                let line = comments
+                    .line(raw)
+                    .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                depth += brace_depth(&line);
+                block.push('\n');
+                block.push_str(&line);
+            }
+            &block
+        } else {
+            declaration
+        };
         let (declaration, body) = inline_body(declaration, &source).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
             Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
@@ -1964,5 +1992,67 @@ mod comment_cases {
                 "    name: \"/* quoted */\";           field: 1 }"
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod inline_attribute_cases {
+    use super::*;
+
+    fn parse(source: &str) -> Result<Vec<Entry>, String> {
+        let mut entries = Vec::new();
+        let path = Path::new("fixture.repl");
+        parse_text(
+            source,
+            path,
+            Path::new("."),
+            Path::new("."),
+            &mut HashSet::new(),
+            &mut entries,
+        )?;
+        Ok(entries)
+    }
+
+    #[test]
+    fn one_attribute_with_or_without_semicolon() {
+        for source in [
+            "\nuart: {baudRate: BaudRate.B9600}\n",
+            "\nuart: {baudRate: BaudRate.B9600;}\n",
+        ] {
+            let entries = parse(source).unwrap();
+            assert_eq!(entries.len(), 1);
+            let entry = &entries[0];
+            assert_eq!(entry.name, "uart");
+            assert!(entry.model.is_empty());
+            assert_eq!(entry.body.len(), 1);
+            let (name, variant) = entry.body[0].1.split_once(':').unwrap();
+            assert_eq!(name, "baudRate");
+            assert_eq!(variant.trim().strip_prefix("BaudRate."), Some("B9600"));
+        }
+    }
+
+    #[test]
+    fn two_attributes_with_or_without_final_semicolon() {
+        for source in [
+            "\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000\n}",
+            "\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000;\n}",
+        ] {
+            let entries = parse(source).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].body.len(), 2);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_upstream_inline_entries() {
+        for source in [
+            "\nuart: {baudRate: BaudRate.B9600;;}\n",
+            "\nuart: {_nonIdentifier;;}\n",
+            "\nuart: {; baudRate: BaudRate.B9600;}\n",
+            "\nuart: {\n    friendlyName: \"some name\";\n    _nonIdentifier\n}",
+            "\nuart: {\n    friendlyName: \"some name\";\n    size: 0x1000;\n};",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
     }
 }

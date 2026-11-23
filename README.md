@@ -996,3 +996,21 @@ target/release/penv run --script "$e/probe.resc" --platform-root ../renode
 ```
 
 ログと終了状態は上記のディレクトリに保存しました。台帳は対象 786 件のうち等価合格 78 件、部分検証 10 件、未達 698 件です。
+
+### backlog-network-58f9301a8fe9-1
+
+REPL の波括弧内で複数行の属性を読み込み、属性間のセミコロンと任意の末尾セミコロンを処理します。固定上流 `ParserTests.cs` の 9 件を移植し、同じ入力で 4 件の解析結果と 5 件の構文エラーを照合しました。STM32H743 では、複数行コメントを含む GPIO 属性ブロックを組み立て、MMIO で設定値 `0x55555555` を確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-inline-attrs.hEQbdrTE
+target/release/penv run --script "$e/gpio.resc" --platform-root ../renode
+```
+
+上記の証拠ディレクトリに実行ログと終了状態を保存しました。固定 STM32H7 REPL 7 構成、構文診断 3 件、公開 Zephyr ELF の Blinky と Button が通過しました。台帳は対象 786 件のうち等価合格 87 件、部分検証 10 件、未達 689 件です。型付き参照と `local` スコープ、登録ブロックを含む他の構文ケースは引き続き未達です。
