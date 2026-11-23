@@ -37,6 +37,7 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
     CpuCondition(String, u32),
     CpuXpsr(String),
@@ -127,6 +128,13 @@ impl<W: Write> Write for ScriptOutput<'_, W> {
     }
 }
 
+pub fn is_terminal_only(commands: &[RuntimeCommand]) -> bool {
+    !commands.is_empty()
+        && commands
+            .iter()
+            .all(|command| matches!(command.action, Action::CreateHostPty(..)))
+}
+
 pub fn run(
     machine: &mut Machine,
     script: &Path,
@@ -151,8 +159,24 @@ pub fn run(
         }
     }
     let mut retired = 0;
+    let mut host_terminals = HashMap::new();
     for command in commands {
         let result = match &command.action {
+            Action::CreateHostPty(name, path, force) => match host_terminals.entry(name) {
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    Err(format!("host terminal {name:?} already exists"))
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    crate::host_pty::HostPty::open(path, *force)
+                        .map(|terminal| {
+                            entry.insert(terminal);
+                            None
+                        })
+                        .map_err(|error| {
+                            format!("host terminal {name:?} at {}: {error}", path.display())
+                        })
+                }
+            },
             Action::RunFor(steps) | Action::CpuStep(_, steps) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
@@ -657,7 +681,10 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
             }
         }
     }
-    if !machine || boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
+    if !machine
+        || boot.platform.is_none()
+        || (boot.image.is_none() && boot.binaries.is_empty() && !is_terminal_only(&boot.runtime))
+    {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
             path.display()
@@ -729,6 +756,18 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
+        ["emulation", "CreateUartPtyTerminal", ..] => {
+            let args = text.split_once("CreateUartPtyTerminal").unwrap().1.trim();
+            let (name, args) = quoted_argument(args).ok_or("expected quoted terminal name")?;
+            let (path, force) =
+                quoted_argument(args).ok_or("expected quoted host terminal path")?;
+            let force = !force.is_empty() && parse_tester_bool(force)?;
+            Some(Action::CreateHostPty(
+                name.into(),
+                PathBuf::from(path),
+                force,
+            ))
+        }
         ["CreateTerminalTester", target, options @ ..] => {
             let mut binary = None;
             for option in options {
@@ -1206,7 +1245,11 @@ fn execute(
         _ => None,
     };
     if let Some(action) = action {
-        if boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
+        if boot.platform.is_none()
+            || (boot.image.is_none()
+                && boot.binaries.is_empty()
+                && !matches!(action, Action::CreateHostPty(..)))
+        {
             return Err("runtime commands require a loaded platform and firmware".into());
         }
         boot.runtime.push(RuntimeCommand { line, action });

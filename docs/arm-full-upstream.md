@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 60 | 39 | 14 | 239 |
+| Renode Robot | 113 | 61 | 39 | 13 | 239 |
 | Renode Infrastructure NUnit | 134 | 57 | 4 | 73 | 9 |
-| 合計 | **247** | **117** | **43** | **87** | **248** |
+| 合計 | **247** | **118** | **43** | **86** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -408,4 +408,16 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-high-ram-verification
 ```sh
 cargo test --locked renode_systembus
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-command-error-verification
+```
+
+## ホスト UART 用の PTY 作成
+
+固定 Renode の `tests/unit-tests/host-uart.robot` と同じ `emulation CreateUartPtyTerminal "tmp" "<一時ファイル>" true` を Linux で実行できる。端末作成だけの RESC はプラットフォームをロードした時点で実行できる。CLI 回帰では既存ファイルに対する拒否と強制置換を、Rust 回帰ではプロセス内でリンクを開いて PTY のキャラクタデバイスであることと、破棄時のリンク削除を確認した。
+
+固定シナリオは端末の作成までを観測する。ゲスト UART と PTY の接続・双方向転送、Linux 以外での PTY 作成は今後の範囲。Mi-V 固有周辺機器の REPL は移植せず、同じ端末作成刺激を Cortex-M0 の REPL で検証した。
+
+```sh
+cargo test --locked renode_host_pty_force_replaces_temporary_file
+cargo test --locked renode_resc_opens_host_uart_pty_without_booting
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-host-pty-verification
 ```

@@ -2,6 +2,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod host_pty;
 mod image;
 mod machine;
 mod monitor;
@@ -346,7 +347,9 @@ fn run() -> Result<ExitCode, String> {
         vector_tables = boot.vector_tables;
         runtime = boot.runtime;
     }
-    if path.is_none() && binaries.is_empty() {
+    let terminal_only =
+        path.is_none() && binaries.is_empty() && monitor::is_terminal_only(&runtime);
+    if path.is_none() && binaries.is_empty() && !terminal_only {
         return Err("missing firmware image; see run --help".into());
     }
     let mut machine = match platform_path {
@@ -430,7 +433,9 @@ fn run() -> Result<ExitCode, String> {
     for (cpu, address) in vector_tables {
         machine.set_named_vector_table(&cpu, address)?;
     }
-    machine.validate_entry()?;
+    if !terminal_only {
+        machine.validate_entry()?;
+    }
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();

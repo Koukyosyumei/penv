@@ -243,6 +243,46 @@ ram: Memory.MappedMemory @ sysbus 0
     fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn renode_resc_opens_host_uart_pty_without_booting() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-pty-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let link = directory.join("allocated tty");
+    fs::write(&link, b"allocated file").unwrap();
+    let script = directory.join("host-uart.resc");
+    let run = |force: bool| {
+        fs::write(&script, format!(
+            "mach create\nmachine LoadPlatformDescription @board.repl\nemulation CreateUartPtyTerminal \"tmp\" \"{}\" {force}\n",
+            link.display()
+        )).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let refused = run(false);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert_eq!(fs::read(&link).unwrap(), b"allocated file");
+    let created = run(true);
+    assert!(created.status.success(), "{created:?}");
+    assert!(fs::symlink_metadata(&link).is_err());
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn renode_resc_global_array_memory_above_32bit_preserves_guest_writes() {
     let directory = std::env::temp_dir().join(format!("penv-high-ram-{}", std::process::id()));

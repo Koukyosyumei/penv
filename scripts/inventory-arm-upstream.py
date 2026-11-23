@@ -500,7 +500,7 @@ def classify_robot(name, case, body, parameter):
     if name == "timer-reconfiguration":
         return OUT, "RV32IC with CLINT", "Reconfigures RISC-V CLINT frequency and guest time-provider path; no corresponding STM32 timer register"
     if name == "host-uart":
-        return OPEN, V6, "Mi-V RESC supplies UART; host serial adapter and bidirectional host I/O contract can use an F072 UART"
+        return PASS, V6, "renode_resc_opens_host_uart_pty_without_booting and renode_host_pty_force_replaces_temporary_file; same forceCreate over allocated file and Linux PTY without running a guest"
     if name == "uart-tester":
         selectors = {
             "Should Fail On Non-Existing UART",
