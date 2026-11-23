@@ -288,7 +288,9 @@ fn port(
                 let (base, _) = crate::stm32h7_board_platform::registration(timer, entries)?;
                 port.connect_timer_input(pin, base, number(channel.trim())?)?;
             }
-        } else if !target.contains('#') {
+            continue;
+        }
+        if !target.contains('#') {
             for wire in target.split('|') {
                 let (name, inputs) = wire.split_once('@').ok_or("missing GPIO destination pin")?;
                 if exti.is_some_and(|exti| exti.name == name.trim()) {

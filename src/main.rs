@@ -152,6 +152,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_IMAGE]
        penv switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]
+       penv peripherals export OUTPUT --platform REPL [--platform-root DIR]
        penv check-platform PATH [--platform-root PATH]
        penv check-platform --from-string REPL [--platform-root PATH]
        penv validate-platform REPL
@@ -219,6 +220,9 @@ Options:
   --litex-button-event STEP:NAME:ACTION  Press, Release, or Toggle at a step
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --uart-check PATH  Check UART lines against a virtual-time plan
+  --uart-transcript PATH  Record UART lines with instruction steps
+  --f4-repl-timing   Preserve STM32F4 REPL timer and SysTick clocks
   --uart-stdin       Forward stdin to the platform UART while running
   --uart-stdin-reset  Enable Ctrl-] r to reload the machine on the UART session
   --uart-device NAME  Select the RV64 platform UART that receives input
@@ -561,7 +565,8 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run' or 'check-platform'; see --help".into()),
+        Some(Some("peripherals")) => return export_peripherals(args),
+        _ => return Err("expected 'run', 'check-platform' or 'peripherals'; see --help".into()),
     }
 
     let mut raw = false;
@@ -599,6 +604,9 @@ fn run() -> Result<ExitCode, String> {
     let mut adxl_events = Vec::new();
     let mut led_events = false;
     let mut uart_input = None;
+    let mut uart_transcript = None;
+    let mut uart_check = None;
+    let mut f4_repl_timing = false;
     let mut uart_stdin = false;
     let mut uart_stdin_reset = false;
     let mut ethernet_loopback = None;
@@ -695,6 +703,8 @@ fn run() -> Result<ExitCode, String> {
                 | "--platform-root"
                 | "--script"
                 | "--uart-input"
+                | "--uart-transcript"
+                | "--uart-check"
                 | "--asset-dir"
                 | "--framebuffer-out"
                 | "--sd-image"
@@ -715,6 +725,8 @@ fn run() -> Result<ExitCode, String> {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
                     "--uart-input" => &mut uart_input,
+                    "--uart-transcript" => &mut uart_transcript,
+                    "--uart-check" => &mut uart_check,
                     "--asset-dir" => &mut asset_dir,
                     "--platform-root" => &mut platform_root,
                     "--pdm-input" => &mut pdm_input,
@@ -942,6 +954,7 @@ fn run() -> Result<ExitCode, String> {
                     .ok_or(FORMAT)?;
                 frame_waits.push((step, PathBuf::from(path), Some(region)));
             }
+            Some("--f4-repl-timing") => f4_repl_timing = true,
             Some("--virtual-mips") => {
                 let value = args
                     .next()
@@ -1529,15 +1542,18 @@ fn run() -> Result<ExitCode, String> {
                         .into(),
                 );
                 }
-                load_platform(platform_path, platform_root.as_deref(), stm32f0_console).or_else(
-                    |original| {
-                        if stm32f0_console {
-                            return Err(original);
-                        }
-                        network_repl::load(platform_path, platform_root.as_deref())
-                            .map_err(|error| format!("{original}; network REPL: {error}"))
-                    },
-                )?
+                if f4_repl_timing {
+                    network_repl::load_with_timing(platform_path, platform_root.as_deref(), true)?
+                } else {
+                    load_platform(platform_path, platform_root.as_deref(), stm32f0_console)
+                        .or_else(|original| {
+                            if stm32f0_console {
+                                return Err(original);
+                            }
+                            network_repl::load(platform_path, platform_root.as_deref())
+                                .map_err(|error| format!("{original}; network REPL: {error}"))
+                        })?
+                }
             }
             None => {
                 if platform_root.is_some() {
@@ -2059,7 +2075,7 @@ fn run() -> Result<ExitCode, String> {
             return Err(format!("unknown LiteX I2S transmitter {name:?}"));
         }
     }
-    if max_steps == Some(0) {
+    if max_steps == Some(0) && !static_memory_script {
         if let Some((_, trace)) = &pc_trace {
             trace
                 .flush()
@@ -2127,7 +2143,17 @@ fn run() -> Result<ExitCode, String> {
         (Some(cli), Some(script)) => cli.min(script),
         (cli, script) => cli.or(script).unwrap_or(10_000_000),
     };
-    let result = if let Some(peer_path) = &ble_peer {
+    if let Some(check) = uart_check {
+        if uart_transcript.is_some() {
+            return Err("--uart-check cannot be combined with --uart-transcript".into());
+        }
+        uart_check::run(&mut machine, &mut output, &check)?;
+        output.flush().map_err(|e| format!("UART: {e}"))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    let result = if let Some(path) = uart_transcript.as_deref() {
+        uart_transcript::run(&mut machine, limit, &mut output, Some(path), None)
+    } else if let Some(peer_path) = &ble_peer {
         let platform = platform_path
             .as_deref()
             .ok_or("--ble-peer requires a platform")?;
@@ -2150,6 +2176,10 @@ fn run() -> Result<ExitCode, String> {
         } else {
             machine.run_radio_pair(&mut peer, limit, &mut output)
         }
+    } else if let Some(script) = script.as_deref().filter(|_| {
+        !runtime.is_empty() && (machine.is_cortex_m() || static_memory_script)
+    }) {
+        monitor::run(&mut machine, script, &runtime, limit, &mut output)
     } else {
         run_machine(
             &mut machine,
@@ -2484,6 +2514,27 @@ fn parse_address64(value: &str) -> Result<u64, String> {
         None => digits.parse(),
     };
     parsed.map_err(|_| format!("invalid 64-bit number: {value}"))
+}
+
+fn export_peripherals(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<ExitCode, String> {
+    let usage = "expected 'peripherals export OUTPUT --platform REPL [--platform-root DIR]'";
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("export")) {
+        return Err(usage.into());
+    }
+    let output = PathBuf::from(args.next().ok_or(usage)?);
+    let (mut platform, mut root) = (None, None);
+    while let Some(flag) = args.next() {
+        let value = PathBuf::from(args.next().ok_or(usage)?);
+        match flag.to_str() {
+            Some("--platform") if platform.is_none() => platform = Some(value),
+            Some("--platform-root") if root.is_none() => root = Some(value),
+            _ => return Err(usage.into()),
+        }
+    }
+    network_repl::export_peripherals(&platform.ok_or(usage)?, root.as_deref(), &output)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn load_platform(

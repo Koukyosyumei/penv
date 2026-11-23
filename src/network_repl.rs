@@ -369,13 +369,23 @@ fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
 }
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
-    load_basic(path, root).or_else(|original| {
-        load_parsed(path, root.unwrap_or(Path::new(".")))
+    load_with_timing(path, root, false)
+}
+
+pub fn load_with_timing(
+    path: &Path,
+    root: Option<&Path>,
+    f4_repl_timing: bool,
+) -> Result<Machine, String> {
+    load_basic(path, root, f4_repl_timing).or_else(|original| {
+        let root = root.unwrap_or(Path::new("."));
+        crate::repl_parser::load(path, root)
+            .and_then(|entries| build_machine_with_timing(entries, path, f4_repl_timing))
             .map_err(|error| format!("{original}; REPL syntax: {error}"))
     })
 }
 
-fn load_basic(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
+fn load_basic(path: &Path, root: Option<&Path>, f4_repl_timing: bool) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -388,12 +398,73 @@ fn load_basic(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             format!("{source}: {}: duplicate REPL property {key:?}", entry.name)
         })?;
     }
-    build_machine(apply_overlays(entries), path)
+    build_machine_with_timing(apply_overlays(entries), path, f4_repl_timing)
 }
 
 pub(crate) fn load_parsed(path: &Path, root: &Path) -> Result<Machine, String> {
     build_machine(crate::repl_parser::load(path, root)?, path)
 }
+
+pub fn export_peripherals(path: &Path, root: Option<&Path>, output: &Path) -> Result<(), String> {
+    use std::io::Write;
+    load(path, root)?;
+    let entries = crate::repl_parser::load(path, root.unwrap_or(Path::new(".")))?;
+    let mut nodes = Vec::new();
+    for entry in &entries {
+        let addresses = match entry.registration.as_deref() {
+            Some("sysbus") => Vec::new(),
+            Some(registration) if registration.starts_with("sysbus <") => {
+                vec![entry.bus_range()?.0]
+            }
+            Some(registration) if registration.starts_with("sysbus ") => vec![entry.address()?],
+            Some(registration)
+                if registration.starts_with('{') && entry.model == F4Flash::MODEL =>
+            {
+                let (registers, options, _) = f4_flash_registrations(entry)?;
+                vec![registers, options]
+            }
+            None | Some("none") => continue,
+            Some(_) => return Err(entry.error("unsupported peripheral export registration")),
+        };
+        let model = entry.model.rsplit('.').next().unwrap();
+        let bindings = addresses
+            .iter()
+            .map(|address| format!(r#"{{"Type":"Bus","Value":{address}}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        nodes.push(format!(
+            r#"{{"Name":{},"Alias":{},"Bindings":[{bindings}],"Children":[]}}"#,
+            json_string(model),
+            json_string(&entry.name),
+        ));
+    }
+    let mut file =
+        fs::File::create(output).map_err(|err| format!("{}: {err}", output.display()))?;
+    writeln!(
+        file,
+        r#"{{"Header":"Peripheral Map 1.0","Root":{{"Name":"SystemBus","Alias":"sysbus","Bindings":[],"Children":[{}]}}}}"#,
+        nodes.join(",")
+    )
+    .map_err(|err| format!("{}: {err}", output.display()))
+}
+
+fn json_string(value: &str) -> String {
+    use std::fmt::Write;
+    let mut output = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' => {
+                output.push('\\');
+                output.push(ch);
+            }
+            '\u{0}'..='\u{1f}' => write!(output, "\\u{:04x}", u32::from(ch)).unwrap(),
+            _ => output.push(ch),
+        }
+    }
+    output.push('"');
+    output
+}
+
 
 pub(crate) fn check_text(content: &str, root: Option<&Path>) -> Result<(), String> {
     let entries = crate::repl_parser::parse_inline(content, root.unwrap_or(Path::new(".")))?;
@@ -404,7 +475,16 @@ pub(crate) fn check_text(content: &str, root: Option<&Path>) -> Result<(), Strin
 }
 
 fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
+    build_machine_with_timing(entries, path, false)
+}
+
+fn build_machine_with_timing(
+    entries: Vec<Entry>,
+    path: &Path,
+    f4_repl_timing: bool,
+) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
+    machine.bus.f4_repl_timing = f4_repl_timing;
     let mut cpus = Vec::new();
     let mut clint = None;
     let mut dwt = None;
@@ -873,11 +953,20 @@ fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
                     low_power: low_power.unwrap_or(false),
                 }
             };
-            let base = uart.address_with_optional_range(layout.size())?;
+            let (base, alias) = if uart
+                .registration
+                .as_deref()
+                .is_some_and(|text| text.starts_with('{'))
+            {
+                crate::stm32h7_board_platform::registration(uart, &entries)
+                    .map_err(|error| uart.error(&error))?
+            } else {
+                (uart.address_with_optional_range(layout.size())?, None)
+            };
             let mut device =
                 crate::stm32_uart::Stm32Usart::with_layout(uart.name.clone(), base, irq, layout);
             device.frequency = frequency;
-            if let Some(alias) = crate::network_platform::rcc_alias(uart, "rcc") {
+            if let Some(alias) = alias {
                 device.clock = Some(
                     crate::stm32_uart::Stm32UsartClock::from_alias(alias)
                         .map_err(|e| uart.error(&e))?,
@@ -1699,6 +1788,14 @@ fn configure_f4_flash(
         .memory(start, F4Flash::BANK_SIZE as usize)
         .map_err(|error| flash.error(&error.to_string()))?;
 
+    let (base, option_base, size) = f4_flash_registrations(controller)?;
+    machine
+        .bus
+        .map_f4_flash(F4Flash::new(base, option_base, size, start..end))
+        .map_err(|error| controller.error(&error))
+}
+
+fn f4_flash_registrations(controller: &Entry) -> Result<(u32, u32, u32), String> {
     let parse = || -> Option<(u32, u32, u32)> {
         let registration = controller
             .registration
@@ -1730,14 +1827,9 @@ fn configure_f4_flash(
         let size = size.filter(|size| *size >= 12 && size % 4 == 0)?;
         region.then_some((base, option_base?, size))
     };
-    let (base, option_base, size) = parse().ok_or_else(|| {
-        controller.error("expected register and optionBytes sysbus registrations")
-    })?;
-    machine
-        .bus
-        .map_f4_flash(F4Flash::new(base, option_base, size, start..end))
-        .map_err(|error| controller.error(&error))
+    parse().ok_or_else(|| controller.error("expected register and optionBytes sysbus registrations"))
 }
+
 
 fn configure_h7_flash(
     flash: &Entry,

@@ -460,6 +460,8 @@ pub struct Bus {
     f4_power: Option<F4Power>,
     f4_rcc: Option<F4Rcc>,
     f4_system: Option<F4System>,
+    // The upstream F4 REPL supplies independent TIMx and SysTick clocks.
+    pub f4_repl_timing: bool,
     f4_gated_ranges: Vec<(u32, u32)>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<H7Gpio>,
@@ -1476,18 +1478,25 @@ impl Bus {
         self.f4_rcc.as_ref().is_some_and(|rcc| {
             self.f4_gated_ranges
                 .iter()
-                .any(|&(base, size)| address.wrapping_sub(base) < size && !rcc.enabled(base))
+                .any(|&(base, size)| {
+                    address.wrapping_sub(base) < size
+                        && !rcc.enabled(base)
+                        && !(self.f4_repl_timing
+                            && self.h7_timers.iter().any(|timer| timer.base == base))
+                })
         })
     }
 
     fn refresh_f4_clocks(&mut self) {
         let Some(rcc) = &self.f4_rcc else { return };
-        if let Some(systick) = &mut self.systick {
-            systick.set_frequency(rcc.hclk());
-        }
-        for timer in &mut self.h7_timers {
-            if let Some(frequency) = rcc.timer_frequency(timer.base) {
-                timer.set_frequency(frequency);
+        if !self.f4_repl_timing {
+            if let Some(systick) = &mut self.systick {
+                systick.set_frequency(rcc.hclk());
+            }
+            for timer in &mut self.h7_timers {
+                if let Some(frequency) = rcc.timer_frequency(timer.base) {
+                    timer.set_frequency(frequency);
+                }
             }
         }
         if let Some(rtc) = self.h7_rtc.iter_mut().find(|rtc| rcc.rtc == Some(rtc.base))
@@ -2081,7 +2090,7 @@ impl Bus {
         }
         let clocked = |timer: &H7Timer| {
             timer_clocked(self.h7_network_control.as_ref(), timer)
-                && f4_clocked(self.f4_rcc.as_ref(), timer.base)
+                && (self.f4_repl_timing || f4_clocked(self.f4_rcc.as_ref(), timer.base))
         };
         for route in &self.timer_pins {
             if let Some(timer) = self
@@ -2160,7 +2169,7 @@ impl Bus {
             }
         }
         for timer in &mut self.h7_timers {
-            if timer_clocked(control, timer) && f4_clocked(self.f4_rcc.as_ref(), timer.base) {
+            if timer_clocked(control, timer) && (self.f4_repl_timing || f4_clocked(self.f4_rcc.as_ref(), timer.base)) {
                 timer.tick(rate);
             }
         }
@@ -3396,7 +3405,7 @@ impl Bus {
                         .iter()
                         .filter(|timer| {
                             timer_clocked(control, timer)
-                                && f4_clocked(self.f4_rcc.as_ref(), timer.base)
+                                && (self.f4_repl_timing || f4_clocked(self.f4_rcc.as_ref(), timer.base))
                         })
                         .flat_map(H7Timer::interrupts),
                 )

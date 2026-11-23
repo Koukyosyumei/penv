@@ -178,7 +178,7 @@ impl SysTick {
         Some(match address {
             CSR => 4 | self.control | (u32::from(std::mem::take(&mut self.count_flag)) << 16),
             RELOAD => self.reload,
-            CURRENT if !self.current_initialized => 0xff_ffff,
+            CURRENT if self.zero_state_reload && !self.current_initialized => 0xff_ffff,
             CURRENT => self.current,
             CALIBRATION => 1 << 31, // No separate reference clock.
             ICSR => {
