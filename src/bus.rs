@@ -113,6 +113,8 @@ struct BusTag {
 
 #[derive(Default)]
 pub struct Bus {
+    #[cfg(test)]
+    mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
     regions: Vec<Region>,
     constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
@@ -313,6 +315,54 @@ impl Bus {
             }
         }
         Ok(bytes)
+    }
+
+    pub(crate) fn read_bus_bytes(
+        &mut self,
+        address: u32,
+        count: usize,
+        only_memory: bool,
+    ) -> Result<Vec<u8>, String> {
+        let range = memory_byte_range(address, count)?;
+        let peripherals = !range.is_empty() && self.peripheral_overlaps(range.start, range.end);
+        if only_memory && peripherals {
+            return Err("SystemBus memory-only transfer intersects a peripheral".into());
+        }
+        let mut bytes = self.read_memory_bytes(address, count)?;
+        if peripherals {
+            for (offset, byte) in bytes.iter_mut().enumerate() {
+                let location = u64::from(address) + offset as u64;
+                if self.peripheral_overlaps(location, location + 1) {
+                    *byte = self
+                        .read::<1>(location as u32)
+                        .map_err(|error| error.to_string())? as u8;
+                }
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn write_bus_bytes(
+        &mut self,
+        address: u32,
+        bytes: &[u8],
+        only_memory: bool,
+        uart: &mut impl Write,
+    ) -> Result<(), String> {
+        let range = memory_byte_range(address, bytes.len())?;
+        if range.is_empty() || !self.peripheral_overlaps(range.start, range.end) {
+            return self.write_memory_bytes(address, bytes);
+        }
+        if only_memory {
+            return Err("SystemBus memory-only transfer intersects a peripheral".into());
+        }
+        for (location, &byte) in range.zip(bytes) {
+            if self.overlaps(location, location + 1) {
+                self.write(location as u32, 1, u32::from(byte), uart)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn find_memory_bytes(
@@ -1138,6 +1188,22 @@ impl Bus {
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
+        self.peripheral_overlaps(start, end)
+            || self.regions.iter().any(|region| {
+                let other = u64::from(region.base);
+                start < other + region.bytes.len() as u64 && other < end
+            })
+    }
+
+    fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        #[cfg(test)]
+        if self
+            .mock_byte_peripherals
+            .iter()
+            .any(|(range, _)| start < range.end && range.start < end)
+        {
+            return true;
+        }
         self.h7_network_control.as_ref().is_some_and(|control| {
             control
                 .ranges()
@@ -1272,10 +1338,6 @@ impl Bus {
             || self.constant_mmio.iter().any(|peripheral| {
                 let base = u64::from(peripheral.base);
                 start < base + u64::from(peripheral.size) && base < end
-            })
-            || self.regions.iter().any(|region| {
-                let other = u64::from(region.base);
-                start < other + region.bytes.len() as u64 && other < end
             })
     }
 
@@ -1743,6 +1805,15 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        #[cfg(test)]
+        if N == 1
+            && let Some((range, bytes)) = self
+                .mock_byte_peripherals
+                .iter()
+                .find(|(range, _)| range.contains(&u64::from(address)))
+        {
+            return Ok(u32::from(bytes[&(address - range.start as u32)]));
+        }
         if N == 4
             && address & 3 == 0
             && let Some(uart) = self.uart.as_mut()
@@ -2117,6 +2188,20 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        #[cfg(test)]
+        if width == 1
+            && let Some((range, bytes)) = self
+                .mock_byte_peripherals
+                .iter_mut()
+                .find(|(range, _)| range.contains(&u64::from(address)))
+        {
+            assert!(
+                bytes
+                    .insert(address - range.start as u32, value as u8)
+                    .is_none()
+            );
+            return Ok(());
+        }
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }
@@ -2922,15 +3007,41 @@ mod memory_segment_cases {
 
     #[test]
     fn upstream_read_bytes_both_memory() {
+        read_bytes_fixture(true, true);
+    }
+
+    #[test]
+    fn upstream_read_bytes_memory_peripheral() {
+        read_bytes_fixture(true, false);
+    }
+
+    #[test]
+    fn upstream_read_bytes_peripheral_memory() {
+        read_bytes_fixture(false, true);
+    }
+
+    #[test]
+    fn upstream_read_bytes_both_peripherals() {
+        read_bytes_fixture(false, false);
+    }
+
+    fn read_bytes_fixture(first_memory: bool, second_memory: bool) {
         let mut bus = Bus::default();
-        bus.map_ram(50, 100).unwrap();
-        bus.map_ram(200, 100).unwrap();
+        for (base, memory) in [(50, first_memory), (200, second_memory)] {
+            if memory {
+                bus.map_ram(base, 100).unwrap();
+            } else {
+                bus.mock_byte_peripherals
+                    .push((u64::from(base)..u64::from(base) + 100, Default::default()));
+            }
+        }
         let bytes: Vec<_> = (0..350).map(|value| (value % 255) as u8).collect();
-        bus.write_memory_bytes(0, &bytes).unwrap();
+        bus.write_bus_bytes(0, &bytes, false, &mut std::io::sink())
+            .unwrap();
         let mut expected = [0; 350];
         for range in [50..150, 200..300] {
             expected[range.clone()].copy_from_slice(&bytes[range]);
         }
-        assert_eq!(bus.read_memory_bytes(0, 350).unwrap(), expected);
+        assert_eq!(bus.read_bus_bytes(0, 350, false).unwrap(), expected);
     }
 }

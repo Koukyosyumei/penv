@@ -133,10 +133,11 @@ pub enum Action {
         address: u32,
         byte: bool,
     },
-    ReadMemoryBytes {
+    ReadBusBytes {
         node: usize,
         address: u32,
         count: usize,
+        only_memory: bool,
     },
     FindMemoryBytes {
         node: usize,
@@ -144,10 +145,11 @@ pub enum Action {
         start: u32,
         end: u32,
     },
-    WriteMemoryBytes {
+    WriteBusBytes {
         node: usize,
         address: u32,
         bytes: Vec<u8>,
+        only_memory: bool,
     },
     ObserveUart {
         node: usize,
@@ -442,13 +444,17 @@ pub fn run(
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
                 }
-                Action::ReadMemoryBytes {
+                Action::ReadBusBytes {
                     node,
                     address,
                     count,
+                    only_memory,
                 } => {
-                    let node = &simulation.nodes[node];
-                    let bytes = node.machine.bus.read_memory_bytes(address, count)?;
+                    let node = &mut simulation.nodes[node];
+                    let bytes = node
+                        .machine
+                        .bus
+                        .read_bus_bytes(address, count, only_memory)?;
                     writeln!(
                         output,
                         "{}: sysbus[{address:#010x}] = {bytes:02x?}",
@@ -467,15 +473,25 @@ pub fn run(
                     writeln!(output, "{}: sysbus matches = {addresses:#x?}", node.name)
                         .map_err(|error| format!("sysbus search output: {error}"))?;
                 }
-                Action::WriteMemoryBytes {
+                Action::WriteBusBytes {
                     node,
                     address,
                     bytes,
+                    only_memory,
                 } => {
-                    simulation.nodes[node]
-                        .machine
-                        .bus
-                        .write_memory_bytes(address, &bytes)?;
+                    let node = &mut simulation.nodes[node];
+                    if let Some(log) = &mut node.uart_log {
+                        node.machine
+                            .bus
+                            .write_bus_bytes(address, &bytes, only_memory, log)?;
+                    } else {
+                        node.machine.bus.write_bus_bytes(
+                            address,
+                            &bytes,
+                            only_memory,
+                            &mut output,
+                        )?;
+                    }
                 }
                 Action::ObserveUart { node, name } => {
                     simulation.nodes[node]

@@ -327,13 +327,15 @@ def triage(row):
         status, reason = 'PASS', 'SystemBus の既定方針で、固定上流と同じ未マップアドレス 0xABCD1234 のバイト読み取りが 0 を返すことを照合。src/bus.rs'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldFindBytePattern':
         status, reason = 'PASS', '固定上流と同じ連続する 1 MiB RAM 二領域と境界をまたぐ入力で、全検索一致位置を照合。src/bus.rs'
+    elif suite == 'SystemBusTests.cs' and name == 'ShouldReadBytes':
+        status, reason = 'PASS', '固定上流の RAM とバイト周辺機器の全4構成で、350バイトの入力と出力を照合。周辺機器モックはバイト単位の書き込みと値保持を再現。src/bus.rs'
     elif suite == 'SystemBusTests.cs' and (name in {
         'ShouldHandleWriteToMemorySegment',
         'ShouldHandlePartialWriteToMemorySegmentAtTheBeginning',
         'ShouldHandlePartialWriteToMemorySegmentAtTheEnd',
         'ShouldHandleWriteToAHoleBetweenMemorySegments',
         'ShouldHandleWriteOverlappingMemorySegment',
-    } or name == 'ShouldReadBytes' and bindings == 'isFirstMemory=true, isSecondMemory=true'):
+    }):
         status, reason = 'PASS', '固定アドレス・入力・RAM 範囲で同じ書き込みと読み取りを実行し、転送列と穴のゼロ埋めを照合。src/bus.rs'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldPreserveThrowExceptionWhenSplittingTag':
         status, reason = 'PASS', '固定上流と同じ親タグ・子タグを作り、左右の親区間で例外と子区間で読み取り成功を照合。src/bus.rs'

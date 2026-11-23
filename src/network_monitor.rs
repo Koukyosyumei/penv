@@ -20,6 +20,14 @@ pub struct Plan {
     configured: usize,
 }
 
+fn memory_only(args: &[&str]) -> Result<bool, String> {
+    match args {
+        [] | ["false" | "False"] => Ok(false),
+        ["true" | "True"] => Ok(true),
+        _ => Err("expected optional SystemBus onlyMemory boolean".into()),
+    }
+}
+
 fn byte_array(bytes: &[&str]) -> Result<Vec<u8>, String> {
     let bytes = bytes.join(" ");
     let list = bytes
@@ -325,11 +333,12 @@ impl Plan {
                     high,
                 });
             }
-            ["sysbus", "ReadBytes", address, count, "true" | "True"] => {
+            ["sysbus", "ReadBytes", address, count, options @ ..] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;
                 let count = crate::platform::number(resolve(*count)?)? as usize;
-                self.actions.push(Action::ReadMemoryBytes {
+                self.actions.push(Action::ReadBusBytes {
+                    only_memory: memory_only(options)?,
                     node,
                     address,
                     count,
@@ -359,14 +368,22 @@ impl Plan {
                     end,
                 });
             }
-            ["sysbus", "WriteBytes", bytes @ .., address, "true" | "True"] => {
+            ["sysbus", "WriteBytes", args @ ..] => {
                 let node = self.monitor_node()?;
+                let end = args
+                    .iter()
+                    .position(|word| word.ends_with(']'))
+                    .ok_or("expected bracketed SystemBus byte array")?;
+                let [address, options @ ..] = &args[end + 1..] else {
+                    return Err("expected SystemBus byte write address".into());
+                };
                 let address = crate::platform::number(resolve(*address)?)?;
-                let bytes = byte_array(bytes)?;
-                self.actions.push(Action::WriteMemoryBytes {
+                let bytes = byte_array(&args[..=end])?;
+                self.actions.push(Action::WriteBusBytes {
                     node,
                     address,
                     bytes,
+                    only_memory: memory_only(options)?,
                 });
             }
             ["sysbus", "WriteDoubleWord", address, value] => {

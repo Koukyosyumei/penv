@@ -1470,3 +1470,22 @@ target/release/penv run --script "$e/strict.resc" --platform-root ../renode
 ```
 
 最後のコマンドは意図したアドレスエラーで終了します。`cargo test` 195件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格176件、部分検証17件、未達593件です。上流の報告ログと、周辺機器を含む一括転送は残っています。
+
+### backlog-network-5d68e000c930-1
+
+SystemBus の `ReadBytes` と `WriteBytes` は、RAM とバイト幅アクセスを実装する周辺機器を一つの転送で扱えます。未マップ区間の読み取りはゼロで、書き込みはスキップします。`onlyMemory=true` では周辺機器との交差を転送前に拒否します。固定上流 `ShouldReadBytes` の4構成を一括実行し、バイト周辺機器を含む残り3構成を等価合格に更新しました。テスト用周辺機器は上流モックと同じオフセット別の書き込みと読み戻しを再現します。STM32H743 の CLI では公開上流 REPL の USART2 に `[34, 12]` を書いて読み戻し、同じ範囲のメモリー専用読み取りが拒否されることを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-mixed-bytes.n7OGEM8c
+target/release/penv run --script "$e/normal.resc" --platform-root ../renode
+target/release/penv run --script "$e/memory-only.resc" --platform-root ../renode
+```
+
+最後のコマンドは意図した診断で終了します。`cargo test` 198件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。上記にケース別結果と終了状態を保存しました。台帳は対象786件のうち等価合格179件、部分検証17件、未達590件です。CPU コンテキスト別登録と、バイト幅を持たない周辺機器の上流アクセス幅変換は残っています。
