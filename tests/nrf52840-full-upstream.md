@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 18 | 27 |
+| 監査した共有・混成 Robot | 190 | 145 | 20 | 25 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **18** | **27** |
+| 合計 | **221** | **176** | **20** | **25** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -787,3 +787,17 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 保存した `fixture/gdb.resc` を実行すると `StartGdbServer 3333` で停止する。固定条件と再現ファイルを `nrf52-gdb-read-watch-df9a2f7.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-read-watch.qGzd6FQ6` に保存した。
+
+### GDB RAM 書き込みウォッチポイント
+
+`gdb.robot:478–498,645–694` を同じ Cortex-M4 ELF で部分移植した。4バイト命令で、単一の `0x100: 0 → 1`、複数の `0x100: 0 → 1 → 4` と `0x104: 0 → 1` を上流と同じ命令境界 `0x1c/0x24/0x30` で確認した。停止は monitor Step によるため、書き込みウォッチポイントによる停止理由と GDB の通知は未達。
+
+```sh
+cargo test --locked
+tests/nrf52840-gdb-write-watch-fixture.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/fixture"
+tests/nrf52840-gdb-read-watch-fixture.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/read-watch"
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+`fixture/gdb.resc` は StartGdbServer、`fixture/write-hook.resc` は書き込みフックで停止する。結果と期待値は `nrf52-gdb-write-watch-2a98288.md` で ARM 担当に渡した。ARM 返答によると GDB メモリ候補と起動前スナップショット候補は統合側へ取り込み済み。GDB の watch/dump と実行後スナップショットは引き続き未達。担当ブランチは候補を取り込んでいない。再現ファイル、ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-write-watch.c0LzHitJ` に保存した。
