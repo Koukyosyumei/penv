@@ -7,7 +7,7 @@ const CSR: u32 = 0xe000_e010;
 const RELOAD: u32 = 0xe000_e014;
 const CURRENT: u32 = 0xe000_e018;
 const CALIBRATION: u32 = 0xe000_e01c;
-const ICSR: u32 = 0xe000_ed04;
+pub const ICSR: u32 = 0xe000_ed04;
 
 pub struct SysTick {
     control: u32,

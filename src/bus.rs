@@ -348,6 +348,27 @@ impl Bus {
         Ok(())
     }
 
+    pub fn pend_nvic_exception(&mut self, target: &str, exception: u32) -> Result<(), String> {
+        use crate::systick::{ICSR, NMI, PENDSV, SYSTICK};
+
+        self.validate_nvic_name(target)?;
+        let pending = match u8::try_from(exception) {
+            Ok(irq @ 16..=47) => {
+                self.nvic.as_mut().unwrap().set_line(irq - 16, true, 0);
+                return Ok(());
+            }
+            Ok(NMI) => 1 << 31,
+            Ok(PENDSV) => 1 << 28,
+            Ok(SYSTICK) => 1 << 26,
+            _ => return Err(format!("unsupported Cortex-M exception {exception}")),
+        };
+        self.systick
+            .as_mut()
+            .ok_or("system exception pending bits require SCB ICSR")?
+            .write(ICSR, pending);
+        Ok(())
+    }
+
     pub fn set_nvic_clocked(&mut self, target: &str, clocked: bool) -> Result<(), String> {
         self.validate_nvic_name(target)?;
         self.systick

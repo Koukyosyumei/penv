@@ -853,6 +853,7 @@ mod tests {
         bus.map_nvic(0xc0, None).unwrap();
         let mut output = std::io::sink();
         bus.map_systick().unwrap();
+        bus.set_nvic_name("nvic".into());
         bus.write(2 * 4, 4, 0x101, &mut output).unwrap();
         bus.write(0x20, 2, 0xe7fe, &mut output).unwrap(); // b .
         bus.write(0x100, 2, 0xbf00, &mut output).unwrap(); // nop
@@ -866,8 +867,7 @@ mod tests {
             .step(&mut pc, &mut registers, &mut bus, &mut output)
             .unwrap();
         assert_eq!(pc, 0x20);
-        // Equivalent to the upstream nvic SetPendingIRQ 2 monitor command.
-        bus.write(0xe000_ed04, 4, 1 << 31, &mut output).unwrap();
+        bus.pend_nvic_exception("nvic", 2).unwrap();
         assert_eq!(bus.read::<4>(0xe000_ed04).unwrap(), 1 << 31);
         assert!(
             thumb

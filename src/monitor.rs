@@ -39,6 +39,7 @@ enum Action {
     Button(String, bool),
     ButtonPulse(String),
     NvicGpio(String, u8, bool),
+    NvicPending(String, u32),
     NvicClocked(String, bool),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
@@ -113,6 +114,10 @@ pub fn run(
             Action::NvicGpio(target, line, high) => machine
                 .bus
                 .drive_nvic_line(target, *line, *high)
+                .map(|()| None),
+            Action::NvicPending(target, exception) => machine
+                .bus
+                .pend_nvic_exception(target, *exception)
                 .map(|()| None),
             Action::NvicClocked(target, clocked) => machine
                 .bus
@@ -442,6 +447,10 @@ fn execute(
                 .parse()
                 .map_err(|_| "expected NVIC Clocked true or false")?,
         )),
+        [target, "SetPendingIRQ", exception] => Some(Action::NvicPending(
+            resolve(target)?.to_owned(),
+            crate::parse_address(resolve(exception)?)?,
+        )),
         [target, "OnGPIO", line, value] => {
             let line = crate::parse_address(resolve(line)?)?;
             if line >= 32 {
@@ -674,6 +683,36 @@ mod tests {
                 assert_eq!(machine.bus.nvic.as_ref().unwrap().next_irq(0), None);
             }
         }
+    }
+
+    #[test]
+    fn renode_resc_set_pending_irq_sets_nmi() {
+        use crate::systick::ICSR;
+
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_nvic(0xc0, None).unwrap();
+        machine.bus.set_nvic_name("nvic".into());
+        machine.bus.map_systick().unwrap();
+        let mut boot = Boot {
+            platform: Some("board.repl".into()),
+            image: Some(("test.hex".into(), ImageFormat::Hex)),
+            ..Boot::default()
+        };
+        let script = Path::new("test.resc");
+        execute(
+            "nvic SetPendingIRQ 2",
+            &HashMap::new(),
+            &mut true,
+            &mut boot,
+            script,
+            Path::new("."),
+            1,
+        )
+        .unwrap();
+        run(&mut machine, script, &boot.runtime, 0, &mut io::sink()).unwrap();
+        assert_eq!(machine.bus.read::<4>(ICSR).unwrap(), 1 << 31);
+        assert!(machine.bus.pend_nvic_exception("other", 2).is_err());
+        assert!(machine.bus.pend_nvic_exception("nvic", 3).is_err());
     }
 
     #[test]
