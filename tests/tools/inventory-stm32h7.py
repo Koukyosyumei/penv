@@ -320,6 +320,10 @@ def triage(row):
         status, reason = 'PASS', '固定 Cortex-M7 と同じ 10 命令と R4 の期待値を照合。src/thumb/ge_upstream.rs'
         if '(usub8)' in name:
             reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
+    elif suite == 'GPIODetachingTests.cs' and name == 'ShouldConnectGPIOToReceiverAndReturnTheSameReceiver':
+        status, reason = 'PASS', '共通 GPIO 接続で、番号0の入力1への接続・受信先の同一性・番号1と2の空端点を照合。src/stm32h7_gpio.rs'
+    elif suite == 'GPIODetachingTests.cs' and name == 'ShouldDisconnectEndpointOfUnregisteredPeripheral':
+        status, reason = 'PARTIAL', '複数送信元・同一端点の再接続・選択的な解除を照合。上流の B は送信元と受信先を兼ね、現行 STM32H7 経路は GPIO と TIM に役割が分かれる'
     elif suite == 'GPIODetachingTests.cs' and name in {
         'ShouldDetachConnectionFromGPIOByNumberConnection',
         'ShouldDetachOnlyOneConnectionFromGPIOByNumberConnection',

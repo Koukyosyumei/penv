@@ -50,10 +50,9 @@ impl GpioConnections {
         }
         let input = u8::try_from(input).map_err(|_| "GPIO input exceeds 255")?;
         let route = (pin, receiver, input);
-        if self.endpoints.contains(&route) {
-            return Err("duplicate GPIO to STM32 timer connection".into());
+        if !self.endpoints.contains(&route) {
+            self.endpoints.push(route);
         }
-        self.endpoints.push(route);
         Ok(())
     }
 }
@@ -321,11 +320,27 @@ mod tests {
     }
 
     #[test]
+    fn upstream_gpio_returns_the_same_receiver() {
+        let mut routes = super::GpioConnections::default();
+        let receiver = 0x10;
+        routes
+            .connect(0, receiver, "MockReceiver", 1, None)
+            .unwrap();
+        assert_eq!(routes.endpoints.as_slice(), [(0, receiver, 1)]);
+        assert!(
+            !routes
+                .endpoints
+                .iter()
+                .any(|&(pin, _, _)| matches!(pin, 1 | 2))
+        );
+    }
+
+    #[test]
     fn pin_edges_fan_out_to_timer_inputs() {
         let mut port = Stm32Gpio::new(0x58022800, 0x400, [1, 0, 0], 16);
         port.connect_timer_input(0, 0x40010000, 0).unwrap();
         port.connect_timer_input(0, 0x40010400, 2).unwrap();
-        assert!(port.connect_timer_input(0, 0x40010000, 0).is_err());
+        port.connect_timer_input(0, 0x40010000, 0).unwrap();
 
         assert_eq!(port.timer_input_changes().count(), 0);
         port.write(port.base + 0x18, 1);

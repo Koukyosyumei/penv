@@ -1640,3 +1640,22 @@ target/release/penv run --script "$e/unregister.resc" --platform-root ../renode
 ```
 
 `cargo test` 218件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 3件と公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格198件、部分検証17件、未達571件です。中継周辺機器の入出力を同時に切断する汎用 GPIO グラフと、外部接続・別マシンの破棄を扱うケースは残っています。
+
+### backlog-network-66b4cd80a9d2-1
+
+GPIO で同一の送信ピン・受信先・入力番号を再接続しても、端点は一つに保たれます。固定上流 `ShouldConnectGPIOToReceiverAndReturnTheSameReceiver` の受信先同一性と、他の送信ピンが空であることを照合しました。`ShouldDisconnectEndpointOfUnregisteredPeripheral` は、複数送信元、重複抑止、対象端点だけの解除を STM32H7 GPIO/TIM で確認しました。上流の中継ノードは送信元と受信先を兼ねるため、後者は部分検証です。固定 STM32H743 の CLI で重複した接続を受理し、TIM3 解除後に TIM2 だけが残ることも確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gpio-reconnect.Hc85piXC
+target/release/penv run --script "$e/reconnect.resc" --platform-root ../renode
+```
+
+`cargo test` 220件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格199件、部分検証18件、未達569件です。中継ノードと外部・別マシンの接続解除が残っています。

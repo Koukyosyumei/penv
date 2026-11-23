@@ -3197,6 +3197,22 @@ mod gpio_detaching_cases {
     }
 
     #[test]
+    fn unregister_receiver_removes_duplicate_free_fanout_from_multiple_sources() {
+        let mut bus = gpio_bus(2);
+        let mut gpio = Stm32Gpio::new(0xc00, 0x400, [0; 3], 16);
+        gpio.connect_timer_input(0, 0x800, 1).unwrap();
+        bus.map_h7_gpio(gpio).unwrap();
+        let gpio = &mut bus.h7_gpio[0];
+        gpio.connect_timer_input(0, 0x800, 1).unwrap();
+        gpio.connect_timer_input(0, 0x800, 1).unwrap();
+        assert!(gpio.timer_endpoints(0).eq([(0x400, 1), (0x800, 1)]));
+        assert!(bus.h7_gpio[1].timer_endpoints(0).eq([(0x800, 1)]));
+        bus.unregister_from_address(0x800).unwrap();
+        assert!(bus.h7_gpio[0].timer_endpoints(0).eq([(0x400, 1)]));
+        assert_eq!(bus.h7_gpio[1].timer_endpoints(0).count(), 0);
+    }
+
+    #[test]
     fn upstream_detach_only_selected_numbered_gpio() {
         let mut bus = gpio_bus(3);
         bus.unregister_from_address(0x400).unwrap();
