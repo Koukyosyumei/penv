@@ -262,6 +262,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | --- | --- | --- |
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
 | CLINT | `unit-tests/timer-reconfiguration.robot` の `Should Tick At Exact Time` | `clint_traps_at_the_exact_reprogrammed_compare_tick`。ゲストが `mtimecmp` の上下ワードを書き換え、5 ティックでは未発火、6 ティック目で機械タイマー例外に入る。virt の 10 MHz に合わせて 59 ステップと 60 ステップに適応 |
+| RV32 TVM | `unit-tests/riscv-priv.robot` の SATP 読み書き・`SFENCE.VMA` に対する `When TVM Is One/Zero` 各ケース（上流は RV64） | RV32 版の Rust テスト `privilege_controls_gate_sret_and_address_translation_operations` と `scripts/firmware/rv32-tvm.S`。実 ELF は Sv32 有効時の M→S 遷移、S→M トラップ、TVM 解除後の再実行を確認 |
 | virt UART | `platforms/cpus/riscv_virt.repl`（上流 REPL。Robot ケースの移植元ではなく配線の出典） | `virt_ns16550_receive_interrupt_routes_through_plic` と `TEST_UART_IRQ` ELF。外部割り込み、PLIC ソース 3 の claim/complete、受信バイトと割り込み解除を検査 |
 | LiteX UART | `platforms/LiteX/LiteX_Ibex.robot` の `Should Boot` と `Should Display Help` | `litex_receives_boot_abort_and_shell_command_in_separate_events` は `Q` と `help\r` を別々に投入し、バイト順と RX 割り込みの解除を検査。BIOS のプロンプトと help 応答は実 ELF を使う既存回帰で検査 |
 | LiteX の既存回帰 | `LiteX_VexRiscv_SMP.robot` の OpenSBI・Linux、`LiteX_VexRiscv_I2S.robot` のオーディオ、`Arty_LiteX_VexRiscv.robot` と `Nexys_Video_LiteX_VexRiscv.robot` の入出力 | `scripts/validate-riscv-upstream.sh` に対応する検証あり。Arty のスイッチ・ボタンは各 1 ピンを検証 |
@@ -323,7 +324,28 @@ target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
 ```
 
-TSR の検証 ELF は変更前の `66bb839` で失敗を UART に出力し、修正後は `rv32-priv: SRET with TSR trapped at the expected PC` を出力しました。両 ELF の指定ステップ到達時の終了コードは 2 です。Sv32 の既存ページテーブル再走査テストと LiteX Linux の回帰も確認しました。残課題は、上流の RV32 権限スイート全体への拡張と、TVM ケースの実 ELF 化です。
+TSR の検証 ELF は変更前の `66bb839` で失敗を UART に出力し、修正後は `rv32-priv: SRET with TSR trapped at the expected PC` を出力しました。両 ELF の指定ステップ到達時の終了コードは 2 です。Sv32 の既存ページテーブル再走査テストと LiteX Linux の回帰も確認しました。残課題は上流の RV32 権限スイート全体への拡張です。
+
+### Sv32 有効時の TVM を実 ELF で検証
+
+`scripts/firmware/rv32-tvm.S` は、上流の TVM=0/1 の 6 ケースを一つの RV32 ELF にまとめたものです。M モードで TVM を立て、VA `0x40000000` を PA `0x80000000` にマップしてから `mret` で S モードに入ります。TVM=1 の S モードでは `satp` の読み書きと `sfence.vma` の各命令で、違法命令の `mcause`、仮想 `mepc`、命令ビットの `mtval`、トラップ元の MPP を照合します。拒否された読み書きが宛先レジスターや `satp` を変えないことも確認します。M モードで TVM を解除し、再度 S モードに入ると、同じ命令列が完走して `satp` の新しい ASID を読み戻せます。TVM=1 の M モードでも `satp` アクセスと `sfence.vma` が通ることを検査します。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+out=$(mktemp -d)
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 \
+  -nostdlib -fuse-ld=lld -Wl,-T,scripts/firmware/rv32-virt.ld \
+  scripts/firmware/rv32-tvm.S -o "$out/tvm.elf"
+status=0
+target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --max-steps 10000 "$out/tvm.elf" > "$out/uart.log" || status=$?
+test "$status" -eq 2 &&
+diff -u <(printf '%s\n' \
+  'rv32-tvm: Sv32 supervisor SATP read/write and SFENCE.VMA gated; MRET recovery OK') "$out/uart.log"
+```
+
+TVM 実装前の `66bb839` は失敗マーカーを出し、`eced642` は成功マーカーを出しました。互換性の追加修正は不要でした。既存の TSR と virt のタイマー・UART 割り込みの ELF も再確認しました。残課題は、上流 Robot スイートの直接実行と、ページテーブル更新後の TLB 無効化を実 ELF で検証することです。
 
 ## Cortex-M0 / Cortex-M0+
 
