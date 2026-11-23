@@ -3,6 +3,7 @@ use std::{collections::VecDeque, io::Write};
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
+    rtc_clock::RtcClock,
     sv32::TranslationCache,
     thumb::{Thumb, ThumbStep},
 };
@@ -15,6 +16,7 @@ pub struct Machine {
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
+    pub rtc_clock: RtcClock,
     uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
@@ -173,6 +175,7 @@ impl Machine {
             secondary: Vec::new(),
             next_hart: 0,
             elapsed_steps: 0,
+            rtc_clock: RtcClock::default(),
             uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),

@@ -496,7 +496,7 @@ def classify_robot(name, case, body, parameter):
         return OPEN, V6, "RV32I fixture uses ordinary calls/loops; trace format and file-size controls are ISA independent"
     if name == "real-time-clock-mode":
         model = case.split()[0]
-        return OPEN, F072, "Source uses Timers." + model + "; portable machine/RTC date-time agreement through RTC mode changes; F072 RTC integration still missing"
+        return PARTIAL, F072, "renode_resc_machine_rtc_modes_share_one_creation_time covers machine mode sequence; Timers." + model + ".CurrentDateTime and its mode-change subscription remain"
     if name == "timer-reconfiguration":
         return OUT, "RV32IC with CLINT", "Reconfigures RISC-V CLINT frequency and guest time-provider path; no corresponding STM32 timer register"
     if name == "host-uart":

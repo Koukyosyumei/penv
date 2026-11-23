@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 61 | 39 | 13 | 239 |
+| Renode Robot | 113 | 61 | 41 | 11 | 239 |
 | Renode Infrastructure NUnit | 134 | 57 | 4 | 73 | 9 |
-| 合計 | **247** | **118** | **43** | **86** | **248** |
+| 合計 | **247** | **118** | **45** | **84** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -420,4 +420,15 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-command-error-verification
 cargo test --locked renode_host_pty_force_replaces_temporary_file
 cargo test --locked renode_resc_opens_host_uart_pty_without_booting
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-host-pty-verification
+```
+
+## マシンのリアルタイムクロックモード
+
+固定上流 `real-time-clock-mode.robot` の共有コマンド `machine RealTimeClockMode` と `machine RealTimeClockDateTime` を実装した。既定の Epoch は 1970-01-01、HostTimeLocal と HostTimeUTC は単一のマシン作成時刻が起点。途中でモードを切り替えても Cortex-M の仮想経過時間を維持し、秒単位で表示する。HostTimeLocal は64ビット Linux のローカルタイムゾーンを使う。CLI 回帰では固定上流と同じ Epoch → HostTimeLocal → HostTimeUTC → Epoch を試し、Rust 回帰では仮想時間による閏日の繰り上がりを確認する。
+
+上流の AmbiqApollo4 と MAX32650 の両 RTC はマシンのモード変更を購読し、自身の `CurrentDateTime` を更新する。固定上流の STM32F4 RTC は独立したカレンダーを使う。STM32 RTC のカレンダー動作を維持し、デバイス固有の同期と両時刻の一致を未達条件として2件とも部分移植にした。
+
+```sh
+cargo test --locked rtc
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-rtc-modes-verification
 ```

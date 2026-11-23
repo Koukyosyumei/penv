@@ -9,6 +9,7 @@ use std::{
 use crate::{
     bus::{CORTEX_M_STEP_HZ, UartWatch, UnhandledAccess},
     machine::{CpuHook, Machine, Stop},
+    rtc_clock::RtcMode,
     uart::{BinaryUartPattern, FailingUartPattern, UartHistory, UartWaitMode},
 };
 
@@ -37,6 +38,8 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    RtcMode(RtcMode),
+    RtcDateTime,
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
     CpuCondition(String, u32),
@@ -128,11 +131,14 @@ impl<W: Write> Write for ScriptOutput<'_, W> {
     }
 }
 
-pub fn is_terminal_only(commands: &[RuntimeCommand]) -> bool {
+pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
     !commands.is_empty()
-        && commands
-            .iter()
-            .all(|command| matches!(command.action, Action::CreateHostPty(..)))
+        && commands.iter().all(|command| {
+            matches!(
+                command.action,
+                Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
+            )
+        })
 }
 
 pub fn run(
@@ -162,6 +168,13 @@ pub fn run(
     let mut host_terminals = HashMap::new();
     for command in commands {
         let result = match &command.action {
+            Action::RtcMode(mode) => machine.rtc_clock.set_mode(*mode).map(|()| None),
+            Action::RtcDateTime => {
+                let value = machine.rtc_clock.date_time(machine.elapsed_steps());
+                writeln!(output.output, "{value}")
+                    .map_err(|e| e.to_string())
+                    .map(|()| None)
+            }
             Action::CreateHostPty(name, path, force) => match host_terminals.entry(name) {
                 std::collections::hash_map::Entry::Occupied(_) => {
                     Err(format!("host terminal {name:?} already exists"))
@@ -683,7 +696,9 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     }
     if !machine
         || boot.platform.is_none()
-        || (boot.image.is_none() && boot.binaries.is_empty() && !is_terminal_only(&boot.runtime))
+        || (boot.image.is_none()
+            && boot.binaries.is_empty()
+            && !is_configuration_only(&boot.runtime))
     {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
@@ -756,6 +771,10 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
+        ["machine", "RealTimeClockMode", mode] => {
+            Some(Action::RtcMode(RtcMode::parse(resolve(mode)?)?))
+        }
+        ["machine", "RealTimeClockDateTime"] => Some(Action::RtcDateTime),
         ["emulation", "CreateUartPtyTerminal", ..] => {
             let args = text.split_once("CreateUartPtyTerminal").unwrap().1.trim();
             let (name, args) = quoted_argument(args).ok_or("expected quoted terminal name")?;
@@ -1248,7 +1267,10 @@ fn execute(
         if boot.platform.is_none()
             || (boot.image.is_none()
                 && boot.binaries.is_empty()
-                && !matches!(action, Action::CreateHostPty(..)))
+                && !matches!(
+                    action,
+                    Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
+                ))
         {
             return Err("runtime commands require a loaded platform and firmware".into());
         }

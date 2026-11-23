@@ -12,6 +12,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod rtc_clock;
 mod stm32_adc;
 mod stm32_can;
 mod stm32_crc;
@@ -347,9 +348,9 @@ fn run() -> Result<ExitCode, String> {
         vector_tables = boot.vector_tables;
         runtime = boot.runtime;
     }
-    let terminal_only =
-        path.is_none() && binaries.is_empty() && monitor::is_terminal_only(&runtime);
-    if path.is_none() && binaries.is_empty() && !terminal_only {
+    let configuration_only =
+        path.is_none() && binaries.is_empty() && monitor::is_configuration_only(&runtime);
+    if path.is_none() && binaries.is_empty() && !configuration_only {
         return Err("missing firmware image; see run --help".into());
     }
     let mut machine = match platform_path {
@@ -433,7 +434,7 @@ fn run() -> Result<ExitCode, String> {
     for (cpu, address) in vector_tables {
         machine.set_named_vector_table(&cpu, address)?;
     }
-    if !terminal_only {
+    if !configuration_only {
         machine.validate_entry()?;
     }
 

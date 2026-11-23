@@ -243,6 +243,55 @@ ram: Memory.MappedMemory @ sysbus 0
     fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[test]
+fn renode_resc_machine_rtc_modes_share_one_creation_time() {
+    let directory = std::env::temp_dir().join(format!("penv-rtc-modes-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let script = directory.join("rtc-modes.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+machine RealTimeClockDateTime
+machine RealTimeClockMode HostTimeLocal
+machine RealTimeClockDateTime
+machine RealTimeClockMode HostTimeUTC
+machine RealTimeClockDateTime
+machine RealTimeClockMode Epoch
+machine RealTimeClockDateTime
+"#,
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .env("TZ", "UTC0")
+        .args(["run", "--script"])
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let stdout = String::from_utf8(result.stdout).unwrap();
+    let values: Vec<_> = stdout.lines().collect();
+    assert_eq!(values.len(), 4);
+    assert_eq!(values[0], "1970-01-01 00:00:00");
+    assert_eq!(values[1], values[2]);
+    assert_ne!(values[1], values[0]);
+    assert_eq!(values[3], values[0]);
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn renode_resc_opens_host_uart_pty_without_booting() {
