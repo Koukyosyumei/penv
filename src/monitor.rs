@@ -12,6 +12,10 @@ pub struct Boot {
     pub image: Option<String>,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
+    pub buttons: Vec<(String, String, bool)>,
+    pub halt_hooks: Vec<(String, String, String, String)>,
+    symbols: Vec<String>,
+    hooks: HashMap<String, String>,
     pub sd_cards: Vec<(String, String, u64)>,
 }
 
@@ -26,6 +30,44 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
         let text = raw.trim();
         let error = |message: &str| format!("{}:{}: {message}", path.display(), line + 1);
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
+            continue;
+        }
+        if let Some(name) = text.strip_prefix("set ") {
+            if cursor
+                .next()
+                .is_none_or(|(_, line)| line.trim() != "\"\"\"")
+            {
+                return Err(error("expected triple-quoted hook body"));
+            }
+            let mut body = Vec::new();
+            loop {
+                let (_, command) = cursor.next().ok_or_else(|| error("unterminated hook"))?;
+                let command = command.trim();
+                if command == "\"\"\"" {
+                    break;
+                }
+                if !command.is_empty() && !command.starts_with('#') {
+                    body.push(command);
+                }
+            }
+            let [assign, halt, ..] = body.as_slice() else {
+                return Err(error("unsupported hook body"));
+            };
+            let (variable, hart) = assign
+                .split_once(" = machine['sysbus.")
+                .and_then(|(variable, suffix)| Some((variable, suffix.strip_suffix("']")?)))
+                .ok_or_else(|| error("unsupported hook machine lookup"))?;
+            if variable.is_empty()
+                || hart.is_empty()
+                || *halt != format!("{variable}.IsHalted = True")
+                || !matches!(
+                    body.get(2..),
+                    Some([] | ["print(\"halted management CPU\")"])
+                )
+            {
+                return Err(error("unsupported hook body"));
+            }
+            boot.hooks.insert(name.to_string(), hart.to_string());
             continue;
         }
         if let Some(name) = text.strip_prefix("macro ") {
@@ -155,10 +197,55 @@ fn execute(
                 .push((file.to_string(), crate::parse_address(resolve(address)?)?));
         }
         ["sysbus", "LoadSymbolsFrom", value] if boot.platform.is_some() => {
-            // Symbol files are debugger metadata and are not loaded into guest RAM.
-            resolve(value)?
+            let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @symbol-path")?;
+            boot.symbols.push(file.to_string());
+        }
+        ["emulation", "SetGlobalQuantum", value] => {
+            let seconds: f64 = resolve(value)?
+                .trim_matches('"')
+                .parse()
+                .map_err(|_| "invalid emulation quantum")?;
+            if !seconds.is_finite() || seconds <= 0.0 {
+                return Err("invalid emulation quantum".into());
+            }
+            // Single-machine execution already synchronizes after each instruction.
+        }
+        [target, "Pressed" | "Released"] if boot.platform.is_some() && target.contains('.') => {
+            let (gpio, button) = target.rsplit_once('.').unwrap();
+            boot.buttons.push((
+                gpio.trim_start_matches("sysbus.").to_string(),
+                button.to_string(),
+                words[1] == "Pressed",
+            ));
+        }
+        [
+            cpu,
+            "AddHook",
+            "`sysbus",
+            "GetSymbolAddress",
+            symbol,
+            callback,
+        ] if boot.platform.is_some() => {
+            let symbol = symbol
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix("\"`"))
+                .ok_or("expected quoted hook symbol")?;
+            let hook = callback
+                .strip_prefix('$')
+                .and_then(|name| boot.hooks.get(name))
+                .ok_or("unknown halt hook")?;
+            let file = boot
+                .symbols
+                .last()
+                .ok_or("hook requires a loaded symbol file")?;
+            boot.halt_hooks.push((
+                cpu.to_string(),
+                symbol.to_string(),
+                hook.clone(),
+                file.clone(),
+            ));
         }
         ["emulation", "SetSeed", value] => {
             // None of the supported devices consume Renode's random seed.
@@ -222,6 +309,44 @@ pub fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fire_monitor_resolves_button_and_elf_hook() {
+        let directory =
+            std::env::temp_dir().join(format!("penv-fire-monitor-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let script = directory.join("boot.resc");
+        let source = r#"mach create
+machine LoadPlatformDescription @beaglev-fire.repl
+emulation SetGlobalQuantum "0.0008"
+sysbus LoadSymbolsFrom @u-boot.elf
+gpio0.UserButton Pressed
+set hook
+"""
+e51 = machine['sysbus.e51']
+e51.IsHalted = True
+print("halted management CPU")
+"""
+u54_4 AddHook `sysbus GetSymbolAddress "_start"` $hook
+sysbus LoadELF @hss.elf
+"#;
+        fs::write(&script, source).unwrap();
+        let boot = load(&script, &directory).unwrap();
+        assert_eq!(boot.buttons, [("gpio0".into(), "UserButton".into(), true)]);
+        assert_eq!(
+            boot.halt_hooks,
+            [(
+                "u54_4".into(),
+                "_start".into(),
+                "e51".into(),
+                "u-boot.elf".into()
+            )]
+        );
+        fs::write(&script, source.replace("0.0008", "NaN")).unwrap();
+        let result = load(&script, &directory);
+        fs::remove_dir_all(directory).unwrap();
+        assert!(matches!(result, Err(error) if error.contains("invalid emulation quantum")));
+    }
 
     #[test]
     fn parses_binary_addresses_and_named_cpu_entries() {

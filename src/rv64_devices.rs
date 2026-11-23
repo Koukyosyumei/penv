@@ -8,7 +8,7 @@ use crate::{
     ns16550::Ns16550,
     rv64_ethernet::Ethernet,
     rv64_gem::Gem,
-    rv64_mpfs::{DdrMock, Spi, Sysreg},
+    rv64_mpfs::{DdrMock, Gpio, I2c, Qspi, Spi, Sysreg, Usb},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_mpfs_wdog::Watchdog,
@@ -22,7 +22,10 @@ pub struct Devices {
     pub ethernet: Vec<Ethernet>,
     pub gems: Vec<Gem>,
     pub reset_generators: Vec<ResetGenerator>,
-    pub read_only_words: Vec<(u32, u32)>,
+    pub mpfs_i2c: Vec<I2c>,
+    pub mpfs_qspi: Vec<Qspi>,
+    pub mpfs_gpio: Vec<Gpio>,
+    pub mpfs_usb: Vec<Usb>,
     pub fire_ihc: Option<Box<FireIhc>>,
     pub fire_media_controller: Option<usize>,
     pub mpfs_sd: Vec<rv64_mpfs_sd::Controller>,
@@ -152,6 +155,9 @@ impl Devices {
                     plic.line(source, pending);
                 }
             }
+            for i2c in &self.mpfs_i2c {
+                plic.line(i2c.irq, i2c.pending());
+            }
             for sd in &self.mpfs_sd {
                 let (source, pending) = sd.interrupt();
                 plic.line(source, pending);
@@ -215,13 +221,12 @@ impl Devices {
         {
             return Some(ddr.read(address, width));
         }
-        if width == 4
-            && let Some((_, value)) = self
-                .read_only_words
-                .iter()
-                .find(|&&(word, _)| word == address)
+        if let Some(value) = self
+            .mpfs_usb
+            .iter()
+            .find_map(|usb| usb.read(address, width))
         {
-            return Some(*value);
+            return Some(value);
         }
         if let Some(value) = self
             .fire_ihc
@@ -255,6 +260,25 @@ impl Devices {
             .mpfs_spi
             .iter()
             .find_map(|spi| spi.read(address, width))
+        {
+            return Some(value);
+        }
+        if let Some(value) = self
+            .mpfs_gpio
+            .iter()
+            .find_map(|gpio| gpio.read(address, width))
+        {
+            return Some(value);
+        }
+        if let Some(value) = self
+            .mpfs_i2c
+            .iter()
+            .find_map(|i2c| i2c.read(address, width))
+            .or_else(|| {
+                self.mpfs_qspi
+                    .iter()
+                    .find_map(|qspi| qspi.read(address, width))
+            })
         {
             return Some(value);
         }
@@ -300,11 +324,10 @@ impl Devices {
         if self.mpfs_ddr.iter().any(|ddr| ddr.accepts(address, width)) {
             return Some(Ok(()));
         }
-        if width == 4
-            && self
-                .read_only_words
-                .iter()
-                .any(|&(word, _)| word == address)
+        if self
+            .mpfs_usb
+            .iter_mut()
+            .any(|usb| usb.write(address, width, value).is_some())
         {
             return Some(Ok(()));
         }
@@ -343,6 +366,24 @@ impl Devices {
             .mpfs_spi
             .iter_mut()
             .any(|spi| spi.write(address, width, value).is_some())
+        {
+            return Some(Ok(()));
+        }
+        if self
+            .mpfs_gpio
+            .iter_mut()
+            .any(|gpio| gpio.write(address, width, value).is_some())
+        {
+            return Some(Ok(()));
+        }
+        if self
+            .mpfs_i2c
+            .iter_mut()
+            .any(|i2c| i2c.write(address, width, value).is_some())
+            || self
+                .mpfs_qspi
+                .iter_mut()
+                .any(|qspi| qspi.write(address, width, value).is_some())
         {
             return Some(Ok(()));
         }

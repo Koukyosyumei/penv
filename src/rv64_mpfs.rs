@@ -246,3 +246,315 @@ mod spi_tests {
         assert_eq!(spi.read(other.base, 4), None);
     }
 }
+
+/// MPFS MUSB register interface with no attached USB devices.
+pub struct Usb {
+    pub base: u32,
+    session: bool,
+    endpoint: u8,
+    interrupt_enables: [u32; 3],
+}
+
+impl Usb {
+    pub const SIZE: u64 = 0x1000;
+
+    pub fn new(base: u32) -> Self {
+        Self {
+            base,
+            session: false,
+            endpoint: 0,
+            interrupt_enables: [0x1f, 0x1e, 6],
+        }
+    }
+
+    fn offset(&self, address: u32, width: usize) -> Option<u32> {
+        let offset = address.checked_sub(self.base)?;
+        (matches!(width, 1 | 2 | 4)
+            && (offset as usize).is_multiple_of(width)
+            && u64::from(offset) + width as u64 <= Self::SIZE)
+            .then_some(offset)
+    }
+
+    pub fn read(&self, address: u32, width: usize) -> Option<u32> {
+        Some(match (self.offset(address, width)?, width) {
+            (0x01, 1) => 0x30, // HS enable reset value and HS mode
+            (0x06, 2) => self.interrupt_enables[0],
+            (0x08, 2) => self.interrupt_enables[1],
+            (0x0b, 1) => self.interrupt_enables[2],
+            (0x0e, 1) => u32::from(self.endpoint),
+            (0x60, 1) => 0xd8 | u32::from(self.session), // B-device, FS device, valid VBUS
+            _ => 0,
+        })
+    }
+
+    pub fn write(&mut self, address: u32, width: usize, value: u32) -> Option<()> {
+        match (self.offset(address, width)?, width) {
+            (0x06, 2) => self.interrupt_enables[0] = value & 0x1f,
+            (0x08, 2) => self.interrupt_enables[1] = value & 0x1e,
+            (0x0b, 1) => self.interrupt_enables[2] = value & 0xff,
+            (0x0e, 1) => self.endpoint = value as u8 & 0xf,
+            (0x60, 1) => self.session = value & 1 != 0,
+            _ => {}
+        }
+        Some(())
+    }
+}
+
+pub struct Gpio {
+    pub base: u32,
+    pub name: String,
+    pub button: Option<(String, u32, bool)>,
+    input: u32,
+    output: u32,
+    config: [u32; 32],
+}
+
+impl Gpio {
+    pub const SIZE: u64 = 0x1000;
+
+    pub fn new(base: u32, name: String) -> Self {
+        Self {
+            base,
+            name,
+            button: None,
+            input: 0,
+            output: 0,
+            config: [0; 32],
+        }
+    }
+
+    pub fn set_button(&mut self, pressed: bool) {
+        if let Some((_, pin, invert)) = self.button {
+            let mask = 1 << pin;
+            self.input = (self.input & !mask) | if pressed ^ invert { mask } else { 0 };
+        }
+    }
+
+    fn offset(&self, address: u32, width: usize) -> Option<u32> {
+        let offset = address.checked_sub(self.base)?;
+        (width == 4 && offset.is_multiple_of(4) && u64::from(offset) < Self::SIZE).then_some(offset)
+    }
+
+    fn enabled(&self, bit: u32) -> u32 {
+        self.config
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (pin, flags)| {
+                mask | (u32::from(flags & bit != 0) << pin)
+            })
+    }
+
+    pub fn read(&self, address: u32, width: usize) -> Option<u32> {
+        Some(match self.offset(address, width)? {
+            offset @ 0..=0x7c => self.config[(offset / 4) as usize],
+            0x84 => self.input & self.enabled(2),
+            0x88 => self.output & self.enabled(1),
+            _ => 0,
+        })
+    }
+
+    pub fn write(&mut self, address: u32, width: usize, value: u32) -> Option<()> {
+        match self.offset(address, width)? {
+            offset @ 0..=0x7c => self.config[(offset / 4) as usize] = value & 0xeb,
+            0x88 => {
+                let mask = self.enabled(1);
+                self.output = (self.output & !mask) | (value & mask);
+            }
+            0xa0 => self.output &= !value,
+            0xa4 => self.output |= value,
+            _ => {}
+        }
+        Some(())
+    }
+}
+
+#[cfg(test)]
+mod boot_device_tests {
+    use super::{Gpio, Usb};
+
+    #[test]
+    fn musb_session_preserves_device_status_and_respects_access_width() {
+        let base = 0x2020_1000;
+        let mut usb = Usb::new(base);
+        assert_eq!(usb.read(base + 0x60, 1), Some(0xd8));
+        assert_eq!(usb.write(base + 0x60, 1, 0xff), Some(()));
+        assert_eq!(usb.read(base + 0x60, 1), Some(0xd9));
+        assert_eq!(usb.read(base + 0x60, 4), Some(0));
+        assert_eq!(usb.write(base + 0x06, 2, 0xffff), Some(()));
+        assert_eq!(usb.read(base + 0x06, 2), Some(0x1f));
+        assert_eq!(usb.write(base + 0x3fc, 4, 0), Some(()));
+        assert_eq!(usb.read(base + 0x1000, 1), None);
+    }
+
+    #[test]
+    fn fire_button_is_visible_on_an_enabled_active_low_input() {
+        let base = 0x2012_0000;
+        let mut gpio = Gpio::new(base, "gpio0".into());
+        gpio.button = Some(("UserButton".into(), 13, true));
+        gpio.set_button(false);
+        assert_eq!(gpio.read(base + 0x84, 4), Some(0));
+        gpio.write(base + 13 * 4, 4, 2).unwrap();
+        assert_eq!(gpio.read(base + 0x84, 4), Some(1 << 13));
+        gpio.set_button(true);
+        assert_eq!(gpio.read(base + 0x84, 4), Some(0));
+    }
+}
+
+/// MPFS I2C master with no responding slave on the bus.
+pub struct I2c {
+    pub base: u32,
+    pub irq: usize,
+    control: u8,
+    status: u8,
+    data: u8,
+}
+
+impl I2c {
+    pub const SIZE: u64 = 0x1000;
+
+    pub fn new(base: u32, irq: usize) -> Self {
+        Self {
+            base,
+            irq,
+            control: 0,
+            status: 0xf8,
+            data: 0,
+        }
+    }
+
+    fn offset(&self, address: u32, width: usize) -> Option<u32> {
+        let offset = address.checked_sub(self.base)?;
+        (width == 1 && u64::from(offset) < Self::SIZE).then_some(offset)
+    }
+
+    pub fn read(&self, address: u32, width: usize) -> Option<u32> {
+        Some(u32::from(match self.offset(address, width)? {
+            0 => self.control,
+            4 => self.status,
+            8 => self.data,
+            _ => 0,
+        }))
+    }
+
+    pub fn pending(&self) -> bool {
+        self.control & 0x48 == 0x48
+    }
+
+    pub fn write(&mut self, address: u32, width: usize, value: u32) -> Option<()> {
+        let value = value as u8;
+        match self.offset(address, width)? {
+            0 => {
+                let was_pending = self.pending();
+                self.control = value & 0xcf;
+                if value & 0x40 == 0 || value & 0x10 != 0 {
+                    self.status = 0xf8;
+                    self.control &= !8;
+                } else if value & 0x20 != 0 {
+                    self.status = if self.status == 0xf8 { 0x08 } else { 0x10 };
+                    self.control |= 8;
+                } else if was_pending && value & 8 == 0 && matches!(self.status, 0x08 | 0x10) {
+                    self.status = if self.data & 1 == 0 { 0x20 } else { 0x48 };
+                    self.control |= 8;
+                }
+            }
+            8 => self.data = value,
+            _ => {}
+        }
+        Some(())
+    }
+}
+
+/// The idle register state needed to initialize a CoreQSPI bus.
+pub struct Qspi {
+    pub base: u32,
+    pub size: u64,
+    control: u32,
+    frames: u32,
+    interrupt_enable: u32,
+    upper_address: u32,
+    frames_upper: u32,
+}
+
+impl Qspi {
+    pub fn new(base: u32, size: u64) -> Self {
+        Self {
+            base,
+            size,
+            control: 0x402,
+            frames: 0,
+            interrupt_enable: 0,
+            upper_address: 0,
+            frames_upper: 0,
+        }
+    }
+
+    fn offset(&self, address: u32, width: usize) -> Option<u32> {
+        let offset = address.checked_sub(self.base)?;
+        (width == 4 && offset.is_multiple_of(4) && u64::from(offset) + 4 <= self.size)
+            .then_some(offset & 0xff)
+    }
+
+    pub fn read(&self, address: u32, width: usize) -> Option<u32> {
+        Some(match self.offset(address, width)? {
+            0x00 => self.control,
+            0x04 => self.frames,
+            0x0c => self.interrupt_enable,
+            0x10 => 0x98 | (self.control & (1 << 16)) >> 8,
+            0x18 => self.upper_address,
+            0x50 => self.frames_upper | (self.frames & 0xffff),
+            _ => 0,
+        })
+    }
+
+    pub fn write(&mut self, address: u32, width: usize, value: u32) -> Option<()> {
+        match self.offset(address, width)? {
+            0x00 => self.control = (value & 0x1_000d) | 0x402,
+            0x04 => {
+                self.frames = value & 0x3dff_ffff;
+                if value & (1 << 31) != 0 {
+                    self.control |= 1 << 16;
+                } else if value & (1 << 30) != 0 {
+                    self.control &= !(1 << 16);
+                }
+            }
+            0x0c => self.interrupt_enable = value & 0x3f,
+            0x18 => self.upper_address = value & 0xff,
+            0x50 => self.frames_upper = value & 0xffff_0000,
+            _ => {}
+        }
+        Some(())
+    }
+}
+
+#[cfg(test)]
+mod bus_tests {
+    use super::{I2c, Qspi};
+
+    #[test]
+    fn i2c_reports_an_absent_slave_and_clears_irq_on_stop() {
+        let base = 0x2010_b000;
+        let mut i2c = I2c::new(base, 61);
+        assert_eq!(i2c.read(base + 4, 1), Some(0xf8));
+        i2c.write(base, 1, 0x60).unwrap();
+        assert!(i2c.pending());
+        assert_eq!(i2c.read(base + 4, 1), Some(8));
+        i2c.write(base + 8, 1, 0xa1).unwrap();
+        i2c.write(base, 1, 0x40).unwrap();
+        assert!(i2c.pending());
+        assert_eq!(i2c.read(base + 4, 1), Some(0x48));
+        i2c.write(base, 1, 0x50).unwrap();
+        assert!(!i2c.pending());
+        assert_eq!(i2c.read(base + 4, 1), Some(0xf8));
+    }
+
+    #[test]
+    fn qspi_aliases_report_the_same_idle_and_fifo_mode() {
+        let base = 0x2100_0000;
+        let mut qspi = Qspi::new(base, 0x1000);
+        assert_eq!(qspi.read(base + 0x10, 4), Some(0x98));
+        qspi.write(base + 0x104, 4, 0x8000_0010).unwrap();
+        assert_eq!(qspi.read(base + 0x10, 4), Some(0x198));
+        assert_eq!(qspi.read(base + 0x50, 4), Some(0x10));
+        assert_eq!(qspi.read(base + 0x1000, 4), None);
+    }
+}

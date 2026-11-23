@@ -7,7 +7,7 @@ use crate::{
     rv64_devices::{FallbackRange, MpfsCacheWayEnable, Plic, Uart},
     rv64_ethernet::{Ethernet, Phy},
     rv64_gem::Gem,
-    rv64_mpfs::{DdrMock, Spi, Sysreg},
+    rv64_mpfs::{DdrMock, Gpio, I2c, Qspi, Spi, Sysreg, Usb},
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_mpfs_wdog::{Output as WatchdogOutput, Watchdog},
@@ -332,13 +332,78 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
             map_gem(&mut machine, entry)?;
             continue;
         }
+        if entry.model == "I2C.MPFS_I2C" && entry.registration.as_deref() != Some("none") {
+            let base = entry.address()?;
+            check_mapping(&machine, entry, base, I2c::SIZE)?;
+            let mut source = 0;
+            for (_, line) in &entry.body {
+                if let Some((output, target)) = line.split_once("->")
+                    && output.trim() == "IRQ"
+                {
+                    let (controller, pin) = endpoint(entry, target)?;
+                    let pin = number(entry, pin)?;
+                    if source != 0
+                        || !plic.is_some_and(|plic| plic.name == controller)
+                        || !(1..=sources).contains(&pin)
+                    {
+                        return Err(entry.error("invalid MPFS I2C interrupt route"));
+                    }
+                    source = pin as usize;
+                }
+            }
+            machine
+                .bus
+                .rv64_devices
+                .mpfs_i2c
+                .push(I2c::new(base, source));
+            continue;
+        }
+        if entry.model == "SPI.MPFS_QSPI" && entry.registration.as_deref() != Some("none") {
+            let base = entry.address()?;
+            let size = required_number(entry, "size")?;
+            if size < 0x54 || size > (1 << 32) {
+                return Err(entry.error("invalid MPFS QSPI size"));
+            }
+            check_mapping(&machine, entry, base, size)?;
+            machine
+                .bus
+                .rv64_devices
+                .mpfs_qspi
+                .push(Qspi::new(base, size));
+            continue;
+        }
+        if entry.model == "GPIOPort.MPFS_GPIO" && entry.registration.as_deref() != Some("none") {
+            let base = entry.address()?;
+            check_mapping(&machine, entry, base, Gpio::SIZE)?;
+            let mut gpio = Gpio::new(base, entry.name.clone());
+            for button in entries.iter().filter(|button| {
+                button.model == "Miscellaneous.Button"
+                    && button.registration.as_deref() == Some(entry.name.as_str())
+            }) {
+                let wiring = button
+                    .body
+                    .iter()
+                    .find_map(|(_, line)| line.strip_prefix("->"))
+                    .ok_or_else(|| button.error("missing MPFS GPIO button wiring"))?;
+                let (target, pin) = endpoint(button, wiring)?;
+                let pin = number(button, pin)?;
+                if target != entry.name || pin >= 32 || gpio.button.is_some() {
+                    return Err(button.error("invalid MPFS GPIO button wiring"));
+                }
+                gpio.button = Some((
+                    button.name.clone(),
+                    pin as u32,
+                    flag(button, "invert", false)?,
+                ));
+                gpio.set_button(false);
+            }
+            machine.bus.rv64_devices.mpfs_gpio.push(gpio);
+            continue;
+        }
         if entry.model == "USB.MPFS_USB" && entry.registration.as_deref() != Some("none") {
-            // The HSS probes this undefined 32-bit offset, which Renode ignores.
-            let address = entry
-                .address()?
-                .checked_add(0x3fc)
-                .ok_or_else(|| entry.error("invalid MPFS USB address"))?;
-            map_read_only_word(&mut machine, entry, address, 0)?;
+            let base = entry.address()?;
+            check_mapping(&machine, entry, base, Usb::SIZE)?;
+            machine.bus.rv64_devices.mpfs_usb.push(Usb::new(base));
             continue;
         }
         if entry.model == "Miscellaneous.MPFS_DDRMock"
@@ -447,21 +512,6 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         machine.bus.rv64_devices.fire_ihc = Some(Box::default());
     }
     Ok(machine)
-}
-
-fn map_read_only_word(
-    machine: &mut Machine,
-    entry: &Entry,
-    address: u32,
-    value: u32,
-) -> Result<(), String> {
-    check_mapping(machine, entry, address, 4)?;
-    machine
-        .bus
-        .rv64_devices
-        .read_only_words
-        .push((address, value));
-    Ok(())
 }
 
 fn map_gem(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
@@ -791,9 +841,9 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         });
     let overlaps = overlaps
         || devices
-            .read_only_words
+            .mpfs_usb
             .iter()
-            .any(|&(address, _)| start < u64::from(address) + 4 && u64::from(address) < end);
+            .any(|usb| start < u64::from(usb.base) + Usb::SIZE && u64::from(usb.base) < end);
     let overlaps = overlaps
         || devices.mpfs_sd.iter().any(|device| {
             start < u64::from(device.base) + rv64_mpfs_sd::Controller::SIZE
@@ -813,6 +863,20 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         || devices.mpfs_spi.iter().any(|device| {
             start < u64::from(device.base) + Spi::SIZE && u64::from(device.base) < end
         });
+    let overlaps = overlaps
+        || devices
+            .mpfs_gpio
+            .iter()
+            .any(|gpio| start < u64::from(gpio.base) + Gpio::SIZE && u64::from(gpio.base) < end);
+    let overlaps = overlaps
+        || devices
+            .mpfs_i2c
+            .iter()
+            .any(|i2c| start < u64::from(i2c.base) + I2c::SIZE && u64::from(i2c.base) < end)
+        || devices
+            .mpfs_qspi
+            .iter()
+            .any(|qspi| start < u64::from(qspi.base) + qspi.size && u64::from(qspi.base) < end);
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
     }

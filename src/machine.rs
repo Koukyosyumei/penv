@@ -15,6 +15,8 @@ pub struct Machine {
     pub primary: Hart,
     secondary: Vec<Hart>,
     next_hart: usize,
+    halt_hooks: Vec<(usize, u64, usize)>,
+    halted: u8,
     elapsed_steps: u64,
     uart_input: VecDeque<(u64, Vec<u8>)>,
 }
@@ -151,6 +153,8 @@ impl Machine {
             },
             secondary: Vec::new(),
             next_hart: 0,
+            halt_hooks: Vec::new(),
+            halted: 0,
             elapsed_steps: 0,
             uart_input: VecDeque::new(),
         }
@@ -260,6 +264,18 @@ impl Machine {
         self.elapsed_steps
     }
 
+    pub fn halt_on_pc(&mut self, source: &str, pc: u64, target: &str) -> Result<(), String> {
+        let find = |name: &str| {
+            let name = name.strip_prefix("sysbus.").unwrap_or(name);
+            std::iter::once(&self.primary)
+                .chain(&self.secondary)
+                .position(|hart| hart.rv64.is_some() && hart.name.as_deref() == Some(name))
+                .ok_or_else(|| format!("unknown RV64 hook hart {name:?}"))
+        };
+        self.halt_hooks.push((find(source)?, pc, find(target)?));
+        Ok(())
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
@@ -286,6 +302,17 @@ impl Machine {
             {
                 let (_, bytes) = self.uart_input.pop_front().unwrap();
                 self.bus.queue_uart_input(bytes);
+            }
+            if self.halted & (1 << index) != 0 {
+                continue;
+            }
+            for &(source, pc, target) in &self.halt_hooks {
+                if index == source && hart.rv64.as_ref().is_some_and(|cpu| cpu.pc == pc) {
+                    self.halted |= 1 << target;
+                }
+            }
+            if self.halted & (1 << index) != 0 {
+                continue;
             }
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
                 Step::Retired => retired += 1,
@@ -706,6 +733,29 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_pc_hook_halts_only_the_target_hart() {
+        let mut machine = Machine::new(16).unwrap();
+        machine.configure_harts(2);
+        for (index, name) in ["e51", "u54_4"].into_iter().enumerate() {
+            let hart = machine.hart_mut(index);
+            hart.name = Some(name.into());
+            hart.rv64 = Some(Box::new(Rv64::new(crate::rv64::Isa::IM)));
+        }
+        machine
+            .bus
+            .memory(RAM_BASE, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+        machine
+            .halt_on_pc("u54_4", u64::from(RAM_BASE), "e51")
+            .unwrap();
+        assert_eq!(
+            machine.run(6, &mut std::io::sink()).unwrap(),
+            (Stop::Limit, 4)
+        );
+    }
 
     #[test]
     fn handles_ecall_and_returns_to_guest_code() {

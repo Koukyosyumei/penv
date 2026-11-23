@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | 上流と同じ外部 PMP を両 U74 に接続。2 台の起動、ログインと 56 バイト ping の 10/10 応答を確認 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 から SD の Linux 6.6.35 を起動し、`ttyS0` コンソールを確認。両 CoreSPI の登録を確認。次の MPFS MUSB プローブでパニックになり、Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | `verify-fire.py` で通過。公開 HSS と SD を元の RESC で起動し、OpenSBI v1.2、U-Boot 2023.07.02、Linux 6.6.35、UART の root ログイン、`uname -m` と `uname -n` を確認。さらにゲストから SD の先頭セクターを読み、公開イメージとの SHA-256 一致を確認 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -286,7 +286,7 @@ rg -o 'https://[^[:space:]]+' "$fire_resc" | while IFS= read -r url; do
     printf '%s  %s\n' "${name##*-}" "$fire_assets/$name" | sha1sum -c - || exit 1
 done
 
-# 上流スクリプトの次の未対応 Monitor コマンドを確認する。
+# 上流スクリプトの構成と HSS の開始を確認する。
 target/release/penv run --script "$fire_resc" --platform-root ../renode \
   --asset-dir "$fire_assets" --max-steps 100000
 
@@ -392,7 +392,7 @@ python3 scripts/verify-fire.py "$fire_assets" --until linux
 
 前回の最初の阻害点は `mchp_corespi_probe+0x174` の 32 ビット読み出しです。Linux は仮想アドレス `0xffff8f800004d000` でロードアクセス例外を報告し、起動中にパニックになりました。この阻害点の修正と次の例外は下の CoreSPI の節に記録しています。[PolarFire SoC の REPL](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/polarfire-soc.repl)
 
-検証スクリプトは上流 RESC からプラットフォーム、カード接続、HSS ELF ロードを取り出します。元の RESC 全体の実行には `SetGlobalQuantum`、GPIO ボタン操作、シンボルロードと CPU フックが残っています。今回の範囲では `cargo test` 75 件、StarLight の上流対応 7 ケース、RV64 virt の実 Linux ログインが通過しました。
+この時点の検証スクリプトは上流 RESC の一部を抽出していました。元の RESC 全体への対応は後述します。この段階では `cargo test` 75 件、StarLight の上流対応 7 ケース、RV64 virt の実 Linux ログインが通過しました。
 
 #### Fire の CoreSPI プローブ
 
@@ -407,7 +407,28 @@ python3 scripts/verify-fire.py "$fire_assets" --max-steps 6500000000 \
 
 比較には同じ公開 HSS と SD イメージを使いました。FIT 内の元の DTB を使い、U-Boot のハッシュ検証が通過しました。修正前の `17b85ea` は Linux 6.6.35 の `console [ttyS0] enabled` の後、`mchp_corespi_probe+0x174` のロードアクセス例外を再現しました。修正後は同じコンソールの初期化を経て、`20108000.spi` と `20109000.spi` がそれぞれコントローラー 0 と 1 を登録しました。
 
-次の致命的な停止は `mpfs_musb_set_vbus` が呼ぶ `musb_default_readb` の USB 対象オフセット `0x60` への 8 ビット読み出しです。検証スクリプトはログイン待ちでこのカーネルパニックを検出します。SD ルートのマウント、Buildroot ログイン、`uname` は未確認です。`cargo test` は 76 件すべて通過しました。
+この段階の次の停止は `mpfs_musb_set_vbus` が呼ぶ `musb_default_readb` の USB 対象オフセット `0x60` への 8 ビット読み出しです。検証スクリプトはログイン待ちでこのカーネルパニックを検出します。SD ルートのマウントからログインまでの検証は次節に記録しています。この段階の `cargo test` は 76 件通過しました。
+
+#### Fire の上流 RESC と Linux 周辺機器のプローブ
+
+`verify-fire.py` は上記の公開素材と上流の `beaglev-fire.resc` をそのまま使います。Fire の設定に必要な GPIO ボタン操作と、ELF の `_start` で管理ハートを停止する CPU フックを実装しました。`SetGlobalQuantum` は時間指定の妥当性を検査します。Penv は命令単位でハートを切り替えるため、スケジューリングの粒度は変わりません。フックは上流スクリプトの停止処理に対応します。任意の Python フックの実行と管理ハート停止時の Monitor メッセージは未対応です。
+
+CoreSPI の次に発生した MUSB のプローブ例外は、接続機器がない場合の USB レジスターと 8 ビット DEVCTL の実装で解消しました。その次の CoreI2C には初期状態、スレーブ不在時の NACK と PLIC 割り込みを実装しました。CoreQSPI にはプローブ時のレジスター応答を実装しました。USB の転送、I2C スレーブ、SPI/QSPI のデータ転送と GPIO 割り込みは残課題です。[Renode MPFS_USB](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/USB/MPFS_USB.cs) [Renode MPFS_I2C](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/I2C/MPFS_I2C.cs) [Renode MPFS_QSPI](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/SPI/MPFS_QSPI.cs)
+
+```sh
+cargo test
+cargo build --release
+python3 scripts/verify-fire.py "$fire_assets" --max-steps 9000000000 \
+  --timeout 1800 --logs target/fire-sd
+```
+
+検証スクリプトは UART から root としてログインし、`uname -m` と `uname -n` を確認します。続いてゲストの `/dev/mmcblk0` の先頭 512 バイトを `dd` で読み、ホスト側の公開 SD イメージの同じ範囲と SHA-256 が一致した場合にのみ PASS を出力します。UART と標準エラーは指定ログディレクトリに残ります。
+
+公開イメージで `PASS Should Boot Buildroot From SD Card` を確認しました。U-Boot で元の FIT 内のカーネルと DTB の SHA-256 検証が通過し、Linux は両 CoreSPI、両 CoreI2C と SDHCI を初期化しました。DMA で GPT を読み出して 3 パーティションを認識し、`mmcblk0p3` の ext4 をマウントしました。UART ログイン後の `uname -m` は `riscv64`、`uname -n` は `buildroot` を返しました。ゲストとホストの先頭セクターの SHA-256 はともに `c0d1a9055fedfc78ee08193dc4b6c269c1124988d6727d62d02649595b016912` でした。`cargo test` は 83 件通過しました。
+
+StarLight の外部 PMP 付き上流 3 ケースも前掲のコマンドで再実行しました。両ゲストの UART root ログインと 56 バイト ping の 10/10 応答を確認し、両側の `eth0` IRQ は 3 → 14 でした。
+
+SD の書き込みが未実装なので ext4 の書き込み可能な再マウントは失敗し、ルートは読み取り専用で動作します。Fire の Ethernet は PHY 接続とフレーム転送が残っています。起動ログには GNU Parted の GPT 末尾位置の警告と、非コヒーレント DMA に関する Linux の警告も残ります。
 
 ## Cortex-M0 / Cortex-M0+
 

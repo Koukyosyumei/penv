@@ -206,3 +206,79 @@ fn word(bytes: &[u8], offset: usize) -> u32 {
 fn double(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
 }
+
+pub fn symbol(bytes: &[u8], name: &str) -> Result<u64, String> {
+    let header = bytes.get(..64).ok_or("short ELF64 symbol file")?;
+    if header[..7] != *b"\x7fELF\x02\x01\x01" || half(header, 18) != 243 || half(header, 58) != 64 {
+        return Err("expected a little-endian RISC-V ELF64 section table".into());
+    }
+    let slice = |offset: u64, size: u64| -> Option<&[u8]> {
+        bytes.get(usize::try_from(offset).ok()?..usize::try_from(offset.checked_add(size)?).ok()?)
+    };
+    let sections = slice(double(header, 40), u64::from(half(header, 60)) * 64)
+        .ok_or("invalid ELF64 section table")?;
+    for symtab in sections
+        .chunks_exact(64)
+        .filter(|section| word(section, 4) == 2)
+    {
+        if double(symtab, 56) != 24 {
+            return Err("invalid ELF64 symbol size".into());
+        }
+        let index = word(symtab, 40) as usize;
+        let strings = sections
+            .chunks_exact(64)
+            .nth(index)
+            .ok_or("invalid ELF64 string-table index")?;
+        if word(strings, 4) != 3 {
+            return Err("expected ELF64 symbol strings".into());
+        }
+        let strings = slice(double(strings, 24), double(strings, 32))
+            .ok_or("invalid ELF64 symbol strings")?;
+        let symbols =
+            slice(double(symtab, 24), double(symtab, 32)).ok_or("invalid ELF64 symbol table")?;
+        for entry in symbols.chunks_exact(24) {
+            if half(entry, 6) == 0 {
+                continue;
+            }
+            if let Some(tail) = strings.get(word(entry, 0) as usize..)
+                && tail.split(|&byte| byte == 0).next() == Some(name.as_bytes())
+            {
+                return Ok(double(entry, 8));
+            }
+        }
+    }
+    Err(format!("ELF64 symbol {name:?} not found"))
+}
+
+#[cfg(test)]
+mod symbol_tests {
+    use super::*;
+
+    #[test]
+    fn reads_defined_elf64_symbols_from_the_linked_string_table() {
+        let mut elf = [0u8; 312];
+        elf[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        elf[18..20].copy_from_slice(&243u16.to_le_bytes());
+        elf[40..48].copy_from_slice(&64u64.to_le_bytes());
+        elf[58..60].copy_from_slice(&64u16.to_le_bytes());
+        elf[60..62].copy_from_slice(&3u16.to_le_bytes());
+        let symtab = &mut elf[128..192];
+        symtab[4..8].copy_from_slice(&2u32.to_le_bytes());
+        symtab[24..32].copy_from_slice(&256u64.to_le_bytes());
+        symtab[32..40].copy_from_slice(&48u64.to_le_bytes());
+        symtab[40..44].copy_from_slice(&2u32.to_le_bytes());
+        symtab[56..64].copy_from_slice(&24u64.to_le_bytes());
+        let strings = &mut elf[192..256];
+        strings[4..8].copy_from_slice(&3u32.to_le_bytes());
+        strings[24..32].copy_from_slice(&304u64.to_le_bytes());
+        strings[32..40].copy_from_slice(&8u64.to_le_bytes());
+        let symbol_entry = &mut elf[280..304];
+        symbol_entry[..4].copy_from_slice(&1u32.to_le_bytes());
+        symbol_entry[6..8].copy_from_slice(&1u16.to_le_bytes());
+        symbol_entry[8..16].copy_from_slice(&0x8020_0000u64.to_le_bytes());
+        elf[304..312].copy_from_slice(b"\0_start\0");
+        assert_eq!(symbol(&elf, "_start"), Ok(0x8020_0000));
+        assert!(symbol(&elf, "_other").is_err());
+        assert!(symbol(&elf[..290], "_start").is_err());
+    }
+}

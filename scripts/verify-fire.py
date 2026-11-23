@@ -2,34 +2,24 @@
 """Run the BeagleV-Fire SD boot case using the public Renode assets."""
 
 import argparse
+import hashlib
 from pathlib import Path
 import re
 import subprocess
 import time
 
 
-def boot_script(upstream, destination):
-    commands = upstream.read_text().splitlines()
-    prefixes = (
-        "using sysbus",
-        "mach create",
-        "machine LoadPlatformDescription ",
-        "machine SdCardFromFile ",
-        "sysbus LoadELF ",
-    )
-    boot = [line.strip() for line in commands if line.strip().startswith("$")]
-    for prefix in prefixes:
-        matches = [line.strip() for line in commands if line.strip().startswith(prefix)]
-        if len(matches) != 1:
-            raise RuntimeError(f"Expected one {prefix!r} command in {upstream}")
-        boot.extend(matches)
-    destination.write_text("\n".join(boot) + "\n")
-
-
 def verify(args):
     args.logs.mkdir(parents=True, exist_ok=True)
-    script = args.logs / "fire-sd-boot.resc"
-    boot_script(args.renode / "scripts/single-node/beaglev-fire.resc", script)
+    script = args.renode / "scripts/single-node/beaglev-fire.resc"
+    image = re.search(r"(?m)^\$image\?=@[^\s]+/([^/\s]+)$", script.read_text())
+    if image is None:
+        raise RuntimeError(f"Missing SD image in {script}")
+    with (args.assets / image[1]).open("rb") as media:
+        sector = media.read(512)
+    if len(sector) != 512:
+        raise RuntimeError("The SD image has no complete first sector")
+    digest = hashlib.sha256(sector).hexdigest().encode()
     uart = args.logs / "fire.uart.log"
     stderr = args.logs / "fire.stderr.log"
     with uart.open("wb") as output, stderr.open("wb") as errors, uart.open("rb") as capture:
@@ -76,6 +66,8 @@ def verify(args):
             expect(rb"\nriscv64\r*\n")
             guest.stdin.write(b"uname -n\r")
             expect(rb"\nbuildroot\r*\n")
+            guest.stdin.write(b"dd if=/dev/mmcblk0 bs=512 count=1 2>/dev/null | sha256sum\r")
+            expect(rb"\n" + digest + rb"[ \t]+-\r*\n")
             print("PASS Should Boot Buildroot From SD Card", flush=True)
         finally:
             if guest.poll() is None:

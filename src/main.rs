@@ -323,6 +323,8 @@ fn run() -> Result<ExitCode, String> {
     let mut binaries = Vec::new();
     let mut boot_pcs = Vec::new();
     let mut sd_cards = Vec::new();
+    let mut buttons = Vec::new();
+    let mut halt_hooks = Vec::new();
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -357,6 +359,15 @@ fn run() -> Result<ExitCode, String> {
         for (value, controller, capacity) in boot.sd_cards {
             let path = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
             sd_cards.push((path, controller, capacity));
+        }
+        buttons = boot.buttons;
+        for (cpu, symbol, target, value) in boot.halt_hooks {
+            let file = monitor::asset_path(&value, &script, root, asset_dir.as_deref())?;
+            let address = fs::read(&file)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| image64::symbol(&bytes, &symbol))
+                .map_err(|error| format!("{}: {error}", file.display()))?;
+            halt_hooks.push((cpu, address, target));
         }
         boot_pcs = boot.boot_pcs;
     }
@@ -393,6 +404,25 @@ fn run() -> Result<ExitCode, String> {
                 Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
             }
         };
+        for (gpio_name, button_name, pressed) in &buttons {
+            let gpio = machine
+                .bus
+                .rv64_devices
+                .mpfs_gpio
+                .iter_mut()
+                .find(|gpio| {
+                    gpio.name == *gpio_name
+                        && gpio
+                            .button
+                            .as_ref()
+                            .is_some_and(|(name, _, _)| name == button_name)
+                })
+                .ok_or_else(|| format!("unknown GPIO button {gpio_name}.{button_name}"))?;
+            gpio.set_button(*pressed);
+        }
+        for (source, pc, target) in &halt_hooks {
+            machine.halt_on_pc(source, *pc, target)?;
+        }
         for (path, name, capacity) in &sd_cards {
             let controller = machine
                 .bus
