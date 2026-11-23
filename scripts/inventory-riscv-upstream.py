@@ -94,7 +94,7 @@ def robot_cases(root, isa, act):
                             basis += "; ELF passed both standalone Zbkc and fixed ISA with V omitted"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:Zaamo|Zalrsc)/[^/]+\.elf", portable):
                             if Path(portable).name == "Zalrsc-sc.w-00.elf":
-                                basis += "; reduced ISA reaches ACT test 238: overlapping same-hart byte store invalidates reservation; signature expects SC success"
+                                basis += "; ELF passed with Zaamo/Zalrsc after preserving reservations on same-hart stores (ACT test 238)"
                             else:
                                 basis += "; ELF passed with standalone atomic subextension and with A"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/ZfhminD?/[^/]+\.elf", portable):

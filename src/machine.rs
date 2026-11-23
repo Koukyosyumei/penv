@@ -764,7 +764,7 @@ impl Hart {
         }
         self.translate(bus, address, width, crate::pmp::WRITE)
             .and_then(|physical| {
-                bus.write(physical, width, value, output)
+                bus.write_with_origin(physical, width, value, output, Some(self.slot))
                     .map_err(|error| error.at_virtual(address))
             })
             .map_err(|error| Fault::Bus(Access::Store, error))
@@ -2494,6 +2494,19 @@ mem: Memory.MappedMemory @ sysbus 0x1000 {{ size: 0x40000 }}
         machine.run(1, &mut output).unwrap();
         assert_eq!(machine.primary.registers[4], 1);
         assert_eq!(machine.bus.read_ram::<4>(RAM_BASE + 32).unwrap(), 0x10e);
+
+        // A guest byte store preserves the reservation held by its own hart.
+        machine.primary.pc = RAM_BASE;
+        machine.run(1, &mut output).unwrap();
+        assert!(
+            machine
+                .primary
+                .store(&mut machine.bus, RAM_BASE + 33, 1, 2, &mut output)
+                .is_ok()
+        );
+        machine.run(1, &mut output).unwrap();
+        assert_eq!(machine.primary.registers[4], 0);
+        assert_eq!(machine.bus.read_ram::<4>(RAM_BASE + 32).unwrap(), 7);
     }
 
     #[test]

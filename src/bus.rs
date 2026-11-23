@@ -1044,15 +1044,26 @@ impl Bus {
     }
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
+        self.memory_for_store(address, width, None)
+    }
+
+    pub(crate) fn memory_for_store(
+        &mut self,
+        address: u32,
+        width: usize,
+        writer: Option<usize>,
+    ) -> Result<&mut [u8], BusError> {
         for region in &mut self.regions {
             if let Some(offset) = region.offset(address, width) {
                 if width != 0 {
                     let address = u64::from(region.base) + offset as u64;
-                    for reservation in &mut self.reservations {
-                        if reservation.is_some_and(|reserved| {
-                            address < u64::from(reserved) + 4
-                                && u64::from(reserved) < address + width as u64
-                        }) {
+                    for (hart, reservation) in self.reservations.iter_mut().enumerate() {
+                        if Some(hart) != writer
+                            && reservation.is_some_and(|reserved| {
+                                address < u64::from(reserved) + 4
+                                    && u64::from(reserved) < address + width as u64
+                            })
+                        {
                             *reservation = None;
                         }
                     }
@@ -1322,13 +1333,24 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        self.write_with_origin(address, width, value, uart, None)
+    }
+
+    pub fn write_with_origin(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+        uart: &mut impl Write,
+        writer: Option<usize>,
+    ) -> Result<(), BusError> {
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
         }
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));
         }
-        let ram_error = match self.memory(address, width) {
+        let ram_error = match self.memory_for_store(address, width, writer) {
             Ok(bytes) => {
                 bytes.copy_from_slice(&value.to_le_bytes()[..width]);
                 return self.observe_tohost(address, width, uart);

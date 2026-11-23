@@ -279,7 +279,7 @@ impl Hart {
         }
         let memory = self
             .translate(bus, address, 8, pmp::WRITE)
-            .and_then(|physical| bus.memory(physical, 8))
+            .and_then(|physical| bus.memory_for_store(physical, 8, Some(self.slot)))
             .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(address)))?;
         memory.copy_from_slice(&bits.to_le_bytes());
         Ok(())

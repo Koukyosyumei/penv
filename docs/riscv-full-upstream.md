@@ -1209,3 +1209,22 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 未達は `Zalrsc-sc.w-00.elf` の test 238 です。同じハートが LR の対象ワードと重なる位置にバイトを書き込むと、penv は予約を無効にして SC の結果を 1 にします。固定署名は 0 を要求します。固定 Renode でこのシーケンスがどう観測されるかは未確認です。固定 Robot 構成は V の未対応で対象 11 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。
 
 先に調べた BF16 の `Zfbfmin-fcvt.s.bf16-00.elf` は test 125 で署名が 0x7e000000 を要求する既知の失敗を再現しました。仕様の標準 NaN と署名の差が残っています。構成別の `results.jsonl`、ケースログ、終了状態を上記の証拠ディレクトリに保存しました。
+
+### RV32 LR/SC の同一ハートストア
+
+固定 ACT の `Zalrsc-sc.w-00.elf` は test 238 で、LR と同じワードに対する同一ハートのバイトストア後に SC の成功を要求します。前の実装は書き込み元を区別せず、その予約を無効にしていました。固定 tlib の `atomic.c` にある `register_address_access` は書き込み元ハートの予約を無効化の対象から外します。penv では通常のゲストストアで書き込み元を RAM に伝え、他のハートの予約と外部書き込みによる無効化は既存の動作を保ちます。Rust テストで同一ハートのバイトストア後の SC 成功と、外部書き込み後の SC 失敗を確認しました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-ae15026-65g5UX"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/atomic.repl" --artifacts "$repro/atomic" "$elfs"/{Zaamo,Zalrsc}/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/{Zaamo,Zalrsc}/*.elf
+```
+
+同じ release バイナリで縮小 ISA 構成は 11/11 件が通過し、固定 Robot 構成は V の未対応で 11 件とも CPU 作成時に停止しました。Rust テストは 88 件すべて通過し、他ハートのストアと AMO による予約無効化の既存回帰も通過しました。固定 Renode の挙動はソースで確認しました。実行比較は残っています。上流等価合格は累計 155 件です。ケースログ、`results.jsonl`、終了状態は上記の証拠ディレクトリに保存しました。
