@@ -11,6 +11,16 @@ tests/stm32f407-freertos-smoke.sh "$work" --upstream
 tests/stm32f407-freertos-smoke.sh "$work/cm4f" --fpu
 tests/stm32f407-freertos-smoke.sh "$work/loopback"
 
+# STM32F4_Discovery.robot: Peripheral Export File Created.
+map="$work/peripherals.json"
+target/release/penv peripherals export "$map" \
+    --platform "$renode/platforms/cpus/stm32f4.repl" --platform-root "$renode"
+test -f "$map" && test -s "$map"
+for marker in 'Peripheral Map 1.0' SynopsysEthernetMAC STM32_GPIOPort STM32F4_RCC; do
+    rg -qF "$marker" "$map"
+done
+printf 'Peripheral Export File Created: %s\n' "$map"
+
 fetch_asset() {
     local asset=$1 sha=$2
     local firmware="$assets/$asset"
@@ -69,14 +79,44 @@ run_to_limit() {
     fi
 }
 
+# arm-cortex-m-fpu.robot: Should Pass Context Stacking Preservation Test v7-M.
+cat > "$work/fpu-v7m.repl" <<'REPL'
+mem: Memory.MappedMemory @ sysbus 0x0
+    size: 0x40000
+uart: UART.NS16550 @ sysbus 0x80000
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m4"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+REPL
+sha=d49ec01cc0c6270f7055330871953182a507efc6
+asset="cortex-v7m-extended-frame-test.elf-s_91928-$sha"
+fetch_asset "$asset" "$sha"
+cp "$assets/$asset" "$work/fpu-v7m.elf"
+cat > "$work/fpu-v7m.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @fpu-v7m.repl
+sysbus LoadELF @fpu-v7m.elf
+cpu VectorTableOffset `sysbus GetSymbolAddress "vector_table"`
+RESC
+run_to_limit fpu-v7m --script "$work/fpu-v7m.resc" --max-steps 100000
+if ! rg -aqx 'Test succeeded\r?' "$work/fpu-v7m.log"; then
+    cat "$work/fpu-v7m.log" >&2
+    exit 1
+fi
+printf 'Cortex-M4F context stacking: Test succeeded\n'
+
 # Port the TIM2 upcount and downcount cases from STM32F4_Discovery.robot.
 while read -r direction label suffix sha; do
     name="tim2-$direction"
     run_case "$name" "stm32f4disco-timer-${direction}count.elf-$suffix-$sha" "$sha" platforms/cpus/stm32f4.repl 100000
-    if ! rg -aqF "Timer2 $label Overflow Example" "$work/$name.log" ||
-        ! rg -aqF 'Tim2 IRQ enabled' "$work/$name.log" ||
-        ! awk '/Tim2 started/ { started = 1 }
-            started && /period elapsed callback/ { callbacks++ }
+    if ! awk -v banner="*** Timer2 $label Overflow Example ***" '
+            { sub(/^\000/, ""); sub(/\r$/, "") }
+            $0 == banner && state == 0 { state = 1 }
+            $0 == "Tim2 IRQ enabled" && state == 1 { state = 2 }
+            $0 == "Tim2 started" && state == 2 { state = 3 }
+            $0 == "period elapsed callback" && state == 3 { callbacks++ }
             END { exit callbacks < 3 }' "$work/$name.log"; then
         cat "$work/$name.log" >&2
         exit 1

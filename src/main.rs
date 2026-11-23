@@ -73,6 +73,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv peripherals export OUTPUT --platform REPL [--platform-root DIR]
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
@@ -119,7 +120,8 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run'; see --help".into()),
+        Some(Some("peripherals")) => return export_peripherals(args),
+        _ => return Err("expected 'run' or 'peripherals'; see --help".into()),
     }
 
     let mut raw = false;
@@ -432,6 +434,27 @@ fn run() -> Result<ExitCode, String> {
         );
         return Ok(ExitCode::from(2));
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn export_peripherals(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<ExitCode, String> {
+    let usage = "expected 'peripherals export OUTPUT --platform REPL [--platform-root DIR]'";
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("export")) {
+        return Err(usage.into());
+    }
+    let output = PathBuf::from(args.next().ok_or(usage)?);
+    let (mut platform, mut root) = (None, None);
+    while let Some(flag) = args.next() {
+        let value = PathBuf::from(args.next().ok_or(usage)?);
+        match flag.to_str() {
+            Some("--platform") if platform.is_none() => platform = Some(value),
+            Some("--platform-root") if root.is_none() => root = Some(value),
+            _ => return Err(usage.into()),
+        }
+    }
+    platform::export_peripherals(&platform.ok_or(usage)?, root.as_deref(), &output)?;
     Ok(ExitCode::SUCCESS)
 }
 

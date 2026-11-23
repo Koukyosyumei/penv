@@ -207,13 +207,20 @@ mod tests {
             FLASH..FLASH + F4Flash::BANK_SIZE,
         ))
         .unwrap();
-        let mut write =
-            |address, value| bus.write(address, 4, value, &mut std::io::sink()).unwrap();
-        write(FLASH, 0xdead_beef);
-        write(LAST_SECTOR, 0xcafe_babe);
-        write(0x4002_3c04, 0x4567_0123);
-        write(0x4002_3c04, 0xcdef_89ab);
-        write(0x4002_3c10, CR_START | CR_SECTOR_ERASE | (11 << 3));
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut std::io::sink()).unwrap();
+        };
+        write(&mut bus, FLASH, 0xdead_beef);
+        write(&mut bus, LAST_SECTOR, 0xcafe_babe);
+        assert_eq!(bus.read::<4>(FLASH).unwrap(), 0xdead_beef);
+        assert_eq!(bus.read::<4>(LAST_SECTOR).unwrap(), 0xcafe_babe);
+        write(&mut bus, 0x4002_3c04, 0x4567_0123);
+        write(&mut bus, 0x4002_3c04, 0xcdef_89ab);
+        write(
+            &mut bus,
+            0x4002_3c10,
+            CR_START | CR_SECTOR_ERASE | (11 << 3),
+        );
         assert_eq!(bus.read::<4>(FLASH).unwrap(), 0xdead_beef);
         assert_eq!(bus.read::<4>(LAST_SECTOR).unwrap(), u32::MAX);
     }

@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -308,7 +309,7 @@ fn brace_depth(text: &str) -> i32 {
         .sum()
 }
 
-pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
+fn declarations(path: &Path, root: Option<&Path>) -> Result<Vec<Entry>, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -344,7 +345,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             declarations.push(entry);
         }
     }
-    let entries = declarations;
+    Ok(declarations)
+}
+
+pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
+    load_entries(path, &declarations(path, root)?)
+}
+
+fn load_entries(path: &Path, entries: &[Entry]) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
     let mut cpus = Vec::new();
     let mut clint = None;
@@ -361,7 +369,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut f4_rcc = None;
     let mut plic = None;
     let mut timer = None;
-    for entry in &entries {
+    for entry in entries {
         match entry.model.as_str() {
             "" if entry.name == "sysbus" => configure_bus_init(entry, &mut machine)?,
             "Miscellaneous.BitBanding" => {
@@ -607,9 +615,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         }
         if let Some(flash) = flash_controller {
             if flash.model == F4Flash::MODEL {
-                configure_f4_flash(flash, &entries, &mut machine)?;
+                configure_f4_flash(flash, entries, &mut machine)?;
             } else {
-                configure_h7_flash(flash, &entries, nvic, &mut machine)?;
+                configure_h7_flash(flash, entries, nvic, &mut machine)?;
             }
         }
         configure_stm32_can(&stm32_can, nvic, &mut machine)?;
@@ -643,10 +651,17 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_iwdg(Iwdg::new(entry.address()?, frequency, window, prescaler))
                 .map_err(|e| entry.error(&e))?;
         }
-        configure_f4_spi(&entries, nvic, &mut machine)?;
-        configure_f1_i2c(&entries, nvic, &mut machine)?;
+        configure_f4_spi(entries, nvic, &mut machine)?;
+        configure_f1_i2c(entries, nvic, &mut machine)?;
         let mut uart_irq = None;
-        if let Some(uart) = uart {
+        if let Some(uart) = uart.filter(|uart| uart.model == "UART.NS16550") {
+            keys(uart, &[])?;
+            machine
+                .bus
+                .map_ns16550(uart.address()?, 0, false)
+                .map_err(|e| uart.error(&e))?;
+        }
+        if let Some(uart) = uart.filter(|uart| uart.model != "UART.NS16550") {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
             }
@@ -742,10 +757,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         } else {
             0
         };
-        stm32h7_adc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
-        crate::stm32h7_board_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
-        stm32h7_gpio_platform::configure(&entries, exti, exti_lines, &mut machine)?;
-        stm32h7_rtc_platform::configure(&entries, nvic, exti, exti_lines, &mut machine)?;
+        stm32h7_adc_platform::configure(entries, nvic, exti, exti_lines, &mut machine)?;
+        crate::stm32h7_board_platform::configure(entries, nvic, exti, exti_lines, &mut machine)?;
+        stm32h7_gpio_platform::configure(entries, exti, exti_lines, &mut machine)?;
+        stm32h7_rtc_platform::configure(entries, nvic, exti, exti_lines, &mut machine)?;
         for uart in stm32_uarts {
             let legacy = uart.model == "UART.STM32_UART";
             let mut irq = None;
@@ -807,7 +822,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map_err(|e| uart.error(&e))?;
         }
         if let Some(rcc) = f4_rcc {
-            configure_f4_rcc(rcc, &entries, &mut machine)?;
+            configure_f4_rcc(rcc, entries, &mut machine)?;
         }
         machine
             .bus
@@ -827,7 +842,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .configure_mpu(mpu_regions.unwrap_or(default_mpu_regions), has_cache);
         }
         crate::network_platform::configure(
-            &entries,
+            entries,
             &mut machine,
             None,
             nvic.map(|entry| entry.name.as_str()),
@@ -1112,8 +1127,68 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_err(|e| entry.error(&e))?;
     }
     let vex_cpu = (cpu.model == "CPU.VexRiscv").then_some(cpu.name.as_str());
-    crate::network_platform::configure(&entries, &mut machine, vex_cpu, None)?;
+    crate::network_platform::configure(entries, &mut machine, vex_cpu, None)?;
     Ok(machine)
+}
+
+/// Export the system-bus peripheral tree using Renode's Peripheral Map schema.
+pub fn export_peripherals(path: &Path, root: Option<&Path>, output: &Path) -> Result<(), String> {
+    let entries = declarations(path, root)?;
+    load_entries(path, &entries)?;
+    let mut nodes = Vec::new();
+    for entry in &entries {
+        let addresses = match entry.registration.as_deref() {
+            Some("sysbus") => Vec::new(),
+            Some(registration) if registration.starts_with("sysbus <") => {
+                vec![entry.bus_range()?.0]
+            }
+            Some(registration) if registration.starts_with("sysbus ") => vec![entry.address()?],
+            Some(registration)
+                if registration.starts_with('{') && entry.model == F4Flash::MODEL =>
+            {
+                let (registers, options, _) = f4_flash_registrations(entry)?;
+                vec![registers, options]
+            }
+            None | Some("none") => continue,
+            Some(_) => return Err(entry.error("unsupported peripheral export registration")),
+        };
+        let model = entry.model.rsplit('.').next().unwrap();
+        let bindings = addresses
+            .iter()
+            .map(|address| format!(r#"{{"Type":"Bus","Value":{address}}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        nodes.push(format!(
+            r#"{{"Name":{},"Alias":{},"Bindings":[{bindings}],"Children":[]}}"#,
+            json_string(model),
+            json_string(&entry.name),
+        ));
+    }
+    let mut file =
+        fs::File::create(output).map_err(|err| format!("{}: {err}", output.display()))?;
+    writeln!(
+        file,
+        r#"{{"Header":"Peripheral Map 1.0","Root":{{"Name":"SystemBus","Alias":"sysbus","Bindings":[],"Children":[{}]}}}}"#,
+        nodes.join(",")
+    )
+    .map_err(|err| format!("{}: {err}", output.display()))
+}
+
+fn json_string(value: &str) -> String {
+    use std::fmt::Write;
+    let mut output = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '\\' | '"' => {
+                output.push('\\');
+                output.push(ch);
+            }
+            '\u{0}'..='\u{1f}' => write!(output, "\\u{:04x}", u32::from(ch)).unwrap(),
+            _ => output.push(ch),
+        }
+    }
+    output.push('"');
+    output
 }
 
 fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String> {
@@ -1423,6 +1498,14 @@ fn configure_f4_flash(
         .memory(start, F4Flash::BANK_SIZE as usize)
         .map_err(|error| flash.error(&error.to_string()))?;
 
+    let (base, option_base, size) = f4_flash_registrations(controller)?;
+    machine
+        .bus
+        .map_f4_flash(F4Flash::new(base, option_base, size, start..end))
+        .map_err(|error| controller.error(&error))
+}
+
+fn f4_flash_registrations(controller: &Entry) -> Result<(u32, u32, u32), String> {
     let parse = || -> Option<(u32, u32, u32)> {
         let registration = controller
             .registration
@@ -1454,13 +1537,8 @@ fn configure_f4_flash(
         let size = size.filter(|size| *size >= 12 && size % 4 == 0)?;
         region.then_some((base, option_base?, size))
     };
-    let (base, option_base, size) = parse().ok_or_else(|| {
-        controller.error("expected register and optionBytes sysbus registrations")
-    })?;
-    machine
-        .bus
-        .map_f4_flash(F4Flash::new(base, option_base, size, start..end))
-        .map_err(|error| controller.error(&error))
+    parse()
+        .ok_or_else(|| controller.error("expected register and optionBytes sysbus registrations"))
 }
 
 fn configure_h7_flash(

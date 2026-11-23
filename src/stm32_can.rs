@@ -87,9 +87,11 @@ impl Filters {
         let init = self.control & 1 != 0;
         match offset {
             0x200 => self.control = (self.control & !0x3f01) | (value & 0x3f01),
-            0x204 if init => self.list = value & BANK_MASK,
-            0x20c if init => self.wide = value & BANK_MASK,
-            0x214 if init => self.fifo = value & BANK_MASK,
+            // Renode preserves the full filter configuration words. Only the
+            // banks that exist participate in filter matching.
+            0x204 if init => self.list = value,
+            0x20c if init => self.wide = value,
+            0x214 if init => self.fifo = value,
             0x21c => self.active = value & BANK_MASK,
             0x240..=0x31c => {
                 let bank = ((offset - 0x240) / 8) as usize;
@@ -226,7 +228,7 @@ impl StmCan {
             0x0c | 0x10 => self.rx[(offset / 4 - 3) as usize].status(),
             0x14 => self.interrupt_enable,
             0x18 => self.error,
-            0x1c => self.timing,
+            0x1c if self.status & INRQ != 0 => self.timing,
             0x180..=0x1ac => self.tx[((offset - 0x180) / 16) as usize][(offset / 4 & 3) as usize],
             0x1b0..=0x1cc => self.rx[((offset - 0x1b0) / 16) as usize]
                 .messages
@@ -306,6 +308,71 @@ impl StmCan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Renode Infrastructure STMCANTest.InitTest.
+    #[test]
+    fn renode_stmcan_init_test() {
+        let mut can = StmCan::new(0, None, [None; 4]);
+        can.reset();
+        for (offset, expected) in [
+            (0x00, 0x0001_0002),
+            (0x04, 0x0000_0c02),
+            (0x08, 0x1c00_0000),
+            (0x0c, 0),
+            (0x10, 0),
+            (0x14, 0),
+            (0x18, 0),
+            (0x1c, 0),
+        ] {
+            assert_eq!(can.read(offset), expected, "offset {offset:#x}");
+        }
+        can.write(0x00, 0x0001_0001);
+        assert_eq!(can.read(0x04), 0x0000_0c01);
+        assert_eq!(can.read(0x1c), 0x0123_0000);
+
+        can.reset();
+        for mailbox in [0x180, 0x190, 0x1a0] {
+            assert_eq!(can.read(mailbox) & 1, 0);
+            for field in [4, 8, 12] {
+                assert_eq!(can.read(mailbox + field), 0);
+            }
+        }
+        for (field, mask) in [(0, 1), (4, 0x10), (8, u32::MAX), (12, u32::MAX)] {
+            for fifo in [0x1b0, 0x1c0] {
+                can.write(fifo + field, 0xff00_00ff);
+            }
+            for fifo in [0x1b0, 0x1c0] {
+                assert_eq!(can.read(fifo + field) & mask, 0);
+            }
+        }
+
+        can.reset();
+        let filters = can.filters.as_mut().unwrap();
+        assert_eq!(filters.read(0x200), 0x2a1c_0e01);
+        for offset in [0x204, 0x20c, 0x214] {
+            assert_eq!(filters.read(offset), 0);
+            filters.write(offset, 0xff00_00ff);
+            assert_eq!(filters.read(offset), 0xff00_00ff);
+            filters.write(0x200, 0x2a1c_0e00);
+            assert_eq!(filters.read(0x200), 0x2a1c_0e00);
+            filters.write(offset, 0x00ff_ff00);
+            assert_eq!(filters.read(offset), 0xff00_00ff);
+            filters.write(0x200, 0x2a1c_0e01);
+        }
+        assert_eq!(filters.read(0x21c), 0);
+        filters.write(0x21c, 0xf000_0000);
+        assert_eq!(filters.read(0x21c), 0);
+        for index in 0..28 {
+            let offset = 0x240 + index * 8;
+            assert_eq!(filters.read(offset), 0);
+            filters.write(offset, 0xff00_00ff);
+            assert_eq!(filters.read(offset), 0xff00_00ff);
+            filters.write(0x200, 0x2a1c_0e00);
+            assert_eq!(filters.read(0x200), 0x2a1c_0e00);
+            filters.write(offset, 0x00ff_ff00);
+            assert_eq!(filters.read(offset), 0x00ff_ff00);
+        }
+    }
 
     #[test]
     fn extended_frame_matches_16_bit_list_and_prefers_32_bit_filter() {

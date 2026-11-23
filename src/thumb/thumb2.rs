@@ -114,7 +114,7 @@ impl Thumb {
         let rt = (low >> 12) as usize;
         let rm = (low & 15) as usize;
         let rd = ((low >> 8) & 15) as usize;
-        if matches!(high, 0xec00..=0xeeff) && self.execute_fpu(high, low, r, bus)? {
+        if matches!(high, 0xec00..=0xeeff) && self.execute_fpu(high, low, *next, r, bus, output)? {
             return Ok(());
         }
         match high {

@@ -531,6 +531,11 @@ OTG FS リセット値を使用します。参照した `STM32F40x.svd.gz` の S
 `d71b3e11c870ec83346eb994e98a57c5eacdf0082d2949ed495d7a3828bf41ec` です。
 [SVD アセット](https://dl.antmicro.com/projects/renode/svd/STM32F40x.svd.gz)
 
-受け入れの対象は上表のゲスト起動と入出力です。Discovery の `Peripheral Export File Created` は
-Renode モニターが書き出す Peripheral Map ファイルを検査するツール機能として対象外です。
+受け入れの対象は上表のゲスト起動と入出力です。Discovery の `Peripheral Export File Created` は下記の上流全件の照合に追加しました。
 USB データ転送、汎用 SVD 展開、フラッシュ書き込み、CAN 通常モードでのノード間通信は残課題です。
+
+### 上流全件の照合
+
+Discovery 全 13 ケースと共有候補の個別台帳、確認済みの観測条件、再現手順と未達は
+[STM32F407 Discovery 上流ケース台帳](docs/stm32f407-full-upstream.md) に記録しています。
+Peripheral Export はこの照合の対象に含め、未変更の CPU REPL からファイルを書き出して検査します。
