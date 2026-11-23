@@ -1080,3 +1080,23 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 同じ release バイナリで診断構成は 6/6 件が完了コード 0 に到達しました。`ZfaZvfh` の ELF も診断構成では通過し、半精度形式の有効化には Zvfh の代わりに Zfh を使っています。固定 Robot 構成は V の未対応で 6/6 件が CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。
 
 Rust テストは 88 件すべて通過しました。固定 F・D・Zfh・ZfhD の ELF 185 件を同じ V なし構成で `zfaFli` の有無だけ切り替えて比較し、ケース別結果は一致しました。両構成で 149 件が通過し、36 件の未達が残ります。上記の証拠ディレクトリに構成別の `results.jsonl`、ケースログ、終了状態を保存しました。
+
+### RV32 Zfa の最小・最大値命令
+
+V を外した構成で代表の `ZfaF-fminm.s-00.elf` は、最初の `fminm.s` で不正命令になりました。半精度・単精度・倍精度の `fminm` と `fmaxm` を実装しました。どちらかの入力が NaN なら正規 NaN を返し、シグナリング NaN では無効演算フラグを立てます。有限値と符号付きゼロの比較は既存の `fmin`・`fmax` と同じ経路を使います。診断用の `CPU.RiscV32` プロパティ `zfaMinMax: true` で有効になります。[RISC-V Zfa 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zfa.html)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-cecdea1-cqq1jj"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/min-max.repl" --artifacts "$repro/min-max" \
+  "$elfs"/Zfa*/*f{min,max}m*.elf "$elfs"/Zfa*/*fli*.elf "$elfs"/{F,D,Zfh,ZfhD}/*f{min,max}.*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zfa*/*f{min,max}m*.elf
+```
+
+同じ release バイナリで、診断構成の固定 ACT ELF は `fminm`・`fmaxm` 12 件、既存の `fli` 6 件、`fmin`・`fmax` 12 件がすべて完了コード 0 に到達しました。Rust テストも 88 件すべて通過しました。固定 Robot 構成では V の未対応で対象 12 件すべてが CPU 作成時に停止しました。Zfa の残りの命令と固定構成での検証が残り、上流等価合格は累計 155 件です。構成別のケースログ、`results.jsonl` と終了状態は上記の証拠ディレクトリに保存しました。

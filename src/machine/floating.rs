@@ -105,7 +105,9 @@ impl Hart {
                 0x02 => format.multiply(decode_lhs(), decode_rhs(), rounding()?),
                 0x03 => format.divide(decode_lhs(), decode_rhs(), rounding()?),
                 0x04 => format.sign_inject(lhs, rhs, funct3).ok_or_else(illegal)?,
-                0x05 if funct3 <= 1 => format.min_max(lhs, rhs, funct3 == 1),
+                0x05 if funct3 <= 1 || (self.zfa_min_max && funct3 <= 3) => {
+                    format.min_max(lhs, rhs, funct3 & 1 != 0, funct3 & 2 != 0)
+                }
                 0x08 if rs2 as u32 != (insn >> 25) & 3 => {
                     let source = self.format(rs2 as u32).ok_or_else(illegal)?;
                     format.convert(source.decode(lhs), rounding()?)

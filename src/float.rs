@@ -398,12 +398,13 @@ impl Format {
         ))
     }
 
-    pub fn min_max(self, lhs: u64, rhs: u64, maximum: bool) -> ResultBits {
+    pub fn min_max(self, lhs: u64, rhs: u64, maximum: bool, propagate_nan: bool) -> ResultBits {
         let lhs_bits = self.unbox(lhs);
         let rhs_bits = self.unbox(rhs);
         let lhs = self.decode(lhs);
         let rhs = self.decode(rhs);
         let bits = match (lhs.is_nan(), rhs.is_nan()) {
+            (true, _) | (_, true) if propagate_nan => self.nan(),
             (true, true) => self.nan(),
             (true, false) => rhs_bits,
             (false, true) => lhs_bits,
