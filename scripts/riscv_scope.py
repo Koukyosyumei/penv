@@ -186,6 +186,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 basis = "fixed RV32 fixture requires V and shared monitor memory assertions"
                 if re.fullmatch(r"Should Read (?:Signed )?(?:Byte|Word|Double Word)(?: Zero)? At Raw Address", case):
                     return "target", "partial", basis + "; original static values and comparisons passed as guest ELFs with V omitted"
+                if re.fullmatch(r"Should Read (?:Signed )?(?:Byte|Word|Double Word) Of Symbol(?: With (?:Negative )?Offset)?", case):
+                    return "target", "partial", basis + "; static symbol addresses, offsets and comparisons passed as guest ELFs with V omitted"
                 return "target", status, basis + "; monitor work requested from ARM"
             if filename == "riscv-bkb.robot":
                 return "target", "ported", "fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked"

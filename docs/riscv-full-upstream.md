@@ -1669,3 +1669,18 @@ target/release/penv run --script "$evidence/monitor.resc"
 ```
 
 Robot 本来のモニター経路は、V を外しても `sysbus WriteByte 0x01 0x42` が未対応です。共有モニターの変更を ARM 担当への依頼 `riscv-memory-assert-6d37343.md` に記録しました。ゲスト ELF の 9 件は部分移植のままで、シンボルと監視付き比較も残っています。上流等価合格は累計 174 件です。生成ソース、ELF、ケース別 JSONL、再現 RESC は上記の証拠ディレクトリに保存しました。
+
+### 固定 RV32 メモリー比較の単一シンボルとオフセット
+
+固定 `memory-assertions.robot` の静的な単一シンボル 12 件を、前回の生アドレス 9 件と同じ ELF 検証に追加しました。固定シンボルのアドレスをアセンブラー定数にし、正負のオフセットを読み書きの幅でスケールして検証します。宣言上のシンボル長が 2 バイトでも 4 バイト比較でオフセット 1 が 4 バイトになるケースも含みます。元のアドレスを保持するため、診断 ELF のコードは 0x1000 に置きます。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repro/memory"
+```
+
+同じ release バイナリで、V だけを外した診断構成の 21/21 件が通過しました。書き込み側だけでオフセットを除いた負例は完了コード 1 でした。固定構成では 21 件とも V の未対応で CPU 作成時に停止しました。Rust テストは 88/88 件が通過しました。
+
+上流のモニターによるシンボル解決と比較は ARM 担当への既存依頼 `riscv-memory-assert-6d37343.md` の返答待ちです。追加した 12 件は部分移植として記録し、複数シンボル、エラー、監視付き比較は残っています。上流等価合格は累計 174 件です。ケース別ログ、ELF とソースは `~/.local/state/penv-dispatch/evidence/riscv/backlog-4629434-USNwjd/` に保存しました。

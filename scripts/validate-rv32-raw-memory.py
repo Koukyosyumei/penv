@@ -1,4 +1,4 @@
-"""Check fixed memory-assertions Robot inputs with RV32 guest loads and stores."""
+"""Check fixed static memory-assertions Robot inputs with RV32 guest loads and stores."""
 
 import argparse
 import json
@@ -19,30 +19,45 @@ BRANCH = {
 
 def program(body):
     checks = []
+    definitions = []
+    widths = {"Byte": 1, "Word": 2, "DoubleWord": 4}
+
+    def address(operand, width, qualifiers):
+        if not qualifiers:
+            return operand
+        offset, = qualifiers
+        return f"{operand} + ({int(offset.removeprefix('offset=')) * widths[width]})"
+
     for line in body.splitlines():
         fields = re.split(r"\s{2,}", line.strip())
         keyword, *args = fields
-        if keyword.startswith("Store "):
-            store = WIDTH[keyword[6:].replace(" ", "")][0]
-            checks += [f"li t0, {args[0]}", f"li t1, {args[1]}", f"{store} t1, 0(t0)"]
-        elif keyword.startswith("Memory Should "):
+        if keyword == "Add Symbol":
+            symbol, base, _size = args
+            definitions.append(f".equ {symbol}, {base}")
+        elif keyword.startswith("Store "):
+            width = keyword[6:].replace(" ", "")
+            store = WIDTH[width][0]
+            operand, value, *qualifiers = args
+            checks += [f"li t0, {address(operand, width, qualifiers)}",
+                       f"li t1, {value}", f"{store} t1, 0(t0)"]
+        elif keyword.startswith(("Memory Should ", "Symbol Should ")):
             relation = keyword[14:].removeprefix("Be ")
-            signed = args[-1] == "signed=true"
-            if signed:
-                args.pop()
+            qualifiers = [value for value in args if value.startswith("offset=")]
+            signed = "signed=true" in args
+            args = [value for value in args if value not in qualifiers and value != "signed=true"]
             width = args.pop()
-            address, *expected = args
+            operand, *expected = args
             branch, operands = BRANCH[relation]
             if branch in {"bge", "blt"} and not signed:
                 branch += "u"
             checks += [
-                f"li t0, {address}", f"{WIDTH[width][1 if signed else 2]} t1, 0(t0)",
+                f"li t0, {address(operand, width, qualifiers)}", f"{WIDTH[width][1 if signed else 2]} t1, 0(t0)",
                 f"li t2, {expected[0] if expected else 0}", f"{branch} {operands}, fail",
             ]
     if not checks:
         raise ValueError("missing fixed raw memory inputs")
     return "\n".join([
-        ".option norvc", ".text", ".globl _start", "_start:", *checks,
+        ".option norvc", ".text", ".globl _start", *definitions, "_start:", *checks,
         "li t1, 1", "j done", "fail: li t1, 3", "done: li t0, 0x2000",
         "sw t1, 0(t0)", "j .", "",
     ])
@@ -55,10 +70,11 @@ def main():
     args = parser.parse_args()
     source = (args.renode / "tests/unit-tests/memory-assertions.robot").read_text()
     cases = [(name, body) for name, body in re.findall(
-        r"(?ms)^(Should Read [^\n]+ At Raw Address)\n(.*?)(?=^\S|\Z)", source,
+        r"(?ms)^(Should Read (?:Signed )?(?:Byte|Word|Double Word)(?: Zero)? "
+        r"(?:At Raw Address|Of Symbol(?: With (?:Negative )?Offset)?))\n(.*?)(?=^\S|\Z)", source,
     ) if "Create Machine 32" in body]
-    if len(cases) != 9:
-        parser.error(f"expected nine static raw-address RV32 cases, found {len(cases)}")
+    if len(cases) != 21:
+        parser.error(f"expected 21 static RV32 memory cases, found {len(cases)}")
     isa = "rv32" + re.search(r"rv\$\{bitness\}([a-z0-9_]+)", source)[1]
     args.output.mkdir(parents=True, exist_ok=False)
     results = []
@@ -69,7 +85,7 @@ def main():
         )
     linker = args.output / "layout.ld"
     linker.write_text("ENTRY(_start)\nPHDRS { code PT_LOAD FLAGS(5); }\n"
-                      "SECTIONS { .text 0x10 : { *(.text) } :code }\n")
+                      "SECTIONS { .text 0x1000 : { *(.text) } :code }\n")
     for index, (name, body) in enumerate(cases):
         asm = args.output / f"{index}.S"
         elf = asm.with_suffix(".elf")
