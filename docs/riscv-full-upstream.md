@@ -1770,3 +1770,23 @@ target/release/penv run --script "$evidence/timer.resc"
 ```
 
 Rust テストは91件（追加3件を含む）が通過しました。既存の代表 RESC は `cpu PerformanceInMips 1` を拒否して終了1でした。上流の仮想時間指定とブロック境界・IRQ のログ順は共有担当への既存依頼 `riscv-clint-blocks-4e73e5a.md` の残件です。台帳の3件は部分移植で、等価合格は累計174件です。ケース別テスト結果と代表 RESC のログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-b01404e-ceCbx7/` に保存しました。
+
+### RV32 静的メモリー比較を共有スカラーコマンドで検証
+
+ARM 担当の共有コミット `2cfdb6fdcf4e2b7534e4800b626afd3589d0cd72` を別ディレクトリに展開してビルドしました。固定 `memory-assertions.robot` から静的29件の値・幅・アドレスを読み取り、実際の `sysbus Write*` と `sysbus Read*` に変換しました。シンボル、幅に応じたオフセット、全件・いずれかの比較、符号付き比較は検証スクリプトで処理します。QuadWord ケースも共有側の8バイトコマンドで実行しました。
+
+```bash
+repro=$(mktemp -d)
+mkdir "$repro/src"
+git archive 2cfdb6fdcf4e2b7534e4800b626afd3589d0cd72 | tar -x -C "$repro/src"
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc \
+  cargo build --locked --release --manifest-path "$repro/src/Cargo.toml"
+bin="$repro/src/target/release/penv"
+python3 scripts/validate-rv32-monitor-memory.py "$bin" ../renode "$repro/memory"
+python3 scripts/validate-litex-arty-uart.py "$bin" ../renode /tmp/penv-full-riscv/regression/assets "$repro/arty"
+cargo test --locked
+```
+
+固定 ISA と V だけを除いた ISA は、この共有コミットではどちらも CPU 作成時に拒否されました。ゲスト命令を実行しない `rv32imac` 診断構成では29/29件が通過し、Byte を `0x42` から `0x43` に変更した負例は比較で拒否されました。同じバイナリで公開 Arty ELF の5件が通過し、担当ブランチの Rust テストも91件が通過しました。
+
+台帳の29件は部分移植です。固定 ISA、モニター自身のシンボル解決・比較・エラー応答、実行中の監視とタイムアウトは残っています。上流等価合格は累計174件です。ケース別 JSONL、生成 RESC、負例と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-f89310c-zmfE2z/` に保存しました。

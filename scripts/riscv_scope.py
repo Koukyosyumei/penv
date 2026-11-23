@@ -184,20 +184,21 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if choices == {"32"}:
             if filename == "memory-assertions.robot":
                 basis = "fixed RV32 fixture requires V and shared monitor memory assertions"
+                scalar = "; also checked via shared 2cfdb6f scalar RESC at rv32imac with host assertions"
                 if re.fullmatch(r"Should Read (?:Signed )?(?:Byte|Word|Double Word)(?: Zero)? At Raw Address", case):
-                    return "target", "partial", basis + "; original static values and comparisons passed as guest ELFs with V omitted"
+                    return "target", "partial", basis + "; original static values and comparisons passed as guest ELFs with V omitted" + scalar
                 if re.fullmatch(r"Should Read (?:Signed )?(?:Byte|Word|Double Word) Of Symbol(?: With (?:Negative )?Offset)?", case):
-                    return "target", "partial", basis + "; static symbol addresses, offsets and comparisons passed as guest ELFs with V omitted"
+                    return "target", "partial", basis + "; static symbol addresses, offsets and comparisons passed as guest ELFs with V omitted" + scalar
                 if re.fullmatch(r"Should Read (?:Byte|Word|Double Word) Of (?:All Symbols|Any Symbol)", case):
-                    return "target", "partial", basis + "; indexed stores and static all/any comparisons passed as guest ELFs with V omitted"
+                    return "target", "partial", basis + "; indexed stores and static all/any comparisons passed as guest ELFs with V omitted" + scalar
                 if re.fullmatch(r"Should Read (?:Byte|Word|Double Word) (?:At Raw Address|Of Symbol|Of All Symbols|Of Any Symbol) After", case):
                     return "target", "partial", basis + "; original store loop and post-sweep comparisons passed as a guest ELF with V omitted; watchpoint timing unverified"
                 if case == "Should Read Double Word Of All Symbols Independently After":
                     return "target", "partial", basis + "; original changing store loop and latched per-symbol matches passed as a guest ELF with V omitted"
                 if case == "Should Not Confuse Symbol Name With Address On Store":
-                    return "target", "partial", basis + "; explicit address and numeric symbol stores passed as a guest ELF with V omitted"
+                    return "target", "partial", basis + "; explicit address and numeric symbol stores passed as a guest ELF with V omitted" + scalar
                 if case == "Should Read Quad Word Of Symbol With Negative Offset":
-                    return "target", "partial", basis + "; eight-byte offset and full value checked with paired RV32 word accesses and V omitted"
+                    return "target", "partial", basis + "; eight-byte offset and full value checked with paired RV32 word accesses and V omitted" + scalar
                 return "target", status, basis + "; monitor work requested from ARM"
             if filename == "riscv-bkb.robot":
                 return "target", "ported", "fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked"
