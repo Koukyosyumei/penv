@@ -1031,10 +1031,16 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 return Err(entry.error(&format!("expected CLINT connection {expected}")));
             }
         }
-        machine
-            .bus
-            .map_clint(entry.address()?, targets)
-            .map_err(|e| entry.error(&e))?;
+        // VexRiscv's custom CLINT wiring uses the established one-tick-per-step
+        // time base used by the LiteX Linux demos.
+        if let Some(frequency) = frequency.filter(|_| !uses_vex_irq(cpu)) {
+            machine
+                .bus
+                .map_clint_with_frequency(entry.address()?, targets, frequency)
+        } else {
+            machine.bus.map_clint(entry.address()?, targets)
+        }
+        .map_err(|e| entry.error(&e))?;
     }
     if let Some(entry) = litex_cpu_timer {
         if configs.len() != 1 || clint.is_some() || !uses_vex_irq(cpu) {

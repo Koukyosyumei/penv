@@ -230,6 +230,30 @@ run_nexys --wait-for-frame-roi "710000000:0:0:75:80:$roi"
 
 上流ファームウェアで、全画面はステップ 708,000,000、左上 75×80 の領域はステップ 710,000,000 で一致し、両方とも終了コード 0 でした。参照 URL の CLI からの取得と Robot Framework のテスター API 互換性は残課題です。
 
+## RV32 riscv_virt の UART とタイマー
+
+上流 `platforms/cpus/riscv_virt.repl` の RAM・NS16550・CLINT を使い、Clang と LLD でビルドした RV32IMAC ELF を実行します。検証 ELF は UART に起動マーカーを出力し、`mtimecmp = mtime + 64` を設定します。割り込みハンドラで機械タイマーの `mcause` と `mcycle` の差を確認し、割り込みを解除します。`mret` で戻った後に UART に成功マーカーを出力します。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+out=$(mktemp -d)
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 \
+  -nostdlib -fuse-ld=lld -Wl,-T,scripts/firmware/rv32-virt.ld \
+  scripts/firmware/rv32-virt.S -o "$out/rv32-virt.elf"
+status=0
+target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --platform-root ../renode --max-steps 10000 "$out/rv32-virt.elf" \
+  > "$out/uart.log" 2> "$out/stderr.log" || status=$?
+test "$status" -eq 2 &&
+diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
+  'rv32-virt: 10 MHz CLINT machine timer IRQ and mret OK') "$out/uart.log"
+```
+
+変更前の `d3ba7be` では UART 出力と割り込み進入はできましたが、CLINT が REPL の `frequency: 10000000` を使わず、タイマーが期待より早く発火しました。修正後は 100 MHz の実行ステップ基準で 10 ステップにつき `mtime` が 1 進みます。テスト ELF はステップ上限まで待機ループに留まるため、終了コード 2 が期待値です。
+
+既存の LiteX VexRiscv 専用 CLINT 配線と `--clint` は従来の 1 ステップ 1 ティックを使います。LiteX の回帰は `scripts/validate-riscv-upstream.sh` で確認します。virt の PLIC 経由 UART 割り込みとマルチハートの起動はこの ELF の検証範囲外です。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。

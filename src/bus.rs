@@ -363,6 +363,15 @@ impl Bus {
     }
 
     pub fn map_clint(&mut self, base: u32, targets: usize) -> Result<(), String> {
+        self.map_clint_with_frequency(base, targets, Clint::STEP_HZ)
+    }
+
+    pub fn map_clint_with_frequency(
+        &mut self,
+        base: u32,
+        targets: usize,
+        frequency: u32,
+    ) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + Clint::SIZE;
         if base & 3 != 0 || end > 1 << 32 || self.clint.is_some() || self.overlaps(start, end) {
@@ -370,7 +379,7 @@ impl Bus {
                 "invalid or overlapping CLINT range at {base:#010x}"
             ));
         }
-        self.clint = Some(Clint::new(base, targets));
+        self.clint = Some(Clint::new(base, targets, frequency));
         Ok(())
     }
 
