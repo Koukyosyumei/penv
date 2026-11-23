@@ -194,7 +194,7 @@ diff -u <(printf 'processor\t: 0\n') <(
 )
 
 prepare_assets "$litex"
-python3 "$(dirname -- "$0")/validate-litex-smp-linux.py" "$penv" "$renode_root" "$assets" "$artifacts" \
+python3 -B "$(dirname -- "$0")/validate-litex-smp-linux.py" "$penv" "$renode_root" "$assets" "$artifacts" \
     | tee "$artifacts/litex-smp.assertions.log"
 python3 "$(dirname -- "$0")/validate-litex-uart-order.py" opensbi "$artifacts/litex-smp.uart.log"
 prepare_assets "$renode_root/$i2s"
@@ -342,15 +342,8 @@ diff -u <(printf '4368\n7724\n0\n1\n0\n') <(
 nexys4ddr=$(dirname -- "$0")/fixtures/nexys4ddr-spi-sd.resc
 prepare_assets "$nexys4ddr"
 printf Q > "$artifacts/nexys4ddr-abort.input"
-printf 'spisdcardboot\r' > "$artifacts/nexys4ddr-boot.input"
-run_to_step_limit nexys4ddr-spi-sd "$nexys4ddr" --max-steps 100000000 \
-    --litex-uart-legacy-console \
-    --uart-event "35000000:$artifacts/nexys4ddr-abort.input" \
-    --uart-event "80000000:$artifacts/nexys4ddr-boot.input"
-for marker in 'Press Q or ESC to abort boot completely.' 'Cancelled' '> spisdcardboot' \
-    'SD Card via SPI Initialising' 'Read FAT16 Boot Sector' '[mkfs.fat]' 'Root Directory' 'File 1 [README  .TXT]'; do
-    rg -aqF "$marker" "$artifacts/nexys4ddr-spi-sd.uart.log"
-done
+python3 -B "$(dirname -- "$0")/validate-nexys4ddr-spi-sd.py" "$penv" "$renode_root" "$assets" "$artifacts" \
+    | tee "$artifacts/nexys4ddr-spi-sd.assertions.log"
 tftp=$renode_root/scripts/single-node/litex_vexriscv_tftp.resc
 prepare_assets "$tftp"
 printf 'netboot\r' > "$artifacts/tftp-netboot.input"

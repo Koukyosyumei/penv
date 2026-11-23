@@ -1360,3 +1360,20 @@ python3 scripts/validate-litex-uart-order.py opensbi "$repro/litex-smp.uart.log"
 ```
 
 公開イメージ 4 個の SHA-1 が上流の指定と一致しました。同じ release 実行で Linux の全 UART アサーションと既存 OpenSBI の 3 行を確認しました。最後の CPU 行を受信した後、検証側がシミュレーターを停止しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 159 件です。残る LiteX ケースと最大 ISA 構成の全件確認は未達です。UART、生の終了状態と照合結果は `~/.local/state/penv-dispatch/evidence/riscv/backlog-114167a-7kUH0M/` に保存しました。
+
+### Nexys4DDR の対話 UART と SPI SD
+
+固定 `Nexys4DDR_LiteX_VexRiscv.robot` の `Should Boot` と `Should List Readme File` を同じ UART セッションで移植しました。起動案内を待って `Q` を単独で送り、`litex>` で起動ケースを合格にします。その状態から `spisdcardboot` を送り、SPI 初期化、FAT16 ブートセクター、ファイルシステム名、ルートディレクトリー、`File 1 [README  .TXT]` を順に照合します。従来のステップ指定による入力を、上流と同じ出力待ちに置き換えました。UART の接続とログ保存は SMP Linux の検証と共有します。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 -B scripts/validate-nexys4ddr-spi-sd.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro/nexys"
+python3 -B scripts/validate-litex-smp-linux.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro/smp"
+```
+
+公開 BIOS と SD イメージの SHA-1 は上流の指定と一致しました。Nexys4DDR の 2 ケースは通常 UART 設定で通過し、同じ release バイナリで SMP Linux のログインと CPU 0〜3 の回帰も通過しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 161 件です。残る LiteX ケースと最大 ISA 構成は未達です。UART、照合結果、プロセスの終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-e9227e4-d7en5G/` に保存しました。
