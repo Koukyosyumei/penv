@@ -400,6 +400,17 @@ PENV_RENODE_ROOT="$renode_root" PENV_RENODE_ASSETS="$assets" \
 
 公開イメージによる回帰は 8 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky の通常動作とクロック停止・再開、Button、CRC の計 9 シナリオを確認しました。
 
+#### STM32F072 の受入証跡
+
+受入対象は、STM32F072B Discovery の Robot 6 ケースと HEX 起動 1 ケース、および同じ公開イメージを使うプロンプト・クロック停止の追加回帰です。上の対応表にある他 SoC、CPU 別メモリ登録、Cortex-M の未対応機能は残課題です。
+
+```sh
+evidence="$(mktemp -d)/arm-acceptance"
+scripts/verify-stm32f072.sh ../renode "$evidence"
+```
+
+スクリプトは、クリーンな追跡済みファイルと固定 Renode リビジョンを確認し、上流 Robot と RESC の参照 URL が一致することを検証します。配布名に含まれるサイズと SHA-1 を照合してから `cargo test --locked` と公開イメージ回帰を実行し、期待する 8 テストがすべて合格したことを名前で照合します。証跡には、両リビジョン、ファームウェア SHA-256、`cargo-test.log`、`stm32f072.log`、合格テスト一覧が含まれます。この環境で `cc` がなければ、`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc` を指定できます。
+
 F4 の TIM2 ELF が起動前に止まる箇所は以下で再現できます。F072 のタイマー観測条件は `cargo test renode_tim2` と `cargo test renode_stm32_pwm` で実行します。
 
 ```sh
