@@ -2,6 +2,7 @@ use std::{
     alloc::{Layout, alloc_zeroed},
     fmt,
     io::{self, Write},
+    sync::Arc,
 };
 
 use crate::{
@@ -12,7 +13,7 @@ use crate::{
     plic::Plic,
     stm32_adc::Stm32F0Adc,
     stm32_can::Stm32Can,
-    stm32_crc::{CrcConfigError, Stm32F0Crc},
+    stm32_crc::Stm32F0Crc,
     stm32_dma::Stm32Dma,
     stm32_exti::Exti,
     stm32_flash::Stm32F0Flash,
@@ -45,10 +46,14 @@ pub enum BusError {
     Page(u32),
     Misaligned(u32, usize),
     Output(io::Error),
-    CrcConfiguration(CrcConfigError),
+    CommandError(Arc<dyn std::error::Error + Send + Sync>),
 }
 
 impl BusError {
+    fn command_error(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::CommandError(Arc::new(error))
+    }
+
     pub fn at_virtual(self, address: u32) -> Self {
         match self {
             Self::Unmapped(_, width) => Self::Unmapped(address, width),
@@ -77,7 +82,19 @@ impl fmt::Display for BusError {
                 write!(f, "misaligned {width}-byte access at {address:#010x}")
             }
             Self::Output(error) => write!(f, "UART: {error}"),
-            Self::CrcConfiguration(error) => error.fmt(f),
+            Self::CommandError(error) => {
+                write!(f, "Bus access failed with error: CommandError: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BusError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CommandError(error) => Some(error.as_ref()),
+            Self::Output(error) => Some(error),
+            _ => None,
         }
     }
 }
@@ -142,6 +159,11 @@ pub struct Bus {
     pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
     pub faulting_device: Option<std::ops::RangeInclusive<u32>>,
+    #[cfg(test)]
+    command_fault_device: Option<(
+        std::ops::Range<u32>,
+        Arc<dyn std::error::Error + Send + Sync>,
+    )>,
     #[cfg(test)]
     pub faulting_stack_writes: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
@@ -557,7 +579,7 @@ impl Bus {
             .unwrap()
             .complete(transfer, result.is_ok());
         match result {
-            Err(error @ (BusError::Output(_) | BusError::CrcConfiguration(_))) => Err(error),
+            Err(error @ (BusError::Output(_) | BusError::CommandError(_))) => Err(error),
             _ => Ok(()),
         }
     }
@@ -1609,6 +1631,13 @@ impl Bus {
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         #[cfg(test)]
+        if N == 4
+            && let Some((region, error)) = &self.command_fault_device
+            && region.contains(&address)
+        {
+            return Err(BusError::CommandError(Arc::clone(error)));
+        }
+        #[cfg(test)]
         if self
             .faulting_device
             .as_ref()
@@ -1782,7 +1811,7 @@ impl Bus {
             && let Some(crc) = self.stm32_crc.as_mut()
             && crc.contains(address)
         {
-            return crc.read(address, N).map_err(BusError::CrcConfiguration);
+            return crc.read(address, N).map_err(BusError::command_error);
         }
         self.read_ram::<N>(address)
     }
@@ -2055,7 +2084,7 @@ impl Bus {
         {
             return crc
                 .write(address, width, value)
-                .map_err(BusError::CrcConfiguration);
+                .map_err(BusError::command_error);
         }
         if self
             .stm32_flash
@@ -2079,6 +2108,30 @@ impl Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_systembus_propagates_peripheral_command_error_identity() {
+        let cause: Arc<dyn std::error::Error + Send + Sync> =
+            Arc::new(io::Error::other("device rejected command"));
+        let mut bus = Bus {
+            command_fault_device: Some((0x1000..0x1100, Arc::clone(&cause))),
+            unhandled_access: Some(UnhandledAccess::ThrowException),
+            ..Bus::default()
+        };
+        let error = bus.read_scalar::<4>(0x1000, true).unwrap_err();
+        let BusError::CommandError(actual) = &error else {
+            panic!("{error}");
+        };
+        assert!(Arc::ptr_eq(&cause, actual));
+        assert_eq!(
+            error.to_string(),
+            "Bus access failed with error: CommandError: device rejected command"
+        );
+        assert!(matches!(
+            bus.read_scalar::<4>(0x1100, true),
+            Err(BusError::AddressError(0x1100))
+        ));
+    }
 
     #[test]
     fn renode_gpio_unregister_receiver_detaches_only_its_endpoints() {

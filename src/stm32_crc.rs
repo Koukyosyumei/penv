@@ -20,6 +20,8 @@ impl fmt::Display for CrcConfigError {
     }
 }
 
+impl std::error::Error for CrcConfigError {}
+
 fn validate_polynomial(polynomial: u32, width: i32) -> Result<(), CrcConfigError> {
     if !(1..=32).contains(&width) {
         return Err(CrcConfigError::WidthOutOfRange(width));

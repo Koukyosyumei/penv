@@ -102,7 +102,7 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) | BusError::CrcConfiguration(_) => return None,
+                BusError::Output(_) | BusError::CommandError(_) => return None,
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),

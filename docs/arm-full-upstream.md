@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 60 | 39 | 14 | 239 |
-| Renode Infrastructure NUnit | 134 | 56 | 4 | 74 | 9 |
-| 合計 | **247** | **116** | **43** | **88** | **248** |
+| Renode Infrastructure NUnit | 134 | 57 | 4 | 73 | 9 |
+| 合計 | **247** | **117** | **43** | **87** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -397,4 +397,15 @@ CLI 回帰では同じ `0x8_0000_0000`、RAM 各32 KiB と仮想時間 0.001 秒
 ```sh
 cargo test --locked renode_resc_global_array_memory
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-high-ram-verification
+```
+
+## SystemBus の CommandError 伝播
+
+固定 Infrastructure の `SystemBusTests.cs::ShouldPropagateBusAccessExceptionFromPeripheral` を移植した。上流と同じ `0x1000` から `0x100` バイトのテスト用周辺機器を使い、32ビット読み出しの `CommandError` が同じ原因オブジェクトを保持することを `Arc::ptr_eq` で確認した。隣接する未マップアドレスの `AddressError` と区別する。STM32 CRC の設定エラーは共通の `CommandError` を通して診断を返し、元の型付きエラーを原因として保持する。
+
+汎用タイマーの残件には、`ComparingTimer.Compare` の上限チェックと、降順に反転した `LimitTimer` のゼロ到達イベントが必要。STM32 の CCR の幅マスクと更新境界に影響するため、専用の汎用タイマーモデルを用いるケースとして保留した。
+
+```sh
+cargo test --locked renode_systembus
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-command-error-verification
 ```

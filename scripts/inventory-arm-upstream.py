@@ -321,7 +321,7 @@ def classify_nunit(name, case, attrs, parameter):
         if case in tags:
             return PASS, COMMON, "renode_systembus_tag_overrides_unhandled_policy_and_splits; same tag ranges, byte values and AddressError checks"
         if case == "ShouldPropagateBusAccessExceptionFromPeripheral":
-            return OPEN, COMMON, "Requires a peripheral-originated CommandError and its identity, distinct from a missing target's AddressError"
+            return PASS, COMMON, "renode_systembus_propagates_peripheral_command_error_identity; a 32-bit peripheral read at 0x1000 preserves the originating CommandError object, and the adjacent unmapped address reports AddressError"
         if case == "ShouldFindBytePattern":
             return PASS, COMMON, "renode_systembus_finds_bytes_across_mappings_and_mebibyte_boundary; same two 1 MiB mappings, 00..07 pattern and addresses 0/0x000ffffc"
     if name == "CRCTests":
