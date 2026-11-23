@@ -1916,9 +1916,9 @@ Renode	tests/unit-tests/riscv-andestar-v5.robot	480	Should Reject Reserved BF16 
 Renode	tests/unit-tests/riscv-andestar-v5.robot	489	Should Widen Vector BF16		target	blocked-cpu	fixed rv32gc_v_xandesvbfhcvt rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-andestar-v5.robot	498	Should Narrow Vector BF16		target	blocked-cpu	fixed rv32gc_v_xandesvbfhcvt rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-andestar-v5.robot	504	Should Convert Vector BF16 On RV64		outside	outside	Create Machine keyword uses CPU.RiscV64; parameters: xandesvbfhcvt  bits=64
-Renode	tests/unit-tests/riscv-andestar-v5.robot	511	Should Restart Int4 Byte Loads At An Odd Element		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected at CPU construction; vector body unexecuted
-Renode	tests/unit-tests/riscv-andestar-v5.robot	521	Should Execute VLN8.V		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected at CPU construction; vector body unexecuted
-Renode	tests/unit-tests/riscv-andestar-v5.robot	528	Should Execute VLNU8.V		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected at CPU construction; vector body unexecuted
+Renode	tests/unit-tests/riscv-andestar-v5.robot	511	Should Restart Int4 Byte Loads At An Odd Element		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected; donor tests matched original packed bytes, mask, restart and vector readback
+Renode	tests/unit-tests/riscv-andestar-v5.robot	521	Should Execute VLN8.V		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected; donor tests matched original packed bytes, mask, restart and vector readback
+Renode	tests/unit-tests/riscv-andestar-v5.robot	528	Should Execute VLNU8.V		target	blocked-cpu	fixed rv32gc_v_xandesvsintload rejected; donor tests matched original packed bytes, mask, restart and vector readback
 Renode	tests/unit-tests/riscv-andestar-v5.robot	535	Should Mask Packed FP16 Exceptions And Preserve Tail Elements		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-andestar-v5.robot	547	Should Execute VFPMADT		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted
 Renode	tests/unit-tests/riscv-andestar-v5.robot	553	Should Preserve Packed FP16 Zero Signs		target	blocked-cpu	fixed rv32gc_v_xandesvpackfph rejected at CPU construction; vector body unexecuted

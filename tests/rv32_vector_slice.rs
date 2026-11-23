@@ -105,3 +105,54 @@ fn masked_lanes_leave_memory_untouched_and_special_encodings_trap() {
         );
     }
 }
+
+// PackedInt4.cs uses funct7 4/5 for masked/unmasked and rs2=2/3.
+const VLN8_V12_A0: u32 = 0x0a25_465b;
+const VLNU8_V12_A0: u32 = 0x0a35_465b;
+
+fn int4_fixture(opcode: u32, packed: &[u8], start: u32, vl: u32, expected: &[u8]) {
+    let mut cpu = Rv32Vector::new(128).unwrap();
+    configure(&mut cpu, expected.len() as u32, 0);
+    cpu.transfer(VLE8_V12_A0, 0x4000, |_, _, _| Ok::<_, ()>(0xaa))
+        .unwrap();
+    if opcode & (1 << 25) == 0 {
+        cpu.transfer(VLE8_V12_A0 & !(31 << 7), 0x4000, |_, _, _| Ok::<_, ()>(1))
+            .unwrap();
+    }
+    configure(&mut cpu, vl, 0);
+    assert!(cpu.csrs.write(0x008, start));
+    cpu.andes_int4_load(opcode, 0x4000, |addr| {
+        Ok::<_, ()>(packed[(addr - 0x4000) as usize])
+    })
+    .unwrap();
+    assert_eq!(cpu.csrs.read(0x008), Some(0));
+    configure(&mut cpu, expected.len() as u32, 0);
+    let mut output = Vec::new();
+    cpu.transfer(VSE8_V12_A0, 0x5000, |_, _, value| {
+        output.push(value.unwrap() as u8);
+        Ok::<_, ()>(0)
+    })
+    .unwrap();
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn should_restart_int4_byte_loads_at_an_odd_element() {
+    int4_fixture(VLN8_V12_A0, &[0x81, 0x7f], 1, 3, &[0xaa, 0xf8, 0xff, 0xaa]);
+}
+
+#[test]
+fn should_execute_vln8_v() {
+    for (packed, expected) in [(0xf8, [0xf8, 0xff]), (0x70, [0, 7]), (0x91, [1, 0xf9])] {
+        int4_fixture(VLN8_V12_A0, &[packed], 0, 2, &expected);
+    }
+    int4_fixture(VLN8_V12_A0 & !(1 << 25), &[0xf8], 0, 2, &[0xf8, 0xaa]);
+}
+
+#[test]
+fn should_execute_vlnu8_v() {
+    for (packed, expected) in [(0xf8, [8, 15]), (0x70, [0, 7]), (0x91, [1, 9])] {
+        int4_fixture(VLNU8_V12_A0, &[packed], 0, 2, &expected);
+    }
+    int4_fixture(VLNU8_V12_A0 & !(1 << 25), &[0xf8], 0, 2, &[8, 0xaa]);
+}

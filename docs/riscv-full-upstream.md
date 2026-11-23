@@ -1827,3 +1827,19 @@ done
 独立テスト4件を含む Rust テスト95件は通過しました。固定構成の `Sm-00.elf` は両バイナリで CPU 作成時に終了1です。候補側では未実装拡張として V が示されます。設定を変えた別診断では、担当候補の既存ブートストラップ経路で `Sm-00.elf` の完了と診断 ELF の UART マーカーを確認しました。新しい転送モジュールは共有 CPU へ接続前です。
 
 共有担当への接続手順は `riscv-vector-slice-repair-2cfdb6f.md` に記録しました。標準 V 全体、Andes 固有命令、および固定構成の等価合格は残っています。892行の分類と短い前後比較は `~/.local/state/penv-dispatch/evidence/riscv/repair-2cfdb6f-Ihhigv/` に保存しました。
+
+### Andes の符号付き・符号なし4ビットロード
+
+固定 `riscv-andestar-v5.robot` の `Should Restart Int4 Byte Loads At An Odd Element`、`Should Execute VLN8.V`、`Should Execute VLNU8.V` を RV32 独立モジュールに移植しました。固定 Infrastructure の命令ビット列に従ってデコードし、下位ニブルから順に展開します。テストは VLEN 128、上流と同じバイト列、マスク、`vstart` と期待値を使い、標準 `vle8.v/vse8.v` でレジスターを準備・読み戻しします。
+
+```bash
+cargo test --locked
+cargo test --locked --test rv32_vector_slice
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$(mktemp -d)/fixed" --vector
+```
+
+独立モジュールの対象3件を含む Rust テスト98件が通過しました。固定 CPU 構成では対象3件とも V と XandesVsIntLoad が利用不可で、CPU 作成時に終了1でした。共有 CPU への接続、VS と拡張のゲート、ゲストバス呼び出しは ARM 担当への依頼 `riscv-andes-int4-8f29836.md` に記録しました。台帳の3件は CPU 作成で未達のままです。
+
+ケース別結果とログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-8f29836-zOf6Y8/` に保存しました。
+
+既存の release バイナリで公開 Arty ELF の5件も再確認しました。

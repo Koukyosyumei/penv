@@ -163,6 +163,11 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 "Should Execute FLMISM",
             }:
                 return "target", "ported", "fixed RV32 XandesPerf register operands and single-step PC/results checked on ELF"
+            if bits == "32" and case in {
+                "Should Restart Int4 Byte Loads At An Odd Element",
+                "Should Execute VLN8.V", "Should Execute VLNU8.V",
+            }:
+                return "target", "blocked-cpu", "fixed rv32gc_v_xandesvsintload rejected; donor tests matched original packed bytes, mask, restart and vector readback"
             if bits == "32" and "Create Vector Machine" in selection[0]:
                 return "target", "blocked-cpu", f"fixed rv32gc_v_{arguments.strip()} rejected at CPU construction; vector body unexecuted"
             scope, status = ("target", "pending") if bits == "32" else ("outside", "outside")

@@ -86,4 +86,60 @@ impl Rv32Vector {
         self.csrs.write(0x008, 0);
         Ok(())
     }
+
+    /// Execute XandesVsIntLoad VLN8.V or VLNU8.V with an RV32 byte reader.
+    /// The caller checks VS and the extension and applies the address policy.
+    pub fn andes_int4_load<E>(
+        &mut self,
+        insn: u32,
+        base: u32,
+        mut read: impl FnMut(u32) -> Result<u8, E>,
+    ) -> Result<(), TransferError<E>> {
+        // Mask out vm, rs1 and vd. The two load selectors differ at bit 20.
+        let signed = match insn & 0xfdf0_707f {
+            0x0820_405b => true,
+            0x0830_405b => false,
+            _ => return Err(TransferError::Illegal),
+        };
+        let kind = self.csrs.read(0xc21).unwrap();
+        let lmul = match kind & 7 {
+            scale @ 0..=3 => scale as i32,
+            scale @ 5..=7 => scale as i32 - 8,
+            _ => return Err(TransferError::Illegal),
+        };
+        let emul = lmul - ((kind >> 3) & 7) as i32;
+        let masked = insn & (1 << 25) == 0;
+        let vd = ((insn >> 7) & 31) as usize;
+        if kind & !0xff != 0 || !(-3..=3).contains(&emul) || (masked && vd == 0) {
+            return Err(TransferError::Illegal);
+        }
+        let group = 1 << emul.max(0);
+        if vd % group != 0 {
+            return Err(TransferError::Illegal);
+        }
+
+        let first = vd * self.csrs.read(0xc22).unwrap() as usize;
+        let start = self.csrs.read(0x008).unwrap() as usize;
+        let length = self.csrs.read(0xc20).unwrap() as usize;
+        for index in start..length {
+            if masked && self.registers[index / 8] & (1 << (index % 8)) == 0 {
+                continue;
+            }
+            let byte = match read(base.wrapping_add((index / 2) as u32)) {
+                Ok(byte) => byte,
+                Err(error) => {
+                    self.csrs.write(0x008, index as u32);
+                    return Err(TransferError::Memory(error));
+                }
+            };
+            let nibble = (byte >> (4 * (index % 2))) & 0xf;
+            self.registers[first + index] = if signed {
+                (((nibble << 4) as i8) >> 4) as u8
+            } else {
+                nibble
+            };
+        }
+        self.csrs.write(0x008, 0);
+        Ok(())
+    }
 }
