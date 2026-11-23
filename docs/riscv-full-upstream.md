@@ -719,3 +719,22 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 固定 Robot の最大 ISA 構成では再試行した 11 件がすべて V で CPU 作成時に停止しました。固定構成の文字列には Zcb 自体も含まれていません。ACT の縮小構成結果は台帳の各 11 行に追記し、上流等価合格は累計 116 件です。RV32 特権 Robot は Zcb の阻害が解消し、分離した C/V 表記と V の実装が残っています。
 
 REPL と変更前後のログ・終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-d0f41d5-bsrWMp/` に保存しました。
+
+### RV32 の分離 C 表記と固定カウンターケース
+
+RV32 ISA 文字列で、他の標準拡張から区切られた C と、`Zicsr_Zifencei_c` のように名前付き拡張の後に置かれた C を受け付けます。固定 `riscv-priv.robot` の CPU 作成診断は変更前の `c, v` から `v` になりました。V だけを除いた構成で CPU 作成に成功し、`rv32ima_zicsr_c` でも Zcb を介さずに公開圧縮命令 ELF 2 件を実行できました。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+target/release/penv check-platform "$evidence/full.repl"  # V の未対応で終了コード 1
+python3 scripts/validate-rv32-priv-counters.py target/release/penv ../renode "$evidence/counters-rerun"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$evidence/separated-c.repl" --artifacts "$evidence/separated-c-rerun" "$work"/isa/rv32uc-[pv]-*
+```
+
+検証器は固定 Robot から MCYCLE・MINSTRET の増加、抑止、書き込み直後の抑止を検査する 6 命令列と `a3` の期待値を抽出します。V だけを除いた ISA で、その命令列を実 ELF として同じ PC から実行し、直後の `a3` を照合しました。6 件とも通過しました。Rust テスト 84 件、既存の有効・無効構成 50 件、公開圧縮命令 ELF も通過しました。
+
+固定上流の構成での CPU 作成には V が残っているため、カウンター 6 件は台帳で `blocked-cpu` を維持し、縮小構成での検証結果を追記しました。上流等価合格は累計 116 件です。
+
+REPL、実 ELF、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-e03f061-RAjzOl/` に保存しました。

@@ -945,20 +945,23 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     }
                     let (letters, suffix) = base.split_at(base.find('z').unwrap_or(base.len()));
                     let letters = letters.strip_prefix("rv32").unwrap_or("");
-                    let letters = letters.trim_matches('_');
+                    let letters = letters.replace('_', "");
                     let general = letters.contains('g');
                     let embedded = letters.contains('e');
                     let single = general || letters.contains('f');
                     let double = general || letters.contains('d');
-                    let valid_csr_suffix = suffix
+                    // Renode accepts separated C even after a named extension.
+                    let compressed =
+                        letters.contains('c') || suffix.split('_').any(|part| part == "c");
+                    let valid_suffix = suffix
                         .split('_')
-                        .all(|part| matches!(part, "" | "zicsr" | "zifencei"));
+                        .all(|part| matches!(part, "" | "c" | "zicsr" | "zifencei"));
                     let ibex_legacy = ibex && base == "rv32imcu_zicsr_zifencei";
                     if !ibex_legacy
                         && (!(general || embedded || letters.contains('i'))
                             || !letters.chars().all(|letter| "iemafdcgb".contains(letter))
                             || (embedded && !letters.chars().all(|letter| "emac".contains(letter)))
-                            || !valid_csr_suffix
+                            || !valid_suffix
                             || (double && !single))
                     {
                         return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
@@ -977,7 +980,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     isa = Some((
                         general || letters.contains('m'),
                         general || letters.contains('a'),
-                        letters.contains('c') || bitmanip.zcb,
+                        compressed || bitmanip.zcb,
                         embedded,
                     ));
                 }
@@ -2103,7 +2106,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
         missing.extend(parts.filter(|extension| {
             !matches!(
                 *extension,
-                "zicsr"
+                "c" | "zicsr"
                     | "zifencei"
                     | "zicond"
                     | "zba"
