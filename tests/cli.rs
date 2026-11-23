@@ -244,6 +244,53 @@ ram: Memory.MappedMemory @ sysbus 0
 }
 
 #[test]
+fn renode_resc_cortex_m_hook_logs_at_current_pc() {
+    let directory = std::env::temp_dir().join(format!("penv-cpu-hook-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0, 8, 0, 0, 9, 0, 0, 0, 0, 0xbf, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("hook.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadBinary @firmware.bin 0
+cpu AddHook `cpu PC` "monitor.Parse('log \"message from the cpu hook\"')"
+sysbus.cpu AddHook 0x0a "monitor.Parse('log \"second PC\"')"
+cpu Pause
+emulation RunFor "0.00000001"
+cpu Resume
+emulation RunFor "0.00000002"
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "2", "--script"])
+        .arg(script)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(output.stderr, b"message from the cpu hook\nsecond PC\n");
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_gpio_button_fans_out_to_distinct_pins() {
     let directory = std::env::temp_dir().join(format!("penv-gpio-fanout-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

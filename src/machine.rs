@@ -29,6 +29,7 @@ pub struct Hart {
     cpu_wait_asserted: bool,
     pub monitor_paused: bool,
     pub monitor_halted: bool,
+    pub monitor_log_hooks: Vec<(u32, String)>,
     reset_held: bool,
     reset_pc_written: bool,
     pub pc: u32,
@@ -156,6 +157,7 @@ impl Machine {
                 cpu_wait_asserted: false,
                 monitor_paused: false,
                 monitor_halted: false,
+                monitor_log_hooks: Vec::new(),
                 reset_held: false,
                 reset_pc_written: false,
                 pc: RAM_BASE,
@@ -584,6 +586,13 @@ impl Hart {
             }
             if thumb.sleeping() {
                 return Ok(Step::Trap);
+            }
+            if !thumb.locked_up() {
+                for (address, message) in &self.monitor_log_hooks {
+                    if *address == self.pc {
+                        eprintln!("{message}");
+                    }
+                }
             }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)

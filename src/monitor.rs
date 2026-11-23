@@ -44,6 +44,7 @@ enum Action {
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
+    CpuLogHook(String, Option<u32>, String),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
@@ -191,6 +192,13 @@ pub fn run(
                             .map_err(|e| e.to_string())
                             .map(|()| None)
                     }
+                })
+            }
+            Action::CpuLogHook(cpu, address, message) => {
+                machine.cortex_m_monitor_cpu(cpu).map(|hart| {
+                    hart.monitor_log_hooks
+                        .push((address.unwrap_or(hart.pc), message.clone()));
+                    None
                 })
             }
             Action::ReadCpuPc(cpu) => machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
@@ -1031,6 +1039,43 @@ fn execute(
             let cpu = resolve(target)?;
             Some(Action::CpuXpsr(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+            ))
+        }
+        [target, "AddHook", ..] => {
+            let cpu = resolve(target)?;
+            let args = text[target.len()..].trim_start()["AddHook".len()..].trim_start();
+            let (address, body) = if let Some(expression) = args.strip_prefix('`') {
+                let (expression, body) = expression
+                    .split_once('`')
+                    .ok_or("unterminated AddHook address expression")?;
+                let words: Vec<_> = expression.split_whitespace().collect();
+                if !matches!(words.as_slice(), [name, "PC"] if name.strip_prefix("sysbus.").unwrap_or(name) == cpu.strip_prefix("sysbus.").unwrap_or(cpu))
+                {
+                    return Err("AddHook address expression must read the target CPU PC".into());
+                }
+                (None, body)
+            } else {
+                let (address, body) = args
+                    .split_once(char::is_whitespace)
+                    .ok_or("expected AddHook address and body")?;
+                (Some(crate::parse_address(resolve(address)?)?), body)
+            };
+            let body = body
+                .trim()
+                .strip_prefix("\"monitor.Parse('")
+                .and_then(|body| body.strip_suffix("')\""))
+                .and_then(|body| body.strip_prefix("log "))
+                .ok_or("AddHook supports monitor.Parse with a log command")?;
+            let body = body.replace("\\\"", "\"");
+            let (message, "") =
+                quoted_argument(&body).ok_or("expected quoted AddHook log message")?
+            else {
+                return Err("expected one AddHook log message".into());
+            };
+            Some(Action::CpuLogHook(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                address,
+                message.to_owned(),
             ))
         }
         ["emulation", "SynchroniseQuantum"] => Some(Action::SynchroniseQuantum),

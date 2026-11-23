@@ -476,12 +476,12 @@ def classify_robot(name, case, body, parameter):
         raise ValueError(f"Unreviewed GDB setup for {case}")
     if name == "hooks":
         if "CortexM Hook" in case:
-            return PARTIAL, V6, "renode_systick_current_write_reloads_without_pend_and_zero_reload_stops; M0 zero reload covered, Python PC hooks and pause log missing"
+            return PARTIAL, V6, "renode_systick_current_write_reloads_without_pend_and_zero_reload_stops; M0 zero reload and log hooks covered; hooks that write SystemBus or pause emulation and the corresponding log observations remain"
         if "stm32l072.resc" in body:
             return OUT, "STM32L072 LRWAN1 / Cortex-M0+", "Asserts specific L072 firmware symbol names and translation block addresses"
         if "cortex-a9" in body:
             return OUT, "Cortex-A9 / ARMv7-A", "Executes hard-coded A32 LDRB/B sequence with a Python watchpoint"
-        return OPEN, V6, "Mi-V fixture runs monitor.Parse at a CPU hook; hook/monitor/log contract is ISA independent"
+        return PASS, V6, "renode_resc_cortex_m_hook_logs_at_current_pc; same current-PC AddHook, monitor.Parse log command and expected message on execution"
     if name == "per-core-registration":
         if "Create Machine With Hex File" in body:
             return OUT, "per-core-registration-hex.repl: two Cortex-M4s", "Same F072 HEX asset, but loader must resolve CPU1 0x07000000 vs CPU2 0x08000000 context"
