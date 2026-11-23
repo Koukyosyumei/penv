@@ -242,3 +242,19 @@ fn renode_multiline_binding_not_treat_double_slash_in_multiline_string_as_commen
         )],
     );
 }
+
+#[test]
+fn renode_multiline_binding_escaped_delimiter_on_its_own_line() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is \n\\'''\nnot a single line '''",
+        &[("sysbus.cpu", "this is \n'''\nnot a single line ")],
+    );
+}
+
+#[test]
+fn renode_multiline_binding_escaped_delimiter_at_end_of_line() {
+    assert_mock_placeholders(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is \\'''\nnot a single line '''",
+        &[("sysbus.cpu", "this is '''\nnot a single line ")],
+    );
+}
