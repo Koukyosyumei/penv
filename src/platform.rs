@@ -909,7 +909,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             "CPU.VexRiscv" => Some((true, false, false, false)),
             _ => None,
         };
-        let mut floating = (false, false, false, false);
+        let mut floating = (false, false, false, false, false);
         let mut zfa = false;
         let mut zfa_fli = false;
         let mut zfa_min_max = false;
@@ -964,6 +964,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     smepmp = false;
                     sscofpmf = false;
                     let mut zfh = false;
+                    let mut zfhmin = false;
                     let mut zfbfmin = false;
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
@@ -976,6 +977,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "smepmp" if !smepmp => smepmp = true,
                             "zfbfmin" if !zfbfmin => zfbfmin = true,
                             "zfa" if !zfa => zfa = true,
+                            "zfhmin" if !zfhmin => zfhmin = true,
                             "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
@@ -1023,7 +1025,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     {
                         return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
                     }
-                    floating = (single, double, zfh, zfbfmin);
+                    floating = (single, double, zfh, zfbfmin, zfhmin);
                     if letters.contains('b') {
                         // Renode enables all four supported bit-manipulation subsets for B.
                         bitmanip = BitManip {
@@ -1115,6 +1117,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 if floating.2 && !floating.0 {
                     return Err(entry.error("Zfh requires the RV32 F extension"));
                 }
+                if floating.4 && !floating.0 {
+                    return Err(entry.error("Zfhmin requires the RV32 F extension"));
+                }
                 if floating.3 && !floating.0 {
                     return Err(entry.error("Zfbfmin requires the RV32 F extension"));
                 }
@@ -1203,6 +1208,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         if floating.0 {
             hart.enable_floating(floating.1, floating.2);
             hart.set_zfbfmin(floating.3);
+            hart.set_zfhmin(floating.4);
             hart.set_zfa(zfa);
             hart.set_zfa_diagnostics(zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round);
         }
@@ -2233,6 +2239,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zabha"
                     | "zmmul"
                     | "zfa"
+                    | "zfhmin"
                     | "zfh"
                     | "zfbfmin"
                     | "smepmp"
@@ -2263,7 +2270,10 @@ type RiscvConfig<'a> = (
         (bool, bool),
         (bool, bool),
         BitManip,
-        (((bool, bool, bool, bool), bool), (bool, bool, bool, bool)),
+        (
+            ((bool, bool, bool, bool, bool), bool),
+            (bool, bool, bool, bool),
+        ),
     ),
     usize,
     (bool, bool),

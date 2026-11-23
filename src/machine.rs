@@ -48,6 +48,7 @@ pub struct Hart {
     translations: TranslationCache,
     thumb: Option<Thumb>,
     zfh: bool,
+    zfhmin: bool,
     zfbfmin: bool,
     zfa: bool,
     zfa_fli: bool,
@@ -188,6 +189,7 @@ impl Machine {
                 translations: TranslationCache::default(),
                 thumb: None,
                 zfh: false,
+                zfhmin: false,
                 zfbfmin: false,
                 zfa: false,
                 zfa_fli: false,
@@ -586,6 +588,10 @@ impl Hart {
         self.zfa_min_max = min_max;
         self.zfa_quiet_compare = quiet_compare;
         self.zfa_round = round;
+    }
+
+    pub fn set_zfhmin(&mut self, enabled: bool) {
+        self.zfhmin = enabled;
     }
 
     pub fn set_zfbfmin(&mut self, enabled: bool) {

@@ -13,7 +13,7 @@ impl Hart {
         match encoding {
             0 if self.csr.f_extension => Some(Format::Single),
             1 if self.csr.d_extension => Some(Format::Double),
-            2 if self.zfh => Some(Format::Half),
+            2 if self.zfh || self.zfhmin => Some(Format::Half),
             _ => None,
         }
     }
@@ -68,6 +68,17 @@ impl Hart {
         let rd = ((insn >> 7) & 31) as usize;
         let rs1 = ((insn >> 15) & 31) as usize;
         let rs2 = ((insn >> 20) & 31) as usize;
+        if self.zfhmin && !self.zfh && matches!(format, Format::Half) {
+            let supported = match (opcode, insn >> 27, rs2, funct3) {
+                (0x07 | 0x27, _, _, _) => true,
+                (0x53, 0x08, 0 | 1, _) => true,
+                (0x53, 0x1c | 0x1e, 0, 0) => true,
+                _ => false,
+            };
+            if !supported {
+                return Err(illegal());
+            }
+        }
         let floating = self.floating.as_ref().unwrap();
         if opcode == 0x07 {
             let address = self.registers[rs1].wrapping_add(sign(insn >> 20, 12));

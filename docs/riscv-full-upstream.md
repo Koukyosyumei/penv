@@ -1161,3 +1161,28 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 同じ release バイナリで、固定最大 ISA の V を Zfa に置き換えた診断構成は固定 Zfa ACT ELF 41 件すべてで完了コード 0 に到達しました。`ZfaZvfh` の ELF は半精度を Zfh で有効にしています。Rust テストは 88 件すべて通過しました。固定 Robot 構成には Zfa の指定がなく、V の未対応で 41 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。ケースログ、`results.jsonl` と終了状態は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zfhmin の半精度転送と形式変換
+
+代表の固定 ACT ELF `Zfhmin-flh-00.elf` は、`rv32ifc_zfhmin` の CPU 作成時に停止しました。ISA 名の `_zfhmin` を受け付け、F を前提に半精度のロード・ストア・ビット転送と単精度との形式変換を有効にしました。D がある場合は倍精度との形式変換も使えます。半精度の算術命令には Zfh が必要です。[RISC-V Zfhmin 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zfh.html)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-42222ac-s8DGWo"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+for suite in Zfhmin ZfhminD; do
+  isa=rv32ifc_zfhmin
+  if [ "$suite" = ZfhminD ]; then isa=rv32ifdc_zfhmin; fi
+  python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+    --platform "$evidence/$isa.repl" --artifacts "$repro/$suite" "$elfs/$suite/"*.elf
+done
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zfhmin*/*.elf
+```
+
+同じ release バイナリで Zfhmin と ZfhminD の固定 ELF 各 6 件が通過しました。Zfhmin に D を加え、ZfhD の形式変換 ELF 2 件でも半精度と倍精度の相互変換を確認しました。同じ構成で Zfh の `fadd.h` は不正命令として拒否されました。Zfh・ZfhD の回帰は 2 MiB RAM の診断構成で 83/83 件が通過しました。最初の 1 MiB 構成では 12 件が ELF のロード時にメモリー範囲外で停止しました。Rust テストは 88/88 件が通過しました。
+
+固定 Robot 構成では V の未対応で対象 12 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。構成別の `results.jsonl`、ケースログ、終了状態を上記の証拠ディレクトリに保存しました。
