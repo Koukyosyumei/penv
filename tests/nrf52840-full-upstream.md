@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 7 | 38 |
+| 監査した共有・混成 Robot | 190 | 145 | 10 | 35 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **7** | **38** |
+| 合計 | **221** | **176** | **10** | **35** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -704,3 +704,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 GDB 入口の切り分けでは、`target/debug/penv run --script "$ARTIFACT_DIR/fixture/gdb.resc"` が `StartGdbServer 3337` で停止した。WFI の2ケースは Thumb の短い ELF で `ShouldEnterDebugMode` が未対応と確認した。モード設定を省くと2回目の `Step 1` で命令完了なしのエラーとなる。GDB のレジスタ読み出しと WFI ステップの再現は `nrf52-gdb-vfp-wfi-818e017.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-vfp.d3yor8HD` に保存した。
+
+### GDB Python 周辺機器用フィクスチャ
+
+`gdb.robot:587–644,1210–1224` の Python MMIO 3件を1本の Cortex-M4 ELF で実行した。上流の `repeater.py` で値の初期化・読み出し・書き込みを照合した。読み出しケースは既存の monitor watchpoint を用い、`0x147` のロード後に停止して次の2命令をそれぞれ再開できることをログ順で確認した。書き込みは値が `0x147` から `1` に変わることを確認した。上流の `rolling-bit.py` に固定の Thumb 命令列で書き込むケースは、意図した `0x0800000a` に到達した。GDB の停止理由・ブレークポイントと書き込みウォッチポイントは未達のため、3件は部分移植。
+
+```sh
+cargo test --locked
+tests/nrf52840-gdb-pydev-fixture.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/fixture"
+tests/nrf52840-pydev-watchpoint-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/counter"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+保存した `final/gdb.resc` と `final/write-watch.resc` はそれぞれ StartGdbServer と書き込みフックで停止する。再現手順と期待値は `nrf52-gdb-pydev-6920dc6.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-pydev.m0jngGkG`。
