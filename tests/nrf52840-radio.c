@@ -66,7 +66,8 @@ void reset(void)
     CHECK(REG(RADIO + 0x514) == 0x108);
     CHECK(REG(RADIO + 0x518) == 8);
     REG(RADIO + 0x504) = TX;
-    REG(RADIO + 0x200) = 3; /* READY -> START; END -> DISABLE. */
+    REG(RADIO + 0x200) = 0x80000003; /* READY -> START; END -> DISABLE. */
+    CHECK(REG(RADIO + 0x200) == 3);
     REG(RADIO + 0x000) = 1;
     CHECK(ends == 1 && disabled == 1 && good_crc == 0);
     CHECK(REG(RADIO + 0x100) == 1 && REG(RADIO + 0x154) == 1);

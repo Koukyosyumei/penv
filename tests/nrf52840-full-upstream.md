@@ -758,3 +758,18 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 固定 GDB 操作のファイルはフィクスチャ実行時に生成する。サーバー起動の再現は `StartGdbServer 3333` で停止。初回の `nop.w` も未対応だったため、最終フィクスチャは幅が同じ `movw r0,#0` を使う。共有要件と両方の再現は `nrf52-gdb-breakpoints-9e8b14d.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-breakpoints.6x3lFb6N` に保存した。
+
+### RADIO SHORTS と GDB ブロック終了フック
+
+RADIO ELF で `SHORTS` に `0x80000003` を書く。従来は予約ビットがあるため MMIO エラーで停止した。修正後は予約ビットを読み値に残さず `0x3` を返し、`READY → START` と `END → DISABLE` を使った送受信・EasyDMA・IRQ が成立する。定義済みで未モデル化のショートカットは引き続き明示的に拒否する。
+
+```sh
+cargo test --locked
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-gdb-breakpoint-fixture.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/breakpoints"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+`gdb.robot:783–821` の step/continue は `target/debug/penv run --script "$ARTIFACT_DIR/hook-step.resc"` と `hook-continue.resc` で `SetHookAtBlockEnd "self.Pause()"` が未対応と確認した。両件を未達のままとし、期待 PC 0/4/8 と fixture を `nrf52-gdb-block-end-293763a.md` で ARM 担当に渡した。
+
+再現ファイル、ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/radio-shorts.AH29vNFR` に保存した。

@@ -28,6 +28,8 @@ const EVENTS: u32 = READY
     | TX_READY
     | RX_READY
     | PHY_END;
+// Defined fields include shortcuts whose task or event is not modeled.
+const DEFINED_SHORTS: u32 = 0x003f_f97f;
 const SHORTS: u32 =
     (1 << 0) | (1 << 1) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 18) | (1 << 19) | (1 << 20);
 
@@ -426,7 +428,7 @@ impl Radio {
             0x14 if trigger => self.raise(RSSI_END),
             0x1c | 0x20 if trigger => self.bit_counter = offset == 0x1c,
             offset if Self::task(offset) => {}
-            0x200 if value & !SHORTS == 0 => self.shorts = value,
+            0x200 if value & DEFINED_SHORTS & !SHORTS == 0 => self.shorts = value & SHORTS,
             0x304 => self.interrupts |= value & EVENTS,
             0x308 => self.interrupts &= !value,
             0x504 => self.pointer = value,
