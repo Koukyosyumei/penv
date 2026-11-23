@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 20 | 25 |
+| 監査した共有・混成 Robot | 190 | 145 | 22 | 23 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **20** | **25** |
+| 合計 | **221** | **176** | **22** | **23** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -801,3 +801,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 `fixture/gdb.resc` は StartGdbServer、`fixture/write-hook.resc` は書き込みフックで停止する。結果と期待値は `nrf52-gdb-write-watch-2a98288.md` で ARM 担当に渡した。ARM 返答によると GDB メモリ候補と起動前スナップショット候補は統合側へ取り込み済み。GDB の watch/dump と実行後スナップショットは引き続き未達。担当ブランチは候補を取り込んでいない。再現ファイル、ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-write-watch.c0LzHitJ` に保存した。
+
+### GDB リセットと実行制御
+
+`gdb.robot:990–1030` の main/factorial を1本の Cortex-M4 ELF に移植した。monitor の main フックがリセット後も有効なこと、factorial 到達後のリセットと1ステップで main に戻ることを確認した。GDB のブレークポイント削除・差し替え・停止通知は残るため部分移植。
+
+```sh
+cargo test --locked
+tests/nrf52840-gdb-reset-fixture.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/fixture"
+tests/nrf52840-gdb-breakpoint-fixture.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/breakpoints"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+`fixture/debug.resc` は StartGdbServer で停止した。Ctrl-C の補助入力 `fixture/loop.resc` は命令上限で PC `0x8` を報告する。固定の長文 `mon echo` は `fixture/long.gdb` に保存した。Ctrl-C と長文のケースは未達。再現と期待値を `nrf52-gdb-reset-control-14a8459.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-reset.fc0AOsK9`。
