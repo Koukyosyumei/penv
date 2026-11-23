@@ -1144,3 +1144,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 125件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-irq-attributes.9rE3Kilw` にあります。台帳は対象786件のうち等価合格115件、部分検証11件、未達660件です。
+
+### backlog-network-80d50622371d-1
+
+REPL の IRQ 解析で、範囲と単一端点のグループを宛先ごとに保持します。固定上流 `ShouldParseEntryWithMultiplexedMultiIrqEntries` と同じ入力で送信元の展開順、3宛先の順序、各宛先の端点とグループ境界を照合し、部分検証から等価合格に更新しました。STM32H7 の既存 IRQ 配線はグループを展開した番号列を使います。EXTI の複数宛先への同時配信は残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 125件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-irq-groups.3Clg0yOD` に保存しました。台帳は対象786件のうち等価合格116件、部分検証10件、未達660件です。

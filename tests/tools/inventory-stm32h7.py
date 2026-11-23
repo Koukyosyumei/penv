@@ -324,7 +324,7 @@ def triage(row):
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
     elif suite == 'ParserTests.cs' and name == 'ShouldParseEntryWithMultiplexedMultiIrqEntries':
-        status, reason = 'PARTIAL', '固定入力で展開順と全宛先を照合。範囲グループの境界を保持する上流構文木の個別アサーションは未移植'
+        status, reason = 'PASS', '固定入力で送信元展開、全宛先の順序、宛先ごとの全端点と範囲グループ境界を照合。src/platform.rs'
     elif suite == 'ParserTests.cs' and name in {
         'ShouldParseEntryWithMultiIrqEntries',
         'ShouldParseEntryWithNoAttrbutes',

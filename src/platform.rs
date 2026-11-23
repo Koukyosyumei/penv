@@ -1546,16 +1546,19 @@ pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
 }
 
 pub(crate) fn irq_list(value: &str, count: u32) -> Result<Vec<u8>, String> {
-    irq_ends(value, count, |name| {
+    Ok(irq_end_groups(value, count, |name| {
         Err(format!("invalid numeric IRQ {name:?}"))
-    })
+    })?
+    .into_iter()
+    .flatten()
+    .collect())
 }
 
-fn irq_ends<T: From<u8>>(
+fn irq_end_groups<T: From<u8>>(
     value: &str,
     count: u32,
     named: impl Fn(&str) -> Result<T, String>,
-) -> Result<Vec<T>, String> {
+) -> Result<Vec<Vec<T>>, String> {
     let value = value.trim();
     let mut ends = Vec::new();
     let (list, grouped) = value
@@ -1570,11 +1573,11 @@ fn irq_ends<T: From<u8>>(
             if start > end {
                 return Err("descending IRQ range".into());
             }
-            ends.extend((start..=end).map(T::from));
+            ends.push((start..=end).map(T::from).collect());
         } else if item.starts_with(|c: char| c.is_ascii_digit()) {
-            ends.push(T::from(irq_index(item, count)?));
+            ends.push(vec![T::from(irq_index(item, count)?)]);
         } else {
-            ends.push(named(item)?);
+            ends.push(vec![named(item)?]);
         }
     }
     if !grouped && ends.len() != 1 {
@@ -2355,7 +2358,7 @@ uart:
 
     #[test]
     fn upstream_irq_ranges_and_multiplexing() {
-        #[derive(Debug, PartialEq, Eq)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum Source {
             Index(u8),
             Named,
@@ -2375,15 +2378,15 @@ uart:
                     Source::Index(3),
                     Source::Named,
                 ][..],
-                &[("pic", &[2, 3, 4, 5][..])][..],
+                &[("pic", &[&[2, 3, 4, 5][..]][..])][..],
             ),
             (
                 "\nuart:\n    [1-2, IRQ] -> pic0@[4-6] | pic1@[7-8, 9] | pic2@[10, 11, 12]",
                 &[Source::Index(1), Source::Index(2), Source::Named],
                 &[
-                    ("pic0", &[4, 5, 6]),
-                    ("pic1", &[7, 8, 9]),
-                    ("pic2", &[10, 11, 12]),
+                    ("pic0", &[&[4, 5, 6]]),
+                    ("pic1", &[&[7, 8], &[9]]),
+                    ("pic2", &[&[10], &[11], &[12]]),
                 ],
             ),
         ] {
@@ -2393,16 +2396,27 @@ uart:
                 panic!("expected one IRQ attribute");
             };
             let (from, to) = wiring.split_once("->").unwrap();
-            let sources = irq_ends(from, 256, |name| {
+            let sources = irq_end_groups(from, 256, |name| {
                 assert_eq!(name, "IRQ");
                 Ok(Source::Named)
             })
             .unwrap();
-            assert_eq!(sources, expected_sources);
+            assert!(
+                sources
+                    .into_iter()
+                    .flatten()
+                    .eq(expected_sources.iter().cloned())
+            );
             let targets = irq_destinations(to)
                 .map(|target| {
                     let (name, pins) = target.unwrap();
-                    (name, irq_list(pins, 256).unwrap())
+                    (
+                        name,
+                        irq_end_groups::<u8>(pins, 256, |name| {
+                            Err(format!("unexpected IRQ {name}"))
+                        })
+                        .unwrap(),
+                    )
                 })
                 .collect::<Vec<_>>();
             assert_eq!(targets.len(), expected_targets.len());
@@ -2410,7 +2424,10 @@ uart:
                 targets.iter().zip(expected_targets)
             {
                 assert_eq!(name, expected_name);
-                assert_eq!(pins, expected_pins);
+                assert_eq!(
+                    pins.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    *expected_pins
+                );
             }
         }
     }
