@@ -140,7 +140,9 @@ pub fn run(command: &str, args: impl Iterator<Item = OsString>) -> Result<(), St
         })
         .collect::<Result<Vec<_>, _>>()?;
     let result = match (command, args.as_slice()) {
-        ("thumb-assemble", [source]) => assemble(source),
+        ("thumb-assemble", [source]) => {
+            assemble(source).map_err(|error| format!("assembly error detected: {error}"))
+        }
         ("thumb-disassemble", [address, bytes]) => {
             disassemble_hex(crate::parse_address(address)?, bytes)
         }

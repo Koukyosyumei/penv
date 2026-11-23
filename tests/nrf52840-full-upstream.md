@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 108 | 5 | 77 |
+| 監査した共有・混成 Robot | 190 | 109 | 5 | 76 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **125** | **5** | **91** |
+| 合計 | **221** | **126** | **5** | **90** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -306,4 +306,10 @@ tests/nrf52840-thumb-llvm-upstream.sh "$PWD/target/debug/penv"
 tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
-ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-llvm-errors.chK1LR2d/` の `cargo-test`、`llvm-errors`、`llvm`、`shell` に保存した。アセンブル時の不正 mnemonic・operand・ISA 拡張の共有ケースは未達。
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-llvm-errors.chK1LR2d/` の `cargo-test`、`llvm-errors`、`llvm`、`shell` に保存した。アセンブルの診断は次節に記録した。
+
+### Thumb アセンブルエラーの診断
+
+`llvm-asm-disasm.robot:535–542` の共有ケースのうち Cortex-M4 に適用できる2入力を移植した。不明命令は上流の `illegalinstruction123`、不正オペランドは Thumb の `str r0, [sp, #65536]` を使用する。LLVM MC の詳細診断、終了コード 1、空の標準出力を照合した。正常命令が不正命令より前にある複数行ソースでも、前半のバイト列が出力されないことを検証した。RISC-V V 拡張の診断は固定の別 ISA 構成であり、既存の対象外に該当する。
+
+前節と同じコマンドで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-assembler-errors.ImBrXqLR/` の `cargo-test`、`llvm-errors`、`llvm`、`shell` に保存した。監査対象の LLVM アセンブル・逆アセンブル6ケースはすべて合格した。台帳全体の残数は固定構成の集計を参照。

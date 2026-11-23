@@ -53,3 +53,21 @@ printf '%s\n' "$decoded"
 expect_error outside 0x02000000 4 'unmapped RAM access at 0x02000000'
 expect_error invalid16 0x20 2 'invalid instruction encoding'
 expect_error invalid32 0x24 4 'invalid instruction encoding'
+
+# Shared assembly diagnostics from Robot 535-542. The RISC-V V-extension
+# input is outside the Cortex-M4 configuration.
+expect_assembly_error() {
+    label=$1
+    source=$2
+    diagnostic=$3
+    status=0
+    "$penv" thumb-assemble "$source" >"$out/$label.stdout" 2>"$out/$label.stderr" || status=$?
+    [ "$status" -eq 1 ]
+    [ ! -s "$out/$label.stdout" ]
+    grep -Fq 'assembly error detected:' "$out/$label.stderr"
+    grep -Fq "$diagnostic" "$out/$label.stderr"
+    cat "$out/$label.stderr"
+}
+expect_assembly_error mnemonic 'illegalinstruction123' 'error: invalid instruction'
+expect_assembly_error operand 'str r0, [sp, #65536]' 'error: invalid operand for instruction'
+expect_assembly_error partial "$(printf 'nop\nillegalinstruction123')" 'error: invalid instruction'
