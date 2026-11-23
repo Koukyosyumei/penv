@@ -406,6 +406,11 @@ def disposition(path, name, context):
         r"Should Dump 64-bit PCs(?: As Binary)?(?: For Isolated Memory)?", name
     ):
         return "pass", "Fixed text and ReTrace PC records for shared and isolated RV64 RAM verified (rv64-pc-trace.md)"
+    if path.name == "execution-tracing.robot" and name in {
+        "Should Trace RISC-V Amo Operands",
+        "Should Be Able To Add Amo Operands To The Trace In Binary Format",
+    }:
+        return "pass", "Fixed RV64 AMO before/after operands and ReTrace parser checks verified (rv64-amo-trace.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

@@ -99,6 +99,7 @@ Options:
   --renode-elf-load  Load the mapped RAM portions of RV64 ELF segments
   --robot-tohost ADDRESS   Install a 4 KiB single-hart Renode-style watcher
   --max-steps N      Stop after N execution steps (0 configures only; default: 10000000)
+  --trace-amo CPU:FORMAT:PATH  Record aligned RV64 RAM AMO operands in text or binary
   --trace-pc CPU:FORMAT:PATH  Record RV64 PCs in text or binary ReTrace format
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -399,30 +400,35 @@ fn run() -> Result<ExitCode, String> {
             Some("--") => positional = true,
             Some("--raw") => raw = true,
             Some("--rv64") => rv64 = true,
-            Some("--trace-pc") => {
-                let error = "--trace-pc requires CPU:text:PATH or CPU:binary:PATH";
+            Some(option @ ("--trace-pc" | "--trace-amo")) => {
+                let error = format!("{option} requires CPU:text:PATH or CPU:binary:PATH");
                 let specification = args
                     .next()
                     .and_then(|arg| arg.into_string().ok())
-                    .ok_or(error)?;
+                    .ok_or_else(|| error.clone())?;
                 let (cpu, rest) = specification
                     .split_once(':')
                     .filter(|(cpu, _)| !cpu.is_empty())
-                    .ok_or(error)?;
+                    .ok_or_else(|| error.clone())?;
                 let (format, path) = rest
                     .split_once(':')
                     .filter(|(_, path)| !path.is_empty())
-                    .ok_or(error)?;
+                    .ok_or_else(|| error.clone())?;
                 let binary = match format {
                     "text" => false,
                     "binary" => true,
                     _ => return Err(error.into()),
                 };
                 if pc_trace
-                    .replace((cpu.to_owned(), binary, PathBuf::from(path)))
+                    .replace((
+                        cpu.to_owned(),
+                        binary,
+                        option == "--trace-amo",
+                        PathBuf::from(path),
+                    ))
                     .is_some()
                 {
-                    return Err("--trace-pc may only be specified once".into());
+                    return Err("specify only one of --trace-pc and --trace-amo, once".into());
                 }
             }
             Some("--stats") => stats = true,
@@ -866,12 +872,12 @@ fn run() -> Result<ExitCode, String> {
         uart_events.insert(0, (uart_input_at.unwrap_or(0), path));
     }
     let pc_trace = pc_trace
-        .map(|(cpu, binary, path)| {
+        .map(|(cpu, binary, amo, path)| {
             File::options()
                 .write(true)
                 .create_new(true)
                 .open(&path)
-                .and_then(|file| machine::PcTrace::new(file, binary))
+                .and_then(|file| machine::PcTrace::new(file, binary, amo))
                 .map(|trace| (cpu, trace))
                 .map_err(|error| format!("{}: {error}", path.display()))
         })
@@ -945,6 +951,9 @@ fn run() -> Result<ExitCode, String> {
         if let Some(value) = vex_irq_mask {
             machine.primary.set_vex_irq_mask(value)?;
         }
+        if let Some((cpu, trace)) = &pc_trace {
+            machine.trace_pc(cpu, trace.clone())?;
+        }
         let mut reset_templates = Vec::new();
         for action in &setup_actions {
             if let SetupAction::ResetCpu(cpu) = action {
@@ -979,9 +988,6 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.bus.renode_unmapped_data = renode_unmapped_data;
-        if let Some((cpu, trace)) = &pc_trace {
-            machine.trace_pc(cpu, trace.clone())?;
-        }
         for action in &setup_actions {
             match action {
                 SetupAction::Assemble(cpu, address, instruction) => {

@@ -9,7 +9,7 @@ use std::{
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
-    rv64::Rv64,
+    rv64::{AtomicTrace, Rv64},
     sv32::TranslationCache,
     thumb::Thumb,
 };
@@ -20,17 +20,24 @@ pub const MAX_HARTS: usize = 8;
 pub(crate) struct PcTrace {
     file: Rc<RefCell<BufWriter<File>>>,
     binary: bool,
+    amo: bool,
 }
 
 impl PcTrace {
-    pub(crate) fn new(file: File, binary: bool) -> std::io::Result<Self> {
+    pub(crate) fn new(file: File, binary: bool, amo: bool) -> std::io::Result<Self> {
         let mut file = BufWriter::new(file);
         if binary {
-            file.write_all(b"ReTrace\x05\x08\x00")?;
+            if amo {
+                // The emitted opcodes are base A instructions.
+                file.write_all(b"ReTrace\x05\x08\x01\x01\x0Friscv64 rv64ima")?;
+            } else {
+                file.write_all(b"ReTrace\x05\x08\x00")?;
+            }
         }
         Ok(Self {
             file: Rc::new(RefCell::new(file)),
             binary,
+            amo,
         })
     }
 
@@ -43,6 +50,56 @@ impl PcTrace {
         } else {
             writeln!(file, "0x{pc:X}")
         }
+    }
+
+    fn write_atomic(&self, pc: u64, record: &AtomicTrace) -> Result<(), String> {
+        let mut file = self.file.borrow_mut();
+        let output = (|| -> std::io::Result<()> {
+            if self.binary {
+                file.write_all(&pc.to_le_bytes())?;
+                file.write_all(&[4])?;
+                file.write_all(&record.instruction.to_le_bytes())?;
+                for (phase, values) in [(0, record.before), (1, record.after)] {
+                    file.write_all(&[
+                        3,
+                        phase,
+                        if record.width == 8 { 3 } else { 2 },
+                        (record.instruction >> 27) as u8,
+                    ])?;
+                    for value in values {
+                        file.write_all(&value.to_le_bytes()[..record.width])?;
+                    }
+                }
+                file.write_all(&[0])
+            } else {
+                let input = record
+                    .instruction
+                    .to_le_bytes()
+                    .map(|byte| format!("{byte:#04x}"))
+                    .join(" ");
+                let decoded = crate::llvm_mc("+m,+a", "--disassemble", &input)
+                    .map_err(std::io::Error::other)?;
+                let text = String::from_utf8_lossy(&decoded.stdout);
+                let instruction = text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty() && *line != ".text")
+                    .filter(|_| decoded.status.success() && decoded.stderr.is_empty())
+                    .ok_or_else(|| std::io::Error::other("llvm-mc could not decode traced AMO"))?;
+                let instruction = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+                writeln!(file, "0x{pc:X}: {:08x} {instruction}", record.instruction)?;
+                for (phase, [rd, rs1, rs2, value]) in
+                    [("before", record.before), ("after", record.after)]
+                {
+                    writeln!(
+                        file,
+                        "AMO operands {phase} - RD: 0x{rd:X}, RS1: 0x{rs1:X} (memory value: 0x{value:X}), RS2: 0x{rs2:X}"
+                    )?;
+                }
+                Ok(())
+            }
+        })();
+        output.map_err(|error| format!("RV64 AMO trace: {error}"))
     }
 
     pub(crate) fn flush(&self) -> std::io::Result<()> {
@@ -340,7 +397,13 @@ impl Machine {
     }
 
     pub(crate) fn trace_pc(&mut self, name: &str, trace: PcTrace) -> Result<(), String> {
-        self.pc_trace = Some((self.rv64_hart_by_name(name)?, trace));
+        let hart = self.rv64_hart_by_name(name)?;
+        self.hart_mut(hart)
+            .rv64
+            .as_mut()
+            .expect("named RV64 CPU")
+            .trace_amo = trace.amo;
+        self.pc_trace = Some((hart, trace));
         Ok(())
     }
 
@@ -441,9 +504,17 @@ impl Machine {
                 Step::Retired => {
                     retired += 1;
                     if let (Some((_, trace)), Some(pc)) = (trace, pc) {
-                        trace
-                            .write(pc)
-                            .map_err(|error| format!("RV64 PC trace: {error}"))?;
+                        if trace.amo {
+                            if let Some(record) =
+                                hart.rv64.as_mut().and_then(|cpu| cpu.atomic_trace.take())
+                            {
+                                trace.write_atomic(pc, &record)?;
+                            }
+                        } else {
+                            trace
+                                .write(pc)
+                                .map_err(|error| format!("RV64 PC trace: {error}"))?;
+                        }
                     }
                 }
                 Step::Trap => {}

@@ -15,10 +15,20 @@ use crate::{
 };
 
 #[derive(Clone)]
+pub(crate) struct AtomicTrace {
+    pub(crate) instruction: u32,
+    pub(crate) width: usize,
+    pub(crate) before: [u64; 4],
+    pub(crate) after: [u64; 4],
+}
+
+#[derive(Clone)]
 pub struct Rv64 {
     pub(crate) hart_id: usize,
     pub(crate) mhartid_override: Option<u64>,
     pub(crate) trace_custom_csr: bool,
+    pub(crate) trace_amo: bool,
+    pub(crate) atomic_trace: Option<AtomicTrace>,
     pub(crate) stack_access_trace_name: Option<String>,
     pub pc: u64,
     reset_vector: u64,
@@ -208,6 +218,8 @@ impl Rv64 {
             hart_id: 0,
             mhartid_override: None,
             trace_custom_csr: false,
+            trace_amo: false,
+            atomic_trace: None,
             stack_access_trace_name: None,
             pc: u64::from(RAM_BASE),
             reset_vector: u64::from(RAM_BASE),
@@ -1014,7 +1026,7 @@ impl Rv64 {
     }
 
     fn atomic(
-        &self,
+        &mut self,
         inst: Instruction,
         bus: &mut Bus,
         hart: usize,
@@ -1084,6 +1096,33 @@ impl Rv64 {
             bus.cpu_memory64(self.hart_id, physical, width)
                 .ok_or_else(fault)?
                 .copy_from_slice(&value.to_le_bytes()[..width]);
+            if self.trace_amo {
+                let destination = inst.rd();
+                let after = |reg| {
+                    if reg == destination && destination != 0 {
+                        old
+                    } else {
+                        self.registers[reg]
+                    }
+                };
+                let mask = u64::MAX >> (64 - width * 8);
+                self.atomic_trace = Some(AtomicTrace {
+                    instruction: inst.0,
+                    width,
+                    before: [
+                        self.registers[destination],
+                        address,
+                        self.registers[inst.rs2()],
+                        previous,
+                    ],
+                    after: [
+                        after(destination),
+                        after(inst.rs1()),
+                        after(inst.rs2()),
+                        value & mask,
+                    ],
+                });
+            }
         }
         Ok(sign(previous, width as u32 * 8))
     }
