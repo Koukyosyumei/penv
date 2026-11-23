@@ -254,7 +254,7 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 63 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 65 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
@@ -453,7 +453,7 @@ PWM は初回の校正値を読み飛ばし、2 回目が 1000 Hz ±25 Hz、デ�
 この設定は SysTick や周辺タイマーにも共通です。未変更 kit の FreeRTOS 回帰は既定値で実行します。
 
 残課題は入力のデジタルフィルター、GPIO の多段伝搬・競合、ADC 変換、PLLI2S の出力クロック、
-デバッグ時の停止動作、`ApplySVD` のレジスター展開、
+デバッグ時の停止動作、`ApplySVD` の汎用レジスター展開、
 AIRCR のソフトウェアリセット要求、実機確認です。
 フラッシュプログラム動作、UART のビット時間、CAN の通常モードでのノード間通信も
 残課題です。
@@ -496,12 +496,13 @@ Renode の参照リビジョンは `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` �
 |---|---|
 | PWM・直交位相 | Discovery の `PWM Capture` 2 件と `Quadrature Decoder` を公開 ELF と同じ GPIO 接続で実行。2 番目の周波数とデューティ比、最初の 2 つの角度を照合 |
 | タイマー IRQ・FAULTMASK | Discovery の TIM2 上り・下りと FAULTMASK 2 件を公開 ELF で実行。FAULTMASK ELF は TIM3 を直接設定するため、生成 RESC が起動前に `RCC_APB1ENR.TIM3EN` を設定。マスク中に出力がないこと、解除後 3 回以上、例外復帰後 4 回以上の割り込みを照合。FreeRTOS では TIM9 と TIM2 のキュー配送も検査 |
-| RTC | Discovery の `Should Not Crash On RTC Writes` を公開 Zephyr ELF で実行し、初期値、月変更後、時変更後の UART 出力を順に照合 |
+| RTC | Discovery の `Should Not Crash On RTC Writes` を公開 Zephyr ELF で実行し、初期値、月変更後、時変更後の UART 出力を順に照合。`Configure RTC Alarm` は公開 RIOT ELF に上流と同じ 32 kHz オーバーレイと UART 入力 `s` を使い、2 秒間隔で計 4 回の `Alarm!` とその後 3 秒間の無出力を検査 |
 | I²C | Discovery に専用の上流 ELF ケースは見当たりませんでした。FreeRTOS の検証用 REPL で `01 23` の書き込み・読み戻しとイベント IRQ、未接続アドレスの NACK とエラー IRQ を検査。未変更 kit でも NACK を確認 |
 | SPI | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流ループバックケースと同様に、検証用 REPL の FreeRTOS で 8/16 ビット転送、RX/TX 割り込み、DMA を検査。未変更 kit では未接続の応答を確認 |
 | CAN | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流 CAN ループバックケースに対応する範囲として、FreeRTOS で bxCAN のフィルター、CAN1 FIFO0、CAN2 FIFO1、送受信・状態 IRQ とペイロードを検査 |
-| フラッシュ | `stm32f4-erase.robot` の 3 ケースを Rust で移植。消去モード未指定で値保持、一括消去で両端が `0xffffffff`、セクター 11 消去で先頭の `0xdeadbeef` が残ることを照合。FreeRTOS ELF でも ACR レイテンシ、ロック、オプションバイトを検査 |
+| フラッシュ | `stm32f4-erase.robot` の 3 ケースを Rust で移植。消去モード未指定で値保持、一括消去で両端が `0xffffffff`、セクター 11 消去で先頭の `0xdeadbeef` が残ることを照合。FreeRTOS ELF でも ACR レイテンシ、ロック、オプションバイトを検査。Discovery の標準・カスタムレイテンシ CubeMX ELF は未変更 CPU REPL でそれぞれ 3 行以上の `Hello World!` を照合 |
 | 再起動 | 上流 Cortex-M の BASEPRI リセットと STM32L072 の IWDG ケースに相当する検査を F407 FreeRTOS ELF で実施。IWDG のリフレッシュ、期限切れ、SRAM 保持、BASEPRI の `0x50 → 0`、周辺機器の初期状態、再起動後の UART・キュー出力を照合 |
+| Cortex-M | `arm-cortex-m-interrupts.robot` の WFE/SEVONPEND、SysTick の RVR/CVR 書き込み順 2 件は `cargo test` で照合。WFE は IRQ 5 の保留後の SRAM 書き込み、SysTick は 100 Hz の 10・1・10・9 を検査 |
 | 起動回帰 | 未変更の Contiki RESC で公開 Contiki と Zephyr Hello World を実行。FreeRTOS は未変更 kit の ARM_CM3・ARM_CM4F と検証用 REPL の 3 構成で実行 |
 
 [Discovery Robot ケース](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
@@ -517,11 +518,19 @@ tests/stm32f407-upstream-smoke.sh target/close-f407-tests
 
 公開 ELF は自動取得と SHA-1 照合の対象です。ログは指定ディレクトリに残ります。
 IRQ は `faultmask*.log`、I²C/SPI/CAN は `loopback/uart.log`、再起動は各構成の
-`watchdog-uart.log` で確認できます。`cargo test` は 68 件です。
+`watchdog-uart.log` で確認できます。`cargo test` は 70 件です。
 
-残課題として、Discovery の標準・カスタムフラッシュレイテンシ CubeMX ELF は
-どちらも `USB_DisableGlobalInt` の `0x50000008` で停止しました。
-RIOT の RTC アラーム ELF は上流と同じ 32 kHz オーバーレイでも
-`0x0800043a` の Cortex-M 例外復帰で停止しました。上流 Cortex-M の WFE/SEVONPEND と
-モニター操作による SysTick の境界時刻照合、Discovery の周辺機器マップのエクスポート、
-フラッシュ書き込み、CAN 通常モードでのノード間通信も未移植です。
+RIOT は、例外フレームに Thumb 関数ポインターを格納します。例外復帰では保存された
+xPSR の Thumb 状態を検査し、PC の下位ビットを落として命令をフェッチします。
+RTC のステータスフラグ消去はバックアップドメイン保護中でも受け付けます。
+アラームの検査は仮想開始後 0.1 秒に `s` を注入し、絶対時刻 2.0・2.2・4.2・6.2・8.2・11.2 秒
+で停止した各実行の累積アラーム数が 0・1・2・3・4・4 になることを照合します。
+
+CubeMX の USB 初期化には、上流 REPL の明示的な USB リセットタグと、SVD 由来の
+OTG FS リセット値を使用します。参照した `STM32F40x.svd.gz` の SHA-256 は
+`d71b3e11c870ec83346eb994e98a57c5eacdf0082d2949ed495d7a3828bf41ec` です。
+[SVD アセット](https://dl.antmicro.com/projects/renode/svd/STM32F40x.svd.gz)
+
+受け入れの対象は上表のゲスト起動と入出力です。Discovery の `Peripheral Export File Created` は
+Renode モニターが書き出す Peripheral Map ファイルを検査するツール機能として対象外です。
+USB データ転送、汎用 SVD 展開、フラッシュ書き込み、CAN 通常モードでのノード間通信は残課題です。

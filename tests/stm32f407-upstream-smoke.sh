@@ -141,6 +141,40 @@ if ! awk '
 fi
 printf 'RTC: month and hour writes preserved the expected calendar values\n'
 
+cat > "$work/rtc-32khz.repl" <<'REPL'
+using "platforms/cpus/stm32f4.repl"
+
+rtc:
+    wakeupTimerFrequency: 32000
+REPL
+printf s > "$work/rtc-start.txt"
+sha=ca2effb6a0a8bcde39496b99bcb8b160a4ed292e
+for window in 0:2000000 1:2200000 2:4200000 3:6200000 4:8200000 4:11200000; do
+    name="rtc-alarm-${window#*:}"
+    run_case "$name" "stm32f4_discovery--riot-tests_periph_rtc.elf-s_1249644-$sha" "$sha" \
+        rtc-32khz.repl "${window#*:}" --uart-event "100000:$work/rtc-start.txt"
+    if ! rg -aqF 'Help: Press s to start test' "$work/$name.log" ||
+        ! rg -aqF 'RIOT RTC low-level driver test' "$work/$name.log" ||
+        ! awk -v expected="${window%:*}" '/^Alarm!$/ { ++alarms }
+            END { exit alarms != expected }' "$work/$name.log"; then
+        cat "$work/$name.log" >&2
+        exit 1
+    fi
+done
+printf 'RTC: four RIOT alarms at two-second intervals, then three seconds idle\n'
+
+while read -r name size sha; do
+    run_case "$name" "stm32f4--cube_mx-hello_world.elf-s_$size-$sha" "$sha" platforms/cpus/stm32f4.repl 3500000
+    if ! awk '/^Hello World!\r?$/ { ++lines } END { exit lines < 3 }' "$work/$name.log"; then
+        cat "$work/$name.log" >&2
+        exit 1
+    fi
+    printf '%s: at least three Hello World! lines\n' "$name"
+done <<'ASSETS'
+cubemx 625976 606092c29de896f3bd83a4e981f2c7f3a6ed3142
+cubemx-flash-latency 625992 119d2b1d81ef6bb85498d1024c61736bb53cee4c
+ASSETS
+
 # The overlays reproduce the Robot test's patch cables without changing the CPU REPL.
 cat > "$work/pwm-pins.repl" <<'REPL'
 using "platforms/cpus/stm32f4.repl"

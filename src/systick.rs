@@ -65,25 +65,25 @@ impl SysTick {
         if cycles == 0 {
             return;
         }
-        let until_zero = if self.current != 0 {
-            self.current
-        } else if self.reload != 0 {
-            self.reload + 1
-        } else {
+        let until_zero = self.current;
+        if until_zero == 0 {
             return;
-        };
+        }
         if cycles < until_zero {
             self.current = until_zero - cycles;
         } else {
             self.count_flag = true;
             self.pending |= self.control & 2 != 0;
-            let remainder = (cycles - until_zero) % (self.reload + 1);
-            self.current = if remainder == 0 {
+            self.current = if self.reload == 0 {
                 0
             } else {
-                self.reload + 1 - remainder
+                self.reload - (cycles - until_zero) % self.reload
             };
         }
+    }
+
+    pub fn pending_mask(&self) -> u8 {
+        u8::from(self.pending) | (u8::from(self.pendsv_pending) << 1)
     }
 
     pub fn pending(&self, exception: u8) -> bool {
@@ -115,10 +115,21 @@ impl SysTick {
 
     pub fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
-            CSR => self.control = value & 3, // Processor clock is the only source.
-            RELOAD => self.reload = value & 0xff_ffff,
+            CSR => {
+                if value & 1 != 0 && self.control & 1 == 0 && self.current == 0 {
+                    self.current = self.reload;
+                }
+                self.control = value & 3; // Processor clock is the only source.
+            }
+            RELOAD => {
+                let old_reload = self.reload;
+                self.reload = value & 0xff_ffff;
+                if old_reload == 0 && self.current == 0 && self.control & 1 != 0 {
+                    self.current = self.reload;
+                }
+            }
             CURRENT => {
-                self.current = 0;
+                self.current = self.reload;
                 self.count_flag = false;
             }
             CALIBRATION => {}
@@ -147,16 +158,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn renode_systick_counts_down_for_either_reload_and_current_write_order() {
+        for registers in [[CURRENT, RELOAD], [RELOAD, CURRENT]] {
+            let mut timer = SysTick::default();
+            timer.set_frequency(100);
+            for address in registers {
+                timer.write(address, if address == RELOAD { 10 } else { 0 });
+            }
+            timer.write(CSR, 5);
+            assert_eq!(timer.read(CURRENT), Some(10));
+            // Model each 10 ms interval in a single virtual update.
+            for _ in 0..9 {
+                timer.tick(100);
+            }
+            assert_eq!(timer.read(CURRENT), Some(1));
+            timer.tick(100);
+            assert_eq!(timer.read(CURRENT), Some(10));
+            assert!(!timer.pending(SYSTICK));
+            timer.tick(100);
+            assert_eq!(timer.read(CURRENT), Some(9));
+        }
+    }
+
+    #[test]
     fn advances_fractional_clock_and_preserves_reload_phase_after_wrap() {
         let mut timer = SysTick::default();
         timer.set_frequency(2_500_000);
         timer.write(RELOAD, 3);
         timer.write(CSR, 3);
-        timer.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND); // 2 cycles, down to 2.
-        assert_eq!(timer.read(CURRENT), Some(2));
+        timer.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND); // Two cycles, down to one.
+        assert_eq!(timer.read(CURRENT), Some(1));
         assert!(!timer.pending(SYSTICK));
-        timer.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND); // 3 cycles, two to reach 0 and one to reload.
-        assert_eq!(timer.read(CURRENT), Some(3));
+        timer.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND); // Three cycles, one to wrap and two to count down.
+        assert_eq!(timer.read(CURRENT), Some(1));
         assert!(timer.pending(SYSTICK));
         assert_eq!(timer.read(CSR), Some(0x10007));
         assert_eq!(timer.read(CSR), Some(7));

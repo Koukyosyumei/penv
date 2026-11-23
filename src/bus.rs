@@ -352,7 +352,13 @@ impl Bus {
     pub fn tick_systick(&mut self) {
         let rate = self.step_hz();
         if let Some(timer) = &mut self.systick {
+            let before = timer.pending_mask();
             timer.tick(rate);
+            if timer.pending_mask() & !before != 0
+                && let Some(nvic) = &mut self.nvic
+            {
+                nvic.signal_pending_event();
+            }
         }
     }
 
@@ -1927,9 +1933,16 @@ impl Bus {
         }
         if width == 4
             && let Some(timer) = self.systick.as_mut()
-            && timer.write(address, value)
         {
-            return Ok(());
+            let before = timer.pending_mask();
+            if timer.write(address, value) {
+                if timer.pending_mask() & !before != 0
+                    && let Some(nvic) = &mut self.nvic
+                {
+                    nvic.signal_pending_event();
+                }
+                return Ok(());
+            }
         }
         if address == VTOR && width == 4 {
             let base = value & !0x7f;
@@ -2160,11 +2173,11 @@ impl Bus {
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
-            if rtc_clocked(self.h7_network_control.as_ref(), rtc)
-                && (self.f4_rcc.as_ref().and_then(|rcc| rcc.rtc) != Some(rtc.base)
-                    || self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked))
-            {
-                rtc.write(address, value);
+            if rtc_clocked(self.h7_network_control.as_ref(), rtc) {
+                let backup_unlocked = self.f4_rcc.as_ref().and_then(|rcc| rcc.rtc)
+                    != Some(rtc.base)
+                    || self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked);
+                rtc.write(address, value, backup_unlocked);
             }
             return Ok(());
         }

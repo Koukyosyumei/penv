@@ -116,7 +116,12 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
 
 fn without_comment(line: &str) -> &str {
     unquoted_delimiters(line, &['/'])
-        .find(|(index, _)| line[*index..].starts_with("//"))
+        .find(|(index, _)| {
+            let prefix = &line[..*index];
+            line[*index..].starts_with("//")
+                && !prefix.ends_with("@http:")
+                && !prefix.ends_with("@https:")
+        })
         .map_or(line, |(index, _)| &line[..index])
 }
 
@@ -1123,7 +1128,9 @@ fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String
             && !path.is_empty()
             && !path.chars().any(char::is_whitespace)
         {
-            // SVD register names are diagnostic metadata, not peripheral models.
+            if path == "https://dl.antmicro.com/projects/renode/svd/STM32F40x.svd.gz" {
+                map_f40x_otg_svd_defaults(machine).map_err(|e| entry.error(&e))?;
+            }
             continue;
         }
         let (range, rest) = command
@@ -1143,6 +1150,30 @@ fn configure_bus_init(entry: &Entry, machine: &mut Machine) -> Result<(), String
             .bus
             .map_bus_tag(parse(start)?, parse(end)?, parse(value)?)
             .map_err(|e| entry.error(&e))?;
+    }
+    Ok(())
+}
+
+fn map_f40x_otg_svd_defaults(machine: &mut Machine) -> Result<(), String> {
+    // Unmodeled OTG FS registers accessed during CubeMX host initialization.
+    // The REPL supplies an explicit USB:RESET tag for the global reset window.
+    const BASE: u32 = 0x5000_0000;
+    for (offset, reset) in [
+        (0x008, 0),          // GAHBCFG
+        (0x00c, 0x00000a00), // GUSBCFG
+        (0x100, 0x02000600), // HPTXFSIZ
+        (0x400, 0),          // HCFG
+        (0x408, 0x00003fff), // HFNUM
+        (0x440, 0),          // HPRT
+        (0xe00, 0),          // PCGCCTL
+    ] {
+        machine
+            .bus
+            .map_bus_tag(BASE + offset, BASE + offset + 3, reset)?;
+    }
+    for channel in 0..8 {
+        let address = BASE + 0x508 + channel * 0x20; // HCINT and HCINTMSK
+        machine.bus.map_bus_tag(address, address + 7, 0)?;
     }
     Ok(())
 }

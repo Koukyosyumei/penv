@@ -16,6 +16,8 @@ pub struct Thumb {
     basepri: u8,
     faultmask: bool,
     waiting_for_interrupt: bool,
+    waiting_for_event: bool,
+    event: bool,
     it_state: u8,
     negative: bool,
     zero: bool,
@@ -356,7 +358,7 @@ impl Thumb {
                 previous != 0
                     && u8::try_from(previous).is_ok_and(|exception| remaining.contains(exception))
             };
-            if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
+            if xpsr & (1 << 24) == 0 || !valid_mode {
                 return Err("invalid Cortex-M exception return frame".into());
             }
             if extended {
@@ -385,7 +387,7 @@ impl Thumb {
             self.it_state = (((xpsr >> 25) & 3) | ((xpsr >> 8) & 0xfc)) as u8;
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
-            return Ok(pc);
+            return Ok(pc & !1);
         }
         if target & 1 == 0 {
             return Err(format!(
@@ -396,7 +398,15 @@ impl Thumb {
     }
 
     pub fn sleeping(&self) -> bool {
-        self.waiting_for_interrupt
+        self.waiting_for_interrupt || self.waiting_for_event
+    }
+
+    fn signal_event(&mut self) {
+        if self.waiting_for_event {
+            self.waiting_for_event = false;
+        } else {
+            self.event = true;
+        }
     }
 
     pub fn service_interrupts(
@@ -407,6 +417,13 @@ impl Thumb {
     ) -> Result<bool, String> {
         bus.sample_nvic(&self.active_exceptions);
         bus.tick_systick();
+        if bus
+            .nvic
+            .as_mut()
+            .is_some_and(|nvic| nvic.take_pending_event())
+        {
+            self.signal_event();
+        }
         if self.faultmask || (self.interrupts_masked && !self.waiting_for_interrupt) {
             return Ok(false);
         }
@@ -449,6 +466,7 @@ impl Thumb {
             if self.interrupts_masked {
                 return Ok(false);
             }
+            self.waiting_for_event = false;
             *pc = self.exception_entry(exception, *pc, r, bus)?;
             if matches!(exception, PENDSV | SYSTICK) {
                 bus.systick.as_mut().unwrap().acknowledge(exception);
@@ -780,7 +798,9 @@ impl Thumb {
             }
             0xbe00..=0xbeff => return Ok(false),
             0xbf00 | 0xbf10 => {}
+            0xbf20 => self.waiting_for_event = !std::mem::take(&mut self.event),
             0xbf30 => self.waiting_for_interrupt = true,
+            0xbf40 => self.signal_event(),
             0xbf01..=0xbfef if self.thumb2 && !in_it && inst & 15 != 0 => {
                 self.it_state = inst as u8;
             }
@@ -1001,6 +1021,39 @@ mod tests {
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
         assert_eq!((pc, r[0], r[13]), (0xa0, 42, other_task + 32));
+    }
+
+    #[test]
+    fn renode_wfe_wakes_on_a_disabled_irq_pending_with_sevonpend() {
+        const TARGET: u32 = 0x2000_1000;
+        for enabled in [false, true] {
+            let mut bus = Bus::default();
+            bus.map_ram(0x2000_0000, 0x2000).unwrap();
+            bus.map_nvic(0xc0, None).unwrap();
+            let mut output = std::io::sink();
+            bus.write(0xe000_ed10, 4, u32::from(enabled) << 4, &mut output)
+                .unwrap();
+            let mut pc = 0x2000_0000;
+            bus.write(pc, 2, 0xbf20, &mut output).unwrap(); // wfe
+            bus.write(pc + 2, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
+            let mut r = [0; 32];
+            r[0] = TARGET;
+            r[1] = 0xdead_beef;
+            let mut thumb = Thumb::default();
+            thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
+            assert!(thumb.sleeping());
+            assert_eq!(bus.read_ram::<4>(TARGET).unwrap(), 0);
+            bus.nvic
+                .as_mut()
+                .unwrap()
+                .set_line(5, true, &thumb.active_exceptions);
+            assert!(!thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());
+            assert_eq!(thumb.sleeping(), !enabled);
+            if enabled {
+                thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
+                assert_eq!(bus.read_ram::<4>(TARGET).unwrap(), 0xdead_beef);
+            }
+        }
     }
 
     #[test]

@@ -101,8 +101,14 @@ impl Stm32Rtc {
         }
     }
 
-    pub fn write(&mut self, address: u32, value: u32) {
+    pub fn write(&mut self, address: u32, value: u32, backup_unlocked: bool) {
         let offset = address - self.base;
+        if offset == 0x0c {
+            self.status &= value | !(SYNC | 0xff00);
+        }
+        if !backup_unlocked {
+            return;
+        }
         if offset == 0x24 {
             self.key = match (self.key, value as u8) {
                 (0 | 2, 0xca) => 1,
@@ -114,9 +120,6 @@ impl Stm32Rtc {
         if let 0x50..=0x9c = offset {
             self.backup[((offset - 0x50) / 4) as usize] = value;
             return;
-        }
-        if offset == 0x0c {
-            self.status &= value | !(SYNC | 0xff00);
         }
         if self.key != 2 {
             return;
