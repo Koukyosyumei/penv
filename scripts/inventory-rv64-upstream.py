@@ -221,6 +221,10 @@ def infrastructure_fixture(source, line):
 
 
 def disposition(path, name, context):
+    if path.name == "BeagleV-StarLight.robot" and name in {
+        "Should Boot U-Boot", "Should Boot U-Boot With External PMP",
+    }:
+        return "pass", "Fixed two-machine StarLight assets and ordered UART boot assertions verified (rv64-starlight-boot.md)"
     if path.name in BOARD:
         return "partial", "Existing CLI run; exact Robot semantics require audit"
     if path.name == "per-core-registration.robot":

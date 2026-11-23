@@ -45,9 +45,8 @@ class Guest:
         self.process.stdin.write(line + b"\r")
 
     def verify_uboot(self):
-        self.expect(rb"OpenSBI v0\.9")
-        self.expect(rb"Platform Name[ \t]+: StarFive")
-        self.expect(rb"U-Boot 2021\.01")
+        for line in (rb"OpenSBI v0\.9", rb"Platform Name\s+: StarFive", rb"U-Boot 2021\.01"):
+            self.expect(line + rb"[^\r\n]*[\r\n]")
         self.expect(rb"dwmac\.10020000")
 
     def login(self, verify_uboot=True):
@@ -197,8 +196,10 @@ def main():
                         help="connect the two guest ports to a local penv Ethernet switch")
     parser.add_argument("--upstream-cases", action="store_true",
                         help="verify the StarLight Robot cases")
+    parser.add_argument("--upstream-boot-only", action="store_true",
+                        help="verify the upstream two-machine U-Boot case")
     parser.add_argument("--external-pmp", action="store_true",
-                        help="run the three upstream cases with external PMP")
+                        help="run the selected upstream cases with external PMP")
     parser.add_argument("--recovery", action="store_true",
                         help="verify Ethernet reopen and reload one machine after Linux reboot")
     reboot = parser.add_mutually_exclusive_group()
@@ -215,8 +216,10 @@ def main():
         parser.error("--switch-port requires --ports")
     if args.upstream_cases and (args.switch_port is None or args.recovery):
         parser.error("--upstream-cases requires a switch and cannot be combined with --recovery")
-    if args.external_pmp and not args.upstream_cases:
-        parser.error("--external-pmp requires --upstream-cases")
+    if args.upstream_boot_only and (args.upstream_cases or args.ports or args.recovery):
+        parser.error("--upstream-boot-only cannot be combined with Ethernet or recovery")
+    if args.external_pmp and not (args.upstream_cases or args.upstream_boot_only):
+        parser.error("--external-pmp requires --upstream-cases or --upstream-boot-only")
     args.logs.mkdir(parents=True, exist_ok=True)
     args.script = args.renode / "scripts/single-node/beaglev_starlight.resc"
     suffix = " With External PMP" if args.external_pmp else ""
@@ -227,7 +230,13 @@ def main():
         if args.external_pmp:
             temporary = tempfile.TemporaryDirectory(prefix="penv-starlight-pmp-")
             args.script = external_pmp_script(args, temporary.name)
-        if args.ports:
+        if args.upstream_boot_only:
+            for name in ("machine0", "machine1"):
+                guests.append(Guest(args, name))
+            for guest in guests:
+                guest.verify_uboot()
+            print(f"PASS Should Boot U-Boot{suffix}", flush=True)
+        elif args.ports:
             first, second = args.ports
             if args.switch_port is not None and not args.upstream_cases:
                 switch = start_switch(args)
