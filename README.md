@@ -1659,3 +1659,21 @@ target/release/penv run --script "$e/reconnect.resc" --platform-root ../renode
 ```
 
 `cargo test` 220件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格199件、部分検証18件、未達569件です。中継ノードと外部・別マシンの接続解除が残っています。
+
+### backlog-network-bb984cbcaa5f-1
+
+上流 `SDCard.robot` のファイル装着3件を移植しました。固定 H743 REPL の同型 SDMMC で、上流 Robot ファイル自身を容量 `0x1000` で装着できることと、存在しないファイル・空パスの上流診断を確認しました。このプローブでは SDHC の最小容量までメモリー上でゼロ埋めします。元ファイルへの永続化と、アドレスを指定しない単体 SDMMC の構築は残っています。共有変更は ARM 担当へ引き渡しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-display-sd-smoke.sh ~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+```
+
+`cargo test` 220件、固定 STM32H7 REPL 7構成、構文診断3件、Zephyr Blinky・Button・表示・SD の実 ELF が通過しました。証拠は `~/.local/state/penv-dispatch/evidence/h7-sd-file.5coRI4Lq` にあります。台帳は等価合格202件、部分検証18件、未達566件です。GPIO の中継ケースには同一ノードの受信・再送信を表す接続モデルが必要です。

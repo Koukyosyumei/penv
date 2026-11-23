@@ -333,6 +333,27 @@ impl Plan {
                     high,
                 });
             }
+            ["machine", "SdCardFromFile", file, controller, size] => {
+                let node = self.monitor_node()?;
+                let file = resolve(*file)?;
+                let path = if file.is_empty() {
+                    PathBuf::new()
+                } else {
+                    monitor::local_path(file, source, root)
+                };
+                let controller = resolve(*controller)?;
+                let controller = controller
+                    .strip_prefix("sysbus.")
+                    .unwrap_or(controller)
+                    .to_owned();
+                let size = crate::platform::number(resolve(*size)?)? as usize;
+                self.actions.push(Action::AttachSdFile {
+                    node,
+                    controller,
+                    path,
+                    size,
+                });
+            }
             ["sysbus", "UnregisterFromAddress", address] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;

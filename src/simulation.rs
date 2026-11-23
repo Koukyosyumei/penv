@@ -133,6 +133,12 @@ pub enum Action {
         address: u32,
         byte: bool,
     },
+    AttachSdFile {
+        node: usize,
+        controller: String,
+        path: std::path::PathBuf,
+        size: usize,
+    },
     UnregisterAddress {
         node: usize,
         address: u32,
@@ -447,6 +453,17 @@ pub fn run(
                         node.name
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::AttachSdFile {
+                    node,
+                    controller,
+                    path,
+                    size,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .attach_sd_file(&controller, &path, size)?;
                 }
                 Action::UnregisterAddress { node, address } => {
                     simulation.nodes[node]

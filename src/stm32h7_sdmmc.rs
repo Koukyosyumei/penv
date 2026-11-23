@@ -55,6 +55,43 @@ impl Sdmmc {
         Ok(())
     }
 
+    pub(crate) fn attach_file(
+        &mut self,
+        path: &std::path::Path,
+        size: usize,
+    ) -> Result<(), String> {
+        use std::io::Read;
+
+        if path.as_os_str().is_empty() {
+            return Err("No image file provided.".into());
+        }
+        let file = std::fs::File::open(path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                format!("Could not find image file '{}'", path.display())
+            } else {
+                format!("{}: {error}", path.display())
+            }
+        })?;
+        if size == 0 {
+            return Err("SD image size must be nonzero".into());
+        }
+        let capacity = size
+            .div_ceil(CAPACITY_UNIT)
+            .checked_mul(CAPACITY_UNIT)
+            .ok_or("SD image capacity exceeds host address space")?;
+        let mut image = Vec::new();
+        image
+            .try_reserve_exact(capacity)
+            .map_err(|_| "cannot allocate SD image")?;
+        file.take(size as u64)
+            .read_to_end(&mut image)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        image.resize(capacity, 0);
+        self.attach(image)?;
+        self.reset();
+        Ok(())
+    }
+
     fn flags(&self) -> u32 {
         self.status
             | if self.fifo.is_empty() {

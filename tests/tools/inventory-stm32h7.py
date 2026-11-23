@@ -320,6 +320,12 @@ def triage(row):
         status, reason = 'PASS', '固定 Cortex-M7 と同じ 10 命令と R4 の期待値を照合。src/thumb/ge_upstream.rs'
         if '(usub8)' in name:
             reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
+    elif suite == 'SDCard.robot' and name in {
+        'Should Be Able To Load Existing File',
+        'Should Fail At Loading Nonexistent File',
+        'Should Fail At Loading Empty Path',
+    }:
+        status, reason = 'PASS', '同じファイル・空パス・容量引数で機器への装着成功または上流の診断を照合。固定H743の同型SDMMCを使用。tests/stm32h7-sd-file-robot.sh'
     elif suite == 'GPIODetachingTests.cs' and name == 'ShouldConnectGPIOToReceiverAndReturnTheSameReceiver':
         status, reason = 'PASS', '共通 GPIO 接続で、番号0の入力1への接続・受信先の同一性・番号1と2の空端点を照合。src/stm32h7_gpio.rs'
     elif suite == 'GPIODetachingTests.cs' and name == 'ShouldDisconnectEndpointOfUnregisteredPeripheral':

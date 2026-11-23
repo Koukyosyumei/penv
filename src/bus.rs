@@ -151,6 +151,7 @@ pub struct Bus {
     h7_dma2d: Vec<Dma2d>,
     h7_hsem: Option<Hsem>,
     h7_sdmmc: Vec<Sdmmc>,
+    h7_sdmmc_names: Vec<String>,
     h7_crypto: Vec<Crypto>,
     h7_dsi: Vec<Dsi>,
     designware_usb: Vec<DesignWareUsb>,
@@ -854,9 +855,24 @@ impl Bus {
         }
     }
 
-    pub fn map_h7_sdmmc(&mut self, device: Sdmmc) -> Result<(), String> {
+    pub(crate) fn attach_sd_file(
+        &mut self,
+        name: &str,
+        path: &std::path::Path,
+        size: usize,
+    ) -> Result<(), String> {
+        let index = self
+            .h7_sdmmc_names
+            .iter()
+            .position(|controller| controller == name)
+            .ok_or_else(|| format!("unknown SDMMC controller {name:?}"))?;
+        self.h7_sdmmc[index].attach_file(path, size)
+    }
+
+    pub fn map_h7_sdmmc(&mut self, name: &str, device: Sdmmc) -> Result<(), String> {
         self.check_peripheral_range(device.base, Sdmmc::SIZE)?;
         self.h7_sdmmc.push(device);
+        self.h7_sdmmc_names.push(name.to_owned());
         Ok(())
     }
 
