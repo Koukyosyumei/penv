@@ -223,9 +223,10 @@ Robot は要求の直後に既に出ているログを最長 3 仮想秒待ち�
 `Sleeping` の後 1 秒の無通信と解除後 3 回の IRQ、例外復帰のケースは 4 回の IRQ を検査します。
 実行は `rtc` または `faultmask` を第 2 引数に渡すと個別に選択できます。
 
-今回の検証ログでは Rust の 80 テスト、Cortex-M4F フォールト ELF 16 件、FreeRTOS
+今回の検証ログでは Rust の 81 テスト（`cargo-test-final.log`）、Cortex-M4F フォールト ELF 16 件、FreeRTOS
 FPU 回帰、フラッシュ診断の終了状態が 0 でした。`terminal/` には UART チェック
 の小型 ELF と、成功、未改行バイトによるアイドル違反、8 秒の待ち時間切れのログがあります。
+同じ成功・失敗条件は CLI 統合テストにも追加しました。
 
 FAULTMASK 2 件のタイムスタンプは `faultmask-check.log` と
 `faultmask-exit-check.log` にあります。1 秒の無通信、解除後の IRQ 3 回、例外復帰後の
