@@ -59,6 +59,8 @@ Options:
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
+  --set-mtvec CPU:VALUE  Initialize the named RV64 machine trap vector
+  --translate-read CPU:ADDRESS  Translate an RV64 address for a data read
   --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
   --write-pmp-register CPU@NAME:VALUE  Write a named external PMP register
   --set-gpr CPU@xN:VALUE  Initialize an RV64 integer register (x1 through x31)
@@ -110,6 +112,8 @@ enum SetupAction {
     ResetCpu(String),
     StepCpu(String),
     SetMstatus(String, u64),
+    SetMtvec(String, u64),
+    TranslateRead(String, u64),
     SetFreg(String, usize, u64),
     SetGpr(String, usize, u64),
     WritePmpRegister(String, String, u64),
@@ -427,6 +431,23 @@ fn run() -> Result<ExitCode, String> {
                     name.to_ascii_lowercase(),
                     parse_address64(value)?,
                 ));
+            }
+            Some(option @ ("--set-mtvec" | "--translate-read")) => {
+                let error = || format!("{option} requires CPU:VALUE");
+                let argument = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or_else(error)?;
+                let (cpu, value) = argument
+                    .split_once(':')
+                    .filter(|(cpu, _)| !cpu.is_empty())
+                    .ok_or_else(error)?;
+                let value = parse_address64(value)?;
+                setup_actions.push(if option == "--set-mtvec" {
+                    SetupAction::SetMtvec(cpu.to_owned(), value)
+                } else {
+                    SetupAction::TranslateRead(cpu.to_owned(), value)
+                });
             }
             Some(option @ ("--set-mstatus" | "--read-register" | "--read-register-now")) => {
                 let delimiter = if option == "--set-mstatus" { ':' } else { '@' };
@@ -788,6 +809,20 @@ fn run() -> Result<ExitCode, String> {
                         .expect("validated RV64 CPU")
                         .reset_from(initial);
                     machine.bus.take_reservation64(hart);
+                }
+                SetupAction::SetMtvec(cpu, value) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU")
+                        .privilege
+                        .set_vector(*value);
+                }
+                SetupAction::TranslateRead(cpu, address) => {
+                    let physical = machine.rv64_translate_read(cpu, *address)?;
+                    eprintln!("penv: translation {cpu}@{address:#018x} = {physical:#018x}");
                 }
                 SetupAction::SetMstatus(cpu, value) => {
                     let hart = machine.rv64_hart_by_name(cpu)?;

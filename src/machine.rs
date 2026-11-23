@@ -198,6 +198,19 @@ impl Machine {
             .ok_or_else(|| format!("unknown named RV64 CPU {name:?}"))
     }
 
+    pub(crate) fn rv64_translate_read(&mut self, name: &str, address: u64) -> Result<u64, String> {
+        let id = self.rv64_hart_by_name(name)?;
+        let hart = if id == 0 {
+            &self.primary
+        } else {
+            &self.secondary[id - 1]
+        };
+        hart.rv64
+            .as_ref()
+            .expect("validated RV64 CPU")
+            .translate_read(&mut self.bus, address)
+    }
+
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
         let hart = std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)

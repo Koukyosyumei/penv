@@ -347,6 +347,11 @@ def disposition(path, name, context):
         return "pass", "Fixed instruction words, operands, PC and trap cause verified (rv64-ldsd.md)"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
+    if path.name == "memory-access.robot":
+        if name == "Should Report Illegal Address For Instruction Fetch":
+            return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"
+        if name == "Should Report Illegal Address For Store":
+            return "pass", "Fixed fixture executes LW; physical address diagnostic and trap cause 5 verified (rv64-physical-address.md)"
     if path.name == "riscv-external-pmp.robot" and name in {
         "Should Access All 64-Bit Address Registers From Monitor",
         "Should Access All 64-Bit Address Registers From CPU",
@@ -470,6 +475,13 @@ def main():
                         variant_status, variant_reason = fixture_status(
                             status, reason, fixtures.evidence(body, parameter), corpus,
                             f"{name}\n{context}")
+                        if path.name == "memory-access.robot" and name == "Should Throw Monitor Exception":
+                            if parameter.startswith("${PLAT_RISCV64}"):
+                                variant_status = "pass"
+                                variant_reason = "Fixed RV64 read translation rejects the illegal physical address (rv64-physical-address.md)"
+                            elif parameter.startswith("${PLAT_RISCV32}"):
+                                variant_status = "out"
+                                variant_reason = "Fixed template uses CPU.RiscV32 rv32i and tests its 32-bit address limit"
                         emit((label, relative, no, name, parameter, variant_status, variant_reason))
                     if parameters:
                         continue

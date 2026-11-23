@@ -53,6 +53,9 @@ impl TranslationCache {
             _ => (7, 15),
         };
         let physical = if mode == Mode::Machine || satp >> 60 == 0 {
+            if address >> 56 != 0 {
+                return Err(Fault::illegal_physical(access_cause, address));
+            }
             address
         } else {
             let virtual_page = address >> 12;

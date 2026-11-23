@@ -126,6 +126,7 @@ pub(crate) struct Fault {
     cause: u64,
     value: u64,
     output: Option<std::io::Error>,
+    illegal_physical: bool,
 }
 
 impl Fault {
@@ -134,7 +135,27 @@ impl Fault {
             cause,
             value,
             output: None,
+            illegal_physical: false,
         }
+    }
+
+    pub(crate) fn illegal_physical(cause: u64, address: u64) -> Self {
+        Self {
+            illegal_physical: true,
+            ..Self::new(cause, address)
+        }
+    }
+
+    fn physical_diagnostic(&self) -> String {
+        let action = if self.cause == 1 {
+            "execute code"
+        } else {
+            "access memory"
+        };
+        format!(
+            "Trying to {action} from an illegal address outside of the physical memory address space: {:#x}",
+            self.value
+        )
     }
 }
 
@@ -224,6 +245,17 @@ impl Rv64 {
         self.privilege.write(0x300, value, self.misa());
     }
 
+    pub(crate) fn translate_read(&self, bus: &mut Bus, address: u64) -> Result<u64, String> {
+        self.translations
+            .translate(bus, &self.privilege, address, 1, READ)
+            .map_err(|fault| {
+                format!(
+                    "Failed to translate address {address:#x}: {}",
+                    self.describe(&fault)
+                )
+            })
+    }
+
     pub fn validate(&self, bus: &mut Bus) -> Result<(), String> {
         self.fetch(bus)
             .map(|_| ())
@@ -231,6 +263,9 @@ impl Rv64 {
     }
 
     fn describe(&self, fault: &Fault) -> String {
+        if fault.illegal_physical {
+            return fault.physical_diagnostic();
+        }
         if let Some(error) = &fault.output {
             return format!("RV64 pc={:#018x}: UART: {error}", self.pc);
         }
@@ -338,10 +373,13 @@ impl Rv64 {
             }
             Ok(step) => Ok(step),
             Err(fault) => {
-                if fault.output.is_some() {
+                if fault.output.is_some() || (fault.illegal_physical && fault.cause == 1) {
                     return Err(self.describe(&fault));
                 }
                 if let Some(target) = self.privilege.trap(self.pc, fault.cause, fault.value) {
+                    if fault.illegal_physical {
+                        eprintln!("penv: {}", fault.physical_diagnostic());
+                    }
                     self.pc = target;
                     return Ok(Step::Trap);
                 }
@@ -723,6 +761,7 @@ impl Rv64 {
                         cause: 7,
                         value: address,
                         output: Some(error),
+                        illegal_physical: false,
                     });
                 }
                 Err(_) => return Err(Fault::new(7, address)),
