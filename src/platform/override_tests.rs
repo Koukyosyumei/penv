@@ -463,3 +463,25 @@ fn renode_empty_ctor_ambiguous() {
     .unwrap_err();
     assert!(error.contains("AmbiguousCtor:"));
 }
+
+#[test]
+fn renode_creation_type_missing_type() {
+    let error = check_string("\nsomeDevice: NotExistingType", None).unwrap_err();
+    assert!(error.contains("TypeNotResolved:"));
+}
+
+#[test]
+fn renode_creation_type_external_registration() {
+    let error = check_string(
+        "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockExternal @ sysbus\n",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("NoUsableRegisterInterface:"));
+}
+
+#[test]
+fn renode_creation_type_protected_constructor() {
+    let error = check_string("\np: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor @ sysbus 0x0\n", None).unwrap_err();
+    assert!(error.contains("NoCtor:"));
+}

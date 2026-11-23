@@ -1218,6 +1218,7 @@ fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
     Ok(())
 }
 
+const MOCK_EXTERNAL: &str = "Antmicro.Renode.UnitTests.Mocks.MockExternal";
 const EMPTY_PERIPHERAL: &str = "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
 
 fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
@@ -1303,6 +1304,17 @@ fn build_entries(
                     .bus
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
+            }
+            MOCK_EXTERNAL => {
+                keys(entry, &[])?;
+                if !matches!(entry.registration.as_deref(), None | Some("none")) {
+                    return Err(entry.error(
+                        "NoUsableRegisterInterface: external object is not a bus peripheral",
+                    ));
+                }
+            }
+            "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor" => {
+                return Err(entry.error("NoCtor: model has no public constructor"));
             }
             EMPTY_PERIPHERAL => {
                 validate_empty_peripheral_constructor(entry)?;
@@ -1499,10 +1511,19 @@ fn build_entries(
                 || matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL)
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
-            _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
+            _ => {
+                return Err(entry.error(&format!(
+                    "TypeNotResolved: unsupported platform model {:?}",
+                    entry.model
+                )));
+            }
         }
     }
-    if check_only && entries.iter().all(|entry| entry.model == EMPTY_PERIPHERAL) {
+    if check_only
+        && entries
+            .iter()
+            .all(|entry| matches!(entry.model.as_str(), EMPTY_PERIPHERAL | MOCK_EXTERNAL))
+    {
         return Ok(machine);
     }
     if cpus.is_empty() || !ram {
