@@ -442,6 +442,11 @@ impl Bus {
         if !system && !reload {
             return false;
         }
+        self.reset_cortex_m_devices(reload);
+        true
+    }
+
+    pub fn reset_cortex_m_devices(&mut self, reload: bool) {
         if let Some(nvic) = self.nvic.as_mut() {
             nvic.reset();
         }
@@ -489,7 +494,6 @@ impl Bus {
         if let Some(exti) = self.exti.as_mut() {
             exti.reset(self.gpio_exti_levels);
         }
-        true
     }
 
     pub fn sample_nvic(&mut self, active: u64) {

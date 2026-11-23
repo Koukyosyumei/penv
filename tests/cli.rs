@@ -42,6 +42,24 @@ fn upstream_stm32f072_hello_world_boots_elf_and_hex() {
 }
 
 #[test]
+#[ignore = "requires the upstream Renode tree and public STM32F072 Hello World ELF"]
+fn upstream_stm32f072_cpuwait_defers_elf_boot_until_released() {
+    let fixture = "stm32f072-cpuwait.resc";
+    let held = run_upstream_stm32f072_script(fixture, "1000000");
+    assert_eq!(held.status.code(), Some(2), "{held:?}");
+    assert!(held.stdout.is_empty(), "{held:?}");
+
+    let released = run_upstream_stm32f072_script(fixture, "11000000");
+    assert!(released.status.success(), "{released:?}");
+    assert!(
+        released
+            .stdout
+            .ends_with(b"Hello World! stm32f072b_disco\r\n"),
+        "{released:?}"
+    );
+}
+
+#[test]
 #[ignore = "requires the upstream Renode tree and the public STM32F0 CRC ELF"]
 fn upstream_stm32f072_crc_firmware_passes_840_cases() {
     let result = run_upstream_stm32f072_script("stm32f072-crc.resc", "150000000");

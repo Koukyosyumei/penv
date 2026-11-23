@@ -36,6 +36,10 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    CpuWait(String, bool),
+    CpuReset(String),
+    CpuPc(String, u32),
+    MachineReset,
     Button(String, bool),
     ButtonPulse(String),
     NvicGpio(String, u8, bool),
@@ -103,6 +107,12 @@ pub fn run(
                 })
             }
             Action::RunFor(_) => Err("RunFor requires a Cortex-M platform".into()),
+            Action::CpuWait(cpu, asserted) => {
+                machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
+            }
+            Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
+            Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
+            Action::MachineReset => machine.reset_cortex_m_machine().map(|()| None),
             Action::Button(name, pressed) => {
                 machine.bus.set_named_button(name, *pressed).map(|()| None)
             }
@@ -449,6 +459,28 @@ fn execute(
                 state,
                 timeout,
                 hold,
+            ))
+        }
+        [target, "PC", address] if !boot.runtime.is_empty() => {
+            let cpu = resolve(target)?;
+            Some(Action::CpuPc(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                crate::parse_address(resolve(address)?)?,
+            ))
+        }
+        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
+        ["machine" | "mach", "Reset"] => Some(Action::MachineReset),
+        [target, "Reset"] => {
+            let cpu = resolve(target)?;
+            Some(Action::CpuReset(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+            ))
+        }
+        [target, "CpuWaitSignal", state @ ("Set" | "Unset")] => {
+            let cpu = resolve(target)?;
+            Some(Action::CpuWait(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                *state == "Set",
             ))
         }
         ["emulation", "RunFor", duration] => {

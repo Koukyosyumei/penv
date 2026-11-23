@@ -312,18 +312,20 @@ def classify_robot(name, case, body, parameter):
         if "Enable BusFault" in body:
             return OUT, "Cortex-M55 with configurable BusFault", "Asserts BusFault handler, priority or syndrome; HardFault adaptation is represented by the disabled-BusFault cases"
         if case == "Should Replace External IRQ With HardFault On Vector BusFault":
-            return OPEN, V6, "Shared IRQ16 vector-fault replacement, preserved pending state and HardFault PC; SCB syndrome is M55-only"
+            return PARTIAL, V6, "renode_irq_vector_fault_preserves_pending_and_reuses_frame; same fault offset 0x40, IRQ16 pending, HardFault PC and SP; M55 syndrome registers absent"
         raise ValueError(f"Unreviewed fault case: {case}")
     if name == "arm-cortex-m-exception-return":
         if "trustZone=True" in parameter or "TrustZone enabled" in parameter or "Insecure Code" in body:
             return OUT, "Cortex-M33 with TrustZone", "Uses BXNS/BLXNS or SAU and FNC_RETURN security transition"
         if case == "Should Return From Exception When Using Allowed Instruction":
             return PASS, V6, "renode_nmi_bx_lr_restores_interrupted_thread; same reset/NMI PCs, NOP, BX LR and SetPendingIRQ 2"
+        if case == "Should Not Return From Exception When In Thread Mode":
+            return PASS, V6, "renode_thread_bx_and_nmi_handler_blx_do_not_unstack; load the same 0xffffffb8 via literal, BX in Thread mode, same PC"
+        if case == "Should Not Return From Insecure Mode When Not Using TrustZone":
+            return PASS, V6, "renode_nonsecure_return_token_branches_without_trustzone; literal 0xfeffffff, same BX and PC 0xfefffffe"
         ports = {
-            "Should Not Return From Exception When Loading PC From Vector Table": "renode_exception_vector_load_does_not_unstack_an_exc_return_value; external IRQ vector replaces MPU-induced HardFault stimulus",
-            "Should Not Return From Exception When In Thread Mode": "renode_thread_bx_and_handler_blx_do_not_unstack; Armv6-M EXC_RETURN replaces Armv8-M token",
-            "Should Not Return From Exception When Not Using Allowed Instruction": "renode_thread_bx_and_handler_blx_do_not_unstack; IRQ16 replaces NMI and Armv6-M EXC_RETURN replaces Armv8-M token",
-            "Should Not Return From Insecure Mode When Not Using TrustZone": "renode_nonsecure_return_token_branches_without_trustzone; shared branch result on Armv6-M, no Armv8-M security state",
+            "Should Not Return From Exception When Loading PC From Vector Table": "renode_exception_vector_load_does_not_unstack_an_exc_return_value; same NMI and HardFault vector 0xffffffb0, unmapped 0x2000 stack instead of an Armv8-M MPU denial",
+            "Should Not Return From Exception When Not Using Allowed Instruction": "renode_thread_bx_and_nmi_handler_blx_do_not_unstack; same NMI and BLX LR, Armv6-M EXC_RETURN produces PC 0xfffffff8",
         }
         return PARTIAL, V6, ports[case]
     if name == "arm-cortex-m-interrupts":
@@ -335,7 +337,13 @@ def classify_robot(name, case, body, parameter):
     if name == "arm-cortex-m-signals":
         if "DWT" in case or "Clocked State" in case:
             return PARTIAL, F072, "renode_systick_external_clock_gate_survives_reset and upstream Blinky clock variant; original RA8M1/SAMD51 CPU and DWT checkpoints absent"
-        return OPEN, V6, "RA8M1 Cortex-M85 fixture; CPUWAIT/CPU reset stimulus is portable, including deferred SP/PC fetch with a minimal local vector table"
+        if case == "CPU Should Not Read Vector Table Until After CPU Wait Signal Is Deasserted":
+            return PARTIAL, V6, "renode_cpuwait_latches_only_at_reset_and_releases_at_sync_point plus upstream_stm32f072_cpuwait_defers_elf_boot_until_released; RA8M1 ELF and exact vector addresses replaced"
+        if case == "Emulation Reset Should Halt CPU When CPU Wait Signal Set":
+            return PASS, V6, "renode_initial_cpuwait_prevents_execution_after_machine_reset; initial signal asserted, reset, unmapped PC 0xdeadbeef stays halted"
+        if case == "CPU Wait Signal Should Unhalt CPU When Deasserted After Reset":
+            return PASS, V6, "renode_cpuwait_releases_with_an_explicit_pc; assert/reset/write PC 0x100/deassert/synchronize, halted transitions True to False"
+        return PASS, V6, "renode_cpuwait_latches_only_at_reset_and_releases_at_sync_point; retains signal across reset and compares the same counter address and 0.1 s intervals"
     if name == "arm-cortex-m-fpu":
         model = ("K6xF Cortex-M4F" if "nxp-k6xf" in body else
                  "Armv8-M with TrustZone and FPU" if "V8M" in body else "Cortex-M with FP extension")

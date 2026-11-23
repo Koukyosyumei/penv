@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 14 | 35 | 64 | 239 |
+| Renode Robot | 113 | 21 | 35 | 57 | 239 |
 | Renode Infrastructure NUnit | 134 | 2 | 0 | 132 | 9 |
-| 合計 | **247** | **16** | **35** | **196** | **248** |
+| 合計 | **247** | **23** | **35** | **189** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植35件と未達196件が残る。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植35件と未達189件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -88,7 +88,7 @@ Cortex-M55 の CFSR/HFSR/BFAR、BusFault 有効化、ITSTATE、TrustZone、FP �
 | HardFault 中の NMI が `ldr r0, =0x100000; msr msp, r0; bx lr` を実行 | 復帰時の読み出しが失敗して NMI を終了。SP `0x100020` までフレームを消費し、HardFault の状態でロックアップ |
 | 読み出しだけが失敗するスタックで、スレッドから起動した NMI が `nop; bx lr` を実行 | SP `0x100000`、EXC_RETURN `0xFFFFFFF9` と保存フレームの8ワードを保持して HardFault へテールチェーン。Fault を解除すると同じフレームでスレッドに復帰 |
 
-上流の Cortex-M55 は一部のケースで BusFault を有効化する。Armv6-M では HardFault に昇格するため、その例外番号とベクターを検証した。CFSR、HFSR、SHCSR、ITSTATE、FP、TrustZone の観測は対象外。通常の例外復帰で保留中の割り込みを選ぶテールチェーンと、ベクター取得中に到着する割り込みの優先順位評価は残件。Fault 注入は Rust テスト内で行い、公開 STM32F072 イメージは既存動作の回帰に用いる。
+上流の Cortex-M55 は一部のケースで BusFault を有効化する。Armv6-M では HardFault に昇格するため、その例外番号とベクターを検証した。CFSR、HFSR、SHCSR、ITSTATE、FP、TrustZone の観測は対象外。通常の例外復帰で保留済みの割り込みへ進むテールチェーンは以下で検証した。ベクター取得中に新たに到着する割り込みの優先順位評価は残件。Fault 注入は Rust テスト内で行い、公開 STM32F072 イメージは既存動作の回帰に用いる。
 
 ```sh
 cargo test --locked stacking_fault
@@ -132,4 +132,24 @@ cargo test --locked renode_stm32_usart
 ```sh
 cargo test --locked stm32_usart
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-timing-evidence
+```
+
+
+## Cortex-M0 の例外復帰と CPUWAIT リセット境界
+
+固定上流の `arm-cortex-m-signals.robot` と Infrastructure の `CortexM.cs` を参照した。CPUWAIT はアサートだけでは実行中の CPU を止めず、リセット時に保持状態へ入る。保持中は PC/SP のベクター取得を保留する。解除後の同期点でベクターを取得するか、保持中に PC が明示設定された場合はその PC を保持する。同期点ではゲスト命令を実行しない。REPL の `isCpuWaitSignalSet` と RESC の `cpu CpuWaitSignal Set/Unset`、`cpu Reset`、`machine Reset`、`emulation RunToNearestSyncPoint` で再現できる。同期点は penv の次の仮想ステップで扱う。
+
+- 0.1秒ごとにアドレス `0x4` のカウンターを観測し、アサート後もリセット前は増加し、リセット後は停止することと、信号がリセットをまたいで維持されることを確認した。RA8M1 固有の ELF とベクター値を検査する行は部分移植として残し、同じ遅延取得を Cortex-M0 のローカルベクターと公開 F072 Hello World ELF の両方で検査した。
+- 固定上流の `arm-cortex-m-exception-return.robot` にある Thread の `BX` では `0xffffffb8` と `0xfeffffff` をリテラルからロードし、同じ着地点を確認した。NMI ハンドラーの `BLX LR` はフレームを取り出さず、Armv6-M の EXC_RETURN に対応する `0xfffffff8` へ分岐する。NMI のアンスタック Fault から HardFault ベクターの値 `0xffffffb0` を PC に読み込むケースでは、MPU の代わりに未マップのスタックを用いた。
+- 例外復帰時、宛先コンテキストより優先度の高い保留割り込みへ保存フレームの読み出し前にテールチェーンする。読み出しを失敗させたフレームを保持し、NMI → IRQ16 → IRQ17 の順に処理した後、同じフレームから Thread に戻れることを検査した。ベクター読出し Fault の移植では IRQ16 の保留と単一フレームを保持したまま HardFault に遷移することを検査した。
+
+RA8M1 のリセットマクロとホスト側 pause/halt、M33 MPU、M55 固有の Fault 状態レジスタ、ベクター取得中の新規割り込み到着は残件。公開 ELF の CPUWAIT 保持中の無出力と解除後の UART 完了マーカーは通常の RESC/CLI で検証した。
+
+```sh
+cargo test --locked cpuwait
+cargo test --locked exception_return
+cargo test --locked renode_thread_bx
+cargo test --locked renode_exception_vector
+cargo test --locked renode_irq_vector
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-exception-boundaries-evidence
 ```

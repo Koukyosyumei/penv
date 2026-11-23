@@ -371,6 +371,91 @@ impl Thumb {
         }
     }
 
+    fn exception_priority(bus: &Bus, exception: u8) -> i16 {
+        match exception {
+            0 => 256,
+            NMI => -2,
+            HARDFAULT => -1,
+            _ => bus
+                .nvic
+                .as_ref()
+                .map_or(0, |nvic| nvic.priority(exception))
+                .into(),
+        }
+    }
+
+    fn active_handler(bus: &Bus, active: u64) -> u8 {
+        (NMI..64)
+            .filter(|number| active & (1 << number) != 0)
+            .min_by_key(|&number| Self::exception_priority(bus, number))
+            .unwrap_or(0)
+    }
+
+    fn pending_configurable(bus: &Bus, active: u64, current: u8) -> Option<u8> {
+        let external = bus
+            .nvic
+            .as_ref()
+            .and_then(|nvic| nvic.next_irq(active))
+            .map(|(line, _)| 16 + line);
+        external
+            .into_iter()
+            .chain([PENDSV, SYSTICK].into_iter().filter(|&exception| {
+                active & (1 << exception) == 0
+                    && bus
+                        .systick
+                        .as_ref()
+                        .is_some_and(|timer| timer.pending(exception))
+            }))
+            .filter(|&exception| {
+                Self::exception_priority(bus, exception) < Self::exception_priority(bus, current)
+            })
+            .min_by_key(|&exception| (Self::exception_priority(bus, exception), exception))
+    }
+
+    fn acknowledge(&mut self, exception: u8, bus: &mut Bus) {
+        match exception {
+            NMI | PENDSV | SYSTICK => bus.systick.as_mut().unwrap().acknowledge(exception),
+            HARDFAULT => bus.nvic.as_mut().unwrap().set_hardfault_pending(false),
+            _ => bus.nvic.as_mut().unwrap().acknowledge(exception - 16),
+        }
+        self.pending &= !(1 << exception);
+    }
+
+    fn tail_chain(
+        &mut self,
+        target: u32,
+        remaining: u64,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> Option<u32> {
+        if (target == 0xffff_fff1) != (remaining != 0) {
+            return None;
+        }
+        let destination = Self::active_handler(bus, remaining);
+        let nmi_pending = bus.systick.as_ref().is_some_and(|timer| timer.pending(NMI));
+        let hardfault_pending = bus
+            .nvic
+            .as_ref()
+            .is_some_and(|nvic| nvic.pending_exceptions() & (1 << HARDFAULT) != 0);
+        let exception = if nmi_pending && destination != NMI {
+            NMI
+        } else if self.interrupts_masked {
+            return None;
+        } else if hardfault_pending && !matches!(destination, NMI | HARDFAULT) {
+            HARDFAULT
+        } else {
+            Self::pending_configurable(bus, remaining, destination)?
+        };
+        self.active_exceptions = remaining;
+        self.active_exception = destination;
+        r[14] = target;
+        let handler = self.take_exception_vector(exception, bus);
+        if self.active_exception == exception {
+            self.acknowledge(exception, bus);
+        }
+        Some(handler)
+    }
+
     fn branch(
         &mut self,
         target: u32,
@@ -381,6 +466,9 @@ impl Thumb {
             let use_psp = target == 0xffff_fffd;
             let stack = if use_psp { self.psp } else { r[13] };
             let remaining = self.active_exceptions & !(1 << self.active_exception);
+            if let Some(handler) = self.tail_chain(target, remaining, r, bus) {
+                return Ok(handler);
+            }
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
                 match bus.read_ram::<4>(stack.wrapping_add(index as u32 * 4)) {
@@ -440,17 +528,7 @@ impl Thumb {
         // The returning exception is no longer active. An eligible HardFault
         // uses the existing frame and the original EXC_RETURN.
         self.active_exceptions &= !(1 << self.active_exception);
-        self.active_exception = (NMI..64)
-            .filter(|number| self.active_exceptions & (1 << number) != 0)
-            .min_by_key(|number| match *number {
-                NMI | HARDFAULT => i16::from(*number) - 4,
-                _ => bus
-                    .nvic
-                    .as_ref()
-                    .map_or(0, |nvic| nvic.priority(*number))
-                    .into(),
-            })
-            .unwrap_or(0);
+        self.active_exception = Self::active_handler(bus, self.active_exceptions);
         let use_psp = target == 0xffff_fffd;
         if self.can_take_hardfault() {
             r[14] = target;
@@ -510,8 +588,7 @@ impl Thumb {
         self.pending = pending;
         if pending & (1 << NMI) != 0 && self.active_exceptions & (1 << NMI) == 0 {
             *pc = self.exception_entry(NMI, *pc, r, bus);
-            bus.systick.as_mut().unwrap().acknowledge(NMI);
-            self.pending &= !(1 << NMI);
+            self.acknowledge(NMI, bus);
             self.sleep = Sleep::Running;
             return Ok(true);
         }
@@ -520,60 +597,23 @@ impl Thumb {
         }
         if pending & (1 << HARDFAULT) != 0 && self.can_take_hardfault() {
             *pc = self.exception_entry(HARDFAULT, *pc, r, bus);
-            bus.nvic.as_mut().unwrap().set_hardfault_pending(false);
-            self.pending &= !(1 << HARDFAULT);
+            self.acknowledge(HARDFAULT, bus);
             return Ok(true);
         }
         if self.interrupts_masked && self.sleep != Sleep::Interrupt {
             return Ok(false);
         }
-        let priority = |exception| bus.nvic.as_ref().map_or(0, |nvic| nvic.priority(exception));
-        let current_priority = if self.active_exception == 0 {
-            256
-        } else {
-            if self.active_exception == HARDFAULT {
-                0
-            } else {
-                u16::from(priority(self.active_exception))
-            }
-        };
-        let mut selected = bus
-            .nvic
-            .as_ref()
-            .and_then(|nvic| nvic.next_irq(self.active_exceptions))
-            .map(|(line, priority)| (16 + line, priority));
-        for exception in [PENDSV, SYSTICK] {
-            if bus
-                .systick
-                .as_ref()
-                .is_some_and(|timer| timer.pending(exception))
-                && self.active_exceptions & (1 << exception) == 0
-            {
-                let candidate = (exception, priority(exception));
-                if selected.is_none_or(|(number, priority)| {
-                    (candidate.1, candidate.0) < (priority, number)
-                }) {
-                    selected = Some(candidate);
-                }
-            }
-        }
-        if let Some((exception, _)) =
-            selected.filter(|(_, priority)| u16::from(*priority) < current_priority)
+        if let Some(exception) =
+            Self::pending_configurable(bus, self.active_exceptions, self.active_exception)
         {
             self.sleep = Sleep::Running;
             if self.interrupts_masked {
                 return Ok(false);
             }
             *pc = self.exception_entry(exception, *pc, r, bus);
-            if self.active_exception != exception {
-                return Ok(true);
+            if self.active_exception == exception {
+                self.acknowledge(exception, bus);
             }
-            if matches!(exception, PENDSV | SYSTICK) {
-                bus.systick.as_mut().unwrap().acknowledge(exception);
-            } else {
-                bus.nvic.as_mut().unwrap().acknowledge(exception - 16);
-            }
-            self.pending &= !(1 << exception);
             return Ok(true);
         }
         Ok(false)
@@ -1479,61 +1519,174 @@ mod tests {
     }
 
     #[test]
-    fn renode_thread_bx_and_handler_blx_do_not_unstack() {
-        // arm-cortex-m-exception-return.robot: Thread BX and Handler BLX.
-        const EXC_RETURN: u32 = 0xffff_fff9;
-        for (opcode, handler_mode) in [(0x4700, false), (0x47f0, true)] {
-            let mut bus = Bus::default();
-            bus.map_ram(0, 0x1000).unwrap();
-            let mut output = std::io::sink();
-            bus.write(16 * 4, 4, 0x101, &mut output).unwrap();
-            let mut thumb = Thumb::new(Some(0));
-            let mut pc = 0x20;
-            let mut registers = [0; 32];
-            registers[0] = EXC_RETURN;
-            registers[13] = 0x800;
-            if handler_mode {
-                pc = thumb.exception_entry(16, pc, &mut registers, &mut bus);
-                assert_eq!(registers[14], EXC_RETURN);
-            }
-            let sp = registers[13];
-            let link = pc + 3;
-            bus.write(pc, 2, opcode, &mut output).unwrap();
-            thumb
-                .step(&mut pc, &mut registers, &mut bus, &mut output)
-                .unwrap();
-            assert_eq!(pc, EXC_RETURN & !1);
-            assert_eq!(registers[13], sp);
-            assert_eq!(thumb.active_exception, if handler_mode { 16 } else { 0 });
-            assert_eq!(registers[14], if handler_mode { link } else { 0 });
-        }
-    }
-
-    #[test]
-    fn renode_exception_vector_load_does_not_unstack_an_exc_return_value() {
-        // arm-cortex-m-exception-return.robot: use an IRQ vector in place of the MPU fault.
-        let mut bus = Bus::default();
-        bus.map_ram(0, 0x1000).unwrap();
-        bus.map_nvic(0xc0, None).unwrap();
+    fn renode_thread_bx_and_nmi_handler_blx_do_not_unstack() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
         let mut output = std::io::sink();
-        bus.write(16 * 4, 4, 0xffff_fff9, &mut output).unwrap();
-        bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
-        bus.write(0xe000_e200, 4, 1, &mut output).unwrap();
-        let mut thumb = Thumb::new(Some(0));
-        let mut pc = 0x20;
-        let mut registers = [0; 32];
+        for (address, opcode) in [
+            (0x20, 0x4800),
+            (0x22, 0x4700),
+            (0x100, 0xbf00),
+            (0x102, 0x47f0),
+        ] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        bus.write(0x24, 4, 0xffff_ffb8, &mut output).unwrap();
+        bus.write(8, 4, 0x101, &mut output).unwrap();
         registers[13] = 0x800;
+        let mut pc = 0x20;
+        for _ in 0..2 {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Retired)
+            );
+        }
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0xffff_ffb8, 0x800, 0)
+        );
 
+        let mut thumb = Thumb::new(Some(0));
+        bus.write(0x20, 2, 0xe7fe, &mut output).unwrap();
+        let mut pc = 0x20;
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        bus.pend_nvic_exception("nvic", 2).unwrap();
         assert!(
             thumb
                 .service_interrupts(&mut pc, &mut registers, &mut bus)
                 .unwrap()
         );
         assert_eq!(
-            (pc, registers[13], thumb.active_exception),
-            (0xffff_fff8, 0x7e0, 16)
+            (pc, registers[13], registers[14]),
+            (0x100, 0x7e0, 0xffff_fff9)
         );
-        assert_eq!(bus.read_ram::<4>(0x7e0 + 24).unwrap(), 0x20);
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 0x102);
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(
+            (pc, registers[13], registers[14], thumb.active_exception),
+            (0xffff_fff8, 0x7e0, 0x105, NMI)
+        );
+    }
+
+    #[test]
+    fn renode_exception_vector_load_does_not_unstack_an_exc_return_value() {
+        // Armv6-M uses an unmapped stack in place of the Cortex-M33 MPU.
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        bus.write(8, 4, 0x101, &mut output).unwrap();
+        bus.write(12, 4, 0xffff_ffb0, &mut output).unwrap();
+        for (address, opcode) in [
+            (0x100, 0x4801), // ldr r0, =0x2000
+            (0x102, 0x4685), // mov sp, r0
+            (0x104, 0x4770), // bx lr
+        ] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        bus.write(0x108, 4, 0x2000, &mut output).unwrap();
+        let mut pc = 0x20;
+        registers[13] = 0x800;
+        bus.pend_nvic_exception("nvic", 2).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        for expected in [ThumbStep::Retired, ThumbStep::Retired, ThumbStep::Exception] {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(expected)
+            );
+        }
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0xffff_ffb0, 0x2000, HARDFAULT)
+        );
+        assert_eq!(bus.read_ram::<4>(0x7f8).unwrap(), 0x20);
+    }
+
+    #[test]
+    fn exception_return_tail_chains_without_reading_the_saved_frame() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        for (address, value) in [
+            (8, 0x101),
+            (16 * 4, 0x201),
+            (17 * 4, 0x301),
+            (0xe000_e100, 3),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        for address in [0x100, 0x200, 0x300] {
+            bus.write(address, 2, 0x4770, &mut output).unwrap(); // bx lr
+        }
+        let mut pc = 0x20;
+        registers[13] = 0x800;
+        bus.pend_nvic_exception("nvic", 2).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        bus.pend_nvic_exception("nvic", 17).unwrap();
+        bus.pend_nvic_exception("nvic", 16).unwrap();
+        bus.faulting_accesses = Some(0x7e0..=0x7ff);
+        for (handler, irq) in [(0x200, 16), (0x300, 17)] {
+            assert!(
+                !thumb
+                    .service_interrupts(&mut pc, &mut registers, &mut bus)
+                    .unwrap()
+            );
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Retired)
+            );
+            assert_eq!(
+                (pc, registers[13], registers[14], thumb.active_exceptions),
+                (handler, 0x7e0, 0xffff_fff9, 1 << irq)
+            );
+        }
+        bus.faulting_accesses = None;
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Retired)
+        );
+        assert_eq!(
+            (pc, registers[13], thumb.active_exceptions),
+            (0x20, 0x800, 0)
+        );
+    }
+
+    #[test]
+    fn renode_irq_vector_fault_preserves_pending_and_reuses_frame() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        bus.faulting_accesses = Some(0x100040..=0x100040);
+        bus.write(0x10000c, 4, 0x341, &mut output).unwrap();
+        bus.write(0x200, 2, 0xe7fe, &mut output).unwrap();
+        let mut pc = 0x200;
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+        bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
+        bus.pend_nvic_exception("nvic", 16).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(
+            (pc, registers[13], thumb.active_exceptions),
+            (0x340, 0xfe0, 1 << HARDFAULT)
+        );
+        assert_eq!(bus.read::<4>(0xe000_e200).unwrap() & 1, 1);
+        assert_eq!(bus.read_ram::<4>(0xff8).unwrap(), 0x200);
     }
 
     #[test]
@@ -1586,20 +1739,24 @@ mod tests {
     #[test]
     fn renode_nonsecure_return_token_branches_without_trustzone() {
         // arm-cortex-m-exception-return.robot: Should Not Return From Insecure Mode
-        // When Not Using TrustZone. Seed r0 to avoid the wide immediate load.
+        // When Not Using TrustZone. Load the same immediate via an Armv6-M literal.
         let mut bus = Bus::default();
         bus.map_ram(0, 0x1000).unwrap();
         let mut output = std::io::sink();
-        bus.write(0x20, 2, 0x4700, &mut output).unwrap(); // bx r0
+        bus.write(0x20, 2, 0x4800, &mut output).unwrap(); // ldr r0, =0xfeffffff
+        bus.write(0x22, 2, 0x4700, &mut output).unwrap(); // bx r0
+        bus.write(0x24, 4, 0xfeff_ffff, &mut output).unwrap();
         let mut thumb = Thumb::new(Some(0));
         let mut pc = 0x20;
         let mut registers = [0; 32];
-        registers[0] = 0xfeff_ffff;
         registers[13] = 0x800;
 
-        thumb
-            .step(&mut pc, &mut registers, &mut bus, &mut output)
-            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Retired)
+            );
+        }
         assert_eq!(
             (pc, registers[13], thumb.active_exception),
             (0xfeff_fffe, 0x800, 0)
@@ -1674,8 +1831,8 @@ mod tests {
         assert_eq!(pc, 0x90);
         assert_eq!(bus.read::<4>(ICSR).unwrap(), 1 << 28);
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
-        assert!(thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());
-        assert_eq!(pc, 0x80);
+        assert_eq!((pc, r[13], r[14]), (0x80, 0x2000_0200, 0xffff_fffd));
+        assert_eq!(thumb.psp, 0x2000_00e0);
         assert_eq!(bus.read::<4>(ICSR).unwrap(), 0);
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
@@ -1816,9 +1973,10 @@ mod tests {
         assert_eq!((pc, thumb.active_exception), (0x80, 16));
         assert!(!thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
-        assert_eq!((pc, r[13]), (0x60, 0x2000_0100));
-        assert!(thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());
-        assert_eq!(pc, 0xa0);
+        assert_eq!((pc, r[13], r[14]), (0xa0, 0x2000_00e0, 0xffff_fff9));
+        assert_eq!(bus.read_ram::<4>(r[13] + 24).unwrap(), 0x60);
+        thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
+        assert_eq!((pc, r[13], thumb.active_exception), (0x60, 0x2000_0100, 0));
     }
 
     #[test]

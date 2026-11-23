@@ -379,17 +379,24 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         }
         let mut cpu_type = None;
         let mut vectors = None;
+        let mut cpu_wait = false;
         for (key, value) in keys(
             entry,
             &[
                 "cpuType",
                 "vectorTableOffset",
                 "InitVectorTableOffset",
+                "isCpuWaitSignalSet",
                 "nvic",
             ],
         )? {
             match key {
                 "cpuType" => cpu_type = Some(value),
+                "isCpuWaitSignalSet" => {
+                    cpu_wait = value
+                        .parse()
+                        .map_err(|_| entry.error("invalid isCpuWaitSignalSet"))?;
+                }
                 "nvic" if nvic.is_some_and(|controller| controller.name == value) => {}
                 "nvic" => return Err(entry.error("unknown NVIC reference")),
                 "vectorTableOffset" | "InitVectorTableOffset" if vectors.is_none() => {
@@ -1220,6 +1227,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         }
         machine.primary.name = Some(entry.name.clone());
         machine.primary.configure_cortex_m(vectors);
+        machine.set_cortex_m_cpu_wait(&entry.name, cpu_wait)?;
         return Ok(machine);
     }
     if let Some(nvic) = nvic {
