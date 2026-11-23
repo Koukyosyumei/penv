@@ -646,6 +646,21 @@ impl Bus {
         self.refresh_gpio_wiring();
     }
 
+    pub fn gpio_led_index(&self, target: &str) -> Result<usize, String> {
+        let path = target.strip_prefix("sysbus.").unwrap_or(target);
+        self.gpio_leds
+            .iter()
+            .position(|(_, led)| match path.split_once('.') {
+                Some((parent, name)) => led.parent.as_deref() == Some(parent) && led.name == name,
+                None => led.name == path,
+            })
+            .ok_or_else(|| format!("unknown STM32 GPIO LED {target:?}"))
+    }
+
+    pub fn gpio_led(&self, index: usize) -> &GpioLed {
+        &self.gpio_leds[index].1
+    }
+
     pub fn add_gpio_button(&mut self, button: GpioButton) {
         self.gpio_buttons.push(button);
         self.set_button(self.gpio_buttons.len() - 1, false);

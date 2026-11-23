@@ -8,10 +8,10 @@ sysbus.gpioPortA.button Release
 emulation RunFor "0.001s"
 waitForUart sysbus.usart1 "Button pressed at "
 sysbus.gpioPortA.button Press
-emulation RunFor "1s"
+waitForLed sysbus.gpioPortC.led false "1s" "1s"
 sysbus.gpioPortA.button Release
-emulation RunFor "1s"
+waitForLed sysbus.gpioPortC.led true "1s" "1s"
 sysbus.gpioPortA.button Press
-emulation RunFor "1s"
+waitForLed sysbus.gpioPortC.led false "1s" "1s"
 sysbus.gpioPortA.button Release
 emulation RunFor "0.001s"

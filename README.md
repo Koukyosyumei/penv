@@ -312,13 +312,15 @@ tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
 | --- | --- | --- |
 | `Should Run Zephyr Hello Sample` | 今回追加。 `upstream_stm32f072_hello_world_boots_elf_and_hex` の ELF 実行 | `Hello World! stm32f072b_disco` の完了行。 |
 | `Should Run Zephyr Console Echo Sample` | 既存。 `upstream_stm32f072_console_echo_accepts_resc_uart_input` と `upstream_stm32f072_console_echo_replies_after_uart_prompt` | 入力案内を受けて送信し、次に `Echo working?` を受信。 |
-| `Should Run Zephyr Blinky Sample` | 今回追加。 `upstream_stm32f072_blinky_alternates_led_states` | 4 秒の実行区間における LED の点灯・消灯 3 往復。Robot の状態ごとのタイムアウト判定は残課題。 |
-| `Should Run Zephyr Button Sample` | 今回追加。 `upstream_stm32f072_button_updates_led_and_reports_press` | 3 回の押下・解放、数値の押下時刻を含む UART 行、LED の遷移列。1 秒の保持区間を含み、検査は遷移ログを使う。Robot の各操作での保持判定は残課題。 |
+| `Should Run Zephyr Blinky Sample` | 今回追加。 `upstream_stm32f072_blinky_alternates_led_states` | LED の点灯・消灯を 1 秒ずつのタイムアウトで 3 往復確認します。 |
+| `Should Run Zephyr Button Sample` | 今回追加。 `upstream_stm32f072_button_updates_led_and_reports_press` | 3 回の押下・解放、数値の押下時刻を含む UART 行、LED の遷移列。期待状態に達してからの 1 秒間を各操作で検査し、途中で LED が変化すれば失敗します。 |
 | `Should Read ADC` | 既存。 `upstream_stm32f072_adc_waits_for_uart_between_voltage_changes` | 起動行、0.6 V で `745`、1.2 V で `1489`。 |
 | `Should Run stm32f0-crc-test Application` | 今回追加。 `upstream_stm32f072_crc_firmware_passes_840_cases` | `test result: ok. 840 passed; 0 failed` の完了行。 |
 | `Should Load HEX` | 今回追加。 `upstream_stm32f072_hello_world_boots_elf_and_hex` の HEX 実行 | `LoadHEX`、明示的な `VectorTableOffset`、同じ Hello World 完了行。 |
 
 `tests/unit-tests/per-core-registration.robot` の `Should Load Hex To Core Specific Memory` と `Should Not Load Hex To Invalid Core Specific Memory` は同じ HEX を参照します。CPU ごとのメモリ登録とロード先指定が必要なため、上表の単一 CPU の HEX 回帰とは別の残課題です。
+
+Blinky と Button の RESC が使う `waitForLed sysbus.gpioPortC.led true "1s" ["1s"]` は、タイムアウト内に指定状態を待ち、末尾の期間を指定した場合はその状態を保持することを検査します。LED 名と真偽値は各操作で指定し、経過したステップはスクリプト全体の上限に含まれます。対象は GPIO に配線した STM32 ボード LED です。Robot のテスター ID、デューティー比計測、シフトレジスター接続 LED の待機は残課題です。[Renode LEDTester](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Main/Testing/LEDTester.cs)
 
 #### Cortex-M と STM32 周辺機器
 

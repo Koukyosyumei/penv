@@ -597,7 +597,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     } else if gpio_leds.iter().any(|led| led.name == target) {
                         if inputs.trim() != "0"
                             || outputs.len() != 1
-                            || led_inputs.insert(target, (port.base, outputs[0])).is_some()
+                            || led_inputs
+                                .insert(target, (entry.name.as_str(), port.base, outputs[0]))
+                                .is_some()
                         {
                             return Err(entry.error("invalid or duplicate GPIO LED wiring"));
                         }
@@ -634,10 +636,10 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .first()
                 .map_or(Ok(false), |(_, value)| value.parse())
                 .map_err(|_| led.error("invalid LED invert property"))?;
-            if let Some((port, pin)) = led_inputs.remove(led.name.as_str()) {
-                machine
-                    .bus
-                    .add_gpio_led(port, GpioLed::new(led.name.clone(), pin, invert));
+            if let Some((parent, port, pin)) = led_inputs.remove(led.name.as_str()) {
+                let mut device = GpioLed::new(led.name.clone(), pin, invert);
+                device.parent = Some(parent.to_owned());
+                machine.bus.add_gpio_led(port, device);
                 continue;
             }
             let (target, pin) = led

@@ -1,8 +1,10 @@
 pub struct GpioLed {
     pub name: String,
     pub pin: u8,
+    pub parent: Option<String>,
     invert: bool,
-    state: bool,
+    pub state: bool,
+    pub transitions: u64,
 }
 
 impl GpioLed {
@@ -10,8 +12,10 @@ impl GpioLed {
         Self {
             name,
             pin,
+            parent: None,
             invert,
             state: invert,
+            transitions: 0,
         }
     }
 
@@ -21,6 +25,7 @@ impl GpioLed {
             return;
         }
         self.state = state;
+        self.transitions = self.transitions.wrapping_add(1);
         if report {
             eprintln!("LED {} {}", self.name, if state { "on" } else { "off" });
         }

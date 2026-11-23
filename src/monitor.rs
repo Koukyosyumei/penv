@@ -37,6 +37,7 @@ pub struct RuntimeCommand {
 enum Action {
     RunFor(u64),
     Button(String, bool),
+    WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode),
     WriteUartLine(String, String, &'static [u8]),
@@ -135,6 +136,19 @@ pub fn run(
                     }
                 })
             }
+            Action::WaitForLed(target, state, timeout, hold) => wait_for_led(
+                machine,
+                target,
+                *state,
+                *timeout,
+                *hold,
+                &mut budget,
+                &mut output,
+            )
+            .map(|count| {
+                retired += count;
+                None
+            }),
             Action::WriteUartLine(target, text, ending) => machine
                 .bus
                 .write_stm32_uart_line(target, text, ending)
@@ -147,6 +161,48 @@ pub fn run(
         }
     }
     Ok((Stop::ScriptComplete, retired))
+}
+
+fn wait_for_led(
+    machine: &mut Machine,
+    target: &str,
+    state: bool,
+    timeout: u64,
+    hold: u64,
+    budget: &mut u64,
+    output: &mut impl Write,
+) -> Result<u64, String> {
+    let index = machine.bus.gpio_led_index(target)?;
+    let mut retired = 0;
+    if machine.bus.gpio_led(index).state != state {
+        let start = machine.elapsed_steps();
+        let limit = timeout.min(*budget);
+        let (stop, count) =
+            machine.run_until(limit, output, |bus, _| bus.gpio_led(index).state == state)?;
+        *budget -= machine.elapsed_steps().wrapping_sub(start);
+        if stop != Stop::OutputMatch {
+            return Err(format!(
+                "LED {target} did not reach state {state} ({stop:?})"
+            ));
+        }
+        retired += count;
+    }
+
+    let transitions = machine.bus.gpio_led(index).transitions;
+    let limit = hold.min(*budget);
+    let (stop, count) = machine.run_until(limit, output, |bus, _| {
+        bus.gpio_led(index).transitions != transitions
+    })?;
+    if stop == Stop::OutputMatch {
+        return Err(format!("LED {target} changed while holding state {state}"));
+    }
+    if stop != Stop::Limit || limit != hold {
+        return Err(format!(
+            "LED {target} hold ended before completion ({stop:?})"
+        ));
+    }
+    *budget -= limit;
+    Ok(retired + count)
 }
 
 fn wait_for_uart(
@@ -338,6 +394,23 @@ fn execute(
                 ending,
             ))
         }
+        ["waitForLed", target, state, timeout, hold @ ..] if hold.len() <= 1 => {
+            let state = resolve(state)?
+                .parse()
+                .map_err(|_| "expected LED state true or false")?;
+            let timeout = duration_steps(resolve(timeout)?)?;
+            let hold = hold
+                .first()
+                .map(|value| duration_steps(resolve(value)?))
+                .transpose()?
+                .unwrap_or(0);
+            Some(Action::WaitForLed(
+                resolve(target)?.to_owned(),
+                state,
+                timeout,
+                hold,
+            ))
+        }
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
         }
@@ -498,6 +571,38 @@ pub fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn led_wait_times_out_and_rejects_a_change_during_hold() {
+        use crate::{stm32_gpio::Stm32Gpio, stm32_gpio_board::GpioLed};
+
+        let mut machine = Machine::without_default_ram();
+        let gpio = 0x4800_0000;
+        machine.bus.map_ram(0, 0x100).unwrap();
+        machine
+            .bus
+            .map_stm32_gpio(Stm32Gpio::new(gpio, 0x400, [1, 0, 0], 8))
+            .unwrap();
+        machine
+            .bus
+            .add_gpio_led(gpio, GpioLed::new("led".into(), 0, false));
+        let mut output = io::sink();
+        let mut budget = 2;
+        let error =
+            wait_for_led(&mut machine, "led", true, 0, 0, &mut budget, &mut output).unwrap_err();
+        assert!(error.contains("did not reach state true"));
+        assert_eq!(budget, 2);
+
+        machine.bus.write(gpio + 0x18, 4, 1, &mut output).unwrap(); // set pin
+        machine.bus.write(0, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
+        machine.primary.configure_cortex_m(Some(0));
+        machine.primary.pc = 0;
+        machine.primary.registers[..2].copy_from_slice(&[gpio + 0x28, 1]); // clear pin
+        let error =
+            wait_for_led(&mut machine, "led", true, 0, 2, &mut budget, &mut output).unwrap_err();
+        assert!(error.contains("changed while holding state true"));
+        assert_eq!(machine.elapsed_steps(), 1);
+    }
 
     #[test]
     fn parses_renode_uart_write_line_endings() {
