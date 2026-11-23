@@ -20,6 +20,7 @@ minerva=$renode_root/scripts/single-node/litex_minerva.resc
 litex=$renode_root/scripts/single-node/litex_vexriscv_smp.resc
 linux_single=$renode_root/scripts/single-node/litex_vexriscv_linux.resc
 ibex=$renode_root/scripts/single-node/litex_ibex.resc
+tock=$renode_root/scripts/single-node/litex_vexriscv_tock.resc
 zephyr=$renode_root/scripts/single-node/litex_vexriscv_zephyr.resc
 i2s=scripts/complex/litex_i2s/litex_vexriscv_i2s.resc
 git -C "$renode_root" rev-parse HEAD > "$artifacts/renode-revision"
@@ -32,6 +33,9 @@ prepare_assets() {
             split($1, assignment, "=")
             sub(/\?$/, "", assignment[1])
             variables[assignment[1]] = assignment[2]
+        }
+        $1 == "set" && $3 ~ /^@https:\/\// {
+            variables["$" $2] = $3
         }
         ($1 == "sysbus" && ($2 == "LoadELF" || $2 == "LoadBinary" || $2 == "LoadFdt")) ||
         ($1 == "machine" && $2 == "SdCardFromFile") || $2 == "LoadPCM" {
@@ -104,6 +108,15 @@ run_to_step_limit litex-zephyr "$zephyr" --uart-event "4000000:$artifacts/zephyr
     --max-steps 12000000
 rg -aqF 'uart:~$' "$artifacts/litex-zephyr.uart.log"
 rg -aqF 'Zephyr version' "$artifacts/litex-zephyr.uart.log"
+
+prepare_assets "$tock"
+run_to_step_limit litex-tock "$tock" --max-steps 700000000
+rg -aqF 'LiteX+VexRiscv on ArtyA7: initialization complete, entering main loop.' "$artifacts/litex-tock.uart.log"
+# The upstream tester waits for the first D1 before checking three ordered pairs.
+diff -u <(for _ in 1 2 3; do printf 'D1 says hello\nD2 says hello\n'; done) <(
+    tr -d '\r' < "$artifacts/litex-tock.uart.log" |
+        awk '/^D[12] says hello$/ && ($0 == "D1 says hello" || count) { print; if (++count == 6) exit }'
+)
 
 prepare_assets "$arty"
 printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
@@ -224,4 +237,4 @@ if sha256(roi).hexdigest() != "e64eaa319a979cfb4bae39ee9e0c1ea2a04c688211a4ebe95
 print(f"{path} (75x80 logo ROI): OK")
 PYTHON
 } > "$artifacts/nexys-video.frames.log"
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, and Nexys Video framebuffer verified. Logs are in %s\n' "$artifacts"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, and Nexys Video framebuffer verified. Logs are in %s\n' "$artifacts"

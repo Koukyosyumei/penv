@@ -261,6 +261,8 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | 対象 | 上流の出典とケース | penv のテストと検証範囲 |
 | --- | --- | --- |
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
+| RV32 カウンタ | `unit-tests/riscv-priv.robot` の MCYCLE / MINSTRET の増加・停止・書き込み確定境界（RV32 各 3 ケース） | `scripts/firmware/rv32-counters.S` で 6 ケースを実 ELF 化 |
+| LiteX Tock | `platforms/LiteX/LiteX_Tock.robot` の `Should Run Tock` | 上流 RESC と ELF で起動行と `D1 → D2` の 3 組を UART から照合 |
 | CLINT | `unit-tests/timer-reconfiguration.robot` の `Should Tick At Exact Time` | `clint_traps_at_the_exact_reprogrammed_compare_tick`。ゲストが `mtimecmp` の上下ワードを書き換え、5 ティックでは未発火、6 ティック目で機械タイマー例外に入る。virt の 10 MHz に合わせて 59 ステップと 60 ステップに適応 |
 | RV32 TVM | `unit-tests/riscv-priv.robot` の SATP 読み書き・`SFENCE.VMA` に対する `When TVM Is One/Zero` 各ケース（上流は RV64） | RV32 版の Rust テスト `privilege_controls_gate_sret_and_address_translation_operations` と `scripts/firmware/rv32-tvm.S`。実 ELF は Sv32 有効時の M→S 遷移、S→M トラップ、TVM 解除後の再実行を確認 |
 | RV32 Sv32 / TLB | `unit-tests/riscv-priv.robot` の `Should Not Trap On SFENCE.VMA When TVM Is Zero`（上流は RV64）と `unit-tests/riscv-mret.robot` の `Should Invalidate TLB After Mode Change` | 前者を RV32 S モードへ適応し、`rv32-tlb.S` でページテーブル更新後の命令・データ変換を検証。後者の上流 ELF は Bare/PMP の別ケースとして検証 |
@@ -289,7 +291,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
 ```
 
-`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、専用 SD ルートファイルシステム、Nexys4DDR の SPI SD、Tock の繰り返し UART 出力はこの移植の対象外です。
+`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、専用 SD ルートファイルシステム、Nexys4DDR の SPI SD は未移植です。Tock の UART 出力は下記の回帰で確認します。
 
 ## RV32 の権限切り替えと仮想メモリ操作
 
@@ -372,6 +374,22 @@ diff -u <(printf '%s\n' 'rv32-tlb: stale translation or unexpected trap') "$out/
 ```
 
 現行実装は両検査に合格し、追加の互換性修正は不要でした。fence を省いた対照 ELF は現行のキャッシュで古い変換を観測しました。fence を省いたときに古い変換が残るかは実装に依存します。既存の TVM ELF と上流の Bare/PMP ELF も再確認しました。アドレス・ASID を指定する fence の細粒度な無効化、複数ハート間の TLB シュートダウン、Robot スイートの直接実行は残課題です。
+
+### RV32 カウンタと LiteX Tock の再現
+
+```sh
+cargo test --locked
+cargo build --locked --release
+out=$(mktemp -d)
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 \
+  -nostdlib -fuse-ld=lld -Wl,-T,scripts/firmware/rv32-virt.ld \
+  scripts/firmware/rv32-counters.S -o "$out/counters.elf"
+target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --max-steps 2000 "$out/counters.elf"
+bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
+```
+
+RV32 ELF は 6 ケース通過の行を出力し、待機ループのステップ上限で終了コード 2 になります。Tock の検証は最初の `D1` を待つ上流と同様に、先行する `D2` を許容します。対象のケースはいずれも既存実装で通過しました。
 
 ## Renode / penv 共通計測ハーネス
 
