@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 41 | 0 | 472 | 237 |
+| Renode | 513 | 50 | 0 | 463 | 237 |
 | Infrastructure | 217 | 1 | 0 | 216 | 7 |
-| **合計** | **730** | **42** | **0** | **688** | **244** |
+| **合計** | **730** | **51** | **0** | **679** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 688 件には、共有フォールト配送、UART ビット時間・パリティー、GDB・モニター・
+未達 679 件には、共有フォールト配送、UART ビット時間・パリティー、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -156,7 +156,7 @@ CPU モデルを ARMv7E-M に変更し、Robot がモニターから行ってい
   スタックに障害命令の PC が保存されることを確認します。フルアクセス設定時は
   `VLDR → VCVT.S32.F32 → VCVT.F32.S32 → VSTR` が完了し、`OK` を出します。
 
-残件は、遅延 FP 保存中のフォールト、未実装の FP オペコード、特権限定 CPACR アクセスです。
+未実装の FP オペコードと特権限定 CPACR アクセスは残件です。
 
 ### Cortex-M4F の命令フェッチと例外ベクター
 
@@ -179,8 +179,7 @@ NMI 進入時にベクター取得とスタック書き込みが同時に失敗�
 （スレッド・MSP の基本フレームでは `0xfffffff9`）に置き換えました。
 上流の SHCSR に現れる NMI・HardFault のアクティブ状態は Rust テストで内部状態を照合します。
 初期 MSP がゼロのリセットでは、2 ステップ目の INVSTATE ロックアップと DHCSR の
-CPU・デバッガー別の読出しを確認します。一般のスタック単独障害、例外復帰時の
-フレーム読み出し障害、遅延 FP 保存、ロックアップからの NMI 復帰は残件です。
+CPU・デバッガー別の読出しを確認します。ロックアップからの NMI 復帰は残件です。
 
 ## Robot の時間条件を移植した 7 件
 
@@ -254,3 +253,42 @@ mkdir -p "$work"
     exit "$rc"
 ) &
 ```
+
+## Cortex-M4F の例外スタック保存・復元フォールト
+
+固定上流の `tests/unit-tests/arm-cortex-m-bus-fault.robot` から 9 ケースを Rust に
+移植しました。上流の RAM、ベクター、ハンドラー、故障する周辺機器のアドレスを
+使用します。復帰トークンは ARMv7-M の Thread/MSP 基本フレーム `0xfffffff9`、
+上流で使う NMI/HardFault アクティブビットは Cortex-M4F の内部例外状態を照合します。
+
+- 保存では `CFSR.STKERR`、NMI による HardFault の保留、IRQ16 の pending/active、
+  同優先度での BusFault 選択、HardFault を中断した NMI のロックアップと IT 状態を検査します。
+- 復元では読み出しのみを故障させ、`CFSR.UNSTKERR`、NMI 復帰時のアクティブ状態、
+  元のフレームを使うテールチェーンと FPCA クリアを検査します。
+- 遅延 FP 保存では `FPCAR=0x100020`、`HFRDY`、`LSPACT`、`CFSR.LSPERR`、
+  `HFSR.FORCED` と HardFault の保留を照合します。Thread と HardFault からの NMI で
+  保留とロックアップをそれぞれ再現します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-stack-faults
+mkdir -p "$work"
+cargo test thumb::stack_fault_tests
+(
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/cortex-m4f-faults.sh "$work/faults" >"$work/fault-elf.log" 2>&1
+    echo "$?" >"$work/fault-elf.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos-fpu.log" 2>&1
+    echo "$?" >"$work/freertos-fpu.status"
+) &
+```
+
+`cargo test` は 90 件、フォールト ELF は 16 件が合格しました。FreeRTOS では
+`FPU context OK: A`、`FPU context OK: B`、`IWDG reboot: SRAM retained` を確認しました。
+公開の Cortex-M4 拡張フレーム ELF は上記の上流スモークの `fpu-v7m` 手順を単独で実行し、
+`upstream-fpu.log` に `Test succeeded` を記録しました。実行上限での終了コード 2 と
+UART 成功行を合わせて検証しています。TrustZone の追加スタック、共有のフォールト配送の
+残件、一般の遅延 FP 準備ビットの組み合わせは今回の 9 ケースの外に残ります。

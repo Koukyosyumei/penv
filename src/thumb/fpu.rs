@@ -15,13 +15,21 @@ impl Thumb {
     ) -> Result<bool, ExecuteError> {
         let core = (low >> 12) as usize;
         let move_single = high & 0xffe0 == 0xee00 && low & 0xf7f == 0xa10;
+        let copy_single = high & 0xffbf == 0xeeb0 && low & 0xfd0 == 0xa40;
         let move_status = matches!(high, 0xeee1 | 0xeef1) && low & 0xfff == 0xa10;
         let multiple = matches!(high & 0xffb0, 0xed20 | 0xecb0) && low & 0xf00 == 0xa00;
         let scalar = high & 0xff20 == 0xed00 && low & 0xe00 == 0xa00;
         let convert = high & 0xffbf == 0xeebd && low & 0xfd0 == 0xac0;
         let from_signed = high & 0xffbf == 0xeeb8 && low & 0xfd0 == 0xac0;
         let compare = high & 0xffbf == 0xeeb4 && low & 0xf50 == 0xa40;
-        if !(move_single || move_status || multiple || scalar || convert || compare || from_signed)
+        if !(move_single
+            || copy_single
+            || move_status
+            || multiple
+            || scalar
+            || convert
+            || compare
+            || from_signed)
         {
             return Ok(false);
         }
@@ -30,7 +38,15 @@ impl Thumb {
             .as_ref()
             .filter(|nvic| nvic.fpu_access())
             .ok_or(ExecuteError::NoCoprocessor)?;
-        self.fp_active |= nvic.fpu_auto_preserve();
+        let auto_preserve = nvic.fpu_auto_preserve();
+        self.preserve_lazy_fp(bus)?;
+        self.fp_active |= auto_preserve;
+        if copy_single {
+            let destination = core * 2 + ((high >> 6) & 1) as usize;
+            let source = ((low & 15) * 2 + ((low >> 5) & 1)) as usize;
+            self.fp[destination] = self.fp[source];
+            return Ok(true);
+        }
         if multiple {
             let base = (high & 0xf) as usize;
             let first = core * 2 + ((high >> 6) & 1) as usize;

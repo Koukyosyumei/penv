@@ -90,7 +90,7 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
-    faulting_regions: Vec<(u32, Option<u32>)>,
+    faulting_regions: Vec<(u32, Option<u32>, bool, bool)>,
     constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
@@ -254,26 +254,52 @@ impl Bus {
     }
 
     pub fn map_faulting_memory(&mut self, base: u32, offset: Option<u32>) -> Result<(), String> {
+        self.map_faulting_memory_access(base, offset, true, true)
+    }
+
+    pub fn map_faulting_memory_access(
+        &mut self,
+        base: u32,
+        offset: Option<u32>,
+        reads: bool,
+        writes: bool,
+    ) -> Result<(), String> {
         if offset.is_some_and(|offset| offset >= 0x1000) {
             return Err("fault offset outside mock peripheral".into());
         }
         self.map_ram(base, 0x1000)?;
-        self.faulting_regions.push((base, offset));
+        self.faulting_regions.push((base, offset, reads, writes));
         Ok(())
     }
 
-    fn faulting_address(&self, address: u32, width: usize) -> Option<u32> {
-        self.faulting_regions.iter().find_map(|&(base, offset)| {
-            let relative = address.wrapping_sub(base);
-            if relative >= 0x1000 {
-                return None;
-            }
-            match offset {
-                None => Some(address),
-                Some(offset) if offset.wrapping_sub(relative) < width as u32 => Some(base + offset),
-                _ => None,
-            }
-        })
+    #[cfg(test)]
+    pub fn set_faulting_memory_offset(&mut self, base: u32, offset: Option<u32>) {
+        self.faulting_regions
+            .iter_mut()
+            .find(|region| region.0 == base)
+            .unwrap()
+            .1 = offset;
+    }
+
+    fn faulting_address(&self, address: u32, width: usize, write: bool) -> Option<u32> {
+        self.faulting_regions
+            .iter()
+            .find_map(|&(base, offset, reads, writes)| {
+                if !(if write { writes } else { reads }) {
+                    return None;
+                }
+                let relative = address.wrapping_sub(base);
+                if relative >= 0x1000 {
+                    return None;
+                }
+                match offset {
+                    None => Some(address),
+                    Some(offset) if offset.wrapping_sub(relative) < width as u32 => {
+                        Some(base + offset)
+                    }
+                    _ => None,
+                }
+            })
     }
 
     pub fn map_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -1533,7 +1559,7 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
-        if let Some(address) = self.faulting_address(address, N) {
+        if let Some(address) = self.faulting_address(address, N, false) {
             return Err(BusError::Unmapped(address, N));
         }
         if N == 4
@@ -1863,21 +1889,17 @@ impl Bus {
         })
     }
 
-    pub fn cortex_exception_stack(
-        &mut self,
-        address: u32,
-        width: usize,
-    ) -> Result<Option<&mut [u8]>, BusError> {
-        if let Some(address) = self.faulting_address(address, width) {
-            return Err(BusError::Unmapped(address, width));
+    pub fn write_cortex_stack(&mut self, address: u32, value: u32) -> Result<(), BusError> {
+        if let Some(address) = self.faulting_address(address, 4, true) {
+            return Err(BusError::Unmapped(address, 4));
         }
-        match self.guest_memory(address, width) {
-            Ok(memory) => Ok(Some(memory)),
-            // The default system bus discards unhandled stack writes. An
-            // explicitly faulting mapping above still signals a BusFault.
-            Err(BusError::Unmapped(..)) => Ok(None),
-            Err(error) => Err(error),
+        match self.guest_memory(address, 4) {
+            Ok(memory) => memory.copy_from_slice(&value.to_le_bytes()),
+            // An unhandled stack write follows the open-bus default.
+            Err(BusError::Unmapped(..)) => {}
+            Err(error) => return Err(error),
         }
+        Ok(())
     }
 
     pub fn read_cortex_data<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
@@ -1888,7 +1910,7 @@ impl Bus {
     }
 
     pub fn read_cortex_instruction<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
-        if let Some(address) = self.faulting_address(address, N) {
+        if let Some(address) = self.faulting_address(address, N, false) {
             return Err(BusError::Unmapped(address, N));
         }
         self.read_ram::<N>(address)
@@ -1919,7 +1941,7 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
-        if let Some(address) = self.faulting_address(address, width) {
+        if let Some(address) = self.faulting_address(address, width, true) {
             return Err(BusError::Unmapped(address, width));
         }
         if self.uart_tx == Some(address) && width == 1 {

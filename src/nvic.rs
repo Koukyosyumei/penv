@@ -11,6 +11,7 @@ const SET_PENDING: u32 = BASE + 0x200;
 const ACTIVE: u32 = BASE + 0x300;
 const CLEAR_PENDING: u32 = BASE + 0x280;
 const PRIORITY: u32 = BASE + 0x400;
+const FPCAR: u32 = BASE + 0xf38;
 const FPCCR: u32 = BASE + 0xf34;
 const CPACR: u32 = BASE + 0xd88;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd18;
@@ -51,6 +52,8 @@ pub struct Nvic {
     ccr: u32,
     cpacr: u32,
     fpccr: Option<u32>,
+    fpcar: u32,
+    hardfault_pending: bool,
     fault_enables: u32,
     active: ActiveExceptions,
     locked_up: bool,
@@ -125,6 +128,8 @@ impl Nvic {
             ccr: 1 << 9,
             cpacr: 0,
             fpccr: None,
+            fpcar: 0,
+            hardfault_pending: false,
             fault_enables: 0,
             active: ActiveExceptions::default(),
             locked_up: false,
@@ -159,7 +164,7 @@ impl Nvic {
         (CPUID, CPUID + 4),
         (VTOR, AIRCR + 4),
         (CPACR, CPACR + 4),
-        (FPCCR, FPCCR + 4),
+        (FPCCR, FPCAR + 4),
         (BASE + 0xd24, BASE + 0xd30),
         (BASE + 0xd38, BASE + 0xd3c),
         (BASE + 0xdf0, BASE + 0xdf4),
@@ -304,6 +309,39 @@ impl Nvic {
         self.cfsr |= 1 << 12; // STKERR
     }
 
+    pub fn record_unstacking_fault(&mut self) {
+        self.cfsr |= 1 << 11;
+    }
+
+    pub fn record_lazy_fault(&mut self) {
+        self.cfsr |= 1 << 13;
+    }
+
+    pub fn pend_hardfault(&mut self) {
+        self.hardfault_pending = true;
+    }
+
+    pub fn take_pending_hardfault(&mut self) -> bool {
+        std::mem::take(&mut self.hardfault_pending)
+    }
+
+    pub fn lazy_fp_enabled(&self) -> bool {
+        self.fpccr.is_some_and(|value| value & (1 << 30) != 0)
+    }
+
+    pub fn reserve_lazy_fp(&mut self, address: u32, hardfault_ready: bool) {
+        self.fpcar = address;
+        if let Some(fpccr) = &mut self.fpccr {
+            *fpccr = (*fpccr & (3 << 30)) | (u32::from(hardfault_ready) << 4) | 1;
+        }
+    }
+
+    pub fn clear_lazy_fp(&mut self) {
+        if let Some(fpccr) = &mut self.fpccr {
+            *fpccr &= !1;
+        }
+    }
+
     pub fn record_vector_fault(&mut self) {
         self.hfsr |= 1 << 1; // VECTTBL
     }
@@ -363,6 +401,7 @@ impl Nvic {
             if address == BASE + 0xd24 {
                 return Some(
                     self.fault_enables
+                        | (u32::from(self.hardfault_pending) << 21)
                         | (u32::from(self.active.contains(4)))
                         | (u32::from(self.active.contains(5)) << 1)
                         | (u32::from(self.active.contains(6)) << 3),
@@ -388,6 +427,9 @@ impl Nvic {
             }
             if address == CPUID && self.has_fpu() {
                 return Some(0x410f_c241);
+            }
+            if address == FPCAR && self.has_fpu() {
+                return Some(self.fpcar);
             }
             if address == FPCCR {
                 return self.fpccr;
@@ -485,7 +527,7 @@ impl Nvic {
             && address == FPCCR
             && let Some(fpccr) = &mut self.fpccr
         {
-            *fpccr = value & (3 << 30);
+            *fpccr = (*fpccr & !(3 << 30)) | (value & (3 << 30));
             return true;
         }
         if width == 4 && address == CPACR {
