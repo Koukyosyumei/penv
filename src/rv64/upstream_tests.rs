@@ -119,17 +119,8 @@ fn inhibits_minstret_after_write_finishes() {
 fn traps_sfence_vma_in_user_mode() {
     let mut cpu = Rv64::new(Isa::IM);
     let mut bus = Bus::new(4096).unwrap();
-    let trap_vector = u64::from(RAM_BASE) + 0x100;
-    let fault_pc = cpu.pc;
-    cpu.privilege.set_vector(trap_vector);
     cpu.privilege.mode = Mode::User;
-    load_program(&mut bus, &[0x1200_0073]); // sfence.vma zero, zero
-
-    let step = cpu.step(&mut bus, 0, 1, &mut Vec::new()).unwrap();
-    assert!(matches!(step, Step::Trap));
-    assert_eq!(cpu.pc, trap_vector);
-    assert_eq!(cpu.privilege.read(0x342, cpu.misa(), !3), Some(2));
-    assert_eq!(cpu.privilege.read(0x341, cpu.misa(), !3), Some(fault_pc));
+    assert_illegal(&mut cpu, &mut bus, 0x1200_0073); // sfence.vma zero, zero
 }
 
 fn assert_amocas(width: usize, expected: u128, replacement: u128, swaps: bool) {
@@ -146,14 +137,7 @@ fn assert_amocas(width: usize, expected: u128, replacement: u128, swaps: bool) {
     cpu.registers[S2] = replacement as u64;
     cpu.registers[S2 + 1] = (replacement >> 64) as u64;
 
-    let size = width.trailing_zeros();
-    let instruction = (0b00101 << 27)
-        | ((S2 as u32) << 20)
-        | ((A3 as u32) << 15)
-        | (size << 12)
-        | ((A0 as u32) << 7)
-        | 0x2f;
-    run_straight_line(&mut cpu, &mut bus, &[instruction]);
+    run_straight_line(&mut cpu, &mut bus, &[amocas(width, A0, S2)]);
 
     let previous = if width == 4 {
         ORIGINAL as i32 as i64 as u64
@@ -217,4 +201,137 @@ fn amocas_q_preserves_single_page_on_mismatch() {
         0x216b_00b5_d0d0_caca_1eef_f00d_babe_dead,
         false,
     );
+}
+
+fn assert_illegal(cpu: &mut Rv64, bus: &mut Bus, instruction: u32) {
+    let pc = cpu.pc;
+    let vector = u64::from(RAM_BASE) + 0x100;
+    cpu.privilege.set_vector(vector);
+    load_program(bus, &[instruction]);
+    assert!(matches!(
+        cpu.step(bus, 0, 1, &mut Vec::new()).unwrap(),
+        Step::Trap
+    ));
+    assert_eq!(cpu.pc, vector);
+    assert_eq!(cpu.privilege.read(0x342, cpu.misa(), !3), Some(2));
+    assert_eq!(cpu.privilege.read(0x341, cpu.misa(), !3), Some(pc));
+}
+
+#[test]
+fn traps_on_counter_access_from_user_mode() {
+    for csr in [MCYCLE, 0xc02] {
+        let mut cpu = Rv64::new(Isa::IM);
+        let mut bus = Bus::new(4096).unwrap();
+        assert!(cpu.privilege.write(0x306, 0, cpu.misa()));
+        assert!(cpu.privilege.write(0x106, 7, cpu.misa()));
+        cpu.privilege.mode = Mode::User;
+        assert_illegal(&mut cpu, &mut bus, read_csr(csr, A0));
+    }
+}
+
+#[test]
+fn sret_obeys_tsr_in_supervisor_mode() {
+    for tsr in [0, 1 << 22] {
+        let mut cpu = Rv64::new(Isa::IM);
+        let mut bus = Bus::new(4096).unwrap();
+        assert!(cpu.privilege.write(0x141, 0xbad0, cpu.misa()));
+        assert!(cpu.privilege.write(0x300, tsr, cpu.misa()));
+        cpu.privilege.mode = Mode::Supervisor;
+        const SRET: u32 = 0x1020_0073;
+        if tsr != 0 {
+            assert_illegal(&mut cpu, &mut bus, SRET);
+        } else {
+            run_straight_line(&mut cpu, &mut bus, &[SRET]);
+            assert_eq!(cpu.pc, 0xbad0);
+            assert!(cpu.privilege.mode == Mode::User);
+        }
+    }
+}
+
+#[test]
+fn supervisor_satp_and_sfence_obey_tvm() {
+    const SATP: u32 = 0x180;
+    const SFENCE: u32 = 0x1200_0073;
+    let read = read_csr(SATP, A0);
+    let write = write_csr(SATP, A0);
+    for instruction in [read, write, SFENCE] {
+        for tvm in [0, 1 << 20] {
+            let mut cpu = Rv64::new(Isa::IM);
+            let mut bus = Bus::new(4096).unwrap();
+            assert!(cpu.privilege.write(0x300, tvm, cpu.misa()));
+            cpu.privilege.mode = Mode::Supervisor;
+            cpu.registers[A0] = 0x0000_ffff_0000_0000;
+            if tvm != 0 {
+                assert_illegal(&mut cpu, &mut bus, instruction);
+                assert_eq!(cpu.privilege.satp, 0);
+            } else {
+                run_straight_line(&mut cpu, &mut bus, &[instruction]);
+                if instruction == read {
+                    assert_eq!(cpu.registers[A0], 0);
+                } else if instruction == write {
+                    assert_eq!(cpu.privilege.satp, cpu.registers[A0]);
+                }
+            }
+        }
+    }
+}
+
+fn amocas(width: usize, rd: usize, rs2: usize) -> u32 {
+    (0b00101 << 27)
+        | ((rs2 as u32) << 20)
+        | ((A3 as u32) << 15)
+        | (width.trailing_zeros() << 12)
+        | ((rd as u32) << 7)
+        | 0x2f
+}
+
+#[test]
+fn amocas_q_zero_source_ignores_x1() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gc_zacas").unwrap());
+    let mut bus = Bus::new(8192).unwrap();
+    let address = u64::from(RAM_BASE) + 0x1000;
+    cpu.registers[A3] = address;
+    cpu.registers[A0] = 7;
+    cpu.registers[A1] = 9;
+    cpu.registers[1] = 0xdead;
+    bus.memory64(address, 16)
+        .unwrap()
+        .copy_from_slice(&((9u128 << 64) | 7).to_le_bytes());
+    run_straight_line(&mut cpu, &mut bus, &[amocas(16, A0, 0)]);
+    assert_eq!(bus.ram64(address, 16).unwrap(), [0; 16]);
+    assert_eq!(
+        (cpu.registers[A0], cpu.registers[A1], cpu.registers[1]),
+        (7, 9, 0xdead)
+    );
+}
+
+#[test]
+fn amocas_q_zero_destination_does_not_write_x1() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gc_zacas").unwrap());
+    let mut bus = Bus::new(8192).unwrap();
+    let address = u64::from(RAM_BASE) + 0x1000;
+    cpu.registers[A3] = address;
+    cpu.registers[S2] = 7;
+    cpu.registers[S2 + 1] = 9;
+    cpu.registers[1] = 0xdead;
+    run_straight_line(&mut cpu, &mut bus, &[amocas(16, 0, S2)]);
+    assert_eq!(
+        bus.ram64(address, 16).unwrap(),
+        ((9u128 << 64) | 7).to_le_bytes()
+    );
+    assert_eq!((cpu.registers[0], cpu.registers[1]), (0, 0xdead));
+}
+
+#[test]
+fn amocas_q_traps_on_odd_register_pairs() {
+    for (rd, rs2) in [(A0 + 1, S2), (A0, S2 + 1), (A0 + 1, S2 + 1)] {
+        let mut cpu = Rv64::new(Isa::parse("rv64gc_zacas").unwrap());
+        let mut bus = Bus::new(8192).unwrap();
+        let address = u64::from(RAM_BASE) + 0x1000;
+        cpu.registers[A3] = address;
+        cpu.registers[rs2] = 7;
+        assert_illegal(&mut cpu, &mut bus, amocas(16, rd, rs2));
+        assert_eq!(bus.ram64(address, 16).unwrap(), [0; 16]);
+        assert_eq!(cpu.registers[rd], 0);
+    }
 }

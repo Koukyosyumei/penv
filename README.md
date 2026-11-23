@@ -110,13 +110,10 @@ dtc -I dts -O dtb -o "$work/virt.dtb" platforms/rv64_virt.dts
 fdtput -t x "$work/virt.dtb" /chosen linux,initrd-start 0 84000000
 fdtput -t x "$work/virt.dtb" /chosen linux,initrd-end 0 "$end"
 dtc -I dtb -O dtb -p 4096 -o "$work/virt-padded.dtb" "$work/virt.dtb"
-target/release/penv run --platform platforms/rv64_virt.repl --raw --uart-stdin \
-  --dtb "0x88000000:$work/virt-padded.dtb" --load-binary "0x80200000:$work/Image" \
-  --load-binary "0x84000000:$work/rootfs.cpio" --max-steps 5000000000 \
-  "$work/opensbi-1.6/build/platform/generic/firmware/fw_jump.bin"
+python3 scripts/verify-rv64-virt.py "$work" --logs target/rv64-virt-verification
 ```
 
-Buildroot のプロンプトには、公開デモと同じ `root` / `starfive` を使います。initramfs の起動スクリプトは `eth0` を探してタイムアウトします。この virt 構成の残課題は VirtIO、PCIe、RTC、SiFive Test のリセットと電源断、QEMU の `a2` を使う FW_DYNAMIC、複数ハートの Linux 検証です。PLIC の閾値と MMIO 範囲には既存の Renode 向けモデルを使用します。
+検証スクリプトは UART で公開デモの `root` / `starfive` を使って認証し、`id -u` と `uname -m` の出力を照合します。initramfs の起動スクリプトは `eth0` を探してタイムアウトします。この virt 構成の残課題は VirtIO、PCIe、RTC、SiFive Test のリセットと電源断、QEMU の `a2` を使う FW_DYNAMIC、複数ハートの Linux 検証です。PLIC の閾値と MMIO 範囲には既存の Renode 向けモデルを使用します。
 
 OpenSBI v1.6 が `Penv RV64 virt` と 10 MHz のタイマーを認識し、Linux 5.10.6 が `0x10000000` の `ttyS0` を有効にして `/init` を実行しました。UART のパスワード認証後、`id -u` が `0`、`uname -m` が `riscv64` を返しました。`cargo test` は全 49 件通過しました。CLI の回帰テストは 2 ハートの `a0` と 4 GiB 超の `a1`、DTB のマジックとアラインメントの検証を含みます。
 
@@ -231,33 +228,50 @@ Linux `5.10.6-penv-gpio` で GPIO 再起動ドライバーへのバインドを�
 | 同 `Should Inhibit MCYCLE RV64` / `Should Inhibit MINSTRET RV64` | `inhibits_mcycle` / `inhibits_minstret`。抑止中の差分が 0 |
 | 同 `Should Inhibit MCYCLE After Write Finishes RV64` / `Should Inhibit MINSTRET After Write Finishes RV64` | `inhibits_mcycle_after_write_finishes` / `inhibits_minstret_after_write_finishes`。抑止を書き替える命令を境界にした差分が 2 |
 | 同 `Should Trap On SFENCE.VMA In User Mode RV64` | `traps_sfence_vma_in_user_mode`。例外の入口、原因 2、`mepc` |
+| 同 `Should Fail On Counter Access` | `traps_on_counter_access_from_user_mode`。ユーザーモードからの `mcycle` と `instret` を拒否 |
+| 同 `Should [Not] Trap On Sret When MSTATUS.TSR Is {One,Zero} RV64` | `sret_obeys_tsr_in_supervisor_mode`。例外と `sepc` への復帰 |
+| 同 `Should [Not] Trap On {SATP Write,SATP Read,SFENCE.VMA} When TVM Is {One,Zero}` | `supervisor_satp_and_sfence_obey_tvm`。3 命令それぞれの許可と例外 |
 | `riscv-amocas.robot` の `Amocas.{w,d,q} On RV64 Should Set Value At Single-Page Memory Location` | `amocas_{w,d,q}_changes_single_page_on_match`。旧値の返却、置換、アドレス・置換レジスター、書き込み幅 |
 | 同 `Amocas.{w,d,q} On RV64 Shouldn't Set Value At Single-Page Memory Location` | `amocas_{w,d,q}_preserves_single_page_on_mismatch`。旧値の返却とメモリ保持 |
+| 同 `Amocas.q On RV64 Should Handle Zero {Source,Destination} Register` / `Amocas.q On RV64 Using Odd Registers Should Throw Illegal Instruction` | `amocas_q_zero_*` / `amocas_q_traps_on_odd_register_pairs`。`x1` とメモリの保持、奇数レジスター対の例外 |
 
-Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジスター設定と Step を Rust のレジスター初期化と実際の命令実行に置き換えました。`amocas.w` は旧値の下位 32 ビットに加えて、RV64 での符号拡張を検証します。ページ境界またぎ、MMIO、他の AMO、残りの特権・PMP・ISA 拡張ケースは未移植です。[Renode riscv-priv.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-priv.robot) [Renode riscv-amocas.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-amocas.robot)
+Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジスター設定と Step を Rust のレジスター初期化と実際の命令実行に置き換えました。`amocas.w` は旧値の下位 32 ビットに加えて、RV64 での符号拡張を検証します。対象はこの表の上流 25 ケースです。Renode の `allowUnalignedAccesses: true` を前提とする AMOCAS のページ境界またぎ、`Memory.ArrayMemory` を使う MMIO、他の AMO と汎用 ISA スイート（`riscv-isa-tests.robot` と `riscv-arch-tests.robot`）は残課題です。[Renode riscv-priv.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-priv.robot) [Renode riscv-amocas.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/riscv-amocas.robot)
 
-| BeagleV の上流ケース | CLI での対応 |
+| プラットフォームの検証ケース | CLI での対応 |
 | --- | --- |
 | StarLight `Should Boot U-Boot` | 両ゲストの UART3 で OpenSBI v0.9、StarFive、U-Boot 2021.01、`dwmac.10020000` を順に照合 |
 | StarLight `Should Provide Two Linux Machines With Ethernet Connection` | U-Boot 確認後にローカルスイッチを起動し、両ゲストにログインして上流と同じ MAC・IPv4・MTU 440 を設定 |
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | 上流と同じ外部 PMP を両 U74 に接続。2 台の起動、ログインと 56 バイト ping の 10/10 応答を確認 |
+| StarLight の標準 `reboot`（Penv 回帰） | GPIO 再起動ドライバーを有効にした Linux で `--recovery --linux-reboot`。ゲストの再起動、OpenSBI 再表示、UART 再認証、ローカル Ethernet 復帰を確認 |
+| RV64 virt の Linux 起動（Penv 回帰） | `verify-rv64-virt.py`。OpenSBI v1.6、Linux 5.10.6 の `ttyS0`、UART の root 認証とコマンド出力を確認 |
 | Fire `Should Boot Buildroot From SD Card` | `verify-fire.py` で通過。公開 HSS と SD を元の RESC で起動し、OpenSBI v1.2、U-Boot 2023.07.02、Linux 6.6.35、UART の root ログイン、`uname -m` と `uname -n` を確認。さらにゲストから SD の先頭セクターを読み、公開イメージとの SHA-256 一致を確認 |
 
-CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
+StarLight の上流ケースは `verify-starlight.py --upstream-cases` で実行します。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
 `monitor-tests.robot` にも Fire の REPL を使うケースがあります。配列プロパティ設定、`Select` の整形、スカラー型エラーを検証する Monitor ケースなので、UART 起動や RV64 CPU の優先ケースとは別に保留しました。[Renode monitor-tests.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/monitor-tests.robot)
 
+以下では公開 StarLight 素材を `$assets`、再起動用 FIT のビルド先を `$out`、RV64 virt の起動素材を `$work`、公開 Fire 素材を `$fire_assets` に用意します。素材の取得と作成方法は各プラットフォームの節にあります。StarLight のスイッチはループバックだけを使います。
+
 ```sh
-cargo test rv64::upstream_tests
 cargo test
 cargo build --release
-python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
-  --switch-port 30456 --upstream-cases --logs target/rv64-upstream-tests/starlight
+logs=target/close-rv64
+python3 scripts/verify-starlight.py "$assets" --ports 30801 30802 \
+  --switch-port 30800 --upstream-cases --logs "$logs/starlight"
+python3 scripts/verify-starlight.py "$assets" --ports 30804 30805 \
+  --switch-port 30803 --upstream-cases --external-pmp --logs "$logs/starlight-pmp"
+python3 scripts/verify-starlight.py "$out/assets" --ports 30807 30808 \
+  --switch-port 30806 --recovery --linux-reboot --logs "$logs/starlight-reboot"
+python3 scripts/verify-rv64-virt.py "$work" --logs "$logs/virt"
+python3 scripts/verify-fire.py "$fire_assets" --max-steps 9000000000 \
+  --timeout 1800 --logs "$logs/fire"
 ```
 
-移植した Rust ケース 13 件を含む `cargo test` 全 62 件と、StarLight の CLI ケース 4 件が通過しました。56 バイトと 3200 バイトは各 10/10 応答で、`eth0` IRQ は A が 3 → 61、B が 3 → 54 でした。RV64 virt の OpenSBI v1.6 → Linux 5.10.6 も再実行し、UART ログイン後の `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+`cargo test` は全 89 件通過し、上流の Rust 移植 19 テストが含まれます。 StarLight の上流 7 ケースが通過し、両ゲストの root ログイン、通常構成の 56・3200 バイト ping と外部 PMP 構成の 56 バイト ping で各 10/10 応答を確認しました。両構成で両ゲストの `eth0` IRQ が増加しました。RV64 virt は OpenSBI v1.6 から Linux 5.10.6 を起動し、UART ログイン後の `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
+標準 `reboot` は、GPIO 再起動ドライバーのバインドを確認してから実行しました。`Restarting system`、2 回目の OpenSBI、UART 再認証を確認し、再起動後の 56・3200 バイト ping は両方向で各 10/10 応答でした。公開 FIT に同梱のカーネルには GPIO 再起動ドライバーがないため、このケースでは前述の手順で作成した FIT を使います。 Fire の SD 起動ケースも再実行し、UART ログイン後に読んだ先頭セクターの SHA-256 が公開 SD イメージと一致しました。
 
 #### StarLight の外部 PMP ケース
 
