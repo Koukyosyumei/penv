@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 120 | 5 | 65 |
+| 監査した共有・混成 Robot | 190 | 121 | 5 | 64 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **137** | **5** | **79** |
+| 合計 | **221** | **138** | **5** | **78** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -403,3 +403,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/python-monitor-type.w6i2XUAR/` の `cargo-test`、`monitor`、`shell` に保存した。
+
+### アドレスフックからの SysTick 有効化と停止
+
+`hooks.robot:53–81` の固定 Cortex-M0、ゼロ化した命令メモリ、SysTick reload = 0 を使用した。上流 Python フックのバス書き込みと停止を `AddWrite32Hook` と `AddPauseHook` に移し、`0x10` の診断より後に `0x20` で停止することを ELF で照合した。RESC で開始前にフックを登録する方式に対応する。任意の Python、対話中の再開、watchpoint と PyDev は未達。
+
+```sh
+cargo test
+tests/nrf52840-systick-hooks-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/systick-hooks"
+tests/nrf52840-bus-fault-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/bus-fault"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/systick-hooks.X3326rpO/` の `cargo-test.final`、`elf.final`、`bus-fault`、`shell` に保存した。

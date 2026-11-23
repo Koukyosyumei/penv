@@ -1,6 +1,6 @@
 use std::{
     alloc::{Layout, alloc_zeroed},
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     io::{self, Write},
 };
@@ -119,8 +119,15 @@ struct RamIoRead {
     value: u32,
 }
 
+#[derive(Clone, Copy)]
+pub enum CpuHook {
+    Write32(u32, u32),
+    Pause,
+}
+
 #[derive(Default)]
 pub struct Bus {
+    pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
     pub thumb_trace: Option<crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
@@ -1679,6 +1686,22 @@ impl Bus {
         Ok(())
     }
 
+    pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
+        let Some(hooks) = self.cpu_hooks.get(&pc).cloned() else {
+            return Ok(false);
+        };
+        for hook in hooks {
+            match hook {
+                CpuHook::Write32(address, value) => self.write(address, 4, value, output)?,
+                CpuHook::Pause => {
+                    writeln!(output, "Machine paused").map_err(BusError::Output)?;
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub fn thumb_fetch(&self, address: u32) -> Result<u32, String> {
         self.check_thumb_bus_context(address, 2)?;
         self.check_thumb_access(address, 2, false, true)?;
@@ -2128,9 +2151,15 @@ impl Bus {
         }
         if width == 4
             && let Some(timer) = self.systick.as_mut()
-            && timer.write(address, value)
         {
-            return Ok(());
+            let zero_reload = timer.enabling_with_zero_reload(address, value);
+            if timer.write(address, value) {
+                if zero_reload {
+                    writeln!(uart, "Systick_NS enabled but it won't be started as long as the reload value is zero")
+                        .map_err(BusError::Output)?;
+                }
+                return Ok(());
+            }
         }
         if address == VTOR && width == 4 {
             let base = value & !0x7f;

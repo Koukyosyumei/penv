@@ -411,6 +411,7 @@ fn run() -> Result<ExitCode, String> {
     let mut thumb_trace = None;
     let mut ram_access_logs = Vec::new();
     let mut ram_io_pages = Vec::new();
+    let mut cpu_hooks = Vec::new();
     let mut opcode_counters = Vec::new();
     let mut opcode_counting = None;
     let mut opcode_queries = Vec::new();
@@ -456,6 +457,7 @@ fn run() -> Result<ExitCode, String> {
         thumb_trace = boot.thumb_trace;
         ram_access_logs = boot.ram_access_logs;
         ram_io_pages = boot.ram_io_pages;
+        cpu_hooks = boot.cpu_hooks;
         opcode_counters = boot.opcode_counters;
         opcode_counting = boot.opcode_counting;
         opcode_queries = boot.opcode_queries;
@@ -650,6 +652,14 @@ fn run() -> Result<ExitCode, String> {
             machine.bus.thumb_opcodes.get(name)?;
         }
     }
+    if !cpu_hooks.is_empty() {
+        if !machine.is_cortex_m() || ble_peer.is_some() {
+            return Err("address hooks require a single Cortex-M machine".into());
+        }
+        for (pc, hook) in cpu_hooks {
+            machine.bus.cpu_hooks.entry(pc).or_default().push(hook);
+        }
+    }
     if !ram_access_logs.is_empty() || !ram_io_pages.is_empty() {
         if !machine.has_cortex_m4() || ble_peer.is_some() {
             return Err("RAM I/O logging requires a single Cortex-M4 machine".into());
@@ -745,6 +755,9 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.pc
         );
+    }
+    if stop == Stop::Paused {
+        eprintln!("penv: machine paused at pc={:#010x}", machine.primary.pc);
     }
     if let Stop::Semihosting(exit) = stop {
         eprintln!("cpu.semihosting: {exit}");

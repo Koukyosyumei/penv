@@ -44,7 +44,7 @@ impl SysTick {
     }
 
     pub fn tick(&mut self) {
-        if self.control & 1 == 0 {
+        if self.control & 1 == 0 || (self.reload == 0 && self.current == 0) {
             return;
         }
         if let Some(frequency) = self.frequency {
@@ -107,6 +107,10 @@ impl SysTick {
             }
             _ => return None,
         })
+    }
+
+    pub fn enabling_with_zero_reload(&self, address: u32, value: u32) -> bool {
+        address == CSR && value & 1 != 0 && self.control & 1 == 0 && self.reload == 0
     }
 
     pub fn write(&mut self, address: u32, value: u32) -> bool {

@@ -21,6 +21,7 @@ pub struct Boot {
     pub thumb_trace: Option<crate::thumb::trace::TraceConfig>,
     pub ram_access_logs: Vec<String>,
     pub ram_io_pages: Vec<(u32, bool)>,
+    pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
     pub opcode_queries: Vec<String>,
@@ -195,6 +196,17 @@ fn execute(
                 crate::parse_address(resolve(pattern)?)?,
                 label.trim_matches('"').into(),
             ));
+        }
+        ["cpu" | "sysbus.cpu", "AddWrite32Hook", pc, address, value] if boot.platform.is_some() => {
+            let pc = crate::parse_address(resolve(pc)?)? & !1;
+            let address = crate::parse_address(resolve(address)?)?;
+            let value = crate::parse_address(resolve(value)?)?;
+            boot.cpu_hooks
+                .push((pc, crate::bus::CpuHook::Write32(address, value)));
+        }
+        ["cpu" | "sysbus.cpu", "AddPauseHook", pc] if boot.platform.is_some() => {
+            let pc = crate::parse_address(resolve(pc)?)? & !1;
+            boot.cpu_hooks.push((pc, crate::bus::CpuHook::Pause));
         }
         ["cpu" | "sysbus.cpu", "GetOpcodeCounter", name] if boot.platform.is_some() => {
             boot.opcode_queries.push(name.trim_matches('"').into());

@@ -41,6 +41,7 @@ pub enum Stop {
     Semihosting(crate::semihosting::Exit),
     Ecall,
     Ebreak,
+    Paused,
     Limit,
 }
 
@@ -626,6 +627,12 @@ impl Hart {
             }
             if thumb.sleeping() {
                 return Ok(Step::Trap);
+            }
+            if bus
+                .apply_cpu_hooks(self.pc, output)
+                .map_err(|error| error.to_string())?
+            {
+                return Ok(Step::Stop(Stop::Paused));
             }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
