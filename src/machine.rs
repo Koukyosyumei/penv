@@ -841,8 +841,20 @@ impl Machine {
 }
 
 impl Hart {
-    fn reset_cortex_m(&mut self, bus: &mut Bus) -> Result<(), String> {
-        let thumb = self.thumb.as_mut().unwrap();
+    pub(crate) fn set_cortex_m_clocked(&mut self, clocked: bool) -> Result<(), String> {
+        self.thumb
+            .as_mut()
+            .ok_or("Clocked requires Cortex-M")?
+            .set_clocked(clocked);
+        Ok(())
+    }
+
+    pub(crate) fn cortex_m_executed_instructions(&self) -> Option<u64> {
+        self.thumb.as_ref().map(Thumb::executed_instructions)
+    }
+
+    pub(crate) fn reset_cortex_m(&mut self, bus: &mut Bus) -> Result<(), String> {
+        let thumb = self.thumb.as_mut().ok_or("Reset requires Cortex-M")?;
         let (sp, pc) = thumb.reset(bus)?;
         let vectors = thumb.vector_base();
         thumb.reset_state();
@@ -1068,6 +1080,10 @@ impl Hart {
                 .and_then(|()| bus.advance_nrf_ppi(output))
                 .and_then(|()| bus.advance_stm32_dma(output))
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
+            if !thumb.clocked() {
+                bus.tick_systick();
+                return Ok(Step::Trap);
+            }
             if self.busy_wait.as_mut().is_some_and(BusyWait::waiting) {
                 bus.tick_systick();
                 return Ok(Step::Trap);
@@ -2500,5 +2516,28 @@ mod tests {
             );
             assert_eq!(machine.primary.registers[3], expected, "funct3={operation}");
         }
+    }
+    #[test]
+    fn cortex_m_clock_gate_and_counter_survive_individual_reset_as_expected() {
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        let mut out = std::io::sink();
+        machine.bus.write(0, 4, 0x800, &mut out).unwrap();
+        machine.bus.write(4, 4, 0x101, &mut out).unwrap();
+        machine.bus.write(0x100, 2, 0xe7fe, &mut out).unwrap(); // b .
+        machine.primary.configure_cortex_m(Some(0), true);
+        machine.validate_entry().unwrap();
+
+        machine.run(3, &mut out).unwrap();
+        assert_eq!(machine.primary.cortex_m_executed_instructions(), Some(3));
+        machine.primary.set_cortex_m_clocked(false).unwrap();
+        machine.primary.reset_cortex_m(&mut machine.bus).unwrap();
+        machine.run(5, &mut out).unwrap();
+        assert_eq!(machine.primary.cortex_m_executed_instructions(), Some(0));
+        assert_eq!(machine.primary.pc, 0x100);
+        assert_eq!(machine.primary.registers[13], 0x800);
+        machine.primary.set_cortex_m_clocked(true).unwrap();
+        machine.run(2, &mut out).unwrap();
+        assert_eq!(machine.primary.cortex_m_executed_instructions(), Some(2));
     }
 }

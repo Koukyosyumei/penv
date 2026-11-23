@@ -39,6 +39,8 @@ pub struct Thumb {
     basepri: u8,
     faultmask: bool,
     itstate: u8,
+    clock_gated: bool,
+    retired_instructions: u64,
     negative: bool,
     zero: bool,
     carry: bool,
@@ -72,8 +74,21 @@ impl Thumb {
         *self = Self {
             vectors: self.vectors,
             thumb2: self.thumb2,
+            clock_gated: self.clock_gated,
             ..Self::default()
         };
+    }
+
+    pub fn set_clocked(&mut self, clocked: bool) {
+        self.clock_gated = !clocked;
+    }
+
+    pub fn clocked(&self) -> bool {
+        !self.clock_gated
+    }
+
+    pub fn executed_instructions(&self) -> u64 {
+        self.retired_instructions
     }
 
     pub fn vector_base(&self) -> u32 {
@@ -613,6 +628,7 @@ impl Thumb {
         });
         let retired = self.step_fetched(inst, pc, r, bus, output)?;
         if retired {
+            self.retired_instructions = self.retired_instructions.wrapping_add(1);
             observe(ThumbBoundary {
                 phase: InstructionBoundary::End,
                 pc: *pc,
