@@ -85,9 +85,27 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
             "RV64 platform requires contiguous hart IDs from zero (up to {MAX_HARTS})"
         ));
     }
+    let mut external_pmps = [None; MAX_HARTS];
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.model == "Miscellaneous.RiscVExternalPMP")
+    {
+        let Some(registration) = entry
+            .registration
+            .as_deref()
+            .filter(|value| *value != "none")
+        else {
+            continue;
+        };
+        let target = registration.strip_prefix("sysbus.").unwrap_or(registration);
+        let hart = hart_by_name(&cpus, entry, target)?;
+        if external_pmps[hart].replace(entry).is_some() {
+            return Err(entry.error("duplicate external PMP for RV64 hart"));
+        }
+    }
     machine.configure_harts(cpus.len());
     for &(hart, entry) in &cpus {
-        let cpu = create_cpu(entry, clint)?;
+        let cpu = create_cpu(entry, clint, external_pmps[hart])?;
         let target = machine.hart_mut(hart);
         target.name = Some(entry.name.clone());
         target.rv64 = Some(Box::new(cpu));
@@ -671,7 +689,11 @@ fn range_end(entry: &Entry, start: u64, size: u64) -> Result<u64, String> {
         .ok_or_else(|| entry.error("invalid tagged address range size"))
 }
 
-fn create_cpu(entry: &Entry, clint: Option<&Entry>) -> Result<Rv64, String> {
+fn create_cpu(
+    entry: &Entry,
+    clint: Option<&Entry>,
+    external_pmp: Option<&Entry>,
+) -> Result<Rv64, String> {
     if entry.registration.as_deref() != Some("sysbus") {
         return Err(entry.error("expected RV64 CPU registered on sysbus"));
     }
@@ -703,7 +725,14 @@ fn create_cpu(entry: &Entry, clint: Option<&Entry>) -> Result<Rv64, String> {
     if pmp_count > 64 || !(1..=54).contains(&pmp_bits) {
         return Err(entry.error("unsupported RV64 PMP configuration"));
     }
-    if pmp_count != 0 {
+    if let Some(external) = external_pmp {
+        let count = property(external, "numberOfPMPEntries")
+            .map_or(Ok(64), |value| number(external, value))?;
+        if !(1..=64).contains(&count) {
+            return Err(external.error("unsupported RV64 external PMP entry count"));
+        }
+        cpu.privilege.pmp = Some(Pmp::external(count as usize, pmp_bits as u32));
+    } else if pmp_count != 0 {
         cpu.privilege.pmp = Some(Pmp::new(pmp_count as usize, pmp_bits as u32));
     }
     if entry

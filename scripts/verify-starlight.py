@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import time
 
 
@@ -15,7 +16,7 @@ class Guest:
         self.errors = (args.logs / f"{name}.stderr.log").open("wb")
         self.offset = 0
         self.process = subprocess.Popen([
-            args.penv, "run", "--script", args.renode / "scripts/single-node/beaglev_starlight.resc",
+            args.penv, "run", "--script", args.script,
             "--platform-root", args.renode, "--asset-dir", args.assets,
             "--uart-device", "uart3", "--uart-stdin", "--max-steps",
             "40000000000" if args.recovery else ("24000000000" if link else "14000000000"),
@@ -162,6 +163,27 @@ def start_switch(args):
     return switch
 
 
+def external_pmp_script(args, directory):
+    directory = Path(directory)
+    board = directory / "beaglev_starlight.repl"
+    upstream = (args.renode / "platforms/boards/beaglev_starlight.repl").resolve()
+    board.write_text(
+        f'using "{upstream}"\n'
+        "pmp1: Miscellaneous.RiscVExternalPMP @ U74_1\n"
+        "pmp2: Miscellaneous.RiscVExternalPMP @ U74_2\n"
+    )
+    script = directory / "beaglev_starlight.resc"
+    source, replaced = re.subn(
+        r"(?m)^machine LoadPlatformDescription @platforms/boards/beaglev_starlight\.repl$",
+        f"machine LoadPlatformDescription @{board}",
+        args.script.read_text(),
+    )
+    if replaced != 1:
+        raise RuntimeError("expected one StarLight board registration in the upstream RESC")
+    script.write_text(source)
+    return script
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("assets", type=Path)
@@ -174,7 +196,9 @@ def main():
     parser.add_argument("--switch-port", type=int,
                         help="connect the two guest ports to a local penv Ethernet switch")
     parser.add_argument("--upstream-cases", action="store_true",
-                        help="run the four StarLight Robot cases without external PMP")
+                        help="verify the StarLight Robot cases")
+    parser.add_argument("--external-pmp", action="store_true",
+                        help="run the three upstream cases with external PMP")
     parser.add_argument("--recovery", action="store_true",
                         help="verify Ethernet reopen and reload one machine after Linux reboot")
     reboot = parser.add_mutually_exclusive_group()
@@ -191,10 +215,18 @@ def main():
         parser.error("--switch-port requires --ports")
     if args.upstream_cases and (args.switch_port is None or args.recovery):
         parser.error("--upstream-cases requires a switch and cannot be combined with --recovery")
+    if args.external_pmp and not args.upstream_cases:
+        parser.error("--external-pmp requires --upstream-cases")
     args.logs.mkdir(parents=True, exist_ok=True)
+    args.script = args.renode / "scripts/single-node/beaglev_starlight.resc"
+    suffix = " With External PMP" if args.external_pmp else ""
+    temporary = None
     guests = []
     switch = None
     try:
+        if args.external_pmp:
+            temporary = tempfile.TemporaryDirectory(prefix="penv-starlight-pmp-")
+            args.script = external_pmp_script(args, temporary.name)
         if args.ports:
             first, second = args.ports
             if args.switch_port is not None and not args.upstream_cases:
@@ -206,18 +238,19 @@ def main():
             with ThreadPoolExecutor(max_workers=2) as pool:
                 if args.upstream_cases:
                     list(pool.map(Guest.verify_uboot, guests))
-                    print("PASS Should Boot U-Boot", flush=True)
+                    print(f"PASS Should Boot U-Boot{suffix}", flush=True)
                     switch = start_switch(args)
                 list(pool.map(lambda guest: guest.login(not args.upstream_cases), guests))
             first, second = guests
             first.configure("66:34:B0:6C:DE:A0", "192.168.0.5")
             second.configure("66:34:B0:6C:DE:A1", "192.168.0.6")
             if args.upstream_cases:
-                print("PASS Should Provide Two Linux Machines With Ethernet Connection", flush=True)
+                print(f"PASS Should Provide Two Linux Machines With Ethernet Connection{suffix}", flush=True)
                 second.ping("192.168.0.5", 56)
-                print("PASS Should Ping", flush=True)
-                second.ping("192.168.0.5", 3200)
-                print("PASS Should Ping Large Payload", flush=True)
+                print(f"PASS Should Ping{suffix}", flush=True)
+                if not args.external_pmp:
+                    second.ping("192.168.0.5", 3200)
+                    print("PASS Should Ping Large Payload", flush=True)
             else:
                 for size in (56, 3200):
                     first.ping("192.168.0.6", size)
@@ -246,6 +279,8 @@ def main():
                 switch.terminate()
             switch.wait()
             switch.stdout.close()
+        if temporary is not None:
+            temporary.cleanup()
 
 
 if __name__ == "__main__":

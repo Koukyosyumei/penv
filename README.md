@@ -242,7 +242,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Provide Two Linux Machines With Ethernet Connection` | U-Boot 確認後にローカルスイッチを起動し、両ゲストにログインして上流と同じ MAC・IPv4・MTU 440 を設定 |
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
-| StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
+| StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | 上流と同じ外部 PMP を両 U74 に接続。2 台の起動、ログインと 56 バイト ping の 10/10 応答を確認 |
 | Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナー、メディア選択、Mi-V IHC と IPI キューの初期化を経て MMC 起動試行まで到達。公開 SD から U-Boot 用の起動イメージを DDR に転送し CRC 検証を経て OpenSBI v1.2 と U-Boot 2023.07.02 の Fire モデル表示と SD 上の `/boot.scr` 実行まで到達。Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
@@ -258,6 +258,18 @@ python3 scripts/verify-starlight.py "$assets" --ports 30457 30458 \
 ```
 
 移植した Rust ケース 13 件を含む `cargo test` 全 62 件と、StarLight の CLI ケース 4 件が通過しました。56 バイトと 3200 バイトは各 10/10 応答で、`eth0` IRQ は A が 3 → 61、B が 3 → 54 でした。RV64 virt の OpenSBI v1.6 → Linux 5.10.6 も再実行し、UART ログイン後の `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+
+#### StarLight の外部 PMP ケース
+
+REPL の `Miscellaneous.RiscVExternalPMP @ CPU` で対象ハートに外部 PMP を接続します。Renode と同様に有効な領域がない間はアクセスを許可し、領域を設定すると PMP の一致判定と権限を適用します。検証スクリプトは上流 Robot と同じ 2 つの宣言を一時 REPL に追加し、公開イメージを起動します。[Renode RiscVExternalPMP](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Cores/RiscV/RiscVExternalPMP.cs)
+
+```sh
+cargo build --release
+python3 scripts/verify-starlight.py "$assets" --ports 30667 30668 \
+  --switch-port 30666 --upstream-cases --external-pmp
+```
+
+外部 PMP の上流対応 3 ケースが通過しました。両ゲストで root ログインと `id -u`／`uname -m` を確認し、56 バイトの ping は 10/10 応答でした。`eth0` IRQ は A が 3 → 14、B が 2 → 13 でした。
 
 ### BeagleV-Fire の SD 起動の再現
 
@@ -329,7 +341,7 @@ PENV_FIRE_SD_IMAGE="$(find "$fire_assets" -maxdepth 1 -name 'sdcard.img-s_*')" \
 
 Fire の直接起動を `--max-steps 400000000` で実行すると、MPFS SD ホストの初期設定を通過します。eMMC 未接続のため選択は失敗し、HSS は CLI の待機を経て `Initializing Mi-V IHC` まで進みます。次に `pc=0x0a01353e` からの `0x50000004` 書き込みでストアアクセス例外になります。この時点では Mi-V IHC、GPIO ボタンの配線、残りの SD コマンドと DMA、RESC のシンボルロードと CPU フックが残っています。Fire の U-Boot と Buildroot ログインは未到達です。[Fire の IHC アドレス定義](https://github.com/polarfire-soc/hart-software-services/blob/5e3f86966381ee9acb94969d0e18ad666f272a30/boards/mpfs-beaglev-fire/drivers_config/fpga_ip/miv_ihc/miv_ihc_add_mapping.h)
 
-継続作業では `cargo test` 68 件が通過しました。StarLight の上流対応 4 ケースを公開ファームウェアで再実行し、両ゲストの root ログイン、56 バイトと 3200 バイトの ping 各 10/10 応答、`eth0` IRQ の A 側 3 → 61 と B 側 3 → 60 を確認しました。外部 PMP の 3 ケースは残っています。RV64 virt は OpenSBI v1.6、Linux 5.10.6、UART ログインを経て `id -u` が `0`、`uname -m` が `riscv64` を返しました。
+継続作業では `cargo test` 68 件が通過しました。StarLight の上流対応 4 ケースを公開ファームウェアで再実行し、両ゲストの root ログイン、56 バイトと 3200 バイトの ping 各 10/10 応答、`eth0` IRQ の A 側 3 → 61 と B 側 3 → 60 を確認しました。外部 PMP の結果はこの次の節に記録しています。RV64 virt は OpenSBI v1.6、Linux 5.10.6、UART ログインを経て `id -u` が `0`、`uname -m` が `riscv64` を返しました。
 
 #### Fire の Mi-V IHC と MMC 起動試行
 

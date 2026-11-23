@@ -344,6 +344,7 @@ pub struct Pmp {
     address: Vec<u64>,
     active: u64,
     address_mask: u64,
+    allow_when_inactive: bool,
 }
 
 impl Pmp {
@@ -353,7 +354,14 @@ impl Pmp {
             address: vec![0; entries],
             active: 0,
             address_mask: (1 << address_bits) - 1,
+            allow_when_inactive: false,
         }
+    }
+
+    pub fn external(entries: usize, address_bits: u32) -> Self {
+        let mut pmp = Self::new(entries, address_bits);
+        pmp.allow_when_inactive = true;
+        pmp
     }
 
     fn config_start(&self, csr: u32) -> Option<usize> {
@@ -412,6 +420,9 @@ impl Pmp {
         let Some(end) = address.checked_add(width as u64) else {
             return false;
         };
+        if self.allow_when_inactive && self.active == 0 {
+            return true;
+        }
         let mut active = self.active;
         while active != 0 {
             let index = active.trailing_zeros() as usize;
@@ -440,5 +451,23 @@ impl Pmp {
             }
         }
         mode == Mode::Machine
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_pmp_is_bypassed_only_while_no_regions_are_active() {
+        let mut pmp = Pmp::external(64, 54);
+        assert!(pmp.permits(0x1000, 4, READ, Mode::Supervisor));
+        assert!(pmp.write(0x3b0, 0x800));
+        assert!(pmp.write(0x3a0, 0x08 | u64::from(READ)));
+        assert!(pmp.permits(0x1000, 4, READ, Mode::Supervisor));
+        assert!(!pmp.permits(0x1000, 4, WRITE, Mode::Supervisor));
+        assert!(!pmp.permits(0x3000, 4, READ, Mode::Supervisor));
+        assert!(pmp.write(0x3a0, 0));
+        assert!(pmp.permits(0x3000, 4, READ, Mode::Supervisor));
     }
 }
