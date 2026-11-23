@@ -8,7 +8,7 @@ RV64 REPL の `renodeResetMstatus: true` は、固定 tlib の `set_default_msta
 
 固定 Renode の `riscv-unit-tests.robot:458` と `:483` は両方合格しました。Penv の同じ ISA、CLINT、RAM、初期 PC を使用し、NaN ボックス化した分子と分母をセットしました。初期の `f2=0` と DZ=0、1命令後の `pc=0x2004`、正の無限大、DZ=1 を両精度で照合しました。Penv でも FS はリセットプロファイルで初期化されるため、元の2ケースを上流等価の合格に更新しました。
 
-`cargo test` は124件合格しました。ログは `target/backlog-rv64-fdiv-reset/` にあります。CPU 単体の Monitor リセット操作と ResetVector の変更・再設定は引き続き未達です。
+`cargo test` は124件合格しました。ログは `target/backlog-rv64-fdiv-reset/` にあります。CPU 単体のリセットと ResetVector 操作は [後続の照合](rv64-reset-vector.md) で検証しました。
 
 ## 再現
 

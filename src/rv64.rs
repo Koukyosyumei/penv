@@ -19,6 +19,8 @@ pub struct Rv64 {
     pub(crate) hart_id: usize,
     pub(crate) trace_custom_csr: bool,
     pub pc: u64,
+    reset_vector: u64,
+    pc_follows_reset_vector: bool,
     registers: [u64; 32],
     floating: [u64; 32],
     isa: Isa,
@@ -144,6 +146,8 @@ impl Rv64 {
             hart_id: 0,
             trace_custom_csr: false,
             pc: u64::from(RAM_BASE),
+            reset_vector: u64::from(RAM_BASE),
+            pc_follows_reset_vector: true,
             registers: [0; 32],
             floating: [0; 32],
             isa,
@@ -152,6 +156,25 @@ impl Rv64 {
             allow_unaligned: false,
             waiting: false,
         }
+    }
+
+    pub(crate) fn set_reset_vector(&mut self, address: u64) {
+        self.reset_vector = address;
+        if self.pc_follows_reset_vector {
+            self.pc = address;
+        }
+    }
+
+    pub(crate) fn set_program_counter(&mut self, address: u64) {
+        self.pc = address;
+        self.pc_follows_reset_vector = false;
+    }
+
+    pub(crate) fn reset_from(&mut self, initial: &Self) {
+        let reset_vector = self.reset_vector;
+        *self = initial.clone();
+        self.pc_follows_reset_vector = true;
+        self.set_reset_vector(reset_vector);
     }
 
     pub fn set_boot_arguments(&mut self, hart: usize, dtb: u64) {
@@ -166,6 +189,7 @@ impl Rv64 {
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         match name {
             "pc" => Some(self.pc),
+            "resetvector" => Some(self.reset_vector),
             "fflags" if self.isa.single => Some(u64::from(self.privilege.fcsr & 31)),
             name if self.isa.single && name.starts_with('f') => {
                 let index = name[1..].parse::<usize>().ok()?;

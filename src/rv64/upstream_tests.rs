@@ -1176,3 +1176,24 @@ fn renode_fdiv_single_and_half_set_divide_by_zero_flag() {
         assert_ne!(cpu.privilege.fcsr & 8, 0);
     }
 }
+
+#[test]
+fn rv64_reset_restores_configured_state_and_current_reset_vector() {
+    let mut initial = Rv64::new(Isa::parse("rv64gc_zfh").unwrap());
+    initial.set_reset_vector(0x1000);
+    initial.privilege.initialize_renode_reset_status(true);
+    let mut cpu = initial.clone();
+    cpu.set_program_counter(0x2000);
+    cpu.set_reset_vector(0x1234);
+    assert_eq!(cpu.pc, 0x2000);
+    cpu.initialize_mstatus(0);
+    cpu.initialize_freg(2, u64::MAX).unwrap();
+    cpu.registers[A0] = 42;
+    cpu.reset_from(&initial);
+    assert_eq!(cpu.pc, 0x1234);
+    assert_eq!(cpu.monitor_register("mstatus"), Some(0xb800));
+    assert_eq!(cpu.monitor_register("f2"), Some(0));
+    assert_eq!(cpu.registers[A0], 0);
+    cpu.set_reset_vector(0x1238);
+    assert_eq!(cpu.pc, 0x1238);
+}

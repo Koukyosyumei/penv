@@ -204,7 +204,7 @@ impl Machine {
             .find(|hart| hart.name.as_deref() == Some(name))
             .ok_or_else(|| format!("unknown CPU {name:?}"))?;
         if let Some(cpu) = &mut hart.rv64 {
-            cpu.pc = u64::from(entry);
+            cpu.set_program_counter(u64::from(entry));
         }
         hart.pc = entry;
         Ok(())
@@ -213,7 +213,7 @@ impl Machine {
     pub fn set_entry(&mut self, entry: u32) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(cpu) = &mut hart.rv64 {
-                cpu.pc = u64::from(entry);
+                cpu.set_program_counter(u64::from(entry));
             }
             hart.pc = entry;
         }
@@ -221,7 +221,10 @@ impl Machine {
 
     pub fn set_rv64_entry(&mut self, entry: u64) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
-            hart.rv64.as_mut().expect("RV64 machine").pc = entry;
+            hart.rv64
+                .as_mut()
+                .expect("RV64 machine")
+                .set_program_counter(entry);
         }
     }
 

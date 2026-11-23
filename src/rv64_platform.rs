@@ -783,6 +783,10 @@ fn create_cpu(
         return Err(entry.error("unsupported RV64 privileged architecture"));
     }
     let mut cpu = Rv64::new(isa);
+    if let Some(address) = property(entry, "resetVector").or_else(|| property(entry, "ResetVector"))
+    {
+        cpu.set_reset_vector(number(entry, address)?);
+    }
     if let Some(length) =
         property(entry, "vectorRegisterLength").or_else(|| property(entry, "VectorRegisterLength"))
     {

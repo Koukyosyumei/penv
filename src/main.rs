@@ -62,6 +62,10 @@ Options:
   --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
   --set-freg CPU@fN:VALUE  Initialize raw RV64 floating-point register bits
   --read-register CPU@NAME  Report a supported RV64 register after execution
+  --read-register-now CPU@NAME  Report an RV64 register in setup argument order
+  --set-reset-vector CPU:ADDRESS  Change a named RV64 reset vector during setup
+  --set-pc CPU:ADDRESS  Set the named RV64 PC during setup
+  --reset-cpu CPU    Restore a named RV64 CPU during setup, preserving the reset vector
   --write-memory [CPU@]BASE:WIDTH:VALUE  Write a little-endian RAM value during setup
   --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
   --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
@@ -92,11 +96,17 @@ Options:
 
 type RamRead = (Option<String>, u64, usize);
 
-enum SetupMemory {
+enum SetupAction {
     Load(PathBuf, u64, Option<String>),
     Read(RamRead),
     Write(RamRead, u64),
     Move(String, u64, u64),
+    ReadRegister(String, String),
+    SetPc(String, u64),
+    SetResetVector(String, u64),
+    ResetCpu(String),
+    SetMstatus(String, u64),
+    SetFreg(String, usize, u64),
 }
 
 fn ram_width(value: &str) -> Result<usize, String> {
@@ -217,11 +227,9 @@ fn run() -> Result<ExitCode, String> {
     let mut harts = None;
     let mut max_steps = 10_000_000;
     let mut extra_ram = Vec::new();
-    let mut setup_memory = Vec::new();
+    let mut setup_actions = Vec::new();
     let mut memory_reads = Vec::new();
     let mut register_reads = Vec::new();
-    let mut mstatus_initializers = Vec::new();
-    let mut freg_initializers = Vec::new();
     let mut dtb = None;
     let mut clint = None;
     let mut mtvec = None;
@@ -340,6 +348,31 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
+            Some("--reset-cpu") => {
+                let cpu = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .filter(|cpu| !cpu.is_empty())
+                    .ok_or("--reset-cpu requires CPU")?;
+                setup_actions.push(SetupAction::ResetCpu(cpu));
+            }
+            Some(option @ ("--set-pc" | "--set-reset-vector")) => {
+                let error = || format!("{option} requires CPU:ADDRESS");
+                let argument = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or_else(error)?;
+                let (cpu, address) = argument
+                    .split_once(':')
+                    .filter(|(cpu, _)| !cpu.is_empty())
+                    .ok_or_else(error)?;
+                let address = parse_address64(address)?;
+                setup_actions.push(if option == "--set-pc" {
+                    SetupAction::SetPc(cpu.to_owned(), address)
+                } else {
+                    SetupAction::SetResetVector(cpu.to_owned(), address)
+                });
+            }
             Some("--set-freg") => {
                 let error = "--set-freg requires CPU@fN:VALUE (f0 through f31)";
                 let argument = args
@@ -356,9 +389,13 @@ fn run() -> Result<ExitCode, String> {
                     .and_then(|index| index.parse::<usize>().ok())
                     .filter(|index| *index < 32)
                     .ok_or(error)?;
-                freg_initializers.push((cpu.to_owned(), index, parse_address64(value)?));
+                setup_actions.push(SetupAction::SetFreg(
+                    cpu.to_owned(),
+                    index,
+                    parse_address64(value)?,
+                ));
             }
-            Some(option @ ("--set-mstatus" | "--read-register")) => {
+            Some(option @ ("--set-mstatus" | "--read-register" | "--read-register-now")) => {
                 let delimiter = if option == "--set-mstatus" { ':' } else { '@' };
                 let error = || {
                     if option == "--set-mstatus" {
@@ -376,7 +413,15 @@ fn run() -> Result<ExitCode, String> {
                     .filter(|(cpu, value)| !cpu.is_empty() && !value.is_empty())
                     .ok_or_else(error)?;
                 if option == "--set-mstatus" {
-                    mstatus_initializers.push((cpu.to_owned(), parse_address64(value)?));
+                    setup_actions.push(SetupAction::SetMstatus(
+                        cpu.to_owned(),
+                        parse_address64(value)?,
+                    ));
+                } else if option == "--read-register-now" {
+                    setup_actions.push(SetupAction::ReadRegister(
+                        cpu.to_owned(),
+                        value.to_ascii_lowercase(),
+                    ));
                 } else {
                     register_reads.push((cpu.to_owned(), value.to_ascii_lowercase()));
                 }
@@ -418,9 +463,9 @@ fn run() -> Result<ExitCode, String> {
                 };
                 let address = parse_address64(base)?;
                 if option == "--load-binary" {
-                    setup_memory.push(SetupMemory::Load(PathBuf::from(path), address, cpu));
+                    setup_actions.push(SetupAction::Load(PathBuf::from(path), address, cpu));
                 } else if option == "--move-ram" {
-                    setup_memory.push(SetupMemory::Move(
+                    setup_actions.push(SetupAction::Move(
                         cpu.ok_or_else(error)?,
                         address,
                         parse_address64(path)?,
@@ -432,11 +477,11 @@ fn run() -> Result<ExitCode, String> {
                     if value > u64::MAX >> (64 - width * 8) {
                         return Err("--write-memory value exceeds the requested width".into());
                     }
-                    setup_memory.push(SetupMemory::Write((cpu, address, width), value));
+                    setup_actions.push(SetupAction::Write((cpu, address, width), value));
                 } else {
                     let width = ram_width(path)?;
                     if option == "--read-memory-now" {
-                        setup_memory.push(SetupMemory::Read((cpu, address, width)));
+                        setup_actions.push(SetupAction::Read((cpu, address, width)));
                     } else {
                         memory_reads.push((cpu, address, width));
                     }
@@ -635,6 +680,20 @@ fn run() -> Result<ExitCode, String> {
         if let Some(value) = vex_irq_mask {
             machine.primary.set_vex_irq_mask(value)?;
         }
+        let mut reset_templates = Vec::new();
+        for action in &setup_actions {
+            if let SetupAction::ResetCpu(cpu) = action {
+                let hart = machine.rv64_hart_by_name(cpu)?;
+                if !reset_templates.iter().any(|(index, _)| *index == hart) {
+                    let initial = machine
+                        .hart_mut(hart)
+                        .rv64
+                        .clone()
+                        .expect("validated RV64 CPU");
+                    reset_templates.push((hart, initial));
+                }
+            }
+        }
         if let Some(path) = path.as_deref() {
             let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             image::load(&mut machine, file, raw, renode_elf_load)
@@ -655,9 +714,57 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.bus.renode_unmapped_data = renode_unmapped_data;
-        for action in &setup_memory {
+        for action in &setup_actions {
             match action {
-                SetupMemory::Load(path, address, cpu) => {
+                SetupAction::ReadRegister(cpu, name) => {
+                    report_registers(&mut machine, &[(cpu.clone(), name.clone())])?;
+                }
+                SetupAction::SetPc(cpu, address) | SetupAction::SetResetVector(cpu, address) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    let cpu = machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU");
+                    if matches!(action, SetupAction::SetPc(..)) {
+                        cpu.set_program_counter(*address);
+                    } else {
+                        cpu.set_reset_vector(*address);
+                    }
+                }
+                SetupAction::ResetCpu(cpu) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    let (_, initial) = reset_templates
+                        .iter()
+                        .find(|(index, _)| *index == hart)
+                        .expect("captured CPU reset state");
+                    machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU")
+                        .reset_from(initial);
+                    machine.bus.take_reservation64(hart);
+                }
+                SetupAction::SetMstatus(cpu, value) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU")
+                        .initialize_mstatus(*value);
+                }
+                SetupAction::SetFreg(cpu, index, value) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU")
+                        .initialize_freg(*index, *value)?;
+                }
+                SetupAction::Load(path, address, cpu) => {
                     let hart = cpu
                         .as_deref()
                         .map(|cpu| machine.rv64_hart_by_name(cpu))
@@ -666,9 +773,9 @@ fn run() -> Result<ExitCode, String> {
                     image::load_binary_in_context(&mut machine, file, *address, hart)
                         .map_err(|e| format!("{}: {e}", path.display()))?;
                 }
-                SetupMemory::Read(read) => report_ram(&machine, read)?,
-                SetupMemory::Write(write, value) => write_ram(&mut machine, write, *value)?,
-                SetupMemory::Move(cpu, old, new) => {
+                SetupAction::Read(read) => report_ram(&machine, read)?,
+                SetupAction::Write(write, value) => write_ram(&mut machine, write, *value)?,
+                SetupAction::Move(cpu, old, new) => {
                     let hart = machine.rv64_hart_by_name(cpu)?;
                     machine.bus.move_cpu_ram_alias(hart, *old, *new)?;
                 }
@@ -706,24 +813,6 @@ fn run() -> Result<ExitCode, String> {
             return Err("--renode-lrsc requires a single RV64 hart".into());
         }
         machine.bus.renode_lrsc = renode_lrsc;
-        for (cpu, value) in &mstatus_initializers {
-            let hart = machine.rv64_hart_by_name(cpu)?;
-            machine
-                .hart_mut(hart)
-                .rv64
-                .as_mut()
-                .expect("validated RV64 CPU")
-                .initialize_mstatus(*value);
-        }
-        for (cpu, index, value) in &freg_initializers {
-            let hart = machine.rv64_hart_by_name(cpu)?;
-            machine
-                .hart_mut(hart)
-                .rv64
-                .as_mut()
-                .expect("validated RV64 CPU")
-                .initialize_freg(*index, *value)?;
-        }
         for (cpu, name) in &register_reads {
             let hart = machine.rv64_hart_by_name(cpu)?;
             if machine
