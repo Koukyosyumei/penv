@@ -1,5 +1,7 @@
 # RV64 上流ケース台帳
 
+[ACT 構成と ISA ELF 診断の更新](rv64-act-and-failures.md)に、`0b01721` 後の結果と再現手順を記録しています。以下の結果欄は初版の検証結果です。
+
 この台帳は BeagleV StarLight、BeagleV-Fire、RV64 virt と、そこで適用できる ISA・特権・ネットワーク・ストレージのためのものです。固定したソースは下表の通りです。Renode の参照作業ツリーは読み取り専用で使い、未展開のサブモジュールはコミット指定のアーカイブを別ディレクトリに展開しました。
 
 | ソース | リビジョン |
@@ -45,7 +47,7 @@ curl -fLsS https://github.com/riscv-software-src/sail-riscv-tests/releases/downl
 printf '%s  %s\n' eb24265e83ca0b68a24a513dff7e4535975e724fe07d71f3cf75fef87fd75bec "$work/isa.tar.gz" | sha256sum -c -
 tar xzf "$work/isa.tar.gz" -C "$work/isa" --wildcards './rv64*'
 python3 scripts/inventory-rv64-upstream.py ../renode "$work"/renode-infrastructure-* \\
-  --ui "$work"/renode-ui-* --tlib "$work"/tlib-* --isa "$work/isa" \
+  --ui "$work"/renode-ui-* --tlib "$work"/tlib-* --isa "$work/isa" --arch "$act/work" \
   --dependency packet-net "$work"/Packet.Net-* --dependency fdtsharp "$work"/FdtSharp-* \
   --dependency elfsharp "$work"/elfsharp-* --dependency inpli-tftp "$work"/InpliTftpServer-* \
   > target/rv64-upstream.tsv
@@ -55,7 +57,7 @@ python3 scripts/probe-rv64-isa.py "$work/isa" --logs target/full-upstream-rv64/i
 python3 scripts/verify-rv64-virt.py "$virt_work" --logs target/full-upstream-rv64/virt-final
 ```
 
-`$virt_work` は README の OpenSBI・Linux・DTB 準備で作成したディレクトリです。ISA の試行は Renode の Python セレクターを使用し、`llvm-nm` で ELF ごとの `tohost` を解決します。終了値を通知する奇数書き込みがなければ成功扱いにしません。CPU には現在の Penv が扱える拡張を設定し、結果は [ELF 別診断](rv64-isa-diagnostics.tsv) と個別の標準出力・エラーログに記録します。Renode の CPU 構成、タイムアウト、全書き込み経路の等価性は未確認です。
+`$act/work` は [固定 ACT の更新手順](rv64-act-and-failures.md) で生成します。`$virt_work` は README の OpenSBI・Linux・DTB 準備で作成したディレクトリです。ISA の試行は Renode の Python セレクターを使用し、`llvm-nm` で ELF ごとの `tohost` を解決します。終了値を通知する奇数書き込みがなければ成功扱いにしません。CPU には現在の Penv が扱える拡張を設定し、結果は [ELF 別診断](rv64-isa-diagnostics.tsv) と個別の標準出力・エラーログに記録します。Renode の CPU 構成、タイムアウト、全書き込み経路の等価性は未確認です。
 
 ACT の再現では、一時ディレクトリに `riscv-arch-test` の固定コミットを Git でチェックアウトし、`git submodule update --init -- external/riscv-unified-db` を実行します。`test_config.yaml` のコンパイラー、objdump、Sail と UDB が使うコンテナ実行環境を用意し、次を実行します。
 
@@ -70,6 +72,6 @@ CONFIG_FILES=config/spike/spike-rv64-max/test_config.yaml make -C "$act" -j8
 - RV64 の MRET は上流の MachineUser と Machine の 2 ケースを移植しました。REPL の `privilegeLevels` を設定に反映し、例外前後の PC と MPP を同じ値で検証しました。
 - Zicond の RV64 用 11 ケースを移植し、無効時のトラップ、64 ビット値とレジスター別名を確認しました。Zbkb は pack・packh・brev8 の 3 ケースが通過しました。packw は固定 tlib と Robot がゼロ拡張を期待する一方、Penv は RV64 命令の符号拡張を実装しているため部分移植です。
 - 公開 ELF 372 本の診断は 346 本が終了値 0、26 本が失敗または未完了でした。上流等価の合格数には加えていません。残りには半精度浮動小数点、未整列アクセス、ブレークポイント、カウンター、CBO、Svnapot と ELF の配置差が含まれます。
-- 上流の `riscv-arch-tests.robot` は `spike-rv64-max` の生成 ELF が必要です。Robot に記載された `riscv-arch-test` の参照は `1dfa48c2adecaa16fae9fca14d34c591ea99321c` です。ビルド出力を用意して `--arch` に渡すと、同梱セレクターの結果をパラメータに展開できます。固定 ACT・UDB を Git の別作業ツリーに用意し、uv 0.8.24、xPack GCC 15.2.0、Sail 0.9 で生成を試行しました。UDB の構成検証が要求する Podman が見つからず、Docker デーモンにも接続できませんでした。生成は未完了です。ログは `target/full-upstream-rv64/arch-build-pinned.log` にあります。NUnit の `TestCaseSource`、動的 Robot テンプレートとサブモジュールの追加テスト入力も個別展開が必要です。Packet.Net と FdtSharp の NUnit 行はケース別の適用判断待ちです。
+- 上流の `riscv-arch-tests.robot` の `spike-rv64-max` は、[ACT の更新手順](rv64-act-and-failures.md) でビルドに成功し、242 パラメータを展開しました。NUnit の `TestCaseSource`、動的 Robot テンプレートとサブモジュールの追加テスト入力も個別展開が必要です。Packet.Net と FdtSharp の NUnit 行はケース別の適用判断待ちです。
 - RV64 virt では OpenSBI v1.6、Linux 5.10.6、UART root ログインと `id -u`／`uname -m` を実イメージで確認しました。
 - Fire の eMMC パーティションを扱う共有 NUnit フィクスチャ 5 ケースを保持しています。SD 書き込み、eMMC のパーティション、StarLight のネットワークに関する共有ケースの適用判断と移植は継続項目です。共有スイートの `review` 行は全件の判定を終えていません。全件合格ゲートの条件は未成立です。

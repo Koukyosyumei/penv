@@ -15,18 +15,27 @@ def main():
     parser.add_argument("--penv", type=Path, default=Path("target/release/penv"))
     parser.add_argument("--logs", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--allow-unaligned", action="store_true")
+    parser.add_argument("--ram-size", type=lambda value: int(value, 0), default=0x100000)
+    parser.add_argument("--elf", action="append", help="select named ELF parameters for a diagnostic variant")
     args = parser.parse_args()
     args.logs.mkdir(parents=True, exist_ok=True)
     selector = args.renode / "tests/unit-tests/riscv-isa-tests.py"
     names = runpy.run_path(str(selector))["get_variables"](str(args.isa))["TESTS_64"]
     if not names:
         parser.error("the upstream selector found zero RV64 executable parameters")
+    if args.elf:
+        if missing := sorted(set(args.elf) - set(names)):
+            parser.error("not selected by the upstream harness: " + ", ".join(missing))
+        names = sorted(set(args.elf))
     platform = args.logs / "isa.repl"
+    unaligned = "    allowUnalignedAccesses: true\n" if args.allow_unaligned else ""
     platform.write_text(
         'cpu: CPU.RiscV64 @ sysbus\n'
-        '    cpuType: "rv64gc_zba_zbb_zbc_zbs_zacas_zicond_zbkb_zbkx"\n'
+        '    cpuType: "rv64gc_zba_zbb_zbc_zbs_zacas_zicond_zbkb_zbkx_zfh_zicboz"\n'
+        f'{unaligned}'
         'mem: Memory.MappedMemory @ sysbus 0x80000000\n'
-        '    size: 0x100000\n'
+        f'    size: {args.ram_size:#x}\n'
     )
 
     def run(name):

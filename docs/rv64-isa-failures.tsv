@@ -1,0 +1,27 @@
+elf	before_terminal_result	cause	current_default	separate_profile	variant_result
+rv64mi-p-breakpoint	penv: tohost exit code 2	Trigger CSRs and breakpoint matching missing	diagnostic-fail	-	-
+rv64mi-p-instret_overflow	penv: tohost exit code 2	Explicit minstret write was incremented at retirement	diagnostic-pass	-	-
+rv64mzicbo-p-zero	penv: tohost exit code 668	Zicboz cbo.zero missing	diagnostic-pass	-	-
+rv64ssvnapot-p-napot	unmapped ELF64 segment at 0x80100000 (1048592 bytes)	ELF exceeds the 1 MiB RAM map	diagnostic-fail	large-ram	diagnostic-pass
+rv64ui-p-ma_data	penv: tohost exit code 668	Diagnostic profile disables unaligned data accesses	diagnostic-fail	unaligned	diagnostic-pass
+rv64ui-v-ma_data	penv: instruction limit reached at pc=0x800022b8	Diagnostic profile disables unaligned data accesses	diagnostic-fail	unaligned	diagnostic-pass
+rv64uzfh-p-fadd	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fclass	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fcmp	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fcvt	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fcvt_w	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fdiv	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fmadd	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-fmin	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-ldst	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-p-move	penv: tohost exit code 669	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fadd	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fclass	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fcmp	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fcvt	penv: instruction limit reached at pc=0x800022bc	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fcvt_w	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fdiv	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fmadd	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-fmin	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-ldst	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-
+rv64uzfh-v-move	penv: instruction limit reached at pc=0x800022b8	Zfh binary16 missing	diagnostic-pass	-	-

@@ -595,3 +595,69 @@ fn amoadd_robot_single_and_page_spanning_ram() {
         }
     }
 }
+
+#[test]
+fn minstret_explicit_write_replaces_the_instruction_increment() {
+    let mut cpu = Rv64::new(Isa::IM);
+    let mut bus = Bus::new(4096).unwrap();
+    cpu.registers[A0] = u64::MAX;
+    run_straight_line(
+        &mut cpu,
+        &mut bus,
+        &[
+            write_csr(MINSTRET, A0),
+            read_csr(MINSTRET, A1),
+            read_csr(MINSTRET, A2),
+        ],
+    );
+    assert_eq!(cpu.registers[A1], u64::MAX);
+    assert_eq!(cpu.registers[A2], 0);
+}
+
+#[test]
+fn zfh_boxes_half_values_and_honors_rounding_and_nan_rules() {
+    use crate::rv64_float::{Format, Rounding};
+    let half = Format::Half;
+    let zero = half.decode(half.boxed(0));
+    let smallest = half.decode(half.boxed(1));
+    let one = half.decode(half.boxed(0x3c00));
+    let result = half.add(one, smallest, Rounding::Up);
+    assert_eq!((result.bits, result.flags), (0x3c01, 1));
+    assert_eq!(half.add(one, smallest, Rounding::NearestEven).bits, 0x3c00);
+    assert_eq!(
+        half.add(half.decode(0x3c00), zero, Rounding::NearestEven)
+            .bits,
+        0x7e00
+    );
+    assert_eq!(half.boxed(0x8000), 0xffff_ffff_ffff_8000);
+    assert!(Isa::parse("rv64i_zfh").is_err());
+}
+
+#[test]
+fn cbo_zero_clears_only_the_selected_block_and_checks_environment_bits() {
+    const OPCODE: u32 = 0x0045_200f; // cbo.zero (a0)
+    let base = u64::from(RAM_BASE) + 0x100;
+    for mode in [Mode::Machine, Mode::Supervisor, Mode::User] {
+        let mut cpu = Rv64::new(Isa::parse("rv64i_zicboz").unwrap());
+        let mut bus = Bus::new(4096).unwrap();
+        cpu.registers[A0] = base + 17;
+        cpu.privilege.mode = mode;
+        if mode != Mode::Machine {
+            assert_illegal(&mut cpu, &mut bus, OPCODE);
+            cpu.pc = u64::from(RAM_BASE);
+            assert!(cpu.privilege.write(0x30a, 1 << 7, cpu.misa()));
+            if mode == Mode::User {
+                cpu.privilege.mode = mode;
+                assert_illegal(&mut cpu, &mut bus, OPCODE);
+                cpu.pc = u64::from(RAM_BASE);
+                assert!(cpu.privilege.write(0x10a, 1 << 7, cpu.misa()));
+            }
+        }
+        cpu.privilege.mode = mode;
+        bus.memory64(base - 1, 66).unwrap().fill(0xff);
+        run_straight_line(&mut cpu, &mut bus, &[OPCODE]);
+        assert_eq!(bus.ram64(base, 64).unwrap(), [0; 64]);
+        assert_eq!(bus.ram64(base - 1, 1).unwrap(), [0xff]);
+        assert_eq!(bus.ram64(base + 64, 1).unwrap(), [0xff]);
+    }
+}

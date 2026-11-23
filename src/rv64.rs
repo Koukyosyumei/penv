@@ -32,6 +32,8 @@ pub struct Isa {
     pub compressed: bool,
     pub single: bool,
     pub double: bool,
+    half: bool,
+    zicboz: bool,
     pub cas: bool,
     bitmanip: bitmanip::Extensions,
 }
@@ -66,6 +68,8 @@ impl Isa {
             match extension {
                 "zicsr" | "zifencei" => {}
                 "zacas" if isa.atomic => isa.cas = true,
+                "zfh" if isa.single => isa.half = true,
+                "zicboz" => isa.zicboz = true,
                 extension if isa.bitmanip.enable(extension) => {}
                 _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
             }
@@ -89,6 +93,8 @@ impl Isa {
         compressed: false,
         single: false,
         double: false,
+        half: false,
+        zicboz: false,
         cas: false,
         bitmanip: bitmanip::Extensions::NONE,
     };
@@ -113,12 +119,14 @@ impl Fault {
 
 impl Rv64 {
     pub fn new(isa: Isa) -> Self {
+        let mut privilege = Privilege::default();
+        privilege.zicboz = isa.zicboz;
         Self {
             pc: u64::from(RAM_BASE),
             registers: [0; 32],
             floating: [0; 32],
             isa,
-            privilege: Privilege::default(),
+            privilege,
             translations: TranslationCache::default(),
             allow_unaligned: false,
             waiting: false,
@@ -203,7 +211,7 @@ impl Rv64 {
         }
         bus.rv64_devices.advance_watchdogs(elapsed);
         let pending = u64::from(pending) | bus.rv64_devices.tick(hart);
-        let count_retired = self.privilege.tick(pending, time);
+        let mut count_retired = self.privilege.tick(pending, time);
         if let Some(target) = self.privilege.interrupt(self.pc) {
             self.waiting = false;
             self.pc = target;
@@ -224,6 +232,13 @@ impl Rv64 {
             } else {
                 instruction
             };
+            let fields = Instruction(decoded);
+            if fields.opcode() == 0x73 && decoded >> 20 == 0xb02 {
+                // An explicit minstret write overrides this instruction's increment.
+                let operation = fields.funct3() & 3;
+                let writes = operation == 1 || (operation != 0 && fields.rs1() != 0);
+                count_retired &= !writes;
+            }
             self.execute(decoded, length, bus, hart, output)
                 .map_err(|mut fault| {
                     if fault.cause == 2 {
@@ -386,6 +401,20 @@ impl Rv64 {
                     .or_else(|| bitmanip::register(self.isa, fields, lhs, rhs))
                     .ok_or(illegal)?,
             ),
+            0x0f if instruction & 0xfff0_7fff == 0x0040_200f
+                && self.privilege.allows_cbo_zero() =>
+            {
+                const BLOCK_SIZE: usize = 64;
+                let base = lhs & !(BLOCK_SIZE as u64 - 1);
+                let address = self
+                    .translations
+                    .translate(bus, &self.privilege, base, BLOCK_SIZE, WRITE)
+                    .map_err(|fault| Fault::new(fault.cause, lhs))?;
+                bus.memory64(address, BLOCK_SIZE)
+                    .ok_or(Fault::new(7, lhs))?
+                    .fill(0);
+                None
+            }
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
                 self.floating_instruction(fields, bus, output)?

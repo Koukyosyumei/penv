@@ -12,6 +12,7 @@ impl Rv64 {
         match encoding {
             0 if self.isa.single => Some(Format::Single),
             1 if self.isa.double => Some(Format::Double),
+            2 if self.isa.half => Some(Format::Half),
             _ => None,
         }
     }
@@ -33,10 +34,12 @@ impl Rv64 {
         }
         let opcode = inst.opcode();
         let format = match opcode {
-            0x07 | 0x27 => inst
-                .funct3()
-                .checked_sub(2)
-                .and_then(|code| self.format(code)),
+            0x07 | 0x27 => match inst.funct3() {
+                1 => self.format(2),
+                2 => self.format(0),
+                3 => self.format(1),
+                _ => None,
+            },
             _ => self.format((inst.0 >> 25) & 3),
         }
         .ok_or_else(illegal)?;

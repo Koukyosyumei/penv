@@ -110,6 +110,9 @@ impl Levels {
 pub struct Privilege {
     pub mode: Mode,
     pub levels: Levels,
+    pub zicboz: bool,
+    menvcfg: u64,
+    senvcfg: u64,
     pub status: u64,
     pub satp: u64,
     pub pmp: Option<Pmp>,
@@ -256,6 +259,16 @@ impl Privilege {
                 || (self.mode == Mode::Supervisor && self.status & TVM == 0))
     }
 
+    pub fn allows_cbo_zero(&self) -> bool {
+        const CBZE: u64 = 1 << 7;
+        self.zicboz
+            && (self.mode == Mode::Machine
+                || (self.menvcfg & CBZE != 0
+                    && (self.mode == Mode::Supervisor
+                        || self.levels != Levels::MachineSupervisorUser
+                        || self.senvcfg & CBZE != 0)))
+    }
+
     pub fn allows_wfi(&self) -> bool {
         self.mode != Mode::User && (self.mode == Mode::Machine || self.status & TW == 0)
     }
@@ -283,6 +296,7 @@ impl Privilege {
             0x100 => (self.status & SSTATUS) | UXL | sd,
             0x104 => self.enable & self.mideleg,
             0x106 => self.supervisor_counter_enable,
+            0x10a if self.zicboz => self.senvcfg,
             0x144 => self.pending() & self.mideleg,
             0x180 if self.allows_sfence() => self.satp,
             0x300 => {
@@ -299,6 +313,7 @@ impl Privilege {
             0x303 => self.mideleg,
             0x304 => self.enable,
             0x306 => self.counter_enable,
+            0x30a if self.zicboz => self.menvcfg,
             0x310 => return None,
             0x320 => self.inhibit,
             0x344 => self.pending(),
@@ -353,6 +368,7 @@ impl Privilege {
             0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS & fp_mask),
             0x104 => self.enable = (self.enable & !self.mideleg) | (value & self.mideleg),
             0x106 => self.supervisor_counter_enable = value & u64::from(u32::MAX),
+            0x10a => self.senvcfg = value & (1 << 7),
             0x144 => {
                 let writable = self.mideleg & (1 << 1);
                 self.injected = (self.injected & !writable) | (value & writable);
@@ -373,6 +389,7 @@ impl Privilege {
             0x303 => self.mideleg = value & S_INTERRUPTS,
             0x304 => self.enable = value & (M_INTERRUPTS | S_INTERRUPTS | self.platform_interrupts),
             0x306 => self.counter_enable = value & u64::from(u32::MAX),
+            0x30a => self.menvcfg = value & (1 << 7),
             0x320 => self.inhibit = value & 5,
             0x344 => self.injected = value & S_INTERRUPTS,
             0x7c0 => self.bpm = Some(value),
