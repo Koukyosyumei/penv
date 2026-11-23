@@ -10,6 +10,7 @@ use crate::{
     bus::{CORTEX_M_STEP_HZ, UartWatch, UnhandledAccess},
     machine::{CpuHook, Machine, Stop},
     rtc_clock::RtcMode,
+    time_handle::TimeHandle,
     uart::{BinaryUartPattern, FailingUartPattern, UartHistory, UartWaitMode},
 };
 
@@ -166,6 +167,7 @@ pub fn run(
     }
     let mut retired = 0;
     let mut host_terminals = HashMap::new();
+    let mut time_handle = TimeHandle::default();
     for command in commands {
         let result = match &command.action {
             Action::RtcMode(mode) => machine.rtc_clock.set_mode(*mode).map(|()| None),
@@ -202,12 +204,15 @@ pub fn run(
                     }
                     let chunk = (*steps).min(budget);
                     let start = machine.elapsed_steps();
-                    machine.run(chunk, &mut output).map(|(stop, count)| {
-                        retired += count;
-                        budget -= machine.elapsed_steps().wrapping_sub(start);
-                        (stop != Stop::Limit || (chunk < *steps && !machine.primary.monitor_paused))
-                            .then_some(stop)
-                    })
+                    time_handle
+                        .run_grant(chunk, |granted| machine.run(granted, &mut output))
+                        .map(|(stop, count)| {
+                            retired += count;
+                            budget -= machine.elapsed_steps().wrapping_sub(start);
+                            (stop != Stop::Limit
+                                || (chunk < *steps && !machine.primary.monitor_paused))
+                                .then_some(stop)
+                        })
                 })
             }
             Action::CpuCondition(cpu, condition) => machine.cortex_m_cpu(cpu).and_then(|thumb| {

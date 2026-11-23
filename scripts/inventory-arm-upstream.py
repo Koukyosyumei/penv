@@ -291,6 +291,23 @@ def classify_nunit(name, case, attrs, parameter):
             return PARTIAL, F072, "renode_stm32_limit_timer_update_irq_gates_and_precision; same frequency, duration and two alarms, STM32 CNT=1 differs from generic LimitTimer.Value=2"
         if case == "ShouldSwitchDirectionProperly":
             return OPEN, COMMON, "Generic LimitTimer fires when descending reaches zero at second 4; STM32 TIM2 update IRQ fires on the next tick (underflow), so a generic zero-boundary timer is required"
+    if name == "TimeHandleTests":
+        checks = {
+            "WaitShouldNotBlockIfThereWasNoRequest": (PASS, "wait_without_request_returns_without_progress"),
+            "WaitShouldNotBlockAfterContinue": (PASS, "wait_returns_after_continue_grant_first"),
+            "WaitShouldNotBlockAfterContinue2": (PARTIAL, "wait_returns_after_continue_request_first"),
+            "RequestShouldBlockWaitingForGrant": (PARTIAL, "request_waits_for_grant"),
+            "WaitShouldBlockWaitingForReport": (PARTIAL, "wait_for_report_request_first"),
+            "WaitShouldBlockWaitingForReport2": (PARTIAL, "wait_for_report_grant_first"),
+            "ContinueShouldFinishWaiting2": (PARTIAL, "continue_finishes_wait_request_first"),
+            "ContinueShouldFinishWaiting3": (PARTIAL, "continue_finishes_wait_grant_first"),
+        }
+        if case in checks:
+            status, check = checks[case]
+            note = "same 1000-tick grant and report ordering"
+            if status == PARTIAL:
+                note += "; synchronous pending/ready results, actual host-thread blocking and wakeup remain"
+            return status, COMMON, f"renode_time_handle_{check}; {note}"
     if name == "TimeSourceTests":
         checks = {
             "ShouldExecuteDelayedActionInNearestSyncedStateExactlyOnce": ("delayed_action_in_nearest_synced_state_exactly_once", "10"),
