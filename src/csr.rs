@@ -31,6 +31,21 @@ enum Privilege {
     Machine = 3,
 }
 
+#[derive(Clone, Copy, Default)]
+struct AddressTrigger {
+    control: u32,
+    address: u32,
+}
+
+#[derive(Clone, Default)]
+struct Triggers {
+    selected: usize,
+    entries: [AddressTrigger; 2],
+}
+
+const MCONTROL: u32 = 2 << 28;
+const MCONTROL_FIELDS: u32 = 0x5f; // M/S/U and execute/store/load
+
 #[derive(Clone, Default)]
 struct Supervisor {
     delegation: u32,
@@ -85,6 +100,7 @@ pub struct Csr {
     pmp: Option<Box<Pmp>>,
     privilege: Privilege,
     supervisor: Option<Supervisor>,
+    triggers: Option<Box<Triggers>>,
     interrupt_enable: u32,
     pending: u32,
     pub ibex: bool,
@@ -116,6 +132,7 @@ impl Default for Csr {
             pmp: None,
             privilege: Privilege::Machine,
             supervisor: None,
+            triggers: None,
             interrupt_enable: 0,
             pending: 0,
             ibex: false,
@@ -171,6 +188,21 @@ impl Csr {
 
     pub fn enable_supervisor_mode(&mut self) {
         self.supervisor = Some(Supervisor::default());
+    }
+
+    pub fn enable_address_triggers(&mut self) {
+        self.triggers = Some(Box::default());
+    }
+
+    pub fn address_trigger_matches(&self, address: u32, access: u8) -> bool {
+        let mode = 1 << (3 + self.privilege as u32);
+        self.triggers.as_ref().is_some_and(|triggers| {
+            triggers.entries.iter().any(|trigger| {
+                trigger.address == address
+                    && trigger.control & mode != 0
+                    && trigger.control & u32::from(access) != 0
+            })
+        })
     }
 
     pub fn enable_pmp(&mut self, entries: usize) {
@@ -310,6 +342,16 @@ impl Csr {
             0x342 => self.cause,
             0x343 => self.trap_value,
             0x344 => self.pending_interrupts(),
+            0x7a0 => self.triggers.as_ref()?.selected as u32,
+            0x7a1 => {
+                let triggers = self.triggers.as_ref()?;
+                MCONTROL | triggers.entries[triggers.selected].control
+            }
+            0x7a2 => {
+                let triggers = self.triggers.as_ref()?;
+                triggers.entries[triggers.selected].address
+            }
+            0x7a4 if self.triggers.is_some() => 1 << 2,
             0x7c0 if self.ibex => 0,
             0x9c0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_mask,
             0xbc0 if self.vex => self.local_irq_mask?,
@@ -392,6 +434,25 @@ impl Csr {
             0xb02 | 0xb82 => {
                 set_counter_half(&mut self.counters.instret, value, address & 0x80 != 0);
                 self.counters.instret_written = true;
+            }
+            0x7a0..=0x7a2 if let Some(triggers) = self.triggers.as_mut() => {
+                match address {
+                    0x7a0 if (value as usize) < triggers.entries.len() => {
+                        triggers.selected = value as usize;
+                    }
+                    0x7a0 => {}
+                    0x7a1 => {
+                        // Only exact-address matches with the breakpoint action are implemented.
+                        triggers.entries[triggers.selected].control =
+                            if value & !MCONTROL_FIELDS == MCONTROL {
+                                value & MCONTROL_FIELDS
+                            } else {
+                                0
+                            };
+                    }
+                    0x7a2 => triggers.entries[triggers.selected].address = value,
+                    _ => unreachable!(),
+                }
             }
             0x7c0 if self.ibex => {}
             0x330 if self.minerva => self.local_irq_mask = Some(value),

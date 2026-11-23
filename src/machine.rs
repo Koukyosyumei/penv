@@ -69,6 +69,7 @@ enum Fault {
     Illegal(u32),
     InvalidCsr(u32, String),
     MisalignedTarget(u32),
+    Breakpoint(u32),
 }
 
 impl Fault {
@@ -103,6 +104,7 @@ impl Fault {
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),
+            Self::Breakpoint(address) => (3, *address),
         })
     }
 }
@@ -113,6 +115,7 @@ impl std::fmt::Display for Fault {
             Self::Bus(_, error) => error.fmt(f),
             Self::Illegal(insn) => write!(f, "unsupported instruction {insn:#010x}"),
             Self::InvalidCsr(_, error) => f.write_str(error),
+            Self::Breakpoint(address) => write!(f, "address breakpoint at {address:#010x}"),
             Self::MisalignedTarget(address) => {
                 write!(f, "misaligned instruction target {address:#010x}")
             }
@@ -486,6 +489,10 @@ impl Hart {
         self.csr.enable_supervisor_mode();
     }
 
+    pub fn enable_address_triggers(&mut self) {
+        self.csr.enable_address_triggers();
+    }
+
     pub fn enable_pmp(&mut self, entries: usize) {
         self.csr.enable_pmp(entries);
     }
@@ -515,6 +522,9 @@ impl Hart {
     }
 
     fn load<const N: usize>(&mut self, bus: &mut Bus, address: u32) -> Result<u32, Fault> {
+        if self.csr.address_trigger_matches(address, crate::pmp::READ) {
+            return Err(Fault::Breakpoint(address));
+        }
         if N > 1 && address as usize & (N - 1) != 0 && self.unaligned_accesses {
             let mut value = 0;
             for index in 0..N {
@@ -539,6 +549,9 @@ impl Hart {
         value: u32,
         output: &mut impl Write,
     ) -> Result<(), Fault> {
+        if self.csr.address_trigger_matches(address, crate::pmp::WRITE) {
+            return Err(Fault::Breakpoint(address));
+        }
         if address as usize & (width - 1) != 0 && self.unaligned_accesses {
             for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
                 self.store(
@@ -698,6 +711,9 @@ impl Hart {
 
     fn step(&mut self, bus: &mut Bus, output: &mut impl Write) -> Result<Step, Fault> {
         let pc = self.pc;
+        if self.csr.address_trigger_matches(pc, crate::pmp::EXECUTE) {
+            return Err(Fault::Breakpoint(pc));
+        }
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
@@ -824,6 +840,9 @@ impl Hart {
                     }
                     _ => return Err(illegal()),
                 };
+                if self.csr.address_trigger_matches(a, permissions) {
+                    return Err(Fault::Breakpoint(a));
+                }
                 let physical = self
                     .translate(bus, a, 4, permissions)
                     .map_err(|error| Fault::Bus(access, error))?;

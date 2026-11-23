@@ -985,6 +985,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 hart.enable_supervisor_mode();
             }
         }
+        if entry.model == "CPU.RiscV32" {
+            hart.enable_address_triggers();
+        }
         if pmp != 0 {
             hart.enable_pmp(pmp);
         }

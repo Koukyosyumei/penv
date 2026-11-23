@@ -467,7 +467,7 @@ python3 "$runner" --penv target/release/penv --platform "$virt" \
   --artifacts "$out/priv-results" "$out"/priv/*
 ```
 
-特権テストは 22 件中 21 件が通過しました。`rv32mi-p-breakpoint` は `tselect`、`tdata1`、`tdata2` のデバッグトリガーを要求し、現行版では `tohost` コード 2 で失敗するため runner は終了コード 1 を返します。
+特権テストは 22 件すべて通過しました。`rv32mi-p-breakpoint` は変更前に `tohost` コード 2 で失敗しました。標準 RV32 に独立した 2 スロットのアドレス一致トリガーを実装した結果、命令実行・ロード・ストアのブレークポイントを検査する同じ ELF が `tohost` コード 0 を返します。
 
 同リリースの `riscv-arch-tests.tar.gz`（SHA-256 `c07ba4f475e96395d77287e1fd471a4a43af47d09f121393f61812158462b3c1`）から `sail-rv32-max/elfs/rv32i/{I,M}/*.elf` を取り出し、同じ runner に `--act` を加えて実行しました。47 件すべてが初期化時の `fmv.w.x`（`mtval=0xf0008053`）で違法命令になり、ACT が失敗コード 1 を返しました。この配布物は Sail の最大構成で、Renode が指定する `spike-rv32-max` のビルドとは別です。penv の ISA 設定に合う ACT ELF を作るには、上流指定のソースと参照モデル・ツールチェーンが必要です。この環境では Sail と RISC-V GNU クロスコンパイラが未導入です。
 
@@ -478,7 +478,7 @@ Renode の例外ケースは Robot 内の URL から `riscv32--ebreak_custom_tes
 | 分野 | 出典と対応 |
 | --- | --- |
 | ISA | Renode の `unit-tests/riscv-zicond-extension.robot` の RV32 ゼロ化・通過・無効時の違法命令、および全ビットが 1 の値の保持を Rust テスト `zicond_rv32_matches_zero_nonzero_and_disabled_cases` に移植。公開済み Zicond ELF 4 件も実行 |
-| 特権 | 公開 `rv32mi-*` / `rv32si-*` と、上流 `riscv-priv.robot`・`riscv-mret.robot` に対応する既存 ELF。デバッグトリガーを要求する `rv32mi-p-breakpoint` は残件 |
+| 特権 | 公開 `rv32mi-*` / `rv32si-*` と、上流 `riscv-priv.robot`・`riscv-mret.robot` に対応する既存 ELF。`rv32mi-p-breakpoint` は実行・読み出し・書き込みのアドレス一致トリガーを検証 |
 | Sv32 | 公開 `rv32si-p-dirty`、仮想モードの I/M/A/C ELF、既存の PTE 差し替え ELF。SUM と MXR を変えたときに、キャッシュ済み変換が許可を持ち越さないことを Rust テストで追加検証 |
 | CLINT | Renode `unit-tests/timer-reconfiguration.robot` の比較値の上下ワード更新から派生し、32 ビット境界をまたぐ `mtimecmp` 比較を追加検証。10 MHz の実割り込みは virt ELF で再確認 |
 | PLIC | 上流 `platforms/cpus/riscv_virt.repl` の 52 入力・M コンテキストに合わせ、ソース 52、しきい値と同値での通知抑止、claim/complete を Rust テストで検査。ソース 3 は virt の NS16550 実 ELF で再確認 |
@@ -495,7 +495,27 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
   --platform "$out/virt-zicond.repl" --artifacts "$out/zicond-results" "$out"/zicond/*
 ```
 
-公開 ELF の通過内訳は I/M/A/C 122 件、M/S 特権 21 件、Zicond 4 件です。virt の NS16550 と CLINT の実 ELF および LiteX の実ファームウェア回帰は、それぞれ上の再現手順を使います。残課題はデバッグトリガー、RV32 の未対応 ISA 拡張、対応 ISA に絞った ACT ELF の生成、Robot の翻訳ブロックログやネイティブ周辺機器を必要とするケースです。たとえば上流の Verilated UARTLite や Andes 固有 PLIC は、ここで検証した標準 virt の PLIC と構成が異なります。
+公開 ELF の通過内訳は I/M/A/C 122 件、M/S 特権 22 件、Zicond 4 件です。virt の NS16550 と CLINT の実 ELF および LiteX の実ファームウェア回帰は、それぞれ上の再現手順を使います。残課題はデバッグモードへの遷移・連鎖・範囲一致のトリガー、RV32 の未対応 ISA 拡張、対応 ISA に絞った ACT ELF の生成、Robot の翻訳ブロックログやネイティブ周辺機器を必要とするケースです。たとえば上流の Verilated UARTLite や Andes 固有 PLIC は、ここで検証した標準 virt の PLIC と構成が異なります。
+
+### RV32 virt と LiteX の受け入れ検証
+
+`close-rv32-isa` の優先ケースと `close-litex` の対象ケースを一つのコマンドで確認します。
+
+```sh
+bash scripts/validate-riscv-acceptance.sh ../renode "$(mktemp -d)"
+```
+
+第 3 引数には上記リリースの保存済みアーカイブを渡せます。依存は Rust、GNU tar、curl、Python 3、Clang、LLD、`llvm-nm`、ripgrep と公開イメージへのアクセスです。`verification.log` に両リビジョン、実行バイナリの SHA-256、結果を保存します。Cargo のログ、148 件の ELF の結果と個別ログ、実ファームウェアの UART・PCM・画像比較の証拠は同じディレクトリに置かれます。
+
+| 受け入れ項目 | 判定 |
+| --- | --- |
+| ISA・特権・Sv32 | 公開 ELF 148 件の `tohost=0`、TSR・TVM・PTE 差し替え・カウンタの実 ELF の UART 一致、上流 Bare/PMP MRET ELF の最終 PC |
+| CLINT・PLIC・UART | 上流 virt REPL で 10 MHz タイマー割り込みと PLIC 経由の NS16550 受信割り込み、Rust の比較値境界・claim/complete |
+| LiteX Linux・Minerva・Arty | 単一ハートと SMP のログイン、Minerva UART ブート、Arty LED と実行中の PHY 設定を公開イメージで確認 |
+| LiteX I²S・Nexys・SD | Zephyr の PCM バイト一致、Nexys Video の上流 PNG 一致・ROI 一致と不一致、Nexys4DDR SPI SD の FAT16 列挙 |
+| 追加の実ファームウェア回帰 | Murax、Ibex、Zephyr シェル、Tock、Linux GPIO/SPI/I²C、SD root/FAT16、TFTP、MicroPython、RV32 ECALL/EBREAK |
+
+上流 Robot 一式の実行、Renode 指定の ACT ビルド、サポート外 ISA 拡張とネイティブモデルは引き続き残課題です。
 
 ## Renode / penv 共通計測ハーネス
 
