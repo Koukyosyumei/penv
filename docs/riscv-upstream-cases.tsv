@@ -564,7 +564,7 @@ Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	24	Should Boot		target	p
 Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	40	Should Control LED		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
 Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	62	Should Read Button		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
 Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	86	Should Handle SPI		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
-Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	95	Should Handle I2C		target	partial	fixed images and temperature values verified at scheduled steps; live temperature control requested from ARM
+Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	95	Should Handle I2C		target	partial	fixed images and live UART temperature assertions passed on shared integration f89b35a; RV32 branch lacks the shared trigger
 Renode	tests/platforms/LiteX/LiteX_Microwatt.robot	15	Should Boot		outside	outside	litex_microwatt.resc -> litex_microwatt.repl:16 requires CPU.PowerPc64
 Renode	tests/platforms/LiteX/LiteX_Microwatt.robot	30	Should Display Help		outside	outside	boot-finished fixture from Should Boot requires CPU.PowerPc64
 Renode	tests/platforms/LiteX/LiteX_Tock.robot	2	Should Run Tock		target	ported	fixed Tock ELF and RESC; initialization and three ordered D1/D2 UART pairs checked

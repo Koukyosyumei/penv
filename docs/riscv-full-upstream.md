@@ -1731,3 +1731,21 @@ python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repr
 ```
 
 診断構成は42/42件、Rust は88/88件が通過しました。固定構成は42件とも V 未対応で CPU 作成時に停止しました。ウォッチポイントと仮想時間のタイムアウト、モニターの名前解決と QuadWord アクセス、6件のモニターエラー応答は ARM 担当の既存依頼 `riscv-memory-assert-6d37343.md` で追跡しています。追加3件は部分移植で、上流等価合格は累計174件です。ケース別 JSONL・ELF・負例と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-0b6b9c7-guu3Cw/` に保存しました。
+
+### LiteX Linux I²C の共有実装を実イメージで検証
+
+`LiteX_Linux_VexRiscv.robot` の `Should Handle I2C` を、ARM 担当から返答のあった共有コミット `f89b35a71908efcbde1fd6d91fba82f1112d114c` で再実行しました。固定公開イメージを起動し、I²C 検出表8行と上流指定の sysfs パスを確認しました。最初の読み出し結果 `4368` とプロンプトに合わせてセンサーを36 °Cに設定し、次の読み出し結果 `7724` とプロンプトを確認しました。同じバイナリで公開 Arty ELF の起動、LED、スイッチ、ボタン、PHY の5件も再実行しました。
+
+```bash
+repro=$(mktemp -d)
+mkdir "$repro/src"
+git archive f89b35a71908efcbde1fd6d91fba82f1112d114c | tar -x -C "$repro/src"
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc \
+  cargo build --locked --release --manifest-path "$repro/src/Cargo.toml"
+assets=/tmp/penv-full-riscv/regression/assets
+bin="$repro/src/target/release/penv"
+python3 scripts/validate-litex-linux-i2c.py "$bin" ../renode "$assets" "$repro/linux-i2c"
+python3 scripts/validate-litex-arty-uart.py "$bin" ../renode "$assets" "$repro/arty"
+```
+
+担当ブランチの `cargo test --locked` は88件が通過しました。同ブランチのバイナリでは `--litex-temperature-after-uart` が未対応で、I²C は台帳に統合側の合格を明記した上で担当側の部分移植に据え置きました。担当側の等価合格は累計174件です。固定入力のハッシュ、ケース別照合ログ、UART と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-45aa3a9-pwAUTz/` に保存しました。
