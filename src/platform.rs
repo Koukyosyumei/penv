@@ -909,7 +909,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             "CPU.VexRiscv" => Some((true, false, false, false)),
             _ => None,
         };
-        let mut floating = (false, false, false);
+        let mut floating = (false, false, false, false);
         let mut zicond = false;
         let mut zacas = false;
         let mut zmmul = false;
@@ -954,6 +954,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     smepmp = false;
                     sscofpmf = false;
                     let mut zfh = false;
+                    let mut zfbfmin = false;
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
@@ -963,6 +964,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "zacas" if !zacas => zacas = true,
                             "sscofpmf" if !sscofpmf => sscofpmf = true,
                             "smepmp" if !smepmp => smepmp = true,
+                            "zfbfmin" if !zfbfmin => zfbfmin = true,
                             "zfh" if !zfh => zfh = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
@@ -1004,7 +1006,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     {
                         return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
                     }
-                    floating = (single, double, zfh);
+                    floating = (single, double, zfh, zfbfmin);
                     if letters.contains('b') {
                         // Renode enables all four supported bit-manipulation subsets for B.
                         bitmanip = BitManip {
@@ -1068,6 +1070,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
                 if floating.2 && !floating.0 {
                     return Err(entry.error("Zfh requires the RV32 F extension"));
+                }
+                if floating.3 && !floating.0 {
+                    return Err(entry.error("Zfbfmin requires the RV32 F extension"));
                 }
                 if smepmp && pmp == 0 {
                     return Err(entry.error("Smepmp requires internal PMP entries"));
@@ -1150,6 +1155,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         hart.set_bitmanip(bitmanip);
         if floating.0 {
             hart.enable_floating(floating.1, floating.2);
+            hart.set_zfbfmin(floating.3);
         }
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
@@ -2172,6 +2178,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zabha"
                     | "zmmul"
                     | "zfh"
+                    | "zfbfmin"
                     | "smepmp"
                     | "sscofpmf"
             )
@@ -2200,7 +2207,7 @@ type RiscvConfig<'a> = (
         (bool, bool),
         (bool, bool),
         BitManip,
-        (bool, bool, bool),
+        (bool, bool, bool, bool),
     ),
     usize,
     (bool, bool),

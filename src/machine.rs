@@ -48,6 +48,7 @@ pub struct Hart {
     translations: TranslationCache,
     thumb: Option<Thumb>,
     zfh: bool,
+    zfbfmin: bool,
     floating: Option<Box<[u64; 32]>>,
     unaligned_accesses: bool,
     zicond: bool,
@@ -182,6 +183,7 @@ impl Machine {
                 translations: TranslationCache::default(),
                 thumb: None,
                 zfh: false,
+                zfbfmin: false,
                 floating: None,
                 unaligned_accesses: false,
                 zicond: false,
@@ -557,6 +559,10 @@ impl Hart {
         self.csr.d_extension = double;
         self.zfh = half;
         self.floating = Some(Box::new([0; 32]));
+    }
+
+    pub fn set_zfbfmin(&mut self, enabled: bool) {
+        self.zfbfmin = enabled;
     }
 
     pub fn set_bitmanip(&mut self, extensions: BitManip) {

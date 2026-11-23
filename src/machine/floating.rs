@@ -35,13 +35,33 @@ impl Hart {
         }
         let opcode = insn & 0x7f;
         let funct3 = (insn >> 12) & 7;
+        if self.zfbfmin {
+            match insn & 0xfff0_007f {
+                0x4480_0053 => {
+                    self.convert_bfloat(insn, ((insn >> 15) & 31) as usize, true, funct3)?;
+                    return Ok(None);
+                }
+                0x4060_0053 if funct3 == 0 => {
+                    self.convert_bfloat(insn, ((insn >> 15) & 31) as usize, false, 0)?;
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
         let format = match opcode {
             0x07 | 0x27 => match funct3 {
+                1 if self.zfbfmin => Some(Format::Half),
                 1 => self.format(2),
                 2 => self.format(0),
                 3 => self.format(1),
                 _ => None,
             },
+            0x53 if self.zfbfmin
+                && funct3 == 0
+                && matches!(insn & 0xfff0_007f, 0xe400_0053 | 0xf400_0053) =>
+            {
+                Some(Format::Half)
+            }
             _ => self.format((insn >> 25) & 3),
         }
         .ok_or_else(illegal)?;
@@ -150,14 +170,23 @@ impl Hart {
         if !self.csr.floating_enabled() {
             return Err(illegal());
         }
-        let source = ((insn >> 20) & 31) as usize;
+        self.convert_bfloat(insn, ((insn >> 20) & 31) as usize, insn & 0x8000 != 0, 7)
+    }
+
+    fn convert_bfloat(
+        &mut self,
+        insn: u32,
+        source: usize,
+        narrow: bool,
+        rounding: u32,
+    ) -> Result<(), Fault> {
         let rd = ((insn >> 7) & 31) as usize;
         let mut bits = self.floating.as_ref().unwrap()[source];
         if !self.csr.d_extension {
             bits = Format::Single.boxed(u64::from(bits as u32));
         }
-        let (format, result) = if insn & 0x8000 != 0 {
-            let rounding = Rounding::decode(7, self.csr.fcsr).ok_or_else(illegal)?;
+        let (format, result) = if narrow {
+            let rounding = Rounding::decode(rounding, self.csr.fcsr).ok_or(Fault::Illegal(insn))?;
             (
                 Format::BFloat,
                 Format::BFloat.convert(Format::Single.decode(bits), rounding),

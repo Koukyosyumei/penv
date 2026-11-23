@@ -904,3 +904,22 @@ target/release/penv run --platform "$evidence/zmmul.repl" \
 固定構成そのものを再試行した 4 件は引き続き V の未対応で CPU 作成時に停止します。台帳の 4 行に両診断構成の結果を追記しました。上流等価合格は累計 155 件です。
 
 REPL、実 ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-26cff01-UHp1Hp/` に保存しました。
+
+### RV32 Zfbfmin の標準 BF16 命令
+
+明示的な `Zfbfmin` 指定に対応しました。標準の FCVT.BF16.S、FCVT.S.BF16 と、16 ビットのロード・ストア・ビット転送を有効にします。変換処理を Andes スカラー BF16 と共有し、標準命令では命令自身の丸め指定を使います。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zfbfmin.repl" --artifacts "$evidence/zfbfmin-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zfbfmin/*.elf
+python3 scripts/validate-rv32-andes-bfloat.py target/release/penv ../renode "$evidence/andes-rerun"
+```
+
+変更前は `rv32ifc_zfbfmin` の CPU 作成で 6 件とも停止しました。修正後は 5 件が完了コード 0、拡大変換 ELF は test 125 の NaN ボックス不正ケースで完了コード 1 でした。固定署名は 0x7e000000 を要求します。補助 ELF は、NaN ボックスが不正な BF16 を BF16 の標準 NaN として扱い、FP32 の標準 NaN 0x7fc00000 と FFLAGS=0 になることを確認しました。署名との差は未解決として記録します。[Zfbfmin 仕様](https://github.com/riscv/riscv-isa-manual/blob/main/src/unpriv/zfbfmin.adoc) · [NaN ボックス規則](https://github.com/riscv/riscv-isa-manual/blob/main/src/unpriv/d-st-ext.adoc#nan-boxing-of-narrower-values)
+
+Rust テスト 87 件、既存 Andes BF16 6 ケース、固定 Zfh ACT ELF 53 件は通過しました。固定 Robot の最大構成では V の未対応で 6 件とも CPU 作成が止まり、その構成には Zfbfmin の指定もありません。台帳では各結果を記録し、上流等価合格は累計 155 件です。
+
+REPL、補助 ELF とソース、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-d810a17-9FrFR7/` に保存しました。
