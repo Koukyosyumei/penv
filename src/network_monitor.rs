@@ -203,6 +203,24 @@ impl Plan {
                 let name = name.strip_prefix("sysbus.").unwrap_or(name).to_owned();
                 self.actions.push(Action::ObserveUart { node, name });
             }
+            ["tester", "FailOnUart" | "WriteUartLine", name, text] => {
+                let node = self.monitor_node()?;
+                let name = name.strip_prefix("sysbus.").unwrap_or(name).to_owned();
+                let text = resolve(*text)?.to_owned();
+                if words[1] == "FailOnUart" {
+                    if text.is_empty() || text.contains(['\r', '\n']) {
+                        return Err("expected nonempty single-line UART failure text".into());
+                    }
+                    self.actions.push(Action::FailOnUart {
+                        node,
+                        name,
+                        pattern: text,
+                    });
+                } else {
+                    self.actions
+                        .push(Action::WriteUartLine { node, name, text });
+                }
+            }
             ["tester", "WaitUart", name, timeout, mode, patterns @ ..] if !patterns.is_empty() => {
                 let node = self.monitor_node()?;
                 let unfinished = match *mode {

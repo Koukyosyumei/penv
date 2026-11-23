@@ -114,7 +114,7 @@ impl Crypto {
     fn process(&mut self) {
         let key_size = (self.control >> 8) & 3;
         while self.control & ENABLE != 0
-            && self.mode() == 4
+            && matches!(self.mode(), 4..=6)
             && key_size < 3
             && self.input.len() >= BLOCK_WORDS
             && self.output.len() <= FIFO_DEPTH - BLOCK_WORDS
@@ -132,10 +132,36 @@ impl Crypto {
                 bytes.copy_from_slice(&value.to_be_bytes());
             }
             let decrypt = self.control & 4 != 0;
+            let mode = self.mode();
+            let mut iv = [0; 16];
+            for (word, bytes) in self.key_and_iv[8..].iter().zip(iv.chunks_exact_mut(4)) {
+                bytes.copy_from_slice(&word.to_be_bytes());
+            }
             match key_size {
-                0 => transform(Aes128::new((&key[16..]).into()), &mut block, decrypt),
-                1 => transform(Aes192::new((&key[8..]).into()), &mut block, decrypt),
-                _ => transform(Aes256::new((&key).into()), &mut block, decrypt),
+                0 => transform(
+                    Aes128::new((&key[16..]).into()),
+                    &mut block,
+                    decrypt,
+                    mode,
+                    &mut iv,
+                ),
+                1 => transform(
+                    Aes192::new((&key[8..]).into()),
+                    &mut block,
+                    decrypt,
+                    mode,
+                    &mut iv,
+                ),
+                _ => transform(
+                    Aes256::new((&key).into()),
+                    &mut block,
+                    decrypt,
+                    mode,
+                    &mut iv,
+                ),
+            }
+            for (word, bytes) in self.key_and_iv[8..].iter_mut().zip(iv.chunks_exact(4)) {
+                *word = u32::from_be_bytes(bytes.try_into().unwrap());
             }
             self.output.extend(
                 block
@@ -150,11 +176,36 @@ fn transform(
     cipher: impl BlockEncrypt + BlockDecrypt + BlockSizeUser<BlockSize = U16>,
     block: &mut [u8; 16],
     decrypt: bool,
+    mode: u32,
+    iv: &mut [u8; 16],
 ) {
-    if decrypt {
-        cipher.decrypt_block(block.into());
-    } else {
-        cipher.encrypt_block(block.into());
+    match (mode, decrypt) {
+        (5, false) => {
+            xor_block(block, iv);
+            cipher.encrypt_block(block.into());
+            *iv = *block;
+        }
+        (5, true) => {
+            let next_iv = *block;
+            cipher.decrypt_block(block.into());
+            xor_block(block, iv);
+            *iv = next_iv;
+        }
+        (6, _) => {
+            let mut mask = *iv;
+            cipher.encrypt_block((&mut mask).into());
+            xor_block(block, &mask);
+            let counter = u32::from_be_bytes(iv[12..].try_into().unwrap());
+            iv[12..].copy_from_slice(&counter.wrapping_add(1).to_be_bytes());
+        }
+        (_, true) => cipher.decrypt_block(block.into()),
+        (_, false) => cipher.encrypt_block(block.into()),
+    }
+}
+
+fn xor_block(block: &mut [u8; 16], mask: &[u8; 16]) {
+    for (byte, key) in block.iter_mut().zip(mask) {
+        *byte ^= key;
     }
 }
 

@@ -79,6 +79,16 @@ pub enum Action {
         node: usize,
         name: String,
     },
+    FailOnUart {
+        node: usize,
+        name: String,
+        pattern: String,
+    },
+    WriteUartLine {
+        node: usize,
+        name: String,
+        text: String,
+    },
     WaitUart {
         node: usize,
         name: String,
@@ -246,7 +256,28 @@ pub fn run(
                         .machine
                         .bus
                         .stm32_usart_mut(&name)?
-                        .observed = Some(Vec::new());
+                        .observed = Some(Default::default());
+                }
+                Action::FailOnUart {
+                    node,
+                    name,
+                    pattern,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .stm32_usart_mut(&name)?
+                        .observed
+                        .as_mut()
+                        .ok_or("start a UART observer before registering failures")?
+                        .failing
+                        .push(pattern);
+                }
+                Action::WriteUartLine { node, name, text } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .write_stm32_uart_line(&name, text.into_bytes())?;
                 }
                 Action::WaitUart {
                     node,
@@ -266,6 +297,7 @@ pub fn run(
                             .observed
                             .as_mut()
                             .ok_or("start a UART observer before waiting")?;
+                        let bytes = &mut bytes.bytes;
                         if scanned == Some(bytes.len()) {
                             return Ok(false);
                         }

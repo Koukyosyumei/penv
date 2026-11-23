@@ -177,6 +177,16 @@ for file, kind in robot.items():
             status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL・仮想スイッチ。10 仮想秒で成功カウンター 0x2c とサーバーの応答 10 回を確認。クライアント UART の比較行と Robot の順序条件が未達'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Have Ethernet as Link Up in CubeMX':
             note = '同一 ELF を未変更 Nucleo REPL で試行。ARM EABI5 hard-float ELF のローダー拒否で UART 観測前に停止'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass ADC DMA Test':
+            status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3。固定上流と同じ順序で 7 件の PASS 行を照合。tests/stm32h7-nucleo-ztest-robot.sh'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Zephyr Encryption Sample':
+            status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3。ECB/CBC/CTR の暗号化と復号の Match 行を上流順に照合。tests/stm32h7-nucleo-ztest-robot.sh'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Not Run Out Of Ring Buffer Space When Writing Long Line To Uart':
+            status, note = 'PARTIAL', '同一 ELF・長文・CR・50 ms 後のプロンプトを観測。ただし追加観測で RX ring buffer full が出るため未達'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Hear Loopback CAN Messages':
+            note = '同一 ELF は初期化を完了。最初の Counter received: 0 が 8 仮想秒以内に出ない。FDCAN の送信・FIFO ループバック未実装'
+        elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Interrupt Test':
+            note = '同一 ELF の test_arm_esf_collection 中、0x0800c460 で Thumb 0xde5a の未対応により停止'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Blink Led':
             status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3。UART 一致で停止し、GreenLED の変化を 8 仮想秒観測、点灯・消灯各 1 秒 ±5%。tests/stm32h7-nucleo-led-robot.sh'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should See Button Press':

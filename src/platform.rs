@@ -798,11 +798,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 .map(crate::stm32_uart::Stm32UsartClock::from_alias)
                 .transpose()
                 .map_err(|e| uart.error(&e))?;
-            machine
+            let device = machine
                 .bus
                 .map_stm32_usart(base, irq, low_power.unwrap_or(false), clock)
-                .map_err(|e| uart.error(&e))?
-                .name = uart.name.clone();
+                .map_err(|e| uart.error(&e))?;
+            device.name = uart.name.clone();
+            device.frequency = frequency;
         }
         machine
             .bus

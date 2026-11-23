@@ -742,6 +742,11 @@ impl Bus {
             }
         }
         let control = self.h7_network_control.as_ref();
+        for uart in &mut self.stm32_uarts {
+            if usart_clocked(control, uart) {
+                uart.tick_receive();
+            }
+        }
         if let Some(display) = &mut self.h7_ltdc
             && ltdc_clocked(control, display)
         {
@@ -1275,6 +1280,19 @@ impl Bus {
             .iter_mut()
             .find(|uart| uart.name == name)
             .ok_or_else(|| format!("unknown STM32 UART {name:?}"))
+    }
+
+    pub fn write_stm32_uart_line(&mut self, name: &str, mut bytes: Vec<u8>) -> Result<(), String> {
+        let uart = self
+            .stm32_uarts
+            .iter_mut()
+            .find(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 UART {name:?}"))?;
+        if usart_clocked(self.h7_network_control.as_ref(), uart) {
+            bytes.push(b'\r');
+            uart.queue_input(bytes);
+        }
+        Ok(())
     }
 
     pub fn has_uart_input(&self) -> bool {

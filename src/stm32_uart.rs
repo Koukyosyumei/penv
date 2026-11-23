@@ -40,13 +40,22 @@ impl Stm32UsartClock {
     }
 }
 
+#[derive(Default)]
+pub struct UartObservation {
+    pub bytes: Vec<u8>,
+    pub failing: Vec<String>,
+}
+
 pub struct Stm32Usart {
     pub base: u32,
     pub name: String,
-    pub observed: Option<Vec<u8>>,
+    pub frequency: Option<u32>,
+    pub observed: Option<UartObservation>,
     pub irq: Option<Stm32Irq>,
     pub clock: Option<Stm32UsartClock>,
     receive: VecDeque<u8>,
+    incoming: VecDeque<u8>,
+    rx_delay: u64,
     registers: [u32; 12],
     complete: bool,
     low_power: bool,
@@ -64,10 +73,13 @@ impl Stm32Usart {
         Self {
             base,
             name: String::new(),
+            frequency: None,
             observed: None,
             irq,
             clock,
             receive: VecDeque::new(),
+            incoming: VecDeque::new(),
+            rx_delay: 0,
             registers: [0; 12],
             complete: true,
             low_power,
@@ -77,6 +89,7 @@ impl Stm32Usart {
     pub fn reset(&mut self) {
         let mut reset = Self::new(self.base, self.irq, self.low_power, self.clock);
         reset.name = std::mem::take(&mut self.name);
+        reset.frequency = self.frequency;
         reset.observed = self.observed.take();
         *self = reset;
     }
@@ -90,9 +103,55 @@ impl Stm32Usart {
     }
 
     pub fn queue_input(&mut self, bytes: Vec<u8>) {
-        if self.receiver_enabled() {
+        if self.frequency.is_some() {
+            self.incoming.extend(bytes);
+        } else if self.receiver_enabled() {
             self.receive.extend(bytes);
         }
+    }
+
+    pub fn tick_receive(&mut self) {
+        if self.incoming.is_empty() {
+            return;
+        }
+        if self.rx_delay == 0 {
+            self.rx_delay = self.receive_period();
+        }
+        self.rx_delay -= 1;
+        if self.rx_delay == 0 {
+            let byte = self.incoming.pop_front().unwrap();
+            if self.receiver_enabled() {
+                self.receive.push_back(byte);
+            }
+        }
+    }
+
+    fn receive_period(&self) -> u64 {
+        const PRESCALERS: [u32; 16] = [
+            1, 2, 4, 6, 8, 10, 12, 16, 32, 64, 128, 256, 256, 256, 256, 256,
+        ];
+        let control = self.registers[0];
+        let over8 = !self.low_power && control & (1 << 15) != 0;
+        let brr = self.registers[3] & if self.low_power { 0xfffff } else { 0xffff };
+        let divisor = if over8 {
+            (brr & 0xfff0) | ((brr & 7) << 1)
+        } else {
+            brr
+        };
+        let multiplier = if self.low_power {
+            256
+        } else if over8 {
+            2
+        } else {
+            1
+        };
+        let prescaler = PRESCALERS[(self.registers[11] & 0xf) as usize];
+        let baud =
+            u64::from(self.frequency.unwrap() / prescaler) * multiplier / u64::from(divisor.max(1));
+        // Start bit, eight data bits, optional parity, and configured stop bits.
+        let stop_half_bits = [2, 1, 4, 3][((self.registers[1] >> 12) & 3) as usize];
+        let half_bits = 18 + 2 * u64::from(control & (1 << 10) != 0) + stop_half_bits;
+        (half_bits * u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND)).div_ceil(2 * baud.max(1))
     }
 
     fn status(&self) -> u32 {
@@ -142,10 +201,20 @@ impl Stm32Usart {
                 self.registers[10] = value & 0xff;
                 if self.registers[0] & (UE | TE) == UE | TE {
                     output.write_all(&[value as u8])?;
-                    if let Some(bytes) = &mut self.observed {
-                        bytes.push(value as u8);
-                    }
                     self.complete = true;
+                    if let Some(observation) = &mut self.observed {
+                        observation.bytes.push(value as u8);
+                        if let Some(pattern) = observation
+                            .failing
+                            .iter()
+                            .find(|pattern| observation.bytes.ends_with(pattern.as_bytes()))
+                        {
+                            return Err(io::Error::other(format!(
+                                "UART {} matched failing text {pattern:?}",
+                                self.name
+                            )));
+                        }
+                    }
                 }
             }
             _ => {}

@@ -682,3 +682,27 @@ bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-led.Fm3d6yZW` に保存しました。点灯期待値の変更とボタン押下の削除で、期間違反と UART タイムアウトも確認しました。全 789 件のうち等価合格 13 件、部分検証 15 件、未達 761 件です。
+
+### backlog-network-d636d1885df8-1
+
+未変更 Nucleo REPL と上流の公開 ELF で、ADC DMA と Zephyr Encryption Sample の 2 ケースが等価合格しました。ADC DMA は USART3 で上流と同じ 7 件の `PASS` 行を順番に照合しました。暗号サンプルは従来の ECB の次に CBC で停止していたため、STM32H7 CRYPTO に CBC の IV 更新と CTR の 32 ビットカウンターを実装しました。ECB・CBC・CTR の暗号化と復号の `Match` 行が上流と同じ順序で出ました。
+
+長文 UART ケース向けに、名前付き USART への行入力、禁止文字列の監視、REPL 周波数と UART 設定に基づく受信間隔を実装しました。上流と同じコマンドと CR を入力し、50 ms の実行後にプロンプトを照合しました。さらに 0.7 仮想秒の対照観測を追加すると `RX ring buffer full` が出るため、部分検証に留めています。モニターが禁止文字列を検出して失敗することも、この対照で確認しました。
+
+CAN ループバックは初期化後の `Counter received: 0` が 8 仮想秒以内に出ず、FDCAN の送信・受信 FIFO ループバックが未実装です。割り込みケースは `test_arm_esf_collection` 中に `0x0800c460` の Thumb `0xde5a` で停止します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+logs=$(mktemp -d)
+bash tests/stm32h7-nucleo-uart-line.sh "$logs"
+printf 'emulation RunFor "0.7"\n' >> "$logs/case.resc"
+target/release/penv run --script "$logs/case.resc" --platform-root ../renode \
+    --asset-dir "$PENV_ASSET_DIR" --max-steps 18000000 --uart-log-dir "$(mktemp -d)"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-uart-line.m4RnjA3M` にあります。ADC DMA・暗号サンプルは `ztest/`、長文の対照は `paced-after/` です。台帳は対象 789 件のうち等価合格 15 件、部分検証 16 件、未達 758 件です。
