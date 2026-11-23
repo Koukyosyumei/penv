@@ -2421,8 +2421,8 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfhminD/ZfhminD-fmv.h.x-00.elf	target	blocked-cpu	upstream CPU creation requires V; Zfh diagnostic passed with 1 MiB RAM
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfhminD/ZfhminD-fmv.x.h-00.elf	target	blocked-cpu	upstream CPU creation requires V; Zfh diagnostic passed with 1 MiB RAM
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZfhminD/ZfhminD-fsh-00.elf	target	blocked-cpu	upstream CPU creation requires V; Zfh diagnostic passed with 1 MiB RAM
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicntr/Zicntr-csrrc-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicntr/Zicntr-csrrs-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicntr/Zicntr-csrrc-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicntr/Zicntr-csrrs-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicond/Zicond-czero.eqz-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicond/Zicond-czero.nez-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicsr/Zicsr-csrrc-00.elf	target	blocked-cpu	upstream CPU creation requires V
@@ -2433,8 +2433,8 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zicsr/Zicsr-csrrwi-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zifencei/Zifencei-fence.i-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zihintpause/Zihintpause-pause-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zihpm/Zihpm-csrrc-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zihpm/Zihpm-csrrs-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zihpm/Zihpm-csrrc-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zihpm/Zihpm-csrrs-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zknd/Zknd-aes32dsi-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zkne/Zknd; ELF passed standalone and with V replaced by Zkne/Zknd
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zknd/Zknd-aes32dsmi-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zkne/Zknd; ELF passed standalone and with V replaced by Zkne/Zknd
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zkne/Zkne-aes32esi-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zkne/Zknd; ELF passed standalone and with V replaced by Zkne/Zknd

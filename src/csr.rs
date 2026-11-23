@@ -98,9 +98,7 @@ struct Supervisor {
 }
 
 const CYCLE_ENABLE: u32 = 1;
-const TIME_ENABLE: u32 = 2;
 const INSTRET_ENABLE: u32 = 4;
-const COUNTER_ENABLE: u32 = CYCLE_ENABLE | TIME_ENABLE | INSTRET_ENABLE;
 
 #[derive(Clone, Default)]
 struct Counters {
@@ -231,7 +229,7 @@ impl Csr {
         if self.privilege == Privilege::Machine {
             return true;
         }
-        let bit = 1 << (address & 3);
+        let bit = 1 << (address & 31);
         self.counters.machine_enable & bit != 0
             && (self.privilege != Privilege::User
                 || self.supervisor.is_none()
@@ -483,6 +481,9 @@ impl Csr {
                 };
                 counter_half(value, address & 0x80 != 0)
             }
+            // Renode exposes unimplemented HPM counters as zero.
+            0xb03..=0xb1f | 0xb83..=0xb9f => 0,
+            0xc03..=0xc1f | 0xc83..=0xc9f if self.counter_accessible(address) => 0,
             0x310 | 0xf11..=0xf13 | 0xf15 => 0,
             0xf14 => self.hart_id as u32,
             0x340 => self.scratch,
@@ -604,9 +605,9 @@ impl Csr {
                 self.interrupt_enable = value & (MACHINE_INTERRUPTS | supervisor_mask);
             }
             0x305 => self.vector = Some(self.correct_vector("MTVEC", value, true)),
-            0x306 => self.counters.machine_enable = value & COUNTER_ENABLE,
+            0x306 => self.counters.machine_enable = value,
             0x106 if self.supervisor.is_some() => {
-                self.counters.supervisor_enable = value & COUNTER_ENABLE;
+                self.counters.supervisor_enable = value;
             }
             0x323..=0x33f => {}
             0x723..=0x73f if self.sscofpmf => {}
@@ -885,6 +886,29 @@ fn vector_target(vector: u32, cause: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hpm_counter_access_uses_each_counter_enable_bit() {
+        let mut csr = Csr::default();
+        csr.enable_supervisor_mode();
+        csr.enable_user_mode();
+        let read = |csr: &mut Csr, address: u32| csr.access((address << 20) | 0x20f3, 0);
+
+        assert_eq!(read(&mut csr, 0xb9f).unwrap(), 0);
+        assert_eq!(read(&mut csr, 0xc1f).unwrap(), 0);
+        csr.access(0x3060_9073, 1 << 31).unwrap();
+        csr.privilege = Privilege::Supervisor;
+        assert_eq!(read(&mut csr, 0xc9f).unwrap(), 0);
+        assert!(read(&mut csr, 0xc83).is_err());
+        assert!(read(&mut csr, 0xb9f).is_err());
+        csr.privilege = Privilege::User;
+        assert!(read(&mut csr, 0xc9f).is_err());
+        csr.privilege = Privilege::Supervisor;
+        csr.access(0x1060_9073, 1 << 31).unwrap();
+        csr.privilege = Privilege::User;
+        assert_eq!(read(&mut csr, 0xc9f).unwrap(), 0);
+        assert!(csr.access(0xc9f0_9073, 1).is_err());
+    }
 
     #[test]
     fn vector_bootstrap_gates_csrs_and_does_not_advertise_v() {

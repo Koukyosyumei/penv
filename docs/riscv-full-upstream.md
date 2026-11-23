@@ -1035,3 +1035,25 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 固定 Robot の ISA 指定には Zkne と Zknd がなく、V の未対応で全 4 件が CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。
 
 構成別の終了状態、ケースごとのログ、`results.jsonl` は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zihpm のカウンター読み出し
+
+V を外した診断構成で代表の `Zihpm-csrrc-00.elf` が `hpmcounter3` の読み出し時に停止しました。固定 tlib の `arch/riscv/op_helper.c` と同様に、未実装の HPM カウンター 3〜31 の下位・上位 CSR はゼロを返します。S/U モードではカウンター番号に対応する `mcounteren`・`scounteren` のビットでアクセスを制御します。Rust テストではカウンター 31 の上位 CSR を使い、権限による許可・拒否と読み出し専用 CSR への書き込み拒否を確認しました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-aaecfb0-0vynVb"
+cargo test --locked
+cargo build --locked --release
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/no-v.repl" --artifacts "$repro/no-v" \
+  "$elfs"/Zihpm/*.elf "$elfs"/Zicntr/*.elf
+python3 scripts/validate-rv32-priv-counters.py target/release/penv ../renode "$repro/counters"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" \
+  "$elfs"/Zihpm/*.elf "$elfs"/Zicntr/*.elf
+```
+
+同じ release バイナリで、診断構成の固定 ELF は Zihpm と Zicntr が各 2 件完了コード 0 に到達しました。上流の RV32 特権カウンターを移植した既存の実 ELF 回帰 6 件と Rust テスト 88 件も通過しました。固定 Robot 構成は V の未対応で 4 件とも CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。ケースごとのログ、`results.jsonl` と終了状態を上記の証拠ディレクトリに保存しました。

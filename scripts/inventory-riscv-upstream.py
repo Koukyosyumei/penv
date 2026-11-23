@@ -92,6 +92,8 @@ def robot_cases(root, isa, act):
                                 basis += "; reduced-ISA Zfbfmin ELF passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zbkc/[^/]+\.elf", portable):
                             basis += "; ELF passed both standalone Zbkc and fixed ISA with V omitted"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:Zihpm|Zicntr)/[^/]+\.elf", portable):
+                            basis += "; fixed ELF passed with only V omitted from ISA"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zkn[ed]/[^/]+\.elf", portable):
                             basis += "; fixed ISA omits Zkne/Zknd; ELF passed standalone and with V replaced by Zkne/Zknd"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zknh/[^/]+\.elf", portable):
