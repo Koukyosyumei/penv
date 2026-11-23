@@ -218,6 +218,15 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         &mut HashSet::new(),
         &mut entries,
     )?;
+    for entry in &entries {
+        crate::platform::validate_entry_properties(&entry.body, |line, key| {
+            format!(
+                "{}:{line}: {}: duplicate REPL property {key:?}",
+                entry.source.display(),
+                entry.name
+            )
+        })?;
+    }
     nrf52840::apply_overrides(&mut entries)?;
     let mut machine = Machine::without_default_ram();
     if stm32f0::is_stm32f0(&entries) {

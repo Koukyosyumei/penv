@@ -1462,3 +1462,48 @@ emulation RunFor "0"
     }
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn renode_repl_reports_duplicate_attribute_before_overlays() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-repl-duplicate-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let platform = directory.join("board.repl");
+    let script = directory.join("boot.resc");
+    fs::write(
+        &script,
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @vectors.bin 0\nemulation RunFor \"0\"\n",
+    )
+    .unwrap();
+    fs::write(directory.join("vectors.bin"), [0, 8, 0, 0, 9, 0, 0, 0]).unwrap();
+    fs::create_dir(directory.join("uart")).unwrap();
+    for (properties, line) in [
+        ("\n    size: 8\n    size: 16", 4),
+        (" { size: 8; size: 16 }", 2),
+    ] {
+        fs::write(
+            &platform,
+            format!(
+                "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU{properties}\nexternal:\n    size: 32\n"
+            ),
+        )
+        .unwrap();
+        for simulation in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_penv"));
+            command.args(["run", "--script"]).arg(&script);
+            if simulation {
+                command.arg("--uart-log-dir").arg(directory.join("uart"));
+            }
+            let result = command.output().unwrap();
+            assert!(!result.status.success(), "{result:?}");
+            let stderr = String::from_utf8(result.stderr).unwrap();
+            assert!(
+                stderr.contains(&format!(
+                    "board.repl:{line}: external: duplicate REPL property \"size\""
+                )),
+                "{stderr}"
+            );
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
+}

@@ -18,3 +18,11 @@ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo test --locked
 ```
 
 `cargo test` はユニット 209 件、CLI 18 件合格。ログは `~/.local/state/penv-dispatch/evidence/integration/shared-find-bytes-2b94f71/cargo-test.log`。
+
+STM32H7 `3d3a3ae` と STM32F407 `8e670e9` の共通部分として、REPL の同じ宣言内の属性重複をオーバーレイの適用前に検出する。通常・複数機・nRF のローダーが共通の判定を使い、元のファイルと重複行を報告する。インデント形式とインライン形式を通常・複数機の CLI 入口で確認した。登録や init セクションの検証は別の後続差分として残る。
+
+```sh
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc cargo test --locked renode_repl_reports_duplicate_attribute
+```
+
+対象テストのログは `~/.local/state/penv-dispatch/evidence/integration/shared-repl-duplicate-ca7e82f/focused.log`。既存 6 担当の回帰は `scripts/verify-release.sh` を使う。

@@ -371,6 +371,33 @@ fn apply_litex_irq_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn property_key(text: &str) -> Option<&str> {
+    let (key, value) = text.split_once(':')?;
+    let key = key.trim();
+    (!value.trim().is_empty()
+        && !key.is_empty()
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then_some(key)
+}
+
+pub(crate) fn validate_entry_properties<'a, S>(
+    body: &'a [(S, String)],
+    error: impl Fn(&S, &str) -> String,
+) -> Result<(), String> {
+    let mut properties = HashSet::new();
+    for (source, text) in body {
+        if matches!(text.as_str(), "init:" | "init add:") {
+            break;
+        }
+        if let Some(key) = property_key(text)
+            && !properties.insert(key)
+        {
+            return Err(error(source, key));
+        }
+    }
+    Ok(())
+}
+
 pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
@@ -379,6 +406,15 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         &mut HashSet::new(),
         &mut entries,
     )?;
+    for entry in &entries {
+        validate_entry_properties(&entry.body, |line, key| {
+            format!(
+                "{}:{line}: {}: duplicate REPL property {key:?}",
+                entry.source.display(),
+                entry.name
+            )
+        })?;
+    }
     apply_litex_irq_overrides(&mut entries)?;
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
         return crate::rv64_platform::load(

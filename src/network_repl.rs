@@ -1,3 +1,5 @@
+use crate::platform::{property_key, validate_entry_properties};
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -329,15 +331,6 @@ fn brace_depth(text: &str) -> i32 {
         .sum()
 }
 
-fn property_key(text: &str) -> Option<&str> {
-    let (key, value) = text.split_once(':')?;
-    let key = key.trim();
-    (!value.trim().is_empty()
-        && !key.is_empty()
-        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-    .then_some(key)
-}
-
 fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
     let mut definitions: Vec<Entry> = Vec::new();
     let mut names: HashMap<String, usize> = HashMap::new();
@@ -347,13 +340,9 @@ fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
             && let Some(&index) = names.get(&entry.name)
         {
             let body = &mut definitions[index].body;
-            // Replace a property from an earlier entry. Preserve duplicates within an
-            // entry for the individual peripheral's existing validation.
-            let mut replaced = HashSet::new();
+            // Replace a property from an earlier entry.
             for (_, text) in &entry.body {
-                if let Some(key) = property_key(text)
-                    && replaced.insert(key)
-                {
+                if let Some(key) = property_key(text) {
                     let mut previous = body
                         .iter()
                         .enumerate()
@@ -388,6 +377,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         &mut HashSet::new(),
         &mut entries,
     )?;
+    for entry in &entries {
+        validate_entry_properties(&entry.body, |source, key| {
+            format!("{source}: {}: duplicate REPL property {key:?}", entry.name)
+        })?;
+    }
     let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
     let mut cpus = Vec::new();
@@ -1782,7 +1776,7 @@ ram:
             ),
             (
                 "nvic:\n    systickFrequency: 1\n    systickFrequency: 2\n",
-                "unsupported or duplicate NVIC property",
+                "duplicate REPL property \"systickFrequency\"",
             ),
         ] {
             fs::write(&overlay, format!("{valid}{addition}")).unwrap();
