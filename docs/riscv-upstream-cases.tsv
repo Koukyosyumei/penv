@@ -560,11 +560,11 @@ Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	100	Should Read Buttons		
 Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	133	Should Read Ethernet PHY Status		target	ported	fixed Arty ELF and REPL; boot prompt and live UART-triggered PHY status transition checked
 Renode	tests/platforms/LiteX/LiteX_Ibex.robot	5	Should Boot		outside	outside	litex_ibex.resc -> litex_ibex.repl:10 requires CPU.IbexRiscV32
 Renode	tests/platforms/LiteX/LiteX_Ibex.robot	22	Should Display Help		outside	outside	boot-finished fixture from Should Boot requires CPU.IbexRiscV32
-Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	24	Should Boot		target	partial	litex_linux_vexriscv.repl; VexRiscv, GPIO, SPI and I2C; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	40	Should Control LED		target	partial	litex_linux_vexriscv.repl; VexRiscv, GPIO, SPI and I2C; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	62	Should Read Button		target	partial	litex_linux_vexriscv.repl; VexRiscv, GPIO, SPI and I2C; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	86	Should Handle SPI		target	partial	litex_linux_vexriscv.repl; VexRiscv, GPIO, SPI and I2C; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	95	Should Handle I2C		target	partial	litex_linux_vexriscv.repl; VexRiscv, GPIO, SPI and I2C; firmware regression, Robot equivalence pending
+Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	24	Should Boot		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
+Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	40	Should Control LED		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
+Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	62	Should Read Button		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
+Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	86	Should Handle SPI		target	ported	fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked
+Renode	tests/platforms/LiteX/LiteX_Linux_VexRiscv.robot	95	Should Handle I2C		target	partial	fixed images and temperature values verified at scheduled steps; live temperature control requested from ARM
 Renode	tests/platforms/LiteX/LiteX_Microwatt.robot	15	Should Boot		outside	outside	litex_microwatt.resc -> litex_microwatt.repl:16 requires CPU.PowerPc64
 Renode	tests/platforms/LiteX/LiteX_Microwatt.robot	30	Should Display Help		outside	outside	boot-finished fixture from Should Boot requires CPU.PowerPc64
 Renode	tests/platforms/LiteX/LiteX_Tock.robot	2	Should Run Tock		target	ported	fixed Tock ELF and RESC; initialization and three ordered D1/D2 UART pairs checked

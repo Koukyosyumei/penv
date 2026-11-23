@@ -1481,3 +1481,20 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/ownership-885d642-QhNIoD/` に保存しました。
+
+### LiteX Linux の対話 UART による起動・GPIO・SPI
+
+固定 `LiteX_Linux_VexRiscv.robot` の公開イメージと既存 REPL/RESC を使い、起動と起動済み状態に依存する LED・ボタン・SPI を同じセッションで検証します。ログイン後に PS1 を設定し、各コマンドをプロンプト待ちで送ります。既存の `--litex-panel-after-uart` で指定回数目のプロンプトに LED 照合とボタン操作を結び付けます。SPI はモード、ワード幅、周波数、受信バイト列を順に照合します。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 -B scripts/validate-litex-linux-io.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro"
+```
+
+I²C の固定ステップ回帰では温度 4368 と 7724 を確認済みです。初回読み出しに同期して温度を更新する共有入口は ARM 担当に引き渡しました。依頼は `~/.local/state/penv-dispatch/shared-requests/riscv-linux-i2c-b6acf2b.md` にあります。
+
+上流 SHA-1 と一致する公開イメージ 4 個で、起動・LED・ボタン・SPI の 4/4 ケースが通過しました。初回試行では応答行の末尾とプロンプトで改行を二重に要求していたため、バッファ先頭のプロンプトも受け付けるよう修正し、同じ release バイナリで再実行しました。Rust テストは 88/88 件、上流等価合格は累計 174 件です。UART、終了状態、照合結果は `~/.local/state/penv-dispatch/evidence/riscv/backlog-b6acf2b-RKQovU/` に保存しました。
