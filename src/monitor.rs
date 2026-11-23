@@ -17,6 +17,9 @@ pub struct Boot {
     pub performance_in_mips: Option<u32>,
     pub fault_on_unmapped_data: bool,
     pub pend_hard_fault: bool,
+    pub opcode_counters: Vec<(String, String)>,
+    pub opcode_counting: Option<bool>,
+    pub opcode_queries: Vec<String>,
     pub semihosting_arguments: Option<String>,
     pub semihosting_directory: Option<PathBuf>,
     pub semihosting_temporary_directory: Option<String>,
@@ -140,6 +143,23 @@ fn execute(
             if boot.platform.is_some() && crate::parse_address(resolve(value)?)? == 3 =>
         {
             boot.pend_hard_fault = true;
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            "InstallOpcodeCounterPattern",
+            name,
+            pattern,
+        ] if boot.platform.is_some() => {
+            boot.opcode_counters.push((
+                name.trim_matches('"').into(),
+                pattern.trim_matches('"').into(),
+            ));
+        }
+        ["cpu" | "sysbus.cpu", "EnableOpcodesCounting", enabled] if boot.platform.is_some() => {
+            boot.opcode_counting = Some(enabled.parse().map_err(|_| "expected true or false")?);
+        }
+        ["cpu" | "sysbus.cpu", "GetOpcodeCounter", name] if boot.platform.is_some() => {
+            boot.opcode_queries.push(name.trim_matches('"').into());
         }
         ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {
             boot.fault_on_unmapped_data = true;

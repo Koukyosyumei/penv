@@ -384,6 +384,9 @@ fn run() -> Result<ExitCode, String> {
     let mut performance_in_mips = None;
     let mut fault_on_unmapped_data = false;
     let mut pend_hard_fault = false;
+    let mut opcode_counters = Vec::new();
+    let mut opcode_counting = None;
+    let mut opcode_queries = Vec::new();
     let mut semihosting_arguments = None;
     let mut semihosting_directory = None;
     let mut semihosting_temporary_directory = None;
@@ -421,6 +424,9 @@ fn run() -> Result<ExitCode, String> {
         performance_in_mips = boot.performance_in_mips;
         fault_on_unmapped_data = boot.fault_on_unmapped_data;
         pend_hard_fault = boot.pend_hard_fault;
+        opcode_counters = boot.opcode_counters;
+        opcode_counting = boot.opcode_counting;
+        opcode_queries = boot.opcode_queries;
         semihosting_arguments = boot.semihosting_arguments;
         semihosting_directory = boot.semihosting_directory;
         semihosting_temporary_directory = boot.semihosting_temporary_directory;
@@ -583,6 +589,18 @@ fn run() -> Result<ExitCode, String> {
     }
     machine.validate_entry()?;
 
+    if !opcode_counters.is_empty() || opcode_counting.is_some() || !opcode_queries.is_empty() {
+        if !machine.has_cortex_m4() || ble_peer.is_some() {
+            return Err("opcode counters require a single Cortex-M4 machine".into());
+        }
+        for (name, pattern) in opcode_counters {
+            machine.bus.thumb_opcodes.install(&name, &pattern)?;
+        }
+        machine.bus.thumb_opcodes.enabled = opcode_counting.unwrap_or(false);
+        for name in &opcode_queries {
+            machine.bus.thumb_opcodes.get(name)?;
+        }
+    }
     if pend_hard_fault {
         if !machine.has_cortex_m4() {
             return Err("nvic SetPendingIRQ 3 requires a Cortex-M4 platform".into());
@@ -649,6 +667,9 @@ fn run() -> Result<ExitCode, String> {
         fs::write(&path, pcm).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     let (stop, steps) = result?;
+    for name in opcode_queries {
+        eprintln!("opcode {name}: {}", machine.bus.thumb_opcodes.get(&name)?);
+    }
     if stats {
         eprintln!(
             "{stop:?}, {steps} instructions, {:.3} ms, pc={:#010x}",

@@ -108,6 +108,7 @@ impl FaultingPeripheral {
 
 #[derive(Default)]
 pub struct Bus {
+    pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub semihosting: Option<crate::semihosting::Semihosting>,
     regions: Vec<Region>,
     faulting_peripherals: Vec<FaultingPeripheral>,

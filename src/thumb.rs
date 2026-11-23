@@ -1,4 +1,5 @@
 mod fpu;
+pub(crate) mod opcode_counter;
 mod thumb2;
 
 use std::io::Write;
@@ -926,6 +927,14 @@ impl Thumb {
         output: &mut impl Write,
     ) -> Result<ThumbStep, String> {
         let inst = bus.thumb_fetch(*pc)?;
+        if bus.thumb_opcodes.enabled {
+            let opcode = if inst >= 0xe800 {
+                (inst << 16) | bus.thumb_fetch(pc.wrapping_add(2))?
+            } else {
+                inst
+            };
+            bus.thumb_opcodes.record(opcode);
+        }
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);
