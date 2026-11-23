@@ -65,7 +65,7 @@ mod zephyr_boot;
 use std::{
     env,
     fs::{self, File},
-    io::{self, LineWriter, Write},
+    io::{self, LineWriter, Read, Write},
     path::PathBuf,
     process::ExitCode,
     time::Instant,
@@ -77,6 +77,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv platform prelex < REPL
        penv platform check (--file REPL | --string REPL) [--platform-root DIR]
        penv peripherals export OUTPUT --platform REPL [--platform-root DIR]
 
@@ -511,7 +512,22 @@ fn run() -> Result<ExitCode, String> {
 
 fn check_platform(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<ExitCode, String> {
     let usage = "expected 'platform check (--file REPL | --string REPL) [--platform-root DIR]'";
-    if args.next().as_deref() != Some(std::ffi::OsStr::new("check")) {
+    let operation = args.next();
+    if operation.as_deref() == Some(std::ffi::OsStr::new("prelex")) {
+        if args.next().is_some() {
+            return Err("expected 'platform prelex' with source on stdin".into());
+        }
+        let mut source = String::new();
+        io::stdin()
+            .read_to_string(&mut source)
+            .map_err(|e| e.to_string())?;
+        let lines = platform::prelex(&source)?;
+        io::stdout()
+            .write_all(lines.join("\n").as_bytes())
+            .map_err(|e| e.to_string())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if operation.as_deref() != Some(std::ffi::OsStr::new("check")) {
         return Err(usage.into());
     }
     let (mut file, mut content, mut root) = (None, None, None);
