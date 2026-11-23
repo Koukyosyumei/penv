@@ -158,6 +158,24 @@ devmem 0x119100a0 32 0   # リセット線を Low にする
 
 公開イメージで DOUT=`1`、DOEN=`0` を読み戻し、DOUT=`0` の書き込みで A の 2 回目の OpenSBI が始まりました。A は再認証し、`id -u` が `0`、`uname -m` が `riscv64` を返しました。再設定後は 56 バイトと 3200 バイトの両方向 ping が各 10/10 応答し、`eth0` IRQ は A が 0 → 100、稼働を継続した B が 3 → 245 に増えました。`cargo test` は全 48 件通過しました。
 
+#### GPIO ドライバーを有効にした Linux の標準 reboot
+
+ビルドには x86-64 Linux ホスト、C コンパイラーと開発ヘッダー、GNU Make、`bc`、`bison`、`flex`、OpenSSL 開発ヘッダー、`curl`、Python 3、Device Tree Compiler 一式、U-Boot の `mkimage` と `dumpimage` が必要です。上の手順で取得した公開ファームウェアを入力にします。スクリプトは公開カーネルのコミット `93604a0a3ecc4ef8efb9d877854f89df2c7208f7` と Bootlin の GCC 10.3.0 ツールチェーンを取得し、ハッシュを照合します。元の ELF に埋め込まれた設定を使い、`CONFIG_POWER_RESET_GPIO_RESTART=y` とリリース接尾辞 `-penv-gpio` を設定します。
+
+```sh
+out=target/starlight-linux-reboot-build
+JOBS=12 scripts/build-starlight-linux-reboot.sh "$assets" "$out"
+cargo build --release
+python3 scripts/verify-starlight.py "$out/assets" --ports 30457 30458 \
+  --switch-port 30456 --recovery --linux-reboot --logs target/starlight-linux-reboot
+```
+
+`MKIMAGE` と `DUMPIMAGE` でツールのパスを指定できます。Linux FIT は元の Buildroot initramfs と DTB を使用し、DTB の `gpio-restart` に `open-source` を追加します。この設定で GPIO10 はドライバーの probe 時に入力のままになり、再起動通知で初めて駆動されます。元の StarFive GPIO ドライバーは出力値を書き込む前に出力を有効にするため、この順序が必要です。ビルド済み資材は `$out/assets` に保存され、上流 RESC が参照するファイル名で読み込めます。[StarFive の GPIO 再起動ドライバー](https://github.com/starfive-tech/beagle_kernel_5.10/blob/93604a0a3ecc4ef8efb9d877854f89df2c7208f7/drivers/power/reset/gpio-restart.c) [StarFive の GPIO 出力制御](https://github.com/starfive-tech/beagle_kernel_5.10/blob/93604a0a3ecc4ef8efb9d877854f89df2c7208f7/drivers/gpio/gpio-starfive-vic.c)
+
+別のビルドディレクトリで再構築し、カーネル `Image` と FIT のバイト列が一致することを確認しました。検証時のツールは Bootlin GCC 10.3.0、DTC 1.6.1、`mkimage` 2023.01 です。生成 FIT の SHA-256 は `d835ed80f222889adc54f5705c28b29d78ca62359581617a67bf14948279a8c1` です。
+
+Linux `5.10.6-penv-gpio` で GPIO 再起動ドライバーへのバインドを確認しました。ゲスト A の標準 `reboot` からサービス停止、`Restarting system`、2 回目の OpenSBI、UART 再認証まで自動確認しました。再ログイン後の `id -u` は `0`、`uname -m` は `riscv64` を返し、56 バイトと 3200 バイトの ping は両方向で各 10/10 応答しました。ホスト側のリセットエスケープは無効のまま検証しました。`cargo test` は全 48 件通過しました。物理ボードでの検証とウォームリセット時の RAM 保持は残課題です。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。
