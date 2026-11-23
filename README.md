@@ -373,6 +373,28 @@ diff -u <(printf '%s\n' 'rv32-tlb: stale translation or unexpected trap') "$out/
 
 現行実装は両検査に合格し、追加の互換性修正は不要でした。fence を省いた対照 ELF は現行のキャッシュで古い変換を観測しました。fence を省いたときに古い変換が残るかは実装に依存します。既存の TVM ELF と上流の Bare/PMP ELF も再確認しました。アドレス・ASID を指定する fence の細粒度な無効化、複数ハート間の TLB シュートダウン、Robot スイートの直接実行は残課題です。
 
+## Renode / penv 共通計測ハーネス
+
+`python3 scripts/benchmark-riscv.py manifest.json 新規出力ディレクトリ` は Linux の GNU `/usr/bin/time` を使います。現在の動作確認は `python3 scripts/test-benchmark-riscv.py` のダミープロセスのみです。実機比較は上流互換テスト全件通過後に行います。
+
+```json
+{
+  "firmware": "assets/demo.elf",
+  "input": "assets/uart.bin",
+  "uart_marker": "DEMO COMPLETE",
+  "timeout_seconds": 60,
+  "repeats": 5,
+  "engines": {
+    "renode": {"argv": ["./run-renode", "{firmware}", "{input}"]},
+    "penv": {"argv": ["./run-penv", "{firmware}", "{input}"], "success_exit_code": 2}
+  }
+}
+```
+
+パスと各エンジンの任意の `cwd` はマニフェストの場所が基準です。両コマンドに同じ絶対パスを渡してファイルの SHA-256 を記録します。コマンドは UART を標準出力に書き、ワークロード終了後に指定の終了コードで終了するよう構成します。マーカーは UTF-8 のバイト列として比較し、経過時間はプロセスの起動から終了までです。試行は直列で、各回のエンジン実行順を交互に入れ替えます。
+
+`trials.jsonl` に各試行の成否、ログの場所、取得できた経過秒と最大 RSS（KiB）を記録します。タイムアウト時はプロセスグループを停止します。`summary.json` の最小値・中央値・最大値には、指定終了コードで終了し、マーカーと測定値を取得できた試行だけが入ります。各エンジンの有効試行が 2 件未満ならハーネスは終了コード 1 を返します。
+
 ## Cortex-M0 / Cortex-M0+
 
 REPL の `CPU.CortexM` で `cpuType: "cortex-m0"` または `cpuType: "cortex-m0+"` を指定すると、限定的な Thumb 実行系を使用できます。`--raw` はイメージを `vectorTableOffset`（既定値 0）に読み込み、ベクターテーブルから初期 SP と PC を設定します。整数演算、分岐、即値オフセットでのロード・ストア、LiteX UART への出力を確認済みです。`BKPT` で実行を終了します。32 ビットの BL と、PUSH・POP、SP 相対のロード・ストアにも対応します。ARM EABI5 の静的 ELF32 は物理ロードアドレスを使用します。明示的なベクターアドレスがない場合は、ロードされる割り当て済みセクションの最小物理アドレスを使い、該当セクションがなければロードセグメントの先頭を使います。リセット時の SP と PC はそのベクターテーブルから取得します。起動後は VTOR への書き込みで、例外用のベクターテーブルをマップ済みの 128 バイト境界に移動できます。SVC はベクターテーブル経由でハンドラーを呼び出し、MSP を使って元の実行状態を復元できます。SysTick は実行ステップをクロックとして動作し、CPSID/CPSIE で割り込みをマスクできます。NVIC は 32 本の外部 IRQ の有効化、保留、優先度を管理し、REPL で LiteX UART を接続できます。高優先度の外部 IRQ または SysTick は実行中のハンドラーに割り込み、MSP で元のハンドラーに復帰できます。LDM/STM、DSB/DMB/ISB、および MSP、PRIMASK、PSR の MRS/MSR にも対応します。CONTROL.SPSEL でスレッドのスタックを切り替え、PSP を使った例外フレームから復帰できます。PendSV は ICSR から保留・解除でき、SHPR3 の優先度に従って配送されます。SVC のエスカレーション、CONTROL.nPRIV、その他の 32 ビット Thumb 命令は未対応です。
