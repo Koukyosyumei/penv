@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 61 | 41 | 11 | 239 |
-| Renode Infrastructure NUnit | 134 | 57 | 4 | 73 | 9 |
-| 合計 | **247** | **118** | **45** | **84** | **248** |
+| Renode Infrastructure NUnit | 134 | 61 | 4 | 69 | 9 |
+| 合計 | **247** | **122** | **45** | **80** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -431,4 +431,15 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-host-pty-verification
 ```sh
 cargo test --locked rtc
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-rtc-modes-verification
+```
+
+## 同期境界での遅延アクション
+
+固定 Infrastructure の `TimeSourceTests.cs` の遅延アクション4件を、初回同期と 10 tick ごとの境界を持つ単一クロックの Rust フィクスチャに移植した。初回の要求は tick 10、第10ラウンドの要求は tick 100、tick 30 の指定は tick 30、tick 31 の指定は tick 40 で処理する。指定時刻より前には実行せず、次の同期境界でアクションを消費するため、同じアクションは再実行されない。
+
+STM32F072 の CPUWAIT 解除に同じ処理を使う。CPUWAIT が保持中に解除された場合は次の実行境界でベクターを取得する。境界の前に再アサートするかリセットを行うと保留を取り消す。マスター・スレーブ間の時間付与、ブロック、記録・再生を観測する他の時間ソースケースは、これらを実装するまで未達。
+
+```sh
+cargo test --locked renode_time_source
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-sync-actions-verification
 ```

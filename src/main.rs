@@ -28,6 +28,7 @@ mod stm32_spi;
 mod stm32_timer;
 mod stm32_uart;
 mod sv32;
+mod sync_action;
 mod systick;
 mod thumb;
 mod uart;

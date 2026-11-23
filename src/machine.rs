@@ -5,6 +5,7 @@ use crate::{
     csr::{Csr, EXTERNAL},
     rtc_clock::RtcClock,
     sv32::TranslationCache,
+    sync_action::SyncAction,
     thumb::{Thumb, ThumbStep},
 };
 
@@ -33,6 +34,7 @@ pub struct Hart {
     pub monitor_halted: bool,
     pub monitor_hooks: Vec<(u32, CpuHook)>,
     reset_held: bool,
+    reset_release: Option<SyncAction<()>>,
     reset_pc_written: bool,
     pub pc: u32,
     pub registers: [u32; 32],
@@ -168,6 +170,7 @@ impl Machine {
                 monitor_halted: false,
                 monitor_hooks: Vec::new(),
                 reset_held: false,
+                reset_release: None,
                 reset_pc_written: false,
                 pc: RAM_BASE,
                 registers: [0; 32],
@@ -284,11 +287,13 @@ impl Machine {
     }
 
     pub fn set_cortex_m_cpu_wait(&mut self, name: &str, asserted: bool) -> Result<(), String> {
+        let boundary = self.elapsed_steps.saturating_add(1);
         let hart = self.named_hart(name)?;
         if hart.thumb.is_none() {
             return Err("CpuWaitSignal requires a Cortex-M CPU".into());
         }
         hart.cpu_wait_asserted = asserted;
+        hart.reset_release = (hart.reset_held && !asserted).then(|| SyncAction::new(boundary, ()));
         Ok(())
     }
 
@@ -429,6 +434,7 @@ impl Hart {
         let vectors = thumb.vector_base();
         self.monitor_halted = false;
         self.reset_held = self.cpu_wait_asserted;
+        self.reset_release = None;
         self.reset_pc_written = false;
         let (sp, pc, lr) = if self.reset_held {
             *thumb = Thumb::new(Some(vectors));
@@ -575,7 +581,7 @@ impl Hart {
                 if let Some(timer) = bus.systick.as_mut() {
                     timer.tick();
                 }
-                if !self.cpu_wait_asserted {
+                if SyncAction::take_due(&mut self.reset_release, elapsed_steps).is_some() {
                     // Vector fetch belongs to the synchronization boundary.
                     if self.reset_pc_written {
                         self.reset_held = false;

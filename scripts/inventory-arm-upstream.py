@@ -291,6 +291,17 @@ def classify_nunit(name, case, attrs, parameter):
             return PARTIAL, F072, "renode_stm32_limit_timer_update_irq_gates_and_precision; same frequency, duration and two alarms, STM32 CNT=1 differs from generic LimitTimer.Value=2"
         if case == "ShouldSwitchDirectionProperly":
             return OPEN, COMMON, "Generic LimitTimer fires when descending reaches zero at second 4; STM32 TIM2 update IRQ fires on the next tick (underflow), so a generic zero-boundary timer is required"
+    if name == "TimeSourceTests":
+        checks = {
+            "ShouldExecuteDelayedActionInNearestSyncedStateExactlyOnce": ("delayed_action_in_nearest_synced_state_exactly_once", "10"),
+            "ShouldExecuteDelayedActionAddedLaterInNearestSyncedState": ("delayed_action_added_later_in_nearest_synced_state", "100"),
+            "ShouldExecuteDelayedActionInSyncedStateExactlyOnce": ("delayed_action_in_synced_state_exactly_once", "30"),
+            "ShouldExecuteNonAlignedDelayedActionInSyncedStateExactlyOnce": ("non_aligned_delayed_action_in_synced_state_exactly_once", "40"),
+        }
+        if case in checks:
+            check, tick = checks[case]
+            return PASS, COMMON, f"renode_time_source_should_execute_{check}; same 10-tick boundaries, due at tick {tick}, deterministic single-source boundary fixture"
+        return OPEN, COMMON, "Requires master/slave time grants, sink blocking or record/replay beyond the single-source boundary scheduler"
     if name == "SystemBusTests":
         if case in {"ShouldFindAfterRegistration", "ShouldFindAfterManyRegistrations"}:
             return PASS, COMMON, "renode_resc_global_array_memory_above_32bit_preserves_guest_writes; same registered ranges, 32-bit reads at base and 0x666/0x667/0x668 values using prefilled ArrayMemory"
