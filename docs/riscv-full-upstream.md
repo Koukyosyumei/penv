@@ -1607,3 +1607,22 @@ done
 ```
 
 ケース別の結果・終了状態と構成は上記の証拠ディレクトリに保存しました。
+
+### 固定 RV32 ISA の全件診断と署名取得の依頼
+
+固定ディスカバリーの公開 RV32 ISA ELF 290 件を同じ release バイナリで一括実行しました。固定 CPU 型から V を外して Zbkb・Zbkx・Zicond と 2 MiB RAM を使う診断構成では 288 件が `tohost=0` でした。残る `rv32ui-p-ma_data` と `rv32ui-v-ma_data` は、同じ診断構成で非整列アクセスを許可すると 2/2 件が通過しました。固定 Robot 構成は V の未対応で 0/290 件でした。Rust テストは 88/88 件が通過しました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-0d400e0-y55I4s"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+mapfile -t cases < "$evidence/isa-files"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$evidence/isa.repl" --artifacts "$repro/diagnostic" "${cases[@]}"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$evidence/unaligned.repl" --artifacts "$repro/unaligned" "$work"/isa/rv32ui-{p,v}-ma_data
+```
+
+署名用 ELF の `begin_signature` と `end_signature` は既存のシンボル表から解決できます。停止時に RAM を取り出す入口が必要なため、例として Sm 署名のアドレスと参照ファイルを ARM 担当への依頼 `riscv-act-signature-0d400e0.md` に渡しました。署名のバイト比較は返答待ちです。等価合格は累計 174 件で、今回の診断は台帳のケース別注記に記録しました。ケースログと終了状態は上記の証拠ディレクトリに保存しました。

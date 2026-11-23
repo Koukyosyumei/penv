@@ -2560,296 +2560,296 @@ Renode	tests/unit-tests/riscv-isa-string.robot	81	Should Throw Construction Exce
 Renode	tests/unit-tests/riscv-isa-string.robot	82	Should Throw Construction Exception	RV32EI | ISA string cannot contain both I and E base instruction sets at the same time	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-isa-string.robot	83	Should Throw Construction Exception	RV32EF | RV32E can only have M, A and C standard extensions	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
 Renode	tests/unit-tests/riscv-isa-string.robot	84	Should Throw Construction Exception	RV32FE | RV32E can only have M, A and C standard extensions	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-breakpoint	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-csr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-illegal	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-instret_overflow	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-lh-misaligned	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-lw-misaligned	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-ma_addr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-ma_fetch	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-mcsr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-pmpaddr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-sbreak	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-scall	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-sh-misaligned	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-shamt	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-sw-misaligned	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-zicntr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-csr	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-dirty	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-ma_fetch	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-sbreak	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-scall	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-wfi	target	blocked-cpu	upstream CPU creation requires V; privileged ISA diagnostic passed with Smepmp enabled
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoadd_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoand_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amomax_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amomaxu_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amomin_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amominu_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoor_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoswap_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoxor_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-lrsc	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoadd_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoand_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amomax_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amomaxu_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amomin_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amominu_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoor_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoswap_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoxor_w	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-lrsc	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uc-p-rvc	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uc-v-rvc	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fclass	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fcmp	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fcvt	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fdiv	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fmadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fmin	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-ldst	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-recoding	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fclass	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fcmp	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fcvt	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fdiv	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fmadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fmin	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-ldst	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-recoding	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fclass	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fcmp	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fcvt	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fdiv	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fmadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fmin	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-ldst	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-move	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-recoding	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fclass	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fcmp	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fcvt	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fdiv	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fmadd	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fmin	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-ldst	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-move	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-recoding	target	blocked-cpu	upstream CPU creation requires V; F/D ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-add	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-addi	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-and	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-andi	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-auipc	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-beq	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bge	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bgeu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-blt	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bltu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bne	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-fence_i	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-jal	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-jalr	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lb	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lbu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-ld_st	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lhu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lui	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lw	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-ma_data	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-or	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-ori	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sb	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-simple	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sll	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-slli	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-slt	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-slti	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sltiu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sltu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sra	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-srai	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-srl	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-srli	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-st_ld	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sub	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sw	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-xor	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-xori	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-add	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-addi	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-and	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-andi	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-auipc	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-beq	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bge	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bgeu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-blt	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bltu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bne	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-fence_i	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-jal	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-jalr	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lb	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lbu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-ld_st	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lhu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lui	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lw	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-ma_data	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-or	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-ori	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sb	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-simple	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sll	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-slli	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-slt	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-slti	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sltiu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sltu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sra	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-srai	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-srl	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-srli	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-st_ld	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sub	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sw	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-xor	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-xori	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-div	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-divu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mul	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mulh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mulhsu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mulhu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-rem	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-remu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-div	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-divu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mul	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mulh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mulhsu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mulhu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-rem	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-remu	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-p-sh1add	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-p-sh2add	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-p-sh3add	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-v-sh1add	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-v-sh2add	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-v-sh3add	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-andn	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-clz	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-cpop	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-ctz	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-max	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-maxu	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-min	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-minu	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-orc_b	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-orn	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-rev8	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-rol	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-ror	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-rori	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-sext_b	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-sext_h	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-xnor	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-zext_h	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-andn	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-clz	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-cpop	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-ctz	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-max	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-maxu	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-min	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-minu	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-orc_b	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-orn	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-rev8	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-rol	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-ror	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-rori	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-sext_b	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-sext_h	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-xnor	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-zext_h	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-p-clmul	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-p-clmulh	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-p-clmulr	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-v-clmul	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-v-clmulh	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-v-clmulr	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-brev8	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-pack	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-packh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-unzip	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-zip	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-brev8	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-pack	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-packh	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-unzip	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-zip	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm4	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm8	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm4	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm8	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bclr	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bclri	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bext	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bexti	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-binv	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-binvi	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bset	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bseti	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bclr	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bclri	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bext	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bexti	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-binv	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-binvi	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bset	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bseti	target	blocked-cpu	upstream CPU creation requires V; reduced-ISA bitmanip diagnostic passed
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fadd	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fclass	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fcmp	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fcvt	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fdiv	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fmadd	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fmin	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-ldst	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-move	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-recoding	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fadd	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fclass	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fcmp	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fcvt	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fdiv	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fmadd	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fmin	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-ldst	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-move	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-recoding	target	blocked-cpu	upstream CPU creation requires V; Zfh ISA diagnostic passed with 2 MiB RAM
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-p-czero_eqz	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-p-czero_nez	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-v-czero_eqz	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-v-czero_nez	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-breakpoint	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-csr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-illegal	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-instret_overflow	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-lh-misaligned	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-lw-misaligned	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-ma_addr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-ma_fetch	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-mcsr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-pmpaddr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-sbreak	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-scall	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-sh-misaligned	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-shamt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-sw-misaligned	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32mi-p-zicntr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-csr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-dirty	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-ma_fetch	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-sbreak	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-scall	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32si-p-wfi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; privileged ISA diagnostic passed with Smepmp enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoadd_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoand_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amomax_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amomaxu_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amomin_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amominu_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoor_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoswap_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-amoxor_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-p-lrsc	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoadd_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoand_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amomax_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amomaxu_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amomin_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amominu_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoor_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoswap_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-amoxor_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ua-v-lrsc	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uc-p-rvc	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uc-v-rvc	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fclass	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fcmp	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fcvt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fdiv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fmadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-fmin	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-ldst	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-p-recoding	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fclass	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fcmp	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fcvt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fdiv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fmadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-fmin	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-ldst	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ud-v-recoding	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fclass	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fcmp	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fcvt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fdiv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fmadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-fmin	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-ldst	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-move	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-p-recoding	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fclass	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fcmp	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fcvt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fdiv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fmadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-fmin	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-ldst	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-move	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uf-v-recoding	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; F/D ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-addi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-and	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-andi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-auipc	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-beq	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bge	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bgeu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-blt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bltu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-bne	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-fence_i	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-jal	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-jalr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lb	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lbu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-ld_st	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lhu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lui	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-lw	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-ma_data	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic passes with unaligned access enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-or	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-ori	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sb	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-simple	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sll	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-slli	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-slt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-slti	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sltiu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sltu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sra	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-srai	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-srl	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-srli	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-st_ld	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sub	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-sw	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-xor	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-p-xori	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-addi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-and	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-andi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-auipc	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-beq	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bge	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bgeu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-blt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bltu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-bne	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-fence_i	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-jal	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-jalr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lb	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lbu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-ld_st	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lhu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lui	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-lw	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-ma_data	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic passes with unaligned access enabled
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-or	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-ori	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sb	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-simple	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sll	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-slli	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-slt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-slti	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sltiu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sltu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sra	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-srai	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-srl	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-srli	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-st_ld	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sub	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-sw	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-xor	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32ui-v-xori	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-div	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-divu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mul	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mulh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mulhsu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-mulhu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-rem	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-p-remu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-div	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-divu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mul	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mulh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mulhsu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-mulhu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-rem	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32um-v-remu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-p-sh1add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-p-sh2add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-p-sh3add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-v-sh1add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-v-sh2add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzba-v-sh3add	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-andn	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-clz	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-cpop	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-ctz	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-max	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-maxu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-min	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-minu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-orc_b	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-orn	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-rev8	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-rol	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-ror	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-rori	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-sext_b	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-sext_h	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-xnor	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-p-zext_h	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-andn	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-clz	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-cpop	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-ctz	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-max	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-maxu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-min	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-minu	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-orc_b	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-orn	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-rev8	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-rol	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-ror	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-rori	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-sext_b	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-sext_h	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-xnor	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbb-v-zext_h	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-p-clmul	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-p-clmulh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-p-clmulr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-v-clmul	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-v-clmulh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbc-v-clmulr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-brev8	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-pack	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-packh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-unzip	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-p-zip	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-brev8	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-pack	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-packh	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-unzip	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkb-v-zip	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm4	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-p-xperm8	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm4	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbkx-v-xperm8	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; fixed ISA omits Zbkx; reduced-ISA Zbkx diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bclr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bclri	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bext	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bexti	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-binv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-binvi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bset	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-p-bseti	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bclr	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bclri	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bext	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bexti	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-binv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-binvi	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bset	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzbs-v-bseti	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; reduced-ISA bitmanip diagnostic passed
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fclass	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fcmp	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fcvt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fdiv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fmadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-fmin	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-ldst	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-move	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-p-recoding	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fclass	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fcmp	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fcvt	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fcvt_w	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fdiv	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fmadd	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-fmin	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-ldst	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-move	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzfh-v-recoding	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0; Zfh ISA diagnostic passed with 2 MiB RAM
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-p-czero_eqz	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-p-czero_nez	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-v-czero_eqz	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
+Renode	tests/unit-tests/riscv-isa-tests.robot	47	Should Run Tests 32	rv32uzicond-v-czero_nez	target	blocked-cpu	upstream CPU creation requires V; full scalar diagnostic with 2 MiB RAM reached tohost=0
 Renode	tests/unit-tests/riscv-isa-tests.robot	55	Should Run Tests 64		outside	outside	Run Test Case width=64 selects CPU.RiscV64 and the RV64 ELF discovery list
 Renode	tests/unit-tests/riscv-lr-sc-instructions.robot	157	Should Handle Multiple Writes To Same Reservation		outside	outside	polarfire-soc.repl uses RV64 E51/U54 harts
 Renode	tests/unit-tests/riscv-lr-sc-instructions.robot	187	Should Work On Multiple Cores		outside	outside	polarfire-soc.repl uses RV64 E51/U54 harts

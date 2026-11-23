@@ -83,6 +83,11 @@ def robot_cases(root, isa, act):
                                 basis += "; both diagnostic watchers reach tohost=0; M-mode SINVAL.VMA probe still traps"
                             else:
                                 basis += "; fixed-format and ACT packet watchers reach tohost=0 in diagnostic ISA"
+                        if key == "TESTS_32" and portable.startswith("rv32"):
+                            if re.fullmatch(r"rv32ui-[pv]-ma_data", portable):
+                                basis += "; full scalar diagnostic passes with unaligned access enabled"
+                            else:
+                                basis += "; full scalar diagnostic with 2 MiB RAM reached tohost=0"
                         if bitmanip_checked:
                             basis += "; reduced-ISA bitmanip diagnostic passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zcb(?:M|Zbb)?/[^/]+\.elf", portable):
