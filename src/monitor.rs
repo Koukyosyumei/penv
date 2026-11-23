@@ -8,7 +8,7 @@ use std::{
 use crate::{
     bus::CORTEX_M_STEP_HZ,
     machine::{Machine, Stop},
-    uart::{UartHistory, UartLineEnd},
+    uart::{UartHistory, UartWaitMode},
 };
 
 #[derive(PartialEq, Eq, Debug)]
@@ -38,7 +38,7 @@ enum Action {
     RunFor(u64),
     Button(String, bool),
     Adc(String, usize, f64),
-    WaitForUart(Option<String>, String, UartLineEnd),
+    WaitForUart(Option<String>, String, UartWaitMode),
     WriteUartLine(String, String, &'static [u8]),
 }
 
@@ -124,8 +124,13 @@ pub fn run(
                         let source = target
                             .as_ref()
                             .map_or_else(String::new, |target| format!(" on {target}"));
+                        let kind = if matches!(end, UartWaitMode::Prompt) {
+                            "prompt"
+                        } else {
+                            "line"
+                        };
                         Err(format!(
-                            "UART line containing {pattern:?} was not received{source} ({stop:?})"
+                            "UART {kind} containing {pattern:?} was not received{source} ({stop:?})"
                         ))
                     }
                 })
@@ -148,7 +153,7 @@ fn wait_for_uart(
     machine: &mut Machine,
     target: Option<&str>,
     pattern: &str,
-    end: UartLineEnd,
+    end: UartWaitMode,
     budget: u64,
     output: &mut ScriptOutput<'_, impl Write>,
 ) -> Result<(Stop, u64), String> {
@@ -287,22 +292,27 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
-        ["waitForUart", ..] => {
-            let args = text["waitForUart".len()..].trim();
+        [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
+            let args = text[command.len()..].trim();
+            let expected = format!("expected {command} [USART] \"literal text\"");
             let (target, line) = if args.starts_with('"') {
                 (None, args)
             } else {
                 let (target, line) = args
                     .split_once(char::is_whitespace)
-                    .ok_or("expected waitForUart [USART] \"literal text\"")?;
+                    .ok_or_else(|| expected.clone())?;
                 (Some(resolve(target)?.to_owned()), line.trim_start())
             };
             let (pattern, ending) = quoted_argument(line)
                 .filter(|(pattern, _)| !pattern.is_empty())
-                .ok_or("expected waitForUart [USART] \"literal text\" [LF|CR]")?;
-            let end = match ending {
-                "" | "LF" => UartLineEnd::Lf,
-                "CR" => UartLineEnd::Cr,
+                .ok_or(expected)?;
+            let end = match (*command, ending) {
+                ("waitForUartPrompt", "") => UartWaitMode::Prompt,
+                ("waitForUartPrompt", _) => {
+                    return Err("unexpected argument after UART prompt".into());
+                }
+                (_, "" | "LF") => UartWaitMode::Lf,
+                (_, "CR") => UartWaitMode::Cr,
                 _ => return Err("expected waitForUart ending LF or CR".into()),
             };
             Some(Action::WaitForUart(target, pattern.to_owned(), end))
@@ -544,7 +554,7 @@ mod tests {
     fn uart_match_requires_a_completed_line_and_never_spans_lines() {
         let mut output = Vec::new();
         let mut history = UartHistory::default();
-        history.begin_wait("ADC reading: 745", UartLineEnd::Lf);
+        history.begin_wait("ADC reading: 745", UartWaitMode::Lf);
         let mut uart = ScriptOutput {
             output: &mut output,
             history: Some(history),

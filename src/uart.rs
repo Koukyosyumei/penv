@@ -120,13 +120,15 @@ impl LiteXUart {
 }
 
 #[derive(Clone, Copy)]
-pub enum UartLineEnd {
+pub enum UartWaitMode {
     Lf,
     Cr,
+    Prompt,
 }
 
 struct UartLineMatch {
     end: u8,
+    prompt: bool,
     pattern: Vec<u8>,
     tail: VecDeque<u8>,
     contains: bool,
@@ -134,12 +136,13 @@ struct UartLineMatch {
 }
 
 impl UartLineMatch {
-    fn new(pattern: &str, end: UartLineEnd) -> Self {
+    fn new(pattern: &str, end: UartWaitMode) -> Self {
         Self {
             end: match end {
-                UartLineEnd::Lf => b'\n',
-                UartLineEnd::Cr => b'\r',
+                UartWaitMode::Lf | UartWaitMode::Prompt => b'\n',
+                UartWaitMode::Cr => b'\r',
             },
+            prompt: matches!(end, UartWaitMode::Prompt),
             pattern: pattern.as_bytes().to_vec(),
             tail: VecDeque::new(),
             contains: false,
@@ -174,13 +177,17 @@ pub struct UartHistory {
 }
 
 impl UartHistory {
-    pub fn begin_wait(&mut self, pattern: &str, end: UartLineEnd) {
+    pub fn begin_wait(&mut self, pattern: &str, end: UartWaitMode) {
         let mut matcher = UartLineMatch::new(pattern, end);
         if let Some(index) = self.unread.iter().position(|&byte| {
             matcher.receive(byte);
             matcher.matched
         }) {
             self.unread.drain(..=index);
+        } else if matcher.prompt && matcher.contains {
+            // A buffered unfinished line is consumed in full, as in TerminalTester.
+            self.unread.clear();
+            matcher.matched = true;
         }
         self.active = Some(matcher);
     }
@@ -190,6 +197,7 @@ impl UartHistory {
             && !matcher.matched
         {
             matcher.receive(byte);
+            matcher.matched |= matcher.prompt && matcher.contains;
             if matcher.matched {
                 self.unread.clear();
                 return;
@@ -215,31 +223,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prompt_prefers_finished_lines_and_consumes_the_buffered_unfinished_line() {
+        let mut history = UartHistory::default();
+        for &byte in b"ready\r\nready> buffered suffix" {
+            history.receive(byte);
+        }
+        history.begin_wait("ready", UartWaitMode::Prompt);
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("ready>", UartWaitMode::Lf);
+        assert!(!history.matched());
+        history.finish_wait();
+        history.begin_wait("ready>", UartWaitMode::Prompt);
+        assert!(history.matched());
+        history.finish_wait();
+        history.begin_wait("buffered suffix", UartWaitMode::Prompt);
+        assert!(!history.matched());
+    }
+
+    #[test]
+    fn live_prompt_matches_before_termination_and_leaves_later_bytes_for_line_wait() {
+        let mut history = UartHistory::default();
+        for &byte in b"Rea\ndy>\nRea" {
+            history.receive(byte);
+        }
+        history.begin_wait("Ready>", UartWaitMode::Prompt);
+        assert!(!history.matched());
+        for &byte in b"dy>" {
+            history.receive(byte);
+        }
+        assert!(history.matched());
+        for &byte in b"response\n" {
+            history.receive(byte);
+        }
+        history.finish_wait();
+        history.begin_wait("response", UartWaitMode::Lf);
+        assert!(history.matched());
+    }
+
+    #[test]
     fn history_consumes_through_the_first_match_and_keeps_later_bytes() {
         let mut history = UartHistory::default();
         for &byte in b"skip\nfirst\r\nlater\npartial" {
             history.receive(byte);
         }
-        history.begin_wait("absent", UartLineEnd::Lf);
+        history.begin_wait("absent", UartWaitMode::Lf);
         assert!(!history.matched());
         history.finish_wait();
-        history.begin_wait("first", UartLineEnd::Lf);
+        history.begin_wait("first", UartWaitMode::Lf);
         assert!(history.matched());
         history.finish_wait();
-        history.begin_wait("skip", UartLineEnd::Lf);
+        history.begin_wait("skip", UartWaitMode::Lf);
         assert!(!history.matched());
         history.finish_wait();
-        history.begin_wait("later", UartLineEnd::Lf);
+        history.begin_wait("later", UartWaitMode::Lf);
         assert!(history.matched());
         history.finish_wait();
-        history.begin_wait("partial line", UartLineEnd::Lf);
+        history.begin_wait("partial line", UartWaitMode::Lf);
         assert!(!history.matched());
         for &byte in b" line\nnext\n" {
             history.receive(byte);
         }
         assert!(history.matched());
         history.finish_wait();
-        history.begin_wait("next", UartLineEnd::Lf);
+        history.begin_wait("next", UartWaitMode::Lf);
         assert!(history.matched());
     }
 
@@ -255,10 +302,10 @@ mod tests {
             history.receive(byte);
         }
         assert_eq!(history.unread.len(), UART_HISTORY_BYTES);
-        history.begin_wait("old", UartLineEnd::Lf);
+        history.begin_wait("old", UartWaitMode::Lf);
         assert!(!history.matched());
         history.finish_wait();
-        history.begin_wait("new", UartLineEnd::Lf);
+        history.begin_wait("new", UartWaitMode::Lf);
         assert!(history.matched());
     }
 }

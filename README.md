@@ -277,7 +277,26 @@ target/release/penv run --script "$assets/adc-backlog.resc" --platform-root ../r
 
 公開 ELF の回帰 2 件が成功し、ADC の変形でも `745` と `1489` が順に出力されました。通常の `cargo test` は 53 件成功し、消費済み行の再利用を防ぐこと、残りステップ 0 での履歴照合、書きかけの行の継続、履歴の上限を確認しました。
 
-STM32 USART 以外の名前付き待機、正規表現、未完了行に対するプロンプトの照合、Robot の UART 入力・LED テスターは残課題です。
+#### 改行を待たずに UART プロンプトを照合する
+
+`waitForUartPrompt sysbus.usart1 "期待文字列"` は、Renode の `Wait For Prompt On Uart` と同様に、履歴の完了行を先に検索し、続いて未完了行を照合します。まだ一致がなければ、入力された文字列が一致した時点で改行を待たずにゲスト実行を区切ります。履歴の未完了行に一致した場合は、その時点までに受信していた行全体を消費します。USART 名を省略すると統合出力を使います。通常の `waitForUart` は行終端を待ちます。
+
+上の手順で Console Echo と ADC の公開 ELF を取得し、Console Echo のライブプロンプト、履歴を使う Console Echo、ADC の行待機を実行します。プロンプトの直後でスクリプトを終えると、末尾が `back`（`62 61 63 6b`）になり、ゲストがまだ CR/LF を送っていないことを確認できます。
+
+```sh
+cargo test
+PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS="$assets" \
+  cargo test --release upstream_stm32f072 -- --ignored
+cargo build --release
+sed -n '1,5p' tests/fixtures/stm32f072-prompt.resc >"$assets/prompt-stop.resc"
+target/release/penv run --script "$assets/prompt-stop.resc" --platform-root ../renode \
+  --asset-dir "$assets" --max-steps 3000000 >"$assets/prompt-stop.out"
+tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
+```
+
+`cargo test` は 55 件成功し、公開 ELF の回帰 3 件も成功しました。Console Echo では改行より前に入力案内を照合してから入力し、`Echo working?` を完了行として受信しました。ADC では引き続き `745` → `1489` を完了行として確認しました。テスト用 HEX でも、改行のない出力 `A` に対し、ライブと履歴の両方から待機が完了することを確認しました。
+
+プロンプト照合の正規表現、STM32 USART 以外の名前付き待機、Robot の UART 入力・LED テスターは残課題です。
 
 ## 現在の実装範囲
 

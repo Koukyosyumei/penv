@@ -25,7 +25,7 @@ use crate::{
     stm32_timer::Stm32Timer,
     stm32_uart::{Stm32Irq, Stm32Usart},
     systick::SysTick,
-    uart::{LiteXUart, MuraxUart, UartHistory, UartLineEnd},
+    uart::{LiteXUart, MuraxUart, UartHistory, UartWaitMode},
 };
 
 // Cortex-M peripheral time advances by 10 ns per execution step.
@@ -933,7 +933,7 @@ impl Bus {
         &mut self,
         target: &str,
         pattern: &str,
-        end: UartLineEnd,
+        end: UartWaitMode,
     ) -> Result<usize, String> {
         let index = self.stm32_usart_index(target)?;
         self.stm32_uart_history[index]
@@ -1502,12 +1502,12 @@ mod tests {
             bus.write(base, 4, 0b1001, &mut output).unwrap();
         }
         assert!(
-            bus.watch_stm32_uart("sysbus.usart3", "OK", UartLineEnd::Lf)
+            bus.watch_stm32_uart("sysbus.usart3", "OK", UartWaitMode::Lf)
                 .is_err()
         );
         bus.record_stm32_uart("sysbus.usart2");
         let index = bus
-            .watch_stm32_uart("sysbus.usart2", "OK", UartLineEnd::Lf)
+            .watch_stm32_uart("sysbus.usart2", "OK", UartWaitMode::Lf)
             .unwrap();
         for (base, bytes) in [
             (usart2, b"O".as_slice()),

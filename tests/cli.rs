@@ -63,7 +63,19 @@ fn upstream_stm32f072_console_echo_accepts_resc_uart_input() {
 }
 
 #[test]
-fn waits_for_a_cr_only_guest_uart_line() {
+#[ignore = "requires the upstream Renode tree and the public STM32F072 Console Echo ELF"]
+fn upstream_stm32f072_console_echo_replies_after_uart_prompt() {
+    let completed = run_upstream_stm32f072_script("stm32f072-prompt.resc", "3000000");
+    assert!(completed.status.success(), "{completed:?}");
+    let uart = String::from_utf8(completed.stdout).unwrap();
+    assert!(
+        uart.ends_with("Start typing characters to see them echoed back\r\nEcho working?\r\n"),
+        "{uart}"
+    );
+}
+
+#[test]
+fn waits_for_cr_lines_and_unterminated_uart_prompts() {
     let directory = std::env::temp_dir().join(format!("penv-resc-cr-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     let script = directory.join("boot.resc");
@@ -102,6 +114,12 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
             .unwrap()
     };
     let selected = run("waitForUart sysbus.usart1 \"A\" CR", "10");
+    let prompt = run("waitForUartPrompt sysbus.usart1 \"A\"", "10");
+    let merged_prompt = run("waitForUartPrompt \"A\"", "10");
+    let buffered_prompt = run(
+        "emulation RunFor \"0.00000005s\"\nwaitForUartPrompt sysbus.usart1 \"A\"",
+        "5",
+    );
     let merged = run("waitForUart \"A\" CR", "10");
     let default = run("waitForUart sysbus.usart1 \"A\"", "10");
     let backlog = "emulation RunFor \"0.00000007s\"\nwaitForUart sysbus.usart1 \"A\" CR";
@@ -116,6 +134,11 @@ usart1: UART.STM32F7_USART @ sysbus 0x40013800
         assert!(result.status.success(), "{result:?}");
         assert_eq!(result.stdout, b"A\r");
         assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete"));
+    }
+    for result in [prompt, merged_prompt, buffered_prompt] {
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"A");
+        assert!(String::from_utf8_lossy(&result.stderr).contains("ScriptComplete, 5 instructions"));
     }
     assert_eq!(default.status.code(), Some(1), "{default:?}");
     assert!(String::from_utf8_lossy(&default.stderr).contains("(Ebreak)"));
