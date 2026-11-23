@@ -1101,3 +1101,17 @@ fn zcb_is_gated_by_c_and_existing_instruction_dependencies() {
         );
     }
 }
+
+#[test]
+fn monitor_mstatus_exposes_raw_state_without_guest_csr_read_bits() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gcv").unwrap());
+    let mut bus = Bus::new(4096).unwrap();
+    cpu.initialize_mstatus(0x200);
+    assert_eq!(cpu.monitor_register("mstatus"), Some(0x200));
+    run_straight_line(&mut cpu, &mut bus, &[0x00f1_d073]); // csrwi vcsr, 3
+    assert_eq!(cpu.monitor_register("mstatus"), Some(0x600));
+    assert_eq!(
+        cpu.privilege.read(0x300, cpu.misa(), !1),
+        Some(0x8000_000a_0000_0600)
+    );
+}

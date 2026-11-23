@@ -282,6 +282,15 @@ impl Privilege {
         self.machine.write(0x05, vector);
     }
 
+    pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
+        Some(match name {
+            "mstatus" => self.status,
+            "mepc" => self.machine.epc,
+            "sepc" if self.levels == Levels::MachineSupervisorUser => self.supervisor.epc,
+            _ => return None,
+        })
+    }
+
     pub fn read(&self, csr: u32, misa: u64, epc_mask: u64) -> Option<u64> {
         if ((csr >> 8) & 3) as u64 > self.mode as u64 {
             return None;

@@ -161,6 +161,20 @@ impl Rv64 {
         self.isa
     }
 
+    pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
+        match name {
+            "pc" => Some(self.pc),
+            name => self.privilege.monitor_register(name).or_else(|| {
+                let index = name.strip_prefix('x')?.parse::<usize>().ok()?;
+                self.registers.get(index).copied()
+            }),
+        }
+    }
+
+    pub(crate) fn initialize_mstatus(&mut self, value: u64) {
+        self.privilege.write(0x300, value, self.misa());
+    }
+
     pub fn validate(&self, bus: &mut Bus) -> Result<(), String> {
         self.fetch(bus)
             .map(|_| ())

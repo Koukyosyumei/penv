@@ -5,7 +5,7 @@ RV64 で `C` とともに `Zcb` を指定できます。12 通りの命令を既
 ## 検証
 
 - 固定 Renode の `riscv-vector-csr.robot` 全12ケースが合格しました。Penv で固定 ISA 指定を使い、VS がオフの場合の例外3件、上位ビットと CSR の別名6件、飽和と VLEN 256 の VSTART を合わせて11件照合し、上流等価の合格に更新しました。
-- `Should Mark MSTATUS.VS As Dirty` は保留です。上流は Monitor から `mstatus` 全体を照合するため、Monitor の表示値とゲストの CSR 読み出し値の対応を確認する必要があります。
+- `Should Mark MSTATUS.VS As Dirty` はこの段階では保留でした。後続の [RV64 Monitor レジスター照合](rv64-monitor-register.md) で解決しました。上流は Monitor から `mstatus` 全体を照合するため、Monitor の表示値とゲストの CSR 読み出し値の対応を確認する必要があります。
 - Zcb の全12命令を含む ELF、VSTART の ELF、VSADD の ELF は固定 ISA 構成で終了値 0 を確認しました。`cargo test` は121件合格しました。
 - 固定の圧縮命令スイートに残る Zcmp/Zcmt と CV32E40P 構成はこの RV64 デコーダー変更の検証対象とは構成が異なります。
 

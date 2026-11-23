@@ -317,9 +317,15 @@ def disposition(path, name, context):
         "Should Reflect VXRM In VCSR",
         "Should Reflect VCSR In VXSAT And VXRM",
         "Should Reflect VSADD.VV Saturation In VCSR",
+        "Should Mark MSTATUS.VS As Dirty",
         "Should Leave Enough VSTART Bits For Largest Possible Value",
     }:
         return "pass", "Fixed CPU ISA including Zcb; CSR, trap and ELF assertions verified (rv64-zcb.md)"
+    if path.name == "riscv-unit-tests.robot" and name in {
+        "Should Keep MEPC First Bit As Zero",
+        "Should Keep SEPC First Bit As Zero",
+    }:
+        return "pass", "Fixed RV64 ISA, two steps and monitor EPC value 0xfe verified by ELF"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(

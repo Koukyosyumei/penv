@@ -59,6 +59,8 @@ Options:
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
+  --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
+  --read-register CPU@NAME  Report RV64 pc, x0–x31, mstatus, mepc or sepc after execution
   --write-memory [CPU@]BASE:WIDTH:VALUE  Write a little-endian RAM value during setup
   --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
   --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
@@ -135,6 +137,21 @@ fn report_ram(machine: &Machine, (cpu, address, width): &RamRead) -> Result<(), 
     Ok(())
 }
 
+fn report_registers(machine: &mut Machine, reads: &[(String, String)]) -> Result<(), String> {
+    for (cpu, name) in reads {
+        let hart = machine.rv64_hart_by_name(cpu)?;
+        let value = machine
+            .hart_mut(hart)
+            .rv64
+            .as_ref()
+            .expect("validated RV64 CPU")
+            .monitor_register(name)
+            .ok_or_else(|| format!("unsupported RV64 monitor register {name:?}"))?;
+        eprintln!("penv: register {cpu}@{name} = {value:#018x}");
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
@@ -201,6 +218,8 @@ fn run() -> Result<ExitCode, String> {
     let mut extra_ram = Vec::new();
     let mut setup_memory = Vec::new();
     let mut memory_reads = Vec::new();
+    let mut register_reads = Vec::new();
+    let mut mstatus_initializers = Vec::new();
     let mut dtb = None;
     let mut clint = None;
     let mut mtvec = None;
@@ -317,6 +336,29 @@ fn run() -> Result<ExitCode, String> {
                     .ok_or("--clint requires BASE")?;
                 if clint.replace(parse_address(&value)?).is_some() {
                     return Err("--clint may only be specified once".into());
+                }
+            }
+            Some(option @ ("--set-mstatus" | "--read-register")) => {
+                let delimiter = if option == "--set-mstatus" { ':' } else { '@' };
+                let error = || {
+                    if option == "--set-mstatus" {
+                        "--set-mstatus requires CPU:VALUE"
+                    } else {
+                        "--read-register requires CPU@NAME"
+                    }
+                };
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(error)?;
+                let (cpu, value) = value
+                    .split_once(delimiter)
+                    .filter(|(cpu, value)| !cpu.is_empty() && !value.is_empty())
+                    .ok_or_else(error)?;
+                if option == "--set-mstatus" {
+                    mstatus_initializers.push((cpu.to_owned(), parse_address64(value)?));
+                } else {
+                    register_reads.push((cpu.to_owned(), value.to_ascii_lowercase()));
                 }
             }
             Some(
@@ -644,6 +686,28 @@ fn run() -> Result<ExitCode, String> {
             return Err("--renode-lrsc requires a single RV64 hart".into());
         }
         machine.bus.renode_lrsc = renode_lrsc;
+        for (cpu, value) in &mstatus_initializers {
+            let hart = machine.rv64_hart_by_name(cpu)?;
+            machine
+                .hart_mut(hart)
+                .rv64
+                .as_mut()
+                .expect("validated RV64 CPU")
+                .initialize_mstatus(*value);
+        }
+        for (cpu, name) in &register_reads {
+            let hart = machine.rv64_hart_by_name(cpu)?;
+            if machine
+                .hart_mut(hart)
+                .rv64
+                .as_ref()
+                .expect("validated RV64 CPU")
+                .monitor_register(name)
+                .is_none()
+            {
+                return Err(format!("unsupported RV64 monitor register {name:?}"));
+            }
+        }
         if max_steps != 0 {
             machine.validate_entry()?;
         }
@@ -673,6 +737,7 @@ fn run() -> Result<ExitCode, String> {
         for read in &memory_reads {
             report_ram(&machine, read)?;
         }
+        report_registers(&mut machine, &register_reads)?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -699,6 +764,7 @@ fn run() -> Result<ExitCode, String> {
     for read in &memory_reads {
         report_ram(&machine, read)?;
     }
+    report_registers(&mut machine, &register_reads)?;
     if let Stop::TestExit(code) = stop {
         eprintln!("penv: TEST FINISHED");
         eprintln!("penv: tohost exit code {code}");
