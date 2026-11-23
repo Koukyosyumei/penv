@@ -114,8 +114,8 @@ renode	tests/unit-tests/arm-cortex-m-exception-return.robot	169-185	Should Not R
 renode	tests/unit-tests/arm-cortex-m-fpu.robot	105-114	Should Pass Zephyr FPU Sharing Generic Tests	上流の行範囲とそこで参照するフィクスチャ	FRDM K64F 専用 Zephyr ELF・nRF52840 に適用不可	対象外の根拠は applicability 欄
 renode	tests/unit-tests/arm-cortex-m-fpu.robot	115-125	Should Pass Context Stacking Preservation Test v7-M	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・元の ELF と UART 判定
 renode	tests/unit-tests/arm-cortex-m-fpu.robot	126-136	Should Pass Context Stacking Preservation Test v8-M with TrustZone	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	137-142	Should Not Raise Exception	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	143-146	Should Raise NOCP Exception	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	137-142	Should Not Raise Exception	NOCP_ASSEMBLY @ 0x10000; FpuEnabled=true; UART OK	共有 Cortex-M FPU・Cortex-M4 に適用	合格・上流命令列と UART 判定を Rust へ移植
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	143-146	Should Raise NOCP Exception	NOCP_ASSEMBLY @ 0x10000; FpuEnabled=false; UART NOCP	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未移植・Cortex-M4 では CPACR 無効時にゲスト UsageFault の代わりに停止
 renode	tests/unit-tests/arm-cortex-m-trustzone.robot	329-339	Should Print Hello From Both States	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
 renode	tests/unit-tests/arm-cortex-m-trustzone.robot	340-362	Should Stop Before Executing Handler On Instruction Fetch SecureFault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
 renode	tests/unit-tests/arm-cortex-m-trustzone.robot	363-391	Should Execute Instructions Preceding Instruction Fetch SecureFault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
