@@ -287,11 +287,6 @@ impl Devices {
             }
             return Some(Ok(()));
         }
-        for sd in &mut self.mpfs_sd {
-            if sd.write(address, width, value).is_some() {
-                return Some(Ok(()));
-            }
-        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| {
             plic.write(address - plic.base, value);

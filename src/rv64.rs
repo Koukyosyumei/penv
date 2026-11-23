@@ -525,7 +525,9 @@ impl Rv64 {
             {
                 return Ok(());
             }
-            if bus.write_rv64_ethernet(low, width, value as u32) {
+            if bus.write_rv64_ethernet(low, width, value as u32)
+                || bus.write_rv64_sd(low, width, value as u32)
+            {
                 return Ok(());
             }
             let result = if width == 8 {

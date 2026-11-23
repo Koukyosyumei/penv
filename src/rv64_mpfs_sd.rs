@@ -14,7 +14,8 @@ const OCR_READY: u32 = 1 << 31;
 const COMMAND_COMPLETE: u32 = 1;
 const TRANSFER_COMPLETE: u32 = 1 << 1;
 const BUFFER_READ_READY: u32 = 1 << 5;
-const COMMAND_TIMEOUT: u32 = (1 << 15) | (1 << 16);
+const DATA_TIMEOUT: u32 = 1 << 20;
+const COMMAND_TIMEOUT: u32 = 1 << 16;
 
 pub struct Controller {
     pub name: String,
@@ -32,6 +33,9 @@ pub struct Controller {
     signal_enable: u32,
     sector: [u8; SECTOR_SIZE],
     cursor: usize,
+    transfer_size: usize,
+    dma_address: u64,
+    dma_read: Option<(u32, usize)>,
 }
 
 struct Card {
@@ -39,6 +43,8 @@ struct Card {
     length: u64,
     capacity: u64,
     app_command: bool,
+    mmc_bus_width: u8,
+    mmc_timing: u8,
     state: CardState,
 }
 
@@ -70,7 +76,10 @@ impl Controller {
             status_enable: 0,
             signal_enable: 0,
             sector: [0; SECTOR_SIZE],
-            cursor: SECTOR_SIZE,
+            cursor: 0,
+            transfer_size: 0,
+            dma_address: 0,
+            dma_read: None,
         }
     }
 
@@ -100,6 +109,8 @@ impl Controller {
             length,
             capacity,
             app_command: false,
+            mmc_bus_width: 0,
+            mmc_timing: 0,
             state: CardState::Idle,
         });
         Ok(())
@@ -108,7 +119,8 @@ impl Controller {
     pub fn select_sd(&mut self, selected: bool) {
         if self.sd_selected != selected {
             self.sd_selected = selected;
-            self.cursor = SECTOR_SIZE;
+            self.transfer_size = 0;
+            self.dma_read = None;
             self.status = 0;
             if let Some(card) = &mut self.card {
                 card.reset();
@@ -132,7 +144,9 @@ impl Controller {
         Some(match offset {
             0x000 | 0x004 | 0x018 | 0x228 | 0x23c => 0,
             0x010 => self.phy_settings,
-            0x240 => 0x0700_0184, // Voltage support and clock fields. DMA is unavailable.
+            0x240 => 0x1740_0184, // Clock, voltage and 64-bit SDMA capabilities
+            0x200 | 0x258 => self.dma_address as u32,
+            0x25c => (self.dma_address >> 32) as u32,
             0x204 => self.block_size_count,
             0x208 => self.argument,
             0x20c => self.command_mode,
@@ -140,19 +154,15 @@ impl Controller {
             0x220 => self.read_data(),
             0x224 => {
                 0x00f2_0400
-                    | if self.sd_selected && self.card.is_some() {
-                        0x0005_0000
-                    } else {
-                        0
-                    }
-                    | if self.cursor < SECTOR_SIZE {
+                    | if self.card.is_some() { 0x0005_0000 } else { 0 }
+                    | if self.cursor < self.transfer_size {
                         1 << 11
                     } else {
                         0
                     }
             }
             0x22c => 1 << 1, // Internal clock stable
-            0x230 => self.status,
+            0x230 => self.status | (u32::from(self.status >> 16 != 0) << 15),
             0x234 => self.status_enable,
             0x238 => self.signal_enable,
             _ => return None,
@@ -166,6 +176,12 @@ impl Controller {
             (0x010, 4) => {
                 let acknowledge = u32::from(value & (3 << 24) != 0) << 26;
                 self.phy_settings = (value & 0x0000_ff3f) | acknowledge;
+            }
+            (0x200 | 0x258, 4) => {
+                self.dma_address = self.dma_address & 0xffff_ffff_0000_0000 | u64::from(value);
+            }
+            (0x25c, 4) => {
+                self.dma_address = u64::from(value) << 32 | u64::from(self.dma_address as u32)
             }
             (0x204, 4) => self.block_size_count = value,
             (0x208, 4) => self.argument = value,
@@ -188,53 +204,155 @@ impl Controller {
 
     fn command(&mut self) {
         self.response.fill(0);
-        self.cursor = SECTOR_SIZE;
+        self.transfer_size = 0;
+        self.dma_read = None;
         let index = (self.command_mode >> 24) & 0x3f;
-        let card = self.card.as_mut().filter(|_| self.sd_selected);
+        let card = self.card.as_mut();
         let flags = match card {
+            Some(card)
+                if matches!(index, 17 | 18)
+                    && self.command_mode & 0x0020_0011 == 0x0020_0011
+                    && matches!(card.state, CardState::Transfer)
+                    && (self.block_size_count & 0xfff) == SECTOR_SIZE as u32 =>
+            {
+                let blocks = if index == 17 {
+                    1
+                } else {
+                    (self.block_size_count >> 16) as usize
+                };
+                if blocks == 0 {
+                    DATA_TIMEOUT
+                } else {
+                    self.dma_read = Some((self.argument, blocks * SECTOR_SIZE));
+                    self.response[0] = card.status();
+                    COMMAND_COMPLETE
+                }
+            }
             Some(card)
                 if index == 17
                     && matches!(card.state, CardState::Transfer)
                     && (self.block_size_count & 0xfff) == SECTOR_SIZE as u32
                     && self.command_mode & 0x0020_0011 == 0x0020_0010 =>
             {
-                if card.read_sector(self.argument, &mut self.sector).is_ok() {
+                if card.read_blocks(self.argument, &mut self.sector).is_ok() {
                     card.app_command = false;
                     self.response[0] = card.status();
                     self.cursor = 0;
+                    self.transfer_size = SECTOR_SIZE;
                     COMMAND_COMPLETE | BUFFER_READ_READY
                 } else {
                     COMMAND_TIMEOUT
                 }
             }
-            Some(card) if index != 17 => match card.identify(index, self.argument) {
-                Some(response) => {
-                    self.response = response;
-                    COMMAND_COMPLETE
+            // Renode attaches a single card directly to the controller. The
+            // Fire HSS can use it through its legacy MMC command path.
+            Some(card)
+                if !self.sd_selected
+                    && index == 8
+                    && self.command_mode & 0x0020_0011 == 0x0020_0010
+                    && matches!(card.state, CardState::Transfer) =>
+            {
+                self.response[0] = card.status();
+                self.sector.fill(0);
+                self.sector[183] = card.mmc_bus_width;
+                self.sector[185] = card.mmc_timing;
+                self.sector[192] = 8; // EXT_CSD revision
+                self.sector[196] = 0x12; // Legacy Renode card: 52 MHz and HS200 at 1.8 V
+                let sectors = (card.capacity / SECTOR_SIZE as u64).min(u64::from(u32::MAX));
+                self.sector[212..216].copy_from_slice(&(sectors as u32).to_le_bytes());
+                self.cursor = 0;
+                self.transfer_size = SECTOR_SIZE;
+                COMMAND_COMPLETE | BUFFER_READ_READY
+            }
+            Some(card)
+                if !self.sd_selected
+                    && index == 21
+                    && self.command_mode & 0x0020_0011 == 0x0020_0010
+                    && matches!(card.state, CardState::Transfer) =>
+            {
+                let size = (self.block_size_count & 0xfff) as usize;
+                if let Some(pattern) = tuning_pattern(size) {
+                    self.response[0] = card.status();
+                    for (chunk, word) in self.sector.chunks_exact_mut(4).zip(pattern) {
+                        chunk.copy_from_slice(&word.to_le_bytes());
+                    }
+                    self.cursor = 0;
+                    self.transfer_size = size;
+                    COMMAND_COMPLETE | BUFFER_READ_READY
+                } else {
+                    COMMAND_TIMEOUT
                 }
-                None => COMMAND_TIMEOUT,
-            },
+            }
+            Some(card) if index != 17 => {
+                match card.identify(index, self.argument, !self.sd_selected) {
+                    Some(response) => {
+                        self.response = response;
+                        COMMAND_COMPLETE
+                    }
+                    None => COMMAND_TIMEOUT,
+                }
+            }
             _ => COMMAND_TIMEOUT,
+        };
+        self.status |= flags & self.status_enable;
+    }
+
+    fn complete_dma_read(&mut self, bus: &mut crate::bus::Bus) {
+        let Some((sector, size)) = self.dma_read.take() else {
+            return;
+        };
+        let card = self.card.as_mut().unwrap();
+        let flags = if card.contains(sector, size)
+            && let Some(buffer) = bus.memory64(self.dma_address, size)
+            && card.read_blocks(sector, buffer).is_ok()
+        {
+            TRANSFER_COMPLETE
+        } else {
+            DATA_TIMEOUT
         };
         self.status |= flags & self.status_enable;
     }
 
     fn read_data(&mut self) -> u32 {
         let end = self.cursor + 4;
-        let Some(bytes) = self.sector.get(self.cursor..end) else {
+        let Some(bytes) = self.sector[..self.transfer_size].get(self.cursor..end) else {
             return 0;
         };
         self.cursor = end;
-        if end == SECTOR_SIZE {
+        if end == self.transfer_size {
             self.status |= TRANSFER_COMPLETE & self.status_enable;
         }
         u32::from_le_bytes(bytes.try_into().unwrap())
     }
 }
 
+// eMMC tuning blocks used by the Microchip PolarFire MSS MMC driver
+// (mss_mmc.c, calc_write_pattern, MIT).
+fn tuning_pattern(size: usize) -> Option<&'static [u32]> {
+    const BUS_4: &[u32] = &[
+        0x00ff0fff, 0xccc3ccff, 0xffcc3cc3, 0xeffefffe, 0xddffdfff, 0xfbfffbff, 0xff7fffbf,
+        0xefbdf777, 0xf0fff0ff, 0x3cccfc0f, 0xcfcc33cc, 0xeeffefff, 0xfdfffdff, 0xffbfffdf,
+        0xfff7ffbb, 0xde7b7ff7,
+    ];
+    const BUS_8: &[u32] = &[
+        0xff00ffff, 0x0000ffff, 0xccccffff, 0xcccc33cc, 0xcc3333cc, 0xffffcccc, 0xffffeeff,
+        0xffeeeeff, 0xffddffff, 0xddddffff, 0xbbffffff, 0xbbffffff, 0xffffffbb, 0xffffff77,
+        0x77ff7777, 0xffeeddbb, 0x00ffffff, 0x00ffffff, 0xccffff00, 0xcc33cccc, 0x3333cccc,
+        0xffcccccc, 0xffeeffff, 0xeeeeffff, 0xddffffff, 0xddffffff, 0xffffffdd, 0xffffffbb,
+        0xffffbbbb, 0xffff77ff, 0xff7777ff, 0xeeddbb77,
+    ];
+    match size {
+        64 => Some(BUS_4),
+        128 => Some(BUS_8),
+        _ => None,
+    }
+}
+
 impl Card {
     fn reset(&mut self) {
         self.app_command = false;
+        self.mmc_bus_width = 0;
+        self.mmc_timing = 0;
         self.state = CardState::Idle;
     }
 
@@ -242,7 +360,7 @@ impl Card {
         (self.state as u32) << 9 | (1 << 8)
     }
 
-    fn identify(&mut self, index: u32, argument: u32) -> Option<[u32; 4]> {
+    fn identify(&mut self, index: u32, argument: u32, mmc: bool) -> Option<[u32; 4]> {
         let app_command = std::mem::take(&mut self.app_command);
         let short = match (app_command, index) {
             (_, 0) => {
@@ -250,6 +368,20 @@ impl Card {
                 0
             }
             (_, 8) => argument & 0xfff,
+            (_, 1) if mmc => {
+                self.state = CardState::Ready;
+                OCR_READY | OCR_HIGH_CAPACITY | 0x00ff_8080
+            }
+            (_, 6) if mmc && matches!(self.state, CardState::Transfer) => {
+                if argument >> 24 & 3 == 3 {
+                    match (argument >> 16) & 0xff {
+                        183 => self.mmc_bus_width = (argument >> 8) as u8,
+                        185 => self.mmc_timing = (argument >> 8) as u8,
+                        _ => {}
+                    }
+                }
+                self.status()
+            }
             (_, 55) => {
                 self.app_command = true;
                 self.status() | 1 << 5
@@ -269,7 +401,11 @@ impl Card {
             }
             (_, 3) if matches!(self.state, CardState::Identification) => {
                 self.state = CardState::Standby;
-                CARD_ADDRESS | self.status()
+                if mmc {
+                    self.status()
+                } else {
+                    CARD_ADDRESS | self.status()
+                }
             }
             (_, 7)
                 if (argument == 0 || argument == CARD_ADDRESS)
@@ -288,6 +424,7 @@ impl Card {
                     (1 << 126) | (0x32 << 96) | (0x15 << 84) | (9 << 80) | (size << 48) | (9 << 22);
                 return Some(Self::long_response(csd));
             }
+            (_, 12) if matches!(self.state, CardState::Transfer) => self.status(),
             (_, 13) if argument == CARD_ADDRESS => self.status(),
             (_, 16) if argument == SECTOR_SIZE as u32 => self.status(),
             _ => return None,
@@ -301,21 +438,44 @@ impl Card {
         std::array::from_fn(|index| (response >> (index * 32)) as u32)
     }
 
-    fn read_sector(&mut self, sector: u32, buffer: &mut [u8; SECTOR_SIZE]) -> io::Result<()> {
+    fn contains(&self, sector: u32, size: usize) -> bool {
+        u64::from(sector) * SECTOR_SIZE as u64 + size as u64 <= self.capacity
+    }
+
+    fn read_blocks(&mut self, sector: u32, buffer: &mut [u8]) -> io::Result<()> {
         let offset = u64::from(sector) * SECTOR_SIZE as u64;
-        if offset >= self.capacity {
+        if !self.contains(sector, buffer.len()) {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "SD sector outside capacity",
             ));
         }
         buffer.fill(0);
-        let stored = self.length.saturating_sub(offset).min(SECTOR_SIZE as u64) as usize;
+        let stored = self.length.saturating_sub(offset).min(buffer.len() as u64) as usize;
         if stored != 0 {
             self.file.seek(SeekFrom::Start(offset))?;
             self.file.read_exact(&mut buffer[..stored])?;
         }
         Ok(())
+    }
+}
+
+impl crate::bus::Bus {
+    pub fn write_rv64_sd(&mut self, address: u32, width: usize, value: u32) -> bool {
+        let Some(index) = self
+            .rv64_devices
+            .mpfs_sd
+            .iter_mut()
+            .position(|sd| sd.write(address, width, value).is_some())
+        else {
+            return false;
+        };
+        if self.rv64_devices.mpfs_sd[index].dma_read.is_some() {
+            let mut controllers = std::mem::take(&mut self.rv64_devices.mpfs_sd);
+            controllers[index].complete_dma_read(self);
+            self.rv64_devices.mpfs_sd = controllers;
+        }
+        true
     }
 }
 
@@ -332,6 +492,83 @@ mod tests {
         assert_eq!(sd.read(sd.base + 0x10, 4), Some(0x0400_1234));
         assert_eq!(sd.write(sd.base + 0x10, 4, 0x0000_1234), Some(()));
         assert_eq!(sd.read(sd.base + 0x10, 4), Some(0x0000_1234));
-        assert_eq!(sd.read(sd.base + 0x240, 4), Some(0x0700_0184));
+        assert_eq!(sd.read(sd.base + 0x240, 4), Some(0x1740_0184));
+    }
+
+    #[test]
+    fn fire_legacy_mmc_path_reports_the_attached_sd_capacity() {
+        let path =
+            std::env::temp_dir().join(format!("penv-fire-legacy-mmc-{}", std::process::id()));
+        std::fs::write(&path, [0u8; 512]).unwrap();
+        let mut sd = Controller::new("mmc".into(), 0x2000_8000, 88);
+        sd.select_sd(false);
+        let result = sd.attach(&path, 0x1_0000_0000);
+        std::fs::remove_file(path).unwrap();
+        result.unwrap();
+        let base = sd.base;
+        sd.write(base + 0x234, 4, u32::MAX).unwrap();
+        sd.write(base + 0x20c, 4, 0).unwrap(); // CMD0
+        sd.write(base + 0x20c, 4, 0x0102_0000).unwrap(); // CMD1
+        assert_eq!(sd.read(base + 0x210, 4), Some(0xc0ff_8080));
+        sd.write(base + 0x20c, 4, 0x0201_0000).unwrap(); // CMD2
+        sd.write(base + 0x208, 4, 0x10000).unwrap();
+        sd.write(base + 0x20c, 4, 0x0302_0000).unwrap(); // CMD3
+        sd.write(base + 0x20c, 4, 0x0702_0000).unwrap(); // CMD7
+        sd.write(base + 0x208, 4, 0x03b9_0200).unwrap();
+        sd.write(base + 0x20c, 4, 0x0603_0000).unwrap(); // CMD6: HS200
+        sd.write(base + 0x230, 4, u32::MAX).unwrap();
+        sd.write(base + 0x20c, 4, 0x0822_0010).unwrap(); // CMD8 with data
+        assert_eq!(sd.read(base + 0x230, 4), Some(0x21));
+        let ext_csd: Vec<_> = (0..128)
+            .flat_map(|_| sd.read(base + 0x220, 4).unwrap().to_le_bytes())
+            .collect();
+        assert_eq!(ext_csd[185], 2);
+        assert_eq!(ext_csd[212..216], (0x0080_0000u32).to_le_bytes());
+        assert_eq!(sd.read(base + 0x230, 4), Some(0x23));
+        sd.write(base + 0x230, 4, u32::MAX).unwrap();
+        sd.write(base + 0x204, 4, 128).unwrap();
+        sd.write(base + 0x20c, 4, 0x1522_0010).unwrap(); // CMD21 with data
+        assert_eq!(sd.read(base + 0x220, 4), Some(0xff00_ffff));
+        for _ in 1..32 {
+            sd.read(base + 0x220, 4).unwrap();
+        }
+        assert_eq!(sd.read(base + 0x230, 4), Some(0x23));
+        assert_eq!(sd.read(base + 0x220, 4), Some(0));
+    }
+
+    #[test]
+    fn sdma_copies_multiple_blocks_and_reports_unmapped_ram() {
+        let path = std::env::temp_dir().join(format!("penv-fire-sdma-{}", std::process::id()));
+        let image = [[0x22u8; 512], [0x55; 512]].concat();
+        std::fs::write(&path, &image).unwrap();
+        let mut sd = Controller::new("mmc".into(), 0x2000_8000, 88);
+        let result = sd.attach(&path, 0x1_0000_0000);
+        std::fs::remove_file(path).unwrap();
+        result.unwrap();
+        sd.card.as_mut().unwrap().state = super::CardState::Transfer;
+        let base = sd.base;
+        let address = 0x1_0000_0100;
+        let mut bus = crate::bus::Bus::new(0x1000).unwrap();
+        bus.map_ram64(0x1_0000_0000, 0x1000).unwrap();
+        bus.rv64_devices.mpfs_sd.push(sd);
+        for (offset, value) in [
+            (0x234, u32::MAX),
+            (0x238, 2),
+            (0x258, address as u32),
+            (0x25c, (address >> 32) as u32),
+            (0x204, 0x0002_0200),
+            (0x20c, 0x1222_0011),
+        ] {
+            assert!(bus.write_rv64_sd(base + offset, 4, value));
+        }
+        assert_eq!(bus.ram64(address, image.len()).unwrap(), image);
+        assert_eq!(bus.rv64_devices.mpfs_sd[0].interrupt(), (88, true));
+        assert_eq!(bus.rv64_devices.read(base + 0x230, 4), Some(3));
+
+        assert!(bus.write_rv64_sd(base + 0x230, 4, 3));
+        assert!(bus.write_rv64_sd(base + 0x25c, 4, 2));
+        assert!(bus.write_rv64_sd(base + 0x20c, 4, 0x1222_0011));
+        assert_eq!(bus.rv64_devices.read(base + 0x230, 4), Some(0x108001));
+        assert_eq!(bus.rv64_devices.mpfs_sd[0].interrupt(), (88, false));
     }
 }

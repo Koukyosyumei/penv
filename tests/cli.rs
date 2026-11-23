@@ -783,7 +783,7 @@ cpu PC 0x80000000
     let instructions: [u32; 67] = [
         0x2000_82b7, // lui t0, 0x20008
         0x1000_03b7, // lui t2, 0x10000
-        0x2242_ae03, // lw t3, 0x224(t0): no eMMC attached
+        0x2242_ae03, // lw t3, 0x224(t0): the attached card is visible to legacy MMC
         0x010e_5e13, // srli t3, t3, 16
         0x01c3_8023, // sb t3, 0(t2)
         0x5000_0eb7, // lui t4, 0x50000
@@ -869,6 +869,6 @@ cpu PC 0x80000000
     assert!(result.status.success(), "{result:?}");
     assert_eq!(
         result.stdout,
-        [&[0xf2, 1, 0xf7, 0xc0, 0x40, 0xff], &sector[..], &[0x23, 0]].concat()
+        [&[0xf7, 1, 0xf7, 0xc0, 0x40, 0xff], &sector[..], &[0x23, 0]].concat()
     );
 }
