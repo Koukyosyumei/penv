@@ -707,9 +707,12 @@ fn parse_text(
             continue;
         }
         init_indent = None;
-        if text == "init:" && indent != 0 {
-            if current.is_none() || !init.is_empty() {
-                return Err(error("expected a single init section in a declaration"));
+        if matches!(text, "init:" | "init add:") && indent != 0 {
+            if current.is_none() {
+                return Err(error("init section has no declaration"));
+            }
+            if !init.is_empty() {
+                return Err(error("more than one init section in a declaration"));
             }
             init_indent = Some(indent);
             init.push((source, text.into()));
@@ -1069,6 +1072,16 @@ pub fn check_text(content: &str, root: Option<&Path>) -> Result<(), String> {
 fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
     if let Some(entry) = entries.iter().find(|entry| entry.local) {
         return Err(entry.error("file-local peripheral scope is unsupported"));
+    }
+    let mut declared = HashSet::new();
+    for entry in &entries {
+        if entry.model.is_empty() {
+            if entry.registration.is_none() && entry.body.is_empty() {
+                return Err(entry.error("empty REPL entry"));
+            }
+        } else if !declared.insert(entry.name.as_str()) {
+            return Err(entry.error("duplicate declarations and overrides are unsupported"));
+        }
     }
     let entries = apply_overlays(entries);
     let mut machine = Machine::without_default_ram();
@@ -2915,6 +2928,36 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    #[test]
+    fn upstream_verify_duplicate_type_declaration() {
+        let error = check_text(
+            "\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral",
+            None,
+        ).unwrap_err();
+        assert!(
+            error.contains(":4: mock: duplicate declarations"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn upstream_verify_empty_entry() {
+        let error = check_text("\nmock:", None).unwrap_err();
+        assert!(error.contains(":2: mock: empty REPL entry"), "{error}");
+    }
+
+    #[test]
+    fn upstream_verify_duplicate_init() {
+        let error = check_text(
+            "\ndevice: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    init:\n        DoSomething\n    init add:\n        DoSomethingElse",
+            None,
+        ).unwrap_err();
+        assert!(
+            error.contains(":5: more than one init section in a declaration"),
+            "{error}"
+        );
     }
 
     #[test]

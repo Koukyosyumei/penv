@@ -1328,3 +1328,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 169件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、初回失敗と再実行のログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-indent-boundaries.Mupqb4ab` に保存しました。対象786件のうち等価合格155件、部分検証17件、未達614件です。
+
+### backlog-network-6af6bb158270-1
+
+REPL の構築前に、空宣言と型の重複宣言を診断します。同じ宣言内の `init:` と `init add:` も重複として診断します。固定上流 `VerificationTests.cs` の3件を個別テストとして先に移植し、同じバイナリで各診断と該当行を照合しました。空の追記 `name: {}` は構文として受理し、上流と同じく構築時に空宣言として拒否します。単独の `init add:` を実行する処理と型・プロパティの一般的な検証は残っています。以前の字下げ7件は、本番の境界を観測する仕組みが必要なため部分検証のままです。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 172件、固定 STM32H7 REPL 7構成、既存の構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-declaration-verification.qM3fX7GY` に保存しました。台帳は対象786件のうち等価合格158件、部分検証17件、未達611件です。
