@@ -1262,7 +1262,7 @@ fn polarfire_resc_reads_a_sector_from_an_attached_sd_image() {
     cpuType: "rv64i"
 ram: Memory.MappedMemory @ sysbus 0x80000000
     size: 0x1000
-uart: UART.NS16550 @ sysbus 0x10000000
+mmuart0: UART.NS16550 @ sysbus 0x10000000
 mmc: SD.MPFS_SDController @ sysbus 0x20008000
 "#,
     )
@@ -1285,6 +1285,7 @@ mmc: SD.MPFS_SDController @ sysbus 0x20008000
         r#"$image?=@https://example.invalid/disk.img
 mach create
 machine LoadPlatformDescription @beaglev-fire.repl
+showAnalyzer mmuart0
 machine SdCardFromFile $image mmc 0x100000000
 sysbus LoadBinary @sd-probe.bin 0x80000000
 cpu PC 0x80000000

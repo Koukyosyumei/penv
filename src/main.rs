@@ -570,7 +570,6 @@ fn run() -> Result<ExitCode, String> {
     let mut silence_ranges = Vec::new();
     let mut vex_supervisor_irq_mask = None;
     let mut buttons = Vec::new();
-    let mut sd_card = None;
     let mut tftp = None;
     let mut video_analyzers = Vec::new();
     let mut pcm_inputs = Vec::new();
@@ -631,10 +630,6 @@ fn run() -> Result<ExitCode, String> {
                 .and_then(|bytes| image64::symbol(&bytes, &symbol))
                 .map_err(|error| format!("{}: {error}", file.display()))?;
             halt_hooks.push((cpu, address, target));
-        }
-        if let Some((controller, image, capacity)) = boot.sd_card {
-            let path = image.resolve(root, asset_dir.as_deref())?;
-            sd_card = Some((controller, path, capacity));
         }
         for (device, input) in boot.pcm_inputs {
             pcm_inputs.push((device, input.resolve(root, asset_dir.as_deref())?));
@@ -702,23 +697,19 @@ fn run() -> Result<ExitCode, String> {
             machine.bus.attach_litex_tftp(name, server.clone())?;
         }
         for analyzer in &video_analyzers {
-            if machine
+            let name = analyzer.strip_prefix("sysbus.").unwrap_or(analyzer);
+            let video = machine
                 .bus
                 .litex_video
                 .as_ref()
-                .is_none_or(|video| video.name != *analyzer)
-            {
+                .is_some_and(|video| video.name == name);
+            let uart = machine.bus.rv64_devices.has_uart(name);
+            if !video && !uart {
                 return Err(format!("unknown analyzer peripheral {analyzer:?}"));
             }
         }
         if framebuffer_out.is_some() && machine.bus.litex_video.is_none() {
             return Err("--framebuffer-out requires a LiteX framebuffer".into());
-        }
-        if let Some((controller, path, capacity)) = &sd_card {
-            let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let card =
-                litex_sd::Card::new(file, *capacity).map_err(|e| format!("{}: {e}", path.display()))?;
-            machine.bus.attach_litex_sd(controller, card)?;
         }
         for &(base, size) in &silence_ranges {
             machine.bus.map_silencer(base, size)?;
@@ -743,16 +734,22 @@ fn run() -> Result<ExitCode, String> {
             machine.halt_on_pc(source, *pc, target)?;
         }
         for (path, name, capacity) in &sd_cards {
-            let controller = machine
+            if let Some(controller) = machine
                 .bus
                 .rv64_devices
                 .mpfs_sd
                 .iter_mut()
                 .find(|sd| sd.name == *name)
-                .ok_or_else(|| format!("unknown MPFS SD controller {name:?}"))?;
-            controller
-                .attach(path, *capacity)
-                .map_err(|error| format!("{}: {error}", path.display()))?;
+            {
+                controller
+                    .attach(path, *capacity)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+            } else {
+                let file = File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+                let card = litex_sd::Card::new(file, *capacity)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                machine.bus.attach_litex_sd(name, card)?;
+            }
         }
         if rv64 {
             machine.primary.rv64 = Some(Box::new(rv64::Rv64::new(rv64::Isa::IM)));

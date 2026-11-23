@@ -109,6 +109,10 @@ impl Devices {
         Some(range.value & (u64::MAX >> (64 - width * 8)))
     }
 
+    pub fn has_uart(&self, name: &str) -> bool {
+        self.uarts.iter().any(|uart| uart.name == name)
+    }
+
     pub fn select_uart(&mut self, name: &str) -> Result<(), String> {
         self.input_uart = self
             .uarts
