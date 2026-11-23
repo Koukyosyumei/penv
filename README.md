@@ -1735,3 +1735,25 @@ done
 ```
 
 `cargo test` 223件、STM32H7 REPL 7構成、公開 Zephyr Blinky・Button ELF、SD ファイル装着3件が通過しました。上記にケース別結果、UART ログと終了状態を保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-503aa8981709-1
+
+FDCAN の TX FIFO とキューで、空き数・読み出し位置・書き込み位置・満杯状態を返します。送信要求の登録範囲、キャンセル後の空きスロット、スロット再利用時の完了フラグを同じバイナリで照合しました。固定 H753 REPL の CLI でも、2スロットの FIFO が空・満杯・1スロット空きになることを確認しました。優先度付き送信の選択と TX イベント FIFO は残っています。
+
+Nucleo と `MCAN.robot` の固定 ELF は両方とも `Counter received: 0` で8仮想秒タイムアウトしました。共有 message RAM の接続は既存依頼 `network-fdcan-417181b.md` で追跡しています。ARM からは、最小構成で hard-float GCM ELF 2本がロードできるとの結果が届きました。統合側の全 H753 構成で残る TIM17 と LED テスターの阻害点は、既存ローカルコミットを添えて `network-h7-gcm-platform-503aa89.md` に引き渡しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-tx-fifo.B1Ctk6HX
+for case in fifo can mcan; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 10000000
+done
+```
+
+`cargo test` 225件、STM32H7 REPL 7構成、Zephyr Blinky・Button、独立した SD 装着3件が通過しました。ログと終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。

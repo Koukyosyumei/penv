@@ -6,6 +6,8 @@ pub struct Fdcan {
     fifo0_count: u32,
     fifo0_get: u32,
     fifo0_put: u32,
+    tx_fifo: std::collections::VecDeque<u32>,
+    tx_put: u32,
 }
 
 impl Fdcan {
@@ -24,6 +26,8 @@ impl Fdcan {
             fifo0_count: 0,
             fifo0_get: 0,
             fifo0_put: 0,
+            tx_fifo: Default::default(),
+            tx_put: 0,
         }
     }
 
@@ -45,6 +49,9 @@ impl Fdcan {
     }
 
     pub fn read(&self, address: u32) -> u32 {
+        if address - self.base == 0xc4 {
+            return self.tx_status();
+        }
         if address - self.base == 0xa4 {
             let capacity = self.fifo0_capacity();
             let full = capacity != 0 && self.fifo0_count == capacity;
@@ -58,6 +65,63 @@ impl Fdcan {
             .get(((address - self.base) / 4) as usize)
             .copied()
             .unwrap_or(0)
+    }
+
+    fn tx_bounds(&self) -> (u32, u32) {
+        let config = self.registers[0xc0 / 4];
+        let start = ((config >> 16) & 0x3f).min(32);
+        let end = (start + ((config >> 24) & 0x3f)).min(32);
+        (start, end)
+    }
+
+    fn tx_queue_mode(&self) -> bool {
+        self.registers[0xc0 / 4] & (1 << 30) != 0
+    }
+
+    fn tx_status(&self) -> u32 {
+        let (start, end) = self.tx_bounds();
+        let size = end - start;
+        if size == 0 {
+            return 0;
+        }
+        let pending = self.registers[0xcc / 4];
+        let free = (start..end).filter(|&slot| pending & (1 << slot) == 0);
+        let free_count = free.clone().count() as u32;
+        let full = free_count == 0;
+        let (get, put) = if self.tx_queue_mode() {
+            (0, free.into_iter().next().unwrap_or(0))
+        } else {
+            let put = if full {
+                self.tx_put
+            } else {
+                (0..size)
+                    .map(|offset| start + (self.tx_put - start + offset) % size)
+                    .find(|&slot| pending & (1 << slot) == 0)
+                    .unwrap()
+            };
+            (self.tx_fifo.front().copied().unwrap_or(put), put)
+        };
+        free_count | (get << 8) | (put << 16) | (u32::from(full) << 21)
+    }
+
+    fn request_tx(&mut self, mask: u32) {
+        if self.registers[0x18 / 4] & 3 != 0 {
+            return;
+        }
+        let (start, end) = self.tx_bounds();
+        for slot in 0..end {
+            let bit = 1 << slot;
+            if mask & bit == 0 || self.registers[0xcc / 4] & bit != 0 {
+                continue;
+            }
+            self.registers[0xcc / 4] |= bit;
+            self.registers[0xdc / 4] &= !bit;
+            self.registers[0xd8 / 4] &= !bit;
+            if slot >= start && !self.tx_queue_mode() {
+                self.tx_fifo.push_back(slot);
+                self.tx_put = start + (slot - start + 1) % (end - start);
+            }
+        }
     }
 
     fn fifo0_capacity(&self) -> u32 {
@@ -109,9 +173,15 @@ impl Fdcan {
         let tx = self.registers[0xc0 / 4];
         let tx_size = DATA_BYTES[(self.registers[0xc8 / 4] & 7) as usize];
         let rx_size = DATA_BYTES[(self.registers[0xbc / 4] & 7) as usize];
-        let tx_count = (((tx >> 16) & 0x3f) + ((tx >> 24) & 0x3f)).min(32);
+        let (start, end) = self.tx_bounds();
+        let mut fifo_order = [0; 32];
+        let fifo_count = self.tx_fifo.len();
+        for (target, &slot) in fifo_order.iter_mut().zip(&self.tx_fifo) {
+            *target = slot;
+        }
+        let direct_end = if self.tx_queue_mode() { end } else { start };
         let capacity = self.fifo0_capacity();
-        for index in 0..tx_count {
+        for index in (0..direct_end).chain(fifo_order[..fifo_count].iter().copied()) {
             let bit = 1 << index;
             if self.registers[0xcc / 4] & bit == 0 {
                 continue;
@@ -129,6 +199,7 @@ impl Fdcan {
             element[..4].copy_from_slice(&frame[..4]);
             element[8..8 + payload].copy_from_slice(&frame[8..8 + payload]);
             self.registers[0xcc / 4] &= !bit;
+            self.tx_fifo.retain(|&slot| slot != index);
             self.registers[0xd8 / 4] |= bit;
             if self.registers[0xe0 / 4] & bit != 0 {
                 self.registers[0x50 / 4] |= 1 << 9;
@@ -178,7 +249,7 @@ impl Fdcan {
             return;
         };
         match offset {
-            0x00 | 0x04 | 0x40 | 0x44 | 0xa4 | 0xcc | 0xd8 | 0xdc => {}
+            0x00 | 0x04 | 0x40 | 0x44 | 0xa4 | 0xc4 | 0xcc | 0xd8 | 0xdc => {}
             0x18 => {
                 let init = value & 1;
                 let changes = if *register & 1 != 0 && init != 0 {
@@ -192,14 +263,18 @@ impl Fdcan {
             }
             0x50 => *register &= !value,
             0x54 | 0x58 | 0x5c => *register = value,
-            0xd0 => {
-                // A transmit request remains pending until cancelled or delivered.
-                self.registers[0xcc / 4] |= value;
+            0xc0 if initialized => {
+                *register = value;
+                self.tx_fifo.clear();
+                self.tx_put = self.tx_bounds().0;
+                self.registers[0xcc / 4] = 0;
             }
+            0xd0 => self.request_tx(value),
             0xd4 => {
                 let cancelled = self.registers[0xcc / 4] & value;
                 self.registers[0xdc / 4] |= cancelled;
                 self.registers[0xcc / 4] &= !value;
+                self.tx_fifo.retain(|&slot| cancelled & (1 << slot) == 0);
                 if cancelled & self.registers[0xe4 / 4] != 0 {
                     self.registers[0x50 / 4] |= 1 << 10;
                 }
@@ -213,6 +288,42 @@ impl Fdcan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tx_fifo_wraps_and_releases_cancelled_slots() {
+        let mut can = Fdcan::new(0, [None, None]);
+        can.write(0x18, 3);
+        can.write(0xc0, (2 << 24) | (1 << 16));
+        can.write(0xd0, 1 << 1);
+        assert_eq!(can.read(0xcc), 0, "requests ignored in INIT");
+        can.write(0x18, 0);
+        assert_eq!(can.read(0xc4), 2 | (1 << 8) | (1 << 16));
+        can.write(0xd0, 1 << 1);
+        assert_eq!(can.read(0xc4), 1 | (1 << 8) | (2 << 16));
+        can.write(0xd0, (1 << 2) | (1 << 31));
+        assert_eq!(can.read(0xcc), 0b110);
+        assert_eq!(can.read(0xc4), (1 << 21) | (1 << 8) | (1 << 16));
+        can.write(0xd4, 1 << 1);
+        assert_eq!(can.read(0xdc), 1 << 1);
+        assert_eq!(can.read(0xc4), 1 | (2 << 8) | (1 << 16));
+        can.write(0xd0, 1 << 1);
+        assert_eq!(can.read(0xdc), 0);
+        assert_eq!(can.read(0xc4), (1 << 21) | (2 << 8) | (2 << 16));
+    }
+
+    #[test]
+    fn tx_queue_reports_first_available_slot() {
+        let mut can = Fdcan::new(0, [None, None]);
+        can.write(0x18, 3);
+        can.write(0xc0, (1 << 30) | (2 << 24) | (1 << 16));
+        can.write(0x18, 0);
+        can.write(0xd0, 1 << 2);
+        assert_eq!(can.read(0xc4), 1 | (1 << 16));
+        can.write(0xd0, 1 << 1);
+        assert_eq!(can.read(0xc4), 1 << 21);
+        can.write(0xd4, 1 << 2);
+        assert_eq!(can.read(0xc4), 1 | (2 << 16));
+    }
 
     fn filtered_frame(id: u32, filters: &[u32], global: u32) -> (u32, [u8; 128]) {
         let mut can = Fdcan::new(0, [None, None]);
