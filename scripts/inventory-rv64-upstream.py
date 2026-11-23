@@ -341,6 +341,10 @@ def disposition(path, name, context):
             return "pass", "Fixed Renode reset profile, NaN-boxed operands, one step, PC, f2 and FFLAGS verified"
     if path.name == "riscv-unit-tests.robot" and name == "Should Properly Handle ResetVector After Creation And After Reset 64":
         return "pass", "Fixed CPU, reset and all 12 PC observations verified by verify-rv64-reset-vector.py"
+    if path.name == "riscv-unit-tests.robot" and name in {
+        "Should Handle LD", "Should Fail LD", "Should Handle SD", "Should Fail SD",
+    }:
+        return "pass", "Fixed instruction words, operands, PC and trap cause verified (rv64-ldsd.md)"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(

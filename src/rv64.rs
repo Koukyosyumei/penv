@@ -202,6 +202,11 @@ impl Rv64 {
         }
     }
 
+    pub(crate) fn initialize_gpr(&mut self, index: usize, value: u64) {
+        assert!((1..32).contains(&index));
+        self.registers[index] = value;
+    }
+
     pub(crate) fn initialize_freg(&mut self, index: usize, value: u64) -> Result<(), String> {
         if !self.isa.single {
             return Err("floating register setup requires the RV64 F extension".into());

@@ -300,6 +300,8 @@ impl Privilege {
         Some(match name {
             "mstatus" => self.status,
             "mepc" => self.machine.epc,
+            "mcause" => self.machine.cause,
+            "mtval" => self.machine.value,
             "sepc" if self.levels == Levels::MachineSupervisorUser => self.supervisor.epc,
             _ => return None,
         })

@@ -60,6 +60,7 @@ Options:
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
   --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
+  --set-gpr CPU@xN:VALUE  Initialize an RV64 integer register (x1 through x31)
   --set-freg CPU@fN:VALUE  Initialize raw RV64 floating-point register bits
   --read-register CPU@NAME  Report a supported RV64 register after execution
   --read-register-now CPU@NAME  Report an RV64 register in setup argument order
@@ -107,6 +108,7 @@ enum SetupAction {
     ResetCpu(String),
     SetMstatus(String, u64),
     SetFreg(String, usize, u64),
+    SetGpr(String, usize, u64),
 }
 
 fn ram_width(value: &str) -> Result<usize, String> {
@@ -373,8 +375,13 @@ fn run() -> Result<ExitCode, String> {
                     SetupAction::SetResetVector(cpu.to_owned(), address)
                 });
             }
-            Some("--set-freg") => {
-                let error = "--set-freg requires CPU@fN:VALUE (f0 through f31)";
+            Some(option @ ("--set-freg" | "--set-gpr")) => {
+                let floating = option == "--set-freg";
+                let error = if floating {
+                    "--set-freg requires CPU@fN:VALUE (f0 through f31)"
+                } else {
+                    "--set-gpr requires CPU@xN:VALUE (x1 through x31)"
+                };
                 let argument = args
                     .next()
                     .and_then(|arg| arg.into_string().ok())
@@ -385,15 +392,16 @@ fn run() -> Result<ExitCode, String> {
                     .filter(|(cpu, _)| !cpu.is_empty())
                     .ok_or(error)?;
                 let index = register
-                    .strip_prefix('f')
+                    .strip_prefix(if floating { 'f' } else { 'x' })
                     .and_then(|index| index.parse::<usize>().ok())
-                    .filter(|index| *index < 32)
+                    .filter(|index| *index < 32 && (floating || *index != 0))
                     .ok_or(error)?;
-                setup_actions.push(SetupAction::SetFreg(
-                    cpu.to_owned(),
-                    index,
-                    parse_address64(value)?,
-                ));
+                let value = parse_address64(value)?;
+                setup_actions.push(if floating {
+                    SetupAction::SetFreg(cpu.to_owned(), index, value)
+                } else {
+                    SetupAction::SetGpr(cpu.to_owned(), index, value)
+                });
             }
             Some(option @ ("--set-mstatus" | "--read-register" | "--read-register-now")) => {
                 let delimiter = if option == "--set-mstatus" { ':' } else { '@' };
@@ -754,6 +762,15 @@ fn run() -> Result<ExitCode, String> {
                         .as_mut()
                         .expect("validated RV64 CPU")
                         .initialize_mstatus(*value);
+                }
+                SetupAction::SetGpr(cpu, index, value) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU")
+                        .initialize_gpr(*index, *value);
                 }
                 SetupAction::SetFreg(cpu, index, value) => {
                     let hart = machine.rv64_hart_by_name(cpu)?;
