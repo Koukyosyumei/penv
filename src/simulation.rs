@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, LineWriter, Write},
+    io::{self, BufWriter, LineWriter, Write},
     path::Path,
     process::ExitCode,
 };
@@ -44,6 +44,7 @@ struct Node {
     switch_by_nic: Vec<Option<usize>>,
     stop: Option<Stop>,
     retired: u64,
+    uart_log: Option<BufWriter<File>>,
 }
 
 #[derive(Default)]
@@ -60,6 +61,7 @@ pub fn run(
     assets: Option<&Path>,
     limit: u64,
     stats: bool,
+    uart_log_dir: Option<&Path>,
 ) -> Result<ExitCode, String> {
     let mut simulation = Simulation::default();
     let mut pending = plan.nodes.into_iter();
@@ -70,9 +72,18 @@ pub fn run(
             match action {
                 Action::Activate(id) => {
                     debug_assert_eq!(id, simulation.nodes.len());
-                    simulation
-                        .nodes
-                        .push(Node::boot(pending.next().unwrap(), root, assets)?);
+                    let mut node = Node::boot(pending.next().unwrap(), root, assets)?;
+                    if let Some(directory) = uart_log_dir {
+                        let path = directory.join(format!("{id}.uart.log"));
+                        node.uart_log = Some(BufWriter::new(
+                            std::fs::OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .open(&path)
+                                .map_err(|e| format!("{}: {e}", path.display()))?,
+                        ));
+                    }
+                    simulation.nodes.push(node);
                 }
                 Action::CreateSwitch(name) => simulation.create_switch(name)?,
                 Action::Connect {
@@ -98,6 +109,12 @@ pub fn run(
         }
     })();
     output.flush().map_err(|e| format!("UART: {e}"))?;
+    for node in &mut simulation.nodes {
+        if let Some(log) = &mut node.uart_log {
+            log.flush()
+                .map_err(|e| format!("{} UART: {e}", node.name))?;
+        }
+    }
     let hit_limit = result?;
     if stats {
         eprintln!("{} simulation rounds", simulation.rounds);
@@ -162,6 +179,7 @@ impl Node {
             machine,
             stop: None,
             retired: 0,
+            uart_log: None,
         })
     }
 }
@@ -231,10 +249,12 @@ impl Simulation {
                 if node.stop.is_some() {
                     continue;
                 }
-                let (stop, retired) = node
-                    .machine
-                    .run(1, output)
-                    .map_err(|e| format!("{}: {e}", node.name))?;
+                let result = if let Some(log) = &mut node.uart_log {
+                    node.machine.run(1, log)
+                } else {
+                    node.machine.run(1, output)
+                };
+                let (stop, retired) = result.map_err(|e| format!("{}: {e}", node.name))?;
                 node.retired += retired;
                 if stop == Stop::Limit {
                     active = true;
@@ -334,6 +354,7 @@ mod tests {
                 switch_by_nic: vec![None],
                 stop: None,
                 retired: 0,
+                uart_log: None,
             });
             simulation
                 .connect(Connection::Connect, index, "mac", "lan")

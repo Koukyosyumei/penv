@@ -1,6 +1,7 @@
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+const FIFO_UNDERRUN: u32 = 1 << 1;
 const RELOAD: u32 = 1 << 3;
 const LAYER1: u32 = 0x84;
 
@@ -93,16 +94,26 @@ impl Ltdc {
             0x08 | 0x0c | 0x10 | 0x14 => {
                 self.registers[(offset / 4) as usize] = value & 0x0fff_07ff
             }
-            0x18 => self.registers[0x18 / 4] = (value & 0xf001_0001) | 0x2220,
+            0x18 => {
+                self.registers[0x18 / 4] = (value & 0xf001_0001) | 0x2220;
+                self.check_scanout();
+            }
             0x24 if value & 1 != 0 => {
                 self.active = self.layers[0];
                 self.registers[0x38 / 4] |= RELOAD;
+                self.check_scanout();
             }
             0x2c => self.registers[0x2c / 4] = value & 0x00ff_ffff,
             0x34 => self.registers[0x34 / 4] = value & 15,
             0x3c => self.registers[0x38 / 4] &= !(value & 15),
             0x40 => self.registers[0x40 / 4] = value & 0x7ff,
             _ => {}
+        }
+    }
+
+    fn check_scanout(&mut self) {
+        if self.registers[0x18 / 4] & self.active.0[0] & 1 != 0 && self.active.0[12] == 0 {
+            self.registers[0x38 / 4] |= FIFO_UNDERRUN;
         }
     }
 

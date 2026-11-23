@@ -92,6 +92,7 @@ Options:
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
   --max-steps N      Stop after N execution steps or simulation rounds (default: 10000000)
+  --uart-log-dir DIR Save each simulation node UART to a numbered file
   --sd-image PATH    Attach a read-only image to the STM32H7 SDMMC slot
   --framebuffer-out PATH  Export LTDC layer 1 as PPM after a single-machine run
   --stats            Print execution statistics to stderr
@@ -144,6 +145,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_events = Vec::new();
     let mut framebuffer_out = None;
     let mut sd_image = None;
+    let mut uart_log_dir = None;
     let mut path = None;
     while let Some(arg) = args.next() {
         match arg.to_str().filter(|_| !positional) {
@@ -156,7 +158,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--framebuffer-out" | "--sd-image"),
+                | "--asset-dir" | "--framebuffer-out" | "--sd-image" | "--uart-log-dir"),
             ) => {
                 let path = args
                     .next()
@@ -166,6 +168,7 @@ fn run() -> Result<ExitCode, String> {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
+                    "--uart-log-dir" => &mut uart_log_dir,
                     "--sd-image" => &mut sd_image,
                     "--framebuffer-out" => &mut framebuffer_out,
                     "--platform-root" => &mut platform_root,
@@ -302,6 +305,7 @@ fn run() -> Result<ExitCode, String> {
                 asset_dir.as_deref(),
                 max_steps,
                 stats,
+                uart_log_dir.as_deref(),
             );
         }
         let boot = plan.nodes.pop().unwrap().boot;
@@ -327,6 +331,9 @@ fn run() -> Result<ExitCode, String> {
         }
         boot_pcs = boot.boot_pcs;
         zephyr = boot.zephyr;
+    }
+    if uart_log_dir.is_some() {
+        return Err("--uart-log-dir requires a simulation script".into());
     }
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());

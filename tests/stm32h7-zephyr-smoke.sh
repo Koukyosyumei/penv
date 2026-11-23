@@ -151,8 +151,8 @@ if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
     exit 1
 fi
 
-# Port the register-shadowing check from STM32LTDC.robot to the reference ELF.
-# DMA2D writes the source pixel, and a zero line count stays staged after reload.
+# Port the shadowing and zero-line underrun checks from STM32LTDC.robot.
+# DMA2D writes the source pixel and the final restore preserves the PPM check.
 cp "$work/boot.repl" "$work/fill.repl"
 printf '\ndma2dScratch: Memory.MappedMemory @ sysbus 0x60000000\n    size: 0x1000\n' >> "$work/fill.repl"
 sed 's/@boot.repl/@fill.repl/' "$work/boot.resc" > "$work/fill.resc"
@@ -163,7 +163,10 @@ for command in '0x580244d4 32 0x10' '0x52001038 32 0x1234abcd' \
     '0x52001000 32 0x00030201' '0x52001004 32' '0x60000000 32' '0xe000e208 32' \
     '0x580244e4 32 0x8' '0x500010ac 32 0x60000000' '0x500010b0 32 0x0004000b' \
     '0x500010b4 32 1' '0x50001084 32 1' '0x50001024 32 1' '0x50001018 32 1' \
-    '0x500010b4 32 0' '0x500010b4 32'; do
+    '0x5000103c 32 0xf' '0x50001034 32 2' \
+    '0x500010b4 32 0' '0x500010b4 32' '0x50001038 32' \
+    '0x50001024 32 1' '0x50001038 32' '0xe000e208 32' \
+    '0x500010b4 32 1' '0x50001024 32 1' '0x5000103c 32 0xf' '0x50001038 32'; do
     printf 'devmem %s\r' "$command" > "$work/ltdc-$step.txt"
     events+=(--uart-event "$step:$work/ltdc-$step.txt")
     step=$((step + 200000))
@@ -173,7 +176,7 @@ target/release/penv run --script "$work/fill.resc" \
     --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
     "${events[@]}" --framebuffer-out "$work/frame.ppm" \
     > "$work/ltdc-uart.log" 2> "$work/ltdc-penv.log" || status=$?
-expected=$(printf '%s\n' 0x2 0x1234abcd 0x4000000 0x0)
+expected=$(printf '%s\n' 0x2 0x1234abcd 0x4000000 0x0 0x0 0xa 0x5000000 0x0)
 actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/ltdc-uart.log")
 if [[ "$status" != 2 || "$actual" != "$expected" ]] ||
     ! printf 'P6\n1 1\n255\n\x34\xab\xcd' | cmp - "$work/frame.ppm"; then

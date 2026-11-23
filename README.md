@@ -382,3 +382,27 @@ bash tests/stm32h7-display-sd-smoke.sh /tmp/第1スクリプトのログディ�
 - **Display**。診断 REPL の DSI ホストに `panel: "NT35510"` を設定します。DCS の Read ID2 を受けたときにパネル ID を読み出し FIFO に入れます。Zephyr は `nt35510: Init complete(0)` と `Display updated` を出力し、800×480 の多色 PPM を取得できました。LTDC のボタン入力とアンダーラン、一般の DSI パネル応答とリンクタイミングは残件です。 [Zephyr NT35510 ドライバー](https://github.com/zephyrproject-rtos/zephyr/blob/v4.3.0/drivers/display/display_nt35510.c)
 - **SD**。`--sd-image PATH` で単一の STM32H7 SDMMC に、サイズが 512 KiB の倍数の読み取り専用 SDHC イメージを接続します。SD 初期化、アドレス選択、ブロック読み取り、受信 FIFO と IRQ に対応します。上流 `STM32SDMMC.robot` のイメージで `Disk mounted.` と `[DIR ] lost+found` を確認し、カードなしの場合のエラー経路も検証しました。M4 起動要求は単一 M7 構成で保持されます。M4 の命令実行、カードへの書き込みと IDMA は残件です。
 - **Shell と上流定義**。診断 Shell で既存の VEML7700 と新しい IIS2MDC を読み出し、TIM3 CH1 → GPIOB4 AF2 の PWM を `pwmled0=25.00%` として確認しました。PWM のレベル表示はエッジ整列のアップカウント設定に対応し、IIS2MDC は静止したゼロ磁場を返します。未変更 RESC の最初の停止箇所は `stm32h7_renode_reference_board.repl:50` の `Sensors.TMP108` です。追加の I²C センサー、上流タイマーの IRQ と代替機能の全配線、未変更構成での Shell 起動は残件です。
+
+### close-h7-io
+
+上流 Robot の観測条件を下記のスモークに移植しました。第 2・第 3 スクリプトには、第 1 スクリプトが表示したディレクトリを渡します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-display-sd-smoke.sh /tmp/第1スクリプトのログディレクトリ
+bash tests/stm32h7-io-smoke.sh /tmp/第1スクリプトのログディレクトリ
+```
+
+| 対象 | 実 ELF での確認と残件 |
+| --- | --- |
+| Shell、VEML7700 | 公開 STM32H7 参照デモで UART の `help` と `kernel version` に応答。上流 `VEML7700.robot` の Shell ケースから 500・1000 lux の条件を移植し、499・999 lux を照合。照度は実行ごとに REPL から設定。 |
+| IIS2MDC | 上流 `IIS2MDC.robot` の正・負のベクトルを参照 Shell で照合。REPL の `MagneticFluxDensityX/Y/Z` は整数 nT。上流専用 polling ELF は診断構成で `sensor: device not ready.` を表示。RESD の時系列・GPIO トリガーと専用 ELF の再現は残件。 |
+| DMA2D、LTDC | Shell から DMA2D の完了・ピクセル・IRQ 90 を照合。上流 `STM32LTDC.robot` のゼロ行テストを移植し、設定をステージした時点では ISR が 0、即時再読み込み後は ISR が `0xa`、IRQ 88 が保留。復元後に元の PPM を取得。専用 display ELF のパネル初期化と画像出力も通過。ボタン入力と走査に同期した発生タイミングは残件。 |
+| PWM | 参照ボードの TIM3 CH1、GPIOB4 AF2、`pwmled0` の配線を使い、実 Shell で 25% を確認。出力はタイマー設定から算出したデューティ比。波形による測定は残件。 |
+| SD | 上流 `STM32SDMMC.robot` と同じ ELF・ext2 イメージで `Disk mounted.` と `[DIR ] lost+found` を確認。カード未接続時の失敗経路も照合。 |
+| 仮想 Ethernet | 上流 `nucleo_h753zi.robot` の `Should Talk Over Ethernet` と同じ echo server/client ELF を仮想スイッチに接続。診断 REPL で両ノードが起動し、サーバーで TCP 接続受理と 4 回以上の `Received and replied` を照合。クライアント側 `Received and compared … all ok` は残件。STM32H7 と LiteX の双方向フレームは既存のモデルテストで照合。 |
+
+Ethernet の第 3 スクリプトは、`--uart-log-dir` でノード作成順に `0.uart.log` と `1.uart.log` を保存します。ディレクトリは事前に作成し、同名ファイルのない場所を指定します。echo ELF の実行で到達した Cortex-M の `CPSIE/CPSID if` と、LR を使うワード版の排他アクセスにも対応しました。

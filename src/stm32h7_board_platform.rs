@@ -316,11 +316,31 @@ pub fn configure(
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
         if entry.model == Iis2mdc::MODEL {
-            if !entry.body.is_empty() {
-                return Err(entry.error("unsupported IIS2MDC properties"));
+            let mut values = [None; 3];
+            for (_, property) in &entry.body {
+                let (key, value) = property
+                    .split_once(':')
+                    .ok_or_else(|| entry.error("expected IIS2MDC magnetic field property"))?;
+                let axis = match key.trim() {
+                    "MagneticFluxDensityX" => 0,
+                    "MagneticFluxDensityY" => 1,
+                    "MagneticFluxDensityZ" => 2,
+                    _ => return Err(entry.error("unsupported IIS2MDC property")),
+                };
+                let value = value
+                    .trim()
+                    .parse::<i32>()
+                    .map_err(|_| entry.error("expected magnetic field in integer nanoteslas"))?;
+                if values[axis].replace(value).is_some() {
+                    return Err(entry.error("duplicate IIS2MDC field axis"));
+                }
             }
-            bus.attach(u16::from(address), Target::Magnetometer(Iis2mdc::new()))
-                .map_err(|e| entry.error(e))?;
+            let field = values.map(|value| value.unwrap_or(0));
+            bus.attach(
+                u16::from(address),
+                Target::Magnetometer(Iis2mdc::new(field)),
+            )
+            .map_err(|e| entry.error(e))?;
             continue;
         }
         let illuminance = match entry.body.as_slice() {

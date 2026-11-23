@@ -707,6 +707,11 @@ impl Thumb {
                 self.stack_transfer(mask, pop, &mut next, r, bus)?;
             }
             0xb661 | 0xb671 if self.thumb2 => self.faultmask = inst & 0x10 != 0,
+            0xb663 | 0xb673 if self.thumb2 => {
+                let masked = inst & 0x10 != 0;
+                self.interrupts_masked = masked;
+                self.faultmask = masked;
+            }
             0xb662 => self.interrupts_masked = false, // cpsie i
             0xb672 => self.interrupts_masked = true,  // cpsid i
             0xb200..=0xb2ff => {

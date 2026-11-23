@@ -160,13 +160,15 @@ impl Thumb {
                     };
                 }
             }
-            0xe850..=0xe85e if low & 0x0f00 == 0x0f00 && rt < 13 => {
+            0xe850..=0xe85e if low & 0x0f00 == 0x0f00 && !matches!(rt, 13 | 15) => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
                 r[rt] = bus
                     .read_exclusive(address)
                     .map_err(|error| error.to_string())?;
             }
-            0xe840..=0xe84e if rt < 13 && rd < 13 && rd != rt && rd != rn => {
+            0xe840..=0xe84e
+                if !matches!(rt, 13 | 15) && !matches!(rd, 13 | 15) && rd != rt && rd != rn =>
+            {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
                 r[rd] = bus
                     .write_exclusive(address, r[rt], output)
