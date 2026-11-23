@@ -118,12 +118,20 @@ def nunit_parameters(source, attribute, path):
 def fixture_status(status, reason, fixtures, corpus, context):
     if status not in {"review", "pending"}:
         return status, reason
-    widths = {cpu for cpu, _, _ in fixtures}
-    if "RiscV64" in widths:
+    models = {model for model, _, _ in fixtures}
+    if "CPU.RiscV64" in models:
         return "pending", "RV64 CPU fixture: " + fixture_description(fixtures)
-    if widths and widths <= {"RiscV32", "VexRiscv", "CV32E40P"}:
+    if any(model == "Network.SynopsysDWCEthernetQualityOfService" and re.search(r"\.robot:\d+$", origin)
+           for model, _, origin in fixtures):
+        return "out", ("Requires Synopsys DWC QoS MTL/DMA register regions and Cortex-A9/Zynq "
+                       "Linux fixture; StarLight uses the distinct SynopsysEthernetMAC BeagleV model")
+    if models == {"CPU.ARMv8R"} and re.search(
+        r"\b(?:PMSA|MPU|TCM|CPSR|SPSR|VBAR|ELR_hyp|HYP)\b", context, re.I
+    ):
+        return "out", "Requires Cortex-R52 ARMv8-R architecture state: " + fixture_description(fixtures)
+    if models and models <= {"CPU.RiscV32", "CPU.VexRiscv", "CPU.CV32E40P"}:
         description = fixture_description(fixtures)
-        if (widths == {"CV32E40P"} or "CLIC-test-platform.repl" in description
+        if (models == {"CPU.CV32E40P"} or "CLIC-test-platform.repl" in description
                 or (corpus == "riscv" and re.search(r"\b(?:Machine|CPU|rv32|RV 32)\b", context, re.I))):
             return "out", "Requires 32-bit CPU configuration: " + description
         return "review", ("Fixture uses " + description
@@ -132,8 +140,8 @@ def fixture_status(status, reason, fixtures, corpus, context):
 
 
 def fixture_description(fixtures):
-    return "; ".join(f"CPU.{cpu}{' ' + isa if isa else ''} ({origin})"
-                     for cpu, isa, origin in fixtures)
+    return "; ".join(f"{model}{' ' + isa if isa else ''} ({origin})"
+                     for model, isa, origin in fixtures)
 
 
 def packet_fixture(source, line, tree):
@@ -269,6 +277,9 @@ def disposition(path, name, context):
         r"Should Access All 32 Bit (?:Config|Address) Registers From Monitor", context
     ):
         return "out", "Fixture creates CPU.RiscV32 with external PMP and checks the RV32 monitor CSR layout"
+    if path.name == "riscv-isa-string.robot" and name == "Should Handle Both 32 And 64 Bit Versions":
+        return "partial", ("Fixed RV64 ISA string checked by Rust and CLI; "
+                           "source case also constructs a separate RV32 CPU")
     if path.name == "riscv-isa-string.robot" and (
         re.search(r"\[Template\]\s+Create RISC-V With ISA String", context)
         or re.search(r"\[Template\]\s+Should Throw Construction Exception", context)
@@ -368,7 +379,8 @@ def main():
                     parameters = template_parameters(body)
                     for parameter in parameters:
                         variant_status, variant_reason = fixture_status(
-                            status, reason, fixtures.evidence(body, parameter), corpus, context)
+                            status, reason, fixtures.evidence(body, parameter), corpus,
+                            f"{name}\n{context}")
                         emit((label, relative, no, name, parameter, variant_status, variant_reason))
                     if parameters:
                         continue
@@ -381,7 +393,7 @@ def main():
                                                     if "[Template]" in line or " IN " in line)
                 if fixtures and status != "unexpanded":
                     scope_body = body + list(dependency_body(body, providers))
-                    status, reason = fixture_status(status, reason, fixtures.evidence(scope_body), corpus, context)
+                    status, reason = fixture_status(status, reason, fixtures.evidence(scope_body), corpus, f"{name}\n{context}")
                     if status != "review":
                         parameter_source = " | ".join(line.strip() for line in body)
                     if status == "review" and any("SdCardFromFile" in line for line in body):

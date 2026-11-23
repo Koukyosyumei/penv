@@ -742,3 +742,11 @@ fn pmp_robot_illegal_rv64_csr_indices_still_trap_with_smepmp() {
         );
     }
 }
+
+#[test]
+fn rv64_robot_isa_string_accepts_mixed_case() {
+    // The fixed Robot case also constructs an RV32 CPU in a separate keyword.
+    let isa = Isa::parse("RV64IMAFDC_Zicsr_Zifencei").unwrap();
+    assert!(isa.multiply && isa.atomic && isa.single && isa.double && isa.compressed);
+    assert!(Isa::parse("RV64GC_Invalid_ISA").is_err());
+}

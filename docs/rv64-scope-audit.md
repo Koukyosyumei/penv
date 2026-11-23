@@ -6,16 +6,16 @@
 | --- | ---: |
 | 確認済みの対象行（暫定分母） | 1,055 |
 | 上流等価の合格 | 31 |
-| 部分移植 | 31 |
-| 上流等価の合格が未達（部分移植を除く） | 993 |
-| 別構成を要求する対象外 | 664 |
-| 適用または展開を確認中 | 2,455 |
+| 部分移植 | 32 |
+| 上流等価の合格が未達（部分移植を除く） | 992 |
+| 別構成を要求する対象外 | 701 |
+| 適用または展開を確認中 | 2,418 |
 
-最終分母は未確定です。確認中の内訳は Renode の 1,923 行、Infrastructure NUnit の 532 行 です。明示的なデータソースの未展開行は今回解消しました。共有リソースやデータ参照、条件で生成する引数、NUnit のディスカバリーを残りの行で検証する必要があります。
+最終分母は未確定です。確認中の内訳は Renode の 1,886 行、Infrastructure NUnit の 532 行 です。明示的なデータソースの未展開行は今回解消しました。共有リソースやデータ参照、条件で生成する引数、NUnit のディスカバリーを残りの行で検証する必要があります。
 
 ## 根拠
 
-- Robot ケースから呼ばれるローカルキーワード、固定スカラー引数、設定の Setup、REPL/RESC の参照先を調べます。状態を再利用するケースの適用判定には、同じスイート内の `Provides` と `Requires` も使います。固定構成を特定できない共有ケースは `review` に残します。
+- Robot ケースから呼ばれるローカルキーワードと静的に解決できる Resource、固定スカラー引数、設定の Setup、REPL/RESC の参照先を調べます。状態を再利用するケースの適用判定には、同じスイート内の `Provides` と `Requires` も使います。固定構成を特定できない共有ケースは `review` に残します。
 - StarLight 7 ケースと Fire 1 ケースは部分移植として保持しています。Fire が取り込む `platforms/cpus/polarfire-soc.repl` の RV64 ハート、MMC、ウォッチドッグを使う PolarFire SoC 7 ケースと Icicle Kit 6 ケースは対象です。Icicle の HSS、FIT、eMMC は各ケースの固定フィクスチャです。
 - CLIC の署名試験 144 ケースは、各ケースの ELF と署名入力を台帳に保持しています。各ケースがロードする `CLIC-test-setup.resc` は `CLIC-test-platform.repl` の RV32IMC ハート、未批准の特権仕様、CLIC を固定します。現対象の RV64 PLIC/CLINT 構成からは対象外です。RV32 ハートがあるだけで共有の UART、追跡、モニター等を除外することは避けています。
 - Fire の RESC が使う `SdCardFromFile` のファイル処理 3 ケースと、共有 SDCard の eMMC モード 5 ケースを保持しています。FdtSharp の 5 ケースは Zynq の DTB をバイナリ形式の入力に使う fixture で、ボードを起動せず構文とデータを検査するため対象に含めています。
@@ -44,8 +44,21 @@ python3 scripts/probe-rv64-isa.py --act --smepmp "$act/work" --ram-size 0x400000
   --elf spike-rv64-max/elfs/priv/Sm/Sm-00.elf --logs "$out/act-sm"
 ```
 
-`cargo test` は 106 件合格。RV64 virt は OpenSBI から Linux の UART ログインへ到達し、`id -u` が `0`、`uname -m` が `riscv64` を返しました。公開 ACT の `Sm-00.elf` は 4 MiB の Smepmp 診断構成で署名と終了を確認しました。
+`cargo test` は 107 件合格。RV64 virt は OpenSBI から Linux の UART ログインへ到達し、`id -u` が `0`、`uname -m` が `riscv64` を返しました。公開 ACT の `Sm-00.elf` は 4 MiB の Smepmp 診断構成で署名と終了を確認しました。
 
 StarLight の通常構成では 2 台で root ログインし、56 バイトと 3,200 バイトの ping が各 10/10 応答しました。両ゲストで Ethernet IRQ の増加を確認しました。ログは `starlight.log` と `starlight/` にあります。
 
-Fire の今回の再試行では公開 SD から HSS、OpenSBI、U-Boot と `/boot.scr` のロードを確認し、UART は Linux FIT のハッシュ検証とカーネル展開まで進みました。この時点のログは `fire.log` と `fire/fire.uart.log` にあります。ログインと SD のセクターハッシュ照合は [既存の公開 Fire イメージの検証結果](../README.md#上流-renode-の-rv64-ケース対応) を参照してください。
+Fire の今回の再試行では公開 SD から HSS、OpenSBI、U-Boot、Linux 6.6.35、SD のパーティション列挙まで確認しました。試行時の既定値である 60 億命令に達し、ログイン前に終了しました。ログは `fire.log`、`fire/fire.uart.log`、`fire/fire.stderr.log`、終了状態は `fire.status` にあります。上記の再現コマンドは、ログインと SD のセクターハッシュ照合まで成功した既存検証と同じ上限を指定しています。[既存の公開 Fire イメージの検証結果](../README.md#上流-renode-の-rv64-ケース対応)
+
+## RV64 ISA 文字列の互換性
+
+固定 Renode の `riscv-isa-string.robot:75` は、大小文字が混在する入力で RV32 と RV64 の CPU を構築します。Penv の RV64 ISA 解析は大小文字を区別せず処理するように変更しました。固定上流ケースの実行と、Penv で同じ RV64 文字列を使った公開 `rv64ui-p-add` ELF の終了値 0 を確認しました。台帳の状態は上流ケース全体に対する部分移植です。ログは `upstream-isa-string.log`、`mixed-isa-elf.log`、`cargo-test-final.log` です。
+
+```sh
+renode-test "$renode_work/tests/unit-tests/riscv-isa-string.robot" \
+  --fixture 'Should Handle Both 32 And 64 Bit Versions' --results-dir "$out/upstream-isa-string" -P 0
+sed 's/"rv64gc"/"RV64IMAFDC_Zicsr_Zifencei"/' platforms/rv64_virt.repl > "$out/mixed-isa.repl"
+elf="$work/isa/rv64ui-p-add"
+tohost=$(llvm-nm "$elf" | awk '$3=="tohost" {print "0x" $1}')
+target/debug/penv run --platform "$out/mixed-isa.repl" --max-steps 100000 --tohost "$tohost" "$elf"
+```

@@ -41,7 +41,8 @@ pub struct Isa {
 
 impl Isa {
     pub fn parse(value: &str) -> Result<Self, String> {
-        let mut extensions = value
+        let normalized = value.to_ascii_lowercase();
+        let mut extensions = normalized
             .strip_prefix("rv64")
             .ok_or_else(|| format!("invalid RV64 ISA {value:?}"))?
             .split('_');
