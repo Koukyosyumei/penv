@@ -46,6 +46,16 @@ impl ConstantMmio {
         })
     }
 
+    pub fn zeroed(base: u32, size: u32) -> Self {
+        Self {
+            base,
+            size,
+            values: Vec::new(),
+            warn_unhandled: false,
+            doubleword_only: false,
+        }
+    }
+
     pub fn doubleword(base: u32, size: u32, value: u32) -> Result<Self, String> {
         if size < 4 || base % 4 != 0 {
             return Err("expected an aligned doubleword peripheral range".into());

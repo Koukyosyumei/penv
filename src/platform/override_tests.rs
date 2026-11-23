@@ -384,6 +384,10 @@ fn assert_empty_peripheral_mapping(source: &str, expected: (u32, u32)) {
         "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"
     );
     assert_eq!(mock.bus_range().unwrap(), expected);
+    let mut machine = build_entries(path, &entries, false, true).unwrap();
+    assert_eq!(machine.bus.read::<1>(expected.0).unwrap(), 0);
+    assert_eq!(machine.bus.read::<4>(expected.0).unwrap(), 0);
+    assert!(machine.bus.read::<1>(expected.0 + expected.1).is_err());
 }
 
 #[test]
@@ -419,4 +423,13 @@ fn renode_declaration_empty_entry() {
             .unwrap_err()
             .contains("EmptyEntry:")
     );
+}
+
+#[test]
+fn renode_declaration_constructs_unregistered_empty_peripheral() {
+    check_string(
+        "\nmock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral",
+        None,
+    )
+    .unwrap();
 }

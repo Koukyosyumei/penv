@@ -1213,12 +1213,23 @@ pub fn check_string(content: &str, root: Option<&Path>) -> Result<(), String> {
 
 fn check_entries(path: &Path, entries: &[Entry]) -> Result<(), String> {
     if !entries.is_empty() {
-        load_entries(path, entries, false)?;
+        build_entries(path, entries, false, true)?;
     }
     Ok(())
 }
 
+const EMPTY_PERIPHERAL: &str = "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral";
+
 fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<Machine, String> {
+    build_entries(path, entries, f4_repl_timing, false)
+}
+
+fn build_entries(
+    path: &Path,
+    entries: &[Entry],
+    f4_repl_timing: bool,
+    check_only: bool,
+) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
     machine.bus.f4_repl_timing = f4_repl_timing;
     let mut cpus = Vec::new();
@@ -1268,6 +1279,17 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                 machine
                     .bus
                     .map_constant_mmio(peripheral)
+                    .map_err(|error| entry.error(&error))?;
+            }
+            EMPTY_PERIPHERAL => {
+                keys(entry, &[])?;
+                if matches!(entry.registration.as_deref(), None | Some("none")) {
+                    continue;
+                }
+                let (base, size) = entry.bus_range()?;
+                machine
+                    .bus
+                    .map_constant_mmio(ConstantMmio::zeroed(base, size))
                     .map_err(|error| entry.error(&error))?;
             }
             "Mocks.DoubleWordPeripheral" => {
@@ -1456,6 +1478,9 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
             _ => return Err(entry.error(&format!("unsupported platform model {:?}", entry.model))),
         }
+    }
+    if check_only && entries.iter().all(|entry| entry.model == EMPTY_PERIPHERAL) {
+        return Ok(machine);
     }
     if cpus.is_empty() || !ram {
         return Err(format!(
