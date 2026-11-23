@@ -317,3 +317,33 @@ fn renode_irq_validation_duplicate_default_source() {
     let error = check_string("\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    -> receiver@0\n    -> receiver @1", None).unwrap_err();
     assert!(error.contains("IrqSourceUsedMoreThanOnce:"));
 }
+
+#[test]
+fn renode_irq_model_unknown_name() {
+    let error = check_string("\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    Something -> receiver@0\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver", None).unwrap_err();
+    assert!(error.contains("IrqSourceDoesNotExist:"));
+}
+
+#[test]
+fn renode_irq_model_numbered_on_named_model() {
+    let error = check_string("\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    [0-1] -> receiver@[0-1]\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver", None).unwrap_err();
+    assert!(error.contains("IrqSourceIsNotNumberedGpioOutput:"));
+}
+
+#[test]
+fn renode_irq_model_ambiguous_default() {
+    let error = check_string("\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts\n    -> receiver@0\n\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver", None).unwrap_err();
+    assert!(error.contains("AmbiguousDefaultIrqSource:"));
+}
+
+#[test]
+fn renode_irq_model_no_default() {
+    let error = check_string("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    -> receiver@0\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver", None).unwrap_err();
+    assert!(error.contains("IrqSourceDoesNotExist:"));
+}
+
+#[test]
+fn renode_irq_model_same_named_and_default() {
+    let error = check_string("\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    -> receiver@0\n    Irq -> receiver @1", None).unwrap_err();
+    assert!(error.contains("IrqSourceUsedMoreThanOnce:"));
+}

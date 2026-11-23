@@ -915,9 +915,10 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut declared = HashMap::new();
     let mut declarations = Vec::new();
     let mut blocks = Vec::new();
+    let mut irq_checks = Vec::new();
     for mut entry in entries {
         validate_entry_attributes(&entry)?;
-        validate_entry_irq_shape(&entry)?;
+        irq_checks.push(validate_entry_irq_shape(&entry));
         if entry.model.is_empty() && entry.name != "sysbus" {
             blocks.push(entry);
             continue;
@@ -976,6 +977,11 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
             }
         }
     }
+    // Check destinations before model outputs while preserving each block's
+    // source list for duplicate detection.
+    for check in irq_checks {
+        check?;
+    }
     Ok(declarations)
 }
 
@@ -1021,6 +1027,19 @@ fn is_repl_identifier(text: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+// Only models with known GPIO properties participate in model-level checks.
+fn named_irq_outputs(model: &str) -> Option<(&'static [&'static str], Option<&'static str>)> {
+    match model {
+        "UART.STM32_UART" => Some((&["IRQ", "DMARequest"], Some("IRQ"))),
+        "Antmicro.Renode.UnitTests.Mocks.MockIrqSender" => Some((&["Irq"], Some("Irq"))),
+        "Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts" => {
+            Some((&["Irq", "AnotherIrq"], None))
+        }
+        "Antmicro.Renode.UnitTests.Mocks.MockCPU" => Some((&[], None)),
+        _ => None,
+    }
+}
+
 fn validate_entry_irq_shape(entry: &Entry) -> Result<(), String> {
     let mut used = HashSet::new();
     for (_, text) in &entry.body {
@@ -1037,6 +1056,15 @@ fn validate_entry_irq_shape(entry: &Entry) -> Result<(), String> {
                 continue;
             };
             sources
+        } else if let Some((names, default)) = named_irq_outputs(&entry.model) {
+            let default = default.ok_or_else(|| {
+                if names.is_empty() {
+                    entry.error("IrqSourceDoesNotExist: model has no GPIO output")
+                } else {
+                    entry.error("AmbiguousDefaultIrqSource: model has multiple GPIO outputs")
+                }
+            })?;
+            vec![IrqEndpoint::Named(default)]
         } else {
             vec![IrqEndpoint::Named("")]
         };
@@ -1049,6 +1077,18 @@ fn validate_entry_irq_shape(entry: &Entry) -> Result<(), String> {
             return Err(entry.error("WrongIrqArity: IRQ source and destination counts differ"));
         }
         for source in sources {
+            if let Some((names, _)) = named_irq_outputs(&entry.model) {
+                match source {
+                    IrqEndpoint::Named(name) if !names.contains(&name) => {
+                        return Err(entry.error(&format!("IrqSourceDoesNotExist: {name:?}")));
+                    }
+                    IrqEndpoint::Number(_) => {
+                        return Err(entry
+                            .error("IrqSourceIsNotNumberedGpioOutput: model has named outputs"));
+                    }
+                    _ => {}
+                }
+            }
             if !used.insert(source) {
                 return Err(entry.error("IrqSourceUsedMoreThanOnce: duplicate IRQ source"));
             }
