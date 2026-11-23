@@ -92,6 +92,8 @@ STM32F072 の 128 KiB フラッシュは、上流 REPL の `FLASH_INTERFACE` 範
 
 ### nRF52840 の上流 Zephyr Shell
 
+[受け入れ対応表と一括再現手順](tests/nrf52840-acceptance.md)
+
 nRF52840 用に Cortex-M4 のリセット、Thumb-2 の一部、BASEPRI・FAULTMASK、NVIC の第 2 IRQ バンク、共有 SRAM エイリアス、起動に必要な SCB レジスターと特権モードの MPU アクセス判定を実装しています。周辺機器は CLOCK、RTC0–2、UART/UARTE0–1、Watchdog、GPIO/GPIOTE、TWI0–1、SPI2 のレガシーマスターモードと ADXL372、TIMER0–4、I²S マスター、PDM、ローカル RADIO、RNG、ECB、EGU0–5 と、一部イベント・タスクを結ぶ PPI プログラマブルチャネルに対応します。
 
 RTC と Watchdog は 32.768 kHz を 1 ステップあたり 10 ns の仮想時間で進めます。Watchdog は有効な全リロード要求の受理でカウンターを再ロードします。タイムアウト割り込みを有効にした場合は 2 LFCLK サイクル後にリセットします。UART の TX は即時に転送され、CLI 入力は最初に宣言した UART が受信を開始していれば SRAM に転送されます。
