@@ -220,6 +220,19 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
         machine.bus.rv64_devices.uarts.push(uart);
     }
     for entry in &entries {
+        if entry.model == "Network.CadenceGEM" && entry.registration.as_deref() != Some("none") {
+            map_gem_status(&mut machine, entry)?;
+            continue;
+        }
+        if entry.model == "USB.MPFS_USB" && entry.registration.as_deref() != Some("none") {
+            // The HSS probes this undefined 32-bit offset, which Renode ignores.
+            let address = entry
+                .address()?
+                .checked_add(0x3fc)
+                .ok_or_else(|| entry.error("invalid MPFS USB address"))?;
+            map_read_only_word(&mut machine, entry, address, 0)?;
+            continue;
+        }
         if entry.model == "Miscellaneous.MPFS_DDRMock"
             && entry.registration.as_deref() != Some("none")
         {
@@ -305,6 +318,43 @@ pub fn load(entries: Vec<Entry>, starlight: bool) -> Result<Machine, String> {
         machine.bus.rv64_devices.starlight_reset_pin = Some(StarLightResetPin::default());
     }
     Ok(machine)
+}
+
+fn map_read_only_word(
+    machine: &mut Machine,
+    entry: &Entry,
+    address: u32,
+    value: u32,
+) -> Result<(), String> {
+    check_mapping(machine, entry, address, 4)?;
+    machine
+        .bus
+        .rv64_devices
+        .read_only_words
+        .push((address, value));
+    Ok(())
+}
+
+fn map_gem_status(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
+    let registration = entry.registration.as_deref().unwrap_or("").trim();
+    let windows = registration
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+        .unwrap_or(registration);
+    for window in windows.trim().trim_end_matches(';').split(';') {
+        let value = window
+            .trim()
+            .strip_prefix("sysbus ")
+            .ok_or_else(|| entry.error("expected Cadence GEM sysbus registration"))?;
+        let address = number(entry, value.trim())?;
+        let status = u32::try_from(address)
+            .ok()
+            .filter(|base| base % 4 == 0)
+            .and_then(|base| base.checked_add(8))
+            .ok_or_else(|| entry.error("invalid Cadence GEM address"))?;
+        map_read_only_word(machine, entry, status, 1 << 2)?; // MDIO management idle
+    }
+    Ok(())
 }
 
 fn map_ethernet(
@@ -561,6 +611,11 @@ fn check_mapping(machine: &Machine, entry: &Entry, base: u32, size: u64) -> Resu
         || devices.mpfs_ddr.iter().any(|device| {
             start < u64::from(device.base) + DdrMock::SIZE && u64::from(device.base) < end
         });
+    let overlaps = overlaps
+        || devices
+            .read_only_words
+            .iter()
+            .any(|&(address, _)| start < u64::from(address) + 4 && u64::from(address) < end);
     if end > 1 << 32 || overlaps || machine.bus.overlaps(start, end) {
         return Err(entry.error("invalid or overlapping device registration"));
     }

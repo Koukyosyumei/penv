@@ -243,7 +243,7 @@ Rust 移植は `src/rv64/upstream_tests.rs` にあります。Monitor のレジ�
 | StarLight `Should Ping` | B から A に 56 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Ping Large Payload` | B から A に 3200 バイトを 10 回送り、全応答と損失 0% を確認 |
 | StarLight `Should Boot U-Boot With External PMP` / `Should Provide Two Linux Machines With Ethernet Connection With External PMP` / `Should Ping With External PMP` | `Miscellaneous.RiscVExternalPMP` の配線が未実装のため保留 |
-| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。L2 キャッシュの way-mask 設定と DDR 初期化の初期段階を通過し、Cadence GEM の状態レジスターで停止。SD 起動と Buildroot ログインは未到達 |
+| Fire `Should Boot Buildroot From SD Card` | 部分検証。公開 HSS がキャッシュの WayEnable と `MPFS_Sysreg` を通過。DDR トレーニング、Cadence GEM の状態レジスター、USB 初期化時のアクセスを通過し、HSS の UART バナーと eMMC 選択まで到達。SD 起動と Buildroot ログインは未到達 |
 
 CLI 移植は `verify-starlight.py --upstream-cases` です。上流と同じ公開 RESC・ファームウェアを使い、ケース名ごとに結果を出力します。Penv のゲストプロセスは U-Boot 確認とスイッチ接続の間も動作を続けます。Linux でのコマンド実行と `eth0` IRQ の確認も行います。[Renode BeagleV-StarLight.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-StarLight.robot) [Renode BeagleV-Fire.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/BeagleV-Fire.robot)
 
@@ -309,6 +309,12 @@ done
 上流の `SilenceRange` に含まれる PolarFire L2 way-mask レジスターに限り、HSS の `amoswap.d` を受け付けて 0 を返します。続く `mss_nwc_init` では静的なタグだけだとトレーニングが進まないため、上流 REPL の `MPFS_DDRMock` を移植しました。32 ビットの固定応答と交互応答、8 ビットのレーン選択状態はインスタンスごとに管理します。[Renode MPFS_DDRMock](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Miscellaneous/MPFS_DDRMock.cs)
 
 前節の直接起動で `--max-steps 4885985` を指定すると、e51 は `0x20233214` まで実行します。次のステップの `0x20110008` 読み出しはロードアクセス例外となり、`0x20220350` に入ります。対象は最初の Cadence GEM のネットワーク状態レジスターです。この段階では UART はまだ空です。`cargo test` は 65 件通過しました。
+
+#### Fire の HSS バナーまでの起動
+
+Cadence GEM の Network Status は、両方のバスエイリアスで管理インターフェイスの idle ビットを返し、書き込みを無視します。さらに HSS の USB 初期化がアクセスする未定義の 32 ビットオフセット `0x3fc` は上流と同じく 0 を返し、書き込みを破棄します。GEM の送受信と USB 転送は未実装です。[Renode CadenceGEM](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/Network/CadenceGEM.cs) [Renode MPFS_USB](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/USB/MPFS_USB.cs)
+
+前節の直接起動を `--max-steps 150000000` で実行すると、UART に HSS の展開成功、バージョン `0.99.36-BVF-0.3.0-2-g3d347fe`、`Attempting to select eMMC` が出ます。その後、e51 の `pc=0x0a0144c8` でファブリックのメディア選択 `0x4fffff00` への書き込みがストアアクセス例外になります。バナー内の OpenSBI 1.2 は HSS に組み込まれたバージョン表示です。ゲストの起動は未到達です。
 
 ## Cortex-M0 / Cortex-M0+
 

@@ -17,6 +17,7 @@ pub struct Devices {
     pub uarts: Vec<Uart>,
     pub ethernet: Vec<Ethernet>,
     pub reset_generators: Vec<ResetGenerator>,
+    pub read_only_words: Vec<(u32, u32)>,
     pub mpfs_ddr: Vec<DdrMock>,
     pub mpfs_sysreg: Option<Sysreg>,
     pub mpfs_cache_way_enable: Option<MpfsCacheWayEnable>,
@@ -177,6 +178,14 @@ impl Devices {
         {
             return Some(ddr.read(address, width));
         }
+        if width == 4
+            && let Some((_, value)) = self
+                .read_only_words
+                .iter()
+                .find(|&&(word, _)| word == address)
+        {
+            return Some(*value);
+        }
         let plic = self.plic.as_mut()?;
         (width == 4 && plic.contains(address)).then(|| plic.read(address - plic.base))
     }
@@ -217,6 +226,14 @@ impl Devices {
             return Some(Ok(()));
         }
         if self.mpfs_ddr.iter().any(|ddr| ddr.accepts(address, width)) {
+            return Some(Ok(()));
+        }
+        if width == 4
+            && self
+                .read_only_words
+                .iter()
+                .any(|&(word, _)| word == address)
+        {
             return Some(Ok(()));
         }
         let plic = self.plic.as_mut()?;

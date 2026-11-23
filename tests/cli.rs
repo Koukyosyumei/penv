@@ -684,3 +684,53 @@ TopSystemRegisters: Miscellaneous.MPFS_Sysreg @ sysbus 0x20002000
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, [0, 7, 0x55, 0xfe, 0]);
 }
+
+#[test]
+fn polarfire_gem_status_responds_at_both_bus_aliases() {
+    let directory = std::env::temp_dir().join(format!("penv-polarfire-gem-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("polarfire.repl");
+    let raw = directory.join("gem-status.bin");
+    fs::write(
+        &board,
+        r#"cpu: CPU.RiscV64 @ sysbus
+    cpuType: "rv64i"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.NS16550 @ sysbus 0x10000000
+mac0: Network.CadenceGEM @ { sysbus 0x20110000; sysbus 0x28110000 }
+"#,
+    )
+    .unwrap();
+    let instructions: [u32; 11] = [
+        0x2011_02b7, // lui t0, 0x20110
+        0x2811_0337, // lui t1, 0x28110
+        0x1000_03b7, // lui t2, 0x10000
+        0x0082_ae03, // lw t3, 8(t0)
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0002_a423, // sw zero, 8(t0): read-only
+        0x0082_ae03, // lw t3, 8(t0)
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0083_2e03, // lw t3, 8(t1)
+        0x01c3_8023, // sb t3, 0(t2)
+        0x0010_0073, // ebreak
+    ];
+    fs::write(
+        &raw,
+        instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--platform"])
+        .arg(&board)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, [4, 4, 4]);
+}
