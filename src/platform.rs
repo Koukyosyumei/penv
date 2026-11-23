@@ -389,10 +389,63 @@ pub(crate) fn quoted_value(text: &str) -> Result<String, &'static str> {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ListItem<'a> {
     List(Vec<ListItem<'a>>),
+    Object(ObjectValue<'a>),
     Number(&'a str),
     String(String),
     Symbol(SymbolicValue<'a>),
     Range(u64, u64),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ObjectValue<'a> {
+    model: &'a str,
+    fields: Vec<(&'a str, &'a str)>,
+}
+
+pub(crate) fn object_fields(input: &str) -> Result<Vec<(&str, &str)>, &'static str> {
+    let mut fields = Vec::new();
+    let mut start = 0;
+    for end in unquoted_delimiters(input, &[';'])
+        .map(|(index, _)| index)
+        .chain([input.len()])
+    {
+        let text = input[start..end].trim();
+        if text.is_empty() && end == input.len() {
+            break;
+        }
+        let name = property_key(text).ok_or("expected REPL object property")?;
+        let (_, value) = text.split_once(':').unwrap();
+        fields.push((name, value.trim()));
+        start = end + 1;
+    }
+    Ok(fields)
+}
+
+fn object_prefix(input: &str) -> Result<(ObjectValue<'_>, &str), &'static str> {
+    let input = input
+        .strip_prefix("new ")
+        .ok_or("expected REPL object")?
+        .trim_start();
+    let (model, body) = input
+        .split_once('{')
+        .ok_or("expected REPL object attributes")?;
+    let model = model.trim_end();
+    if model.is_empty() || model.contains(char::is_whitespace) {
+        return Err("expected REPL object type");
+    }
+    let (end, delimiter) = unquoted_delimiters(body, &['{', '}'])
+        .next()
+        .ok_or("expected closing brace in REPL object")?;
+    if delimiter != '}' {
+        return Err("nested REPL object attributes are unsupported");
+    }
+    Ok((
+        ObjectValue {
+            model,
+            fields: object_fields(&body[..end])?,
+        },
+        &body[end + 1..],
+    ))
 }
 
 pub(crate) fn list_value(input: &str) -> Result<Vec<ListItem<'_>>, &'static str> {
@@ -417,6 +470,10 @@ fn list_prefix(input: &str, depth: usize) -> Result<(Vec<ListItem<'_>>, &str), &
             return Ok((items, tail));
         }
         let (item, tail) = match input.as_bytes().first() {
+            _ if input.starts_with("new ") => {
+                let (object, tail) = object_prefix(input)?;
+                (ListItem::Object(object), tail)
+            }
             Some(b'[') => {
                 let (values, tail) = list_prefix(input, depth + 1)?;
                 (ListItem::List(values), tail)
@@ -576,7 +633,7 @@ fn parse_text(
     let mut definitions = Vec::new();
     let mut seen_usings = HashSet::new();
     let mut comments = ReplComments::default();
-    let mut lines = content.lines().enumerate();
+    let mut lines = content.lines().enumerate().peekable();
     while let Some((index, raw)) = lines.next() {
         let line = comments
             .line(raw)
@@ -643,6 +700,29 @@ fn parse_text(
                 }
                 let (_, value) = property.split_once(':').unwrap();
                 dictionary_value(value.trim()).map_err(|detail| error(&detail))?;
+            }
+            if let Some((_, value)) = text.split_once(':')
+                && let Some(model) = value.trim().strip_prefix("new ")
+                && !model.contains(char::is_whitespace)
+                && !model.contains('{')
+            {
+                property.push_str(" {");
+                while lines.peek().is_some_and(|(_, raw)| {
+                    !raw.trim().is_empty() && raw.len() - raw.trim_start().len() > indentation
+                }) {
+                    let (index, raw) = lines.next().unwrap();
+                    let continuation = comments
+                        .line(raw)
+                        .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
+                    let continuation = continuation.trim();
+                    if !continuation.is_empty() {
+                        property.push_str(continuation);
+                        property.push(';');
+                    }
+                }
+                property.push('}');
+                let (_, value) = property.split_once(':').unwrap();
+                object_prefix(value.trim()).map_err(error)?;
             }
             current
                 .as_mut()
@@ -2565,6 +2645,50 @@ uart:
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].body.len(), 2);
         }
+    }
+
+    #[test]
+    fn upstream_parse_object_value() {
+        let entries = parse(
+            "\ndisplay: Display\n    resolution: new Point\n        x: 640\n        y: 480\n",
+        )
+        .unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        let [(_, property)] = entry.body.as_slice() else {
+            panic!("expected one property")
+        };
+        let (_, value) = property.split_once(':').unwrap();
+        let (object, tail) = object_prefix(value.trim()).unwrap();
+        assert!(tail.is_empty());
+        assert_eq!(object.model, "Point");
+        assert_eq!(object.fields, [("x", "640"), ("y", "480")]);
+    }
+
+    #[test]
+    fn upstream_parse_list_with_inline_object() {
+        let entries = parse("\ndisplay: Display\n    resolutions: [new Point { x: 640; y: 480 }, new Point { x: 5120; y: 2160 }]\n").unwrap();
+        let [entry] = entries.as_slice() else {
+            panic!("expected one entry")
+        };
+        let [(_, property)] = entry.body.as_slice() else {
+            panic!("expected one property")
+        };
+        let values = list_fixture(property);
+        assert_eq!(
+            values,
+            [
+                ListItem::Object(ObjectValue {
+                    model: "Point",
+                    fields: vec![("x", "640"), ("y", "480")]
+                }),
+                ListItem::Object(ObjectValue {
+                    model: "Point",
+                    fields: vec![("x", "5120"), ("y", "2160")]
+                }),
+            ]
+        );
     }
 
     fn list_fixture(property: &str) -> Vec<ListItem<'_>> {

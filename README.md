@@ -1244,3 +1244,19 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 145件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、ログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-lists.pQCV9IG8` にあります。対象786件のうち等価合格139件、部分検証10件、未達637件です。
+
+### backlog-network-66e060011c57-1
+
+REPL の字下げ付きオブジェクト値とリスト内のインラインオブジェクトを解析します。波括弧内の属性処理は STM32H7 Ethernet の領域登録と共有しました。固定上流 `ShouldParseObjectValue` と `ShouldParseListWithInlineObject` を同じバイナリで実行し、オブジェクト型、項目数、属性名、数値トークンを照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 147件に STM32H7 と LiteX の双方向 Ethernet 回帰を含みます。固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF も通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-objects.NqbMFJGf` に保存しました。対象786件のうち等価合格141件、部分検証10件、未達635件です。入れ子のオブジェクト属性、字下げ属性間の空行、一般の型の実行時インスタンス化は残っています。

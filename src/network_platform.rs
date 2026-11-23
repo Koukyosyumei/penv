@@ -441,16 +441,8 @@ fn region(properties: &str, qos: bool) -> Result<Mapping, String> {
     let mut address = None;
     let mut size = None;
     let mut region = None;
-    for property in properties
-        .split(';')
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-    {
-        let (key, value) = property
-            .split_once(':')
-            .ok_or("expected Ethernet region property")?;
-        let value = value.trim();
-        match key.trim() {
+    for (key, value) in crate::platform::object_fields(properties)? {
+        match key {
             "address" if address.is_none() => address = Some(number(value)?),
             "size" if size.is_none() => size = Some(number(value)?),
             "region" if region.is_none() => {
