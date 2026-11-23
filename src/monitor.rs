@@ -37,6 +37,7 @@ pub struct Boot {
 pub enum CpuControl {
     Pause(bool),
     Halt(bool),
+    Clock(String, bool),
     Reset(crate::machine::CpuResetKind),
     ResetLog(String),
 }
@@ -269,6 +270,17 @@ fn execute(
         ["cpu" | "sysbus.cpu", command @ ("Pause" | "Resume")] if boot.platform.is_some() => {
             boot.cpu_control
                 .push(CpuControl::Pause(*command == "Pause"));
+        }
+        [target @ ("cpu" | "cpu0" | "nvic" | "dwt"), "Clocked", value]
+            if boot.platform.is_some() =>
+        {
+            boot.cpu_control.push(CpuControl::Clock(
+                (*target).into(),
+                value
+                    .to_ascii_lowercase()
+                    .parse()
+                    .map_err(|_| "expected true or false")?,
+            ));
         }
         ["cpu" | "sysbus.cpu", "IsHalted", value] if boot.platform.is_some() => {
             boot.cpu_control.push(CpuControl::Halt(

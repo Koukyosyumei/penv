@@ -19,6 +19,7 @@ pub struct Machine {
     elapsed_steps: u64,
     cpu_paused: bool,
     cpu_halted: bool,
+    cpu_clock_stopped: bool,
     pub reset_log: Option<String>,
     uart_step_prefix: bool,
     uart_line_start: bool,
@@ -171,6 +172,7 @@ impl Machine {
             elapsed_steps: 0,
             cpu_paused: false,
             cpu_halted: false,
+            cpu_clock_stopped: false,
             reset_log: None,
             uart_step_prefix: false,
             uart_line_start: true,
@@ -357,6 +359,10 @@ impl Machine {
         self.cpu_halted = halted;
     }
 
+    pub fn set_cpu_clocked(&mut self, clocked: bool) {
+        self.cpu_clock_stopped = !clocked;
+    }
+
     pub fn reset_cpu_control(
         &mut self,
         kind: CpuResetKind,
@@ -455,25 +461,16 @@ impl Machine {
                 let (_, name, acceleration) = self.adxl_events.pop_front().unwrap();
                 *self.bus.nrf_adxl_input(&name).unwrap() = acceleration;
             }
+            let halted = index == 0 && (self.cpu_halted || self.cpu_clock_stopped);
             let result = if self.uart_step_prefix {
                 let mut stamped = StepUart {
                     output,
                     step: self.elapsed_steps,
                     line_start: &mut self.uart_line_start,
                 };
-                hart.execute_step(
-                    &mut self.bus,
-                    self.elapsed_steps,
-                    self.cpu_halted && index == 0,
-                    &mut stamped,
-                )
+                hart.execute_step(&mut self.bus, self.elapsed_steps, halted, &mut stamped)
             } else {
-                hart.execute_step(
-                    &mut self.bus,
-                    self.elapsed_steps,
-                    self.cpu_halted && index == 0,
-                    output,
-                )
+                hart.execute_step(&mut self.bus, self.elapsed_steps, halted, output)
             };
             if let Some(outbox) = radio_outbox.as_deref_mut()
                 && let Some(frame) = self.bus.tick_radio_air()
@@ -679,6 +676,9 @@ impl Hart {
                     .and_then(|()| bus.advance_stm32_dma(output))
                     .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
                 thumb.clock_interrupts(bus);
+                if let Some(dwt) = bus.dwt.as_mut() {
+                    dwt.tick();
+                }
             }
             if clock_ticks != 1 && bus.reset_cortex_m_if_requested(false) {
                 self.reset_cortex_m(bus)?;
@@ -1003,6 +1003,91 @@ mod tests {
         assert_eq!(machine.run(3, &mut output).unwrap(), (Stop::Limit, 3));
         assert_eq!(output, b"PC moved\n");
         machine
+    }
+
+    fn clock_test_setup() -> (Machine, Vec<u8>) {
+        let mut machine = started_cortex_m();
+        let mut output = Vec::new();
+        machine.bus.map_dwt(0xe0001000, 72_000_000).unwrap();
+        machine
+            .bus
+            .systick
+            .as_mut()
+            .unwrap()
+            .set_frequency(100_000_000);
+        for (address, value) in [(0xe000e014, 0xff_ffff), (0xe000e010, 1), (0xe0001000, 1)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        (machine, output)
+    }
+
+    fn clock_test_values(machine: &mut Machine) -> (u32, u32) {
+        (
+            machine.bus.read::<4>(0xe000e018).unwrap(),
+            machine.bus.read::<4>(0xe0001004).unwrap(),
+        )
+    }
+
+    #[test]
+    fn upstream_cortex_m_independent_systick_dwt_clocks() {
+        let (mut machine, mut output) = clock_test_setup();
+        machine.run(100_000, &mut output).unwrap();
+        let before = clock_test_values(&mut machine);
+        machine.run(100_000, &mut output).unwrap();
+        let running = clock_test_values(&mut machine);
+        assert_ne!(before.0, running.0);
+        assert_eq!(running.1 - before.1, 72_000);
+
+        machine.bus.systick.as_mut().unwrap().set_clocked(false);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(false);
+        machine.run(100_000, &mut output).unwrap();
+        assert_eq!(clock_test_values(&mut machine), running);
+
+        machine.bus.systick.as_mut().unwrap().set_clocked(true);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(true);
+        machine.run(100_000, &mut output).unwrap();
+        let resumed = clock_test_values(&mut machine);
+        assert_ne!(resumed.0, running.0);
+        assert_eq!(resumed.1 - running.1, 72_000);
+
+        machine.bus.systick.as_mut().unwrap().set_clocked(false);
+        machine.run(100_000, &mut output).unwrap();
+        let independent = clock_test_values(&mut machine);
+        assert_eq!(independent.0, resumed.0);
+        assert_eq!(independent.1 - resumed.1, 72_000);
+    }
+
+    #[test]
+    fn upstream_cortex_m_clock_gate_persists_across_reset() {
+        let (mut machine, mut output) = clock_test_setup();
+        machine.run(100_000, &mut output).unwrap();
+        machine.set_cpu_clocked(false);
+        machine.bus.systick.as_mut().unwrap().set_clocked(false);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(false);
+        machine
+            .reset_cpu_control(CpuResetKind::Machine, &mut output)
+            .unwrap();
+        assert_eq!(clock_test_values(&mut machine), (0xff_ffff, 0));
+        assert_eq!(machine.run(100_000, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0x100);
+        assert_eq!(clock_test_values(&mut machine), (0xff_ffff, 0));
+
+        for (address, value) in [(0xe000e014, 0xff_ffff), (0xe000e010, 1), (0xe0001000, 1)] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        machine.run(100_000, &mut output).unwrap();
+        assert_eq!(clock_test_values(&mut machine), (0xff_ffff, 0));
+
+        machine.set_cpu_clocked(true);
+        machine.bus.systick.as_mut().unwrap().set_clocked(true);
+        machine.bus.dwt.as_mut().unwrap().set_clocked(true);
+        assert_eq!(
+            machine.run(100_000, &mut output).unwrap(),
+            (Stop::Limit, 100_000)
+        );
+        let resumed = clock_test_values(&mut machine);
+        assert_ne!(resumed.0, 0xff_ffff);
+        assert_eq!(resumed.1, 72_000);
     }
 
     fn check_cpu_flow(machine: &mut Machine, paused: bool, halted: bool) {

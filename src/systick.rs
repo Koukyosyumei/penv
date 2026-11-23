@@ -20,6 +20,8 @@ pub struct SysTick {
     nmi_pending: bool,
     frequency: Option<u32>,
     phase: u64,
+    clock_stopped: bool,
+    current_initialized: bool,
 }
 
 impl SysTick {
@@ -34,6 +36,7 @@ impl SysTick {
     pub fn reset(&mut self) {
         *self = Self {
             frequency: self.frequency,
+            clock_stopped: self.clock_stopped,
             ..Self::default()
         };
     }
@@ -43,8 +46,12 @@ impl SysTick {
         self.phase = 0;
     }
 
+    pub fn set_clocked(&mut self, clocked: bool) {
+        self.clock_stopped = !clocked;
+    }
+
     pub fn tick(&mut self) {
-        if self.control & 1 == 0 || (self.reload == 0 && self.current == 0) {
+        if self.clock_stopped || self.control & 1 == 0 || (self.reload == 0 && self.current == 0) {
             return;
         }
         if let Some(frequency) = self.frequency {
@@ -59,6 +66,7 @@ impl SysTick {
     }
 
     fn cycle(&mut self) {
+        self.current_initialized = true;
         if self.current == 0 {
             self.current = self.reload;
         } else {
@@ -98,6 +106,7 @@ impl SysTick {
         Some(match address {
             CSR => 4 | self.control | (u32::from(std::mem::take(&mut self.count_flag)) << 16),
             RELOAD => self.reload,
+            CURRENT if !self.current_initialized => 0xff_ffff,
             CURRENT => self.current,
             CALIBRATION => 1 << 31, // No separate reference clock.
             ICSR => {
@@ -119,6 +128,7 @@ impl SysTick {
             RELOAD => self.reload = value & 0xff_ffff,
             CURRENT => {
                 self.current = 0;
+                self.current_initialized = true;
                 self.count_flag = false;
             }
             CALIBRATION => {}

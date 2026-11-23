@@ -9,6 +9,7 @@ use std::{
 
 use crate::{
     clint::Clint,
+    dwt::Dwt,
     murax::{Gpio, Timer},
     nrf52840::Peripheral as NrfPeripheral,
     ns16550::Ns16550,
@@ -205,6 +206,7 @@ pub struct Bus {
     stm32_rtc: Option<Stm32Rtc>,
     plic: Option<Plic>,
     pub systick: Option<SysTick>,
+    pub dwt: Option<Dwt>,
     pub nvic: Option<Nvic>,
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
@@ -780,6 +782,10 @@ impl Bus {
             .nvic
             .as_ref()
             .is_some_and(|nvic| nvic.overlaps(start, end))
+            || self.dwt.as_ref().is_some_and(|dwt| {
+                let base = u64::from(dwt.base);
+                start < base + u64::from(Dwt::SIZE) && base < end
+            })
             || (self.systick.is_some() && SysTick::overlaps(start, end))
             || self
                 .uart_tx
@@ -1033,6 +1039,9 @@ impl Bus {
         if let Some(systick) = self.systick.as_mut() {
             systick.reset();
         }
+        if let Some(dwt) = self.dwt.as_mut() {
+            dwt.reset();
+        }
         if let Some(uart) = self.litex_uart.as_mut() {
             *uart = LiteXUart::new(uart.base);
         }
@@ -1211,6 +1220,23 @@ impl Bus {
             ));
         }
         self.exti = Some(Exti::new(base, outputs, first_direct));
+        Ok(())
+    }
+
+    pub fn map_dwt(&mut self, base: u32, frequency: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(Dwt::SIZE);
+        if self.dwt.is_some()
+            || base & 3 != 0
+            || frequency == 0
+            || end > 1 << 32
+            || self.overlaps(start, end)
+        {
+            return Err(format!(
+                "invalid or overlapping DWT mapping at {base:#010x}"
+            ));
+        }
+        self.dwt = Some(Dwt::new(base, frequency));
         Ok(())
     }
 
@@ -2108,6 +2134,11 @@ impl Bus {
             return Ok(uart.read(offset));
         }
         if N == 4
+            && let Some(value) = self.dwt.as_ref().and_then(|dwt| dwt.read(address))
+        {
+            return Ok(value);
+        }
+        if N == 4
             && let Some(timer) = self.systick.as_mut()
             && let Some(value) = timer.read(address)
         {
@@ -2369,6 +2400,14 @@ impl Bus {
             && let Some(offset) = device.offset(address, width)
         {
             return device.write(offset, value, uart).map_err(BusError::Output);
+        }
+        if width == 4
+            && self
+                .dwt
+                .as_mut()
+                .is_some_and(|dwt| dwt.write(address, value))
+        {
+            return Ok(());
         }
         if width == 4
             && let Some(timer) = self.systick.as_mut()

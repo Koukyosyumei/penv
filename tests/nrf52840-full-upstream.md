@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 138 | 6 | 46 |
+| 監査した共有・混成 Robot | 190 | 138 | 8 | 44 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **169** | **6** | **46** |
+| 合計 | **221** | **169** | **8** | **44** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -501,4 +501,20 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 `cargo test` で既存の外部コネクタ削除と送信元機器登録解除を含む3ケースを同じバイナリで実行する。対象ケースだけを再現するには `cargo test upstream_gpio_source_machine_disposal_preserves_external_destination` を使う。実 ELF の Button と Shell は「GPIO の接続と入力番号検証」節のコマンドで回帰確認した。機械間接続は Rust の機械・バス経路で検証した。既存の RESC コネクタコマンドは同じ機械内の配線を扱う。
 
-ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gpio-machine.TBmdCZhd` の `cargo-test`、`button`、`shell` に保存した。GPIO NUnit の14件はすべて台帳上で合格。共有・混成 Robot に部分移植6件と未達46件が残る。
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gpio-machine.TBmdCZhd` の `cargo-test`、`button`、`shell` に保存した。GPIO NUnit の14件はすべて台帳上で合格。残る共有・混成 Robot の件数は集計表に記載した。
+
+### Cortex-M の SysTick・DWT クロック制御
+
+`arm-cortex-m-signals.robot:139-205` と `:206-264` は固定の ATSAMD51 Cortex-M4F と ItsyBitsy Shell ELF を使う。固定 ELF の SHA-1 `96ba3690738a878b9f1d47e5ac677592a42c9040` を照合し、次のコマンドで確認したところ、REPL の `UART.SAMD5_UART` で停止した。固定構成での等価検証は未達。
+
+```sh
+target/debug/penv run --platform ../renode/platforms/cpus/atsamd51g19a.repl --platform-root ../renode --max-steps 1 "$ATSAMD51_ELF"
+cargo test
+tests/nrf52840-cortex-clocks.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/clocks"
+tests/nrf52840-systick-hooks-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/systick"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+Cortex-M4 への部分移植では、1 ms ごとに SysTick と DWT の停止・再開・独立動作を照合した。リセットはマシン全体を対象とし、クロックゲートの保持、カウンターのリセット値、CPU 停止中の命令実行数ゼロを確認した。上流の個別リセットと1秒の Shell 実行区間は部分移植に含まない。テスト用 ELF は、同じゲスト命令列から DWT の MMIO 読み値が `Clocked True` で進み、`False` で停止することを検証する。DWT の実装範囲は `CYCCNTENA` と `CYCCNT`。
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/cortex-clocks.WAC6p7zO` の `atsamd51`、`cargo-test`、`elf`、`systick`、`shell` に保存した。

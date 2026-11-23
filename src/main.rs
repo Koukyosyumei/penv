@@ -2,6 +2,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod dwt;
 mod image;
 mod machine;
 mod monitor;
@@ -733,6 +734,24 @@ fn run() -> Result<ExitCode, String> {
                 monitor::CpuControl::Pause(true) => machine.pause_cpu(),
                 monitor::CpuControl::Pause(false) => machine.resume_cpu(),
                 monitor::CpuControl::Halt(halted) => machine.set_cpu_halted(halted),
+                monitor::CpuControl::Clock(target, enabled) => match target.as_str() {
+                    "cpu" | "cpu0" if machine.primary.name.as_deref() == Some(&target) => {
+                        machine.set_cpu_clocked(enabled)
+                    }
+                    "nvic" => machine
+                        .bus
+                        .systick
+                        .as_mut()
+                        .ok_or("Clocked requires SysTick")?
+                        .set_clocked(enabled),
+                    "dwt" => machine
+                        .bus
+                        .dwt
+                        .as_mut()
+                        .ok_or("Clocked requires DWT")?
+                        .set_clocked(enabled),
+                    _ => return Err(format!("unknown Clocked target {target:?}")),
+                },
                 monitor::CpuControl::Reset(kind) => machine.reset_cpu_control(kind, &mut output)?,
                 monitor::CpuControl::ResetLog(message) => machine.reset_log = Some(message),
             }

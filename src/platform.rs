@@ -377,6 +377,19 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 keys(entry, &[])?;
                 semihosting_uarts.push(entry);
             }
+            "Miscellaneous.DWT" if cortex_m4 => {
+                let (_, frequency) = keys(entry, &["frequency"])?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| entry.error("missing DWT frequency"))?;
+                machine
+                    .bus
+                    .map_dwt(
+                        entry.address()?,
+                        number(frequency).map_err(|e| entry.error(&e))?,
+                    )
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Mocks.TrivialPeripheral" if cortex_m4 => {
                 keys(entry, &[])?;
                 machine
