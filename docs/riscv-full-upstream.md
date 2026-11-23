@@ -1749,3 +1749,24 @@ python3 scripts/validate-litex-arty-uart.py "$bin" ../renode "$assets" "$repro/a
 ```
 
 担当ブランチの `cargo test --locked` は88件が通過しました。同ブランチのバイナリでは `--litex-temperature-after-uart` が未対応で、I²C は台帳に統合側の合格を明記した上で担当側の部分移植に据え置きました。担当側の等価合格は累計174件です。固定入力のハッシュ、ケース別照合ログ、UART と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-45aa3a9-pwAUTz/` に保存しました。
+
+### RV32 CLINT の再設定と割り込みの境界
+
+`timer-reconfiguration.robot` の3件を同じ Rust テストバッチに移植しました。上流と同じ命令語12個、開始 PC、比較レジスターのアドレス、比較値と1 MHzの CLINT を使います。実行は penv の既定 RV32 設定を使い、固定命令列の後ろに診断用の自己ループを置きました。
+
+| 上流ケース | 比較値 | 上流の実行窓に対応する命令数 | penv で MTIP が立つステップ |
+| --- | ---: | ---: | ---: |
+| Should Tick Between Chained Blocks | 5 | 12 | 500 |
+| Should Tick In The Same Block | 6 | 8 | 600 |
+| Should Tick At Exact Time | 6 | 5、続いて1 | 600 |
+
+各窓でゲストの2ワード書き込みと PC を確認しました。すべての窓で `mtime=0`、MTIP は0でした。penv の100 MHzステップ基準では上表の境界の直前まで MTIP は0で、境界で1になりました。
+
+```bash
+cargo test --locked
+cargo test --locked upstream_timer_reconfiguration
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-4e73e5a-FohB4u"
+target/release/penv run --script "$evidence/timer.resc"
+```
+
+Rust テストは91件（追加3件を含む）が通過しました。既存の代表 RESC は `cpu PerformanceInMips 1` を拒否して終了1でした。上流の仮想時間指定とブロック境界・IRQ のログ順は共有担当への既存依頼 `riscv-clint-blocks-4e73e5a.md` の残件です。台帳の3件は部分移植で、等価合格は累計174件です。ケース別テスト結果と代表 RESC のログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-b01404e-ceCbx7/` に保存しました。

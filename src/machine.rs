@@ -2415,6 +2415,94 @@ mem: Memory.MappedMemory @ sysbus 0x1000 {{ size: 0x40000 }}
         );
     }
 
+    // Fixed words, registers and CLINT frequency from timer-reconfiguration.robot.
+    // The final self-loop is diagnostic padding for penv's fixed 100 MHz rate.
+    fn upstream_timer_reconfiguration(compare: u32, windows: &[u64]) {
+        const START: u32 = 0x1000;
+        const CLINT: u32 = 0x0200_0000;
+        const NOP: u32 = 0x0000_0013;
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(START, 0x1000000).unwrap();
+        machine
+            .bus
+            .map_clint_with_frequency(CLINT, 1, 1_000_000)
+            .unwrap();
+        machine.set_entry(START);
+        machine.primary.registers[1] = CLINT + 0x4000;
+        machine.primary.registers[2] = compare;
+        machine.primary.registers[3] = CLINT + 0x4004;
+        let program = [
+            NOP,
+            NOP,
+            0x0020_a023,
+            0x0001_a023,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            0x0000_006f,
+        ];
+        machine
+            .bus
+            .memory(START, program.len() * 4)
+            .unwrap()
+            .copy_from_slice(program.map(u32::to_le_bytes).as_flattened());
+
+        let mut output = std::io::sink();
+        let mut steps = 0;
+        for &window in windows {
+            assert_eq!(
+                machine.run(window, &mut output).unwrap(),
+                (Stop::Limit, window)
+            );
+            steps += window;
+            assert_eq!(machine.primary.pc, START + 4 * steps as u32);
+            assert_eq!(machine.bus.read::<4>(CLINT + 0x4000).unwrap(), compare);
+            assert_eq!(machine.bus.read::<4>(CLINT + 0x4004).unwrap(), 0);
+            assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), 0);
+            assert_eq!(
+                machine.primary.csr.access(0x3440_2073, 0).unwrap() & crate::clint::TIMER,
+                0
+            );
+        }
+
+        let steps_until_irq = u64::from(compare) * 100 - steps;
+        assert_eq!(
+            machine.run(steps_until_irq - 1, &mut output).unwrap(),
+            (Stop::Limit, steps_until_irq - 1)
+        );
+        assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), compare - 1);
+        assert_eq!(
+            machine.primary.csr.access(0x3440_2073, 0).unwrap() & crate::clint::TIMER,
+            0
+        );
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), compare);
+        assert_eq!(
+            machine.primary.csr.access(0x3440_2073, 0).unwrap() & crate::clint::TIMER,
+            crate::clint::TIMER
+        );
+    }
+
+    #[test]
+    fn upstream_timer_reconfiguration_between_chained_blocks() {
+        upstream_timer_reconfiguration(5, &[12]);
+    }
+
+    #[test]
+    fn upstream_timer_reconfiguration_in_the_same_block() {
+        upstream_timer_reconfiguration(6, &[8]);
+    }
+
+    #[test]
+    fn upstream_timer_reconfiguration_at_exact_time() {
+        upstream_timer_reconfiguration(6, &[5, 1]);
+    }
+
     #[test]
     fn virt_ns16550_receive_interrupt_routes_through_plic() {
         // Device addresses and source ID from Renode platforms/cpus/riscv_virt.repl.

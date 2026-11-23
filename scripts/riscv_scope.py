@@ -101,7 +101,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 return "target", "ported", fixture + "; fixed guest opcodes, readbacks and warning sequence checked"
             return "target", "ported", fixture + "; ordered monitor writes, readbacks and warnings checked"
     if filename == "timer-reconfiguration.robot" and re.search(r"(?m)^\s+Create Machine\s*$", source):
-        return "target", "pending", "fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM"
+        return "target", "partial", "fixed RV32 words and 1 MHz CLINT compare/IRQ verified at penv step rate; upstream PerformanceInMips and block/IRQ log assertions blocked by shared monitor"
     if re.search(r"(?m)^\s+Execute Script\s+tests/peripherals/CLIC/CLIC-test-setup\.resc\s*$", source):
         return "outside", "outside", "CLIC-test-setup.resc -> CLIC-test-platform.repl: CoreLocalInterruptController and PrivUnratified; virt uses PLIC/CLINT"
     if filename == "AndesNCEPLIC100.robot" and "plic ReadDoubleWord 0x1080" in source:

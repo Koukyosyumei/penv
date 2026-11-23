@@ -3110,9 +3110,9 @@ Renode	tests/unit-tests/tb_overwrite.robot	72	Shoud Invalidate Other Page When O
 Renode	tests/unit-tests/tb_overwrite.robot	86	Shoud Invalidate The Same Page When Overwritten Using Sysbus		review-variants	pending	-
 Renode	tests/unit-tests/tb_overwrite.robot	100	Should Invalidate Other Page When Overwritten By Guest		review-variants	pending	-
 Renode	tests/unit-tests/tb_overwrite.robot	114	Should Invalidate The Same Page When Overwritten By Guest		review-variants	pending	-
-Renode	tests/unit-tests/timer-reconfiguration.robot	40	Should Tick Between Chained Blocks		target	pending	fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM
-Renode	tests/unit-tests/timer-reconfiguration.robot	51	Should Tick In The Same Block		target	pending	fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM
-Renode	tests/unit-tests/timer-reconfiguration.robot	64	Should Tick At Exact Time		target	pending	fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM
+Renode	tests/unit-tests/timer-reconfiguration.robot	40	Should Tick Between Chained Blocks		target	partial	fixed RV32 words and 1 MHz CLINT compare/IRQ verified at penv step rate; upstream PerformanceInMips and block/IRQ log assertions blocked by shared monitor
+Renode	tests/unit-tests/timer-reconfiguration.robot	51	Should Tick In The Same Block		target	partial	fixed RV32 words and 1 MHz CLINT compare/IRQ verified at penv step rate; upstream PerformanceInMips and block/IRQ log assertions blocked by shared monitor
+Renode	tests/unit-tests/timer-reconfiguration.robot	64	Should Tick At Exact Time		target	partial	fixed RV32 words and 1 MHz CLINT compare/IRQ verified at penv step rate; upstream PerformanceInMips and block/IRQ log assertions blocked by shared monitor
 Renode	tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot	18	Should Run All Instructions		review-shared	pending	-
 Renode	tests/unit-tests/uart-tester.robot	22	Should Fail On Non-Existing UART		review-shared	pending	-
 Renode	tests/unit-tests/uart-tester.robot	28	Should Not Require Tester Id When Single Tester		review-shared	pending	-
