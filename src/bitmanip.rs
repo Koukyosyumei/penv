@@ -5,6 +5,8 @@ pub struct BitManip {
     pub zbc: bool,
     pub zbkc: bool,
     pub zknh: bool,
+    pub zkne: bool,
+    pub zknd: bool,
     pub zksh: bool,
     pub zksed: bool,
     pub zbs: bool,
@@ -86,6 +88,12 @@ impl BitManip {
     pub fn register(self, funct3: u32, funct7: u32, a: u32, b: u32, rs2: u32) -> Option<u32> {
         Some(match (funct3, funct7) {
             (0, 0x28..=0x2b | 0x2e | 0x2f) if self.zknh => sha512_half(funct7, a, b),
+            (0, _) if self.zkne && matches!(funct7 & 0x1f, 0x11 | 0x13) => {
+                a ^ aes32_transform(funct7, b, false)
+            }
+            (0, _) if self.zknd && matches!(funct7 & 0x1f, 0x15 | 0x17) => {
+                a ^ aes32_transform(funct7, b, true)
+            }
             (0, _) if self.zksed && matches!(funct7 & 0x1f, 0x18 | 0x1a) => {
                 a ^ sm4_transform(funct7, b)
             }
@@ -244,6 +252,71 @@ fn sm4_transform(funct7: u32, source: u32) -> u32 {
         x ^ (x << 8) ^ (x << 2) ^ (x << 18) ^ ((x & 0x3f) << 26) ^ ((x & 0xc0) << 10)
     } else {
         x ^ ((x & 0x07) << 29) ^ ((x & 0xfe) << 7) ^ ((x & 0x01) << 23) ^ ((x & 0xf8) << 13)
+    };
+    transformed.rotate_left(shift)
+}
+
+const AES_SBOXES: ([u8; 256], [u8; 256]) = aes_sboxes();
+
+const fn aes_sboxes() -> ([u8; 256], [u8; 256]) {
+    let mut forward = [0; 256];
+    let mut inverse = [0; 256];
+    let mut index = 0;
+    while index < 256 {
+        // Compute the field inverse x^254, then apply the AES affine transform.
+        let mut power = index as u8;
+        let mut reciprocal = 1;
+        let mut exponent = 254;
+        while exponent != 0 {
+            if exponent & 1 != 0 {
+                reciprocal = aes_multiply(reciprocal, power);
+            }
+            power = aes_multiply(power, power);
+            exponent >>= 1;
+        }
+        let substituted = reciprocal
+            ^ reciprocal.rotate_left(1)
+            ^ reciprocal.rotate_left(2)
+            ^ reciprocal.rotate_left(3)
+            ^ reciprocal.rotate_left(4)
+            ^ 0x63;
+        forward[index] = substituted;
+        inverse[substituted as usize] = index as u8;
+        index += 1;
+    }
+    (forward, inverse)
+}
+
+const fn aes_multiply(mut value: u8, mut factor: u8) -> u8 {
+    let mut product = 0;
+    let mut bit = 0;
+    while bit < 8 {
+        product ^= value & 0u8.wrapping_sub(factor & 1);
+        value = (value << 1) ^ (0x1b & 0u8.wrapping_sub(value >> 7));
+        factor >>= 1;
+        bit += 1;
+    }
+    product
+}
+
+fn aes32_transform(funct7: u32, source: u32, decrypt: bool) -> u32 {
+    let shift = (funct7 >> 5) * 8;
+    let byte = ((source >> shift) & 0xff) as usize;
+    let substituted = if decrypt {
+        AES_SBOXES.1[byte]
+    } else {
+        AES_SBOXES.0[byte]
+    };
+    let transformed = if funct7 & 0x02 == 0 {
+        u32::from(substituted)
+    } else {
+        // This MixColumn contribution occupies the four output bytes in little-endian order.
+        let coefficients = if decrypt {
+            [14, 9, 13, 11]
+        } else {
+            [2, 1, 1, 3]
+        };
+        u32::from_le_bytes(coefficients.map(|factor| aes_multiply(substituted, factor)))
     };
     transformed.rotate_left(shift)
 }

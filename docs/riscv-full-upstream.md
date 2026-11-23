@@ -1011,3 +1011,27 @@ Zksed の固定 ACT ELF は `rv32ic_zksed` と、固定最大 ISA の V を Zkse
 固定 Robot の ISA 指定には Zksed がなく、V の未対応で 2 件とも CPU 作成時に停止しました。台帳に各構成の結果を反映し、上流等価合格は累計 155 件です。
 
 構成別の終了状態、ケースごとのログと `results.jsonl` は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zkne・Zknd の AES 命令
+
+CPU 型の `Zkne` と `Zknd` に対応し、RV32 の `aes32esi`、`aes32esmi`、`aes32dsi`、`aes32dsmi` を実装しました。命令のバイト指定に従って S-box を適用し、中間ラウンド命令では MixColumn の 1 バイト分の寄与を求めます。変更前は代表の `Zkne-aes32esi-00.elf` が CPU 作成時に停止しました。[RISC-V スカラー暗号拡張仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/scalar-crypto.html#aes32dsi)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-63cb761-AgofE0"
+cargo test --locked
+cargo build --locked --release
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zkne_zknd_zksed_zksh_zknh.repl" --artifacts "$repro/combined" \
+  "$elfs"/Zkn{e,d}/*.elf "$elfs"/Zksed/*.elf "$elfs"/Zksh/*.elf "$elfs"/Zknh/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zkn{e,d}/*.elf
+```
+
+同じ release バイナリで、Zkne と Zknd の単独構成ではそれぞれ 2 件、固定最大 ISA の V を Zkne・Zknd に置き換えた診断構成（`max-no-v.repl`）では 4 件が完了コード 0 に到達しました。既存の SM3・SM4・SHA-2 を含む併用構成は 18 件、Rust テストは 87 件が通過し、RV32 virt 実 ELF の UART・CLINT・PLIC の出力は期待値と一致しました。
+
+固定 Robot の ISA 指定には Zkne と Zknd がなく、V の未対応で全 4 件が CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。
+
+構成別の終了状態、ケースごとのログ、`results.jsonl` は上記の証拠ディレクトリに保存しました。
