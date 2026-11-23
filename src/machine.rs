@@ -10,6 +10,8 @@ use crate::{
     thumb::Thumb,
 };
 
+mod floating;
+
 pub const MAX_HARTS: usize = 8;
 
 pub struct Machine {
@@ -39,6 +41,7 @@ pub struct Hart {
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    floating: Option<Box<[u64; 32]>>,
     unaligned_accesses: bool,
     zicond: bool,
     zacas: bool,
@@ -166,6 +169,7 @@ impl Machine {
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                floating: None,
                 unaligned_accesses: false,
                 zicond: false,
                 zacas: false,
@@ -466,6 +470,12 @@ impl Hart {
         self.csr.m_extension = multiply;
         self.csr.a_extension = atomic;
         self.csr.c_extension = compressed;
+    }
+
+    pub fn enable_floating(&mut self, double: bool) {
+        self.csr.f_extension = true;
+        self.csr.d_extension = double;
+        self.floating = Some(Box::new([0; 32]));
     }
 
     pub fn set_bitmanip(&mut self, extensions: BitManip) {
@@ -771,6 +781,15 @@ impl Hart {
         let mut next = fallthrough;
 
         let result = match insn & 0x7f {
+            0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => self
+                .floating_instruction(insn, bus, output)
+                .map_err(|fault| {
+                    if matches!(fault, Fault::Illegal(_)) {
+                        illegal()
+                    } else {
+                        fault
+                    }
+                })?,
             0x37 => Some(insn & 0xffff_f000),
             0x17 => Some(pc.wrapping_add(insn & 0xffff_f000)),
             0x6f => {

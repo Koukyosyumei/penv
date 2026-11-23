@@ -22,6 +22,8 @@ const SUM: u32 = 1 << 18;
 const MXR: u32 = 1 << 19;
 const TVM: u32 = 1 << 20;
 const TSR: u32 = 1 << 22;
+const FS: u32 = 3 << 13;
+const SD: u32 = 1 << 31;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +97,9 @@ pub struct Csr {
     pub a_extension: bool,
     pub c_extension: bool,
     status: u32,
+    pub f_extension: bool,
+    pub d_extension: bool,
+    pub fcsr: u8,
     counters: Counters,
     user_supported: bool,
     pmp: Option<Box<Pmp>>,
@@ -127,6 +132,9 @@ impl Default for Csr {
             a_extension: false,
             c_extension: false,
             status: MPP,
+            f_extension: false,
+            d_extension: false,
+            fcsr: 0,
             counters: Counters::default(),
             user_supported: false,
             pmp: None,
@@ -258,6 +266,22 @@ impl Csr {
         8 + self.privilege as u32
     }
 
+    pub fn floating_enabled(&self) -> bool {
+        self.f_extension && self.status & FS != 0
+    }
+
+    pub fn floating_dirty(&mut self) {
+        self.status |= FS;
+    }
+
+    fn floating_status_mask(&self) -> u32 {
+        if self.f_extension { FS } else { 0 }
+    }
+
+    fn status_summary(&self) -> u32 {
+        if self.status & FS == FS { SD } else { 0 }
+    }
+
     pub fn access(&mut self, instruction: u32, register_value: u32) -> Result<u32, String> {
         let address = instruction >> 20;
         let operation = (instruction >> 12) & 7;
@@ -299,7 +323,12 @@ impl Csr {
 
     fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
-            0x100 if self.supervisor.is_some() => self.status & SSTATUS,
+            0x001 if self.floating_enabled() => u32::from(self.fcsr & 31),
+            0x002 if self.floating_enabled() => u32::from(self.fcsr >> 5),
+            0x003 if self.floating_enabled() => u32::from(self.fcsr),
+            0x100 if self.supervisor.is_some() => {
+                self.status & (SSTATUS | FS) | self.status_summary()
+            }
             0x104 => self.interrupt_enable & self.supervisor.as_ref()?.interrupt_delegation,
             0x144 => self.pending_interrupts() & self.supervisor.as_ref()?.interrupt_delegation,
             0x303 => self.supervisor.as_ref()?.interrupt_delegation,
@@ -311,13 +340,15 @@ impl Csr {
             0x143 => self.supervisor.as_ref()?.value,
             0x180 => self.supervisor.as_ref()?.satp,
             0x302 => self.supervisor.as_ref()?.delegation,
-            0x300 => self.status,
+            0x300 => self.status | self.status_summary(),
             0x301 => {
                 (1 << 30)
                     | (u32::from(self.m_extension) << 12)
                     | (1 << 8)
                     | u32::from(self.a_extension)
                     | (u32::from(self.c_extension) << 2)
+                    | (u32::from(self.f_extension) << 5)
+                    | (u32::from(self.d_extension) << 3)
                     | (u32::from(self.user_supported) << 20)
                     | (u32::from(self.supervisor.is_some()) << 18)
             }
@@ -366,8 +397,18 @@ impl Csr {
 
     fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
+            0x001..=0x003 if self.floating_enabled() => {
+                let value = value as u8;
+                self.fcsr = match address {
+                    1 => (self.fcsr & !31) | (value & 31),
+                    2 => (self.fcsr & 31) | (value << 5),
+                    _ => value,
+                };
+                self.floating_dirty();
+            }
             0x100 if self.supervisor.is_some() => {
-                self.status = (self.status & !SSTATUS) | (value & SSTATUS);
+                let mask = SSTATUS | self.floating_status_mask();
+                self.status = (self.status & !mask) | (value & mask);
             }
             0x104 if let Some(supervisor) = self.supervisor.as_ref() => {
                 let mask = supervisor.interrupt_delegation;
@@ -413,8 +454,11 @@ impl Csr {
                 } else {
                     0
                 };
-                self.status =
-                    (value & (MIE | MPIE)) | ((privilege as u32) << 11) | mprv | supervisor;
+                self.status = (value & (MIE | MPIE))
+                    | ((privilege as u32) << 11)
+                    | mprv
+                    | supervisor
+                    | (value & self.floating_status_mask());
             }
             0x304 => {
                 let supervisor_mask = if self.supervisor.is_some() {
@@ -647,6 +691,27 @@ fn vector_target(vector: u32, cause: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floating_csrs_follow_fs_and_share_rounding_and_flags() {
+        let mut csr = Csr::default();
+        csr.enable_supervisor_mode();
+        assert!(csr.write(0x300, MPP | FS));
+        assert_eq!(csr.read(0x300).unwrap() & (FS | SD), 0);
+        assert!(!csr.write(0x003, 0xff));
+
+        csr.f_extension = true;
+        assert_eq!(csr.read(0x301).unwrap() & ((1 << 5) | (1 << 3)), 1 << 5);
+        assert!(csr.write(0x100, 1 << 13));
+        assert_eq!(csr.read(0x100).unwrap() & SD, 0);
+        assert!(csr.write(0x002, 4));
+        assert!(csr.write(0x001, 0x25));
+        assert_eq!(csr.read(0x003), Some(0x85));
+        assert_eq!(csr.read(0x100).unwrap() & (FS | SD), FS | SD);
+        assert!(csr.write(0x100, 0));
+        assert_eq!(csr.read(0x003), None);
+        assert_eq!(csr.read(0x300).unwrap() & (FS | SD), 0);
+    }
 
     #[test]
     fn legacy_vex_machine_sbi_can_forward_a_timer_interrupt_through_sip() {

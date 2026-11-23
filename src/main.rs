@@ -3,6 +3,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod float;
 mod image;
 mod litex;
 mod litex_eth;

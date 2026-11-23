@@ -167,3 +167,47 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 上段の最大構成の手順でも ACT 510 件、ISA 290 件を再実行しました。上流構成の通過は引き続き各 0 件です。両方とも F・D・V・Zfh・Smepmp が未対応で CPU 作成に失敗し、台帳では `blocked-cpu` を維持しています。固定 ACT の W の結果は縮小構成の診断です。
+
+## RV32 F/D の初期化と演算
+
+`full-rv32-fd-bootstrap` では RV64 の `rv64_float.rs`（`d81737d607dd11ddc593ac22248588c0dc114d12`）から整数仮数による丸め・演算・例外フラグを移植しました。RV64 側の命令デコーダ（`0712104489a2342fc63c29eda1a0b41710a7518c`）は命令の対応関係を参照し、RV32 の整数レジスター幅、Sv32 メモリアクセス、圧縮ロード・ストア、`mstatus/sstatus.FS` と `fcsr/frm/fflags` は RV32 側で接続しました。F は単精度を有効にし、D は F と倍精度を有効にします。半精度や RV64 の整数変換・倍精度レジスター転送エンコーディングは無効です。
+
+| 構成 | 結果 |
+| --- | --- |
+| 上流最大 ISA、RAM 1 MiB | ACT 0/510、ISA 0/290。CPU 作成時に V・Zfh・Smepmp が未対応 |
+| `rv32imafc`、1 MiB | ACT F 26/38、Zcf 4/4 |
+| `rv32gc_zba_zbb_zbc_zbs_zacas`、1 MiB | ACT D 52/64、Zcd 4/4 |
+| 同じ F/D 縮小 ISA、2 MiB | ACT F 38/38、D 64/64。公開 ISA F/D 42/42 |
+| 同じ D 縮小 ISA、2 MiB で ACT 全件を診断 | 254/510 |
+
+F のみの構成で D の `D-fadd.d-00.elf` を実行すると初期化時の `FLD` が違法命令になります。1 MiB で失敗した F と D 各 12 件は、ELF のロードセグメント終端が `0x80100000` を超えます。2 MiB はそれらの演算・フラグを確認するための診断です。最大 ISA 構成の合格判定は `blocked-cpu` のまま、F/D の構成別結果を台帳に記録しています。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+sed 's/rv32gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp/rv32imafc/' \
+  "$work/act-upstream.repl" > "$work/f.repl"
+sed 's/rv32gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp/rv32gc_zba_zbb_zbc_zbs_zacas/' \
+  "$work/act-upstream.repl" > "$work/fd.repl"
+for profile in f fd; do
+  sed 's/size: 0x100000/size: 0x200000/' "$work/$profile.repl" > "$work/$profile-2m.repl"
+done
+for group in F D Zcf Zcd; do
+  profile=fd
+  case $group in F|Zcf) profile=f ;; esac
+  python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+    --platform "$work/$profile.repl" --artifacts "$work/$group" \
+    "$work"/act/work/spike-rv32-max/elfs/rv32i/"$group"/*.elf || test "$?" -eq 1
+  case $group in F|D)
+    python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+      --max-steps 10000000 --platform "$work/$profile-2m.repl" --artifacts "$work/$group-2m" \
+      "$work"/act/work/spike-rv32-max/elfs/rv32i/"$group"/*.elf
+    ;;
+  esac
+done
+mapfile -t fp_isa < <(find "$work/isa" -maxdepth 1 -type f -name 'rv32u[fd]-*' ! -name '*.dump' | sort)
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform "$work/fd-2m.repl" --artifacts "$work/isa-fd" "${fp_isa[@]}"
+```
+
+V・Zfh・Smepmp の実装、上流構成での再検証、上流の RAM 容量と生成 ELF の整合確認が残っています。

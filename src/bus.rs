@@ -1284,12 +1284,18 @@ impl Bus {
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
+        let mut bytes = [0; 4];
+        bytes[..N].copy_from_slice(&self.read_ram_bytes::<N>(address)?);
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    pub fn read_ram_bytes<const N: usize>(&self, address: u32) -> Result<[u8; N], BusError> {
         if address as usize & (N - 1) != 0 {
             return Err(BusError::Misaligned(address, N));
         }
         for region in &self.regions {
             if let Some(offset) = region.offset(address, N) {
-                let mut bytes = [0; 4];
+                let mut bytes = [0; N];
                 if region.flash_pages.is_some() {
                     for (index, byte) in bytes[..N].iter_mut().enumerate() {
                         *byte = region.flash_read(offset + index);
@@ -1297,7 +1303,7 @@ impl Bus {
                 } else {
                     bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
                 }
-                return Ok(u32::from_le_bytes(bytes));
+                return Ok(bytes);
             }
         }
         Err(BusError::Unmapped(address, N))
