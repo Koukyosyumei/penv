@@ -376,9 +376,13 @@ def main():
                         if values:
                             for value in sorted(values):
                                 parameter = Path(value).relative_to(directory) if arch else value
-                                emit((label, relative, no, name, parameter, "pending",
-                                                 ("Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv"
-                                                  if arch else "Upstream executable parameter; equivalence unverified")))
+                                if arch and re.fullmatch(r"spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-sc\.[dw]-00\.elf", str(parameter)):
+                                    emit((label, relative, no, name, parameter, "pass",
+                                          "Fixed Robot and Penv signature and watcher verified; rv64-act-unmapped.tsv"))
+                                else:
+                                    emit((label, relative, no, name, parameter, "pending",
+                                          ("Fixed ACT result; see rv64-act-unmapped.tsv"
+                                           if arch else "Upstream executable parameter; equivalence unverified")))
                             continue
                     parameter_source = selector
                 elif (suite_template or any(line.lstrip().startswith("[Template]") for line in body)) and not any(

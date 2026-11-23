@@ -2218,248 +2218,248 @@ renode	tests/unit-tests/riscv-andestar-v5.robot	711	Should Execute VQMACCUS VX	C
 renode	tests/unit-tests/riscv-andestar-v5.robot	717	Should Execute VQMACCSU VV	Create Vector Machine           xandesvqmac | Check Quad MAC                  63  vv  8  0x80  0xff  0xa  0xffff808a | Check Quad MAC                  63  vv  16  0x8000  0xffff  0xa  0xffffffff8000800a | Check Quad MAC                  63  vv  8  0x2  0x3  0xfffffffe  0x4  masked	out	Requires 32-bit CPU configuration: CPU.RiscV32 (tests/unit-tests/riscv-andestar-v5.robot:5)
 renode	tests/unit-tests/riscv-andestar-v5.robot	723	Should Execute VQMACCSU VX	Create Vector Machine           xandesvqmac | Check Quad MAC                  63  vx  8  0x80  0xff  0xa  0xffff808a | Check Quad MAC                  63  vx  16  0x8000  0xffff  0xa  0xffffffff8000800a | Check Quad MAC                  63  vx  8  0x2  0x3  0xfffffffe  0x4  masked	out	Requires 32-bit CPU configuration: CPU.RiscV32 (tests/unit-tests/riscv-andestar-v5.robot:5)
 renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	[Tags]                          basic-tests | [Template]    Run Test Case | FOR  ${test}  IN  @{TESTS_ARCH_32} | ${test}   32 | END	out	Harness selects only RV32 executable parameters
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/build/priv/Sm/Sm-00.sig.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/priv/Sm/Sm-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fadd.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fadd.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fadd.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fclass.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fclass.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.l-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.lu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.wu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.l.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.l.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.lu.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.lu.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.l-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.lu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.wu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.w.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.w.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.wu.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.wu.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fdiv.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fdiv.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fdiv.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-feq.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-feq.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fld-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fle.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fle.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-flt.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-flt.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-flw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.d-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmax.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmax.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmin.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmin.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.d-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmul.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmul.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmul.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.d.x-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.w.x-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.x.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.x.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.d-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.d-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsd-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnj.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnj.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjn.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjn.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjx.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjx.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsqrt.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsqrt.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsub.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsub.d-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsub.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fadd.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fadd.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fclass.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.l.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.lu.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.l-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.lu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.wu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.w.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.wu.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fdiv.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fdiv.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-feq.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fle.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-flt.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-flw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmadd.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmadd.s-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmax.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmin.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmsub.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmsub.s-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmul.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmul.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmv.w.x-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmv.x.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmadd.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmadd.s-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmsub.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmsub.s-02.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsgnj.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsgnjn.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsgnjx.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsqrt.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsub.s-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsub.s-01.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-add-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-addi-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-addiw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-addw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-and-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-andi-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-auipc-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-beq-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bge-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bgeu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-blt-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bltu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bne-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-fence-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-jal-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-jalr-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lb-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lbu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-ld-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lh-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lhu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lui-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lwu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-nop-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-or-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-ori-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sb-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sd-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sh-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sll-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slli-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slliw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sllw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slt-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slti-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sltiu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sltu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sra-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srai-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sraiw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sraw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srl-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srli-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srliw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srlw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sub-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-subw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-xor-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-xori-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-div-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-divu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-divuw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-divw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mul-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulh-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulhsu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulhu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-rem-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-remu-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-remuw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-remw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoadd.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoadd.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoand.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoand.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomax.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomax.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomaxu.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomaxu.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomin.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomin.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amominu.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amominu.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoor.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoor.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoswap.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoswap.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoxor.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoxor.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-lr.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-lr.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-sc.d-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-sc.w-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.add-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addi-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addi16sp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addi4spn-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addiw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.and-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.andi-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.beqz-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.bnez-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.hint-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.j-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.jalr-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.jr-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.ld-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.ldsp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.li-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.lui-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.lw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.lwsp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.mv-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.nop-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.or-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sd-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sdsp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.slli-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.srai-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.srli-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sub-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.subw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sw-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.swsp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.xor-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fld-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fldsp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fsd-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fsdsp-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
-renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zifencei/Zifencei-fence.i-00.elf	pending	Fixed ACT result; see rv64-act-loader.tsv and rv64-act-prepare.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/build/priv/Sm/Sm-00.sig.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/priv/Sm/Sm-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fadd.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fadd.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fadd.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fclass.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fclass.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.l-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.lu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.d.wu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.l.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.l.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.lu.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.lu.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.l-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.lu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.s.wu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.w.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.w.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.wu.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fcvt.wu.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fdiv.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fdiv.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fdiv.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-feq.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-feq.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fld-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fle.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fle.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-flt.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-flt.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-flw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.d-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmax.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmax.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmin.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmin.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.d-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmul.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmul.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmul.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.d.x-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.w.x-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.x.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fmv.x.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.d-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.d-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fnmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsd-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnj.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnj.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjn.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjn.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjx.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsgnjx.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsqrt.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsqrt.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsub.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsub.d-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsub.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/D/D-fsw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fadd.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fadd.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fclass.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.l.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.lu.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.l-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.lu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.s.wu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.w.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fcvt.wu.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fdiv.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fdiv.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-feq.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fle.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-flt.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-flw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmadd.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmadd.s-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmax.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmin.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmsub.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmsub.s-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmul.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmul.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmv.w.x-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fmv.x.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmadd.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmadd.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmadd.s-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmsub.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmsub.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fnmsub.s-02.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsgnj.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsgnjn.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsgnjx.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsqrt.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsub.s-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsub.s-01.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/F/F-fsw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-add-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-addi-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-addiw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-addw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-and-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-andi-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-auipc-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-beq-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bge-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bgeu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-blt-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bltu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-bne-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-fence-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-jal-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-jalr-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lb-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lbu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-ld-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lh-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lhu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lui-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-lwu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-nop-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-or-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-ori-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sb-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sd-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sh-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sll-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slli-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slliw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sllw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slt-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-slti-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sltiu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sltu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sra-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srai-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sraiw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sraw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srl-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srli-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srliw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-srlw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sub-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-subw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-sw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-xor-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/I/I-xori-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-div-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-divu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-divuw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-divw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mul-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulh-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulhsu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulhu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-mulw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-rem-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-remu-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-remuw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/M/M-remw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoadd.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoadd.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoand.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoand.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomax.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomax.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomaxu.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomaxu.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomin.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amomin.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amominu.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amominu.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoor.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoor.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoswap.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoswap.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoxor.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zaamo/Zaamo-amoxor.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-lr.d-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-lr.w-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-sc.d-00.elf	pass	Fixed Robot and Penv signature and watcher verified; rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zalrsc/Zalrsc-sc.w-00.elf	pass	Fixed Robot and Penv signature and watcher verified; rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.add-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addi-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addi16sp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addi4spn-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addiw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.addw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.and-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.andi-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.beqz-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.bnez-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.hint-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.j-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.jalr-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.jr-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.ld-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.ldsp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.li-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.lui-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.lw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.lwsp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.mv-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.nop-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.or-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sd-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sdsp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.slli-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.srai-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.srli-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sub-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.subw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.sw-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.swsp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zca/Zca-c.xor-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fld-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fldsp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fsd-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zcd/Zcd-c.fsdsp-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
+renode	tests/unit-tests/riscv-arch-tests.robot	54	Should Run Arch Tests 64	spike-rv64-max/elfs/rv64i/Zifencei/Zifencei-fence.i-00.elf	pending	Fixed ACT result; see rv64-act-unmapped.tsv
 renode	tests/unit-tests/riscv-bkb.robot	42	Should Execute Pack Instruction On RV32	"Create 32 Bit Machine | Execute Command                 cpu SetRegister ""a0"" 0xffffbeef | Execute Command                 cpu SetRegister ""a1"" 0xffffdead | Execute Instruction             pack a2, a0, a1 | Register Should Be Equal        a2      0xdeadbeef"	out	Explicit Create 32 Bit Machine fixture
 renode	tests/unit-tests/riscv-bkb.robot	50	Should Execute Pack Instruction On RV64	"Create 64 Bit Machine | Execute Command                 cpu SetRegister ""a0"" 0xffffffffbad0cafe | Execute Command                 cpu SetRegister ""a1"" 0xffffffffdeadbeef | Execute Instruction             pack a2, a0, a1 | Register Should Be Equal        a2      0xdeadbeefbad0cafe"	pass	zbkb_robot_rv64_pack_and_brev8
 renode	tests/unit-tests/riscv-bkb.robot	58	Should Execute Packh Instruction On RV32	Create 32 Bit Machine | Test Packh Instruction	out	Explicit Create 32 Bit Machine fixture

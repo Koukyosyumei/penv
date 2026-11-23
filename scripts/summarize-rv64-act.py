@@ -22,6 +22,8 @@ def reason(result, log, parameter):
     if "instruction limit reached" in log:
         return "instruction-limit"
     if "TEST FINISHED" in log:
+        if "RVCP-SUMMARY:" in log and ": FAILED" in log:
+            return "signature-mismatch"
         return "finished-without-passing-signature-and-exit-code"
     return "missing-watcher-completion"
 
@@ -69,6 +71,7 @@ def main():
     parser.add_argument("run_directory", type=Path)
     parser.add_argument("--load-ranges", type=Path)
     parser.add_argument("--upstream-logs", type=Path)
+    parser.add_argument("--verified-zalrsc", type=Path)
     args = parser.parse_args()
     if (args.load_ranges is None) != (args.upstream_logs is None):
         parser.error("--load-ranges requires --upstream-logs and vice versa")
@@ -85,6 +88,16 @@ def main():
     if args.load_ranges is not None:
         summarize_load_ranges(writer, args.load_ranges, args.upstream_logs, reference, args.run_directory)
         return
+    verified = {}
+    if args.verified_zalrsc is not None:
+        with args.verified_zalrsc.open() as stream:
+            verified = dict(csv.reader(stream, delimiter="\t"))
+        if not verified or any(
+            parameter not in parameters or "/Zalrsc/" not in parameter or
+            outcome != "signature-and-robot-pass" or results_by_elf[parameter] != "diagnostic-pass"
+            for parameter, outcome in verified.items()
+        ):
+            parser.error("Zalrsc equivalent cases require fixed Robot and Penv signature/watcher success")
     writer.writerow(("upstream_file", "case_line", "parameter", "renode_fixed",
                      "penv_fixed_inputs", "penv_result", "equivalence", "penv_log"))
     for row in reference:
@@ -93,7 +106,7 @@ def main():
         log = (args.run_directory / relative).read_text()
         cause = reason(results_by_elf[parameter], log, parameter)
         writer.writerow((row["upstream_file"], row["case_line"], parameter, row["renode_fixed"],
-                         results_by_elf[parameter], cause, "pending", relative))
+                         results_by_elf[parameter], cause, "pass" if parameter in verified else "pending", relative))
 
 
 if __name__ == "__main__":

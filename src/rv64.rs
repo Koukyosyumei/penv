@@ -551,6 +551,7 @@ impl Rv64 {
         }
         bus.rv64_devices
             .fallback(physical, width)
+            .or_else(|| self.unmapped_data(bus, physical, width, None))
             .ok_or(Fault::new(5, address))
     }
 
@@ -640,8 +641,41 @@ impl Rv64 {
         }
         bus.rv64_devices
             .fallback(physical, width)
+            .or_else(|| self.unmapped_data(bus, physical, width, Some(value)))
             .map(|_| ())
             .ok_or(Fault::new(7, address))
+    }
+
+    fn unmapped_data(
+        &self,
+        bus: &Bus,
+        physical: u64,
+        width: usize,
+        store: Option<u64>,
+    ) -> Option<u64> {
+        if !bus.renode_unmapped_data {
+            return None;
+        }
+        let end = physical.checked_add(width as u64)?;
+        if bus
+            .mapped_ram_ranges64()
+            .any(|range| physical < range.end && range.start < end)
+        {
+            return None;
+        }
+        if let Some(value) = store {
+            let value = value & (u64::MAX >> (64 - width * 8));
+            eprintln!(
+                "penv: RV64 pc={:#018x}: ignored unmapped {width}-byte write at {physical:#018x}, value {value:#x}",
+                self.pc
+            );
+        } else {
+            eprintln!(
+                "penv: RV64 pc={:#018x}: unmapped {width}-byte read at {physical:#018x} returned zero",
+                self.pc
+            );
+        }
+        Some(0)
     }
 
     fn compare_swap(
@@ -789,9 +823,9 @@ impl Rv64 {
         }
         let previous = ram_read(bus, physical, width).ok_or_else(fault)?;
         if operation == 2 {
-            bus.reserve64(hart, physical, width);
+            bus.reserve64(hart, address, physical, width);
         } else if operation == 3 {
-            if reservation != bus.reservation_key64(physical, width) {
+            if !bus.matches_reservation64(reservation, address, physical, width) {
                 return Ok(1);
             }
             bus.memory64(physical, width)

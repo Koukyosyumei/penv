@@ -73,6 +73,8 @@ Options:
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RISC-V harts at the image entry (1–8)
   --tohost ADDRESS   Watch an RV64 test completion word in RAM
+  --renode-lrsc  Use Renode single-hart RV64 LR/SC reservations
+  --renode-unmapped-data  Warn and return zero/drop for unmapped RV64 data accesses
   --renode-elf-load  Load the mapped RAM portions of RV64 ELF segments
   --robot-tohost ADDRESS   Install a 4 KiB single-hart Renode-style watcher
   --max-steps N      Stop after N execution steps (default: 10000000)
@@ -138,6 +140,8 @@ fn run() -> Result<ExitCode, String> {
     let mut stats = false;
     let mut tohost = None;
     let mut renode_elf_load = false;
+    let mut renode_unmapped_data = false;
+    let mut renode_lrsc = false;
     let mut positional = false;
     let mut ram_mib = None;
     let mut harts = None;
@@ -293,6 +297,8 @@ fn run() -> Result<ExitCode, String> {
                         .map_err(|_| "RAM size exceeds host limits")?,
                 ));
             }
+            Some("--renode-lrsc") => renode_lrsc = true,
+            Some("--renode-unmapped-data") => renode_unmapped_data = true,
             Some("--renode-elf-load") => renode_elf_load = true,
             Some(option @ ("--tohost" | "--robot-tohost")) => {
                 let value = args.next().ok_or("--tohost requires an address")?;
@@ -506,6 +512,14 @@ fn run() -> Result<ExitCode, String> {
             image::load_rv64_dtb(&mut machine, file, *address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
+        if (renode_unmapped_data || renode_lrsc) && machine.primary.rv64.is_none() {
+            return Err("--renode-unmapped-data and --renode-lrsc require an RV64 machine".into());
+        }
+        if renode_lrsc && machine.hart_count() != 1 {
+            return Err("--renode-lrsc requires a single RV64 hart".into());
+        }
+        machine.bus.renode_unmapped_data = renode_unmapped_data;
+        machine.bus.renode_lrsc = renode_lrsc;
         machine.validate_entry()?;
         if let Some((local, peer)) = ethernet_loopback {
             machine.bus.connect_rv64_ethernet(local, peer)?;

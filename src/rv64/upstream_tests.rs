@@ -857,3 +857,36 @@ fn vector_signed_saturation_sets_sticky_vxsat() {
     );
     assert_eq!((cpu.registers[A2], cpu.registers[A3]), (1, 1));
 }
+
+#[test]
+fn renode_lrsc_preserves_same_hart_reservation_across_store_and_width_change() {
+    for compatible in [false, true] {
+        let mut cpu = Rv64::new(Isa::parse("rv64ia").unwrap());
+        let mut bus = Bus::new(4096).unwrap();
+        bus.renode_lrsc = compatible;
+        cpu.registers[A0] = u64::from(RAM_BASE) + 0x100;
+        cpu.registers[A1] = 0x0102_0304_0506_0708;
+        let lr = 2 << 27 | (A0 as u32) << 15 | 2 << 12 | (A2 as u32) << 7 | 0x2f;
+        let sc =
+            3 << 27 | (A1 as u32) << 20 | (A0 as u32) << 15 | 3 << 12 | (A3 as u32) << 7 | 0x2f;
+        run_straight_line(&mut cpu, &mut bus, &[lr, 0x0005_01a3, sc]); // sb zero, 3(a0)
+        assert_eq!(cpu.registers[A3], u64::from(!compatible));
+        let expected = if compatible { cpu.registers[A1] } else { 0 };
+        assert_eq!(ram_read(&bus, cpu.registers[A0], 8), Some(expected));
+    }
+}
+
+#[test]
+fn renode_unmapped_data_does_not_relax_other_access_checks() {
+    let mut cpu = Rv64::new(Isa::parse("rv64i").unwrap());
+    let mut bus = Bus::new(4096).unwrap();
+    assert_eq!(cpu.load(&mut bus, 0x2000, 8).unwrap_err().cause, 5);
+    bus.renode_unmapped_data = true;
+    assert_eq!(cpu.load(&mut bus, 0x2000, 8).unwrap(), 0);
+    cpu.store(&mut bus, 0x2000, 8, u64::MAX, &mut Vec::new())
+        .unwrap();
+    assert_eq!(cpu.load(&mut bus, 0x2000, 8).unwrap(), 0);
+    assert_eq!(cpu.load(&mut bus, 0x2001, 8).unwrap_err().cause, 4);
+    cpu.pc = 0x2000;
+    assert_eq!(cpu.fetch(&mut bus).unwrap_err().cause, 1);
+}

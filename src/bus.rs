@@ -64,6 +64,7 @@ struct Region {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Reservation64 {
+    guest: u64,
     backing: usize,
     offset: usize,
     width: usize,
@@ -99,6 +100,8 @@ pub struct Bus {
     rv64_tohost: Option<u64>,
     robot_tohost: Option<Tohost>,
     pub rv64_test_exit: Option<u64>,
+    pub(crate) renode_unmapped_data: bool,
+    pub(crate) renode_lrsc: bool,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -530,11 +533,13 @@ impl Bus {
         let region = &mut self.regions[backing];
         if width != 0 {
             for reservation in &mut self.rv64_reservations {
-                if reservation.is_some_and(|reserved| {
-                    reserved.backing == backing
-                        && offset < reserved.offset + reserved.width
-                        && reserved.offset < offset + width
-                }) {
+                if !self.renode_lrsc
+                    && reservation.is_some_and(|reserved| {
+                        reserved.backing == backing
+                            && offset < reserved.offset + reserved.width
+                            && reserved.offset < offset + width
+                    })
+                {
                     *reservation = None;
                 }
             }
@@ -550,17 +555,38 @@ impl Bus {
         Some(&mut region.bytes[offset..offset + width])
     }
 
-    pub fn reserve64(&mut self, hart: usize, address: u64, width: usize) {
-        self.rv64_reservations[hart] = self.reservation_key64(address, width);
+    pub fn reserve64(&mut self, hart: usize, guest: u64, address: u64, width: usize) {
+        self.rv64_reservations[hart] = self.reservation_key64(guest, address, width);
     }
 
-    pub fn reservation_key64(&self, address: u64, width: usize) -> Option<Reservation64> {
+    fn reservation_key64(&self, guest: u64, address: u64, width: usize) -> Option<Reservation64> {
         let (backing, offset) = self.ram_location64(address, width)?;
         Some(Reservation64 {
+            guest,
             backing,
             offset,
             width,
         })
+    }
+
+    pub(crate) fn matches_reservation64(
+        &self,
+        reserved: Option<Reservation64>,
+        guest: u64,
+        address: u64,
+        width: usize,
+    ) -> bool {
+        let Some((reserved, current)) = reserved.zip(self.reservation_key64(guest, address, width))
+        else {
+            return false;
+        };
+        if self.renode_lrsc {
+            // The fixed tlib bypasses its shared store table in a single-CPU machine.
+            return reserved.guest == current.guest;
+        }
+        reserved.backing == current.backing
+            && reserved.offset == current.offset
+            && reserved.width == current.width
     }
 
     pub fn take_reservation64(&mut self, hart: usize) -> Option<Reservation64> {
