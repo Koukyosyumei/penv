@@ -59,7 +59,7 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 - `tests/unit-tests/arm-cortex-m-exception-return.robot` の非 TrustZone `bx lr` と通常分岐の 2 入力は、CPU が同じ PC に到達することを確認した。TrustZone の命令を指定するパラメータは対象外とした。
 - `page-access-via-io.robot` は固定 Cortex-M4 のページ単位 I/O 切替。monitor 操作とアクセスログの回帰が未達。
 - `python-engine.robot` の nRF RADIO 構文エラーと `external-control.robot` の nRF SPI 転送は Cortex-M4 へ移植できる。RISC-V カスタム命令による CPU abort は固定の別 ISA を必要とする。
-- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースと登録解除・端点管理7ケースの移植は後述。外部コネクタの2ケースは後述。別機械の破棄を扱う1ケースは未達。
+- Infrastructure の `GPIOTests.cs` と `GPIODetachingTests.cs` は、汎用 GPIO と IRQ に適用できる固定 NUnit ケース。両 fixture の `[Test]` 全14件を登録し、`[SetUp]` は各ケースの準備として扱う。接続4ケースと登録解除・端点管理7ケースの移植は後述。外部コネクタの2ケースは後述。別機械の破棄を扱う1ケースも後述。
 
 ## 固定構成の集計
 
@@ -69,8 +69,8 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
 | 監査した共有・混成 Robot | 190 | 138 | 6 | 46 |
-| Infrastructure GPIO NUnit | 14 | 13 | 0 | 1 |
-| 合計 | **221** | **168** | **6** | **47** |
+| Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
+| 合計 | **221** | **169** | **6** | **46** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -477,7 +477,7 @@ Infrastructure の `GPIODetachingTests.cs` の連鎖解除、共有端点、受�
 
 Infrastructure の `GPIODetachingTests.cs` から、外部コネクタの削除と送信元機器の登録解除を移植した。入力・出力とも pin 0 で接続し、外部削除では送信元端点が消えること、送信元の登録解除では送信元端点が消えて受信側端点が残ることを実動作の Bus で照合した。移植用 RESC の `gpio BridgeLed` は既存 LED 配線にコネクタを挿入し、`gpio RemoveConnector` で解除する。既存の短い Zephyr Button 回帰を拡張し、正常転送と解除後の通知停止を検証する。
 
-前節のコマンドで再現できる。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-external.Yv4oC5Gp/` の `cargo-test`、`elf`、`shell` に保存した。別機械上に送信元・受信側を置くケースは、機械ごとの GPIO 所有権と破棄時の通知を実装する必要がある。
+前節のコマンドで再現できる。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-external.Yv4oC5Gp/` の `cargo-test`、`elf`、`shell` に保存した。別機械上に送信元・受信側を置くケースは「GPIO 送信元の機械破棄」節に記録した。
 
 ### CPU フック内の monitor ログ
 
@@ -491,6 +491,14 @@ tests/nrf52840-systick-hooks-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR
 tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
-元の固定 Mi-V ELF（SHA-1 `ea4ddb074325b2cc1aae56800d099c7cf56e592a`）も取得し、`target/debug/penv run --script ../renode/scripts/single-node/miv.resc --platform-root ../renode --max-steps 1 "$MIV_ELF"` で確認した。固定 REPL の `UART.MiV_CoreUART` で停止したため、台帳では部分移植とした。任意の Python フックと MMIO 読み出し watchpoint は引き続き未達。別機械の GPIO 破棄ケースも、機械間の端点所有権と破棄通知が必要なため未達。
+元の固定 Mi-V ELF（SHA-1 `ea4ddb074325b2cc1aae56800d099c7cf56e592a`）も取得し、`target/debug/penv run --script ../renode/scripts/single-node/miv.resc --platform-root ../renode --max-steps 1 "$MIV_ELF"` で確認した。固定 REPL の `UART.MiV_CoreUART` で停止したため、台帳では部分移植とした。任意の Python フックと MMIO 読み出し watchpoint は引き続き未達。別機械の GPIO 破棄ケースの現在の結果は次節に記録した。
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/nrf52-monitor-hook.fX1aN2OI/` に保存した。`baseline` は未対応コマンドの再現、`focal`、`systick`、`shell` は各回帰、`miv` は固定構成の起動結果。
+
+### GPIO 送信元の機械破棄
+
+`GPIODetachingTests.cs:233` の機械間接続を Rust に移植した。2台の `Machine` に送信元と受信側を分け、外部コネクタで pin 0 を接続する。破棄前に両端点が1件ずつあることと、nRF GPIO の `DIRSET` と `OUTSET` から別機械の LED に信号が届くことを確認した。送信元の `Machine` を破棄した後も、保持した送信側の配線表とコネクタを照会できる。送信側は0件、受信側は1件で、受信機器の登録解除後は受信側も0件になる。
+
+`cargo test` で既存の外部コネクタ削除と送信元機器登録解除を含む3ケースを同じバイナリで実行する。対象ケースだけを再現するには `cargo test upstream_gpio_source_machine_disposal_preserves_external_destination` を使う。実 ELF の Button と Shell は「GPIO の接続と入力番号検証」節のコマンドで回帰確認した。機械間接続は Rust の機械・バス経路で検証した。既存の RESC コネクタコマンドは同じ機械内の配線を扱う。
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gpio-machine.TBmdCZhd` の `cargo-test`、`button`、`shell` に保存した。GPIO NUnit の14件はすべて台帳上で合格。共有・混成 Robot に部分移植6件と未達46件が残る。

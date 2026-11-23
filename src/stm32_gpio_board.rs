@@ -15,6 +15,11 @@ impl GpioLed {
         }
     }
 
+    #[cfg(test)]
+    pub fn is_on(&self) -> bool {
+        self.state
+    }
+
     pub fn sample(&mut self, levels: u16, report: bool) {
         self.sample_level(levels & (1 << self.pin) != 0, report);
     }
