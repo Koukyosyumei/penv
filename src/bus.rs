@@ -1532,6 +1532,12 @@ impl Bus {
 
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
         self.check_thumb_access(address, N, false, false)?;
+        if N == 4
+            && address == crate::nvic::DHCSR
+            && self.nvic.as_ref().is_some_and(Nvic::has_debug_status)
+        {
+            return Ok(0);
+        }
         if address as usize & (N - 1) != 0
             && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
             && let Ok(slice) = self.memory_slice(address, N)
@@ -1591,18 +1597,32 @@ impl Bus {
         self.thumb_data_fault.take()
     }
 
-    pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
-        if let Some((device, offset)) = self
+    fn read_faulting_peripheral<const N: usize>(
+        &self,
+        address: u32,
+    ) -> Option<Result<u32, BusError>> {
+        let (device, offset) = self
             .faulting_peripherals
             .iter()
-            .find_map(|device| Some((device, device.offset(address)?)))
-        {
+            .find_map(|device| Some((device, device.offset(address)?)))?;
+        Some((|| {
             let mut value = [0; 4];
             for (index, byte) in value[..N].iter_mut().enumerate() {
                 device.check_byte(offset + index, address)?;
                 *byte = device.bytes[offset + index];
             }
-            return Ok(u32::from_le_bytes(value));
+            Ok(u32::from_le_bytes(value))
+        })())
+    }
+
+    pub fn read_cortex_m_reset_word(&self, address: u32) -> Result<u32, BusError> {
+        self.read_faulting_peripheral::<4>(address)
+            .unwrap_or_else(|| self.read_ram::<4>(address))
+    }
+
+    pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if let Some(result) = self.read_faulting_peripheral::<N>(address) {
+            return result;
         }
         if N == 4
             && address & 3 == 0

@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 80 | 5 | 105 |
+| 監査した共有・混成 Robot | 190 | 82 | 5 | 103 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **97** | **5** | **119** |
+| 合計 | **221** | **99** | **5** | **117** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -183,7 +183,7 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
 
-BusFault の適用対象31ケースのうち13件が合格、1件が部分移植、17件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
+BusFault の適用対象31ケースのうち15件が合格、1件が部分移植、15件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
 
 ### 未マップのデータアクセス
 
@@ -203,4 +203,10 @@ BusFault の適用対象31ケースのうち13件が合格、1件が部分移植
 
 `arm-cortex-m-bus-fault.robot:369–423` の2構成を移植した。固定の命令列を実行して、再フォールト後の PC、R1/R2、CFSR・BFAR・HFSR・SHCSR、CPU/NVIC の lockup 状態と非休止状態を確認した。続く10ステップで命令が実行されず ITSTATE が保持されること、CPU リセットで lockup が解除されることを確認した。上流 monitor の NMI 注入は ICSR の NMI ペンドで移植し、NMI 入口と保存 PC、lockup の解除を照合した。`lockup.elf` でも CLI 実行時に PC が `0xEFFFFFFE` に留まることを確認した。
 
-上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-shell.sh` で再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/bus-lockup.AF3ru2Uw/` の `cargo-test.final`、`elf`、`shell` に保存した。リセット・ベクタ・例外スタックの失敗による lockup とデバッガの DHCSR 可視性は未達。
+上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-shell.sh` で再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/bus-lockup.AF3ru2Uw/` の `cargo-test.final`、`elf`、`shell` に保存した。リセット時のベクタアクセスと DHCSR の検証は次節に記録した。
+
+### リセットベクタと初期 MSP の BusFault
+
+`arm-cortex-m-bus-fault.robot:1042–1073` の2構成を移植した。ベクタテーブルを `0x100000` に置き、上流と同じオフセット 4 または 0 だけでフォールトさせた。CPU/NVIC の lockup、PC・SP・LR・IPSR、CFSR・HFSR・SHCSR、DHCSR の CPU/デバッガ別の可視性と書き込み無視を照合した。上流の `RunFor` は実行予算を与えてから固定状態を確認するテストに移植し、予算中に命令が実行されないことも検証した。CLI は同じ起動条件を REPL に指定して実行した。
+
+上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-shell.sh` で再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/reset-vector-fault.w13sYiUd/` の `cargo-test.final`、`elf.final`、`shell` に保存した。例外入口・復帰時のバス障害と不正な初期 Thumb 状態は引き続き未達。

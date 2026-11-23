@@ -7,6 +7,7 @@ pub const VTOR: u32 = BASE + 0xd08;
 const MPU_TYPE: u32 = BASE + 0xd90;
 const MPU_RASR: u32 = BASE + 0xda0;
 const STIR: u32 = BASE + 0xf00;
+pub const DHCSR: u32 = BASE + 0xdf0;
 const DEMCR: u32 = BASE + 0xdfc;
 const FPCCR: u32 = BASE + 0xf34;
 const CPACR: u32 = BASE + 0xd88;
@@ -107,6 +108,7 @@ impl Nvic {
             cortex_m4.then_some((BFAR, BFAR + 4)),
             cortex_m4.then_some((CPACR, CPACR + 4)),
             cortex_m4.then_some((FPCCR, FPCCR + 4)),
+            cortex_m4.then_some((DHCSR, DHCSR + 4)),
             cortex_m4.then_some((DEMCR, DEMCR + 4)),
             cortex_m4.then_some((STIR, STIR + 4)),
             cortex_m4.then_some((MPU_TYPE, MPU_RASR + 4)),
@@ -154,6 +156,16 @@ impl Nvic {
 
     pub fn ignores_negative_priority_bus_fault(&self) -> bool {
         self.ignore_negative_priority_bus_fault
+    }
+
+    pub fn has_debug_status(&self) -> bool {
+        self.cortex_m4
+    }
+
+    pub fn record_reset_vector_fault(&mut self) {
+        self.hfsr |= 1 << 1; // VECTTBL
+        self.hard_fault_active = true;
+        self.lockup = true;
     }
 
     pub fn set_hard_fault_active(&mut self, active: bool) {
@@ -260,6 +272,7 @@ impl Nvic {
             (AIRCR, 4) => 0xfa05_0000,
             (CPACR, 4) if self.cortex_m4 => self.cpacr,
             (FPCCR, 4) if self.cortex_m4 => self.fpccr,
+            (DHCSR, 4) if self.cortex_m4 => u32::from(self.lockup) << 19,
             (DEMCR, 4) if self.cortex_m4 => self.demcr,
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => return self.mpu.read(address - MPU_TYPE),
             (CCR, 4) if self.cortex_m4 => {
@@ -322,6 +335,7 @@ impl Nvic {
             }
             (CPACR, 4) if self.cortex_m4 => self.cpacr = value & 0x00f0_0000,
             (FPCCR, 4) if self.cortex_m4 => self.fpccr = value & 0xc000_0000,
+            (DHCSR, 4) if self.cortex_m4 => {}
             (DEMCR, 4) if self.cortex_m4 => self.demcr = value,
             (CCR, 4) if self.cortex_m4 && value & !(STKALIGN | BFHFNMIGN | 0x18) == 0 => {
                 self.ignore_negative_priority_bus_fault = value & BFHFNMIGN != 0;

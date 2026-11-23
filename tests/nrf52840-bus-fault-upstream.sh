@@ -303,3 +303,16 @@ status=0
     >"$out/lockup.log" 2>&1 || status=$?
 [ "$status" -eq 2 ]
 grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/lockup.log"
+
+# Robot 1042-1073. Start with VTOR pointing at the faulting peripheral.
+for offset in 4 0; do
+    sed -e 's/^    vectorTableOffset: 0$/    vectorTableOffset: 0x100000/' \
+        -e "/^faultingPeripheral:/a\    FaultOffset: $offset" \
+        "$out/bus-fault.repl" >"$out/reset-fault-$offset.repl"
+    status=0
+    "$penv" run --platform "$out/reset-fault-$offset.repl" --max-steps 10 "$out/lockup.elf" \
+        >"$out/reset-fault-$offset.log" 2>&1 || status=$?
+    [ "$status" -eq 2 ]
+    grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/reset-fault-$offset.log"
+    printf 'reset vector fault offset %s: lockup reached\n' "$offset"
+done

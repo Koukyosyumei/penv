@@ -21,7 +21,7 @@ fn should_return_from_exception_when_using_bx_lr() {
     let mut cpu = Thumb::new(Some(0));
     cpu.thumb2 = true;
     let mut registers = [0; 32];
-    let (sp, mut pc) = cpu.reset(&bus).unwrap();
+    let (sp, mut pc) = cpu.reset(&bus).unwrap().unwrap();
     registers[13] = sp;
     let mut output = std::io::sink();
     cpu.step(&mut pc, &mut registers, &mut bus, &mut output)
@@ -56,7 +56,7 @@ fn should_not_return_from_insecure_mode_when_not_using_trustzone() {
         .copy_from_slice(&[0x6f, 0xf0, 0x80, 0x70, 0x00, 0x47]); // mov r0, 0xfeffffff; bx r0
     let mut cpu = Thumb::new(Some(0));
     cpu.thumb2 = true;
-    let (sp, mut pc) = cpu.reset(&bus).unwrap();
+    let (sp, mut pc) = cpu.reset(&bus).unwrap().unwrap();
     let mut registers = [0; 32];
     registers[13] = sp;
     for _ in 0..2 {

@@ -4,13 +4,13 @@ mod thumb2;
 use std::io::Write;
 
 use crate::{
-    bus::Bus,
+    bus::{Bus, BusError},
     nvic::Nvic,
     systick::{NMI, PENDSV, SYSTICK},
 };
 
 const HARD_FAULT: u8 = 3;
-const LOCKUP_PC: u32 = 0xefff_fffe;
+pub(crate) const LOCKUP_PC: u32 = 0xefff_fffe;
 
 #[derive(Clone, Copy, Default, PartialEq)]
 enum Sleep {
@@ -73,17 +73,18 @@ impl Thumb {
         self.vectors.get_or_insert(base);
     }
 
-    pub fn reset(&self, bus: &Bus) -> Result<(u32, u32), String> {
-        let sp = bus
-            .read_ram::<4>(self.vector_base())
-            .map_err(|error| error.to_string())?;
-        let vector = self
-            .vector_base()
-            .checked_add(4)
-            .ok_or("reset vector address overflow")?;
-        let target = bus
-            .read_ram::<4>(vector)
-            .map_err(|error| error.to_string())?;
+    /// None indicates a BusFault while loading the reset context.
+    pub fn reset(&self, bus: &Bus) -> Result<Option<(u32, u32)>, String> {
+        let base = self.vector_base();
+        let vector = base.checked_add(4).ok_or("reset vector address overflow")?;
+        let words = bus
+            .read_cortex_m_reset_word(vector)
+            .and_then(|target| bus.read_cortex_m_reset_word(base).map(|sp| (sp, target)));
+        let (sp, target) = match words {
+            Ok(words) => words,
+            Err(BusError::SlaveFault(_)) if self.thumb2 => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
         if target & 1 == 0 {
             return Err(format!(
                 "Cortex-M reset vector {target:#010x} must select Thumb state"
@@ -91,7 +92,12 @@ impl Thumb {
         }
         bus.read_ram::<2>(target & !1)
             .map_err(|error| error.to_string())?;
-        Ok((sp & !3, target & !1))
+        Ok(Some((sp & !3, target & !1)))
+    }
+
+    pub fn enter_reset_lockup(&mut self) {
+        self.locked_up = true;
+        self.active_exceptions = 1 << HARD_FAULT;
     }
 
     fn nz(&mut self, value: u32) {
@@ -482,8 +488,8 @@ impl Thumb {
     }
 
     #[cfg(test)]
-    pub(crate) fn lockup_state(&self) -> (bool, u8) {
-        (self.locked_up, self.itstate)
+    pub(crate) fn lockup_state(&self) -> (bool, u8, u8) {
+        (self.locked_up, self.itstate, self.active_exception)
     }
 
     pub fn sleeping(&self) -> bool {

@@ -32,7 +32,7 @@ fn nocp_fixture() -> (Bus, Thumb, [u32; 32], u32) {
 
     let mut cpu = Thumb::new(Some(0x10000));
     cpu.thumb2 = true;
-    let (sp, pc) = cpu.reset(&bus).unwrap();
+    let (sp, pc) = cpu.reset(&bus).unwrap().unwrap();
     let mut registers = [0; 32];
     registers[13] = sp;
     (bus, cpu, registers, pc)

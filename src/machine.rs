@@ -438,7 +438,7 @@ impl<W: Write> Write for StepUart<'_, W> {
 impl Hart {
     fn reset_cortex_m(&mut self, bus: &mut Bus) -> Result<(), String> {
         let thumb = self.thumb.as_mut().unwrap();
-        let (sp, pc) = thumb.reset(bus)?;
+        let reset_context = thumb.reset(bus)?;
         let vectors = thumb.vector_base();
         let thumb2 = thumb.thumb2;
         *thumb = Thumb::new(Some(vectors));
@@ -449,8 +449,17 @@ impl Hart {
             nvic.set_hard_fault_active(false);
         }
         self.registers.fill(0);
-        self.registers[13] = sp;
-        self.pc = pc;
+        if let Some((sp, pc)) = reset_context {
+            self.registers[13] = sp;
+            self.pc = pc;
+        } else {
+            thumb.enter_reset_lockup();
+            if let Some(nvic) = bus.nvic.as_mut() {
+                nvic.record_reset_vector_fault();
+            }
+            self.pc = crate::thumb::LOCKUP_PC;
+            self.registers[14] = u32::MAX;
+        }
         Ok(())
     }
 
@@ -871,6 +880,50 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_reset_bus_fault(offset: usize) {
+        let mut machine = Machine::new(0x1000).unwrap();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, Some(offset))
+            .unwrap();
+        machine.bus.map_nvic(0xe0, None, true).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.primary.configure_cortex_m(Some(0x100000), true);
+        machine.validate_entry().unwrap();
+        let mut out = std::io::sink();
+        assert_eq!(machine.run(100, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0);
+        assert_eq!(machine.primary.registers[14], u32::MAX);
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 0)
+        );
+        assert!(machine.bus.nvic.as_ref().unwrap().lockup);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 4);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(dhcsr).unwrap(), 1 << 19);
+    }
+
+    #[test]
+    fn upstream_reset_vector_bus_fault_locks_up() {
+        check_reset_bus_fault(4);
+    }
+
+    #[test]
+    fn upstream_initial_msp_bus_fault_locks_up() {
+        check_reset_bus_fault(0);
+    }
 
     fn enter_instruction_time_lockup() -> Machine {
         let mut machine = Machine::new(0x1000).unwrap();
