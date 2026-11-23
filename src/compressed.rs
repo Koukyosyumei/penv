@@ -1,5 +1,5 @@
 // Expand RV32 compressed encodings into the base decoder's format.
-pub fn expand(insn: u32) -> Option<u32> {
+pub fn expand(insn: u32, zcb: bool) -> Option<u32> {
     let bits = |lsb: u32, width: u32| (insn >> lsb) & ((1u32 << width) - 1);
     let rd = bits(7, 5);
     let rs2 = bits(2, 5);
@@ -30,6 +30,20 @@ pub fn expand(insn: u32) -> Option<u32> {
                 immediate(0x07, width, rs2_prime, rs1_prime, offset)
             } else {
                 store_format(0x27, width, rs1_prime, rs2_prime, offset)
+            }
+        }
+        (0, 4) if zcb => {
+            let halfword_offset = bits(5, 1) << 1;
+            let byte_offset = halfword_offset | bits(6, 1);
+            match bits(10, 3) {
+                0 => immediate(0x03, 4, rs2_prime, rs1_prime, byte_offset),
+                1 => {
+                    let funct3 = if bits(6, 1) == 0 { 5 } else { 1 };
+                    immediate(0x03, funct3, rs2_prime, rs1_prime, halfword_offset)
+                }
+                2 => store_format(0x23, 0, rs1_prime, rs2_prime, byte_offset),
+                3 => store_format(0x23, 1, rs1_prime, rs2_prime, halfword_offset),
+                _ => return None,
             }
         }
         (0, 2 | 6) => {
@@ -80,6 +94,15 @@ pub fn expand(insn: u32) -> Option<u32> {
                 let (funct3, funct7) = [(0, 0x20), (4, 0), (6, 0), (7, 0)][bits(5, 2) as usize];
                 register(funct3, funct7, rs1_prime, rs1_prime, rs2_prime)
             }
+            3 if zcb => match (bits(5, 2), bits(2, 3)) {
+                (2, _) => register(0, 1, rs1_prime, rs1_prime, rs2_prime),
+                (3, 0) => immediate(0x13, 7, rs1_prime, rs1_prime, 0xff),
+                (3, 1) => immediate(0x13, 1, rs1_prime, rs1_prime, 0x604),
+                (3, 2) => register(4, 4, rs1_prime, rs1_prime, 0),
+                (3, 3) => immediate(0x13, 1, rs1_prime, rs1_prime, 0x605),
+                (3, 5) => immediate(0x13, 4, rs1_prime, rs1_prime, u32::MAX),
+                _ => return None,
+            },
             _ => return None,
         },
         (1, kind @ (6 | 7)) => {

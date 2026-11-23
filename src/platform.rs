@@ -936,6 +936,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
                             "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
+                            "zcb" if !bitmanip.zcb => bitmanip.zcb = true,
                             "zbkb" if !bitmanip.zbkb => bitmanip.zbkb = true,
                             "zbs" if !bitmanip.zbs => bitmanip.zbs = true,
                             _ => break,
@@ -976,7 +977,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     isa = Some((
                         general || letters.contains('m'),
                         general || letters.contains('a'),
-                        letters.contains('c'),
+                        letters.contains('c') || bitmanip.zcb,
                         embedded,
                     ));
                 }
@@ -2110,6 +2111,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zbc"
                     | "zbs"
                     | "zbkb"
+                    | "zcb"
                     | "zacas"
                     | "zfh"
                     | "smepmp"

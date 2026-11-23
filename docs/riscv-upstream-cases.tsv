@@ -2260,17 +2260,17 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zca/Zca-c.sw-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zca/Zca-c.swsp-00.elf	target	blocked-cpu	upstream CPU creation requires V
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zca/Zca-c.xor-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.lbu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.lh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.lhu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.not-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.sb-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.sh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.zext.b-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbM/ZcbM-c.mul-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbZbb/ZcbZbb-c.sext.b-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbZbb/ZcbZbb-c.sext.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbZbb/ZcbZbb-c.zext.h-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.lbu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.lh-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.lhu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.not-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.sb-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.sh-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcb/Zcb-c.zext.b-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbM/ZcbM-c.mul-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbZbb/ZcbZbb-c.sext.b-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbZbb/ZcbZbb-c.sext.h-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/ZcbZbb/ZcbZbb-c.zext.h-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcd/Zcd-c.fld-00.elf	target	blocked-cpu	upstream CPU creation requires V; F/D diagnostic passed with 1 MiB RAM
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcd/Zcd-c.fldsp-00.elf	target	blocked-cpu	upstream CPU creation requires V; F/D diagnostic passed with 1 MiB RAM
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Zcd/Zcd-c.fsd-00.elf	target	blocked-cpu	upstream CPU creation requires V; F/D diagnostic passed with 1 MiB RAM
@@ -2892,25 +2892,25 @@ Renode	tests/unit-tests/riscv-mret.robot	80	Should Invalidate TLB After Mode Cha
 Renode	tests/unit-tests/riscv-priv.robot	88	Should Fail On Counter Access		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	107	Should Increment MCYCLE RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	119	Should Increment MINSTRET RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	131	Should Increment MCYCLE RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
-Renode	tests/unit-tests/riscv-priv.robot	143	Should Increment MINSTRET RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	131	Should Increment MCYCLE RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
+Renode	tests/unit-tests/riscv-priv.robot	143	Should Increment MINSTRET RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
 Renode	tests/unit-tests/riscv-priv.robot	155	Should Inhibit MCYCLE RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	169	Should Inhibit MINSTRET RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	183	Should Inhibit MCYCLE RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
-Renode	tests/unit-tests/riscv-priv.robot	197	Should Inhibit MINSTRET RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	183	Should Inhibit MCYCLE RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
+Renode	tests/unit-tests/riscv-priv.robot	197	Should Inhibit MINSTRET RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
 Renode	tests/unit-tests/riscv-priv.robot	211	Should Inhibit MCYCLE After Write Finishes RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	227	Should Inhibit MINSTRET After Write Finishes RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	243	Should Inhibit MCYCLE After Write Finishes RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
-Renode	tests/unit-tests/riscv-priv.robot	259	Should Inhibit MINSTRET After Write Finishes RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	243	Should Inhibit MCYCLE After Write Finishes RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
+Renode	tests/unit-tests/riscv-priv.robot	259	Should Inhibit MINSTRET After Write Finishes RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
 Renode	tests/unit-tests/riscv-priv.robot	275	Should Trap On SFENCE.VMA In User Mode RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	283	Should Trap On SFENCE.VMA In User Mode RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	283	Should Trap On SFENCE.VMA In User Mode RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
 Renode	tests/unit-tests/riscv-priv.robot	291	Should Trap On Sret When MSTATUS.TSR Is One RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	301	Should Trap On Sret When MSTATUS.TSR Is One RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	301	Should Trap On Sret When MSTATUS.TSR Is One RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
 Renode	tests/unit-tests/riscv-priv.robot	311	Should Trap On SATP Write When TVM Is One		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	321	Should Trap On SATP Read When TVM Is One		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	330	Should Trap On SFENCE.VMA When TVM Is One		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	339	Should Not Trap On Sret When MSTATUS.TSR Is Zero RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	349	Should Not Trap On Sret When MSTATUS.TSR Is Zero RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	349	Should Not Trap On Sret When MSTATUS.TSR Is Zero RV32		target	blocked-cpu	pinned RV32 fixture still requires separated C/V spelling and V; Zcb is available
 Renode	tests/unit-tests/riscv-priv.robot	359	Should Not Trap On SATP Write When TVM Is Zero		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	369	Should Not Trap On SATP Read When TVM Is Zero		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	378	Should Not Trap On SFENCE.VMA When TVM Is Zero		outside	outside	case passes bitness=64 to its CPU fixture

@@ -5,6 +5,7 @@ pub struct BitManip {
     pub zbc: bool,
     pub zbs: bool,
     pub zbkb: bool,
+    pub zcb: bool,
 }
 
 impl BitManip {

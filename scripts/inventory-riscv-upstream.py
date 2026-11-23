@@ -76,6 +76,8 @@ def robot_cases(root, isa, act):
                         basis = MAX_ISA_BLOCKER
                         if bitmanip_checked:
                             basis += "; reduced-ISA bitmanip diagnostic passed"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zcb(?:M|Zbb)?/[^/]+\.elf", portable):
+                            basis += "; fixed ISA omits Zcb; reduced-ISA Zcb diagnostic passed"
                         if portable == "spike-rv32-max/elfs/rv32i/Zacas/Zacas-amocas.w-00.elf":
                             basis += "; reduced-ISA Zacas diagnostic passed"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:F|D|Zcd|Zcf)/[^/]+\.elf", portable):

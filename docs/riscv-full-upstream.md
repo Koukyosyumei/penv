@@ -701,3 +701,21 @@ done
 有効構成 45 件、無効構成 5 件、Rust テスト 84 件、公開 M/S 特権 ELF 22 件、Smepmp の実 ELF が通過しました。Sscofpmf 専用の公開 ELF は取得済みツリーに見つからず、GCC でビルドした有効・無効の 2 プローブで読み戻しと例外を確認しました。台帳の上流等価合格は累計 116 件で、同じ構成スイートにはベクトル系 7 件が残っています。
 
 REPL、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-29543d0-ZFuha5/` に保存しました。
+
+### RV32 Zcb の実装と固定 ACT 診断
+
+RV32 の Zcb に対応しました。バイト・ハーフワードのロードとストア、符号・ゼロ拡張、NOT、M 有効時の MUL を既存の命令実行経路に展開します。固定 Renode に合わせ、Zcb は圧縮命令を有効にし、Zbb を省略しても Zcb の圧縮拡張命令を使えます。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zcb.repl" --artifacts "$evidence/zcb-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zcb*/*.elf
+```
+
+固定 ACT ELF は変更前に 11 件とも CPU 作成で停止し、変更後は `rv32imac_zbb_zcb` と `rv32ima_zcb` の両構成で 11 件とも完了コード 0 を報告しました。Rust テスト 84 件、公開 RV32 C ELF 2 件、virt の UART・CLINT・PLIC も通過しました。
+
+固定 Robot の最大 ISA 構成では再試行した 11 件がすべて V で CPU 作成時に停止しました。固定構成の文字列には Zcb 自体も含まれていません。ACT の縮小構成結果は台帳の各 11 行に追記し、上流等価合格は累計 116 件です。RV32 特権 Robot は Zcb の阻害が解消し、分離した C/V 表記と V の実装が残っています。
+
+REPL と変更前後のログ・終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-d0f41d5-bsrWMp/` に保存しました。

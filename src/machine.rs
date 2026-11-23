@@ -933,7 +933,7 @@ impl Hart {
         }
         let illegal = || Fault::Illegal(encoded);
         let insn = if width == 2 {
-            crate::compressed::expand(encoded).ok_or_else(illegal)?
+            crate::compressed::expand(encoded, self.bitmanip.zcb).ok_or_else(illegal)?
         } else {
             encoded
         };
@@ -949,6 +949,11 @@ impl Hart {
         let fallthrough = pc.wrapping_add(width);
         let mut next = fallthrough;
 
+        // Fixed Renode exposes the compressed extensions even without scalar Zbb.
+        let bitmanip = BitManip {
+            zbb: self.bitmanip.zbb || (width == 2 && self.bitmanip.zcb),
+            ..self.bitmanip
+        };
         let result = match insn & 0x7f {
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => self
                 .floating_instruction(insn, bus, output)
@@ -1025,8 +1030,7 @@ impl Hart {
                 5 if funct7 == 0x20 => ((a as i32) >> (imm & 31)) as u32,
                 6 => a | imm,
                 7 => a & imm,
-                _ => self
-                    .bitmanip
+                _ => bitmanip
                     .immediate(funct3, funct7, a, imm)
                     .ok_or_else(illegal)?,
             }),
@@ -1056,8 +1060,7 @@ impl Hart {
                 (5, 0x20) => ((a as i32) >> (b & 31)) as u32,
                 (6, 0) => a | b,
                 (7, 0) => a & b,
-                _ => self
-                    .bitmanip
+                _ => bitmanip
                     .register(funct3, funct7, a, b, (insn >> 20) & 31)
                     .ok_or_else(illegal)?,
             }),
