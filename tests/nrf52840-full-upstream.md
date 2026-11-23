@@ -615,3 +615,23 @@ target/release/penv run --platform ../renode/platforms/boards/nrf52840dk_nrf5284
 ```
 
 `HCI_PERIPHERAL_ELF` と `HCI_CONTROLLER_ELF` は `tests/nrf52840-hci-upstream.sh` の固定ファイル。代替の広告行を観測した後にゲストを停止し、`observer-observed.status` に観測結果、`observer.status` にプロセスの終了状態を保存した。
+
+### 外部制御 SPI の3ケース
+
+`external-control.robot:286–366` は同じ外部制御サーバーとクライアントを使う。固定 RV32I REPL は `SPI.NRF52840_SPI` の登録で停止する。比較用に CPU を Cortex-M4 に置き換えると `SPI.ExternalControlSPIPeripheral` まで進む。元の setup は先に `emulation CreateExternalControlServer "server" 3344` で停止する。固定 C クライアントは、CMake のソケット構成と同じソースで GCC によりリンクできた。
+
+```sh
+base=../renode/tools/external_control_client
+gcc -pthread -Wall -Werror -Wextra -fno-strict-aliasing -DNON_INTERACTIVE \
+    -I"$base/include" "$base/examples/spi/main.c" "$base/lib/connection.c" \
+    "$base/lib/renode_api.c" -o "$ARTIFACT_DIR/spi-client"
+target/debug/penv run --script "$ARTIFACT_DIR/server.resc"
+target/debug/penv validate-platform "$ARTIFACT_DIR/spi.repl"
+target/debug/penv validate-platform "$ARTIFACT_DIR/spi-thumb-probe.repl"
+```
+
+再現用 RESC・REPL とログ、終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/external-spi.mUqXXvfW` に保存した。実行順・コールバック・時間制御の期待値を共有依頼 `nrf52-external-spi-e8df14ac.md` に記録した。外部制御の3件は未達のまま。独立した nRF 回帰には `tests/nrf52840-spi.sh`、`tests/nrf52840-spi-mux-upstream.sh`、`tests/nrf52840-shell.sh` を使用した。
+
+### スナップショットの共有依頼
+
+`it-status.robot:219–237` と `ArrayMemory.robot:41–50` は Save/Load の共有経路に依存する。固定 IT 命令 ELF を `tests/nrf52840-itstate-hooks-upstream.sh "$PWD/target/release/penv" ../renode "$ARTIFACT_DIR/itstate"` で生成し、ITSTATE フック回帰を確認した。次に `target/release/penv run --script "$ARTIFACT_DIR/itstate/snapshot.resc"` で、4ステップ後の `Save @itstate.save` が停止点になることを確認した。保存だけを切り分けるため再現用 RESC では GetItState の照会を省いた。固定 Neonkey の UART 起動も残課題。2ケースの期待値と必要な入口は `nrf52-snapshot-e8df14ac.md` で ARM 担当へ渡した。再現用 RESC と検証結果は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/external-spi.mUqXXvfW` に保存した。
