@@ -1,7 +1,9 @@
 use std::{
+    cell::Cell,
     collections::VecDeque,
     io::{Read, Write},
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use crate::{
@@ -30,8 +32,17 @@ pub struct Machine {
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
     inputs: VecDeque<(u64, Input)>,
+    uart_device_events: Vec<(Rc<Cell<bool>>, Input)>,
     queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
     intermediate_frame_matches: Vec<u64>,
+}
+
+#[derive(Clone, Copy)]
+pub enum LiteXUartAction {
+    Phy(u16),
+    Temperature(i32),
+    AssertLed(bool),
+    Toggle,
 }
 
 enum Input {
@@ -196,6 +207,7 @@ impl Machine {
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
             inputs: VecDeque::new(),
+            uart_device_events: Vec::new(),
             queued_frame_waits: VecDeque::new(),
             intermediate_frame_matches: Vec::new(),
         }
@@ -461,6 +473,35 @@ impl Machine {
         Ok(())
     }
 
+    pub fn arm_litex_uart_action(
+        &mut self,
+        fired: Rc<Cell<bool>>,
+        name: &str,
+        action: LiteXUartAction,
+    ) -> Result<(), String> {
+        let name = name.to_owned();
+        let event = match action {
+            LiteXUartAction::Phy(value) => {
+                self.bus.litex_phy_mut(&name)?;
+                Input::PhyVendorSpecific1 { name, value }
+            }
+            LiteXUartAction::Temperature(value) => {
+                self.bus.litex_sensor_mut(&name)?;
+                Input::SensorTemperature { name, value }
+            }
+            LiteXUartAction::AssertLed(expected) => {
+                self.bus.litex_led_state(&name)?;
+                Input::LedAssertion { name, expected }
+            }
+            LiteXUartAction::Toggle if self.bus.has_litex_button(&name) => {
+                Input::Button(name, ButtonAction::Toggle)
+            }
+            LiteXUartAction::Toggle => return Err(format!("unknown LiteX button {name:?}")),
+        };
+        self.uart_device_events.push((fired, event));
+        Ok(())
+    }
+
     pub fn schedule_sensor_temperature(
         &mut self,
         step: u64,
@@ -517,6 +558,18 @@ impl Machine {
     }
 
     pub fn verify_required_events_completed(&self) -> Result<(), String> {
+        if let Some((_, event)) = self.uart_device_events.first() {
+            let name = match event {
+                Input::Button(name, _)
+                | Input::LedAssertion { name, .. }
+                | Input::PhyVendorSpecific1 { name, .. }
+                | Input::SensorTemperature { name, .. } => name,
+                _ => unreachable!(),
+            };
+            return Err(format!(
+                "execution ended before applying the LiteX UART action for {name:?}"
+            ));
+        }
         for (step, input) in &self.inputs {
             let event = match input {
                 Input::LedAssertion { name, .. } => format!("LED assertion for {name:?}"),
@@ -629,6 +682,14 @@ impl Machine {
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            while let Some(index) = self
+                .uart_device_events
+                .iter()
+                .position(|event| event.0.get())
+            {
+                let (_, input) = self.uart_device_events.remove(index);
+                self.schedule_input(self.elapsed_steps, input);
+            }
             while self
                 .inputs
                 .front()

@@ -42,3 +42,9 @@ CLI 20 件と公開 STM32F072 Hello World ELF の Save、Clear、Load、mach set
 `--write-memory ADDRESS:WIDTH:VALUE` と `--read-memory-now ADDRESS:WIDTH` は同じ Bus のグローバル RAM を引数順に操作する。幅は 1、2、4、8 バイト。負数はその幅内の二の補数、非負数は従来の RV64 構文と同じ符号なし範囲。 `--max-steps 0` と明示的な REPL で、ファームウェアなしの RAM 検証ができる。
 
 `cargo test --locked` のユニット 209 件、CLI 21 件が合格。RV64 の固定値 `-1000000000000000000`、Cortex-M の `0x500` と `0xf0000000` を手元で再現した。証跡は `~/.local/state/penv-dispatch/evidence/integration/shared-memory-setup-b69d351/`。CPU スコープ付きアクセス、GDB RSP、取引状態は後続作業。
+
+## UART 出力を待つ実行時操作
+
+RV32 `fdacacf` と `885d642` を共有実行経路に取り込み、同じ照合機能から PHY、パネル、SI70xx 温度設定を実行する。パネルは同じ文字列の N 回目を指定できる。照合は UART 書き込みをまたいで継続し、操作は次のゲストステップの前に適用する。未適用のまま実行が終わると対象名付きエラーを返す。
+
+`cargo test --locked` のユニット 210 件と CLI 21 件が通過した。固定公開 Arty ELF の Boot、LED、Switch、Button、PHY の5件を同じデバッグバイナリで確認した。証跡は `~/.local/state/penv-dispatch/evidence/integration/shared-uart-actions-96e0519/`。機種別の HS3001 と AD4011 には別のプロパティ接続が必要。

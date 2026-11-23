@@ -102,6 +102,7 @@ mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod uart_trigger;
 mod veml7700;
 mod zephyr_boot;
 
@@ -116,7 +117,8 @@ use std::{
     time::Instant,
 };
 
-use machine::{Machine, Stop};
+use machine::{LiteXUartAction, Machine, Stop};
+use uart_trigger::UartTrigger;
 
 const HELP: &str = "Run a bare-metal firmware image.
 
@@ -148,6 +150,9 @@ Options:
   --stm32f0-console  Require an STM32F0 REPL (legacy console option)
   --platform-root DIR  Root for working-directory-relative REPL includes
   --litex-phy-event STEP:NAME:VALUE  Set PHY VendorSpecific1 at a step (repeatable)
+  --litex-panel-after-uart N:NAME:ACTION:TEXT  Apply panel action on UART match N
+  --litex-phy-after-uart NAME:VALUE:TEXT  Set PHY VendorSpecific1 after matching text
+  --litex-temperature-after-uart NAME:CELSIUS:TEXT  Set SI70xx temperature after matching text
   --litex-temperature-event STEP:NAME:CELSIUS  Set an SI70xx temperature (repeatable)
   --litex-led-assert STEP:NAME:STATE  Assert a wired LiteX LED is on or off (repeatable)
   --litex-button-event STEP:NAME:ACTION  Press, Release, or Toggle at a step
@@ -266,6 +271,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_device = None;
     let mut uart_input_at = None;
     let mut temperature_events = Vec::new();
+    let mut uart_actions = Vec::new();
     let mut phy_events = Vec::new();
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
@@ -401,6 +407,17 @@ fn run() -> Result<ExitCode, String> {
                     .map_err(|_| "--litex-phy-event requires a 16-bit register value")?;
                 phy_events.push((step, name.to_string(), value));
             }
+            Some(
+                option @ ("--litex-panel-after-uart"
+                | "--litex-phy-after-uart"
+                | "--litex-temperature-after-uart"),
+            ) => {
+                let argument = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(|| format!("{option} requires a UART action"))?;
+                uart_actions.push(parse_litex_uart_action(option, &argument)?);
+            }
             Some("--litex-temperature-event") => {
                 const FORMAT: &str = "--litex-temperature-event requires STEP:NAME:CELSIUS";
                 let argument = args
@@ -413,12 +430,8 @@ fn run() -> Result<ExitCode, String> {
                     .filter(|(name, _)| !name.is_empty())
                     .ok_or(FORMAT)?;
                 let step = step.parse::<u64>().map_err(|_| FORMAT)?;
-                let value = value
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|value| (-40.0..=85.0).contains(value))
-                    .ok_or("--litex-temperature-event requires -40 to 85 degrees Celsius")?;
-                temperature_events.push((step, name.to_string(), (value * 100.0).round() as i32));
+                let value = parse_litex_temperature(value)?;
+                temperature_events.push((step, name.to_string(), value));
             }
             Some("--litex-led-assert") => {
                 const FORMAT: &str = "--litex-led-assert requires STEP:NAME:on|off";
@@ -714,6 +727,7 @@ fn run() -> Result<ExitCode, String> {
                         || uart_input_at.is_some()
                         || !uart_events.is_empty()
                         || !memory_setup.is_empty()
+                        || !uart_actions.is_empty()
                         || framebuffer_out.is_some()
                         || sd_image.is_some()
                     {
@@ -1100,6 +1114,12 @@ fn run() -> Result<ExitCode, String> {
         Ok(machine)
     };
     let mut machine = boot_machine()?;
+    let mut uart_triggers = Vec::new();
+    for (matches, name, action, pattern) in uart_actions {
+        let trigger = UartTrigger::new(pattern, matches);
+        machine.arm_litex_uart_action(trigger.fired.clone(), &name, action)?;
+        uart_triggers.push(trigger);
+    }
     if setup_only {
         return Ok(ExitCode::SUCCESS);
     }
@@ -1163,6 +1183,7 @@ fn run() -> Result<ExitCode, String> {
     let mut output = UartOutput {
         writer: LineWriter::new(io::stdout().lock()),
         immediate: litex_uart_stdio,
+        triggers: uart_triggers,
     };
     let start = Instant::now();
     let limit = match (max_steps, run_steps) {
@@ -1272,14 +1293,78 @@ fn run() -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn parse_litex_uart_action(
+    option: &str,
+    argument: &str,
+) -> Result<(usize, String, LiteXUartAction, Vec<u8>), String> {
+    let panel = option == "--litex-panel-after-uart";
+    let format = || {
+        format!(
+            "{option} requires {}",
+            if panel {
+                "N:NAME:ACTION:TEXT"
+            } else {
+                "NAME:VALUE:TEXT"
+            }
+        )
+    };
+    let (count, rest) = if panel {
+        let (count, rest) = argument.split_once(':').ok_or_else(format)?;
+        let count = count
+            .parse::<usize>()
+            .ok()
+            .filter(|&count| count != 0)
+            .ok_or_else(format)?;
+        (count, rest)
+    } else {
+        (1, argument)
+    };
+    let mut fields = rest.splitn(3, ':');
+    let name = fields
+        .next()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(format)?;
+    let value = fields.next().ok_or_else(format)?;
+    let pattern = fields
+        .next()
+        .filter(|pattern| !pattern.is_empty())
+        .ok_or_else(format)?;
+    let action = match option {
+        "--litex-panel-after-uart" => match value {
+            "Toggle" => LiteXUartAction::Toggle,
+            "on" => LiteXUartAction::AssertLed(true),
+            "off" => LiteXUartAction::AssertLed(false),
+            _ => return Err("LiteX panel action must be Toggle, on, or off".into()),
+        },
+        "--litex-phy-after-uart" => LiteXUartAction::Phy(
+            u16::try_from(parse_address(value)?)
+                .map_err(|_| "LiteX PHY value must fit in 16 bits")?,
+        ),
+        _ => LiteXUartAction::Temperature(parse_litex_temperature(value)?),
+    };
+    Ok((count, name.to_owned(), action, pattern.as_bytes().to_vec()))
+}
+
+fn parse_litex_temperature(value: &str) -> Result<i32, String> {
+    let degrees = value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| (-40.0..=85.0).contains(value))
+        .ok_or("LiteX temperature must be between -40 and 85 degrees Celsius")?;
+    Ok((degrees * 100.0).round() as i32)
+}
+
 struct UartOutput<W: Write> {
     writer: LineWriter<W>,
     immediate: bool,
+    triggers: Vec<UartTrigger>,
 }
 
 impl<W: Write> Write for UartOutput<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.writer.write(bytes)?;
+        self.triggers
+            .retain_mut(|trigger| !trigger.receive(&bytes[..written]));
         if self.immediate {
             self.writer.flush()?;
         }
