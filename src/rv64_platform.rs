@@ -1177,25 +1177,24 @@ fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result
         };
         windows.push((address, length, 0, 0, false));
     }
-    let Some(primary) = windows
-        .iter()
-        .position(|&(_, _, offset, cpu, _)| cpu == 0 && offset == 0)
-    else {
-        return Err(entry.error("missing unscoped, zero-offset RAM registration"));
-    };
-    let (primary, primary_length, _, _, _) = windows.remove(primary);
-    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
-    if windows.iter().any(|&(_, length, offset, _, _)| {
-        length == 0 || offset.checked_add(length).is_none_or(|end| end > size)
-    }) || primary_length == 0
-        || primary_length > size
+    if windows.is_empty()
+        || windows.iter().any(|&(_, length, offset, _, _)| {
+            length == 0 || offset.checked_add(length).is_none_or(|end| end > size)
+        })
     {
         return Err(entry.error("invalid RAM window size"));
     }
-    let backing = machine
-        .bus
-        .map_ram_backing64(primary, len, primary_length as usize)
-        .map_err(|error| entry.error(&error))?;
+    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
+    let primary = windows
+        .iter()
+        .position(|&(_, _, offset, harts, _)| harts == 0 && offset == 0);
+    let backing = if let Some(primary) = primary {
+        let (base, length, _, _, _) = windows.remove(primary);
+        machine.bus.map_ram_backing64(base, len, length as usize)
+    } else {
+        machine.bus.allocate_ram_backing(len)
+    }
+    .map_err(|error| entry.error(&error))?;
     for (address, length, offset, cpu, cluster) in windows {
         machine
             .bus

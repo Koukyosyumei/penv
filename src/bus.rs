@@ -181,6 +181,12 @@ impl Bus {
         Ok(index)
     }
 
+    pub(crate) fn allocate_ram_backing(&mut self, size: usize) -> Result<usize, String> {
+        let index = self.regions.len();
+        self.regions.push(Region::new(0, size, 0)?);
+        Ok(index)
+    }
+
     pub fn map_alias64(
         &mut self,
         backing: usize,
@@ -723,6 +729,7 @@ impl Bus {
     pub(crate) fn mapped_ram_ranges64(&self) -> impl Iterator<Item = std::ops::Range<u64>> + '_ {
         self.regions
             .iter()
+            .filter(|region| region.mapped != 0)
             .map(|region| region.base..region.base + region.mapped as u64)
             .chain(
                 self.aliases

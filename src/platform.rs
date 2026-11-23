@@ -85,9 +85,16 @@ fn unquoted_delimiters<'a>(
     })
 }
 
+fn ends_with_typed_registration(prefix: &str) -> bool {
+    matches!(
+        prefix.split_whitespace().last(),
+        Some("Bus.BusPointRegistration" | "Bus.BusRangeRegistration")
+    )
+}
+
 fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &'static str> {
     let mut braces = unquoted_delimiters(declaration, &['{', '}']);
-    let Some((begin, '{')) = braces.next() else {
+    let Some((mut begin, '{')) = braces.next() else {
         return if unquoted_delimiters(declaration, &['}']).next().is_some() {
             Err("unexpected closing brace")
         } else {
@@ -97,6 +104,18 @@ fn inline_body(declaration: &str, lineno: usize) -> Result<(&str, Properties), &
     // A brace immediately after @ begins a registration expression.
     if declaration[..begin].trim_end().ends_with('@') {
         return Ok((declaration, Vec::new()));
+    }
+    if ends_with_typed_registration(&declaration[..begin]) {
+        match braces.next() {
+            Some((_, '}')) => {}
+            None => return Ok((declaration, Vec::new())),
+            _ => return Err("invalid typed registration braces"),
+        }
+        match braces.next() {
+            Some((next, '{')) => begin = next,
+            None => return Ok((declaration, Vec::new())),
+            _ => return Err("unexpected closing brace"),
+        }
     }
     let Some((end, '}')) = braces.next() else {
         return Err("expected a closing brace for inline properties");
@@ -225,6 +244,7 @@ fn parse(
         let declaration = declaration.trim_end();
         let (declaration, body) = if let Some(prefix) = declaration.strip_suffix('{')
             && !prefix.trim_end().ends_with('@')
+            && !ends_with_typed_registration(prefix)
             && brace_depth(prefix) == 0
         {
             property_block = true;

@@ -402,6 +402,10 @@ def disposition(path, name, context):
         return "pass", "Fixed RV64 assembly bytes and disassembly mnemonics and operands verified (rv64-assembly.md)"
     if path.name == "llvm-asm-disasm.robot" and name == "Should Handle Illegal Instruction When Assembling":
         return "pass", "Fixed malformed mnemonic, operand and disabled V diagnostics verified (rv64-assembly.md)"
+    if path.name == "execution-tracing.robot" and re.fullmatch(
+        r"Should Dump 64-bit PCs(?: As Binary)?(?: For Isolated Memory)?", name
+    ):
+        return "pass", "Fixed text and ReTrace PC records for shared and isolated RV64 RAM verified (rv64-pc-trace.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

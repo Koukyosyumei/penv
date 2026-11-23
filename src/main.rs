@@ -99,6 +99,7 @@ Options:
   --renode-elf-load  Load the mapped RAM portions of RV64 ELF segments
   --robot-tohost ADDRESS   Install a 4 KiB single-hart Renode-style watcher
   --max-steps N      Stop after N execution steps (0 configures only; default: 10000000)
+  --trace-pc CPU:FORMAT:PATH  Record RV64 PCs in text or binary ReTrace format
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
@@ -359,6 +360,7 @@ fn run() -> Result<ExitCode, String> {
     let mut raw = false;
     let mut rv64 = false;
     let mut stats = false;
+    let mut pc_trace = None;
     let mut stop_when_halted = false;
     let mut tohost = None;
     let mut renode_elf_load = false;
@@ -397,6 +399,32 @@ fn run() -> Result<ExitCode, String> {
             Some("--") => positional = true,
             Some("--raw") => raw = true,
             Some("--rv64") => rv64 = true,
+            Some("--trace-pc") => {
+                let error = "--trace-pc requires CPU:text:PATH or CPU:binary:PATH";
+                let specification = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or(error)?;
+                let (cpu, rest) = specification
+                    .split_once(':')
+                    .filter(|(cpu, _)| !cpu.is_empty())
+                    .ok_or(error)?;
+                let (format, path) = rest
+                    .split_once(':')
+                    .filter(|(_, path)| !path.is_empty())
+                    .ok_or(error)?;
+                let binary = match format {
+                    "text" => false,
+                    "binary" => true,
+                    _ => return Err(error.into()),
+                };
+                if pc_trace
+                    .replace((cpu.to_owned(), binary, PathBuf::from(path)))
+                    .is_some()
+                {
+                    return Err("--trace-pc may only be specified once".into());
+                }
+            }
             Some("--stats") => stats = true,
             Some("--stop-when-halted") => stop_when_halted = true,
             Some("--uart-stdin") => uart_stdin = true,
@@ -837,6 +865,17 @@ fn run() -> Result<ExitCode, String> {
     if let Some(path) = uart_input {
         uart_events.insert(0, (uart_input_at.unwrap_or(0), path));
     }
+    let pc_trace = pc_trace
+        .map(|(cpu, binary, path)| {
+            File::options()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .and_then(|file| machine::PcTrace::new(file, binary))
+                .map(|trace| (cpu, trace))
+                .map_err(|error| format!("{}: {error}", path.display()))
+        })
+        .transpose()?;
     let boot_machine = || -> Result<Machine, String> {
         let mut machine = match platform_path.as_deref() {
             Some(platform_path) => {
@@ -940,6 +979,9 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.bus.renode_unmapped_data = renode_unmapped_data;
+        if let Some((cpu, trace)) = &pc_trace {
+            machine.trace_pc(cpu, trace.clone())?;
+        }
         for action in &setup_actions {
             match action {
                 SetupAction::Assemble(cpu, address, instruction) => {
@@ -1135,6 +1177,11 @@ fn run() -> Result<ExitCode, String> {
     };
     let mut machine = boot_machine()?;
     if max_steps == 0 {
+        if let Some((_, trace)) = &pc_trace {
+            trace
+                .flush()
+                .map_err(|error| format!("RV64 PC trace: {error}"))?;
+        }
         for read in &memory_reads {
             report_ram(&machine, read)?;
         }
@@ -1154,6 +1201,11 @@ fn run() -> Result<ExitCode, String> {
     );
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
+    if let Some((_, trace)) = &pc_trace {
+        trace
+            .flush()
+            .map_err(|error| format!("RV64 PC trace: {error}"))?;
+    }
     let (stop, steps) = result?;
     if stats {
         eprintln!(

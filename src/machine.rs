@@ -1,4 +1,10 @@
-use std::{collections::VecDeque, io::Write};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    fs::File,
+    io::{BufWriter, Write},
+    rc::Rc,
+};
 
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
@@ -10,11 +16,46 @@ use crate::{
 
 pub const MAX_HARTS: usize = 8;
 
+#[derive(Clone)]
+pub(crate) struct PcTrace {
+    file: Rc<RefCell<BufWriter<File>>>,
+    binary: bool,
+}
+
+impl PcTrace {
+    pub(crate) fn new(file: File, binary: bool) -> std::io::Result<Self> {
+        let mut file = BufWriter::new(file);
+        if binary {
+            file.write_all(b"ReTrace\x05\x08\x00")?;
+        }
+        Ok(Self {
+            file: Rc::new(RefCell::new(file)),
+            binary,
+        })
+    }
+
+    fn write(&self, pc: u64) -> std::io::Result<()> {
+        let mut file = self.file.borrow_mut();
+        if self.binary {
+            let mut record = [0; 9];
+            record[..8].copy_from_slice(&pc.to_le_bytes());
+            file.write_all(&record)
+        } else {
+            writeln!(file, "0x{pc:X}")
+        }
+    }
+
+    pub(crate) fn flush(&self) -> std::io::Result<()> {
+        self.file.borrow_mut().flush()
+    }
+}
+
 pub struct Machine {
     pub bus: Bus,
     pub primary: Hart,
     secondary: Vec<Hart>,
     next_hart: usize,
+    pc_trace: Option<(usize, PcTrace)>,
     halt_hooks: Vec<(usize, u64, usize)>,
     halted: u8,
     pub(crate) stop_when_halted: bool,
@@ -156,6 +197,7 @@ impl Machine {
             },
             secondary: Vec::new(),
             next_hart: 0,
+            pc_trace: None,
             halt_hooks: Vec::new(),
             halted: 0,
             stop_when_halted: false,
@@ -297,6 +339,11 @@ impl Machine {
         self.elapsed_steps
     }
 
+    pub(crate) fn trace_pc(&mut self, name: &str, trace: PcTrace) -> Result<(), String> {
+        self.pc_trace = Some((self.rv64_hart_by_name(name)?, trace));
+        Ok(())
+    }
+
     pub(crate) fn halt_rv64_cpu(&mut self, name: &str) -> Result<(), String> {
         let hart = self.rv64_hart_by_name(name)?;
         self.halted |= 1 << hart;
@@ -383,8 +430,22 @@ impl Machine {
             if self.halted & (1 << index) != 0 {
                 continue;
             }
+            let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
+            let pc = trace.map(|_| {
+                hart.rv64
+                    .as_ref()
+                    .expect("trace targets a named RV64 CPU")
+                    .pc
+            });
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
-                Step::Retired => retired += 1,
+                Step::Retired => {
+                    retired += 1;
+                    if let (Some((_, trace)), Some(pc)) = (trace, pc) {
+                        trace
+                            .write(pc)
+                            .map_err(|error| format!("RV64 PC trace: {error}"))?;
+                    }
+                }
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
             }
