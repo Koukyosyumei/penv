@@ -1344,3 +1344,19 @@ done
 ```
 
 同じ release バイナリで両ケースの UART 期待行が順序どおり一致しました。各ログから抜き出した期待行を逆順にした入力は検証で拒否されました。公開アセット 5 個の SHA-1 は上流の指定と一致し、`cargo test --locked` は 88/88 件が通過しました。台帳の上流等価合格は累計 158 件です。SMP Linux のログインと `/proc/cpuinfo` は別ケースとして残ります。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-1a284f6-mdWJvs/` に保存しました。
+
+### LiteX SMP Linux の対話 UART
+
+固定 `LiteX_VexRiscv_SMP.robot` の `Should Boot Linux` を対象に、ステップ番号での入力注入をプロンプト駆動の UART 入力に置き換えました。Linux バージョン、4 CPU の起動、Buildroot の表示を順に確認し、ログインプロンプトを受けて `root` を送ります。シェルプロンプトを受けて `cat /proc/cpuinfo` を送り、CPU 0〜3 を順に確認します。シェルプロンプト内の ANSI 色指定を許容します。16 秒相当の 16 億シミュレーションステップを実行全体の上限とし、別にホスト側のハング防止上限を設けています。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-litex-smp-linux.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro" | tee "$repro/smp.assertions.log"
+python3 scripts/validate-litex-uart-order.py opensbi "$repro/litex-smp.uart.log"
+```
+
+公開イメージ 4 個の SHA-1 が上流の指定と一致しました。同じ release 実行で Linux の全 UART アサーションと既存 OpenSBI の 3 行を確認しました。最後の CPU 行を受信した後、検証側がシミュレーターを停止しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 159 件です。残る LiteX ケースと最大 ISA 構成の全件確認は未達です。UART、生の終了状態と照合結果は `~/.local/state/penv-dispatch/evidence/riscv/backlog-114167a-7kUH0M/` に保存しました。

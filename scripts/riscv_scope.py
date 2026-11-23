@@ -39,6 +39,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "target", "ported", "fixed Tock ELF and RESC; initialization and three ordered D1/D2 UART pairs checked"
     if (filename, case) == ("LiteX_VexRiscv_SMP.robot", "Should Run OpenSBI"):
         return "target", "ported", "fixed SMP images, load addresses and four startup PCs; ordered OpenSBI UART assertions checked"
+    if (filename, case) == ("LiteX_VexRiscv_SMP.robot", "Should Boot Linux"):
+        return "target", "ported", "fixed SMP images and four startup PCs; ordered boot, prompt-driven login and four cpuinfo entries checked"
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:

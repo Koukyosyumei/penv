@@ -194,16 +194,9 @@ diff -u <(printf 'processor\t: 0\n') <(
 )
 
 prepare_assets "$litex"
-run_to_step_limit litex-smp "$litex" --uart-event "600000000:$artifacts/litex-login.input" \
-    --uart-event "675000000:$artifacts/litex-cpuinfo.input" --max-steps 725000000
+python3 "$(dirname -- "$0")/validate-litex-smp-linux.py" "$penv" "$renode_root" "$assets" "$artifacts" \
+    | tee "$artifacts/litex-smp.assertions.log"
 python3 "$(dirname -- "$0")/validate-litex-uart-order.py" opensbi "$artifacts/litex-smp.uart.log"
-for marker in 'Linux version 5.0.9' \
-    'smp: Brought up 1 node, 4 CPUs' 'Welcome to Buildroot' 'buildroot login:'; do
-    rg -aqF "$marker" "$artifacts/litex-smp.uart.log"
-done
-for hart in 0 1 2 3; do
-    rg -aq "^processor[[:blank:]]*: $hart\r*$" "$artifacts/litex-smp.uart.log"
-done
 prepare_assets "$renode_root/$i2s"
 pcm=$(awk -F= '/^\$input_file\?=@https:/ { print $2 }' "$renode_root/$i2s")
 pcm_output=$(realpath "$artifacts")/echo.raw
