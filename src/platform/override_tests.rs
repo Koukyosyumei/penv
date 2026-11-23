@@ -503,3 +503,31 @@ fn renode_registration_validation_non_peripheral_parent() {
     let error = check_string("\nemptyIterestingType: Antmicro.Renode.UnitTests.Mocks.EmptyInterestingType\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ emptyIterestingType\n", None).unwrap_err();
     assert!(error.contains("CastException:"));
 }
+
+#[test]
+fn renode_registration_resolution_no_constructor() {
+    let error = check_string(
+        "\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus \"something\"",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("NoCtorForRegistrationPoint:"));
+}
+
+#[test]
+fn renode_registration_resolution_ambiguous_constructor() {
+    let error = check_string("\nregister: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister\ndevice: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register 1", None).unwrap_err();
+    assert!(error.contains("AmbiguousCtorForRegistrationPoint:"));
+}
+
+#[test]
+fn renode_registration_resolution_ambiguous_point_type() {
+    let error = check_string("\nregister: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister\nregPoint: Antmicro.Renode.UnitTests.Mocks.MockRegistrationPoint\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register regPoint", None).unwrap_err();
+    assert!(error.contains("AmbiguousRegistrationPointType:"));
+}
+
+#[test]
+fn renode_registration_resolution_ambiguous_registree() {
+    let error = check_string("\nregister: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register 2.0", None).unwrap_err();
+    assert!(error.contains("AmbiguousRegistree:"));
+}

@@ -1030,6 +1030,36 @@ fn validate_entry_references(
                         entry.error("TypeMismatch: CPU cannot be a sysbus registration point")
                     );
                 }
+            } else if quoted_string(point).is_some() {
+                return Err(entry.error(
+                    "NoCtorForRegistrationPoint: sysbus point requires an address or range",
+                ));
+            }
+        } else if let Some((parent, point)) = registration.split_once(char::is_whitespace)
+            && let Some(&index) = declared.get(parent)
+            && declarations[index].model == "Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister"
+            && entry.model == EMPTY_PERIPHERAL
+        {
+            let point = point.trim();
+            // This fixture accepts byte and doubleword children at a double point,
+            // doubleword children at an integer bus point, and two point interfaces.
+            let diagnostic = if let Some(&index) = declared.get(point) {
+                (declarations[index].model
+                    == "Antmicro.Renode.UnitTests.Mocks.MockRegistrationPoint")
+                    .then_some(
+                        "AmbiguousRegistrationPointType: point implements two accepted interfaces",
+                    )
+            } else if let Some(token) = number_token(point) {
+                Some(if token.contains('.') {
+                    "AmbiguousRegistree: point accepts both byte and doubleword peripheral interfaces"
+                } else {
+                    "AmbiguousCtorForRegistrationPoint: integer fits both bus and double point constructors"
+                })
+            } else {
+                None
+            };
+            if let Some(diagnostic) = diagnostic {
+                return Err(entry.error(diagnostic));
             }
         } else if is_repl_identifier(registration)
             && let Some(&index) = declared.get(registration)
