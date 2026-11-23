@@ -1,3 +1,5 @@
+mod ble;
+
 use std::{collections::VecDeque, io::Write};
 
 use crate::{
@@ -305,133 +307,20 @@ impl Machine {
         Ok(())
     }
 
-    pub fn run_radio_pair(
-        &mut self,
-        peer: &mut Self,
-        limit: u64,
-        output: &mut impl Write,
-    ) -> Result<(Stop, u64), String> {
-        self.bus.attach_radio_medium()?;
-        peer.bus.attach_radio_medium()?;
-        let mut retired = 0;
-        let mut primary_uart = Vec::new();
-        let mut peer_uart = Vec::new();
-        for _ in 0..limit {
-            let result = self
-                .run(1, &mut primary_uart)
-                .map_err(|e| format!("primary: {e}"));
-            let (stop, count) =
-                Self::flush_radio_uart(result, "primary", &mut primary_uart, output)?;
-            retired += count;
-            if stop != Stop::Limit {
-                return Ok((stop, retired));
-            }
-            let result = peer
-                .run(1, &mut peer_uart)
-                .map_err(|e| format!("peer: {e}"));
-            let (stop, count) = Self::flush_radio_uart(result, "peer", &mut peer_uart, output)?;
-            retired += count;
-            if stop != Stop::Limit {
-                return Ok((stop, retired));
-            }
-            Self::exchange_radio(self, peer)?;
-        }
-        Ok((Stop::Limit, retired))
-    }
-
-    pub fn run_hci_radio_pair(
-        &mut self,
-        peer: &mut Self,
-        controllers: &mut [Self; 2],
-        limit: u64,
-        output: &mut impl Write,
-    ) -> Result<(Stop, u64), String> {
-        let [central, peripheral] = controllers;
-        central.bus.attach_radio_medium()?;
-        peripheral.bus.attach_radio_medium()?;
-        let central_host_link = self.bus.attach_uart_link("uart1")?;
-        let central_controller_link = central.bus.attach_uart_link("uart1")?;
-        let peripheral_host_link = peer.bus.attach_uart_link("uart1")?;
-        let peripheral_controller_link = peripheral.bus.attach_uart_link("uart1")?;
-        let mut nodes = [self, peer, central, peripheral];
-        let labels = [
-            "primary",
-            "peer",
-            "central controller",
-            "peripheral controller",
-        ];
-        let mut uart: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
-        let mut retired = 0;
-        for step in 0..limit {
-            // The upstream RESC holds the hosts in reset while the controllers start.
-            let first_node = if step < crate::bus::CORTEX_M_STEP_HZ {
-                2
-            } else {
-                0
-            };
-            for index in first_node..nodes.len() {
-                let result = nodes[index]
-                    .run(1, &mut uart[index])
-                    .map_err(|e| format!("{}: {e}", labels[index]));
-                let (stop, count) =
-                    Self::flush_radio_uart(result, labels[index], &mut uart[index], output)?;
-                retired += count;
-                if stop != Stop::Limit {
-                    return Ok((stop, retired));
-                }
-            }
-            let [host, peer, central, peripheral] = &mut nodes;
-            host.bus
-                .exchange_uart_link(central_host_link, &mut central.bus, central_controller_link)
-                .map_err(|e| format!("central HCI UART: {e}"))?;
-            peer.bus
-                .exchange_uart_link(
-                    peripheral_host_link,
-                    &mut peripheral.bus,
-                    peripheral_controller_link,
-                )
-                .map_err(|e| format!("peripheral HCI UART: {e}"))?;
-            Self::exchange_radio(central, peripheral)?;
-        }
-        Ok((Stop::Limit, retired))
-    }
-
-    fn exchange_radio(primary: &mut Self, peer: &mut Self) -> Result<(), String> {
-        let primary_frame = primary.bus.tick_radio_air();
-        let peer_frame = peer.bus.tick_radio_air();
-        if let Some(frame) = primary_frame {
-            peer.bus
-                .receive_radio_air(frame)
-                .map_err(|e| format!("peer RADIO: {e}"))?;
-        }
-        if let Some(frame) = peer_frame {
-            primary
-                .bus
-                .receive_radio_air(frame)
-                .map_err(|e| format!("primary RADIO: {e}"))?;
-        }
-        Ok(())
-    }
-
-    fn flush_radio_uart(
-        result: Result<(Stop, u64), String>,
-        node: &str,
-        uart: &mut Vec<u8>,
-        output: &mut impl Write,
-    ) -> Result<(Stop, u64), String> {
-        while let Some(end) = uart.iter().position(|&byte| byte == b'\n') {
-            write!(output, "{node}: ").map_err(|e| e.to_string())?;
-            output.write_all(&uart[..=end]).map_err(|e| e.to_string())?;
-            uart.drain(..=end);
-        }
-        result
-    }
-
     pub fn report_uart_steps(&mut self, enabled: bool) {
         self.uart_step_prefix = enabled;
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
+        self.run_steps(limit, output, None)
+    }
+
+    fn run_steps(
+        &mut self,
+        limit: u64,
+        output: &mut impl Write,
+        mut radio_outbox: Option<&mut Vec<crate::nrf52840::AirFrame>>,
+    ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
             let index = self.next_hart;
@@ -505,6 +394,11 @@ impl Machine {
             } else {
                 hart.execute_step(&mut self.bus, self.elapsed_steps, output)
             };
+            if let Some(outbox) = radio_outbox.as_deref_mut()
+                && let Some(frame) = self.bus.tick_radio_air()
+            {
+                outbox.push(frame);
+            }
             match result? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}

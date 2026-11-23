@@ -23,8 +23,8 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 240 Should Run Zephyr's cmsis_dps.transform.rq15 Test | CMSIS transform_rq15 ELF | `PROJECT EXECUTION SUCCESSFUL`。追加回帰 |
 | 249 Should Restart After Watchdog Timeout | Zephyr WDT ELF、上流 monitor で CPU を 1 MIPS に設定 | 元の RESC コマンドで 1 MIPS を設定し、元の ELF の起動行を 2 回照合 |
 | 262 Should Run Task Watchdog Subsystem | task_wdt ELF | 既定 100 MIPS と元の ELF。Robot と同じ 20 件の順次 UART 照合。各待機は仮想 8 秒 |
-| 291 Should Run Bluetooth sample | HR central/peripheral 各 ELF、2 台、同じ RF 媒体、global quantum 10 µs | 起動、初期化、アドレス C0:00:AA:BB:CC:DD へ接続、購読、通知。起動行と期待アドレスの判定を追加。現在の BLE 再検証を参照 |
-| 332 Should Run Bluetooth Hci Uart Sample | `scripts/multi-node/nrf52840-ble-hci-uart-zephyr.resc` の 4 台。UART1 HCI ペア 2 本、BLE 媒体、controller 先行 1 s、quantum 10 µs | Zephyr 3.6.0 の両 host 起動・接続・購読・通知。元の 3 ELF を 4 台で起動し、UART1 で HCI フレーム、RADIO で接続・購読・通知を確認。CLI で同じ接続を構成。上流の 10 µs 量子条件は照合待ち |
+| 291 Should Run Bluetooth sample | HR central/peripheral 各 ELF、2 台、同じ RF 媒体、global quantum 10 µs | 起動、初期化、アドレス C0:00:AA:BB:CC:DD へ接続、購読、通知。10 µs で同期し、上流の11件を照合。2バイト通知を確認 |
+| 332 Should Run Bluetooth Hci Uart Sample | `scripts/multi-node/nrf52840-ble-hci-uart-zephyr.resc` の 4 台。UART1 HCI ペア 2 本、BLE 媒体、controller 先行 1 s、quantum 10 µs | Zephyr 3.6.0 の両 host 起動・接続・購読・通知。元の 3 ELF を 4 台で起動し、UART1 で HCI フレーム、RADIO で接続・購読・通知を確認。CLI で同じ接続を構成し、10 µs で同期。上流の11件を照合 |
 | 355 Should Return The Chip Id With I2C | MicroPython ELF、BME280 @ twi0 0x76、`readfrom_mem(0x76, 0xD0, 1)` | `ID: 0x60` と上流指定の 3 診断が出ないこと。追加回帰 |
 | 372 Should Scan The I2C Bus Correctly | 同じ ELF、別起動の同じ REPL、`i.scan()` | `S: [118]`。追加回帰 |
 
@@ -67,10 +67,10 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
-| `tests/platforms/NRF52840.robot` | 17 | 15 | 2 | 0 |
+| `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
 | 監査した共有・混成 Robot | 190 | 41 | 4 | 145 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **56** | **6** | **159** |
+| 合計 | **221** | **58** | **4** | **159** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -94,6 +94,7 @@ tests/nrf52840-fpu-upstream.sh target/release/penv ../renode /tmp/nrf52-fpu
 tests/nrf52840-spi-mux-upstream.sh target/release/penv ../renode /tmp/nrf52-spi-mux
 tests/nrf52840-lis2ds12-upstream.sh target/release/penv ../renode /tmp/nrf52-lis
 tests/nrf52840-sensors-upstream.sh target/release/penv ../renode /tmp/nrf52-sensors
+tests/nrf52840-ble-pair.sh target/release/penv ../renode CENTRAL_HR_ELF PERIPHERAL_HR_ELF
 tests/nrf52840-hci-upstream.sh target/release/penv ../renode /tmp/nrf52-hci
 tests/nrf52840-nano33-upstream.sh target/release/penv ../renode /tmp/nrf52-nano33
 tests/nrf52840-monitor-upstream.sh target/release/penv ../renode /tmp/nrf52-monitor
@@ -111,3 +112,13 @@ Nano 33 BLE は未変更の上流 REPL を使用する。ArduCAM の 4 画像は
 固定上流の `UartKeywords.cs` と `TerminalTester.cs` は、既定で次の一致行までを消費する。UART の探索は再起動後の行にも続く。Renode 1.17.0 で固定チェックアウトの Robot 本文を実行したところ、両ケースが通った。Task Watchdog の実ログでは `Control thread getting stuck...` の直後にコールバックとリセットが出る。その後の起動で次の生存ログを照合し、さらに続くコールバックを照合する。回帰ではファームウェアの実出力をこの順序で照合する。
 
 `nrf52840-watchdogs-upstream.sh` は上流 ELF の SHA-1 を照合し、各マーカーを前回一致から仮想 8 秒以内に探す。改行済みの UART 行を使う。時刻は penv の `--uart-steps` が付ける各行の出力開始スロットを秒に換算する。最後に一致した行で停止し、UART と一致時刻を保存する。
+
+## BLE の量子と UART 観測
+
+両ケースで、既定の Cortex-M クロックの 1,000 スロットを仮想 10 µs の同期量子として使う。各ノードの RADIO はローカルのクロックで進み、別ノードへの RF フレームと HCI UART の受信は同期点で反映される。4台構成ではコントローラを仮想 1 秒先行させてからホストを実行する。
+
+BLE 実行時の `--uart-steps` は、改行済みの UART 行を観測した同期点を全ノード共通のステップで表示する。UART0 のテスターごとに行を保持し、Robot 本文と同じ順序で11件を照合する。一致行までをそのテスターで消費し、もう一方のテスターの行を保持する。各待機の上限は仮想 8 秒。心拍ケースでは従来の2バイト通知の確認も行う。心拍サンプルの ELF は `nrf52840-acceptance.sh` に記載の SHA-1 で照合できる。
+
+HCI の回帰は上流 RESC と同じ4台・2本の HCI 接続と無線媒体を CLI から構成する。任意の複数マシン RESC 構文と物理 RF は別の対応範囲。
+
+固定 ELF で両ケースの11件が合格した。心拍ケースの中央通知行は仮想 1.02091 秒、周辺側の HRS 確認後に照合が完了したのは 1.62088 秒。HCI UART の最後の通知は仮想 2.37966 秒に照合した。Renode 1.17.0 でも固定チェックアウトの Robot ケース本文を走らせ、両ケースが通過した。心拍 peripheral の取得 URL は同じ SHA-1 のハイフン表記を用いた。

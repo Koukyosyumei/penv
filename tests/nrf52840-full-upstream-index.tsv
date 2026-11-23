@@ -176,8 +176,8 @@ renode	tests/platforms/NRF52840.robot	232-239	Should Run Zephyr's kernel.interru
 renode	tests/platforms/NRF52840.robot	240-248	Should Run Zephyr's cmsis_dps.transform.rq15 Test	Zephyr CMSIS transform_rq15 ELF	対象	合格・board-extra	in	pass
 renode	tests/platforms/NRF52840.robot	249-261	Should Restart After Watchdog Timeout	Zephyr WDT ELF; CPU 1 MIPS	対象	合格・RESC の CPU 1 MIPS 設定と元の ELF で UART 起動行を 2 回照合	in	pass
 renode	tests/platforms/NRF52840.robot	262-290	Should Run Task Watchdog Subsystem	Zephyr task_wdt ELF; 10 ordered UART markers ×2	対象	合格・元の ELF で Robot の順次 UART 照合 20 件、各待機は仮想 8 秒	in	pass
-renode	tests/platforms/NRF52840.robot	291-331	Should Run Bluetooth sample	HR central/peripheral ELF; RF medium; quantum 10 us; C0:00:AA:BB:CC:DD	対象	実 ELF で指定の起動・接続・通知。量子条件照合待ち	in	partial
-renode	tests/platforms/NRF52840.robot	332-354	Should Run Bluetooth Hci Uart Sample	2 hosts and 2 controllers; UART1 HCI hubs; RF medium; controller lead 1 s; quantum 10 us	対象	実 ELF で指定の起動・接続・通知。量子条件照合待ち	in	partial
+renode	tests/platforms/NRF52840.robot	291-331	Should Run Bluetooth sample	HR central/peripheral ELF; RF medium; quantum 10 us; C0:00:AA:BB:CC:DD	対象	合格・固定 ELF、同期量子 10 µs、Robot の UART 待機11件をテスター別に照合	in	pass
+renode	tests/platforms/NRF52840.robot	332-354	Should Run Bluetooth Hci Uart Sample	2 hosts and 2 controllers; UART1 HCI hubs; RF medium; controller lead 1 s; quantum 10 us	対象	合格・固定 ELF、同期量子 10 µs、Robot の UART 待機11件をテスター別に照合	in	pass
 renode	tests/platforms/NRF52840.robot	355-371	Should Return The Chip Id With I2C	MicroPython ELF; twi0 0x76 BME280; readfrom_mem(0x76,0xD0,1)	対象	合格・board-extra	in	pass
 renode	tests/platforms/NRF52840.robot	372-383	Should Scan The I2C Bus Correctly	MicroPython ELF; twi0 0x76 BME280; i.scan()	対象	合格・board-extra	in	pass
 renode	tests/platforms/imxrt500.robot	2-18	Should Run Pigweed Bluetooth Advertiser	Execute Command include @scripts/multi-node/imxrt500_nrf52840_pigweed_bt_advertiser.resc	混成ボード・対象	上流等価の合格証拠なし	in	unmet

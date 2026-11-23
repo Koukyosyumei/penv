@@ -12,7 +12,7 @@
 | Should Detect Yes Pattern | `audio/speech.log` | 上流 PCM で実 ELF が `Heard yes` を表示 |
 | Should Detect Passed Interrupt In WFE | `audio/wfe.log` | 割り込みを処理した後に WFE を通過 |
 | Should Run Zephyr's kernel.interrupt Test | `audio/interrupt.log` | `PROJECT EXECUTION SUCCESSFUL` |
-| Should Run Bluetooth sample | `ble-pair.log`、`ble-central.log` | 上流の 2 ELF が仮想無線上で接続し、購読後に 2 バイトの心拍通知を受信。central 単体でもスキャン開始 |
+| Should Run Bluetooth sample | `ble-pair.log`、`ble-central.log` | 上流の 2 ELF が量子 10 µs で動作し、UART 待機11件と2バイト通知を確認。central 単体でもスキャン開始 |
 | レガシー TWI / SPI | `twi.log`、`spi.log` | 検証 ELF で TWI の NACK、再 START、IRQ 3/4、SPI の READY、バッファ、IRQ 35 |
 | TIMER / I²S / PDM | `timer.log`、`i2s.log`、`pdm.log` | 検証 ELF で比較・PPI・IRQ、SRAM バッファ、PCM、転送終了を確認 |
 | RADIO / RNG / ECB / EGU | `radio.log`、`rng.log`、`ecb.log`、`egu.log` | 検証 ELF で送受信、乱数開始停止、AES 既知答え、イベントと各 IRQ |
