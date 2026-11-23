@@ -58,7 +58,7 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
     if filename == "riscv-lr-sc-strong-atomicity.robot" and parameter:
         if parameter.startswith("RV64"):
             return "outside", "outside", "riscv-lr-sc-strong-atomicity.repl selects CPU.RiscV64 cpu_0/cpu_1"
-        return "target", "pending", "mixed-width REPL selects CPU.RiscV32 cpu32_0/cpu32_1; ordered steps and write width required"
+        return "target", "ported", "fixed RV32 hart IDs 2/3, both memory models and original ordered steps; shared memory and failed SC checked"
     if filename == "riscv-interrupt-mode.robot":
         mode = re.search(r"(?m)^\s+Create Machine\s+(Auto|Direct|Vectored)\s*$", source)
         if mode:

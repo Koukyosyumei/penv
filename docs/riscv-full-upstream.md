@@ -624,3 +624,22 @@ python3 scripts/validate-rv32-vector-diagnostic.py target/release/penv ../renode
 Rust テスト 82 件、公開特権 ELF 22 件、virt の UART・CLINT・PLIC、ベクトル初期化 ELF が通過しました。上流等価合格は累計 101 件です。ベクトル命令本体と、翻訳ブロックの境界をログで検査するタイマーケースは残っています。
 
 変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-74b8d15-XZOEpw/` に保存しました。
+
+### RV32 のハート間 LR/SC 予約無効化
+
+固定 `riscv-lr-sc-strong-atomicity.robot` の RV32 パラメータ 12 組を移植しました。ハート ID 2 と 3、MappedMemory の 0x81000000、ArrayMemory の 0x00100000、元の命令語とオペランドを使います。片方の LR と SC の間に他方の LR/SC、AMOSWAP、AMOADD、SB、SH、SW を実行します。値を変えない書き込みでも、元ケースと同じ 64 ビットのメモリー比較と SC 結果 `1` を全組で確認しました。
+
+固定混在フィクスチャから待機中の RV64 ハートを省略しました。Renode のモニターによる単一ステップの代わりに、通常実行と共有する Rust のハート実行処理を元の順序で直接呼び出します。予約無効化の挙動は既存実装で一致しました。この移植は RV32 の対話モニターに `Step` や `SingleStepBlocking` を追加するものではありません。
+
+```bash
+cargo test --locked upstream_rv32_writes_invalidate -- --nocapture
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --artifacts "$evidence/atomic-rerun" "$work"/isa/rv32ua-[pv]-*
+```
+
+Rust テスト 83 件と公開 RV32 A ELF 20 件が通過し、virt の `mhartid=32` で実 ELF の LR/SC も確認しました。LiteX SMP Linux の実イメージでも 4 ハート起動、ログイン、CPU 一覧を確認しました。上流等価合格は累計 113 件です。公開 ISA ELF は virt 上での回帰結果です。最大 ISA 構成での上流実行と台帳の未確定ケースが残っています。
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-d7dd072-k4czxK/` に保存しました。

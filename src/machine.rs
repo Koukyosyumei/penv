@@ -470,20 +470,7 @@ impl Machine {
             } else {
                 self.next_hart += 1;
             }
-            let hart = if index == 0 {
-                &mut self.primary
-            } else {
-                &mut self.secondary[index - 1]
-            };
-            self.bus
-                .tick_litex_uart(self.elapsed_steps, output)
-                .map_err(|error| format!("UART: {error}"))?;
-            match hart.execute_step(
-                &mut self.bus,
-                self.elapsed_steps,
-                output,
-                self.function_symbols.as_ref(),
-            )? {
+            match self.execute_hart(index, output)? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
@@ -493,6 +480,23 @@ impl Machine {
             }
         }
         Ok((Stop::Limit, retired))
+    }
+
+    fn execute_hart(&mut self, index: usize, output: &mut impl Write) -> Result<Step, String> {
+        let hart = if index == 0 {
+            &mut self.primary
+        } else {
+            &mut self.secondary[index - 1]
+        };
+        self.bus
+            .tick_litex_uart(self.elapsed_steps, output)
+            .map_err(|error| format!("UART: {error}"))?;
+        hart.execute_step(
+            &mut self.bus,
+            self.elapsed_steps,
+            output,
+            self.function_symbols.as_ref(),
+        )
     }
 }
 
@@ -1190,6 +1194,94 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_rv32_writes_invalidate_other_harts_reservations() {
+        // riscv-lr-sc-strong-atomicity.robot runs only the two selected RV32 harts.
+        let directory =
+            std::env::temp_dir().join(format!("penv-rv32-lr-sc-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"dram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x80000000 }
+mmio: Memory.ArrayMemory @ sysbus 0x100000 { size: 0x10000 }
+cpu32_0: CPU.RiscV32 @ sysbus
+    cpuType: "rv32gc_zicsr_zifencei"
+    hartId: 2
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+    timeProvider: empty
+    allowUnalignedAccesses: true
+cpu32_1: CPU.RiscV32 @ sysbus
+    cpuType: "rv32gc_zicsr_zifencei"
+    hartId: 3
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+    timeProvider: empty
+    allowUnalignedAccesses: true
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None).unwrap();
+        const CORE0: u32 = 0x8000_0000;
+        const CORE1: u32 = 0x8000_0100;
+        const NEW: u32 = 0xbeee_eeef;
+        let mut output = std::io::sink();
+        for address in [0x8100_0000, 0x0010_0000] {
+            for (name, writer) in [
+                ("lr.w/sc.w", &[0x1005_282fu32, 0x18e5_292f][..]),
+                ("amoswap.w", &[0x08e5_292f]),
+                ("amoadd.w", &[0x0005_272f]),
+                ("sb", &[0x00e5_0023]),
+                ("sh", &[0x00e5_1023]),
+                ("sw", &[0x00e5_2023]),
+            ] {
+                machine.monitor_pc("cpu32_0", Some(CORE0)).unwrap();
+                machine.monitor_pc("cpu32_1", Some(CORE1)).unwrap();
+                machine
+                    .bus
+                    .memory(address, 8)
+                    .unwrap()
+                    .copy_from_slice(&5u64.to_le_bytes());
+                for slot in 0..2 {
+                    let hart = machine.hart_mut(slot);
+                    hart.registers[10] = address;
+                    hart.registers[12] = NEW;
+                    hart.registers[14] = 5;
+                }
+                for (pc, code) in [(CORE0, &[0x1005_25afu32, 0x18c5_26af][..]), (CORE1, writer)] {
+                    for (index, instruction) in code.iter().enumerate() {
+                        machine
+                            .bus
+                            .memory(pc + index as u32 * 4, 4)
+                            .unwrap()
+                            .copy_from_slice(&instruction.to_le_bytes());
+                    }
+                }
+                let mut step = |slot| {
+                    machine.elapsed_steps += 1;
+                    assert!(matches!(
+                        machine.execute_hart(slot, &mut output).unwrap(),
+                        Step::Retired
+                    ));
+                };
+                step(0);
+                for _ in writer {
+                    step(1);
+                }
+                step(0);
+
+                let lower = machine.bus.read_ram::<4>(address).unwrap();
+                let upper = machine.bus.read_ram::<4>(address + 4).unwrap();
+                assert_ne!(
+                    u64::from(lower) | (u64::from(upper) << 32),
+                    u64::from(NEW),
+                    "{name} {address:#x}"
+                );
+                assert_eq!(machine.primary.registers[13], 1, "{name} {address:#x}");
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn upstream_rv32_amocas_single_page() {
