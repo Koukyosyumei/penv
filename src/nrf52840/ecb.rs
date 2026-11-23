@@ -86,7 +86,7 @@ fn multiply_by_x(value: u8) -> u8 {
     (value << 1) ^ if value & 0x80 != 0 { 0x1b } else { 0 }
 }
 
-fn aes128(mut key: [u8; 16], mut state: [u8; 16]) -> [u8; 16] {
+pub(super) fn aes128(mut key: [u8; 16], mut state: [u8; 16]) -> [u8; 16] {
     for (byte, key_byte) in state.iter_mut().zip(key) {
         *byte ^= key_byte;
     }

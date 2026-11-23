@@ -805,7 +805,8 @@ impl Thumb {
                         next = architectural_pc;
                     }
                 } else if self.thumb2
-                    && (self.move_wide(inst, low, r)
+                    && (self.add_sub_wide(inst, low, architectural_pc, r)
+                        || self.move_wide(inst, low, r)
                         || self.extract_bits(inst, low, r)
                         || self.insert_bits(inst, low, r)
                         || self.modified_immediate(inst, low, r))

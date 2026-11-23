@@ -276,6 +276,65 @@ impl Machine {
         Ok(())
     }
 
+    pub fn run_radio_pair(
+        &mut self,
+        peer: &mut Self,
+        limit: u64,
+        output: &mut impl Write,
+    ) -> Result<(Stop, u64), String> {
+        self.bus.attach_radio_medium()?;
+        peer.bus.attach_radio_medium()?;
+        let mut retired = 0;
+        let mut primary_uart = Vec::new();
+        let mut peer_uart = Vec::new();
+        for _ in 0..limit {
+            let result = self
+                .run(1, &mut primary_uart)
+                .map_err(|e| format!("primary: {e}"));
+            let (stop, count) =
+                Self::flush_radio_uart(result, "primary", &mut primary_uart, output)?;
+            retired += count;
+            if stop != Stop::Limit {
+                return Ok((stop, retired));
+            }
+            let result = peer
+                .run(1, &mut peer_uart)
+                .map_err(|e| format!("peer: {e}"));
+            let (stop, count) = Self::flush_radio_uart(result, "peer", &mut peer_uart, output)?;
+            retired += count;
+            if stop != Stop::Limit {
+                return Ok((stop, retired));
+            }
+            let primary_frame = self.bus.tick_radio_air();
+            let peer_frame = peer.bus.tick_radio_air();
+            if let Some(frame) = primary_frame {
+                peer.bus
+                    .receive_radio_air(frame)
+                    .map_err(|e| format!("peer RADIO: {e}"))?;
+            }
+            if let Some(frame) = peer_frame {
+                self.bus
+                    .receive_radio_air(frame)
+                    .map_err(|e| format!("primary RADIO: {e}"))?;
+            }
+        }
+        Ok((Stop::Limit, retired))
+    }
+
+    fn flush_radio_uart(
+        result: Result<(Stop, u64), String>,
+        node: &str,
+        uart: &mut Vec<u8>,
+        output: &mut impl Write,
+    ) -> Result<(Stop, u64), String> {
+        while let Some(end) = uart.iter().position(|&byte| byte == b'\n') {
+            write!(output, "{node}: ").map_err(|e| e.to_string())?;
+            output.write_all(&uart[..=end]).map_err(|e| e.to_string())?;
+            uart.drain(..=end);
+        }
+        result
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {

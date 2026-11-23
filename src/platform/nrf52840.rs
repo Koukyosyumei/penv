@@ -120,6 +120,10 @@ pub(super) fn map_peripheral(
     } else if entry.model == "Miscellaneous.NRF52840_RNG" {
         Peripheral::rng(base, irq as u8, name)
     } else if entry.model == "Wireless.NRF52840_Radio" {
+        if base == 0x4000_1000 {
+            bus.map_nrf_peripheral(Peripheral::aar())
+                .map_err(|e| entry.error(&e))?;
+        }
         Peripheral::radio(base, irq as u8, name, loopback.unwrap_or(false))
     } else if entry.model == "Sound.NRF52840_PDM" {
         Peripheral::pdm(base, irq as u8, name)

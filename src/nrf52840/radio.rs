@@ -35,11 +35,27 @@ enum State {
     RxIdle = 2,
     Rx = 3,
     TxIdle = 10,
+    Tx = 11,
 }
 
 struct Packet {
     config: [u32; 4],
     bytes: Vec<u8>,
+}
+
+pub(crate) struct AirFrame {
+    channel: u32,
+    mode: u32,
+    access_address: (u32, u8, u32),
+    bytes: Vec<u8>,
+    remaining: u64,
+}
+
+struct AirTx {
+    until_address: u64,
+    remaining: u64,
+    length: usize,
+    frame: Option<AirFrame>,
 }
 
 pub(super) struct Radio {
@@ -57,10 +73,14 @@ pub(super) struct Radio {
     mode_config: u32,
     link_config: [u32; 11],
     device_addresses: [u32; 17],
+    device_match_index: u32,
     bit_compare: u32,
     bit_counter: bool,
     crc_ok: bool,
     packet: Option<Packet>,
+    medium: bool,
+    air_tx: Option<AirTx>,
+    air_rx: Option<(u64, usize)>,
 }
 
 impl Radio {
@@ -80,15 +100,121 @@ impl Radio {
             mode_config: 0x200,
             link_config: [0; 11],
             device_addresses: [0; 17],
+            device_match_index: 0,
             bit_compare: 0,
             bit_counter: false,
             crc_ok: false,
             packet: None,
+            medium: false,
+            air_tx: None,
+            air_rx: None,
         }
     }
 
     pub(super) fn reset(&mut self) {
+        let medium = self.medium;
         *self = Self::new(self.loopback);
+        self.medium = medium;
+    }
+
+    pub(super) fn attach_medium(&mut self) {
+        self.medium = true;
+    }
+
+    fn access_address(&self, index: u32) -> (u32, u8, u32) {
+        let length = (self.config[3] >> 16) & 7;
+        let base = self.link_config[usize::from(index != 0)];
+        let prefix = (self.link_config[(2 + index / 4) as usize] >> ((index % 4) * 8)) as u8;
+        let mask = if length == 0 {
+            0
+        } else {
+            u32::MAX << (32 - length.min(4) * 8)
+        };
+        (base & mask, prefix, length)
+    }
+
+    pub(super) fn tick_air(&mut self) -> Option<AirFrame> {
+        if let Some((remaining, length)) = &mut self.air_rx {
+            *remaining -= 1;
+            if *remaining == 0 {
+                let length = *length;
+                self.air_rx = None;
+                self.state = State::RxIdle;
+                self.crc_ok = true;
+                self.raise(CRC_OK);
+                self.finish_packet(length, false);
+            }
+        }
+        let tx = self.air_tx.as_mut()?;
+        tx.remaining -= 1;
+        if tx.remaining == 0 {
+            let length = tx.length;
+            self.air_tx = None;
+            self.state = State::TxIdle;
+            self.finish_packet(length, false);
+        } else if tx.frame.is_some() {
+            tx.until_address -= 1;
+            if tx.until_address == 0 {
+                let mut frame = tx.frame.take().unwrap();
+                frame.remaining = tx.remaining;
+                self.begin_packet();
+                return Some(frame);
+            }
+        }
+        None
+    }
+
+    pub(super) fn receive_air(&mut self, frame: AirFrame, bus: &mut Bus) -> Result<(), BusError> {
+        if !matches!(self.state, State::Rx)
+            || self.air_rx.is_some()
+            || self.config[0] != frame.channel
+            || self.config[1] != frame.mode
+            || !(0..8).any(|index| {
+                self.link_config[5] & (1 << index) != 0
+                    && self.access_address(index) == frame.access_address
+            })
+        {
+            return Ok(());
+        }
+        let header = self.header_length();
+        let length = frame
+            .bytes
+            .len()
+            .min(header + (self.config[3] & 255) as usize);
+        if length != 0 {
+            let address = super::dma_address(self.pointer, length)?;
+            bus.memory(address, length)?
+                .copy_from_slice(&frame.bytes[..length]);
+        }
+        self.match_device(&frame.bytes, header);
+        self.air_rx = Some((frame.remaining, length));
+        self.begin_packet();
+        Ok(())
+    }
+
+    fn match_device(&mut self, bytes: &[u8], header: usize) {
+        let enabled = self.device_addresses[16] & 0xff;
+        if enabled == 0 {
+            return;
+        }
+        let Some(address) = bytes.get(header..header + 6) else {
+            return;
+        };
+        let base = u32::from_le_bytes(address[..4].try_into().unwrap());
+        let prefix = u32::from(u16::from_le_bytes(address[4..].try_into().unwrap()));
+        let random = bytes[0] >> 6 & 1;
+        for index in 0..8 {
+            if enabled & (1 << index) != 0
+                && (self.device_addresses[16] >> (8 + index)) & 1 == u32::from(random)
+                && self.device_addresses[index] == base
+                && self.device_addresses[index + 8] == prefix
+            {
+                self.device_match_index = index as u32;
+                self.raise(DEVICE_MATCH);
+                return;
+            }
+        }
+        self.raise(DEVICE_MISS);
     }
 
     pub(super) fn pending(&self) -> bool {
@@ -111,14 +237,23 @@ impl Radio {
 
     fn disable(&mut self) {
         self.state = State::Disabled;
+        self.air_tx = None;
+        self.air_rx = None;
         self.raise(DISABLED);
     }
 
-    fn finish_packet(&mut self, bytes: usize) {
-        self.raise(ADDRESS | PAYLOAD | END | PHY_END);
+    fn begin_packet(&mut self) {
+        self.raise(ADDRESS);
         if self.shorts & (1 << 4) != 0 {
             self.raise(RSSI_END);
         }
+    }
+
+    fn finish_packet(&mut self, bytes: usize, synchronous: bool) {
+        if synchronous {
+            self.begin_packet();
+        }
+        self.raise(PAYLOAD | END | PHY_END);
         if (self.bit_counter || self.shorts & (1 << 6) != 0)
             && self.bit_compare as usize <= bytes * 8
         {
@@ -130,18 +265,24 @@ impl Radio {
         }
     }
 
-    fn packet_bytes<'a>(&self, bus: &'a Bus) -> Result<&'a [u8], BusError> {
-        let [_, _, pcnf0, pcnf1] = self.config;
+    fn header_length(&self) -> usize {
+        let pcnf0 = self.config[2];
         let length_bits = pcnf0 & 15;
         let s0 = ((pcnf0 >> 8) & 1) as usize;
         let s1 = (pcnf0 >> 16) & 15;
-        let header = s0
-            + length_bits.div_ceil(8) as usize
+        s0 + length_bits.div_ceil(8) as usize
             + if s1 != 0 {
                 s1.div_ceil(8) as usize
             } else {
                 ((pcnf0 >> 20) & 1) as usize
-            };
+            }
+    }
+
+    fn packet_bytes<'a>(&self, bus: &'a Bus) -> Result<&'a [u8], BusError> {
+        let [_, _, pcnf0, pcnf1] = self.config;
+        let length_bits = pcnf0 & 15;
+        let s0 = ((pcnf0 >> 8) & 1) as usize;
+        let header = self.header_length();
         let data = if length_bits == 0 {
             0
         } else {
@@ -168,13 +309,33 @@ impl Radio {
         match self.state {
             State::TxIdle => {
                 let bytes = self.packet_bytes(bus)?;
+                if self.medium {
+                    let steps_per_us = crate::bus::CORTEX_M_STEP_HZ / 1_000_000;
+                    let rate = if self.config[1] == 4 { 2 } else { 1 };
+                    let until_address = steps_per_us * (40 + 40 / rate);
+                    let after_address = steps_per_us * ((bytes.len() + 3) as u64 * 8) / rate;
+                    self.air_tx = Some(AirTx {
+                        until_address,
+                        remaining: until_address + after_address,
+                        length: bytes.len(),
+                        frame: Some(AirFrame {
+                            channel: self.config[0],
+                            mode: self.config[1],
+                            access_address: self.access_address(self.link_config[4]),
+                            bytes: bytes.to_vec(),
+                            remaining: 0,
+                        }),
+                    });
+                    self.state = State::Tx;
+                    return Ok(());
+                }
                 if self.loopback {
                     self.packet = Some(Packet {
                         config: self.config,
                         bytes: bytes.to_vec(),
                     });
                 }
-                self.finish_packet(bytes.len());
+                self.finish_packet(bytes.len(), true);
             }
             State::RxIdle => {
                 self.crc_ok = false;
@@ -190,7 +351,7 @@ impl Radio {
                     self.packet = None;
                     self.crc_ok = true;
                     self.raise(CRC_OK);
-                    self.finish_packet(bytes);
+                    self.finish_packet(bytes, true);
                 } else {
                     self.state = State::Rx;
                 }
@@ -206,6 +367,7 @@ impl Radio {
             0x200 => self.shorts,
             0x304 | 0x308 => self.interrupts,
             0x400 => self.crc_ok.into(),
+            0x410 => self.device_match_index,
             0x504 => self.pointer,
             0x508 => self.config[0],
             0x50c => self.tx_power,
@@ -248,7 +410,11 @@ impl Radio {
             8 if trigger => self.start(bus)?,
             12 if trigger => {
                 if matches!(self.state, State::Rx) {
+                    self.air_rx = None;
                     self.state = State::RxIdle;
+                } else if matches!(self.state, State::Tx) {
+                    self.air_tx = None;
+                    self.state = State::TxIdle;
                 }
             }
             16 if trigger => self.disable(),
@@ -312,6 +478,46 @@ impl Radio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn medium_transfers_sram_between_radios_and_separates_address_from_end() {
+        let ram = 0x2000_0000;
+        let mut tx_bus = Bus::default();
+        let mut rx_bus = Bus::default();
+        tx_bus.map_ram(ram, 8).unwrap();
+        rx_bus.map_ram(ram, 8).unwrap();
+        tx_bus
+            .memory(ram, 4)
+            .unwrap()
+            .copy_from_slice(&[3, 1, 2, 3]);
+        let mut tx = Radio::new(false);
+        let mut rx = Radio::new(false);
+        for (device, bus) in [(&mut tx, &mut tx_bus), (&mut rx, &mut rx_bus)] {
+            device.attach_medium();
+            for (offset, value) in [(0x504, ram), (0x514, 8), (0x518, 8), (0x530, 1), (0x200, 3)] {
+                assert!(device.write(offset, value, bus).unwrap());
+            }
+        }
+        assert!(rx.write(4, 1, &mut rx_bus).unwrap());
+        assert!(tx.write(0, 1, &mut tx_bus).unwrap());
+        let frame = (0..10_000)
+            .find_map(|_| tx.tick_air())
+            .expect("TX must reach ADDRESS");
+        assert_eq!(tx.read(0x104), Some(1));
+        assert_eq!(tx.read(0x10c), Some(0));
+        let remaining = frame.remaining;
+        rx.receive_air(frame, &mut rx_bus).unwrap();
+        assert_eq!(rx.read(0x104), Some(1));
+        assert_eq!(rx.read(0x10c), Some(0));
+        for _ in 0..remaining {
+            assert!(tx.tick_air().is_none());
+            assert!(rx.tick_air().is_none());
+        }
+        assert_eq!(rx_bus.memory_slice(ram, 4).unwrap(), &[3, 1, 2, 3]);
+        assert_eq!(rx.read(0x10c), Some(1));
+        assert_eq!(rx.read(0x400), Some(1));
+        assert_eq!(tx.read(0x10c), Some(1));
+    }
 
     #[test]
     fn no_loopback_does_not_deliver_a_packet() {

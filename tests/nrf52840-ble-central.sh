@@ -17,6 +17,5 @@ grep -Fq 'Bluetooth initialized' "$work/uart"
 grep -Fq 'Scanning successfully started' "$work/uart"
 case "$status" in
     0|2) ;;
-    1) grep -Fq 'unmapped RAM access at 0x4000f500' "$work/stderr" ;;
     *) exit "$status" ;;
 esac

@@ -1,8 +1,9 @@
-// Fixed routes implemented by the nRF52840 PPI, excluding the CCM and AAR endpoints.
-const FIXED: [(usize, u32, u32); 9] = [
+// Fixed routes implemented by the nRF52840 PPI, excluding the CCM endpoints.
+const FIXED: [(usize, u32, u32); 10] = [
     (20, 0x4000_8140, 0x4000_1000),
     (21, 0x4000_8140, 0x4000_1004),
     (22, 0x4000_8144, 0x4000_1010),
+    (23, 0x4000_1128, 0x4000_f000),
     (26, 0x4000_1104, 0x4000_8044),
     (27, 0x4000_110c, 0x4000_8048),
     (28, 0x4000_b140, 0x4000_1000),

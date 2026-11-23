@@ -137,7 +137,7 @@ target/release/penv run --platform ../renode/platforms/cpus/nrf52840.repl \
   --max-steps 130000000 "$assets/watchdog.elf"
 ```
 
-`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。AAR/CCM の固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・RTC・I²S・PDM・RADIO・RNG・ECB・EGU 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。CCM の固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・RTC・I²S・PDM・RADIO・RNG・ECB・EGU 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモードです。REPL の NVIC IRQ 3/4 に接続し、アドレス NACK、受信・送信・停止・一時停止イベントと割り込み、繰り返し START、受信時の BB_STOP/BB_SUSPEND に対応します。`Memory.GenericI2cEeprom @ twi1 0x50` のように EEPROM を接続できます。TWIM EasyDMA、スレーブモード、ピン波形とバス速度の再現は未実装です。
 
@@ -203,9 +203,9 @@ RADIO は TXEN/RXEN/START/STOP/DISABLE、READY/ADDRESS/PAYLOAD/END/DISABLED、TX
 tests/nrf52840-radio.sh target/release/penv ../renode
 ```
 
-検証 ELF は IRQ 1 で送信と受信の完了を確認し、送信側の元データを書き換えた後も受信データが一致すること、書き込みがバッファ境界を越えないこと、空の受信では END が発生しないことを確認して `RADIO OK` を出力します。RF 波形、パケットの送信時間、物理 CRC、アドレスフィルタリング、共有無線媒体と複数ノードは未実装です。
+検証 ELF は IRQ 1 で送信と受信の完了を確認し、送信側の元データを書き換えた後も受信データが一致すること、書き込みがバッファ境界を越えないこと、空の受信では END が発生しないことを確認して `RADIO OK` を出力します。ループバックは同期転送です。次の BLE ペア構成では仮想時刻で送受信イベントを駆動します。
 
-上流 Bluetooth central ELF は未変更の上流 REPL で `Bluetooth initialized` と `Scanning successfully started` を表示します。Zephyr の `hal_radio_ram_prio_setup()` が使う AMLI RAMPRI（`0x40000e00–0x40000e34`）は読み書きを保持します。RAM アクセスは逐次実行されるため、バス競合による遅延はモデル化しません。`radio_reset()` の errata レジスターと、PHY、パケット、アドレス、CRC 設定の読み書き、RSSI とビットカウンターのイベントを追加しました。RTC の EVTEN で有効にしたイベントと、RADIO・TIMER・RTC 間の固定 PPI チャネル（20–22、26–31）も利用できます。Cortex-M4 側では CCR.UNALIGN_TRP に従う通常の RAM アクセスと、初期化に必要な Thumb-2 命令を追加しました。[Zephyr nRF52840 RADIO HAL](https://github.com/zephyrproject-rtos/zephyr/blob/30b4c29aaf5d/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/radio/radio_nrf52840.h)
+上流 Bluetooth central ELF は未変更の上流 REPL で `Bluetooth initialized` と `Scanning successfully started` を表示します。Zephyr の `hal_radio_ram_prio_setup()` が使う AMLI RAMPRI（`0x40000e00–0x40000e34`）は読み書きを保持します。RAM アクセスは逐次実行されるため、バス競合による遅延はモデル化しません。`radio_reset()` の errata レジスターと、PHY、パケット、アドレス、CRC 設定の読み書き、RSSI とビットカウンターのイベントを追加しました。RTC の EVTEN で有効にしたイベントと、RADIO・TIMER・RTC・AAR 間の固定 PPI チャネル（20–23、26–31）も利用できます。Cortex-M4 側では CCR.UNALIGN_TRP に従う通常の RAM アクセスと、初期化に必要な Thumb-2 命令を追加しました。[Zephyr nRF52840 RADIO HAL](https://github.com/zephyrproject-rtos/zephyr/blob/30b4c29aaf5d/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/radio/radio_nrf52840.h)
 
 ```sh
 central=nrf52840--zephyr-bluetooth_central_hr.elf-s_3380332-316e27f81dcda3c2b0e7f2c3516001e7b27ad051
@@ -214,7 +214,16 @@ printf '%s  %s\n' 316e27f81dcda3c2b0e7f2c3516001e7b27ad051 "$assets/central.elf"
 tests/nrf52840-ble-central.sh target/release/penv ../renode "$assets/central.elf"
 ```
 
-この回帰は上流 Bluetooth ケースの central 初期化とスキャン開始を判定します。その後、最初のスキャン処理は PC `0x000199fe` の AAR.ENABLE（`0x4000f500`）へのアクセスで停止します。AAR/CCM、共有無線媒体、複数ノード接続は未実装です。
+central 単体回帰は初期化とスキャン開始を判定します。接続と通知の回帰では、同じ未変更 REPL から 2 台の Cortex-M4 を作成し、`--ble-peer` でプロセス内の仮想無線に接続します。CPU は両ノードを 1 ステップずつ進め、UART の出力行に `primary:` と `peer:` を付けます。RADIO は周波数・PHY・アクセスアドレスが一致する受信機へパケットを渡し、ADDRESS と END を別の仮想時刻に発生させます。AAR はゲストの IRK を使い、解決イベントを IRQ 15 と PPI に配送できます。開始タスク内で解決し、実機の処理時間とスクラッチ RAM への書き込みは再現していません。
+
+```sh
+peripheral=nrf52840--zephyr-bluetooth_peripheral_hr.elf-s_3217940-7b59adc9629f8be90067b131e663a13d2d4bb711
+curl -fL "https://dl.antmicro.com/projects/renode/$peripheral" -o "$assets/peripheral.elf"
+printf '%s  %s\n' 7b59adc9629f8be90067b131e663a13d2d4bb711 "$assets/peripheral.elf" | sha1sum -c -
+tests/nrf52840-ble-pair.sh target/release/penv ../renode "$assets/central.elf" "$assets/peripheral.elf"
+```
+
+上流 Robot ファイルの peripheral 名では `zephyr` の直後がアンダースコアになっています。取得できるハイフン区切りのファイルは、上流テスト記載の SHA-1 と一致します。ペア回帰では両ノードの接続、central の `[SUBSCRIBED]` と 2 バイトの心拍通知、peripheral の `HRS notifications enabled` を確認しました。RF 波形、物理 CRC、干渉・衝突、CCM による暗号化リンク、汎用の複数ノード RESC は未実装です。
 
 RNG は START/STOP、VALUE、VALRDY イベント、NVIC IRQ 13、プログラマブル PPI、VALRDY_STOP ショートカットに対応します。VALUE と VALRDY は STOP 後も保持され、イベントはゲストがクリアします。固定シードの疑似乱数を、シミュレーション上の 64 µs 間隔（DERCEN を設定すると 128 µs）で生成します。DERCEN は生成間隔に反映し、物理エントロピーや統計的偏りの補正はモデル化していません。この出力は暗号用途に使用できません。
 
@@ -254,6 +263,6 @@ tests/nrf52840-kernel-interrupt.sh target/release/penv ../renode "$assets/kernel
 
 ## 現在の実装範囲
 
-RV32I 基本整数命令、M 拡張、Zifencei を実装しています。REPL で `rv32ima` または `rv32ima_zicsr_zifencei` を指定すると、共有 RAM 上の A 拡張命令を使用できます。`rv32imc` と `rv32imac` では RV32C の整数圧縮命令に対応します。`cycle`、`instret`、`time` と各上位 32 ビットを読み取れます。CLINT がある場合の `time` は `mtime` に従います。Zicsr の命令と、マシンモードの CSR の一部、および `ECALL`・`EBREAK` からの `MRET` を実装しています。`CPU.RiscV32` ではユーザーモードへの移行とマシンモードへのトラップ、16 エントリーの PMP に対応しています。スーパーバイザーモードでは同期例外の委譲と `SRET`、32 ビット物理アドレス範囲の Sv32 ページ変換に対応しています。変換はハートごとに 64 エントリーをキャッシュし、SFENCE.VMA でそのハートのキャッシュを無効化します。マシンモードから設定したスーパーバイザー割り込みを委譲できます。3 コンテキスト以上の PLIC、その他の ISA 拡張、REPL のその他の構文とデバイス、起動コマンド以外の RESC 構文、ネットワーク、複数ノードは未対応です。標準構成の UART は単一の送信レジスターを提供します。
+RV32I 基本整数命令、M 拡張、Zifencei を実装しています。REPL で `rv32ima` または `rv32ima_zicsr_zifencei` を指定すると、共有 RAM 上の A 拡張命令を使用できます。`rv32imc` と `rv32imac` では RV32C の整数圧縮命令に対応します。`cycle`、`instret`、`time` と各上位 32 ビットを読み取れます。CLINT がある場合の `time` は `mtime` に従います。Zicsr の命令と、マシンモードの CSR の一部、および `ECALL`・`EBREAK` からの `MRET` を実装しています。`CPU.RiscV32` ではユーザーモードへの移行とマシンモードへのトラップ、16 エントリーの PMP に対応しています。スーパーバイザーモードでは同期例外の委譲と `SRET`、32 ビット物理アドレス範囲の Sv32 ページ変換に対応しています。変換はハートごとに 64 エントリーをキャッシュし、SFENCE.VMA でそのハートのキャッシュを無効化します。マシンモードから設定したスーパーバイザー割り込みを委譲できます。3 コンテキスト以上の PLIC、その他の ISA 拡張、REPL のその他の構文とデバイス、起動コマンド以外の RESC 構文、ネットワークと汎用の複数ノード RESC は未対応です。標準構成の UART は単一の送信レジスターを提供します。
 
 RV32I の仕様は [RISC-V ISA マニュアル](https://docs.riscv.org/reference/isa/unpriv/rv32.html) を参照してください。

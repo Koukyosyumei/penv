@@ -17,6 +17,25 @@ impl Thumb {
         }
     }
 
+    pub(super) fn add_sub_wide(&self, high: u32, low: u32, pc: u32, r: &mut [u32; 32]) -> bool {
+        if !matches!(high & 0xfbf0, 0xf200 | 0xf2a0) || low & 0x8000 != 0 {
+            return false;
+        }
+        let source = (high & 15) as usize;
+        let dest = ((low >> 8) & 15) as usize;
+        if dest == 15 || (dest == 13 && source != 13) {
+            return false;
+        }
+        let base = if source == 15 { pc & !3 } else { r[source] };
+        let immediate = ((high & 0x400) << 1) | ((low & 0x7000) >> 4) | (low & 0xff);
+        r[dest] = if high & 0x80 == 0 {
+            base.wrapping_add(immediate)
+        } else {
+            base.wrapping_sub(immediate)
+        };
+        true
+    }
+
     pub(super) fn move_wide(&self, high: u32, low: u32, r: &mut [u32; 32]) -> bool {
         let rd = ((low >> 8) & 15) as usize;
         if !matches!(high & 0xfbf0, 0xf240 | 0xf2c0) || low & 0x8000 != 0 || matches!(rd, 13 | 15) {
@@ -184,13 +203,18 @@ impl Thumb {
                     .store_conditional(0, address, r[rt])
                     .map_err(|e| e.to_string())?;
             }
-            0xe880..=0xe8be if low.count_ones() >= 2 && low & 0xa000 == 0 && rn < 15 => {
+            0xe880..=0xe8be | 0xe900..=0xe93e
+                if low.count_ones() >= 2 && low & 0xa000 == 0 && rn < 15 =>
+            {
                 let writeback = high & 0x20 != 0;
                 let load = high & 0x10 != 0;
                 if writeback && low & (1 << rn) != 0 {
                     return Err(unsupported());
                 }
-                let mut address = r[rn];
+                let descending = high & 0x100 != 0;
+                let mut address =
+                    r[rn].wrapping_sub(if descending { low.count_ones() * 4 } else { 0 });
+                let start = address;
                 if address & 3 != 0 {
                     return Err(format!(
                         "unaligned multiple-register transfer at {address:#010x}"
@@ -206,7 +230,7 @@ impl Thumb {
                     address = address.wrapping_add(4);
                 }
                 if writeback {
-                    values[rn] = address;
+                    values[rn] = if descending { start } else { address };
                 }
                 *r = values;
             }
@@ -315,6 +339,15 @@ impl Thumb {
                 } else {
                     r[rn].wrapping_add(extended)
                 };
+            }
+            0xfa90..=0xfa9e
+                if rn == rm
+                    && rt == 15
+                    && low & 0xf0 == 0xa0
+                    && !matches!(rd, 13 | 15)
+                    && rn != 13 =>
+            {
+                r[rd] = r[rm].reverse_bits();
             }
             0xfab0..=0xfabe
                 if rn == rm && rt == 15 && low & 0xf0 == 0x80 && !matches!(rd, 13 | 15) =>

@@ -267,6 +267,41 @@ impl Bus {
         Ok(())
     }
 
+    pub fn attach_radio_medium(&mut self) -> Result<(), String> {
+        let mut radios = self
+            .nrf_peripherals
+            .iter_mut()
+            .filter(|device| device.is_radio());
+        let radio = radios
+            .next()
+            .ok_or("--ble-peer requires an nRF52840 RADIO")?;
+        if radios.next().is_some() {
+            return Err("--ble-peer requires exactly one RADIO per node".into());
+        }
+        radio.attach_radio_medium();
+        Ok(())
+    }
+
+    pub fn tick_radio_air(&mut self) -> Option<crate::nrf52840::AirFrame> {
+        self.nrf_peripherals
+            .iter_mut()
+            .find_map(NrfPeripheral::tick_radio_air)
+    }
+
+    pub fn receive_radio_air(&mut self, frame: crate::nrf52840::AirFrame) -> Result<(), BusError> {
+        let Some(index) = self
+            .nrf_peripherals
+            .iter()
+            .position(NrfPeripheral::is_radio)
+        else {
+            return Ok(());
+        };
+        let mut radio = self.nrf_peripherals.remove(index);
+        let result = radio.receive_radio_air(frame, self);
+        self.nrf_peripherals.insert(index, radio);
+        result
+    }
+
     pub fn advance_nrf_ppi(&mut self, output: &mut impl Write) -> Result<(), BusError> {
         let mut events = Vec::new();
         for device in &mut self.nrf_peripherals {

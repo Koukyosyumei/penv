@@ -1,3 +1,6 @@
+mod aar;
+use aar::Aar;
+
 mod egu;
 use egu::Egu;
 
@@ -8,6 +11,7 @@ mod rng;
 use rng::Rng;
 
 mod radio;
+pub(crate) use radio::AirFrame;
 use radio::Radio;
 
 mod pdm;
@@ -57,6 +61,7 @@ enum Device {
     Radio(Radio),
     Rng(Rng),
     Ecb(Ecb),
+    Aar(Aar),
     Egu(Egu),
     Twi(Twi),
     Spi(Spi),
@@ -156,6 +161,15 @@ impl Peripheral {
         }
     }
 
+    pub fn aar() -> Self {
+        Self {
+            base: 0x4000_f000,
+            irq: 15,
+            name: "aar".into(),
+            device: Device::Aar(Aar::default()),
+        }
+    }
+
     pub fn ecb(base: u32, irq: u8, name: String) -> Self {
         Self {
             base,
@@ -171,6 +185,30 @@ impl Peripheral {
             irq,
             name,
             device: Device::Rng(Rng::default()),
+        }
+    }
+
+    pub fn is_radio(&self) -> bool {
+        matches!(self.device, Device::Radio(_))
+    }
+
+    pub fn attach_radio_medium(&mut self) {
+        if let Device::Radio(radio) = &mut self.device {
+            radio.attach_medium();
+        }
+    }
+
+    pub fn tick_radio_air(&mut self) -> Option<AirFrame> {
+        match &mut self.device {
+            Device::Radio(radio) => radio.tick_air(),
+            _ => None,
+        }
+    }
+
+    pub fn receive_radio_air(&mut self, frame: AirFrame, bus: &mut Bus) -> Result<(), BusError> {
+        match &mut self.device {
+            Device::Radio(radio) => radio.receive_air(frame, bus),
+            _ => Ok(()),
         }
     }
 
@@ -295,6 +333,7 @@ impl Peripheral {
                 Device::Radio(_) => Radio::event(address - self.base).is_some(),
                 Device::Rng(_) => address - self.base == rng::VALRDY,
                 Device::Ecb(_) => matches!(address - self.base, 0x100 | 0x104),
+                Device::Aar(_) => matches!(address - self.base, 0x100 | 0x104 | 0x108),
                 Device::Egu(_) => Egu::event(address - self.base),
                 _ => false,
             }
@@ -311,6 +350,7 @@ impl Peripheral {
                 Device::Radio(_) => Radio::task(address - self.base),
                 Device::Rng(_) => matches!(address - self.base, 0 | 4),
                 Device::Ecb(_) => matches!(address - self.base, 0 | 4),
+                Device::Aar(_) => matches!(address - self.base, 0 | 8),
                 Device::Egu(_) => Egu::task(address - self.base),
                 Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
                 _ => false,
@@ -329,6 +369,7 @@ impl Peripheral {
             Device::Radio(radio) => std::mem::take(&mut radio.raised),
             Device::Rng(rng) => std::mem::take(&mut rng.raised),
             Device::Ecb(ecb) => std::mem::take(&mut ecb.raised),
+            Device::Aar(aar) => std::mem::take(&mut aar.raised),
             Device::Egu(egu) => std::mem::take(&mut egu.raised),
             _ => return,
         };
@@ -448,6 +489,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.reset(),
             Device::Rng(rng) => *rng = Rng::default(),
             Device::Ecb(ecb) => *ecb = Ecb::default(),
+            Device::Aar(aar) => *aar = Aar::default(),
             Device::Egu(egu) => *egu = Egu::default(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
@@ -484,6 +526,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.pending(),
             Device::Rng(rng) => rng.pending(),
             Device::Ecb(ecb) => ecb.pending(),
+            Device::Aar(aar) => aar.pending(),
             Device::Egu(egu) => egu.pending(),
         }
     }
@@ -515,6 +558,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.read(offset),
             Device::Rng(rng) => rng.read(offset),
             Device::Ecb(ecb) => ecb.read(offset),
+            Device::Aar(aar) => aar.read(offset),
             Device::Egu(egu) => egu.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
@@ -566,6 +610,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.write(offset, value, bus)?,
             Device::Rng(rng) => rng.write(offset, value),
             Device::Ecb(ecb) => ecb.write(offset, value, bus),
+            Device::Aar(aar) => aar.write(offset, value, bus)?,
             Device::Egu(egu) => egu.write(offset, value),
         };
         if supported {

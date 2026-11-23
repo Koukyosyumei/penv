@@ -65,6 +65,7 @@ Options:
   --reset-at STEP    Reset the Cortex-M machine before this step (repeatable)
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --ble-peer PATH    Run a second nRF52840 ELF on an in-process RADIO medium
   --pdm-input PATH   Feed signed 16-bit little-endian PCM to nRF52840 PDM
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
@@ -124,6 +125,7 @@ fn run() -> Result<ExitCode, String> {
     let mut led_events = false;
     let mut uart_input = None;
     let mut pdm_input = None;
+    let mut ble_peer = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
     let mut reset_steps = Vec::new();
@@ -141,7 +143,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--pdm-input"),
+                | "--asset-dir" | "--pdm-input" | "--ble-peer"),
             ) => {
                 let path = args
                     .next()
@@ -152,6 +154,7 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--pdm-input" => &mut pdm_input,
+                    "--ble-peer" => &mut ble_peer,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
                 };
@@ -359,7 +362,7 @@ fn run() -> Result<ExitCode, String> {
     if path.is_none() && binaries.is_empty() {
         return Err("missing firmware image; see run --help".into());
     }
-    let mut machine = match platform_path {
+    let mut machine = match platform_path.as_ref() {
         Some(platform_path) => {
             if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
                 return Err(
@@ -367,7 +370,7 @@ fn run() -> Result<ExitCode, String> {
                         .into(),
                 );
             }
-            platform::load(&platform_path, platform_root.as_deref(), stm32f0_console)?
+            platform::load(platform_path, platform_root.as_deref(), stm32f0_console)?
         }
         None => {
             if stm32f0_console {
@@ -456,7 +459,19 @@ fn run() -> Result<ExitCode, String> {
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
-    let result = machine.run(max_steps, &mut output);
+    let result = if let Some(peer_path) = ble_peer {
+        let platform = platform_path
+            .as_deref()
+            .ok_or("--ble-peer requires a platform")?;
+        let mut peer = platform::load(platform, platform_root.as_deref(), false)?;
+        let image = File::open(&peer_path).map_err(|e| format!("{}: {e}", peer_path.display()))?;
+        image::load(&mut peer, image, false)
+            .map_err(|e| format!("{}: {e}", peer_path.display()))?;
+        peer.validate_entry()?;
+        machine.run_radio_pair(&mut peer, max_steps, &mut output)
+    } else {
+        machine.run(max_steps, &mut output)
+    };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
