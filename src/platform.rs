@@ -874,6 +874,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             _ => None,
         };
         let mut zicond = false;
+        let mut zbs = false;
         let mut id = 0;
         let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
             16
@@ -895,9 +896,18 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             match (key, value) {
                 ("cpuType", value) => {
                     let architecture = value.trim_matches('"').to_ascii_lowercase();
-                    let base = architecture.strip_suffix("_zicond");
-                    zicond = base.is_some();
-                    isa = match base.unwrap_or(&architecture) {
+                    let mut base = architecture.as_str();
+                    zicond = false;
+                    zbs = false;
+                    while let Some((prefix, extension)) = base.rsplit_once('_') {
+                        match extension {
+                            "zicond" if !zicond => zicond = true,
+                            "zbs" if !zbs => zbs = true,
+                            _ => break,
+                        }
+                        base = prefix;
+                    }
+                    isa = match base {
                         "rv32i" => Some((false, false, false)),
                         "rv32im" | "rv32im_zicsr" | "rv32im_zicsr_zifencei" => {
                             Some((true, false, false))
@@ -940,7 +950,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             {
                 let (multiply, atomic, compressed) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
-                (multiply, atomic, compressed, zicond)
+                (multiply, atomic, compressed, zicond, zbs)
             },
             pmp,
         ));
@@ -958,7 +968,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         ));
     }
     machine.configure_harts(configs.len());
-    for &(id, entry, (multiply, atomic, compressed, zicond), pmp) in &configs {
+    for &(id, entry, (multiply, atomic, compressed, zicond, zbs), pmp) in &configs {
         let hart = machine.hart_mut(id);
         hart.name = Some(entry.name.clone());
         let unaligned = entry
@@ -973,6 +983,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic, compressed);
         hart.set_zicond(zicond);
+        hart.set_zbs(zbs);
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
             "CPU.IbexRiscV32" => hart.enable_ibex(),
@@ -1881,7 +1892,7 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
     Ok(())
 }
 
-type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool, bool), usize);
+type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool, bool, bool), usize);
 
 fn uses_vex_irq(entry: &Entry) -> bool {
     entry.model == "CPU.VexRiscv"
