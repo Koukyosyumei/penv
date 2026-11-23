@@ -204,7 +204,7 @@ for file, kind in robot.items():
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Not Run Out Of Ring Buffer Space When Writing Long Line To Uart':
             status, note = 'PARTIAL', '同一 ELF・長文・CR・50 ms 後のプロンプトを観測。ただし追加観測で RX ring buffer full が出るため未達'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Hear Loopback CAN Messages':
-            note = '同一 ELF は初期化を完了。最初の Counter received: 0 が 8 仮想秒以内に出ない。FDCAN の送信・FIFO ループバック未実装'
+            note = '公開 ELF は初期化を完了し、Counter received: 0 で8仮想秒タイムアウト。デバイス側の古典フレーム転送を検証済み。共有バスから messageRAM を渡す接続とフィルター処理が残る'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Pass Interrupt Test':
             status, note = 'PARTIAL', '同一 ELF で test_arm_esf_collection が PASS。test_arm_interrupt は reason 2 の検証で FAIL、test_arm_user_interrupt は 0x08001c0c で Thumb 状態を持たない 0 への分岐で停止'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Blink Led':

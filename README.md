@@ -1694,3 +1694,20 @@ done
 ```
 
 各証拠ディレクトリにケースのログと終了状態を保存しました。拡張 UART と両 GCM は終了状態1です。
+
+### backlog-network-27146221a294-1
+
+STM32H7 FDCAN のデバイス側に、内部ループバックの古典 CAN フレーム転送を追加しました。メッセージ RAM の TX 要素を RX FIFO0 に複製し、送信完了、受信通知、FIFO 状態、ACK を単体テストで照合しました。固定 Nucleo の公開 CAN ELF は初期化とカウンターフィルターの登録まで進み、最初の `Counter received: 0` を8仮想秒待ったところで停止します。現行の共有バスは FDCAN にメッセージ RAM を渡さないため、接続を ARM 担当に依頼します。Zephyr が設定するフィルターと CAN FD はデバイス側の残件です。SD と hard-float の先行依頼は今回確認時点で応答ファイルがありませんでした。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-loopback.2Merc2Mj
+target/release/penv run --script "$e/can.resc" --platform-root ../renode --max-steps 10000000
+```
+
+`cargo test` 221件、STM32H7 REPL 7構成と公開 Zephyr Blinky・Button ELF が通過しました。CAN の CLI は上記の未達で終了状態1です。ケース別結果、UART、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
