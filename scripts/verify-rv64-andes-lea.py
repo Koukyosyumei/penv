@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run fixed RV64 AndeStar LEA, bit operation and GP-relative cases through the Penv CLI."""
+"""Run fixed RV64 AndeStar LEA, bit operation, GP-relative and byte search cases through the Penv CLI."""
 
 import argparse
 from pathlib import Path
@@ -29,7 +29,9 @@ def verify(args, platform, label, commands, expected):
         r"^penv: register cpu@(\w+) = (0x[0-9a-f]+)$", result.stderr, re.M
     )]
     if result.returncode or result.stdout or observed != expected:
-        raise RuntimeError(f"{label}: expected {expected!r}, got {result.stderr}")
+        args.failures.append(label)
+        print(f"FAIL {label}: expected {expected!r}, got {result.stderr}")
+        return
     print(f"PASS {label}")
 
 
@@ -67,6 +69,20 @@ def verify_bits(args, platform, tests, step):
         commands += ["--write-memory", f"0x2000:4:{word:#x}", "--set-gpr", f"cpu@x10:{source}",
                      *step, "--read-register-now", "cpu@x12"]
         expected += [("pc", 0x2004), ("x12", int(rd, 16))]
+    verify(args, platform, case, commands, expected)
+
+
+def verify_byte_search(args, platform, tests, step):
+    case = "Should Search All Eight Bytes On RV64"
+    functions = {"nds.ffb": 16, "nds.ffzmism": 17, "nds.ffmism": 18, "nds.flmism": 19}
+    commands = []
+    expected = []
+    for mnemonic, lhs, rhs, rd in fixture_rows(tests[case], "Check Register Instruction", 6):
+        word = functions[mnemonic] << 25 | 11 << 20 | 10 << 15 | 12 << 7 | 0x5b
+        commands += ["--write-memory", f"0x2000:4:{word:#x}",
+                     "--set-gpr", f"cpu@x10:{lhs}", "--set-gpr", f"cpu@x11:{rhs}",
+                     *step, "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 0))]
     verify(args, platform, case, commands, expected)
 
 
@@ -129,6 +145,7 @@ def main():
     parser.add_argument("--penv", type=Path, default=Path("target/release/penv"))
     parser.add_argument("--logs", type=Path, required=True)
     args = parser.parse_args()
+    args.failures = []
     args.logs.mkdir(parents=True, exist_ok=True)
     platform = args.logs / "andestar.repl"
     write_platform(platform, "rv64imac_xandesperf")
@@ -154,6 +171,7 @@ def main():
 
     verify_bits(args, platform, tests, step)
     verify_gp(args, platform, tests, step)
+    verify_byte_search(args, platform, tests, step)
 
     base = args.logs / "base.repl"
     write_platform(base, "rv64imac")
@@ -161,6 +179,8 @@ def main():
         "--write-memory", "0x2000:4:0x0ab5065b", "--set-mtvec", "cpu:0x1000",
         *step, "--read-register-now", "cpu@mcause", "--read-register-now", "cpu@mepc",
     ], [("pc", 0x1000), ("mcause", 2), ("mepc", 0x2000)])
+    if args.failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

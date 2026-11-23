@@ -578,14 +578,12 @@ impl Rv64 {
                 }
                 None
             }
-            0x5b if self.isa.xandesperf && fields.funct3() == 0 => {
-                let (index, shift) = match instruction >> 25 {
-                    op @ 5..=7 => (rhs, op - 4),
-                    op @ 8..=11 => (u64::from(rhs as u32), op - 8),
-                    _ => return Err(illegal),
-                };
-                Some(lhs.wrapping_add(index << shift))
-            }
+            0x5b if self.isa.xandesperf && fields.funct3() == 0 => Some(match instruction >> 25 {
+                op @ 5..=7 => lhs.wrapping_add(rhs << (op - 4)),
+                op @ 8..=11 => lhs.wrapping_add(u64::from(rhs as u32) << (op - 8)),
+                op @ 16..=19 => andes_find_byte(op, lhs, rhs),
+                _ => return Err(illegal),
+            }),
             0x0f if instruction & 0xfff0_7fff == 0x0040_200f
                 && self.privilege.allows_cbo_zero() =>
             {
@@ -1045,6 +1043,20 @@ pub(crate) fn ram_read(bus: &Bus, hart: Option<usize>, address: u64, width: usiz
         None => bus.ram64(address, width)?,
     });
     Some(u64::from_le_bytes(bytes))
+}
+
+fn andes_find_byte(function: u32, lhs: u64, rhs: u64) -> u64 {
+    let left = lhs.to_le_bytes();
+    let right = rhs.to_le_bytes();
+    let mut pairs = left.into_iter().zip(right);
+    let position = match function {
+        16 => left.iter().position(|&byte| byte == right[0]),
+        17 => pairs.position(|(a, b)| a == 0 || a != b),
+        18 => pairs.position(|(a, b)| a != b),
+        19 => pairs.rposition(|(a, b)| a != b),
+        _ => unreachable!("decoded AndeStar byte operation"),
+    };
+    position.map_or(0, |index| (index as u64).wrapping_sub(8))
 }
 
 fn andes_gp_offset(instruction: u32, width: usize) -> u64 {
