@@ -237,11 +237,29 @@ impl Bus {
             .any(|device| device.ppi_task_supported(address))
     }
 
-    pub fn advance_nrf_i2s(&mut self) -> Result<(), BusError> {
+    pub fn set_nrf_pdm_input(&mut self, input: Vec<u8>) -> Result<(), String> {
+        if input.len() % 2 != 0 {
+            return Err("PDM input must contain whole signed 16-bit little-endian samples".into());
+        }
+        let mut devices = self
+            .nrf_peripherals
+            .iter_mut()
+            .filter(|device| device.is_pdm());
+        let device = devices
+            .next()
+            .ok_or("--pdm-input requires an nRF52840 PDM peripheral")?;
+        if devices.next().is_some() {
+            return Err("--pdm-input requires exactly one PDM peripheral".into());
+        }
+        device.set_pdm_input(input);
+        Ok(())
+    }
+
+    pub fn advance_nrf_audio(&mut self) -> Result<(), BusError> {
         for index in 0..self.nrf_peripherals.len() {
-            if self.nrf_peripherals[index].i2s_transfer_due() {
+            if self.nrf_peripherals[index].audio_transfer_due() {
                 let mut device = self.nrf_peripherals.remove(index);
-                let result = device.complete_i2s(self);
+                let result = device.complete_audio(self);
                 self.nrf_peripherals.insert(index, device);
                 result?;
             }

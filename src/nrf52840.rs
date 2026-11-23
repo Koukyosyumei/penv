@@ -1,3 +1,6 @@
+mod pdm;
+use pdm::Pdm;
+
 mod i2s;
 use i2s::I2s;
 
@@ -38,6 +41,7 @@ enum Device {
     Rtc(Rtc),
     Timer(Timer),
     I2s(I2s),
+    Pdm(Pdm),
     Twi(Twi),
     Spi(Spi),
     Watchdog(Watchdog),
@@ -126,16 +130,37 @@ impl Peripheral {
         }
     }
 
-    pub fn i2s_transfer_due(&mut self) -> bool {
+    pub fn pdm(base: u32, irq: u8, name: String) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Pdm(Pdm::default()),
+        }
+    }
+
+    pub fn is_pdm(&self) -> bool {
+        matches!(self.device, Device::Pdm(_))
+    }
+
+    pub fn set_pdm_input(&mut self, input: Vec<u8>) {
+        if let Device::Pdm(pdm) = &mut self.device {
+            pdm.set_input(input);
+        }
+    }
+
+    pub fn audio_transfer_due(&mut self) -> bool {
         match &mut self.device {
             Device::I2s(i2s) => i2s.tick(),
+            Device::Pdm(pdm) => pdm.tick(),
             _ => false,
         }
     }
 
-    pub fn complete_i2s(&mut self, bus: &mut Bus) -> Result<(), BusError> {
+    pub fn complete_audio(&mut self, bus: &mut Bus) -> Result<(), BusError> {
         match &mut self.device {
             Device::I2s(i2s) => i2s.complete(bus),
+            Device::Pdm(pdm) => pdm.complete(bus),
             _ => Ok(()),
         }
     }
@@ -212,6 +237,7 @@ impl Peripheral {
                 Device::Spi(_) => address - self.base == 0x108,
                 Device::Timer(timer) => timer.event(address - self.base),
                 Device::I2s(_) => I2s::event(address - self.base).is_some(),
+                Device::Pdm(_) => Pdm::event(address - self.base).is_some(),
                 _ => false,
             }
     }
@@ -223,6 +249,7 @@ impl Peripheral {
                 Device::Twi(_) => Twi::is_task(address - self.base),
                 Device::Timer(timer) => timer.task(address - self.base),
                 Device::I2s(_) => matches!(address - self.base, 0 | 4),
+                Device::Pdm(_) => matches!(address - self.base, 0 | 4),
                 Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
                 _ => false,
             }
@@ -235,6 +262,7 @@ impl Peripheral {
             Device::Spi(spi) => std::mem::take(&mut spi.raised),
             Device::Timer(timer) => std::mem::take(&mut timer.raised),
             Device::I2s(i2s) => std::mem::take(&mut i2s.raised),
+            Device::Pdm(pdm) => std::mem::take(&mut pdm.raised),
             _ => return,
         };
         while raised != 0 {
@@ -348,6 +376,7 @@ impl Peripheral {
             Device::Spi(spi) => spi.reset(),
             Device::Timer(timer) => timer.reset(),
             Device::I2s(i2s) => i2s.reset(),
+            Device::Pdm(pdm) => pdm.reset(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -379,6 +408,7 @@ impl Peripheral {
             Device::Spi(spi) => spi.pending(),
             Device::Timer(timer) => timer.pending(),
             Device::I2s(i2s) => i2s.pending(),
+            Device::Pdm(pdm) => pdm.pending(),
         }
     }
 
@@ -405,6 +435,7 @@ impl Peripheral {
             Device::Spi(spi) => spi.read(offset),
             Device::Timer(timer) => timer.read(offset),
             Device::I2s(i2s) => i2s.read(offset),
+            Device::Pdm(pdm) => pdm.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -451,6 +482,7 @@ impl Peripheral {
             Device::Spi(spi) => spi.write(offset, value),
             Device::Timer(timer) => timer.write(offset, value),
             Device::I2s(i2s) => i2s.write(offset, value),
+            Device::Pdm(pdm) => pdm.write(offset, value),
         };
         if supported {
             Ok(())

@@ -65,6 +65,7 @@ Options:
   --reset-at STEP    Reset the Cortex-M machine before this step (repeatable)
   --uart-event STEP:PATH  Queue file bytes at a step (repeatable)
   --uart-input PATH  Queue bytes from a file for the platform UART
+  --pdm-input PATH   Feed signed 16-bit little-endian PCM to nRF52840 PDM
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
@@ -122,6 +123,7 @@ fn run() -> Result<ExitCode, String> {
     let mut button_events = Vec::new();
     let mut led_events = false;
     let mut uart_input = None;
+    let mut pdm_input = None;
     let mut uart_input_at = None;
     let mut uart_events = Vec::new();
     let mut reset_steps = Vec::new();
@@ -139,7 +141,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir"),
+                | "--asset-dir" | "--pdm-input"),
             ) => {
                 let path = args
                     .next()
@@ -149,6 +151,7 @@ fn run() -> Result<ExitCode, String> {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
+                    "--pdm-input" => &mut pdm_input,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
                 };
@@ -380,6 +383,13 @@ fn run() -> Result<ExitCode, String> {
         if !machine.bus.has_nrf_uart(&name) {
             return Err(format!("unsupported UART analyzer target {name:?}"));
         }
+    }
+    if let Some(path) = pdm_input {
+        let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        machine
+            .bus
+            .set_nrf_pdm_input(bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     machine.bus.report_led_events(led_events);
     for (step, name, pressed) in button_events {

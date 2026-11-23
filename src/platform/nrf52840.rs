@@ -111,6 +111,8 @@ pub(super) fn map_peripheral(
     }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
+    } else if entry.model == "Sound.NRF52840_PDM" {
+        Peripheral::pdm(base, irq as u8, name)
     } else if entry.model == "Sound.NRF52840_I2S" {
         Peripheral::i2s(base, irq as u8, name, loopback.unwrap_or(false))
     } else if entry.model == "Timers.NRF52840_Timer" {
