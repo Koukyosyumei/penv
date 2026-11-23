@@ -643,6 +643,7 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     machine.validate_entry()?;
+    let entry_pc = machine.primary.pc;
     if machine.is_cortex_m() {
         for (cpu, address) in boot_pcs {
             machine.set_cortex_m_monitor_pc(&cpu, address, &mut io::stderr().lock())?;
@@ -682,7 +683,12 @@ fn run() -> Result<ExitCode, String> {
             return Err("address hooks require a single Cortex-M machine".into());
         }
         for (pc, hook) in cpu_hooks {
-            machine.bus.cpu_hooks.entry(pc).or_default().push(hook);
+            machine
+                .bus
+                .cpu_hooks
+                .entry(pc.unwrap_or(entry_pc))
+                .or_default()
+                .push(hook);
         }
     }
     if !ram_access_logs.is_empty() || !ram_io_pages.is_empty() {

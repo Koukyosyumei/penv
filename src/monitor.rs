@@ -21,7 +21,7 @@ pub struct Boot {
     pub thumb_trace: Option<crate::thumb::trace::TraceConfig>,
     pub ram_access_logs: Vec<String>,
     pub ram_io_pages: Vec<(u32, bool)>,
-    pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
+    pub cpu_hooks: Vec<(Option<u32>, crate::bus::CpuHook)>,
     pub cpu_control: Vec<CpuControl>,
     pub gpio_changes: Vec<GpioChange>,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
@@ -218,7 +218,7 @@ fn execute(
             let address = crate::parse_address(resolve(address)?)?;
             let value = crate::parse_address(resolve(value)?)?;
             boot.cpu_hooks
-                .push((pc, crate::bus::CpuHook::Write32(address, value)));
+                .push((Some(pc), crate::bus::CpuHook::Write32(address, value)));
         }
         ["cpu" | "sysbus.cpu", "AddLogHook", pc, ..] if boot.platform.is_some() => {
             let (_, remainder) = text.split_once("AddLogHook").unwrap();
@@ -229,6 +229,40 @@ fn execute(
                 .filter(|value| !value.contains('"'))
                 .ok_or("expected a quoted hook message")?;
             let pc = crate::parse_address(resolve(pc)?)? & !1;
+            boot.cpu_hooks
+                .push((Some(pc), crate::bus::CpuHook::Log(message.into())));
+        }
+        ["cpu" | "sysbus.cpu", "AddHook", ..] if boot.platform.is_some() => {
+            let (_, arguments) = text.split_once("AddHook").unwrap();
+            let arguments = arguments.trim_start();
+            let (pc, body) = if let Some(expression) = arguments.strip_prefix('`') {
+                let (expression, body) = expression
+                    .split_once('`')
+                    .ok_or("unterminated AddHook address expression")?;
+                if !matches!(
+                    expression.split_whitespace().collect::<Vec<_>>().as_slice(),
+                    ["cpu" | "sysbus.cpu", "PC"]
+                ) {
+                    return Err("AddHook address expression must read the CPU PC".into());
+                }
+                let pc = boot
+                    .boot_pcs
+                    .iter()
+                    .rev()
+                    .find_map(|(name, pc)| (name == "cpu").then_some(*pc & !1));
+                (pc, body)
+            } else {
+                let (pc, body) = arguments
+                    .split_once(char::is_whitespace)
+                    .ok_or("expected AddHook address and body")?;
+                (Some(crate::parse_address(resolve(pc)?)? & !1), body)
+            };
+            let message = body
+                .trim()
+                .strip_prefix(r#""monitor.Parse('log \""#)
+                .and_then(|body| body.strip_suffix(r#"\"')""#))
+                .filter(|message| !message.contains(['"', '\\', '\'']))
+                .ok_or("AddHook requires monitor.Parse with a single quoted log argument")?;
             boot.cpu_hooks
                 .push((pc, crate::bus::CpuHook::Log(message.into())));
         }
@@ -264,7 +298,7 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "AddPauseHook", pc] if boot.platform.is_some() => {
             let pc = crate::parse_address(resolve(pc)?)? & !1;
-            boot.cpu_hooks.push((pc, crate::bus::CpuHook::Pause));
+            boot.cpu_hooks.push((Some(pc), crate::bus::CpuHook::Pause));
         }
         ["cpu" | "sysbus.cpu", "SetSingleStepItStateLog", boundary] if boot.platform.is_some() => {
             use crate::thumb::opcode_counter::HookPhase;

@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 138 | 5 | 47 |
+| 監査した共有・混成 Robot | 190 | 138 | 6 | 46 |
 | Infrastructure GPIO NUnit | 14 | 13 | 0 | 1 |
-| 合計 | **221** | **168** | **5** | **48** |
+| 合計 | **221** | **168** | **6** | **47** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -478,3 +478,19 @@ Infrastructure の `GPIODetachingTests.cs` の連鎖解除、共有端点、受�
 Infrastructure の `GPIODetachingTests.cs` から、外部コネクタの削除と送信元機器の登録解除を移植した。入力・出力とも pin 0 で接続し、外部削除では送信元端点が消えること、送信元の登録解除では送信元端点が消えて受信側端点が残ることを実動作の Bus で照合した。移植用 RESC の `gpio BridgeLed` は既存 LED 配線にコネクタを挿入し、`gpio RemoveConnector` で解除する。既存の短い Zephyr Button 回帰を拡張し、正常転送と解除後の通知停止を検証する。
 
 前節のコマンドで再現できる。ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/gpio-external.Yv4oC5Gp/` の `cargo-test`、`elf`、`shell` に保存した。別機械上に送信元・受信側を置くケースは、機械ごとの GPIO 所有権と破棄時の通知を実装する必要がある。
+
+### CPU フック内の monitor ログ
+
+`hooks.robot:13-22` の `cpu AddHook` 文を nRF52840 上流 Shell の RESC と ELF に移植した。Cortex-M の起動 PC または指定アドレスに既存のアドレスフックを登録し、`monitor.Parse` の単一 `log` コマンドを実行する。ELF の実行中に `message from the cpu hook` が完全一致し、Shell プロンプトより先に出ることを確認した。
+
+`cargo test` の後、同じデバッグバイナリで次を実行する。
+
+```sh
+tests/nrf52840-monitor-hook-upstream.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF" "$ARTIFACT_DIR/hook"
+tests/nrf52840-systick-hooks-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/systick"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+元の固定 Mi-V ELF（SHA-1 `ea4ddb074325b2cc1aae56800d099c7cf56e592a`）も取得し、`target/debug/penv run --script ../renode/scripts/single-node/miv.resc --platform-root ../renode --max-steps 1 "$MIV_ELF"` で確認した。固定 REPL の `UART.MiV_CoreUART` で停止したため、台帳では部分移植とした。任意の Python フックと MMIO 読み出し watchpoint は引き続き未達。別機械の GPIO 破棄ケースも、機械間の端点所有権と破棄通知が必要なため未達。
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/nrf52-monitor-hook.fX1aN2OI/` に保存した。`baseline` は未対応コマンドの再現、`focal`、`systick`、`shell` は各回帰、`miv` は固定構成の起動結果。
