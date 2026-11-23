@@ -60,6 +60,7 @@ Options:
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
   --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
+  --write-pmp-register CPU@NAME:VALUE  Write a named external PMP register
   --set-gpr CPU@xN:VALUE  Initialize an RV64 integer register (x1 through x31)
   --set-freg CPU@fN:VALUE  Initialize raw RV64 floating-point register bits
   --read-register CPU@NAME  Report a supported RV64 register after execution
@@ -111,6 +112,7 @@ enum SetupAction {
     SetMstatus(String, u64),
     SetFreg(String, usize, u64),
     SetGpr(String, usize, u64),
+    WritePmpRegister(String, String, u64),
 }
 
 fn ram_width(value: &str) -> Result<usize, String> {
@@ -408,6 +410,23 @@ fn run() -> Result<ExitCode, String> {
                 } else {
                     SetupAction::SetGpr(cpu.to_owned(), index, value)
                 });
+            }
+            Some("--write-pmp-register") => {
+                let error = "--write-pmp-register requires CPU@NAME:VALUE";
+                let argument = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or(error)?;
+                let (target, value) = argument.split_once(':').ok_or(error)?;
+                let (cpu, name) = target
+                    .split_once('@')
+                    .filter(|(cpu, name)| !cpu.is_empty() && !name.is_empty())
+                    .ok_or(error)?;
+                setup_actions.push(SetupAction::WritePmpRegister(
+                    cpu.to_owned(),
+                    name.to_ascii_lowercase(),
+                    parse_address64(value)?,
+                ));
             }
             Some(option @ ("--set-mstatus" | "--read-register" | "--read-register-now")) => {
                 let delimiter = if option == "--set-mstatus" { ':' } else { '@' };
@@ -778,6 +797,17 @@ fn run() -> Result<ExitCode, String> {
                         .as_mut()
                         .expect("validated RV64 CPU")
                         .initialize_mstatus(*value);
+                }
+                SetupAction::WritePmpRegister(cpu, name, value) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    machine
+                        .hart_mut(hart)
+                        .rv64
+                        .as_mut()
+                        .expect("validated RV64 CPU")
+                        .privilege
+                        .write_external_pmp(name, *value)
+                        .ok_or_else(|| format!("{cpu}: invalid external PMP register {name}"))?;
                 }
                 SetupAction::SetGpr(cpu, index, value) => {
                     let hart = machine.rv64_hart_by_name(cpu)?;

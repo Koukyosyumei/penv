@@ -347,6 +347,16 @@ def disposition(path, name, context):
         return "pass", "Fixed instruction words, operands, PC and trap cause verified (rv64-ldsd.md)"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
+    if path.name == "riscv-external-pmp.robot" and name in {
+        "Should Access All 64-Bit Address Registers From Monitor",
+        "Should Access All 64-Bit Address Registers From CPU",
+    }:
+        return "pass", "Fixed 16-entry external PMP, all addresses and no invalid accesses verified (rv64-external-pmp.md)"
+    if path.name == "riscv-external-pmp.robot" and name in {
+        "Should Access All 64-Bit Config Registers From Monitor",
+        "Should Access All 64-Bit Config Registers From CPU",
+    }:
+        return "partial", "Fixed runner skips the config loop; Penv pmpcfg0 round-trip separately verified (rv64-external-pmp.md)"
     if path.name == "riscv-external-pmp.robot" and re.search(
         r"Should Access All 32 Bit (?:Config|Address) Registers From Monitor", context
     ):

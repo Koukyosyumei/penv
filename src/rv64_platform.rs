@@ -129,6 +129,9 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         let target = machine.hart_mut(hart);
         target.name = Some(entry.name.clone());
         target.rv64 = Some(Box::new(cpu));
+        if external_pmps[hart].is_some() {
+            eprintln!("penv: {}: Enabling External PMP", entry.name);
+        }
     }
 
     if let Some(entry) = clint {

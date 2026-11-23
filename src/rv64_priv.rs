@@ -303,8 +303,18 @@ impl Privilege {
             "mcause" => self.machine.cause,
             "mtval" => self.machine.value,
             "sepc" if self.levels == Levels::MachineSupervisorUser => self.supervisor.epc,
-            _ => return None,
+            _ => return self.external_pmp()?.read(external_pmp_csr(name)?),
         })
+    }
+
+    pub(crate) fn write_external_pmp(&mut self, name: &str, value: u64) -> Option<()> {
+        let csr = external_pmp_csr(name)?;
+        let pmp = self.pmp.as_mut().filter(|pmp| pmp.allow_when_inactive)?;
+        pmp.write(csr, value).then_some(())
+    }
+
+    fn external_pmp(&self) -> Option<&Pmp> {
+        self.pmp.as_ref().filter(|pmp| pmp.allow_when_inactive)
     }
 
     pub fn read(&self, csr: u32, misa: u64, epc_mask: u64) -> Option<u64> {
@@ -485,6 +495,15 @@ impl Privilege {
         }
         true
     }
+}
+
+fn external_pmp_csr(name: &str) -> Option<u32> {
+    if let Some(index) = name.strip_prefix("pmpcfg") {
+        let index: u32 = index.parse().ok()?;
+        return (index < 16).then(|| 0x3a0 + index);
+    }
+    let index: u32 = name.strip_prefix("pmpaddr")?.parse().ok()?;
+    (index < 64).then(|| 0x3b0 + index)
 }
 
 const MML: u8 = 1;
