@@ -431,3 +431,25 @@ python3 scripts/validate-rv32-zicond.py target/release/penv ../renode "$work/zic
 ```
 
 上流等価合格は累計 54 件です。RV64 専用の同スイートのケースは既存の対象外判定を維持しています。上流最大 ISA と最終分母の確定は残っています。
+
+### RV32 MRET と特権レベルの構成
+
+固定 `tests/unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` を Rust のマシンテストへ移植しました。変更前は `privilegeLevels` と数値の `interruptMode: 1` が拒否され、これらを取り除くと割り込み配線のない CLINT も拒否されました。
+
+`CPU.RiscV32` の REPL は `Machine`、`MachineUser`、`MachineSupervisorUser` と数値の割り込みモードを受け付けます。割り込み配線を省略した CLINT は時刻とレジスターを提供し、出力をハートへ配送しません。マシンテストでは固定 `rv32gc` の REPL、0x2000 の `0xc0001073`、0x4000 の `0x30200073` を使用します。最初のステップは両構成とも PC=0x4000、MPP=M で、次のステップは PC=0x2000、MPP は `MachineUser` で U、`Machine` で M でした。
+
+```bash
+cargo test --locked upstream_rv32_mret -- --nocapture
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-interrupt-mode.py target/release/penv ../renode "$evidence/interrupt-mode"
+python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
+  --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --artifacts "$evidence/privilege" "$work"/isa/rv32[ms]i-*
+```
+
+`cargo test` は 77 件、割り込みモードの移植は 12 件、公開 M/S 特権 ELF は 22 件が通過しました。`scripts/validate-riscv-acceptance.sh` と同じ手順で virt の NS16550・CLINT・PLIC プローブと、固定上流の Bare/PMP MRET ELF も確認しました。後者は SHA-1 が一致し、43 ステップで想定 PC 0x10000 に到達しました。元の Robot が検査する関数ログは引き続き未確認のため、台帳では部分移植です。
+
+固定 `riscv-priv.robot` の RV32 フィクスチャは `rv32imafd_zicsr_zifencei_c_v_zba_zbb_zbc_zbs_zfh_zacas_zcb` を要求し、CPU 作成が `c, v, zcb` で止まります。カウンタ 6 件と権限命令 3 件はこの阻害点を台帳に記録しました。縮小 ISA の検証は補助証拠として扱います。今回の上流等価合格は 2 件で累計 56 件です。上流最大 ISA と最終分母の確定が残っています。
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-850b661-2xKxYz/` に保存しました。

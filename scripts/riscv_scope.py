@@ -121,6 +121,12 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         if choices == {"32"}:
             if filename == "riscv-zicond-extension.robot":
                 return "target", "ported", "pinned RV32 operands or trap PC, MCAUSE and MEPC checked on ELF"
+            if filename == "riscv-mret.robot" and case in {
+                "User Level Exists 32Bits", "User Level Does Not Exists 32Bits",
+            }:
+                return "target", "ported", "fixed rv32gc fixture and instruction words; both single-step PC and MPP assertions checked"
+            if filename == "riscv-priv.robot":
+                return "target", "blocked-cpu", "pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence"
             return "target", status, "case passes bitness=32 to its CPU fixture; " + (basis or "equivalence pending")
     if filename == "riscv-mret.robot" and "LoadPlatformDescriptionFromString ${invalidate_test_plat}" in source:
         return "target", "partial", "inline CPU.RiscV32 rv32im_zicsr; upstream ELF tested, monitor/log equivalence pending"

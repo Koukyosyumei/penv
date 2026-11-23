@@ -2884,33 +2884,33 @@ Renode	tests/unit-tests/riscv-lr-sc-strong-atomicity.robot	107	Writes To Reserva
 Renode	tests/unit-tests/riscv-lr-sc-strong-atomicity.robot	107	Writes To Reservation Should Cause Invalidation	RV64 | 0x00100000 | sh	outside	outside	riscv-lr-sc-strong-atomicity.repl selects CPU.RiscV64 cpu_0/cpu_1
 Renode	tests/unit-tests/riscv-lr-sc-strong-atomicity.robot	107	Writes To Reservation Should Cause Invalidation	RV64 | 0x00100000 | sw	outside	outside	riscv-lr-sc-strong-atomicity.repl selects CPU.RiscV64 cpu_0/cpu_1
 Renode	tests/unit-tests/riscv-lr-sc-strong-atomicity.robot	107	Writes To Reservation Should Cause Invalidation	RV64 | 0x00100000 | sd	outside	outside	riscv-lr-sc-strong-atomicity.repl selects CPU.RiscV64 cpu_0/cpu_1
-Renode	tests/unit-tests/riscv-mret.robot	64	User Level Exists 64Bits		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-mret.robot	68	User Level Exists 32Bits		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-mret.robot	72	User Level Does Not Exists 64Bits		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-mret.robot	76	User Level Does Not Exists 32Bits		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-mret.robot	64	User Level Exists 64Bits	bitness=64 | privilegeLevels=MachineUser	outside	outside	case passes bitness=64 to its CPU fixture
+Renode	tests/unit-tests/riscv-mret.robot	68	User Level Exists 32Bits	bitness=32 | privilegeLevels=MachineUser	target	ported	fixed rv32gc fixture and instruction words; both single-step PC and MPP assertions checked
+Renode	tests/unit-tests/riscv-mret.robot	72	User Level Does Not Exists 64Bits	bitness=64 | privilegeLevels=Machine	outside	outside	case passes bitness=64 to its CPU fixture
+Renode	tests/unit-tests/riscv-mret.robot	76	User Level Does Not Exists 32Bits	bitness=32 | privilegeLevels=Machine	target	ported	fixed rv32gc fixture and instruction words; both single-step PC and MPP assertions checked
 Renode	tests/unit-tests/riscv-mret.robot	80	Should Invalidate TLB After Mode Change		target	partial	inline CPU.RiscV32 rv32im_zicsr; upstream ELF tested, monitor/log equivalence pending
 Renode	tests/unit-tests/riscv-priv.robot	88	Should Fail On Counter Access		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	107	Should Increment MCYCLE RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	119	Should Increment MINSTRET RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	131	Should Increment MCYCLE RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-priv.robot	143	Should Increment MINSTRET RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-priv.robot	131	Should Increment MCYCLE RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	143	Should Increment MINSTRET RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
 Renode	tests/unit-tests/riscv-priv.robot	155	Should Inhibit MCYCLE RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	169	Should Inhibit MINSTRET RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	183	Should Inhibit MCYCLE RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-priv.robot	197	Should Inhibit MINSTRET RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-priv.robot	183	Should Inhibit MCYCLE RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	197	Should Inhibit MINSTRET RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
 Renode	tests/unit-tests/riscv-priv.robot	211	Should Inhibit MCYCLE After Write Finishes RV64		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	227	Should Inhibit MINSTRET After Write Finishes RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	243	Should Inhibit MCYCLE After Write Finishes RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/riscv-priv.robot	259	Should Inhibit MINSTRET After Write Finishes RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-priv.robot	243	Should Inhibit MCYCLE After Write Finishes RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
+Renode	tests/unit-tests/riscv-priv.robot	259	Should Inhibit MINSTRET After Write Finishes RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
 Renode	tests/unit-tests/riscv-priv.robot	275	Should Trap On SFENCE.VMA In User Mode RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	283	Should Trap On SFENCE.VMA In User Mode RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-priv.robot	283	Should Trap On SFENCE.VMA In User Mode RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
 Renode	tests/unit-tests/riscv-priv.robot	291	Should Trap On Sret When MSTATUS.TSR Is One RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	301	Should Trap On Sret When MSTATUS.TSR Is One RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-priv.robot	301	Should Trap On Sret When MSTATUS.TSR Is One RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
 Renode	tests/unit-tests/riscv-priv.robot	311	Should Trap On SATP Write When TVM Is One		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	321	Should Trap On SATP Read When TVM Is One		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	330	Should Trap On SFENCE.VMA When TVM Is One		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	339	Should Not Trap On Sret When MSTATUS.TSR Is Zero RV64		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/riscv-priv.robot	349	Should Not Trap On Sret When MSTATUS.TSR Is Zero RV32		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/riscv-priv.robot	349	Should Not Trap On Sret When MSTATUS.TSR Is Zero RV32		target	blocked-cpu	pinned RV32 fixture uses unsupported separated C/V spelling, V and Zcb; reduced-ISA probes do not establish equivalence
 Renode	tests/unit-tests/riscv-priv.robot	359	Should Not Trap On SATP Write When TVM Is Zero		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	369	Should Not Trap On SATP Read When TVM Is Zero		outside	outside	case passes bitness=64 to its CPU fixture
 Renode	tests/unit-tests/riscv-priv.robot	378	Should Not Trap On SFENCE.VMA When TVM Is Zero		outside	outside	case passes bitness=64 to its CPU fixture

@@ -1220,6 +1220,66 @@ mod tests {
     }
 
     #[test]
+    fn upstream_rv32_mret_restores_pc_and_sets_mpp_to_lowest_privilege() {
+        // Renode riscv-mret.robot: User Level [Does Not] Exist[s] 32Bits.
+        const START: u32 = 0x2000;
+        const TRAP: u32 = 0x4000;
+        const CLINT: u32 = 0x4400_0000;
+        let directory = std::env::temp_dir().join(format!("penv-rv32-mret-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        for (levels, lowest) in [("MachineUser", 0), ("Machine", 3)] {
+            std::fs::write(
+                &repl,
+                format!(
+                    r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 {{ frequency: 66000000 }}
+cpu: CPU.RiscV32 @ sysbus {{ timeProvider: clint; cpuType: "rv32gc"; privilegeLevels: PrivilegeLevels.{levels}; interruptMode: 1 }}
+mem: Memory.MappedMemory @ sysbus 0x1000 {{ size: 0x40000 }}
+"#
+                ),
+            )
+            .unwrap();
+            let mut machine = crate::platform::load(&repl, None).unwrap();
+            machine.set_entry(START);
+            machine.primary.set_mtvec(TRAP);
+            for (address, word) in [(START, 0xc000_1073u32), (TRAP, 0x3020_0073)] {
+                machine
+                    .bus
+                    .memory(address, 4)
+                    .unwrap()
+                    .copy_from_slice(&word.to_le_bytes());
+            }
+
+            let mut output = std::io::sink();
+            machine.run(1, &mut output).unwrap();
+            assert_eq!(machine.primary.pc, TRAP, "{levels}");
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                3,
+                "{levels}"
+            );
+
+            machine.run(1, &mut output).unwrap();
+            assert_eq!(machine.primary.pc, START, "{levels}");
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                lowest,
+                "{levels}"
+            );
+
+            // The fixture supplies time and MMIO without wiring interrupt outputs.
+            let clint = machine.bus.clint.as_mut().unwrap();
+            assert_eq!(clint.time(), 1);
+            clint.write(CLINT, 1);
+            clint.write(CLINT + 0x4000, 0);
+            clint.write(CLINT + 0x4004, 0);
+            assert_eq!(clint.tick(0), 0);
+            assert_eq!(clint.read(CLINT), 1);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn privilege_controls_gate_sret_and_address_translation_operations() {
         // Renode riscv-priv.robot: RV32 TSR and U-mode SFENCE.VMA cases,
         // plus the equivalent RV32 instructions for its supervisor TVM cases.

@@ -881,6 +881,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         let mut smepmp = false;
         let mut bitmanip = BitManip::default();
         let mut id = 0;
+        let mut privilege_levels = (
+            entry.model != "CPU.Minerva",
+            !matches!(entry.model.as_str(), "CPU.Minerva" | "CPU.IbexRiscV32"),
+        );
         let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
             16
         } else {
@@ -894,6 +898,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 "hartId",
                 "timeProvider",
                 "privilegedArchitecture",
+                "privilegeLevels",
                 "pmpEntryCount",
                 "builtInIrqController",
                 "allowUnalignedAccesses",
@@ -973,8 +978,21 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") => {}
                 (
                     "interruptMode",
-                    "InterruptMode.Auto" | "InterruptMode.Direct" | "InterruptMode.Vectored",
+                    "InterruptMode.Auto"
+                    | "InterruptMode.Direct"
+                    | "InterruptMode.Vectored"
+                    | "0"
+                    | "1"
+                    | "2",
                 ) if entry.model == "CPU.RiscV32" => {}
+                ("privilegeLevels", value) if entry.model == "CPU.RiscV32" => {
+                    privilege_levels = match value {
+                        "PrivilegeLevels.Machine" => (false, false),
+                        "PrivilegeLevels.MachineUser" => (true, false),
+                        "PrivilegeLevels.MachineSupervisorUser" => (true, true),
+                        _ => return Err(entry.error("unsupported RV32 privilegeLevels")),
+                    };
+                }
                 ("timeProvider", "empty") if entry.model == "CPU.RiscV32" => {}
                 ("vectorBootstrap", "true") if entry.model == "CPU.RiscV32" => {}
                 ("pmpEntryCount", "0") => pmp = 0,
@@ -1003,6 +1021,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 )
             },
             pmp,
+            privilege_levels,
         ));
     }
     configs.sort_unstable_by_key(|config| config.0);
@@ -1023,6 +1042,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         entry,
         (multiply, atomic, compressed, zicond, zacas, smepmp, bitmanip, floating),
         pmp,
+        (user, supervisor),
     ) in &configs
     {
         let hart = machine.hart_mut(id);
@@ -1050,11 +1070,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             "CPU.Minerva" => hart.enable_minerva(),
             _ => {}
         }
-        if entry.model != "CPU.Minerva" {
+        if user {
             hart.enable_user_mode();
-            if entry.model != "CPU.IbexRiscV32" {
-                hart.enable_supervisor_mode();
-            }
+        }
+        if supervisor {
+            hart.enable_supervisor_mode();
         }
         if entry.model == "CPU.RiscV32" {
             hart.enable_address_triggers();
@@ -1078,9 +1098,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 return None;
             }
             match value.trim() {
-                "InterruptMode.Auto" => Some(InterruptMode::Auto),
-                "InterruptMode.Direct" => Some(InterruptMode::Direct),
-                "InterruptMode.Vectored" => Some(InterruptMode::Vectored),
+                "InterruptMode.Auto" | "0" => Some(InterruptMode::Auto),
+                "InterruptMode.Direct" | "1" => Some(InterruptMode::Direct),
+                "InterruptMode.Vectored" | "2" => Some(InterruptMode::Vectored),
                 _ => None,
             }
         }) {
@@ -1134,11 +1154,14 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             ));
         }
         let targets = target_count.unwrap_or(1) as usize;
-        if frequency == Some(0) || targets == 0 || targets > configs.len() || wires.len() != targets
+        if frequency == Some(0)
+            || targets == 0
+            || targets > configs.len()
+            || (!wires.is_empty() && wires.len() != targets)
         {
             return Err(entry.error("invalid CLINT frequency or target wiring"));
         }
-        for &(id, target, _, _) in &configs[..targets] {
+        for &(id, target, _, _, _) in &configs[..wires.len()] {
             let (software, timer) = if uses_vex_irq(target) {
                 (101, 100)
             } else {
@@ -1164,6 +1187,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             machine.bus.map_clint(entry.address()?, targets)
         }
         .map_err(|e| entry.error(&e))?;
+        if wires.is_empty() {
+            machine.bus.clint.as_mut().unwrap().disconnect_interrupts();
+        }
     }
     if let Some(entry) = litex_cpu_timer {
         if configs.len() != 1 || clint.is_some() || !uses_vex_irq(cpu) {
@@ -2065,6 +2091,7 @@ type RiscvConfig<'a> = (
         (bool, bool, bool),
     ),
     usize,
+    (bool, bool),
 );
 
 fn uses_vex_irq(entry: &Entry) -> bool {
@@ -2080,7 +2107,7 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
     if let Some((pin, target)) = wire.split_once("->")
         && matches!(pin.trim(), "" | "IRQ")
         && let Some((cpu, line)) = target.split_once('@')
-        && let Some(&(hart, target, _, _)) = configs.iter().find(|(_, target, _, _)| {
+        && let Some(&(hart, target, _, _, _)) = configs.iter().find(|(_, target, _, _, _)| {
             target.name == cpu.trim() && (uses_vex_irq(target) || target.model == "CPU.Minerva")
         })
     {

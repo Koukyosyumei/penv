@@ -124,6 +124,10 @@ def robot_cases(root, isa, act):
                     artifacts = re.findall(r"https://[^\s]+/(clic[^/\s]+)", body)
                     if artifacts:
                         parameters = [(case.lineno, " | ".join(artifacts))]
+                if path.name == "riscv-mret.robot":
+                    privilege = re.search(r"(?m)^\s+Create Machine\s+bitness=(32|64)\s+privilege=PrivilegeLevels\.(MachineUser|Machine)\s*$", body)
+                    if privilege:
+                        parameters = [(case.lineno, f"bitness={privilege[1]} | privilegeLevels={privilege[2]}")]
                 if path.name == "riscv-interrupt-mode.robot":
                     mode = re.search(r"(?m)^\s+Create Machine\s+(Auto|Direct|Vectored)\s*$", body)
                     if mode:
