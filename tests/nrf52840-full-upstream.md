@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 16 | 29 |
+| 監査した共有・混成 Robot | 190 | 145 | 18 | 27 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **16** | **29** |
+| 合計 | **221** | **176** | **18** | **27** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -773,3 +773,17 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 `gdb.robot:783–821` の step/continue は `target/debug/penv run --script "$ARTIFACT_DIR/hook-step.resc"` と `hook-continue.resc` で `SetHookAtBlockEnd "self.Pause()"` が未対応と確認した。両件を未達のままとし、期待 PC 0/4/8 と fixture を `nrf52-gdb-block-end-293763a.md` で ARM 担当に渡した。
 
 再現ファイル、ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/radio-shorts.AH29vNFR` に保存した。
+
+### GDB RAM 読み出しウォッチポイント
+
+`gdb.robot:695–752` の単一・複数ウォッチポイントを同じ Cortex-M4 ELF で移植した。単一では `0x100` の値0と停止 PC `0x18`、複数では `0x100/0x100/0x104` の値 `0/1/0` を照合した。続行時のフックと最終停止で PC `0x18/0x24/0x2c` の順を確認した。GDB からの停止理由を検証するには共有 RSP が必要なため、2件は部分移植。別の幅0の補助再現は monitor から拒否されたが、固定 FE310/GDB ケースは未達。
+
+```sh
+cargo test --locked
+tests/nrf52840-gdb-read-watch-fixture.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/fixture"
+tests/nrf52840-gdb-pydev-fixture.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/pydev"
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+保存した `fixture/gdb.resc` を実行すると `StartGdbServer 3333` で停止する。固定条件と再現ファイルを `nrf52-gdb-read-watch-df9a2f7.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-read-watch.qGzd6FQ6` に保存した。
