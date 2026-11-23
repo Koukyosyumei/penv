@@ -63,6 +63,8 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "target", "ported", "fixed Linux images and live booted-image session; ordered UART, GPIO state and SPI assertions checked"
     if (filename, case) == ("LiteX_Linux_VexRiscv.robot", "Should Handle I2C"):
         return "target", "partial", "fixed images and temperature values verified at scheduled steps; live temperature control requested from ARM"
+    if (filename, case) == ("litex_vexriscv_verilated_cfu.robot", "Should Pass Functional HW/SW Compare Tests"):
+        return "target", "pending", "pinned ELF and native model fetched; shared SimulationFilePathLinux and CoSimulatedCFU loading requested from ARM"
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:

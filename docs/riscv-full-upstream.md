@@ -1515,3 +1515,22 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 固定 `timer-reconfiguration.robot` の代表再現は `cpu PerformanceInMips 1` を拒否して終了しました。共有モニターと実行タイミングの不足を ARM 担当への依頼 `riscv-clint-blocks-4e73e5a.md` に記録しました。3 ケースの等価判定は未達です。ケース別結果と再現用 RESC は `~/.local/state/penv-dispatch/evidence/riscv/backlog-4e73e5a-FohB4u/` に保存しました。
+
+### RV32 ACT ビット操作・条件付きゼロと LiteX CFU の阻害点
+
+固定 ACT の Zba・Zbb・Zbc・Zbs・Zbkx・Zicond を同じ release バイナリで一括検証しました。固定 ISA の V を外し、Zbkx と Zicond を追加した構成で 36/36 件が通過しました。固定構成では V の未対応で 36 件とも CPU 作成時に停止しました。Rust テストは 88/88 件で、上流等価合格は累計 174 件です。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-4a06100-pvr8jt"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/scalar.repl" --artifacts "$repro/scalar" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/{Zba,Zbb,Zbc,Zbs,Zbkx,Zicond}/*.elf
+target/release/penv run --script ../renode/scripts/single-node/litex_vexriscv_verilated_cfu.resc \
+  --platform-root ../renode --asset-dir "$evidence/assets" --max-steps 1000
+```
+
+CFU の固定 ELF とネイティブモデルの SHA-1 は上流と一致しました。固定 RESC は `SimulationFilePathLinux`、REPL を直接使うと `CoSimulated.CoSimulatedCFU` の読み込みで停止します。再現と既存の実装状況を ARM 担当への依頼 `riscv-cfu-4a06100.md` に記録しました。UART の 481474 比較と、CFU の機種固有命令・CSR の確認は未達です。ケース別ログと終了状態は上記の証拠ディレクトリに保存しました。

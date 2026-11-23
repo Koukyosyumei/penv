@@ -90,6 +90,8 @@ def robot_cases(root, isa, act):
                                 basis += "; reduced ISA fails pinned bad NaN-boxing signature (expected 0x7e000000)"
                             else:
                                 basis += "; reduced-ISA Zfbfmin ELF passed"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/(?:Zba|Zbb|Zbc|Zbs|Zbkx|Zicond)/[^/]+\.elf", portable):
+                            basis += "; fixed ELF passed in maximum ISA with V omitted and Zbkx/Zicond added"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/[IM]/[^/]+\.elf", portable):
                             basis += "; fixed ELF passed with only V omitted from ISA"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zbkb/[^/]+\.elf", portable):
