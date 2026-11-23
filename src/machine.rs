@@ -22,6 +22,7 @@ pub struct Machine {
     halt_hooks: Vec<(usize, u64, usize)>,
     halted: u8,
     elapsed_steps: u64,
+    reset_steps: VecDeque<u64>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
     inputs: VecDeque<(u64, Input)>,
@@ -187,6 +188,7 @@ impl Machine {
             halt_hooks: Vec::new(),
             halted: 0,
             elapsed_steps: 0,
+            reset_steps: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
             inputs: VecDeque::new(),
@@ -297,6 +299,13 @@ impl Machine {
         self.primary.thumb.is_some()
     }
 
+    pub fn has_cortex_m4(&self) -> bool {
+        self.primary
+            .thumb
+            .as_ref()
+            .is_some_and(|thumb| thumb.thumb2)
+    }
+
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(cpu) = &hart.rv64 {
@@ -309,6 +318,19 @@ impl Machine {
             }
             hart.fetch(&mut self.bus)
                 .map_err(|error| format!("hart {}: {error}", hart.csr.hart_id))?;
+        }
+        Ok(())
+    }
+
+    pub fn schedule_reset(&mut self, step: u64) -> Result<(), String> {
+        if !self.is_cortex_m() {
+            return Err("--reset-at requires a Cortex-M platform".into());
+        }
+        let index = self
+            .reset_steps
+            .partition_point(|&scheduled| scheduled < step);
+        if self.reset_steps.get(index) != Some(&step) {
+            self.reset_steps.insert(index, step);
         }
         Ok(())
     }
@@ -467,6 +489,65 @@ impl Machine {
         Ok(())
     }
 
+    pub fn run_radio_pair(
+        &mut self,
+        peer: &mut Self,
+        limit: u64,
+        output: &mut impl Write,
+    ) -> Result<(Stop, u64), String> {
+        self.bus.attach_radio_medium()?;
+        peer.bus.attach_radio_medium()?;
+        let mut retired = 0;
+        let mut primary_uart = Vec::new();
+        let mut peer_uart = Vec::new();
+        for _ in 0..limit {
+            let result = self
+                .run(1, &mut primary_uart)
+                .map_err(|e| format!("primary: {e}"));
+            let (stop, count) =
+                Self::flush_radio_uart(result, "primary", &mut primary_uart, output)?;
+            retired += count;
+            if stop != Stop::Limit {
+                return Ok((stop, retired));
+            }
+            let result = peer
+                .run(1, &mut peer_uart)
+                .map_err(|e| format!("peer: {e}"));
+            let (stop, count) = Self::flush_radio_uart(result, "peer", &mut peer_uart, output)?;
+            retired += count;
+            if stop != Stop::Limit {
+                return Ok((stop, retired));
+            }
+            let primary_frame = self.bus.tick_radio_air();
+            let peer_frame = peer.bus.tick_radio_air();
+            if let Some(frame) = primary_frame {
+                peer.bus
+                    .receive_radio_air(frame)
+                    .map_err(|e| format!("peer RADIO: {e}"))?;
+            }
+            if let Some(frame) = peer_frame {
+                self.bus
+                    .receive_radio_air(frame)
+                    .map_err(|e| format!("primary RADIO: {e}"))?;
+            }
+        }
+        Ok((Stop::Limit, retired))
+    }
+
+    fn flush_radio_uart(
+        result: Result<(Stop, u64), String>,
+        node: &str,
+        uart: &mut Vec<u8>,
+        output: &mut impl Write,
+    ) -> Result<(Stop, u64), String> {
+        while let Some(end) = uart.iter().position(|&byte| byte == b'\n') {
+            write!(output, "{node}: ").map_err(|e| e.to_string())?;
+            output.write_all(&uart[..=end]).map_err(|e| e.to_string())?;
+            uart.drain(..=end);
+        }
+        result
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_until(limit, output, |_, _| false)
     }
@@ -491,7 +572,10 @@ impl Machine {
                 .is_some_and(|(step, _)| *step <= self.elapsed_steps)
             {
                 match self.inputs.pop_front().unwrap().1 {
-                    Input::Uart(bytes) => self.bus.queue_uart_input(bytes),
+                    Input::Uart(bytes) => self
+                        .bus
+                        .queue_uart_input(bytes)
+                        .map_err(|error| error.to_string())?,
                     Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
                     Input::PhyVendorSpecific1 { name, value } => {
                         self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
@@ -566,6 +650,21 @@ impl Machine {
             self.bus.tick_h7_peripherals();
             if let Some(dwt) = &mut self.bus.dwt {
                 dwt.tick();
+            }
+            if self
+                .reset_steps
+                .front()
+                .is_some_and(|&step| step <= self.elapsed_steps)
+            {
+                while self
+                    .reset_steps
+                    .front()
+                    .is_some_and(|&step| step <= self.elapsed_steps)
+                {
+                    self.reset_steps.pop_front();
+                }
+                self.bus.reset_cortex_m_if_requested(true);
+                hart.reset_cortex_m(&mut self.bus)?;
             }
             while self
                 .button_events
@@ -836,11 +935,13 @@ impl Hart {
         if let Some(cpu) = &mut self.rv64 {
             return cpu.step(bus, self.csr.hart_id, elapsed_steps, output);
         }
-        if self.thumb.is_some() && bus.reset_cortex_m_if_requested() {
+        if self.thumb.is_some() && bus.reset_cortex_m_if_requested(false) {
             self.reset_cortex_m(bus)?;
         }
         if let Some(thumb) = self.thumb.as_mut() {
-            bus.advance_stm32_dma(output)
+            bus.advance_nrf_audio()
+                .and_then(|()| bus.advance_nrf_ppi(output))
+                .and_then(|()| bus.advance_stm32_dma(output))
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
             if self.busy_wait.as_mut().is_some_and(BusyWait::waiting) {
                 if let Some(timer) = &mut bus.systick {

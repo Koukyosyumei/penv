@@ -1125,7 +1125,7 @@ mod tests {
                 assert_eq!(machine.bus.read::<4>(EXTI + 20).unwrap(), 1);
                 machine
                     .bus
-                    .sample_nvic(&crate::nvic::ActiveExceptions::default());
+                    .sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
                 assert_eq!(
                     machine
                         .bus
@@ -1139,7 +1139,7 @@ mod tests {
                 machine.bus.write(EXTI + 20, 4, 1, &mut output).unwrap();
                 machine
                     .bus
-                    .sample_nvic(&crate::nvic::ActiveExceptions::default());
+                    .sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
                 assert_eq!(
                     machine
                         .bus

@@ -242,7 +242,7 @@ spi4: SPI.STM32H7_SPI @ {
         assert_ne!(bus.read::<4>(dma).unwrap() & (1 << 5), 0);
         assert_eq!(bus.read::<4>(spi + 0x14).unwrap(), EOT | TXC | TXP);
         assert_eq!(bus.read::<4>(spi).unwrap(), SPE);
-        bus.sample_nvic(&crate::nvic::ActiveExceptions::default());
+        bus.sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
         assert_ne!(bus.read::<4>(0xe000_e208).unwrap() & (1 << (84 - 64)), 0);
 
         write(&mut bus, rcc + 0x98, 4, 1 << 13);

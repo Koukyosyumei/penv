@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn reads_boot_commands_and_reports_macro_source_lines() {
-        let directory = std::env::temp_dir().join(format!("penv-resc-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("penv-network-resc-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let script = directory.join("boot.resc");
         let content = concat!(

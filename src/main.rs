@@ -28,6 +28,8 @@ mod network_monitor;
 mod network_platform;
 mod network_repl;
 mod network_resc;
+mod nrf52840;
+mod nrf_repl;
 mod ns16550;
 mod nvic;
 mod platform;
@@ -159,6 +161,11 @@ Options:
   --max-steps N      Stop after N execution steps (default: 10000000)
   --sd-image PATH    Attach a read-only image to the STM32H7 SDMMC slot
   --uart-log-dir DIR Save each simulation node UART to a numbered file
+  --reset-at STEP    Reset the Cortex-M machine before this step (repeatable)
+  --i2s-input PATH   Feed PCM bytes to nRF52840 I2S
+  --i2s-output PATH  Save transmitted nRF52840 I2S PCM
+  --pdm-input PATH   Feed signed little-endian PCM to nRF52840 PDM
+  --ble-peer PATH    Run a second nRF52840 image on a shared radio medium
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
@@ -256,6 +263,11 @@ fn run() -> Result<ExitCode, String> {
     let mut frame_waits = Vec::new();
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
+    let mut reset_steps = Vec::new();
+    let mut i2s_input = None;
+    let mut i2s_output = None;
+    let mut pdm_input = None;
+    let mut ble_peer = None;
     let mut sd_image = None;
     let mut uart_log_dir = None;
     let mut path = None;
@@ -291,7 +303,8 @@ fn run() -> Result<ExitCode, String> {
             }
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--framebuffer-out" | "--sd-image" | "--uart-log-dir"),
+                | "--asset-dir" | "--framebuffer-out" | "--sd-image" | "--uart-log-dir"
+                | "--i2s-input" | "--i2s-output" | "--pdm-input" | "--ble-peer"),
             ) => {
                 let path = args
                     .next()
@@ -302,6 +315,10 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--platform-root" => &mut platform_root,
+                    "--pdm-input" => &mut pdm_input,
+                    "--i2s-input" => &mut i2s_input,
+                    "--i2s-output" => &mut i2s_output,
+                    "--ble-peer" => &mut ble_peer,
                     "--sd-image" => &mut sd_image,
                     "--uart-log-dir" => &mut uart_log_dir,
                     "--framebuffer-out" => &mut framebuffer_out,
@@ -467,6 +484,14 @@ fn run() -> Result<ExitCode, String> {
                     .filter(|path| !path.is_empty())
                     .ok_or(FORMAT)?;
                 frame_waits.push((step, PathBuf::from(path), Some(region)));
+            }
+            Some("--reset-at") => {
+                let step = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or("--reset-at requires a nonnegative step number")?;
+                reset_steps.push(step);
             }
             Some("--uart-event") => {
                 let value = args
@@ -772,7 +797,7 @@ fn run() -> Result<ExitCode, String> {
                         .into(),
                 );
                 }
-                platform::load(platform_path, platform_root.as_deref(), stm32f0_console).or_else(
+                load_platform(platform_path, platform_root.as_deref(), stm32f0_console).or_else(
                     |original| {
                         if stm32f0_console {
                             return Err(original);
@@ -816,9 +841,26 @@ fn run() -> Result<ExitCode, String> {
                 .as_ref()
                 .is_some_and(|video| video.name == name);
             let uart = machine.bus.rv64_devices.has_uart(name);
-            if !video && !uart {
+            if !video && !uart && !machine.bus.has_nrf_uart(name) {
                 return Err(format!("unknown analyzer peripheral {analyzer:?}"));
             }
+        }
+        if i2s_input.is_some() || i2s_output.is_some() {
+            let input = if let Some(path) = &i2s_input {
+                fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?
+            } else {
+                Vec::new()
+            };
+            machine
+                .bus
+                .configure_nrf_i2s_pcm(input, i2s_output.is_some())?;
+        }
+        if let Some(path) = &pdm_input {
+            let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            machine
+                .bus
+                .set_nrf_pdm_input(bytes)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         if let Some(path) = &sd_image {
             let image = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -876,6 +918,9 @@ fn run() -> Result<ExitCode, String> {
         }
         if let Some(name) = uart_device.as_deref() {
             machine.bus.rv64_devices.select_uart(name)?;
+        }
+        for &step in &reset_steps {
+            machine.schedule_reset(step)?;
         }
         for (step, path) in &uart_events {
             let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1050,7 +1095,17 @@ fn run() -> Result<ExitCode, String> {
         (Some(cli), Some(script)) => cli.min(script),
         (cli, script) => cli.or(script).unwrap_or(10_000_000),
     };
-    let result = if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
+    let result = if let Some(peer_path) = &ble_peer {
+        let platform = platform_path
+            .as_deref()
+            .ok_or("--ble-peer requires a platform")?;
+        let mut peer = load_platform(platform, platform_root.as_deref(), false)?;
+        let image = File::open(peer_path).map_err(|e| format!("{}: {e}", peer_path.display()))?;
+        image::load(&mut peer, image, false, None)
+            .map_err(|e| format!("{}: {e}", peer_path.display()))?;
+        peer.validate_entry()?;
+        machine.run_radio_pair(&mut peer, limit, &mut output)
+    } else if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
         monitor::run(&mut machine, script, &runtime, limit, &mut output)
     } else {
         run_machine(
@@ -1065,6 +1120,12 @@ fn run() -> Result<ExitCode, String> {
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;
+    if let Some(path) = i2s_output
+        && let Some(pcm) = machine.bus.nrf_i2s_pcm_output()
+    {
+        fs::write(&path, pcm).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+
     for step in machine.intermediate_frame_matches() {
         eprintln!("penv: framebuffer matched at step {step}");
     }
@@ -1225,9 +1286,15 @@ fn run_machine(
                         (true, _) => uart.extend([0x1d, byte]),
                     }
                 }
-                machine.bus.queue_uart_input(uart);
+                machine
+                    .bus
+                    .queue_uart_input(uart)
+                    .map_err(|error| error.to_string())?;
             } else {
-                machine.bus.queue_uart_input(bytes);
+                machine
+                    .bus
+                    .queue_uart_input(bytes)
+                    .map_err(|error| error.to_string())?;
             }
         }
         let batch = if uart_stdin {
@@ -1270,4 +1337,15 @@ fn parse_address64(value: &str) -> Result<u64, String> {
         None => value.parse(),
     };
     parsed.map_err(|_| format!("invalid 64-bit number: {value}"))
+}
+
+fn load_platform(
+    path: &std::path::Path,
+    root: Option<&std::path::Path>,
+    stm32f0_console: bool,
+) -> Result<Machine, String> {
+    platform::load(path, root, stm32f0_console).or_else(|original| {
+        nrf_repl::load(path, root, stm32f0_console)
+            .map_err(|error| format!("{original}; nRF REPL: {error}"))
+    })
 }

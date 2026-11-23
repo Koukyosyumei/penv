@@ -1320,7 +1320,7 @@ ram:
             .unwrap();
         machine
             .bus
-            .sample_nvic(&crate::nvic::ActiveExceptions::default());
+            .sample_nvic(&crate::nvic::ActiveExceptions::default(), false);
         assert_eq!(
             machine.bus.read::<4>(0xe000_e200).unwrap(),
             (1 << 6) | (1 << 7)

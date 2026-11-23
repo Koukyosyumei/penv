@@ -48,12 +48,12 @@ impl Eeprom {
         }
     }
 
-    fn start_write(&mut self) {
+    pub(crate) fn start_write(&mut self) {
         self.address_remaining = self.address_bytes;
         self.address_latch = 0;
     }
 
-    fn write(&mut self, value: u8) {
+    pub(crate) fn write(&mut self, value: u8) {
         if self.address_remaining != 0 {
             self.address_remaining -= 1;
             self.address_latch = (self.address_latch << 8) | usize::from(value);
@@ -72,7 +72,7 @@ impl Eeprom {
         }
     }
 
-    fn read(&mut self) -> u8 {
+    pub(crate) fn read(&mut self) -> u8 {
         let value = self.data[self.pointer];
         self.pointer = (self.pointer + 1) % self.data.len();
         value

@@ -333,7 +333,7 @@ mod tests {
         write(&mut bus, base, PE | NACK);
         write(&mut bus, base + 4, START | (0x68 << 1));
         assert_eq!(bus.read::<4>(base + 0x18).unwrap(), 1 | NACK | STOPPED);
-        bus.sample_nvic(&ActiveExceptions::default());
+        bus.sample_nvic(&ActiveExceptions::default(), false);
         assert_eq!(bus.read::<4>(0xe000_e204).unwrap(), 1 << 30);
         write(&mut bus, base + 0x1c, NACK);
         assert_eq!(bus.read::<4>(base + 0x18).unwrap(), 1 | STOPPED);

@@ -172,11 +172,11 @@ mod tests {
         );
         assert_eq!(bus.read::<4>(BASE).unwrap() & START, 0);
         assert_eq!(bus.read::<4>(BASE + 4).unwrap(), COMPLETE);
-        bus.sample_nvic(&ActiveExceptions::default());
+        bus.sample_nvic(&ActiveExceptions::default(), false);
         assert_eq!(bus.read::<4>(0xe000_e208).unwrap(), 1 << (90 - 64));
         write(&mut bus, BASE + 8, COMPLETE);
         write(&mut bus, 0xe000_e288, 1 << (90 - 64));
-        bus.sample_nvic(&ActiveExceptions::default());
+        bus.sample_nvic(&ActiveExceptions::default(), false);
         assert_eq!(bus.read::<4>(0xe000_e208).unwrap(), 0);
 
         for (offset, value) in [

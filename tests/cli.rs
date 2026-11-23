@@ -651,6 +651,22 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
             .unwrap()
     };
     let output = invoke();
+    let reset = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args([
+            "run",
+            "--raw",
+            "--reset-at",
+            "19",
+            "--reset-at",
+            "10",
+            "--platform",
+        ])
+        .arg(&board)
+        .arg(&firmware)
+        .output()
+        .unwrap();
+    assert!(reset.status.success(), "{reset:?}");
+    assert_eq!(reset.stdout, b"AAA");
     image[4] &= !1;
     fs::write(&firmware, image).unwrap();
     let invalid = invoke();

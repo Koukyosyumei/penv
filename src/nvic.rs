@@ -1,3 +1,5 @@
+mod mpu;
+
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
 pub const IRQ_LINES: usize = 240;
@@ -48,6 +50,8 @@ pub struct Nvic {
     fault_enables: u32,
     mpu: Option<Mpu>,
     cache_selector: u32,
+    nrf_mpu: Option<mpu::Mpu>,
+    demcr: u32,
     pub uart_irq: Option<u8>,
 }
 
@@ -114,6 +118,8 @@ impl Nvic {
             fault_enables: 0,
             mpu: None,
             cache_selector: 0,
+            nrf_mpu: None,
+            demcr: 0,
             uart_irq,
         }
     }
@@ -145,8 +151,12 @@ impl Nvic {
     }
 
     pub fn reset(&mut self) {
+        let has_nrf_mpu = self.nrf_mpu.is_some();
         let mpu_count = self.mpu.as_ref().map(|mpu| mpu.count);
         *self = Self::new(self.priority_mask, self.uart_irq);
+        if has_nrf_mpu {
+            self.enable_nrf_mpu();
+        }
         if let Some(count) = mpu_count {
             self.configure_mpu(count);
         }
@@ -166,6 +176,34 @@ impl Nvic {
 
     pub fn pending_exceptions(&self) -> [u32; BANKS] {
         self.pending
+    }
+
+    pub fn enable_nrf_mpu(&mut self) {
+        self.nrf_mpu = Some(mpu::Mpu::default());
+    }
+
+    pub fn fpu_access(&self) -> bool {
+        self.cpacr & (0xf << 20) == 0xf << 20
+    }
+
+    pub fn allows_unaligned_data(&self) -> bool {
+        self.nrf_mpu.is_some() && !self.unaligned_access_traps()
+    }
+
+    pub fn div_zero_trap(&self) -> bool {
+        self.divide_by_zero_traps()
+    }
+
+    pub fn thumb_mpu_permits(
+        &self,
+        address: u32,
+        width: usize,
+        write: bool,
+        execute: bool,
+    ) -> bool {
+        self.nrf_mpu
+            .as_ref()
+            .is_none_or(|mpu| mpu.permits(address, width, write, execute))
     }
 
     pub fn configure_mpu(&mut self, count: u8) {
@@ -263,6 +301,14 @@ impl Nvic {
                     _ => {}
                 }
             }
+            if let Some(mpu) = &self.nrf_mpu {
+                if (0xd90..=0xda0).contains(&offset) {
+                    return mpu.read(offset - 0xd90);
+                }
+                if offset == 0xdfc {
+                    return Some(self.demcr);
+                }
+            }
             if (0xd90..=0xdb8).contains(&offset) {
                 return self.mpu.as_ref().map(|mpu| mpu.read(offset));
             }
@@ -312,6 +358,17 @@ impl Nvic {
 
     pub fn write(&mut self, address: u32, width: usize, value: u32) -> bool {
         let offset = address.wrapping_sub(BASE);
+        if width == 4
+            && let Some(mpu) = &mut self.nrf_mpu
+        {
+            if (0xd90..=0xda0).contains(&offset) {
+                return mpu.write(offset - 0xd90, value);
+            }
+            if offset == 0xdfc {
+                self.demcr = value;
+                return true;
+            }
+        }
         if width == 4 && self.mpu.is_some() {
             if offset == 0xd84 {
                 self.cache_selector = value & 1;

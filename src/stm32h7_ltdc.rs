@@ -242,7 +242,7 @@ mod tests {
             std::fs::read(&path).unwrap(),
             b"P6\n1 2\n255\n\xff\x00\x00\x00\x00\xff"
         );
-        bus.sample_nvic(&ActiveExceptions::default());
+        bus.sample_nvic(&ActiveExceptions::default(), false);
         assert_eq!(bus.read::<4>(0xe000_e208).unwrap(), 1 << (88 - 64));
         write(&mut bus, LTDC + 0x3c, RELOAD);
         assert_eq!(bus.read::<4>(LTDC + 0x38).unwrap(), 0);
