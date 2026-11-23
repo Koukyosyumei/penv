@@ -744,6 +744,17 @@ fn run() -> Result<ExitCode, String> {
                 monitor::CpuControl::Step(count) => {
                     machine.monitor_step_cortex_m(count, &mut output)?
                 }
+                monitor::CpuControl::LogBlockPc => machine.bus.thumb_block_pc_log = true,
+                monitor::CpuControl::RequireSynchronizedPc(enabled) => {
+                    if !enabled {
+                        return Err("disabling Cortex-M PC synchronization requires translation block chaining".into());
+                    }
+                }
+                monitor::CpuControl::RequireSingleInstructionBlock(width) => {
+                    if width != 1 {
+                        return Err("Cortex-M MaximumBlockSize supports one instruction".into());
+                    }
+                }
                 monitor::CpuControl::Read32(address) => {
                     let value = machine
                         .bus

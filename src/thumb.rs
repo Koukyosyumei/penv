@@ -958,6 +958,10 @@ impl Thumb {
         }
         let address = *pc;
         let inst = bus.thumb_fetch(address)?;
+        if bus.thumb_block_pc_log {
+            writeln!(output, "block started: PC {address:#x}")
+                .map_err(|error| format!("block begin hook output: {error}"))?;
+        }
         let opcode = if bus.thumb_opcodes.enabled
             || !bus.thumb_opcode_hooks.is_empty()
             || bus.thumb_trace.is_some()

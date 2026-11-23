@@ -39,6 +39,9 @@ pub enum CpuControl {
     Pause(bool),
     Halt(bool),
     Step(u64),
+    LogBlockPc,
+    RequireSynchronizedPc(bool),
+    RequireSingleInstructionBlock(u32),
     Read32(u32),
     ReadWatchpoint(u32, usize),
     Clock(String, bool),
@@ -355,6 +358,31 @@ fn execute(
                 crate::parse_address(resolve(address)?)?,
                 width,
             ));
+        }
+        ["cpu" | "sysbus.cpu", "MaximumBlockSize", width] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::RequireSingleInstructionBlock(
+                    crate::parse_address(resolve(width)?)?,
+                ));
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            "SyncPCEveryInstructionDisabled",
+            disabled,
+        ] if boot.platform.is_some() => {
+            let disabled: bool = disabled
+                .to_ascii_lowercase()
+                .parse()
+                .map_err(|_| "expected true or false")?;
+            boot.cpu_control
+                .push(CpuControl::RequireSynchronizedPc(!disabled));
+        }
+        ["cpu" | "sysbus.cpu", "SetHookAtBlockBegin", ..] if boot.platform.is_some() => {
+            let (_, body) = text.split_once("SetHookAtBlockBegin").unwrap();
+            if body.trim() != r#""self.DebugLog('block started: ' + 'PC '+ str(self.PC))""# {
+                return check_unsupported_python_hook(body.trim());
+            }
+            boot.cpu_control.push(CpuControl::LogBlockPc);
         }
         ["cpu" | "sysbus.cpu", "Step", count] if boot.platform.is_some() => {
             boot.cpu_control

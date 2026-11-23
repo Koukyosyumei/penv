@@ -161,6 +161,7 @@ pub struct Bus {
     thumb_read_watchpoints: BTreeSet<(u32, usize)>,
     pub thumb_read_watchpoint_hit: bool,
     pub cpu_hooks: BTreeMap<u32, Vec<CpuHook>>,
+    pub thumb_block_pc_log: bool,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub thumb_trace: Option<crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
