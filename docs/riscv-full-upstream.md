@@ -963,3 +963,26 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 固定 Robot の最大 ISA 構成では再試行した 10 件が V の未対応で停止します。固定 ISA には Zknh の指定もありません。縮小構成の通過を各行に記録し、上流等価合格は累計 155 件です。
 
 REPL、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-fd3fa2d-DXYSwi/` に保存しました。
+
+### RV32 Zksh の SM3 命令
+
+CPU 型で明示された `Zksh` を解析し、`sm3p0` と `sm3p1` を実装しました。変更前は代表の `Zksh-sm3p0-00.elf` が `rv32ic_zksh` の CPU 作成時に停止しました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-a20200a-4MkBWO"
+cargo test --locked
+cargo build --locked --release
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/hash.repl" --artifacts "$repro/hash" \
+  "$elfs"/Zksh/*.elf "$elfs"/Zknh/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" \
+  "$elfs"/Zksh/*.elf
+```
+
+同じ release バイナリで、`rv32ic_zksh` は固定 Zksh ACT ELF 2 件、`rv32ic_zksh_zknh` は Zksh と Zknh の 12 件が完了コード 0 に到達しました。Rust テスト 87 件と、暗号拡張を追加した RV32 virt の UART・CLINT・PLIC も通過しました。上記の最後のコマンドは固定 Robot 構成での残課題の再現です。V の未対応で 2 件とも CPU 作成時に停止し、固定 ISA 指定には Zksh もありません。台帳の等価合格は累計 155 件です。
+
+構成別の `results.jsonl`、ケースごとのログ、終了状態と RV32 virt の検証結果は上記の証拠ディレクトリに保存しました。

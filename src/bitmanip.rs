@@ -5,6 +5,7 @@ pub struct BitManip {
     pub zbc: bool,
     pub zbkc: bool,
     pub zknh: bool,
+    pub zksh: bool,
     pub zbs: bool,
     pub zbkb: bool,
     pub zbkx: bool,
@@ -16,6 +17,13 @@ pub struct BitManip {
 impl BitManip {
     pub fn immediate(self, funct3: u32, funct7: u32, value: u32, imm: u32) -> Option<u32> {
         let index = imm & 31;
+        if self.zksh && funct3 == 1 && funct7 == 0x08 {
+            match index {
+                8 => return Some(value ^ value.rotate_left(9) ^ value.rotate_left(17)),
+                9 => return Some(value ^ value.rotate_left(15) ^ value.rotate_left(23)),
+                _ => {}
+            }
+        }
         if self.zknh && funct3 == 1 && funct7 == 0x08 {
             return Some(match index {
                 0 => value.rotate_right(2) ^ value.rotate_right(13) ^ value.rotate_right(22),
