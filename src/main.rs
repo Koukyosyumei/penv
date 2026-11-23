@@ -222,6 +222,7 @@ Options:
   --uart-input PATH  Queue bytes from a file for the platform UART
   --uart-check PATH  Check UART lines against a virtual-time plan
   --uart-transcript PATH  Record UART lines with instruction steps
+  --uart-reply LINE FILE  Queue bytes once the UART emits the given line
   --f4-repl-timing   Preserve STM32F4 REPL timer and SysTick clocks
   --uart-stdin       Forward stdin to the platform UART while running
   --uart-stdin-reset  Enable Ctrl-] r to reload the machine on the UART session
@@ -605,6 +606,7 @@ fn run() -> Result<ExitCode, String> {
     let mut led_events = false;
     let mut uart_input = None;
     let mut uart_transcript = None;
+    let mut uart_reply = None;
     let mut uart_check = None;
     let mut f4_repl_timing = false;
     let mut uart_stdin = false;
@@ -696,6 +698,19 @@ fn run() -> Result<ExitCode, String> {
                     .ok_or("--ethernet-loopback requires distinct nonzero LOCAL:PEER ports")?;
                 if ethernet_loopback.replace(ports).is_some() {
                     return Err("--ethernet-loopback may only be specified once".into());
+                }
+            }
+            Some("--uart-reply") => {
+                let line = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--uart-reply requires LINE FILE")?;
+                let file = args
+                    .next()
+                    .map(PathBuf::from)
+                    .ok_or("--uart-reply requires LINE FILE")?;
+                if uart_reply.replace((line, file)).is_some() {
+                    return Err("--uart-reply may only be specified once".into());
                 }
             }
             Some(
@@ -2144,15 +2159,21 @@ fn run() -> Result<ExitCode, String> {
         (cli, script) => cli.or(script).unwrap_or(10_000_000),
     };
     if let Some(check) = uart_check {
-        if uart_transcript.is_some() {
-            return Err("--uart-check cannot be combined with --uart-transcript".into());
+        if uart_transcript.is_some() || uart_reply.is_some() {
+            return Err("--uart-check cannot be combined with --uart-transcript or --uart-reply".into());
         }
         uart_check::run(&mut machine, &mut output, &check)?;
         output.flush().map_err(|e| format!("UART: {e}"))?;
         return Ok(ExitCode::SUCCESS);
     }
-    let result = if let Some(path) = uart_transcript.as_deref() {
-        uart_transcript::run(&mut machine, limit, &mut output, Some(path), None)
+    let result = if uart_transcript.is_some() || uart_reply.is_some() {
+        uart_transcript::run(
+            &mut machine,
+            limit,
+            &mut output,
+            uart_transcript.as_deref(),
+            uart_reply,
+        )
     } else if let Some(peer_path) = &ble_peer {
         let platform = platform_path
             .as_deref()
