@@ -2320,3 +2320,33 @@ fn renode_property_binding_exception() {
             .contains("PropertySettingException: Fake exception")
     );
 }
+
+#[test]
+fn renode_sysbus_dependency_implicit() {
+    let source = "\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: sysbus";
+    check_string(source, None).unwrap();
+}
+
+#[test]
+fn renode_sysbus_dependency_with_update_entry() {
+    let source = "\nsysbus:\n    init:\n        Method\n\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: sysbus";
+    let path = Path::new("<platform string>");
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    let mut calls = 0;
+    build_entries_with_scripts(
+        path,
+        &entries,
+        false,
+        true,
+        |_, _, _| Ok(()),
+        |entry, phase, commands, _| {
+            assert_eq!(entry.name, "sysbus");
+            assert_eq!(phase, ScriptPhase::Init);
+            assert_eq!(commands, ["Method"]);
+            calls += 1;
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(calls, 1);
+}

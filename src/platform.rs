@@ -1443,7 +1443,7 @@ fn validate_dependency_constructor(
                     }
                 } else if let Some((_, value)) = statement.split_once(':') {
                     let reference = value.trim();
-                    if !matches!(reference, "none" | "empty") {
+                    if !matches!(reference, "none" | "empty" | "sysbus") {
                         let index = declared
                             .get(reference)
                             .copied()
