@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 103 | 5 | 82 |
+| 監査した共有・混成 Robot | 190 | 106 | 5 | 79 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **120** | **5** | **96** |
+| 合計 | **221** | **123** | **5** | **93** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -282,3 +282,15 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 `arm-cortex-m-exception-return.robot:129–149` の Cortex-M4 に適用できる未達2ケースを移植した。Thread の `BX` は固定オペランド `0xFFFFFFB8` に分岐し、次の命令境界で扱う無効 Thumb 状態を保持する。NMI の `BLX LR` は通常分岐として扱う。Cortex-M4 の Thread/MSP 用 LR `0xFFFFFFF9` に対応する PC `0xFFFFFFF8` と、NMI がアクティブなままであることを照合した。TrustZone 構成の判定は既存の対象外根拠を参照。
 
 `cargo test`、上記の `nrf52840-bus-fault-upstream.sh` と `nrf52840-shell.sh` で再現できる。ログ・終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/exception-branch.0gAH2ip8/` の `cargo-test.final`、`elf`、`shell` に保存した。BusFault の連続フォールトに対する monitor ステップ境界は引き続き部分移植。
+
+### LLVM MC の Thumb アセンブルと逆アセンブル
+
+`llvm-asm-disasm.robot:317–324, 522–534, 543–547` の3ケースを移植した。Cortex-M4 固定ケースでは上流の4命令のバイト列、アドレス、逆アセンブルの表記を照合する。複数行とディレクティブのケースは、元の行数と反復数を維持して Thumb NOP に置き換えた。上流 monitor のゲストメモリ経由のバイト列受け渡しは、CLI の16進バイト列で行う。ホストの `llvm-mc` が必要。逆アセンブルは1命令を対象とし、アセンブルは解決済みの命令エンコーディングを返す。
+
+```sh
+cargo test
+tests/nrf52840-thumb-llvm-upstream.sh "$PWD/target/debug/penv"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-llvm.01QfxuUa/` の `cargo-test.final`、`llvm`、`shell` に保存した。ゲストメモリ範囲外からの逆アセンブルと、共有スイートの不正命令・拡張条件の固定診断は未達。

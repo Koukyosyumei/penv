@@ -30,6 +30,7 @@ mod stm32_uart;
 mod sv32;
 mod systick;
 mod thumb;
+mod thumb_llvm;
 mod uart;
 
 use std::{
@@ -47,6 +48,10 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv thumb-assemble SOURCE
+       penv thumb-disassemble ADDRESS HEXBYTES
+
+Thumb assembly tools require llvm-mc on PATH. HEXBYTES are in memory order.
 
 Options:
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
@@ -105,6 +110,10 @@ fn run() -> Result<ExitCode, String> {
         }
         Some(Some("-V" | "--version")) => {
             println!("penv {}", env!("CARGO_PKG_VERSION"));
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Some(command @ ("thumb-assemble" | "thumb-disassemble"))) => {
+            thumb_llvm::run(command, args)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}
