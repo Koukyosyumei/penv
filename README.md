@@ -251,11 +251,11 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 51 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 53 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
-  SHA-256 は `b56d356383c27a596d14af477ef6df42e1343b9eaeb5562532fd4a536ee0dfd4` です。
+  SHA-256 は `de1ac7adac04303e72dd99b5af83bb28ae50c22c2bf8ad0b99a12276a704a617` です。
 
 ### CAN1/CAN2 のローカル検証
 
@@ -328,6 +328,42 @@ NVIC 31/32、I2C2 は 33/34、I2C3 は 72/73 に配線します。旧世代レ�
 SCL/SDA の信号とタイミング、RCC クロックゲート、10 ビットアドレス、スレーブ動作、
 DMA、SMBus、バス仲裁、エコー以外の接続先は残課題です。
 
+### STM32F407 の IWDG と FreeRTOS の再起動
+
+STM32H7 を担当する `penv/network` の `b96599c` を参照し、F407 の上流宣言
+`Timers.STM32_IndependentWatchdog @ sysbus 0x40003000` を配線しました。上流指定の
+32 kHz、ウィンドウなし、初期プリスケーラー値 `0x4` を使用します。KR の開始・書き込み
+解除・給餌キーと PR/RLR の保護を実装し、整列した 16/32 ビットのアクセスを処理します。
+満了時には Cortex-M の初期 SP と PC を元のベクターテーブルから読み直します。NVIC、
+SysTick、検証で使用する周辺機器をリセットし、SRAM、フラッシュ、ロード済み ELF を保持します。
+[RM0090 の IWDG 章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32bit-mcus-stmicroelectronics.pdf)
+
+上記のスモークテストは通常起動に加え、UART の `!` を受けた FreeRTOS タスクから
+約 6 ms の期限で IWDG を開始するケースを実行します。4 tick 後に給餌し、元の期限を
+越えて生存したことを確認します。次の満了で再起動したファームウェアは、スタートアップが
+初期化しない SRAM の値と、IWDG・SysTick・NVIC・UART のリセット状態を検査します。
+`watchdog-uart.log` では通常の出力一式が次の 3 行を挟んで 2 回現れ、再起動後も
+`X`、`Y`、`Z` に応答します。シミュレーター側のログは `watchdog-penv.log` です。
+
+```text
+IWDG armed
+IWDG refresh held
+IWDG reboot: SRAM retained
+```
+
+生成済みの ELF でリセットケースを直接実行できます。
+
+```sh
+work=target/stm32f407-freertos
+target/release/penv run --script "$work/boot.resc" --max-steps 90000 \
+    --uart-event "24000:$work/uart-x.txt" --uart-event "30000:$work/uart-yz.txt" \
+    --uart-event "38000:$work/uart-watchdog.txt" \
+    --uart-event "75000:$work/uart-x.txt" --uart-event "81000:$work/uart-yz.txt"
+```
+
+IWDG の更新待ち状態、フラッシュオプションによる自動起動、デバッグ時停止、RCC の
+リセット原因フラグ、ボード全域のリセットは残課題です。
+
 ### 未変更の上流 REPL
 
 `../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` で確認しました。
@@ -354,9 +390,10 @@ target/release/penv run --script "$work/upstream.repro.resc" \
 ```
 
 `10cea9f` では `stm32f4.repl:31` の CAN、`2fb7018` では 47 行目の PWR、
-`ddd976f` では 130 行目の SPI、`9348d9c` では 143 行目の `I2C.STM32F1_I2C`
-で停止しました。現在は I2C1〜3 の宣言を通過し、`stm32f4.repl:165: iwdg: unsupported platform model "Timers.STM32_IndependentWatchdog"`
-で終了コード 1 になります。上流 REPL での ELF 起動には IWDG 以降の対応が必要です。
+`ddd976f` では 130 行目の SPI、`9348d9c` では 143 行目の I2C、
+`9bdf9d3` では 165 行目の `Timers.STM32_IndependentWatchdog` で停止しました。
+現在は IWDG の宣言を通過し、`stm32f4.repl:173: rcc: unsupported platform model "Miscellaneous.STM32F4_RCC"`
+で終了コード 1 になります。上流 REPL での ELF 起動には RCC 以降の対応が必要です。
 
 残課題は AIRCR の書き込み（優先度グループ変更とリセット要求）、FPU 命令と ARM_CM4F の
 浮動小数点コンテキスト、上流ボード全体の読み込み、実機での確認です。フラッシュの

@@ -7,6 +7,10 @@
 #define FLASH_CR  REG(0x40023c10)
 #define FLASH_RDP (*(volatile uint8_t *)0x1fffc001)
 #define FLASH_NWRP REG(0x1fffc008)
+#define IWDG_KR   (*(volatile uint16_t *)0x40003000)
+#define IWDG_PR   (*(volatile uint16_t *)0x40003004)
+#define IWDG_RLR  (*(volatile uint16_t *)0x40003008)
+#define IWDG_SR   (*(volatile uint16_t *)0x4000300c)
 #define PWR_CR    REG(0x40007000)
 #define PWR_CSR   REG(0x40007004)
 #define UART4_SR  REG(0x40004c00)
@@ -33,6 +37,9 @@ struct event {
 };
 
 static QueueHandle_t events;
+
+enum { WATCHDOG_ARMED = 0x49adca11, WATCHDOG_FED = 0x49adfead };
+extern volatile uint32_t watchdog_marker;
 
 void firmware_can_test(void);
 void firmware_spi_test(void);
@@ -103,6 +110,28 @@ void uart4_irq(void)
     send_from_irq(UART_EVENT, UART4_DR & 0xff);
 }
 
+static void trigger_watchdog_reset(void)
+{
+    watchdog_marker = WATCHDOG_ARMED;
+    uart_text("IWDG armed\n");
+    IWDG_KR = 0xcccc;
+    IWDG_KR = 0x5555;
+    IWDG_PR = 0;
+    IWDG_RLR = 47; /* 48 counts at 32 kHz / 4 gives 6 ms. */
+    while (IWDG_SR != 0) {
+    }
+    IWDG_KR = 0xaaaa;
+    vTaskDelay(4);
+    IWDG_KR = 0xaaaa;
+    vTaskDelay(3);
+    /* Survived the original deadline. Wait without another refresh. */
+    watchdog_marker = WATCHDOG_FED;
+    uart_text("IWDG refresh held\n");
+    for (;;) {
+        vTaskDelay(portMAX_DELAY);
+    }
+}
+
 static void event_task(void *arg)
 {
     (void)arg;
@@ -128,6 +157,9 @@ static void event_task(void *arg)
             uart_char((char)('0' + timer_count));
         } else {
             configASSERT(event.source == UART_EVENT);
+            if (event.value == '!') {
+                trigger_watchdog_reset();
+            }
             uart_text("UART4 echo=");
             uart_char((char)event.value);
         }
@@ -205,7 +237,18 @@ void firmware_main(void)
     static StackType_t event_stack[configMINIMAL_STACK_SIZE];
     static StaticTask_t event_tcb;
 
+    /* Check reset state before the firmware writes these peripheral registers. */
+    const uint32_t systick = REG(0xe000e010);
+    const uint32_t irq_enables = REG(0xe000e100) | REG(0xe000e104) | REG(0xe000e108);
+    const uint32_t uart_control = UART4_CR1;
     uart_init();
+    configASSERT((systick & 3) == 0 && irq_enables == 0 && uart_control == 0);
+    configASSERT(IWDG_PR == 4 && IWDG_RLR == 0xfff && IWDG_SR == 0);
+    if (watchdog_marker != 0) {
+        configASSERT(watchdog_marker == WATCHDOG_FED);
+        watchdog_marker = 0;
+        uart_text("IWDG reboot: SRAM retained\n");
+    }
     FLASH_ACR = 1;
     configASSERT((FLASH_ACR & 0xf) == 1);
     FLASH_ACR = 0;  /* Restore zero wait states for HSI 16 MHz. */

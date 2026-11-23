@@ -49,6 +49,15 @@ impl F4Flash {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.access = 0;
+        self.status = 0;
+        self.control = 0;
+        self.options = self.option_bytes;
+        self.key.lock();
+        self.option_key.lock();
+    }
+
     pub fn mappings(&self) -> [(u32, u32); 2] {
         [
             (self.base, Self::SIZE),

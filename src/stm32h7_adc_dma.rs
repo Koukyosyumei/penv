@@ -44,6 +44,11 @@ impl DmaMux {
         address.wrapping_sub(self.base) < Self::SIZE
     }
 
+    pub fn reset(&mut self) {
+        self.configs.fill(0);
+        self.generators.fill(0);
+    }
+
     pub fn targets(&self, request: u8) -> impl Iterator<Item = StreamTarget> + '_ {
         self.configs
             .iter()

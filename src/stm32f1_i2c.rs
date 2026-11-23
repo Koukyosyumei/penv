@@ -69,6 +69,12 @@ impl F1I2c {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.registers = RESET_REGISTERS;
+        self.begin(Phase::Idle);
+        self.status = 0;
+    }
+
     pub fn attach_echo(&mut self, address: u8) -> bool {
         let std::collections::btree_map::Entry::Vacant(target) = self.targets.entry(address) else {
             return false;
@@ -203,10 +209,8 @@ impl F1I2c {
         let control = self.registers[0];
         self.registers[0] &= !(START | STOP);
         if control & SWRST != 0 {
-            self.registers = RESET_REGISTERS;
+            self.reset();
             self.registers[0] = SWRST;
-            self.begin(Phase::Idle);
-            self.status = 0;
         } else if control & PE == 0 {
             self.begin(Phase::Idle);
             self.status = 0;

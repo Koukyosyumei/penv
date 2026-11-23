@@ -37,6 +37,17 @@ impl Exti {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.input = 0;
+        self.levels = 0;
+        self.pending = 0;
+        self.mask = 0;
+        self.event_mask = 0;
+        self.rising = 0;
+        self.falling = 0;
+        self.software = 0;
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

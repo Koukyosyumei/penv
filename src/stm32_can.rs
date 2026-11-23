@@ -189,6 +189,10 @@ impl StmCan {
         }
     }
 
+    pub fn reset(&mut self) {
+        *self = Self::new(self.base, self.master, self.irq);
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }
@@ -234,7 +238,7 @@ impl StmCan {
 
     pub fn write(&mut self, offset: u32, value: u32) {
         match offset {
-            0 if value & RESET != 0 => *self = Self::new(self.base, self.master, self.irq),
+            0 if value & RESET != 0 => self.reset(),
             0 => {
                 let previous = self.status;
                 self.control = value & 0x0001_00ff;

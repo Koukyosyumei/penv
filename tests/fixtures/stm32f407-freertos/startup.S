@@ -81,3 +81,11 @@ reset_handler:
     isb
     bl firmware_main
     b firmware_fault
+
+.section .noinit,"aw",%nobits
+.balign 4
+.global watchdog_marker
+.type watchdog_marker, %object
+watchdog_marker:
+    .space 4
+.size watchdog_marker, . - watchdog_marker

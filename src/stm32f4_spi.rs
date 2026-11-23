@@ -49,6 +49,14 @@ impl F4Spi {
         }
     }
 
+    pub fn reset(&mut self) {
+        let (irq, dma, loopback) = (self.irq, self.dma, self.loopback);
+        *self = Self::new(self.base);
+        self.irq = irq;
+        self.dma = dma;
+        self.loopback = loopback;
+    }
+
     pub fn contains(&self, address: u32) -> bool {
         address.wrapping_sub(self.base) < Self::SIZE
     }

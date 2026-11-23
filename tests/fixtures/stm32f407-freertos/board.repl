@@ -36,6 +36,11 @@ timer2: Timers.STM32_Timer @ sysbus 0x40000000
     frequency: 16000000
     initialLimit: 0xFFFFFFFF
 
+iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
+    frequency: 32000
+    windowOption: false
+    defaultPrescaler: 0x4
+
 pwr: Miscellaneous.STM32_PWR @ sysbus 0x40007000
 
 spi1: SPI.STM32SPI @ sysbus 0x40013000

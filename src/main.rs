@@ -25,6 +25,7 @@ mod stm32_crc;
 mod stm32_ethernet;
 mod stm32_exti;
 mod stm32_flash;
+mod stm32_iwdg;
 mod stm32_uart;
 mod stm32f1_i2c;
 mod stm32f4_flash;

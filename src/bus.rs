@@ -16,6 +16,7 @@ use crate::{
     stm32_can::{Filters, StmCan},
     stm32_crc::Stm32Crc,
     stm32_exti::Exti,
+    stm32_iwdg::Iwdg,
     stm32_uart::{Stm32Irq, Stm32Usart, UsartLayout},
     stm32f1_i2c::F1I2c,
     stm32f4_flash::F4Flash,
@@ -96,6 +97,7 @@ pub struct Bus {
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
     stm32_uarts: Vec<Stm32Usart>,
+    iwdgs: Vec<Iwdg>,
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
     h7_adc: Vec<Adc>,
@@ -302,6 +304,98 @@ impl Bus {
         }
         self.dwt = Some(device);
         Ok(())
+    }
+
+    pub fn map_iwdg(&mut self, device: Iwdg) -> Result<(), String> {
+        self.check_peripheral_range(device.base, Iwdg::SIZE)?;
+        self.iwdgs.push(device);
+        Ok(())
+    }
+
+    pub fn tick_watchdogs(&mut self) -> bool {
+        self.iwdgs.iter_mut().any(Iwdg::tick)
+    }
+
+    pub fn reset_cortex_m_devices(&mut self) {
+        self.reservations.fill(None);
+        if let Some(device) = &mut self.nvic {
+            device.reset();
+        }
+        if let Some(device) = &mut self.systick {
+            device.reset();
+        }
+        if let Some(device) = &mut self.dwt {
+            device.reset();
+        }
+        if let Some(device) = &mut self.exti {
+            device.reset();
+        }
+        if let Some(device) = &mut self.h7_exti {
+            device.reset();
+        }
+        if let Some(device) = &mut self.f4_flash {
+            device.reset();
+        }
+        if let Some(device) = &mut self.f4_power {
+            device.reset();
+        }
+        if let Some(control) = &mut self.h7_network_control {
+            if let Some(nic) = control.nic
+                && let Controller::Stm32h7(device) = &mut self.ethernet[nic]
+            {
+                device.reset();
+                device.set_clock(false);
+            }
+            *control = NetworkControl::new(control.rcc_base, control.syscfg_base, control.nic);
+        }
+        for device in &mut self.stm32_uarts {
+            device.reset();
+        }
+        for device in &mut self.iwdgs {
+            device.reset();
+        }
+        for device in &mut self.h7_timers {
+            device.reset();
+        }
+        for device in &mut self.h7_gpio {
+            device.reset();
+        }
+        for device in &mut self.h7_spi {
+            device.reset();
+        }
+        for device in &mut self.f4_spi {
+            device.reset();
+        }
+        for device in &mut self.h7_i2c {
+            device.reset();
+        }
+        for device in &mut self.f1_i2c {
+            device.reset();
+        }
+        for device in &mut self.h7_qspi {
+            device.reset();
+        }
+        for device in &mut self.h7_rng {
+            device.reset();
+        }
+        for device in &mut self.h7_crc {
+            device.reset();
+        }
+        for device in &mut self.h7_adc {
+            device.reset();
+        }
+        for device in &mut self.h7_adc_dma {
+            device.reset();
+        }
+        for device in &mut self.h7_dma_mux {
+            device.reset();
+        }
+        for device in &mut self.h7_bdma {
+            device.reset();
+        }
+        for device in &mut self.stm32_can {
+            device.reset();
+        }
     }
 
     pub fn map_f4_power(&mut self, base: u32) -> Result<(), String> {
@@ -598,6 +692,7 @@ impl Bus {
                 .chain(self.h7_bdma.iter().map(|device| (device.base, Bdma::SIZE)))
                 .chain(self.h7_gpio.iter().map(|port| (port.base, port.size)))
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE)))
+                .chain(self.iwdgs.iter().map(|device| (device.base, Iwdg::SIZE)))
                 .chain(self.f4_spi.iter().map(|spi| (spi.base, F4Spi::SIZE)))
                 .chain(self.h7_spi.iter().map(|spi| (spi.base, Spi::SIZE)))
                 .chain(self.f1_i2c.iter().map(|i2c| (i2c.base, F1I2c::SIZE)))
@@ -1369,6 +1464,12 @@ impl Bus {
         {
             return Ok(fdcan.read(address));
         }
+        if matches!(N, 2 | 4)
+            && address & 3 == 0
+            && let Some(device) = self.iwdgs.iter().find(|device| device.contains(address))
+        {
+            return Ok(device.read(address));
+        }
         self.read_ram::<N>(address)
     }
 
@@ -1793,6 +1894,16 @@ impl Bus {
                 .find(|fdcan| fdcan.contains(address))
         {
             fdcan.write(address, value);
+            return Ok(());
+        }
+        if matches!(width, 2 | 4)
+            && address & 3 == 0
+            && let Some(device) = self
+                .iwdgs
+                .iter_mut()
+                .find(|device| device.contains(address))
+        {
+            device.write(address, value);
             return Ok(());
         }
         self.guest_memory(address, width)?

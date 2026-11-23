@@ -53,6 +53,10 @@ impl Stm32Usart {
         }
     }
 
+    pub fn reset(&mut self) {
+        *self = Self::new(self.base, self.irq, self.layout);
+    }
+
     pub fn size(&self) -> u32 {
         self.layout.size()
     }

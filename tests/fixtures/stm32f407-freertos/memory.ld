@@ -25,4 +25,7 @@ SECTIONS
         . = ALIGN(4);
         _bss_end = .;
     } > SRAM
+    .noinit (NOLOAD) : ALIGN(4) {
+        KEEP(*(.noinit))
+    } > SRAM
 }

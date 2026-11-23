@@ -7,6 +7,7 @@ const FPDS: u32 = 1 << 9;
 const VOS: u32 = 1 << 14;
 const CONTROL_WRITABLE: u32 = LPDS | PDDS | PVD_CONFIG | DBP | FPDS | VOS;
 
+const SBF: u32 = 1 << 1;
 const BRR: u32 = 1 << 3;
 const EWUP: u32 = 1 << 8;
 const BRE: u32 = 1 << 9;
@@ -28,6 +29,12 @@ impl F4Power {
             control: VOS,
             status: 0,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.control = VOS;
+        // The backup regulator and standby flag survive a system reset.
+        self.status &= BRE | BRR | SBF;
     }
 
     pub fn contains(&self, address: u32) -> bool {

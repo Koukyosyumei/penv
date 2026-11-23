@@ -9,6 +9,7 @@ use crate::{
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
     stm32_can::StmCan,
+    stm32_iwdg::Iwdg,
     stm32_uart::{Stm32Irq, UsartLayout},
     stm32f1_i2c::F1I2c,
     stm32f4_flash::F4Flash,
@@ -304,6 +305,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut uart = None;
     let mut stm32_uarts = Vec::new();
     let mut stm32_can = Vec::new();
+    let mut watchdogs = Vec::new();
     let mut plic = None;
     let mut timer = None;
     for entry in &entries {
@@ -375,6 +377,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             }
             StmCan::MODEL => stm32_can.push(entry),
+            Iwdg::MODEL => watchdogs.push(entry),
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
             "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
                 if uart.replace(entry).is_some() {
@@ -542,6 +545,36 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             }
         }
         configure_stm32_can(&stm32_can, nvic, &mut machine)?;
+        for entry in watchdogs {
+            let mut frequency = None;
+            let mut window = true;
+            let mut prescaler = 0;
+            for (key, value) in keys(entry, &["frequency", "windowOption", "defaultPrescaler"])? {
+                match key {
+                    "frequency" => frequency = Some(number(value).map_err(|e| entry.error(&e))?),
+                    "windowOption" => {
+                        window = value
+                            .parse()
+                            .map_err(|_| entry.error("invalid IWDG windowOption"))?
+                    }
+                    "defaultPrescaler" => {
+                        let value = number(value).map_err(|e| entry.error(&e))?;
+                        if value > 7 {
+                            return Err(entry.error("invalid IWDG defaultPrescaler"));
+                        }
+                        prescaler = value as u8;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let frequency = frequency
+                .filter(|&value| value != 0)
+                .ok_or_else(|| entry.error("expected nonzero IWDG frequency"))?;
+            machine
+                .bus
+                .map_iwdg(Iwdg::new(entry.address()?, frequency, window, prescaler))
+                .map_err(|e| entry.error(&e))?;
+        }
         configure_f4_spi(&entries, nvic, &mut machine)?;
         configure_f1_i2c(&entries, nvic, &mut machine)?;
         let mut uart_irq = None;
@@ -759,6 +792,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     }
     if let Some(nvic) = nvic {
         return Err(nvic.error("NVIC requires a Cortex-M CPU"));
+    }
+    if let Some(watchdog) = watchdogs.first() {
+        return Err(watchdog.error("IWDG requires a Cortex-M CPU"));
     }
     if let Some(can) = stm32_can.first() {
         return Err(can.error("STM32 CAN requires a Cortex-M CPU"));
