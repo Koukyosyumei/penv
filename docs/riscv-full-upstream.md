@@ -1465,3 +1465,19 @@ python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
 LED は初期状態と 5 コマンド後の 4 本ずつを照合しました。スイッチの全ビットと、ボタンを解除した後も残るラッチおよびクリア後の状態を確認しました。初期 LED の期待を反転した試行は終了コード 1 と状態差を返しました。
 
 上流 SHA-1 と一致する公開 ELF で新規 3 ケースと既存の起動・PHY が通過しました。同じバイナリで Nexys Video の全面・領域待機も通過しました。Rust テストは 88/88 件、上流等価合格は累計 170 件です。残る LiteX Linux I/O や最大 ISA の確認は未達です。UART、終了状態、照合結果は `~/.local/state/penv-dispatch/evidence/riscv/backlog-fdacacf-aRvIsv/` に保存しました。
+
+### 固定 ACT の RV32 Zbkb 全件
+
+固定 ACT の Zbkb ELF 12 件を同じ release バイナリで検証しました。明示的な `rv32ic_zbkb` では 12/12 件が通過しました。固定 Robot 構成は V の未対応で 12 件とも CPU 作成時に停止しました。台帳には診断結果を追記し、上流等価合格は累計 170 件です。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+sed 's/rv32gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp/rv32ic_zbkb/' \
+  "$work/act-upstream.repl" > "$repro/zbkb.repl"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$repro/zbkb.repl" --artifacts "$repro/zbkb" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zbkb/*.elf
+```
+
+ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/ownership-885d642-QhNIoD/` に保存しました。
