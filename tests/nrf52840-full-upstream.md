@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 6 | 39 |
+| 監査した共有・混成 Robot | 190 | 145 | 7 | 38 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **6** | **39** |
+| 合計 | **221** | **176** | **7** | **38** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -690,3 +690,17 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 `hooks.robot:13–22` の固定 Mi-V Shell ELF は `UART.MiV_CoreUART` で停止する。共有フックを単独で切り分けた `target/debug/penv run --script "$ARTIFACT_DIR/rv32.resc" --max-steps 10` では Cortex-M 専用のエラーで停止した。固定コマンドと既存 Cortex-M 差分を `nrf52-miv-hook-7a643b8.md` で ARM 担当に渡した。この上流ケースは部分移植を維持する。
 
 固定入力の再現ファイル、回帰ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/radio-cca.gdQZpvTO` に保存した。
+
+### GDB VFP 用の Cortex-M4F フィクスチャ
+
+`ArmVfpGDB.robot:58–71` の値 `100.0..131.0` を Cortex-M4F の S0–S31 にロードし、上流のブレークポイントと同じ `0x13a4` に到達する ELF を追加した。ゲストがレジスタを保存して全32値を比較し、UART に結果を出力する。固定 TZ ELF の代替であり、GDB 経由のレジスタ照会は未達のため部分移植とした。
+
+```sh
+cargo test --locked
+tests/nrf52840-gdb-vfp-fixture.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/vfp"
+tests/nrf52840-fpu-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/fpu"
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+GDB 入口の切り分けでは、`target/debug/penv run --script "$ARTIFACT_DIR/fixture/gdb.resc"` が `StartGdbServer 3337` で停止した。WFI の2ケースは Thumb の短い ELF で `ShouldEnterDebugMode` が未対応と確認した。モード設定を省くと2回目の `Step 1` で命令完了なしのエラーとなる。GDB のレジスタ読み出しと WFI ステップの再現は `nrf52-gdb-vfp-wfi-818e017.md` で ARM 担当に渡した。ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/gdb-vfp.d3yor8HD` に保存した。
