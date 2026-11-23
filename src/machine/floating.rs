@@ -108,6 +108,9 @@ impl Hart {
                 0x05 if funct3 <= 1 || (self.zfa_min_max && funct3 <= 3) => {
                     format.min_max(lhs, rhs, funct3 & 1 != 0, funct3 & 2 != 0)
                 }
+                0x08 if self.zfa_round && matches!(rs2, 4 | 5) => {
+                    format.round_to_integral(lhs, rounding()?, rs2 == 5)
+                }
                 0x08 if rs2 as u32 != (insn >> 25) & 3 => {
                     let source = self.format(rs2 as u32).ok_or_else(illegal)?;
                     format.convert(source.decode(lhs), rounding()?)

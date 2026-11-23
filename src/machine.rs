@@ -52,6 +52,7 @@ pub struct Hart {
     zfa_fli: bool,
     zfa_min_max: bool,
     zfa_quiet_compare: bool,
+    zfa_round: bool,
     floating: Option<Box<[u64; 32]>>,
     unaligned_accesses: bool,
     zicond: bool,
@@ -190,6 +191,7 @@ impl Machine {
                 zfa_fli: false,
                 zfa_min_max: false,
                 zfa_quiet_compare: false,
+                zfa_round: false,
                 floating: None,
                 unaligned_accesses: false,
                 zicond: false,
@@ -567,10 +569,17 @@ impl Hart {
         self.floating = Some(Box::new([0; 32]));
     }
 
-    pub fn set_zfa_diagnostics(&mut self, fli: bool, min_max: bool, quiet_compare: bool) {
+    pub fn set_zfa_diagnostics(
+        &mut self,
+        fli: bool,
+        min_max: bool,
+        quiet_compare: bool,
+        round: bool,
+    ) {
         self.zfa_fli = fli;
         self.zfa_min_max = min_max;
         self.zfa_quiet_compare = quiet_compare;
+        self.zfa_round = round;
     }
 
     pub fn set_zfbfmin(&mut self, enabled: bool) {

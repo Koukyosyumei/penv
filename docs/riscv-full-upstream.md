@@ -1121,3 +1121,24 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 診断構成では同じ release バイナリで静かな比較 10 件と、既存の比較・最小最大・即値ロード 33 件がすべて完了コード 0 に到達しました。Rust テストも 88 件すべて通過しました。固定 Robot 構成では V の未対応で対象 10 件すべてが CPU 作成時に停止しました。Zfa の残りの命令と固定構成での検証が残り、上流等価合格は累計 155 件です。構成別のケースログ、`results.jsonl` と終了状態は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zfa の整数値への丸め
+
+代表の固定 ACT ELF `ZfaF-fround.s-00.elf` は、V を外した構成で最初の `fround.s` を不正命令として扱いました。半精度・単精度・倍精度の `fround` と `froundnx` を実装しました。浮動小数点形式を保ったまま命令の丸めモードで整数値に丸め、`froundnx` は非整数の有限入力で不正確フラグを立てます。符号付きゼロ、無限大、シグナリング NaN の処理は既存の浮動小数点処理を利用します。診断用 REPL の `zfaRound: true` で有効になります。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-91e04f5-z84Lun"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/round.repl" --artifacts "$repro/round" \
+  "$elfs"/Zfa*/*fround*.elf "$elfs"/Zfa*/*fli*.elf \
+  "$elfs"/Zfa*/*f{min,max}m*.elf "$elfs"/Zfa*/*f{le,lt}q*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/Zfa*/*fround*.elf
+```
+
+診断構成では、同じ release バイナリで丸めの 10 件と既存の Zfa 回帰 28 件が完了コード 0 に到達しました。Rust テストも 88 件すべて通過しました。固定 Robot 構成では V の未対応で対象 10 件すべてが CPU 作成時に停止しました。上流等価合格は累計 155 件です。Zfa の残りは `fcvtmod.w.d`、`fmvh.x.d`、`fmvp.d.x` と固定構成での検証です。構成別のケースログ、`results.jsonl`、終了状態は上記の証拠ディレクトリに保存しました。

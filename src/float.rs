@@ -471,6 +471,34 @@ impl Format {
         }
     }
 
+    pub fn round_to_integral(
+        self,
+        bits: u64,
+        rounding: Rounding,
+        report_inexact: bool,
+    ) -> ResultBits {
+        let value = self.decode(bits);
+        match value.number {
+            Number::Nan { .. } => ResultBits::flagged(self.nan(), nan_flags(&[value])),
+            Number::Finite {
+                significand,
+                exponent,
+            } if exponent < 0 => {
+                let (whole, fraction) = split(significand, -exponent);
+                let magnitude =
+                    whole + u128::from(rounding.increment(value.negative, whole, fraction));
+                let bits = self
+                    .round(value.negative, magnitude, 0, Rounding::NearestEven)
+                    .bits;
+                ResultBits::flagged(
+                    bits,
+                    u8::from(report_inexact && fraction != Fraction::Zero) * NX,
+                )
+            }
+            _ => ResultBits::new(self.unbox(bits)),
+        }
+    }
+
     pub fn convert_integer(self, value: u64, kind: Integer, rounding: Rounding) -> ResultBits {
         let value = match kind {
             Integer::Word => i128::from(value as i32),
