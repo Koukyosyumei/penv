@@ -2274,3 +2274,49 @@ fn renode_constructor_default_accepts_integer_named_machine() {
         Some(&FixtureValue::Integer(0))
     );
 }
+
+#[test]
+fn renode_property_binding_nested() {
+    let result = mock_registration_machine(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU\n        OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU\n            Placeholder: \"something\"",
+    );
+    let machine = result.unwrap();
+    let cpu = machine.bus.fixture_cpu_properties("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.other
+            .as_ref()
+            .unwrap()
+            .other
+            .as_ref()
+            .unwrap()
+            .placeholder
+            .as_deref(),
+        Some("something")
+    );
+}
+
+#[test]
+fn renode_property_binding_escaped() {
+    let result = mock_registration_machine(
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: \"one with \\\"escaped\\\" quote\\\"\"",
+    );
+    let machine = result.unwrap();
+    let cpu = machine.bus.fixture_cpu_properties("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("one with \"escaped\" quote\"")
+    );
+}
+
+#[test]
+fn renode_property_binding_exception() {
+    let result = mock_registration_machine(
+        "\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    ThrowingProperty: 1",
+    );
+    assert!(
+        result
+            .err()
+            .unwrap()
+            .contains("PropertySettingException: Fake exception")
+    );
+}

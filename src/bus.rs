@@ -156,6 +156,13 @@ pub(crate) struct FixtureCollections {
     pub cpu_int_dict: Option<HashMap<Arc<str>, i32>>,
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct FixtureCpuProperties {
+    pub enum_value: u8,
+    pub placeholder: Option<String>,
+    pub other: Option<Box<FixtureCpuProperties>>,
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
@@ -165,7 +172,7 @@ pub struct Bus {
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
     fixture_cpus: HashMap<String, Arc<str>>,
-    fixture_cpu_enums: HashMap<Arc<str>, u8>,
+    fixture_cpu_properties: HashMap<Arc<str>, FixtureCpuProperties>,
     fixture_values: HashMap<String, FixtureValue>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
@@ -513,12 +520,12 @@ impl Bus {
         }
     }
 
-    pub fn register_fixture_cpu(
+    pub(crate) fn register_fixture_cpu(
         &mut self,
         parent: &str,
         name: &str,
         variable: &str,
-        enum_value: u8,
+        properties: &FixtureCpuProperties,
     ) -> Result<(), String> {
         if parent != "sysbus" && !self.empty_peripherals.contains_key(parent) {
             return Err(format!(
@@ -534,7 +541,9 @@ impl Bus {
             .unwrap_or_else(|| Arc::from(variable));
         match self.fixture_cpus.entry(path) {
             std::collections::hash_map::Entry::Vacant(slot) => {
-                self.fixture_cpu_enums.insert(identity.clone(), enum_value);
+                self.fixture_cpu_properties
+                    .entry(identity.clone())
+                    .or_insert_with(|| properties.clone());
                 slot.insert(identity);
                 Ok(())
             }
@@ -551,7 +560,12 @@ impl Bus {
 
     #[cfg(test)]
     pub fn fixture_cpu_enum(&self, path: &str) -> Option<u8> {
-        self.fixture_cpu_enums.get(self.fixture_cpu(path)?).copied()
+        Some(self.fixture_cpu_properties(path)?.enum_value)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_cpu_properties(&self, path: &str) -> Option<&FixtureCpuProperties> {
+        self.fixture_cpu_properties.get(self.fixture_cpu(path)?)
     }
 
     pub(crate) fn fixture_cpu(&self, path: &str) -> Option<&Arc<str>> {

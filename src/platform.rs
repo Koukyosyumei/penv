@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    bus::{FixtureCollections, FixtureValue},
+    bus::{FixtureCollections, FixtureCpuProperties, FixtureValue},
     constant_mmio::ConstantMmio,
     machine::{MAX_HARTS, Machine},
     nvic::IRQ_LINES,
@@ -1507,6 +1507,29 @@ fn fixture_cpu_enum(value: &str) -> Option<u8> {
     }
 }
 
+fn bind_fixture_cpu_properties(entry: &Entry) -> FixtureCpuProperties {
+    let mut properties = FixtureCpuProperties::default();
+    for (line, item) in &entry.body {
+        let Some((key, value)) = item.split_once(':') else {
+            continue;
+        };
+        match key.trim() {
+            "EnumValue" => properties.enum_value = fixture_cpu_enum(value).unwrap_or_default(),
+            "Placeholder" => {
+                if let Some(ScalarValue::Text(text)) = scalar_value(value) {
+                    properties.placeholder = Some(text);
+                }
+            }
+            "OtherCpu" if inline_model(item) == Some(MOCK_CPU) => {
+                let nested = inline_entry(entry, *line, item, MOCK_CPU);
+                properties.other = Some(Box::new(bind_fixture_cpu_properties(&nested)));
+            }
+            _ => {}
+        }
+    }
+    properties
+}
+
 fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(), String> {
     let mut occupied = HashSet::new();
     for entry in entries.iter().filter(|entry| entry.model == MOCK_CPU) {
@@ -1517,20 +1540,11 @@ fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(),
         else {
             continue;
         };
-        let enum_value = entry
-            .body
-            .iter()
-            .find_map(|(_, item)| {
-                let (key, value) = item.split_once(':')?;
-                (key.trim() == "EnumValue")
-                    .then(|| fixture_cpu_enum(value))
-                    .flatten()
-            })
-            .unwrap_or(0);
+        let properties = bind_fixture_cpu_properties(entry);
         if registration == "sysbus" {
             machine
                 .bus
-                .register_fixture_cpu("sysbus", entry.registered_name(), &entry.name, enum_value)
+                .register_fixture_cpu("sysbus", entry.registered_name(), &entry.name, &properties)
                 .map_err(|error| entry.error(&error))?;
             continue;
         }
@@ -1560,7 +1574,7 @@ fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(),
             }
             machine
                 .bus
-                .register_fixture_cpu(&path, entry.registered_name(), &entry.name, enum_value)
+                .register_fixture_cpu(&path, entry.registered_name(), &entry.name, &properties)
                 .map_err(|error| entry.error(&error))?;
         }
     }
@@ -2125,6 +2139,7 @@ fn validate_empty_peripheral_constructor(entry: &Entry) -> Result<(), String> {
         .iter()
         .filter(|(_, attribute)| {
             script_commands(attribute).is_none()
+                && scalar_property(attribute) != Some("ThrowingProperty")
                 && !attribute
                     .split_once(':')
                     .is_some_and(|(key, value)| key.trim() == "value" && value.trim() == "none")
@@ -2338,6 +2353,14 @@ fn build_entries_with_scripts(
 
             EMPTY_PERIPHERAL => {
                 validate_empty_peripheral_constructor(entry)?;
+                if entry
+                    .body
+                    .iter()
+                    .any(|(_, attribute)| scalar_property(attribute) == Some("ThrowingProperty"))
+                {
+                    return Err(entry.error("PropertySettingException: Fake exception"));
+                }
+
                 if !matches!(entry.registration.as_deref(), None | Some("none")) {
                     let name = format!("sysbus.{}", entry.registered_name());
                     let ranges = entry.bus_ranges()?;
