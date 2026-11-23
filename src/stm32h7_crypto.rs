@@ -9,6 +9,34 @@ const ENABLE: u32 = 1 << 15;
 const FIFO_DEPTH: usize = 8;
 const BLOCK_WORDS: usize = 4;
 
+struct Gcm {
+    hash_key: u128,
+    hash: u128,
+    counter: [u8; 16],
+    tag_mask: u128,
+    header_bits: u64,
+    payload_bits: u64,
+}
+
+impl Gcm {
+    fn hash_block(&mut self, block: [u8; 16]) {
+        let operand = self.hash ^ u128::from_be_bytes(block);
+        let mut key = self.hash_key;
+        let mut product = 0;
+        for bit in (0..128).rev() {
+            if operand & (1 << bit) != 0 {
+                product ^= key;
+            }
+            let low = key & 1;
+            key >>= 1;
+            if low != 0 {
+                key ^= 0xe1 << 120;
+            }
+        }
+        self.hash = product;
+    }
+}
+
 pub struct Crypto {
     pub base: u32,
     pub irq: Option<u8>,
@@ -18,6 +46,7 @@ pub struct Crypto {
     key_and_iv: [u32; 12],
     input: VecDeque<u32>,
     output: VecDeque<u32>,
+    gcm: Option<Gcm>,
 }
 
 impl Crypto {
@@ -34,6 +63,7 @@ impl Crypto {
             key_and_iv: [0; 12],
             input: VecDeque::new(),
             output: VecDeque::new(),
+            gcm: None,
         }
     }
 
@@ -93,7 +123,10 @@ impl Crypto {
                     self.output.clear();
                 }
                 self.control = value & 0x000b_83fc;
-                if self.mode() == 7 {
+                if self.control & ENABLE != 0 && self.mode() == 8 && self.gcm_phase() == 0 {
+                    self.initialize_gcm();
+                    self.control &= !ENABLE;
+                } else if self.mode() == 7 {
                     // Key preparation completes immediately.
                     self.control &= !ENABLE;
                 }
@@ -111,7 +144,119 @@ impl Crypto {
         ((self.control >> 3) & 7) | ((self.control >> 16) & 8)
     }
 
+    fn gcm_phase(&self) -> u32 {
+        (self.control >> 16) & 3
+    }
+
+    fn encrypt_gcm_block(&self, block: &mut [u8; 16]) -> bool {
+        let mut key = [0; 32];
+        for (word, bytes) in self.key_and_iv[..8].iter().zip(key.chunks_exact_mut(4)) {
+            bytes.copy_from_slice(&word.to_be_bytes());
+        }
+        match (self.control >> 8) & 3 {
+            0 => Aes128::new((&key[16..]).into()).encrypt_block(block.into()),
+            1 => Aes192::new((&key[8..]).into()).encrypt_block(block.into()),
+            2 => Aes256::new((&key).into()).encrypt_block(block.into()),
+            _ => return false,
+        }
+        true
+    }
+
+    fn initialize_gcm(&mut self) {
+        let mut hash_key = [0; 16];
+        if !self.encrypt_gcm_block(&mut hash_key) {
+            self.gcm = None;
+            return;
+        }
+        let mut counter = [0; 16];
+        for (word, bytes) in self.key_and_iv[8..11]
+            .iter()
+            .zip(counter.chunks_exact_mut(4))
+        {
+            bytes.copy_from_slice(&word.to_be_bytes());
+        }
+        counter[15] = 1;
+        let mut tag_mask = counter;
+        self.encrypt_gcm_block(&mut tag_mask);
+        counter[15] = 2;
+        self.gcm = Some(Gcm {
+            hash_key: u128::from_be_bytes(hash_key),
+            hash: 0,
+            counter,
+            tag_mask: u128::from_be_bytes(tag_mask),
+            header_bits: 0,
+            payload_bits: 0,
+        });
+    }
+
+    fn process_gcm(&mut self) {
+        let phase = self.gcm_phase();
+        while self.gcm.is_some()
+            && self.input.len() >= BLOCK_WORDS
+            && (phase == 1 || self.output.len() <= FIFO_DEPTH - BLOCK_WORDS)
+        {
+            let mut block = [0; 16];
+            for (word, bytes) in self
+                .input
+                .drain(..BLOCK_WORDS)
+                .zip(block.chunks_exact_mut(4))
+            {
+                bytes.copy_from_slice(&word.to_be_bytes());
+            }
+            let mut state = self.gcm.take().unwrap();
+            match phase {
+                1 => {
+                    state.hash_block(block);
+                    state.header_bits += 128;
+                }
+                2 => {
+                    let decrypt = self.control & 4 != 0;
+                    if decrypt {
+                        state.hash_block(block);
+                    }
+                    let mut mask = state.counter;
+                    if !self.encrypt_gcm_block(&mut mask) {
+                        return;
+                    }
+                    xor_block(&mut block, &mask);
+                    if !decrypt {
+                        state.hash_block(block);
+                    }
+                    let counter = u32::from_be_bytes(state.counter[12..].try_into().unwrap());
+                    state.counter[12..].copy_from_slice(&counter.wrapping_add(1).to_be_bytes());
+                    state.payload_bits += 128;
+                    self.push_gcm_output(block);
+                }
+                3 => {
+                    let header_bits = u64::from_be_bytes(block[..8].try_into().unwrap());
+                    let payload_bits = u64::from_be_bytes(block[8..].try_into().unwrap());
+                    if (header_bits, payload_bits) == (state.header_bits, state.payload_bits) {
+                        state.hash_block(block);
+                        self.push_gcm_output((state.hash ^ state.tag_mask).to_be_bytes());
+                    }
+                    return;
+                }
+                _ => return,
+            }
+            self.gcm = Some(state);
+        }
+    }
+
+    fn push_gcm_output(&mut self, block: [u8; 16]) {
+        self.output.extend(
+            block
+                .chunks_exact(4)
+                .map(|bytes| u32::from_be_bytes(bytes.try_into().unwrap())),
+        );
+    }
+
     fn process(&mut self) {
+        if self.mode() == 8 {
+            if self.control & ENABLE != 0 {
+                self.process_gcm();
+            }
+            return;
+        }
         let key_size = (self.control >> 8) & 3;
         while self.control & ENABLE != 0
             && matches!(self.mode(), 4..=6)
@@ -212,6 +357,47 @@ fn xor_block(block: &mut [u8; 16], mask: &[u8; 16]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn aes_gcm_fixture(decrypt: bool, use_interrupt: bool) {
+        let mut crypto = Crypto::new(0, Some(79));
+        let ciphertext = [0x0388dace, 0x60b6a392, 0xf328c2b9, 0x71b2fe78];
+        let input = if decrypt { ciphertext } else { [0; 4] };
+        let expected = if decrypt { [0; 4] } else { ciphertext };
+        let control = ENABLE | (1 << 19) | (u32::from(decrypt) << 2);
+        crypto.write(0x4c, 2);
+        crypto.write(0x14, if use_interrupt { 2 } else { 0 });
+        crypto.write(0, control);
+        assert_eq!(crypto.read(0) & ENABLE, 0);
+        crypto.write(0, control | (1 << 16));
+        crypto.write(0, control | (2 << 16));
+        for word in input {
+            crypto.write(8, word);
+        }
+        assert_ne!(crypto.read(4) & (1 << 2), 0);
+        assert_eq!(crypto.interrupt(), use_interrupt.then_some(79));
+        assert_eq!(std::array::from_fn(|_| crypto.read(0xc)), expected);
+        assert_eq!(crypto.interrupt(), None);
+        crypto.write(0, control | (3 << 16));
+        for word in [0, 0, 0, 128] {
+            crypto.write(8, word);
+        }
+        assert_eq!(crypto.interrupt(), use_interrupt.then_some(79));
+        assert_eq!(
+            std::array::from_fn(|_| crypto.read(0xc)),
+            [0xab6e47d4, 0x2cec13bd, 0xf53a67b2, 0x1257bddf]
+        );
+        assert_eq!(crypto.interrupt(), None);
+    }
+
+    #[test]
+    fn aes_gcm_aligned_polling_encrypt_and_tag() {
+        aes_gcm_fixture(false, false);
+    }
+
+    #[test]
+    fn aes_gcm_aligned_interrupt_decrypt_and_tag() {
+        aes_gcm_fixture(true, true);
+    }
 
     #[test]
     fn aes_128_ecb_round_trip_and_output_fifo_irq() {

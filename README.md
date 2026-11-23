@@ -1779,3 +1779,25 @@ done
 ```
 
 `cargo test` 227件、STM32H7 REPL 7構成、Zephyr Blinky・Button、SD ファイル装着3件が通過しました。上記にケース別結果、UART と終了状態を保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-eba880b30233-1
+
+FDCAN の共有 message RAM 配線は ARM からの返答待ちのため、独立した STM32H7 CRYP を進めました。AES-GCM の初期化、整列ヘッダー・ペイロード、最終タグをデバイスに実装しました。128ビットの既知ベクトルで、ポーリング暗号化と IRQ 復号のデータ、タグ、FIFO が空になった後の IRQ 解除を同じバイナリで照合しました。AES-192/256 の経路も実装しました。今回の既知ベクトルは AES-128 です。端数ブロックと上流 HAL の CTR 切替ワークアラウンドは残っています。
+
+固定上流 GCM ELF 2本はローカルの共有ローダーで hard-float ABI を拒否され、LED の観測まで進みませんでした。ARM の最小構成ではロード済みで、全 H753 構成への接続は既存の `network-h7-gcm-platform-503aa89.md` で追跡しています。共有ソースの変更はありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gcm-aligned.vaMiF7Ll
+for case in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+`cargo test` 229件、固定 STM32H7 REPL 7構成、公開 Zephyr ADC DMA・暗号・Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。GCM の Robot 2件は未達です。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
