@@ -12,25 +12,16 @@ from robot.api import get_model
 from robot.parsing.model.blocks import TestCase
 from robot.parsing.model.statements import TemplateArguments
 
+sys.dont_write_bytecode = True
+
+from riscv_scope import nunit_source_variants, reservation_variants, robot_review
+
 REVISIONS = {
     "renode": "c38ac3babcd38a7144b9498e3ca4c2226b76aa37",
     "infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85",
     "ui": "5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f",
 }
 MAX_ISA_BLOCKER = "upstream CPU creation requires V, Smepmp"
-BOARD_REGRESSION = {
-    "Arty_LiteX_VexRiscv.robot",
-    "LiteX_Linux_VexRiscv.robot",
-    "LiteX_Tock.robot",
-    "LiteX_VexRiscv_Linux_SDCard.robot",
-    "LiteX_VexRiscv_SMP.robot",
-    "Nexys4DDR_LiteX_VexRiscv.robot",
-    "Nexys_Video_LiteX_VexRiscv.robot",
-}
-BOARD_OUTSIDE = {
-    "LiteX_Ibex.robot": "CPU.IbexRiscV32 board outside the requested CPU list",
-    "LiteX_Microwatt.robot": "Power ISA board",
-}
 DIRECT = re.compile(r"(?i)litex|vexriscv|minerva|nexys|riscv_virt|CPU\.RiscV32|bitness=32|"
                     r"ns16550|corelevelinterruptor|platformlevelinterruptcontroller")
 NUNIT = re.compile(
@@ -56,21 +47,19 @@ def robot_cases(root, isa, act):
             "pmp.robot", "AndesNCEPLIC100.robot", "CLIC-riscv-arch-tests.robot",
         }
         scope = "target" if dedicated else ("review-variants" if explicit else "review-shared")
-        reason = ""
-        if path.name in BOARD_OUTSIDE:
-            scope, reason = "outside", BOARD_OUTSIDE[path.name]
         for section in get_model(source).sections:
             for case in getattr(section, "body", ()):
                 if not isinstance(case, TestCase):
                     continue
-                case_scope, case_reason = scope, reason
-                if re.search(r"\bRV64\b|\b64Bits\b|^Should Run (?:Arch )?Tests 64$", case.name, re.I):
-                    if not dedicated:
-                        case_scope, case_reason = "outside", "case explicitly requires RV64"
+                case_scope, case_reason = scope, ""
                 parameters = [
                     (row.lineno, " | ".join(row.args))
                     for row in case.body if isinstance(row, TemplateArguments)
                 ]
+                if case.name in {"Should Run Tests 64", "Should Run Arch Tests 64"}:
+                    yield ("Renode", name, case.lineno, case.name, "", "outside", "outside",
+                           "Run Test Case width=64 selects CPU.RiscV64 and the RV64 ELF discovery list")
+                    continue
                 if case.name in {"Should Run Tests 32", "Should Run Arch Tests 32"}:
                     directory, key = ((act, "TESTS_ARCH_32") if "Arch" in case.name
                                       else (isa, "TESTS_32"))
@@ -113,16 +102,39 @@ def robot_cases(root, isa, act):
                 elif path.name == "riscv-amocas.robot" and case.name.startswith("Amocas.d On RV32"):
                     case_scope, status = "target", "partial"
                     case_reason = "Rust register-pair and trap checks; Robot equivalence pending"
-                elif path.name in BOARD_REGRESSION:
-                    case_reason = "board regression available; compare expectations case by case"
                 elif any(type(node).__name__ == "For" for node in case.body):
                     case_reason = case_reason or "review nested parameter loop"
+                if path.name == "riscv-lr-sc-strong-atomicity.robot" and case.name == "Writes To Reservation Should Cause Invalidation":
+                    parameters = [(case.lineno, variant) for variant in reservation_variants()]
+                if path.name == "riscv-isa-string.robot" and case.name == "Should Handle Both 32 And 64 Bit Versions":
+                    # Both constructs are required by this single test instance.
+                    case_scope = status = "outside"
+                    case_reason = "requires mixed CPU.RiscV32 and CPU.RiscV64 construction"
+                if path.name == "riscv-extensions.robot" and case.name == "Should Fail On Unsupported ISA":
+                    parameters = [(case.lineno, "RV32GC_invalid_ISA")]
+                lines = source.splitlines()
+                body = "\n".join(lines[case.lineno - 1:case.end_lineno])
+                if "tests/peripherals/CLIC/CLIC-test-setup.resc" in body:
+                    artifacts = re.findall(r"https://[^\s]+/(clic[^/\s]+)", body)
+                    if artifacts:
+                        parameters = [(case.lineno, " | ".join(artifacts))]
+                if path.name == "riscv-interrupt-mode.robot":
+                    mode = re.search(r"(?m)^\s+Create Machine\s+(Auto|Direct|Vectored)\s*$", body)
+                    if mode:
+                        parameters = [(case.lineno, f"interruptMode={mode[1]}")]
+                seen = set()
                 for line, parameter in parameters or [(case.lineno, "")]:
+                    if parameter in seen:
+                        continue
+                    seen.add(parameter)
+                    row_status, row_reason = status, case_reason
                     if parameter == "RV32IMC_Zicsr_Zifencei_Zbs" and path.name == "riscv-isa-string.robot":
-                        yield ("Renode", name, line, case.name, parameter, "target", "partial",
-                               "penv loads exact CPU string; Renode log behavior still to compare")
-                    else:
-                        yield ("Renode", name, line, case.name, parameter, case_scope, status, case_reason or "-")
+                        row_status = "partial"
+                        row_reason = "penv loads exact CPU string; Renode log behavior still to compare"
+                    scope_out, status_out, basis = robot_review(
+                        path.name, case.name, body, parameter, case_scope, row_status, row_reason,
+                    )
+                    yield ("Renode", name, line, case.name, parameter, scope_out, status_out, basis)
 
 
 def argument_variants(declaration):
@@ -151,9 +163,14 @@ def nunit_cases(component, root):
             parameters = re.findall(r"\[(TestCase(?:Source)?\([^\n]*?\))\]", attributes)
             declaration = source[match.end():].partition("{")[0]
             argument_rows = argument_variants(declaration)
-            for parameter in parameters or argument_rows or [""]:
+            source_rows = []
+            if len(parameters) == 1 and parameters[0].startswith("TestCaseSource"):
+                source_rows = [" | ".join(row) for row in nunit_source_variants(parameters[0], source)]
+            for parameter in dict.fromkeys(source_rows or parameters or argument_rows or [""]):
                 basis = ""
-                if parameter.startswith("TestCaseSource"):
+                if source_rows:
+                    basis = "expanded fixed NUnit TestCaseSource; applicability pending"
+                elif parameter.startswith("TestCaseSource"):
                     basis = "expand NUnit data source"
                 elif "[Values" in declaration or "[Range" in declaration:
                     basis = "NUnit argument tuple" if argument_rows else "expand NUnit argument data"
@@ -162,7 +179,6 @@ def nunit_cases(component, root):
 
 
 def main():
-    sys.dont_write_bytecode = True
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("renode", "infrastructure", "ui", "isa", "act"):
         parser.add_argument(name, type=Path)
