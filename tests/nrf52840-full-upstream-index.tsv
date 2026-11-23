@@ -1,271 +1,361 @@
-repository	file	lines	case	parameter	applicability
-renode	tests/external-control/external-control.robot	286-307	Should Run Single SPI Sample	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/external-control/external-control.robot	308-337	Should Run Dual SPI Sample	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/external-control/external-control.robot	338-366	Should Run Single SPI Sample With Robot Managed Time	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/peripherals/ArduCAMMini2MPPlus.robot	45-50	Should Detect Person	${URI}/images/person_image_0.jpg-s_3853-7f2125e28423fa117a1079d84785b17c9b70f62d	対象
-renode	tests/peripherals/ArduCAMMini2MPPlus.robot	45-50	Should Detect Person	${URI}/images/person_image_1.jpg-s_3836-25216268e08894d0dda13107ad1ad5f537ad19c2	対象
-renode	tests/peripherals/ArduCAMMini2MPPlus.robot	51-56	Should Not Detect Person	${URI}/images/no_person_image_0.jpg-s_3787-3bed5184fbf005cbb0b6bf18e8885874ca7273bd	対象
-renode	tests/peripherals/ArduCAMMini2MPPlus.robot	51-56	Should Not Detect Person	${URI}/images/no_person_image_1.jpg-s_3910-81edff305382b42f3b98e3764921574e1b9142fe	対象
-renode	tests/peripherals/BMP180.robot	19-28	Should Read Temperature	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/BMP180.robot	29-37	Should Read Pressure	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/LIS2DS12.robot	20-30	Should Read Acceleration	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/LSM303.robot	31-41	Should Read MagneticField	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/LSM303.robot	42-51	Should Read Acceleration	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/LSM330.robot	22-37	Should Read Acceleration	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/LSM330.robot	38-53	Should Read Rotation	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/LSM9DS1.robot	13-23	Should Detect RING Motion	Execute Command           sysbus.twi0.lsm9ds1_imu FeedAccelerationSample "${CURDIR}${/}circle_rotated.data"	対象
-renode	tests/peripherals/LSM9DS1.robot	24-35	Should Detect SLOPE Motion	Execute Command           sysbus.twi0.lsm9ds1_imu FeedAccelerationSample "${CURDIR}${/}angle_rotated.data"	対象
-renode	tests/peripherals/NRF52840_GPIO.robot	2-37	Should Respect PullUp Configuration	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/peripherals/SPIMultiplexer.robot	16-44	Should Talk to Two SPI Devices	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	89-91	Should Run ZephyrRTOS Shell On UART	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	92-96	Should Run ZephyrRTOS Shell On UARTE	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	97-110	Should Run Alarm Sample	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	111-129	Should Handle LED and Button	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	130-137	Should Detect Passed Interrupt In WFE	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	138-167	Should Handle SPI	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	168-197	Should Handle I2C	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	198-220	Should Echo I2S Audio	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	221-231	Should Detect Yes Pattern	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	232-239	Should Run Zephyr's kernel.interrupt Test	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	240-248	Should Run Zephyr's cmsis_dps.transform.rq15 Test	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	249-261	Should Restart After Watchdog Timeout	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	262-290	Should Run Task Watchdog Subsystem	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	291-331	Should Run Bluetooth sample	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	332-354	Should Run Bluetooth Hci Uart Sample	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	355-371	Should Return The Chip Id With I2C	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/NRF52840.robot	372-383	Should Scan The I2C Bus Correctly	上流の行範囲とそこで参照するフィクスチャ	対象
-renode	tests/platforms/imxrt500.robot	2-18	Should Run Pigweed Bluetooth Advertiser	上流の行範囲とそこで参照するフィクスチャ	混成ボード・対象
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	311-321	Should Enter Lockup On Invalid Reset State	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	322-328	Should Raise Precise BusFault On Peripheral Read	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	329-335	Should Raise Precise BusFault On Peripheral Write	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	336-343	Should Raise Precise BusFault On Unmapped Read When Configured	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	344-351	Should Escalate Disabled BusFault To HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	352-368	Should Escalate BusFault That Cannot Preempt Active Handler	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	369-409	Should Enter Lockup When BusFault Cannot Escalate From HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	410-423	NMI Should Preempt Instruction-Time Lockup	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	424-443	Should Pend HardFault On NMI Stacking BusFault From Thread Mode	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	444-467	Should Replace External IRQ With HardFault On Stacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	468-491	Should Prefer BusFault On Equal-priority Stacking Fault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	492-516	Should Not Push Additional State For Secure Stacking HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	517-543	Should Retain Additional State For Secure Late Arrival	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	544-575	Should Enter Lockup On NMI Stacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	576-600	Should Record Ignored Vector BusFault Before Stacking Lockup	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	601-628	Should Replace External IRQ With HardFault On Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	629-659	Should Force Secure HardFault On Non-secure Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	660-684	Should Target Non-secure HardFault On Non-secure Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	685-709	Should Enter Lockup On NMI Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	710-732	Should Enter Lockup On HardFault Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	733-766	Should Pend Lazy FP HardFault When Original Context Was Ready	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	767-806	Should Enter Lockup On Lazy FP Preservation BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	807-825	Should Reserve Complete Secure Lazy FP Frame With TS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	826-851	Should Enter Lockup On Exception Unstacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	852-880	Should Tail Chain On Exception Unstacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	881-908	Should Clear FPCA When Tail Chaining On Unstacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	909-932	Should Mask Banked Non-secure HardFault With FAULTMASK_NS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	933-957	Should Allow Secure HardFault Past FAULTMASK_NS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	958-991	Should Allow Banked Secure HardFault Past PRIMASK_NS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	992-1014	Should Retain Secure FAULTMASK For HardFault Return Lockup	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1015-1041	Should Enter Lockup On RETPSR Integrity Failure	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1042-1058	Should Enter Lockup On Reset Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1059-1073	Should Enter Lockup On Initial MSP BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1074-1111	Should Tail Chain On Invalid Non-secure DCRS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1112-1148	Should Keep BusFault From Failed Integrity Signature Read	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1149-1211	Should Take HardFault On Integrity Signature Mismatch	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1212-1228	Should Ignore Precise BusFault In HardFault When Configured	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1229-1248	DHCSR Lockup Status Should Follow DAP Visibility	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1249-1266	Should Share BusFault State Across Security States	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1267-1269	Read Access Should Produce Precise Bus Fault Without Single Step	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1270-1272	Write Access Should Produce Precise Bus Fault Without Single Step	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1273-1282	Should Raise Precise BusFault on VLSTM Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1283-1292	Should Raise Precise BusFault on VLLDM Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1293-1308	Should Raise BusFault on BLXNS Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1309-1329	Should Raise BusFault on VLD/VST Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1330-1359	Should Raise BusFault on VSTR/VLDR Vector Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1360-1377	Should Raise BusFault on VSTR/VLDR Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	90-94	Should Not Return From Exception When Loading PC From Vector Table	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	95-95	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	96-96	...    // Set up MPU so that exception return can fault if SP is protected memory	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	97-97	...    ldr r1, =0xe000ed90	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	98-98	...    // Set region 0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	99-99	...    mov r0, 0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	100-100	...    str r0, [r1, #0x8]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	101-101	...    // Set RBAR to 0x0, readable by all	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	102-102	...    mov r0, 0x00000006	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	103-103	...    str r0, [r1, #0xc]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	104-104	...    // Set RLAR to 0xfff, enabled	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	105-105	...    mov r0, 0x00000fe1	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	106-106	...    str r0, [r1, #0x10]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	107-107	...    // Enable MPU	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	108-108	...    mov r0, 0b001	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	109-109	...    str r0, [r1, #0x4]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	110-110	...    b .	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	111-114	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	115-115	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	116-116	...    // Trigger HardFault in exception return - stack will be read on exception return,	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	117-117	...    // but since SP is a protected address, this will cause a HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	118-118	...    mov r0, 0x2000	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	119-119	...    mov sp, r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	120-120	...    bx lr	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	121-128	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	129-132	Should Not Return From Exception When In Thread Mode	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	133-133	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	134-134	...    mov r0, 0xffffffb8	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	135-135	...    bx r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	136-140	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	141-144	Should Return From Exception When Using Allowed Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	145-149	Should Not Return From Exception When Not Using Allowed Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	150-153	Should Not Return From Insecure Mode When Not Using TrustZone	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	154-154	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	155-155	...    mov r0, 0xfeffffff	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	156-156	...    bx r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	157-162	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	163-165	Should Return From Insecure Mode When Using bx	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	166-168	Should Not Return From Insecure Mode When Using blx	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-exception-return.robot	169-185	Should Not Restore Reserved Bits From FncReturn Partial Retpsr	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 へ適用不可
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	105-114	Should Pass Zephyr FPU Sharing Generic Tests	上流の行範囲とそこで参照するフィクスチャ	FRDM K64F 専用 Zephyr ELF・nRF52840 に適用不可
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	115-125	Should Pass Context Stacking Preservation Test v7-M	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	126-136	Should Pass Context Stacking Preservation Test v8-M with TrustZone	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	137-142	Should Not Raise Exception	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 に適用不可
-renode	tests/unit-tests/arm-cortex-m-fpu.robot	143-146	Should Raise NOCP Exception	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・nRF52840 に適用不可
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	329-339	Should Print Hello From Both States	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	340-362	Should Stop Before Executing Handler On Instruction Fetch SecureFault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	363-391	Should Execute Instructions Preceding Instruction Fetch SecureFault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	392-411	Should Fault On Second Halfword Of First Thumb-2 Instruction	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	412-437	Should Execute Preceding Instructions Before Second Halfword Fetch Fault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	438-451	Non-secure Should Fault at Execution on Secure SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	452-466	Non-secure Should Fault at Execution on Secure Non-secure Callable SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	467-483	Non-secure Should Enter Secure State on Secure Non-secure Callable SG on SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	484-498	Non-secure Should Fault at Write to Secure SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	499-513	Non-secure Should Fault at Execution on Secure IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	514-529	Non-secure Should Fault at Execution on Secure Non-secure Callable IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	530-547	Non-secure Should Enter Secure State on Secure Non-secure Callable SG on IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	548-563	Non-secure Should Fault at Write to Secure IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	564-579	IDAU Secure Should Override SAU Non-secure Restrictions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	580-595	IDAU Non-secure Should not Override SAU Secure Restrictions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	596-612	IDAU Secure Non-secure Callable Should Override SAU Non-secure Restrictions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	613-628	Non-secure Should Fault at Write to Secure Non-secure Callable SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	629-645	Non-secure Should Fault at Write to Secure Non-secure Callable IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	646-663	Non-secure Should Fault at Execution on Upper Address Range	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	664-679	Non-secure Should Fault at Execution on Overlapping SAU Regions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	680-691	Secure Should Fault at Execution on Non-secure SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	692-726	Should Raise SecureFault on Width Varied MVE Instructions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	727-747	Should Raise SecureFault on VSTR/VLDR Instructions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	748-757	Should Test SP Register Secure Access	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-cortex-m-trustzone.robot	758-764	Should Test SP Register Non-secure Access	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	16-24	Should Successfully Run ARM CMSIS-DSP Bayes Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	25-31	Should Successfully Run ARM CMSIS-DSP Class Marks Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	32-38	Should Successfully Run ARM CMSIS-DSP Convolution Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	39-45	Should Successfully Run ARM CMSIS-DSP Dotproduct Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	46-52	Should Successfully Run ARM CMSIS-DSP FFT Bin Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	53-59	Should Successfully Run ARM CMSIS-DSP FIR Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	60-66	Should Successfully Run ARM CMSIS-DSP Graphic Equalizer Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	67-73	Should Successfully Run ARM CMSIS-DSP Linear Interp Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	74-80	Should Successfully Run ARM CMSIS-DSP Matrix Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	81-87	Should Successfully Run ARM CMSIS-DSP Signal Convergence Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	88-94	Should Successfully Run ARM CMSIS-DSP Sin Cos Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	95-102	Should Successfully Run ARM CMSIS-DSP SVM Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	103-108	Should Successfully Run ARM CMSIS-DSP Variance Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象
-renode	tests/unit-tests/arm-ge-flag.robot	24-46	Signed Byte Addition Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (sadd8)	上流の行範囲とそこで参照するフィクスチャ	Cortex-M7 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/arm-ge-flag.robot	47-69	Signed Word Addition Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (sadd16)	上流の行範囲とそこで参照するフィクスチャ	Cortex-M7 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/arm-ge-flag.robot	70-92	Signed Byte Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (ssub8)	上流の行範囲とそこで参照するフィクスチャ	Cortex-M7 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/arm-ge-flag.robot	93-115	Signed Word Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (ssub16)	上流の行範囲とそこで参照するフィクスチャ	Cortex-M7 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/arm-ge-flag.robot	116-138	Unsigned Byte Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (usub8)	上流の行範囲とそこで参照するフィクスチャ	Cortex-M7 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/arm-ge-flag.robot	139-160	Unsigned Word Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (usub16)	上流の行範囲とそこで参照するフィクスチャ	Cortex-M7 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/arm-semihosting.robot	194-196	Should do Simple Semihosting Call on Cortex-M	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	197-199	Should do Simple Semihosting Call on Cortex-A in Arm mode	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	200-202	Should do Simple Semihosting Call on Cortex-A in Thumb mode	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	226-239	Should Pass Semihosting Tests With Different Exit Status	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	240-253	Should Pass Semihosting Tests With Arguments	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	254-267	Should Pass Semihosting Tests With Input	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	268-282	Should Pass Semihosting Tests With Output	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	283-288	Should Pass Semihosting Test With Separate Error Output	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/arm-semihosting.robot	289-294	Should Pass Semihosting Test With Custom Temporary Files Directory	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/bus-isolation.robot	50-66	Should Handle Separation By State In Secure World	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	67-84	Should Handle Separation By State In Nonsecure World	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	85-100	Should Change Access Conditions At Runtime	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	101-125	Should Read Through Privilege Aware Reader	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	126-138	Should Handle Readers And Log Context Access	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	139-150	Should Not Read Directly From Sysbus	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	151-157	Test Unsupported Condition Without Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	158-164	Test Unsupported Condition With Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	165-171	Test Condition With Initiator Not Supporting States	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	172-178	Test Conditions With Unregistered Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	179-185	Test Unregistered Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	186-192	Test Condition With No Initiators In The Machine	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	193-199	Test Conflicting Conditions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	200-203	Should Access VTOR in Secure State	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-isolation.robot	204-206	Should Access VTOR Without TrustZone Enabled	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中
-renode	tests/unit-tests/bus-performance.robot	43-47	Should Access Trivial Peripheral	上流の行範囲とそこで参照するフィクスチャ	性能工程・適用性照合中
-renode	tests/unit-tests/it-status.robot	112-166	Should Evaluate Condition Codes Properly	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	167-172	Should Have Correct Condition Code	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	173-194	Should Shift State Bits After Every IT Block Instruction	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	195-218	Should Execute Only 'Then' Instructions	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	219-237	Should Save and Restore State of IT Block Correctly	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	238-256	Should Survive Interrupt	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	257-276	Should Allow Condition Flag Change From Inside IT Block	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	277-300	Should Work in BlockBeginHooks	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/it-status.robot	301-320	Should Work in BlockEndHooks	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/llvm-asm-disasm.robot	302-309	Should Assemble And Disassemble ARM Cortex-A	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	310-316	Should Assemble And Disassemble ARM Cortex-A53	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	317-324	Should Assemble And Disassemble ARM Cortex-M	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	325-334	Should Assemble And Disassemble ARM Cortex-R52	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	335-339	Should Assemble And Disassemble RISCV32IMA	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	340-344	Should Assemble And Disassemble RISCV32IMAC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	345-350	Should Assemble And Disassemble RISCV32IMAFDC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	351-356	Should Assemble And Disassemble RISCV32GC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	357-362	Should Assemble And Disassemble RISCV32GC_XANDES	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	363-367	Should Assemble And Disassemble RISCV32GV	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	368-372	Should Assemble And Disassemble RISCV64IMAC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	373-379	Should Assemble And Disassemble RISCV64IMAFDC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	380-386	Should Assemble And Disassemble RISCV64GC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	387-391	Should Assemble And Disassemble RISCV64GCV	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	392-399	Should Assemble And Disassemble PPC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	400-409	Should Assemble And Disassemble PPC64 LE	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	410-417	Should Assemble And Disassemble Sparc	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	418-423	Should Assemble And Disassemble 16-bit X86	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	424-431	Should Assemble And Disassemble X86	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	432-437	Should Assemble And Disassemble 16-bit X86 On KVM Core	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	438-443	Should Assemble And Disassemble X86 On KVM Core	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	444-449	Should Assemble And Disassemble X86_64	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	450-455	Should Assemble And Disassemble X86_64 On KVM Core	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	456-470	Should Assemble And Disassemble Xtensa	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	471-500	Should Assemble And Execute Xtensa	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	501-506	Should Handle Illegal Instruction When Disassembling	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	507-515	Should Handle Disassembly From Invalid Address	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	516-521	Should Take Base Address Into Account When Assembling	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	522-534	Should Assemble Multiline Program	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	535-542	Should Handle Illegal Instruction When Assembling	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	543-547	Should Handle Assembler Directives	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	548-551	Should Refuse To Infer Triple For Assembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	552-555	Should Refuse To Infer Triple For Addressed Disassembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	556-559	Should Infer Triple For PC-Based Disassembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/llvm-asm-disasm.robot	560-563	Should Assemble And Disassemble After Deserialization	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/monitor-tests.robot	106-113	Should Call GPIO Set	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/unit-tests/page-access-via-io.robot	76-125	Should Set And Clear Page Access Modes Correctly	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象
-renode	tests/unit-tests/profiler-trace.robot	69-79	Should Stop Writing To File Perfetto	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/profiler-trace.robot	80-90	Should Stop Writing To File Collapsed Stack	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/profiler-trace.robot	91-101	Should Stop Writing To File Trace Event	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/profiler-trace.robot	102-113	Should Add Trace End Over The File Limit Trace Event	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/profiler-trace.robot	114-124	Should Not Limit File Size	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/profiler-trace.robot	125-133	Should Disable Profiler Inside Translation Block	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/profiler-trace.robot	134-156	Should Disable Profiler After Reaching Maximum Nested Context Count	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定
-renode	tests/unit-tests/python-engine.robot	26-57	Should Return Syntax Error	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/unit-tests/python-engine.robot	58-71	Should Abort On Runtime Error	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/unit-tests/python-engine.robot	72-96	PyDev Should Handle QuadWord Accesses	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/unit-tests/python-engine.robot	97-102	Should Handle Unsupported Variable Types	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定
-renode	tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot	18-29	Should Run All Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M85 fixture・命令集合を照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	34	ShouldGetAllGPIOConnections	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	52	ShouldDetachConnectionFromGPIOByNumberConnection	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	71	ShouldDetachOnlyOneConnectionFromGPIOByNumberConnection	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	98	ShoulDisconnectGPIOSenderAttachedToGPIOReceiver	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	115	ShouldUnregisterChainedPeripheralsOnBDisconnect	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	149	ShouldDisconnectEndpointOfUnregisteredPeripheral	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	179	ShouldConnectGPIOToReceiverAndReturnTheSameReceiver	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	200	ShouldDisconnectGPIOEndpointFromRemovedExternal	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	233	ShouldDisconnectGPIOEndpointFromDisposedMachine	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	276	ShouldDisconnectGPIOEndpointFromUnregisteredPeripheral	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	21	ShouldPropagateConnected	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	32	ShouldBeEmptyWhenNotConnected	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	40	ShouldConnectBoundGPIOs	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
-Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	48	ShouldThrowOnIllegalInputNo	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中
+repository	file	lines	case	parameter	applicability	verification
+renode	tests/external-control/external-control.robot	286-307	Should Run Single SPI Sample	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/external-control/external-control.robot	308-337	Should Run Dual SPI Sample	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/external-control/external-control.robot	338-366	Should Run Single SPI Sample With Robot Managed Time	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/peripherals/ArduCAMMini2MPPlus.robot	45-50	Should Detect Person	${URI}/images/person_image_0.jpg-s_3853-7f2125e28423fa117a1079d84785b17c9b70f62d	対象	合格・元の ELF/JPEG の UART 順序、スコア差 +131
+renode	tests/peripherals/ArduCAMMini2MPPlus.robot	45-50	Should Detect Person	${URI}/images/person_image_1.jpg-s_3836-25216268e08894d0dda13107ad1ad5f537ad19c2	対象	合格・元の ELF/JPEG の UART 順序、スコア差 +207
+renode	tests/peripherals/ArduCAMMini2MPPlus.robot	51-56	Should Not Detect Person	${URI}/images/no_person_image_0.jpg-s_3787-3bed5184fbf005cbb0b6bf18e8885874ca7273bd	対象	合格・元の ELF/JPEG の UART 順序、スコア差 -170
+renode	tests/peripherals/ArduCAMMini2MPPlus.robot	51-56	Should Not Detect Person	${URI}/images/no_person_image_1.jpg-s_3910-81edff305382b42f3b98e3764921574e1b9142fe	対象	合格・元の ELF/JPEG の UART 順序、スコア差 -181
+renode	tests/peripherals/ArrayMemory.robot	41-50	Should Load Save And Run Demo	ケース内のフィクスチャ	Cortex-M0 fixture。共有メモリアクセスケースの適用性を照合	未確認
+renode	tests/peripherals/BMP180.robot	19-28	Should Read Temperature	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/BMP180.robot	29-37	Should Read Pressure	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/LIS2DS12.robot	20-30	Should Read Acceleration	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/LSM303.robot	31-41	Should Read MagneticField	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/LSM303.robot	42-51	Should Read Acceleration	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/LSM330.robot	22-37	Should Read Acceleration	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/LSM330.robot	38-53	Should Read Rotation	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/peripherals/LSM9DS1.robot	13-23	Should Detect RING Motion	Execute Command           sysbus.twi0.lsm9ds1_imu FeedAccelerationSample "${CURDIR}${/}circle_rotated.data"	対象	合格・同じ ELF/REPL/サンプルと UART 順序
+renode	tests/peripherals/LSM9DS1.robot	24-35	Should Detect SLOPE Motion	Execute Command           sysbus.twi0.lsm9ds1_imu FeedAccelerationSample "${CURDIR}${/}angle_rotated.data"	対象	合格・同じ ELF/REPL/サンプルと UART 順序
+renode	tests/peripherals/NRF52840_GPIO.robot	2-37	Should Respect PullUp Configuration	上流の行範囲とそこで参照するフィクスチャ	対象	同じ MMIO・GPIO 操作を Rust に移植
+renode	tests/peripherals/SPIMultiplexer.robot	16-44	Should Talk to Two SPI Devices	上流の行範囲とそこで参照するフィクスチャ	対象	実 ELF で UART 判定一致
+renode	tests/platforms/ARMv8M-MVE.robot	169-174	Should Pass Matrix Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	175-180	Should Pass FIR Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	181-188	Should Generate Expected Values In Bayes Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	189-194	Should Generate Expected Values In Class Marks Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	195-200	Should Pass Variance Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	201-207	Should Generate Expected Values In SVM Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	208-213	Should Pass Sin Cos Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	214-219	Should Pass Signal Convergence Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	220-225	Should Pass Linear Interpolation Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	226-231	Should Pass Dot Product Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	232-237	Should Pass Arm Convolution Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	238-243	Should Pass Fft Bin Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	244-249	Should Pass Graphic Equalizer Test	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-MVE.robot	250-257	Should Run CMSIS-NN Tests	ケース内のフィクスチャ	Cortex-M85 と Armv8-M MVE 命令が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-TrustZone.robot	87-97	Should Pass NoRtos Test	ケース内のフィクスチャ	Cortex-M33 と Armv8-M TrustZone が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-TrustZone.robot	98-129	Should Pass Rtos Test	ケース内のフィクスチャ	Cortex-M33 と Armv8-M TrustZone が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-TrustZone.robot	130-156	Should Pass Rtos Faults Test	ケース内のフィクスチャ	Cortex-M33 と Armv8-M TrustZone が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/ARMv8M-TrustZone.robot	157-166	Should Pass Trusted Firmware Test	ケース内のフィクスチャ	Cortex-M33 と Armv8-M TrustZone が必要。nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/platforms/NRF52840.robot	89-91	Should Run ZephyrRTOS Shell On UART	NO_DMA; zephyr_shell_nrf52840.elf; demo ping	対象	合格・実 ELF でプロンプト→コマンド→pong。リセットを含む
+renode	tests/platforms/NRF52840.robot	92-96	Should Run ZephyrRTOS Shell On UARTE	DMA; renode-nrf52840-zephyr_shell_module.elf; demo ping	対象	合格・実 ELF でプロンプト→コマンド→pong。リセットを含む
+renode	tests/platforms/NRF52840.robot	97-110	Should Run Alarm Sample	NO_DMA; zephyr_alarm_nRF52840.elf; 2 s/6 s	対象	合格・board-extra
+renode	tests/platforms/NRF52840.robot	111-129	Should Handle LED and Button	GPIO0 11 button inverted / 13 LED; press/release; 1 s intervals	対象	合格・board-extra
+renode	tests/platforms/NRF52840.robot	130-137	Should Detect Passed Interrupt In WFE	DMA; WFE ELF; First WFE should finish	対象	既存実 ELF で確認
+renode	tests/platforms/NRF52840.robot	138-167	Should Handle SPI	spi2; GPIO0 22 CS; ADXL372; (0,0,0),(1,0,0),(2,2,0),(3,3,3)	対象	実 ELF で判定一致・動的 ADXL
+renode	tests/platforms/NRF52840.robot	168-197	Should Handle I2C	twi1; 0x11; ADXL372; (0,0,0),(1,0,0),(2,2,0),(3,3,3)	対象	実 ELF で判定一致・動的 ADXL
+renode	tests/platforms/NRF52840.robot	198-220	Should Echo I2S Audio	Nordic I2S master ELF; 32-byte stereo PCM; 0.01 s	対象	合格・仮想 0.01 s と元の PCM の全バイト一致
+renode	tests/platforms/NRF52840.robot	221-231	Should Detect Yes Pattern	micro_speech ELF; audio_yes_1s.s16le.pcm	対象	既存実 ELF で Heard yes
+renode	tests/platforms/NRF52840.robot	232-239	Should Run Zephyr's kernel.interrupt Test	Zephyr kernel.interrupt ELF	対象	既存実 ELF で成功出力
+renode	tests/platforms/NRF52840.robot	240-248	Should Run Zephyr's cmsis_dps.transform.rq15 Test	Zephyr CMSIS transform_rq15 ELF	対象	合格・board-extra
+renode	tests/platforms/NRF52840.robot	249-261	Should Restart After Watchdog Timeout	Zephyr WDT ELF; CPU 1 MIPS	対象	部分移植・1 MIPS 未再現
+renode	tests/platforms/NRF52840.robot	262-290	Should Run Task Watchdog Subsystem	Zephyr task_wdt ELF; 10 ordered UART markers ×2	対象	部分移植・指定の生存ログ欠落
+renode	tests/platforms/NRF52840.robot	291-331	Should Run Bluetooth sample	HR central/peripheral ELF; RF medium; quantum 10 us; C0:00:AA:BB:CC:DD	対象	実 ELF で指定の起動・接続・通知。量子条件照合待ち
+renode	tests/platforms/NRF52840.robot	332-354	Should Run Bluetooth Hci Uart Sample	2 hosts and 2 controllers; UART1 HCI hubs; RF medium; controller lead 1 s; quantum 10 us	対象	実 ELF で指定の起動・接続・通知。量子条件照合待ち
+renode	tests/platforms/NRF52840.robot	355-371	Should Return The Chip Id With I2C	MicroPython ELF; twi0 0x76 BME280; readfrom_mem(0x76,0xD0,1)	対象	合格・board-extra
+renode	tests/platforms/NRF52840.robot	372-383	Should Scan The I2C Bus Correctly	MicroPython ELF; twi0 0x76 BME280; i.scan()	対象	合格・board-extra
+renode	tests/platforms/imxrt500.robot	2-18	Should Run Pigweed Bluetooth Advertiser	上流の行範囲とそこで参照するフィクスチャ	混成ボード・対象	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	311-321	Should Enter Lockup On Invalid Reset State	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	322-328	Should Raise Precise BusFault On Peripheral Read	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	329-335	Should Raise Precise BusFault On Peripheral Write	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	336-343	Should Raise Precise BusFault On Unmapped Read When Configured	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	344-351	Should Escalate Disabled BusFault To HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	352-368	Should Escalate BusFault That Cannot Preempt Active Handler	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	369-409	Should Enter Lockup When BusFault Cannot Escalate From HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	410-423	NMI Should Preempt Instruction-Time Lockup	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	424-443	Should Pend HardFault On NMI Stacking BusFault From Thread Mode	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	444-467	Should Replace External IRQ With HardFault On Stacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	468-491	Should Prefer BusFault On Equal-priority Stacking Fault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	492-516	Should Not Push Additional State For Secure Stacking HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	517-543	Should Retain Additional State For Secure Late Arrival	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	544-575	Should Enter Lockup On NMI Stacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	576-600	Should Record Ignored Vector BusFault Before Stacking Lockup	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	601-628	Should Replace External IRQ With HardFault On Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	629-659	Should Force Secure HardFault On Non-secure Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	660-684	Should Target Non-secure HardFault On Non-secure Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	685-709	Should Enter Lockup On NMI Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	710-732	Should Enter Lockup On HardFault Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	733-766	Should Pend Lazy FP HardFault When Original Context Was Ready	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	767-806	Should Enter Lockup On Lazy FP Preservation BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	807-825	Should Reserve Complete Secure Lazy FP Frame With TS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	826-851	Should Enter Lockup On Exception Unstacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	852-880	Should Tail Chain On Exception Unstacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	881-908	Should Clear FPCA When Tail Chaining On Unstacking BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	909-932	Should Mask Banked Non-secure HardFault With FAULTMASK_NS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	933-957	Should Allow Secure HardFault Past FAULTMASK_NS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	958-991	Should Allow Banked Secure HardFault Past PRIMASK_NS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	992-1014	Should Retain Secure FAULTMASK For HardFault Return Lockup	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1015-1041	Should Enter Lockup On RETPSR Integrity Failure	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1042-1058	Should Enter Lockup On Reset Vector BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1059-1073	Should Enter Lockup On Initial MSP BusFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1074-1111	Should Tail Chain On Invalid Non-secure DCRS	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1112-1148	Should Keep BusFault From Failed Integrity Signature Read	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1149-1211	Should Take HardFault On Integrity Signature Mismatch	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1212-1228	Should Ignore Precise BusFault In HardFault When Configured	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1229-1248	DHCSR Lockup Status Should Follow DAP Visibility	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1249-1266	Should Share BusFault State Across Security States	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1267-1269	Read Access Should Produce Precise Bus Fault Without Single Step	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1270-1272	Write Access Should Produce Precise Bus Fault Without Single Step	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1273-1282	Should Raise Precise BusFault on VLSTM Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1283-1292	Should Raise Precise BusFault on VLLDM Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1293-1308	Should Raise BusFault on BLXNS Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1309-1329	Should Raise BusFault on VLD/VST Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1330-1359	Should Raise BusFault on VSTR/VLDR Vector Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-bus-fault.robot	1360-1377	Should Raise BusFault on VSTR/VLDR Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M55 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	90-94	Should Not Return From Exception When Loading PC From Vector Table	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	95-95	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	96-96	...    // Set up MPU so that exception return can fault if SP is protected memory	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	97-97	...    ldr r1, =0xe000ed90	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	98-98	...    // Set region 0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	99-99	...    mov r0, 0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	100-100	...    str r0, [r1, #0x8]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	101-101	...    // Set RBAR to 0x0, readable by all	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	102-102	...    mov r0, 0x00000006	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	103-103	...    str r0, [r1, #0xc]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	104-104	...    // Set RLAR to 0xfff, enabled	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	105-105	...    mov r0, 0x00000fe1	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	106-106	...    str r0, [r1, #0x10]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	107-107	...    // Enable MPU	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	108-108	...    mov r0, 0b001	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	109-109	...    str r0, [r1, #0x4]	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	110-110	...    b .	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	111-114	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	115-115	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	116-116	...    // Trigger HardFault in exception return - stack will be read on exception return,	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	117-117	...    // but since SP is a protected address, this will cause a HardFault	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	118-118	...    mov r0, 0x2000	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	119-119	...    mov sp, r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	120-120	...    bx lr	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	121-128	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	129-132	Should Not Return From Exception When In Thread Mode	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	133-133	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	134-134	...    mov r0, 0xffffffb8	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	135-135	...    bx r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	136-140	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	141-144	Should Return From Exception When Using Allowed Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	145-149	Should Not Return From Exception When Not Using Allowed Instruction	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	150-153	Should Not Return From Insecure Mode When Not Using TrustZone	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	154-154	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	155-155	...    mov r0, 0xfeffffff	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	156-156	...    bx r0	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	157-162	...  """	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	163-165	Should Return From Insecure Mode When Using bx	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	166-168	Should Not Return From Insecure Mode When Using blx	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-exception-return.robot	169-185	Should Not Restore Reserved Bits From FncReturn Partial Retpsr	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	105-114	Should Pass Zephyr FPU Sharing Generic Tests	上流の行範囲とそこで参照するフィクスチャ	FRDM K64F 専用 Zephyr ELF・nRF52840 に適用不可	対象外の根拠は applicability 欄
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	115-125	Should Pass Context Stacking Preservation Test v7-M	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	126-136	Should Pass Context Stacking Preservation Test v8-M with TrustZone	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	137-142	Should Not Raise Exception	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-fpu.robot	143-146	Should Raise NOCP Exception	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・Armv7-M への等価移植を照合中	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	329-339	Should Print Hello From Both States	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	340-362	Should Stop Before Executing Handler On Instruction Fetch SecureFault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	363-391	Should Execute Instructions Preceding Instruction Fetch SecureFault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	392-411	Should Fault On Second Halfword Of First Thumb-2 Instruction	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	412-437	Should Execute Preceding Instructions Before Second Halfword Fetch Fault	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	438-451	Non-secure Should Fault at Execution on Secure SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	452-466	Non-secure Should Fault at Execution on Secure Non-secure Callable SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	467-483	Non-secure Should Enter Secure State on Secure Non-secure Callable SG on SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	484-498	Non-secure Should Fault at Write to Secure SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	499-513	Non-secure Should Fault at Execution on Secure IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	514-529	Non-secure Should Fault at Execution on Secure Non-secure Callable IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	530-547	Non-secure Should Enter Secure State on Secure Non-secure Callable SG on IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	548-563	Non-secure Should Fault at Write to Secure IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	564-579	IDAU Secure Should Override SAU Non-secure Restrictions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	580-595	IDAU Non-secure Should not Override SAU Secure Restrictions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	596-612	IDAU Secure Non-secure Callable Should Override SAU Non-secure Restrictions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	613-628	Non-secure Should Fault at Write to Secure Non-secure Callable SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	629-645	Non-secure Should Fault at Write to Secure Non-secure Callable IDAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	646-663	Non-secure Should Fault at Execution on Upper Address Range	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	664-679	Non-secure Should Fault at Execution on Overlapping SAU Regions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	680-691	Secure Should Fault at Execution on Non-secure SAU Address	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	692-726	Should Raise SecureFault on Width Varied MVE Instructions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	727-747	Should Raise SecureFault on VSTR/VLDR Instructions	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	748-757	Should Test SP Register Secure Access	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-cortex-m-trustzone.robot	758-764	Should Test SP Register Non-secure Access	上流の行範囲とそこで参照するフィクスチャ	TrustZone・Armv7-M に機能なし	未確認
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	16-24	Should Successfully Run ARM CMSIS-DSP Bayes Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	25-31	Should Successfully Run ARM CMSIS-DSP Class Marks Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	32-38	Should Successfully Run ARM CMSIS-DSP Convolution Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	39-45	Should Successfully Run ARM CMSIS-DSP Dotproduct Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	46-52	Should Successfully Run ARM CMSIS-DSP FFT Bin Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	53-59	Should Successfully Run ARM CMSIS-DSP FIR Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	60-66	Should Successfully Run ARM CMSIS-DSP Graphic Equalizer Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	67-73	Should Successfully Run ARM CMSIS-DSP Linear Interp Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	74-80	Should Successfully Run ARM CMSIS-DSP Matrix Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	81-87	Should Successfully Run ARM CMSIS-DSP Signal Convergence Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	88-94	Should Successfully Run ARM CMSIS-DSP Sin Cos Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	95-102	Should Successfully Run ARM CMSIS-DSP SVM Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-dsp-examples-cortex-m4.robot	103-108	Should Successfully Run ARM CMSIS-DSP Variance Example	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4F・対象	合格・元の ELF と UART 判定
+renode	tests/unit-tests/arm-ge-flag.robot	24-46	Signed Byte Addition Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (sadd8)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
+renode	tests/unit-tests/arm-ge-flag.robot	47-69	Signed Word Addition Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (sadd16)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
+renode	tests/unit-tests/arm-ge-flag.robot	70-92	Signed Byte Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (ssub8)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
+renode	tests/unit-tests/arm-ge-flag.robot	93-115	Signed Word Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (ssub16)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
+renode	tests/unit-tests/arm-ge-flag.robot	116-138	Unsigned Byte Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (usub8)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
+renode	tests/unit-tests/arm-ge-flag.robot	139-160	Unsigned Word Subtraction Should Set GE Flag If And Only If The Result Is Greater Or Equal To Zero (usub16)	上流の行範囲とそこで参照するフィクスチャ	共有 Armv7E-M DSP・Cortex-M4 に適用	合格・上流の 10 命令と R4 判定を Rust へ移植
+renode	tests/unit-tests/arm-semihosting.robot	194-196	Should do Simple Semihosting Call on Cortex-M	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	197-199	Should do Simple Semihosting Call on Cortex-A in Arm mode	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	200-202	Should do Simple Semihosting Call on Cortex-A in Thumb mode	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	203-225	Should Pass Semihosting Tests	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	226-239	Should Pass Semihosting Tests With Different Exit Status	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	240-253	Should Pass Semihosting Tests With Arguments	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	254-267	Should Pass Semihosting Tests With Input	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	268-282	Should Pass Semihosting Tests With Output	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	283-288	Should Pass Semihosting Test With Separate Error Output	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/arm-semihosting.robot	289-294	Should Pass Semihosting Test With Custom Temporary Files Directory	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/bus-isolation.robot	50-66	Should Handle Separation By State In Secure World	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	67-84	Should Handle Separation By State In Nonsecure World	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	85-100	Should Change Access Conditions At Runtime	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	101-125	Should Read Through Privilege Aware Reader	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	126-138	Should Handle Readers And Log Context Access	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	139-150	Should Not Read Directly From Sysbus	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	151-157	Test Unsupported Condition Without Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	158-164	Test Unsupported Condition With Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	165-171	Test Condition With Initiator Not Supporting States	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	172-178	Test Conditions With Unregistered Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	179-185	Test Unregistered Initiator	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	186-192	Test Condition With No Initiators In The Machine	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	193-199	Test Conflicting Conditions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	200-203	Should Access VTOR in Secure State	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-isolation.robot	204-206	Should Access VTOR Without TrustZone Enabled	上流の行範囲とそこで参照するフィクスチャ	Cortex-M33 fixture・CPU 共通性を照合中	未確認
+renode	tests/unit-tests/bus-performance.robot	43-47	Should Access Trivial Peripheral	上流の行範囲とそこで参照するフィクスチャ	性能工程・適用性照合中	未確認
+renode	tests/unit-tests/gdb/ArmVfpGDB.robot	58-71	Test VFP registers	ケース内のフィクスチャ	Cortex-M33 fixture。共有 FPU/GDB ケースの適用性を照合	未確認
+renode	tests/unit-tests/gdb/ArmVfpGDB.robot	72-90	Test VFP Registers On ARMv7R	ケース内のフィクスチャ	Cortex-M33 fixture。共有 FPU/GDB ケースの適用性を照合	未確認
+renode	tests/unit-tests/gdb/gdb.robot	233-248	Should Change Thread	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	249-266	Should Step Instruction On Just One Thread	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	267-283	Should Step Instruction On All Threads At The Same Time	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	284-295	Should Change Thread On Breakpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	296-321	Should Handle One Thread Connected	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	322-341	Should Handle Subset Of Threads Connected	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	342-364	Should Exit Infinite Loop On Ctrl-C	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	365-386	Should Write And Read Memory	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	387-409	Should Write And Read Peripheral Memory	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	410-420	Should Stop On Breakpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	421-433	Should Step After Breakpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	434-457	Should Handle Multiple Breakpoints	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	458-477	Should Disallow Setting Zero-Sized Watchpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	478-498	Should Stop On Write Watchpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	499-527	Should Stop On Write Watchpoint On Sparc	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	528-556	Should Stop On Write Watchpoint On Big-Endian PowerPC	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	557-586	Should Stop On Write Watchpoint On Little-Endian PowerPC	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	587-616	Should Stop On Peripheral Read Watchpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	617-644	Should Stop On Peripheral Write Watchpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	645-694	Should Handle Multiple Write Watchpoints	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	695-712	Should Stop On Read Watchpoint	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	713-752	Should Handle Multiple Read Watchpoints	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	753-770	Should Correctly Map ARM Registers	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	771-782	Should Handle 64-bit Registers	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	783-801	Should Step When Paused In Block End Hook	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	802-821	Should Continue When Paused In Block End Hook	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	822-840	Handle Long Command	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	841-854	Should Dump Memory Across Pages	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	855-869	Should Break In Virtual Addressing	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	870-885	Should Display Proper Instructions In Virtual Addressing	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	886-913	Should Write To Memory In Virtual Addressing	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	914-933	Should Step Over Wfi In Debug Mode	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	934-950	Should Wait On Wfi	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	951-989	Should Ignore External Interrupts In Debug Mode	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	990-1005	Should Remember Breakpoint After Reset	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1006-1030	Should Remember New Breakpoint After Reset	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1031-1055	Registers Should Be Consistent	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1056-1064	Should Handle Vector Registers	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1065-1099	Should Access Vector Elements	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1100-1123	Should Access Whole Vector Registers	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1124-1153	Should Read Per Core Memory	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1154-1199	Should Write Per Core Memory	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1200-1209	Commands Should Work Properly With High Addresses	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1210-1224	Should Not Pause Machine Upon Python Peripheral Access	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1225-1230	Clustering Should Fail On CPUs With Different Archs	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1231-1239	Clustering Should Load Arch Cluster	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1240-1253	Clustering Should Load Arch Cluster And Then Another Cluster	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1254-1266	Clustering Should Load Arch Cluster And Then CPU	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1267-1276	Clustering Should Load CPU And Then Another CPU	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/gdb/gdb.robot	1277-1288	Clustering Should Load All Cpus If Only One Arch	ケース内のフィクスチャ	複数 ISA の fixture。Cortex-M または共有 GDB 操作を判定	未確認
+renode	tests/unit-tests/hooks.robot	13-22	Should Parse Monitor in CPU Hook	ケース内のフィクスチャ	Cortex-M0 を含む複数 fixture。共有フック動作の適用性を照合	未確認
+renode	tests/unit-tests/hooks.robot	23-52	Should Stop On Peripheral Read Watchpoint	ケース内のフィクスチャ	Cortex-M0 を含む複数 fixture。共有フック動作の適用性を照合	未確認
+renode	tests/unit-tests/hooks.robot	53-81	Test Enabling Systick And Pausing Emulation From CortexM Hook	ケース内のフィクスチャ	Cortex-M0 を含む複数 fixture。共有フック動作の適用性を照合	未確認
+renode	tests/unit-tests/hooks.robot	82-90	Test Translation Block Fetch Hook	ケース内のフィクスチャ	Cortex-M0 を含む複数 fixture。共有フック動作の適用性を照合	未確認
+renode	tests/unit-tests/it-status.robot	112-166	Should Evaluate Condition Codes Properly	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・上流命令バイトと CPU 状態判定を Rust へ移植
+renode	tests/unit-tests/it-status.robot	167-172	Should Have Correct Condition Code	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・上流命令バイトと CPU 状態判定を Rust へ移植
+renode	tests/unit-tests/it-status.robot	173-194	Should Shift State Bits After Every IT Block Instruction	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・上流命令バイトと CPU 状態判定を Rust へ移植
+renode	tests/unit-tests/it-status.robot	195-218	Should Execute Only 'Then' Instructions	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・上流命令バイトと CPU 状態判定を Rust へ移植
+renode	tests/unit-tests/it-status.robot	219-237	Should Save and Restore State of IT Block Correctly	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	未移植・保存または Python フックが必要
+renode	tests/unit-tests/it-status.robot	238-256	Should Survive Interrupt	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・上流命令バイトと CPU 状態判定を Rust へ移植
+renode	tests/unit-tests/it-status.robot	257-276	Should Allow Condition Flag Change From Inside IT Block	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	合格・上流命令バイトと CPU 状態判定を Rust へ移植
+renode	tests/unit-tests/it-status.robot	277-300	Should Work in BlockBeginHooks	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	未移植・保存または Python フックが必要
+renode	tests/unit-tests/it-status.robot	301-320	Should Work in BlockEndHooks	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	未移植・保存または Python フックが必要
+renode	tests/unit-tests/llvm-asm-disasm.robot	302-309	Should Assemble And Disassemble ARM Cortex-A	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	310-316	Should Assemble And Disassemble ARM Cortex-A53	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	317-324	Should Assemble And Disassemble ARM Cortex-M	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	325-334	Should Assemble And Disassemble ARM Cortex-R52	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	335-339	Should Assemble And Disassemble RISCV32IMA	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	340-344	Should Assemble And Disassemble RISCV32IMAC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	345-350	Should Assemble And Disassemble RISCV32IMAFDC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	351-356	Should Assemble And Disassemble RISCV32GC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	357-362	Should Assemble And Disassemble RISCV32GC_XANDES	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	363-367	Should Assemble And Disassemble RISCV32GV	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	368-372	Should Assemble And Disassemble RISCV64IMAC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	373-379	Should Assemble And Disassemble RISCV64IMAFDC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	380-386	Should Assemble And Disassemble RISCV64GC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	387-391	Should Assemble And Disassemble RISCV64GCV	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	392-399	Should Assemble And Disassemble PPC	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	400-409	Should Assemble And Disassemble PPC64 LE	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	410-417	Should Assemble And Disassemble Sparc	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	418-423	Should Assemble And Disassemble 16-bit X86	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	424-431	Should Assemble And Disassemble X86	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	432-437	Should Assemble And Disassemble 16-bit X86 On KVM Core	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	438-443	Should Assemble And Disassemble X86 On KVM Core	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	444-449	Should Assemble And Disassemble X86_64	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	450-455	Should Assemble And Disassemble X86_64 On KVM Core	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	456-470	Should Assemble And Disassemble Xtensa	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	471-500	Should Assemble And Execute Xtensa	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	501-506	Should Handle Illegal Instruction When Disassembling	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	507-515	Should Handle Disassembly From Invalid Address	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	516-521	Should Take Base Address Into Account When Assembling	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	522-534	Should Assemble Multiline Program	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	535-542	Should Handle Illegal Instruction When Assembling	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	543-547	Should Handle Assembler Directives	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	548-551	Should Refuse To Infer Triple For Assembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	552-555	Should Refuse To Infer Triple For Addressed Disassembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	556-559	Should Infer Triple For PC-Based Disassembly	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/llvm-asm-disasm.robot	560-563	Should Assemble And Disassemble After Deserialization	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/monitor-tests.robot	106-113	Should Call GPIO Set	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/unit-tests/opcodes-counting.robot	32-45	Should Count Custom 16-bit Instruction	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	46-59	Should Count Custom 32-bit Instruction	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	60-74	Should Count Custom 64-bit Instruction	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	75-93	Should Count Standard Opcode	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	94-107	Should Count RVV Opcode	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	108-124	Should Parse All Embedded RISC-V Opcodes	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	125-150	Should Count RISC-V Opcodes	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	151-178	Should Count RISC-V Opcodes By B Extension	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	179-199	Should Count 32-Bit Thumb Opcode On ARM	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-counting.robot	200-213	Should Count 16-Bit Thumb Opcode On ARM	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有命令計数動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-execution-hooks.robot	36-52	Should Pass 32-Bit Thumb Opcode To Pre And Post Execution Hooks	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有フック動作の適用性を照合	未確認
+renode	tests/unit-tests/opcodes-execution-hooks.robot	53-66	Should Pass 16-Bit Thumb Opcode To Pre And Post Execution Hooks	ケース内のフィクスチャ	Cortex-M33 を含む複数 fixture。共有フック動作の適用性を照合	未確認
+renode	tests/unit-tests/page-access-via-io.robot	76-125	Should Set And Clear Page Access Modes Correctly	上流の行範囲とそこで参照するフィクスチャ	共有 Cortex-M4・対象	未確認
+renode	tests/unit-tests/profiler-trace.robot	69-79	Should Stop Writing To File Perfetto	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/profiler-trace.robot	80-90	Should Stop Writing To File Collapsed Stack	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/profiler-trace.robot	91-101	Should Stop Writing To File Trace Event	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/profiler-trace.robot	102-113	Should Add Trace End Over The File Limit Trace Event	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/profiler-trace.robot	114-124	Should Not Limit File Size	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/profiler-trace.robot	125-133	Should Disable Profiler Inside Translation Block	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/profiler-trace.robot	134-156	Should Disable Profiler After Reaching Maximum Nested Context Count	上流の行範囲とそこで参照するフィクスチャ	fixture 単位で判定	未確認
+renode	tests/unit-tests/python-engine.robot	26-57	Should Return Syntax Error	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/unit-tests/python-engine.robot	58-71	Should Abort On Runtime Error	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/unit-tests/python-engine.robot	72-96	PyDev Should Handle QuadWord Accesses	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/unit-tests/python-engine.robot	97-102	Should Handle Unsupported Variable Types	上流の行範囲とそこで参照するフィクスチャ	nRF peripheral reference・fixture 単位で判定	未確認
+renode	tests/unit-tests/sync_pc.robot	157-166	Should Report Wrong PC Between Chained Blocks	[Template] Syncing Disabled Template	Cortex-M7 を含む複数 fixture。共通の PC 同期動作を照合	未確認
+renode	tests/unit-tests/sync_pc.robot	167-178	Should Report Correct PC Between Chained Blocks	[Template] Syncing Enabled Template	Cortex-M7 を含む複数 fixture。共通の PC 同期動作を照合	未確認
+renode	tests/unit-tests/sync_pc.robot	179-181	Should Report Correct PC Between Chained Blocks Xtensa	ケース内のフィクスチャ	Cortex-M7 を含む複数 fixture。共通の PC 同期動作を照合	未確認
+renode	tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot	18-29	Should Run All Instructions	上流の行範囲とそこで参照するフィクスチャ	Cortex-M85 fixture・命令集合を照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	34	ShouldGetAllGPIOConnections	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	52	ShouldDetachConnectionFromGPIOByNumberConnection	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	71	ShouldDetachOnlyOneConnectionFromGPIOByNumberConnection	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	98	ShoulDisconnectGPIOSenderAttachedToGPIOReceiver	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	115	ShouldUnregisterChainedPeripheralsOnBDisconnect	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	149	ShouldDisconnectEndpointOfUnregisteredPeripheral	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	179	ShouldConnectGPIOToReceiverAndReturnTheSameReceiver	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	200	ShouldDisconnectGPIOEndpointFromRemovedExternal	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	233	ShouldDisconnectGPIOEndpointFromDisposedMachine	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIODetachingTests.cs	276	ShouldDisconnectGPIOEndpointFromUnregisteredPeripheral	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	21	ShouldPropagateConnected	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	32	ShouldBeEmptyWhenNotConnected	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	40	ShouldConnectBoundGPIOs	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認
+Infrastructure	src/Emulator/Main/Tests/UnitTests/GPIOTests.cs	48	ShouldThrowOnIllegalInputNo	固定 NUnit メソッドの GPIO 接続とアサーション	汎用 GPIO・適用性照合中	未確認

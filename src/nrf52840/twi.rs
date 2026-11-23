@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+
+use super::{arducam::Ov2640, lsm9ds1::Lsm9ds1};
 use crate::stm32_i2c::Eeprom;
 
 use super::{
@@ -13,6 +16,8 @@ pub(super) enum Target {
     Lsm330(Lsm330),
     Lsm303(Lsm303),
     Bmp180(Bmp180),
+    Lsm9ds1(Lsm9ds1),
+    Ov2640(Ov2640),
 }
 
 impl Target {
@@ -25,6 +30,8 @@ impl Target {
             Self::Lsm330(device) => device.start_write(),
             Self::Lsm303(device) => device.start_write(),
             Self::Bmp180(device) => device.start_write(),
+            Self::Lsm9ds1(device) => device.start_write(),
+            Self::Ov2640(device) => device.start_write(),
         }
     }
 
@@ -37,6 +44,8 @@ impl Target {
             Self::Lsm330(device) => device.write(value),
             Self::Lsm303(device) => device.write(value),
             Self::Bmp180(device) => device.write(value),
+            Self::Lsm9ds1(device) => device.write(value),
+            Self::Ov2640(device) => device.write(value),
         }
     }
 
@@ -49,6 +58,8 @@ impl Target {
             Self::Lsm330(device) => device.read(),
             Self::Lsm303(device) => device.read(),
             Self::Bmp180(device) => device.read(),
+            Self::Lsm9ds1(device) => device.read(),
+            Self::Ov2640(device) => device.read(),
         }
     }
 }
@@ -128,6 +139,15 @@ impl Twi {
             })
     }
 
+    pub(super) fn lsm9ds1_samples(&mut self) -> Option<&mut VecDeque<[f64; 3]>> {
+        self.targets
+            .iter_mut()
+            .find_map(|(_, target)| match target {
+                Target::Lsm9ds1(device) => device.imu_samples(),
+                _ => None,
+            })
+    }
+
     pub(super) fn sensor_irqs(&self) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
         self.targets.iter().flat_map(|(_, target)| {
             match target {
@@ -158,6 +178,8 @@ impl Twi {
                 Target::Lsm330(device) => device.reset(),
                 Target::Lsm303(device) => device.reset(),
                 Target::Bmp180(device) => device.reset(),
+                Target::Lsm9ds1(device) => device.reset(),
+                Target::Ov2640(device) => *device = Ov2640::default(),
                 Target::Bme280(device) => **device = Bme280::default(),
                 _ => {}
             }

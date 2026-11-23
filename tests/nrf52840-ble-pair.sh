@@ -16,9 +16,10 @@ cat "$work/uart" "$work/stderr"
 if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
     exit "$status"
 fi
-for message in 'primary: Bluetooth initialized' 'peer: Bluetooth initialized' \
+for message in 'primary: *** Booting Zephyr' 'peer: *** Booting Zephyr' \
+    'primary: Bluetooth initialized' 'peer: Bluetooth initialized' \
     'primary: Scanning successfully started' 'peer: Advertising successfully started' \
-    'primary: Connected:' 'peer: Connected' \
+    'primary: Connected: C0:00:AA:BB:CC:DD' 'peer: Connected' \
     'primary: [SUBSCRIBED]'; do
     if ! grep -Fq "$message" "$work/uart"; then
         echo "Missing Bluetooth milestone: $message" >&2

@@ -1,9 +1,11 @@
 mod adxl372;
+mod arducam;
 mod bme280;
 mod bmp180;
 mod lis2ds12;
 mod lsm303;
 mod lsm330;
+mod lsm9ds1;
 use adxl372::Adxl372;
 
 mod aar;
@@ -386,6 +388,43 @@ impl Peripheral {
             irq,
             name,
             device: Device::Twi(Twi::default()),
+        }
+    }
+
+    pub fn attach_ov2640(&mut self, address: u32) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("OV2640 requires TWI".into());
+        };
+        twi.attach(address, twi::Target::Ov2640(arducam::Ov2640::default()))
+    }
+
+    pub fn attach_lsm9ds1(&mut self, address: u32, magnetic: bool) -> Result<(), String> {
+        let Device::Twi(twi) = &mut self.device else {
+            return Err("LSM9DS1 requires TWI".into());
+        };
+        twi.attach(
+            address,
+            twi::Target::Lsm9ds1(lsm9ds1::Lsm9ds1::new(magnetic)),
+        )
+    }
+
+    pub fn lsm9ds1_samples(&mut self) -> Option<&mut VecDeque<[f64; 3]>> {
+        match &mut self.device {
+            Device::Twi(twi) => twi.lsm9ds1_samples(),
+            _ => None,
+        }
+    }
+
+    pub fn attach_camera(&mut self, gpio: u32, pin: u32) {
+        if let Device::Spi(spi) = &mut self.device {
+            spi.attach_camera(gpio, pin);
+        }
+    }
+
+    pub fn set_camera_image(&mut self, image: &mut Option<Vec<u8>>) -> bool {
+        match &mut self.device {
+            Device::Spi(spi) => spi.set_camera_image(image),
+            _ => false,
         }
     }
 

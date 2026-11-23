@@ -227,6 +227,44 @@ pub(super) fn lsm330_config(entry: &Entry, entries: &[Entry]) -> Result<([f64; 3
     Ok((values, gyro))
 }
 
+pub(super) fn camera_routes<'a>(
+    entry: &'a Entry,
+    entries: &[Entry],
+) -> Result<(&'a str, &'a str, u32), String> {
+    let [(_, spi), (_, twi), (_, end)] = entry.body.as_slice() else {
+        return Err(entry.error("expected ArduCAM SPI and TWI registrations"));
+    };
+    let spi = spi
+        .strip_suffix(';')
+        .ok_or_else(|| entry.error("invalid ArduCAM SPI registration"))?
+        .trim();
+    let (twi, address) = twi
+        .split_once(char::is_whitespace)
+        .ok_or_else(|| entry.error("invalid ArduCAM TWI registration"))?;
+    if entry.registration.as_deref() != Some("{")
+        || end != "}"
+        || !entries
+            .iter()
+            .any(|port| port.name == spi && port.model == "SPI.NRF52840_SPI")
+        || !entries
+            .iter()
+            .any(|port| port.name == twi && port.model == "I2C.NRF52840_I2C")
+    {
+        return Err(entry.error("expected ArduCAM on nRF52840 SPI and TWI"));
+    }
+    spi_cs(entry, entries)?;
+    Ok((
+        spi,
+        twi,
+        number(address.trim()).map_err(|e| entry.error(&e))?,
+    ))
+}
+
+pub(super) fn validate_lsm9ds1(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
+    super::keys(entry, &[])?;
+    validate_twi_target(entry, entries)
+}
+
 pub(super) fn validate_adxl(entry: &Entry, entries: &[Entry]) -> Result<(), String> {
     let registration = entry.registration.as_deref().unwrap_or("");
     let parent = registration.split_whitespace().next();
@@ -433,6 +471,8 @@ pub(super) fn map_peripheral(
                 child.model.as_str(),
                 "SPI.SPILoopback" | "Sensors.ADXL372" | "SPI.SPIMultiplexer"
             ) && child.registration.as_deref() == Some(entry.name.as_str())
+                || (child.model == "Sensors.ArduCAMMini2MPPlus"
+                    && camera_routes(child, entries).is_ok_and(|(spi, _, _)| spi == entry.name))
         });
         let child = children.next();
         let loopback = child.is_some_and(|child| child.model == "SPI.SPILoopback");
@@ -446,6 +486,9 @@ pub(super) fn map_peripheral(
                 spi.attach_adxl_spi(gpio, pin, child.name.clone(), acceleration(child)?);
             } else if child.model == "SPI.SPIMultiplexer" {
                 spi.attach_spi_mux(spi_mux_ports(child, entries)?);
+            } else if child.model == "Sensors.ArduCAMMini2MPPlus" {
+                let (gpio, pin) = spi_cs(child, entries)?;
+                spi.attach_camera(gpio, pin);
             }
         }
         spi
@@ -463,6 +506,8 @@ pub(super) fn map_peripheral(
                     | "Sensors.LSM330_Gyroscope"
                     | "Sensors.LSM303DLHC_Accelerometer"
                     | "Sensors.LSM303DLHC_Gyroscope"
+                    | "Sensors.LSM9DS1_IMU"
+                    | "Sensors.LSM9DS1_Magnetic"
             )
         }) {
             let Some((parent, address)) = child
@@ -496,10 +541,24 @@ pub(super) fn map_peripheral(
                 ) {
                     let (values, irq) = lsm303_config(child, entries)?;
                     twi.attach_lsm303(address, values, irq)
+                } else if matches!(
+                    child.model.as_str(),
+                    "Sensors.LSM9DS1_IMU" | "Sensors.LSM9DS1_Magnetic"
+                ) {
+                    twi.attach_lsm9ds1(address, child.model == "Sensors.LSM9DS1_Magnetic")
                 } else {
                     twi.attach_eeprom(address, super::i2c_eeprom(child)?)
                 }
                 .map_err(|e| child.error(&e))?;
+            }
+        }
+        for child in entries
+            .iter()
+            .filter(|child| child.model == "Sensors.ArduCAMMini2MPPlus")
+        {
+            let (_, port, address) = camera_routes(child, entries)?;
+            if port == entry.name {
+                twi.attach_ov2640(address).map_err(|e| child.error(&e))?;
             }
         }
         twi
@@ -674,7 +733,7 @@ pub(super) fn map_gpio(entry: &Entry, entries: &[Entry], bus: &mut Bus) -> Resul
                     || (line == "0"
                         && matches!(
                             child.model.as_str(),
-                            "Sensors.ADXL372" | "Miscellaneous.LED"
+                            "Sensors.ADXL372" | "Miscellaneous.LED" | "Sensors.ArduCAMMini2MPPlus"
                         )))
         }) {
             return Err(entry.error("unsupported GPIO destination"));

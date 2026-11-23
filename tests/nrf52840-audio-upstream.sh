@@ -61,7 +61,16 @@ uart1:
 REPL
     run shell-uart --platform "$work/uart.repl" --max-steps 700000 \
         --uart-event "100000:$work/ping" --reset-at 300000 --uart-event "400000:$work/ping" "$artifacts/uart.elf"
-    test "$(grep -ac '^pong' "$artifacts/shell-uart.log")" -eq 2
+    awk '
+        /uart:~[$]/ { prompt = 1 }
+        /demo ping/ { if (!prompt || command) exit 1; command = 1 }
+        /^pong\r?$/ {
+            if (!command) exit 1
+            replies++
+            prompt = command = 0
+        }
+        END { if (replies != 2 || command) exit 1 }
+    ' "$artifacts/shell-uart.log"
     "$test_dir/nrf52840-shell.sh" "$penv" "$renode" "$artifacts/uarte.elf" > "$artifacts/shell-uarte.log" 2>&1
 )
 

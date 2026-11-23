@@ -377,6 +377,12 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .map_err(|e| entry.error(&e))?;
             }
             "Timers.STM32_Timer" => stm32_timers.push(entry),
+            "Sensors.ArduCAMMini2MPPlus" if cortex_m4 => {
+                nrf52840::camera_routes(entry, &entries)?;
+            }
+            "Sensors.LSM9DS1_IMU" | "Sensors.LSM9DS1_Magnetic" if cortex_m4 => {
+                nrf52840::validate_lsm9ds1(entry, &entries)?;
+            }
             "Sensors.BMP180" if cortex_m4 => {
                 nrf52840::bmp180_config(entry, &entries)?;
             }

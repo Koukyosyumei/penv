@@ -71,6 +71,8 @@ Options:
   --ble-peer PATH    Run a second nRF52840 ELF on an in-process RADIO medium
   --i2s-input PATH   Feed PCM bytes to nRF52840 I2S
   --i2s-output PATH  Save PCM bytes transmitted by nRF52840 I2S
+  --nrf-camera-image PATH  Preload a JPEG into nRF52840 ArduCAM
+  --lsm9ds1-samples PATH  Load nRF52840 accelerometer samples in g
   --pdm-input PATH   Feed signed 16-bit little-endian PCM to nRF52840 PDM
   --uart-input-at N Delay UART input until execution step N
   --mtvec ADDRESS    Set the initial machine trap vector
@@ -132,6 +134,8 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_steps = false;
     let mut uart_input = None;
     let mut pdm_input = None;
+    let mut camera_image = None;
+    let mut lsm9ds1_samples = None;
     let mut i2s_input = None;
     let mut i2s_output = None;
     let mut ble_peer = None;
@@ -161,7 +165,9 @@ fn run() -> Result<ExitCode, String> {
                 | "--i2s-input"
                 | "--i2s-output"
                 | "--ble-peer"
-                | "--ble-hci-controller"),
+                | "--ble-hci-controller"
+                | "--nrf-camera-image"
+                | "--lsm9ds1-samples"),
             ) => {
                 let path = args
                     .next()
@@ -172,6 +178,8 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--pdm-input" => &mut pdm_input,
+                    "--nrf-camera-image" => &mut camera_image,
+                    "--lsm9ds1-samples" => &mut lsm9ds1_samples,
                     "--i2s-input" => &mut i2s_input,
                     "--i2s-output" => &mut i2s_output,
                     "--ble-peer" => &mut ble_peer,
@@ -439,6 +447,14 @@ fn run() -> Result<ExitCode, String> {
         machine
             .bus
             .configure_nrf_i2s_pcm(input, i2s_output.is_some())?;
+    }
+    if let Some(path) = camera_image {
+        let image = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        machine.bus.set_nrf_camera_image(image)?;
+    }
+    if let Some(path) = lsm9ds1_samples {
+        let samples = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        machine.bus.set_nrf_lsm9ds1_samples(&samples)?;
     }
     if let Some(path) = pdm_input {
         let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;

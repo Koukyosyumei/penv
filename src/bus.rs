@@ -275,6 +275,49 @@ impl Bus {
             .find_map(|device| device.adxl_input(name))
     }
 
+    pub fn set_nrf_camera_image(&mut self, image: Vec<u8>) -> Result<(), String> {
+        if image.len() > 0xff_ffff {
+            return Err("ArduCAM image exceeds the 24-bit FIFO size".into());
+        }
+        let mut image = Some(image);
+        if self
+            .nrf_peripherals
+            .iter_mut()
+            .any(|device| device.set_camera_image(&mut image))
+        {
+            Ok(())
+        } else {
+            Err("--nrf-camera-image requires an nRF52840 ArduCAM".into())
+        }
+    }
+
+    pub fn set_nrf_lsm9ds1_samples(&mut self, input: &str) -> Result<(), String> {
+        let samples = self
+            .nrf_peripherals
+            .iter_mut()
+            .find_map(NrfPeripheral::lsm9ds1_samples)
+            .ok_or("--lsm9ds1-samples requires an nRF52840 LSM9DS1 IMU")?;
+        let mut parsed = Vec::new();
+        for (index, line) in input.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let values = line
+                .split_whitespace()
+                .map(str::parse::<f64>)
+                .collect::<Result<Vec<_>, _>>();
+            match values.as_deref() {
+                Ok([x, y, z]) if [x, y, z].iter().all(|value| value.is_finite()) => {
+                    parsed.push([*x, *y, *z]);
+                }
+                _ => return Err(format!("invalid LSM9DS1 sample at line {}", index + 1)),
+            }
+        }
+        samples.extend(parsed);
+        Ok(())
+    }
+
     pub fn set_nrf_pdm_input(&mut self, input: Vec<u8>) -> Result<(), String> {
         if input.len() % 2 != 0 {
             return Err("PDM input must contain whole signed 16-bit little-endian samples".into());
