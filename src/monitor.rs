@@ -16,6 +16,7 @@ pub struct Boot {
     pub uart_irqs: Vec<UartIrq>,
     pub performance_in_mips: Option<u32>,
     pub fault_on_unmapped_data: bool,
+    pub report_unmapped_data: bool,
     pub pend_hard_fault: bool,
     pub thumb_trace: Option<crate::thumb::trace::TraceConfig>,
     pub opcode_counters: Vec<(String, String)>,
@@ -207,6 +208,11 @@ fn execute(
         }
         ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {
             boot.fault_on_unmapped_data = true;
+            boot.report_unmapped_data = false;
+        }
+        ["sysbus", "UnhandledAccessBehaviour", "Report"] if boot.platform.is_some() => {
+            boot.report_unmapped_data = true;
+            boot.fault_on_unmapped_data = false;
         }
         ["sysbus", "LoadELF", value] if boot.platform.is_some() && boot.image.is_none() => {
             let file = resolve(value)?

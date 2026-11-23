@@ -377,6 +377,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 keys(entry, &[])?;
                 semihosting_uarts.push(entry);
             }
+            "Mocks.TrivialPeripheral" if cortex_m4 => {
+                keys(entry, &[])?;
+                machine
+                    .bus
+                    .map_trivial_peripheral(entry.address()?)
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Mocks.BusFaultingPeripheral" if cortex_m4 => {
                 let mut fault_offset = None;
                 let mut fault_on_writes = true;

@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 116 | 5 | 69 |
+| 監査した共有・混成 Robot | 190 | 117 | 5 | 68 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **133** | **5** | **83** |
+| 合計 | **221** | **134** | **5** | **82** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -352,3 +352,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/bus-point-errors.s2WNfWm8/` の `cargo-test.final`、`errors.final`、`vtor`、`shell` に保存した。
+
+### TrivialPeripheral とマップ外 MMIO の報告
+
+`bus-performance.robot:43–47` の固定プログラムを上流から抽出し、Cortex-M4 用 ELF にした。コードを元のアドレス 0 に配置するため、リセットベクタは `0x100` に置く。上流の既定の未マップアクセス報告は、RESC に `sysbus UnhandledAccessBehaviour Report` を明示する。32ビットの読み出しを1000万回行った後、`ReadDoubleWord from non existing peripheral at 0xFFFFFFC` が1回だけ出ることを判定する。実行時間は計測しない。
+
+```sh
+cargo test
+tests/nrf52840-trivial-peripheral-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/trivial-peripheral"
+tests/nrf52840-bus-fault-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/bus-fault"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/trivial-peripheral.5zdZpD0O/` の `cargo-test`、`elf.final`、`bus-fault`、`shell` に保存した。バス分離の reader 群は、固定フィクスチャの複数 initiator、状態付きバスアクセス、アドレスの重複登録を必要とする。阻害点は台帳に記録した。

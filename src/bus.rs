@@ -33,6 +33,8 @@ use crate::{
 pub(crate) const CORTEX_M_STEP_HZ: u64 = 100_000_000;
 
 pub const RAM_BASE: u32 = 0x8000_0000;
+const TRIVIAL_PERIPHERAL_SIZE: u32 = 0x1000;
+
 pub const UART_TX: u32 = 0x1000_0000;
 
 #[derive(Debug)]
@@ -119,6 +121,8 @@ pub struct Bus {
     pub thumb_negative_priority: bool,
     pub thumb_unprivileged: bool,
     pub fault_on_unmapped_thumb_data: bool,
+    pub report_unmapped_thumb_data: bool,
+    trivial_peripherals: Vec<u32>,
     nrf_peripherals: Vec<NrfPeripheral>,
     nrf_tags: Vec<(u32, u32, u32)>,
     nrf_cpu_hz: Option<u64>,
@@ -275,6 +279,26 @@ impl Bus {
         }
         self.regions.push(Region::new(base, size)?);
         Ok(())
+    }
+
+    pub fn map_trivial_peripheral(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(TRIVIAL_PERIPHERAL_SIZE);
+        if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping trivial peripheral at {base:#010x}"
+            ));
+        }
+        self.trivial_peripherals.push(base);
+        Ok(())
+    }
+
+    fn trivial_peripheral_at(&self, address: u32) -> bool {
+        address & 3 == 0
+            && self
+                .trivial_peripherals
+                .iter()
+                .any(|base| address.wrapping_sub(*base) < TRIVIAL_PERIPHERAL_SIZE)
     }
 
     pub fn map_privileged_ram(&mut self, base: u32, size: usize) -> Result<(), String> {
@@ -596,7 +620,10 @@ impl Bus {
     }
 
     fn overlaps(&self, start: u64, end: u64) -> bool {
-        self.faulting_peripherals.iter().any(|device| {
+        self.trivial_peripherals.iter().any(|&base| {
+            let base = u64::from(base);
+            start < base + u64::from(TRIVIAL_PERIPHERAL_SIZE) && base < end
+        }) || self.faulting_peripherals.iter().any(|device| {
             let base = u64::from(device.base);
             start < base + FAULTING_PERIPHERAL_SIZE as u64 && base < end
         }) || self.nrf_peripherals.iter().any(|device| {
@@ -1602,7 +1629,7 @@ impl Bus {
             return Ok(u32::from_le_bytes(value));
         }
         self.read::<N>(address)
-            .or_else(|error| self.thumb_data_error(error))
+            .or_else(|error| self.thumb_data_error(error, false))
     }
 
     pub fn thumb_write(
@@ -1622,12 +1649,29 @@ impl Bus {
             return Ok(());
         }
         self.write(address, width, value, uart)
-            .or_else(|error| self.thumb_data_error(error))
+            .or_else(|error| self.thumb_data_error(error, true))
     }
 
-    fn thumb_data_error<T: Default>(&mut self, error: BusError) -> Result<T, String> {
+    fn thumb_data_error<T: Default>(&mut self, error: BusError, write: bool) -> Result<T, String> {
         let address = match error {
             BusError::SlaveFault(address) => address,
+            BusError::Unmapped(address, width)
+                if self.report_unmapped_thumb_data
+                    && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>
+            {
+                let access = if write { "Write" } else { "Read" };
+                let width = match width {
+                    1 => "Byte",
+                    2 => "Word",
+                    4 => "DoubleWord",
+                    _ => return Err(error.to_string()),
+                };
+                let direction = if write { "to" } else { "from" };
+                eprintln!(
+                    "sysbus: {access}{width} {direction} non existing peripheral at 0x{address:X}"
+                );
+                return Ok(T::default());
+            }
             BusError::Unmapped(address, width)
                 if self.fault_on_unmapped_thumb_data
                     && !self.overlaps(u64::from(address), u64::from(address) + width as u64) =>
@@ -1677,6 +1721,9 @@ impl Bus {
     }
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4 && self.trivial_peripheral_at(address) {
+            return Ok(0);
+        }
         if let Some(result) = self.read_faulting_peripheral::<N>(address) {
             return result;
         }
@@ -1926,6 +1973,9 @@ impl Bus {
         value: u32,
         uart: &mut impl Write,
     ) -> Result<(), BusError> {
+        if width == 4 && self.trivial_peripheral_at(address) {
+            return Ok(());
+        }
         if let Some(result) = self.write_faulting_peripheral(address, width, value) {
             return result;
         }

@@ -406,6 +406,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_irqs = Vec::new();
     let mut performance_in_mips = None;
     let mut fault_on_unmapped_data = false;
+    let mut report_unmapped_data = false;
     let mut pend_hard_fault = false;
     let mut thumb_trace = None;
     let mut opcode_counters = Vec::new();
@@ -448,6 +449,7 @@ fn run() -> Result<ExitCode, String> {
         uart_irqs = boot.uart_irqs;
         performance_in_mips = boot.performance_in_mips;
         fault_on_unmapped_data = boot.fault_on_unmapped_data;
+        report_unmapped_data = boot.report_unmapped_data;
         pend_hard_fault = boot.pend_hard_fault;
         thumb_trace = boot.thumb_trace;
         opcode_counters = boot.opcode_counters;
@@ -481,13 +483,12 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
-    if fault_on_unmapped_data {
+    if fault_on_unmapped_data || report_unmapped_data {
         if !machine.has_cortex_m4() {
-            return Err(
-                "UnhandledAccessBehaviour ThrowException requires a Cortex-M4 platform".into(),
-            );
+            return Err("UnhandledAccessBehaviour requires a Cortex-M4 platform".into());
         }
-        machine.bus.fault_on_unmapped_thumb_data = true;
+        machine.bus.fault_on_unmapped_thumb_data = fault_on_unmapped_data;
+        machine.bus.report_unmapped_thumb_data = report_unmapped_data;
     }
     if let Some(arguments) = semihosting_arguments {
         let handler = machine
