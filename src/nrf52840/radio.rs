@@ -458,8 +458,8 @@ impl Radio {
             0x554 => self.link_config[10] = value & 127,
             0x560 => self.bit_compare = value,
             0x510 => self.config[1] = value & 15,
-            0x514 if value & !0x67df_010f == 0 => self.config[2] = value,
-            0x518 if value & !0x0307_ffff == 0 => self.config[3] = value,
+            0x514 => self.config[2] = value & 0x67df_010f,
+            0x518 => self.config[3] = value & 0x0307_ffff,
             0xffc => {
                 if value & 1 == 0 {
                     self.reset();

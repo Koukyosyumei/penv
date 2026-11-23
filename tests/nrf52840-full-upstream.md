@@ -660,3 +660,18 @@ GDB メモリの3ケースは nRF52840 REPL 上の `machine StartGdbServer 3333`
 個別 RESC の再現は `target/debug/penv run --script "$ARTIFACT_DIR/perfetto.resc"` など。ネスト条件だけの再現は `nested-step.resc`。再現ファイル・ログ・終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/profiler-handoff.2VkCqhdx` に保存した。
 
 独立した回帰として `cargo test --locked`、Thumb 命令トレース、Zephyr Shell のほか、前節の Observer 広告ランナーを実行し、固定 ELF のスキャン開始と RSSI −10・type 2・データ長28の受信を再確認した。
+
+### RADIO パケット設定と IEEE 802.15.4 フックの切り分け
+
+固定 `NRF52840_Radio.cs` の PCNF0/PCNF1 は予約ビットを読み値に反映せず、同じ書き込みの有効フィールドを受け付ける。既存 RADIO ELF に両方の書き込みを追加したところ、修正前は PCNF0 が未マップとして停止した。修正後は PCNF0 へ `0x80000108`、PCNF1 へ `0x80000008` を書き、読み値 `0x108` と `0x8`、続く送受信・EasyDMA・IRQ を確認した。
+
+```sh
+cargo test --locked
+tests/nrf52840-radio.sh "$PWD/target/debug/penv" ../renode
+tests/nrf52840-python-hook-errors.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/hooks"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+Python パケットフックの固定手順は `target/debug/penv run --script "$ARTIFACT_DIR/packet.resc"` で `CreateIEEE802_15_4Medium` に、固定 RV32 の REPL は `validate-platform "$ARTIFACT_DIR/fixture.repl"` で `Wireless.NRF52840_Radio` の登録に阻まれる。7診断中の既存6件は再確認した。共有入口は `nrf52-packet-hook-b02d214.md` で ARM 担当に渡した。ATSAMD51 の2件も `UART.SAMD5_UART` で停止することを再確認し、個別 Reset と仮想時間の共有要件を `nrf52-clock-reset-b02d214.md` にまとめた。3件とも部分移植を維持する。
+
+再現ファイル、ログ、終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/radio-pcnf.SVa5OjX5` に保存した。
