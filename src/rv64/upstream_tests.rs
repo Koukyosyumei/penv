@@ -5,6 +5,8 @@ const A0: usize = 10;
 const A1: usize = 11;
 const A2: usize = 12;
 const A3: usize = 13;
+const A4: usize = 14;
+const A5: usize = 15;
 const S2: usize = 18;
 
 fn load_program(bus: &mut Bus, instructions: &[u32]) {
@@ -749,4 +751,99 @@ fn rv64_robot_isa_string_accepts_mixed_case() {
     let isa = Isa::parse("RV64IMAFDC_Zicsr_Zifencei").unwrap();
     assert!(isa.multiply && isa.atomic && isa.single && isa.double && isa.compressed);
     assert!(Isa::parse("RV64GC_Invalid_ISA").is_err());
+}
+
+#[test]
+fn vector_control_csrs_gate_on_vs_and_share_status() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp").unwrap());
+    let mut bus = Bus::new(4096).unwrap();
+    let write = Instruction(write_csr(0x00a, A0));
+    assert_eq!(cpu.csr(write, u64::MAX, 0), None);
+    assert_eq!(cpu.misa() & (1 << 21), 1 << 21);
+    cpu.registers[A0] = 1 << 9;
+    cpu.registers[A1] = u64::MAX;
+    run_straight_line(
+        &mut cpu,
+        &mut bus,
+        &[
+            write_csr(0x300, A0),
+            write_csr(0x00a, A1),
+            read_csr(0x00f, A2),
+            write_csr(0x009, A1),
+            read_csr(0x00f, A3),
+            write_csr(0x008, A1),
+            read_csr(0x008, A4),
+        ],
+    );
+    assert_eq!(
+        [cpu.registers[A2], cpu.registers[A3], cpu.registers[A4]],
+        [6, 7, 511]
+    );
+    assert_eq!(cpu.privilege.read(0xc22, cpu.misa(), !1), Some(64));
+    assert_eq!(cpu.privilege.read(0x100, cpu.misa(), !1).unwrap() >> 63, 1);
+    assert_eq!(cpu.csr(Instruction(write_csr(0xc22, A0)), 0, 0), None);
+    let mut scalar = Rv64::new(Isa::parse("rv64gc").unwrap());
+    assert!(scalar.privilege.write(0x300, 3 << 9, scalar.misa()));
+    assert_eq!(scalar.privilege.status & (3 << 9), 0);
+    assert_eq!(scalar.csr(write, 0, 0), None);
+}
+
+#[test]
+fn vector_length_instructions_handle_avl_and_invalid_types() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gc_v").unwrap());
+    let mut bus = Bus::new(4096).unwrap();
+    let immediate =
+        |bits: u32, avl: u32, rd: usize| bits << 20 | avl << 15 | 7 << 12 | (rd as u32) << 7 | 0x57;
+    const E16_M2: u32 = 0x09;
+    const E64_MF2: u32 = 0x1f;
+    assert!(cpu.privilege.write(0x300, 1 << 9, cpu.misa()));
+    cpu.registers[A0] = E16_M2.into();
+    run_straight_line(
+        &mut cpu,
+        &mut bus,
+        &[
+            immediate(0xc00 | E16_M2, 7, A1), // vsetivli
+            immediate(E16_M2, 0, 0),          // preserve vl
+            read_csr(0xc20, A2),
+            immediate(E16_M2, 0, A3), // use VLMAX
+            0x8000_7057 | (A0 as u32) << 20 | (A1 as u32) << 15 | (A4 as u32) << 7,
+            immediate(E64_MF2, 0, A5),
+            read_csr(0xc21, A0),
+        ],
+    );
+    assert_eq!(
+        [
+            cpu.registers[A1],
+            cpu.registers[A2],
+            cpu.registers[A3],
+            cpu.registers[A4],
+            cpu.registers[A5]
+        ],
+        [7, 7, 64, 7, 0]
+    );
+    assert_eq!(cpu.registers[A0], 1 << 63);
+}
+
+#[test]
+fn vector_signed_saturation_sets_sticky_vxsat() {
+    let mut cpu = Rv64::new(Isa::parse("rv64gcv").unwrap());
+    let mut bus = Bus::new(4096).unwrap();
+    cpu.registers[A0] = 127;
+    cpu.registers[A1] = 127;
+    assert!(cpu.privilege.write(0x300, 1 << 9, cpu.misa()));
+    run_straight_line(
+        &mut cpu,
+        &mut bus,
+        &[
+            0x0c00_72d7, // vsetvli t0, zero, e8, m1, ta, ma
+            0x5e05_4057, // vmv.v.x v0, a0
+            0x5e05_c0d7, // vmv.v.x v1, a1
+            0x8600_8157, // vsadd.vv v2, v0, v1
+            read_csr(0x00f, A2),
+            0x5e00_4057, // vmv.v.x v0, zero
+            0x8600_8157, // vsadd.vv v2, v0, v1 (no new saturation)
+            read_csr(0x009, A3),
+        ],
+    );
+    assert_eq!((cpu.registers[A2], cpu.registers[A3]), (1, 1));
 }

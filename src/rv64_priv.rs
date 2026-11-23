@@ -1,4 +1,7 @@
-use crate::pmp::{EXECUTE, READ, WRITE};
+use crate::{
+    pmp::{EXECUTE, READ, WRITE},
+    rv64::vector::VectorState,
+};
 
 const SIE: u64 = 1 << 1;
 const MIE: u64 = 1 << 3;
@@ -6,6 +9,7 @@ const SPIE: u64 = 1 << 5;
 const MPIE: u64 = 1 << 7;
 const SPP: u64 = 1 << 8;
 const MPP: u64 = 3 << 11;
+const VS: u64 = 3 << 9;
 pub const FS: u64 = 3 << 13;
 const MPRV: u64 = 1 << 17;
 pub const SUM: u64 = 1 << 18;
@@ -13,7 +17,7 @@ pub const MXR: u64 = 1 << 19;
 const TVM: u64 = 1 << 20;
 const TW: u64 = 1 << 21;
 const TSR: u64 = 1 << 22;
-const SSTATUS: u64 = SIE | SPIE | SPP | FS | SUM | MXR;
+const SSTATUS: u64 = SIE | SPIE | SPP | VS | FS | SUM | MXR;
 const MSTATUS: u64 = SSTATUS | MIE | MPIE | MPP | MPRV | TVM | TW | TSR;
 const UXL: u64 = 2 << 32;
 const SXL: u64 = 2 << 34;
@@ -118,6 +122,7 @@ pub struct Privilege {
     pub pmp: Option<Pmp>,
     pub bpm: Option<u64>,
     pub fcsr: u8,
+    pub(crate) vector: Option<Box<VectorState>>,
     machine: Trap,
     supervisor: Trap,
     medeleg: u64,
@@ -286,13 +291,20 @@ impl Privilege {
         {
             return None;
         }
-        let sd = if self.status & FS == FS { 1 << 63 } else { 0 };
+        let sd = if self.status & FS == FS || self.status & VS == VS {
+            1 << 63
+        } else {
+            0
+        };
         Some(match csr {
             1..=3 if self.status & FS != 0 && misa & (1 << 5) != 0 => match csr {
                 1 => u64::from(self.fcsr & 31),
                 2 => u64::from(self.fcsr >> 5),
                 _ => u64::from(self.fcsr),
             },
+            0x008..=0x00a | 0x00f | 0xc20..=0xc22 if self.status & VS != 0 => {
+                self.vector.as_ref()?.read(csr)?
+            }
             0x100 => (self.status & SSTATUS) | UXL | sd,
             0x104 => self.enable & self.mideleg,
             0x106 => self.supervisor_counter_enable,
@@ -337,6 +349,24 @@ impl Privilege {
         })
     }
 
+    pub(crate) fn configure_vector(&mut self, kind: u64, avl: Option<u64>) -> Option<u64> {
+        if self.status & VS == 0 {
+            return None;
+        }
+        let length = self.vector.as_mut()?.configure(kind, avl);
+        self.status |= VS;
+        Some(length)
+    }
+
+    pub(crate) fn execute_vector(&mut self, instruction: u32, scalar: u64) -> Option<()> {
+        if self.status & VS == 0 {
+            return None;
+        }
+        self.vector.as_mut()?.execute(instruction, scalar)?;
+        self.status |= VS;
+        Some(())
+    }
+
     pub fn csr_rmw_value(&self, csr: u32, read_value: u64) -> u64 {
         if csr == 0x344 {
             // MIP reads expose hardware OR software SEIP. CSRRS/CSRRC modify
@@ -359,14 +389,27 @@ impl Privilege {
         if (csr >> 10) == 3 || self.read(csr, misa, !1).is_none() {
             return false;
         }
-        let fp_mask = if misa & (1 << 5) == 0 { !FS } else { u64::MAX };
+        let mut extension_mask = if misa & (1 << 5) == 0 { !FS } else { u64::MAX };
+        if self.vector.is_none() {
+            extension_mask &= !VS;
+        }
         match csr {
             1..=3 => {
                 let (mask, shift) = [(31, 0), (0xe0, 5), (0xff, 0)][csr as usize - 1];
                 self.fcsr = (self.fcsr & !mask) | ((value as u8) << shift & mask);
                 self.status |= FS;
             }
-            0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS & fp_mask),
+            0x008..=0x00a | 0x00f => {
+                if !self
+                    .vector
+                    .as_mut()
+                    .is_some_and(|vector| vector.write(csr, value))
+                {
+                    return false;
+                }
+                self.status |= VS;
+            }
+            0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS & extension_mask),
             0x104 => self.enable = (self.enable & !self.mideleg) | (value & self.mideleg),
             0x106 => self.supervisor_counter_enable = value & u64::from(u32::MAX),
             0x10a => self.senvcfg = value & (1 << 7),
@@ -377,7 +420,7 @@ impl Privilege {
             0x180 if matches!(value >> 60, 0 | 8 | 9) => self.satp = value,
             0x180 | 0x301 | 0xb03..=0xb1f | 0x323..=0x33f => {}
             0x300 => {
-                self.status = value & MSTATUS & fp_mask;
+                self.status = value & MSTATUS & extension_mask;
                 if self.levels == Levels::Machine {
                     self.status |= MPP;
                 } else if self.status & MPP == 2 << 11

@@ -271,6 +271,11 @@ def disposition(path, name, context):
         if name.endswith(" 32"):
             return "out", "Harness selects only RV32 executable parameters"
         return "unexpanded", "One row per executable required from the upstream selector"
+    if path.name == "riscv-vector-csr.robot" and name in {
+        "Should Keep VCSR Upper Bits As Zero",
+        "Should Reflect VSADD.VV Saturation In VCSR",
+    }:
+        return "partial", "Fixed Renode verified; Penv Rust/ELF port uses a different harness (rv64-vector-bootstrap.md)"
     if path.name == "riscv-extensions.robot" and re.search(r"\bRV32(?:I_|GC_invalid_ISA)", context):
         return "out", "Create Machine selects CPU.RiscV32 from the fixed ISA argument's rv32 prefix"
     if path.name == "riscv-external-pmp.robot" and re.search(

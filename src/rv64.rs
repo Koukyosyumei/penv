@@ -2,6 +2,7 @@ mod bitmanip;
 mod floating;
 #[cfg(test)]
 mod upstream_tests;
+pub(crate) mod vector;
 
 use std::io::Write;
 
@@ -33,6 +34,7 @@ pub struct Isa {
     pub single: bool,
     pub double: bool,
     half: bool,
+    vector: bool,
     zicboz: bool,
     pub cas: bool,
     pub smepmp: bool,
@@ -51,7 +53,7 @@ impl Isa {
             || (base.contains('d') && !base.contains(['g', 'f']))
             || !base
                 .chars()
-                .all(|ext| matches!(ext, 'i' | 'g' | 'm' | 'a' | 'f' | 'd' | 'c' | 'b'))
+                .all(|ext| matches!(ext, 'i' | 'g' | 'm' | 'a' | 'f' | 'd' | 'c' | 'b' | 'v'))
         {
             return Err(format!("unsupported RV64 ISA {value:?}"));
         }
@@ -59,6 +61,7 @@ impl Isa {
             multiply: base.contains(['g', 'm']),
             atomic: base.contains(['g', 'a']),
             compressed: base.contains('c'),
+            vector: base.contains('v'),
             single: base.contains(['g', 'f']),
             double: base.contains(['g', 'd']),
             ..Self::IM
@@ -69,6 +72,8 @@ impl Isa {
         for extension in extensions {
             match extension {
                 "zicsr" | "zifencei" => {}
+                "c" => isa.compressed = true,
+                "v" => isa.vector = true,
                 "zacas" if isa.atomic => isa.cas = true,
                 "smepmp" => isa.smepmp = true,
                 "zfh" if isa.single => isa.half = true,
@@ -97,6 +102,7 @@ impl Isa {
         single: false,
         double: false,
         half: false,
+        vector: false,
         zicboz: false,
         cas: false,
         smepmp: false,
@@ -125,6 +131,7 @@ impl Rv64 {
     pub fn new(isa: Isa) -> Self {
         let mut privilege = Privilege::default();
         privilege.zicboz = isa.zicboz;
+        privilege.vector = isa.vector.then(Box::<vector::VectorState>::default);
         Self {
             pc: u64::from(RAM_BASE),
             registers: [0; 32],
@@ -281,6 +288,7 @@ impl Rv64 {
             | (u64::from(self.isa.compressed) << 2)
             | (u64::from(self.isa.double) << 3)
             | (u64::from(self.isa.single) << 5)
+            | (u64::from(self.isa.vector) << 21)
             | (u64::from(self.isa.bitmanip.zba && self.isa.bitmanip.zbb && self.isa.bitmanip.zbs)
                 << 1)
     }
@@ -422,6 +430,31 @@ impl Rv64 {
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
                 self.floating_instruction(fields, bus, output)?
+            }
+            0x57 if fields.funct3() == 7 => {
+                let avl = if fields.rs1() != 0 {
+                    Some(lhs)
+                } else if fields.rd() != 0 {
+                    Some(u64::MAX)
+                } else {
+                    None
+                };
+                let (kind, avl) = match instruction >> 30 {
+                    0..=1 => (u64::from(instruction >> 20 & 0x7ff), avl),
+                    3 => (
+                        u64::from(instruction >> 20 & 0x3ff),
+                        Some(fields.rs1() as u64),
+                    ),
+                    2 if instruction >> 25 == 0x40 => (rhs, avl),
+                    _ => return Err(illegal),
+                };
+                Some(self.privilege.configure_vector(kind, avl).ok_or(illegal)?)
+            }
+            0x57 => {
+                self.privilege
+                    .execute_vector(instruction, lhs)
+                    .ok_or(illegal)?;
+                None
             }
             0x2f if self.isa.cas && instruction >> 27 == 5 => {
                 self.compare_swap(fields, bus, lhs, rhs)?

@@ -1,6 +1,6 @@
 # 固定 RV64 ACT の上流照合
 
-このページは `4302d2d` の比較結果です。Penv の [Smepmp 対応と再検証](rv64-smepmp.md) では、固定 ISA の未実装拡張は V が残っています。
+このページは `4302d2d` の比較結果です。最新の固定 ISA での実行結果は [ACT とベクトル命令の初期対応](rv64-vector-bootstrap.md) を参照してください。
 
 対象は Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` の `tests/unit-tests/riscv-arch-tests.robot:54` と、固定 ACT の手順で生成した 242 ELF です。[ELF ごとの判定](rv64-act-equivalence.tsv) [生成手順](rv64-act-and-failures.md)
 
