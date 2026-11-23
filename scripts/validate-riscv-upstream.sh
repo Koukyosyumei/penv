@@ -237,4 +237,35 @@ if sha256(roi).hexdigest() != "e64eaa319a979cfb4bae39ee9e0c1ea2a04c688211a4ebe95
 print(f"{path} (75x80 logo ROI): OK")
 PYTHON
 } > "$artifacts/nexys-video.frames.log"
-printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, and Nexys Video framebuffer verified. Logs are in %s\n' "$artifacts"
+sd_root=$renode_root/scripts/single-node/litex_vexriscv_sdcard.resc
+sd_fat=$(dirname -- "$0")/fixtures/litex-sd-fat.resc
+prepare_assets "$sd_root"
+printf 'root\r' > "$artifacts/sd-login.input"
+printf 'ls -la /\r' > "$artifacts/sd-list.input"
+run_to_step_limit litex-sd-root "$sd_root" --max-steps 550000000 \
+    --uart-event "500000000:$artifacts/sd-login.input" \
+    --uart-event "530000000:$artifacts/sd-list.input"
+for marker in 'mmc0: new SD card at address 0001' 'mmcblk0: mmc0:0001 RENOD' \
+    'blk_queue_max_hw_sectors: set to minimum 8' 'blk_queue_max_segment_size: set to minimum 4096' \
+    'VFS: Mounted root (ext4 filesystem) readonly' 'Run /sbin/init as init process' 'buildroot login: root'; do
+    rg -aqF "$marker" "$artifacts/litex-sd-root.uart.log"
+done
+sed -E 's/\x1b\[[0-9;]*m//g' "$artifacts/litex-sd-root.uart.log" | rg -a 'linuxrc -> bin/busybox' > /dev/null
+
+prepare_assets "$sd_fat"
+printf 'mount /dev/mmcblk0p1 /mnt; ls /mnt; cat /mnt/readme.txt\r' > "$artifacts/sd-read.input"
+printf 'echo "This is a write test" > /mnt/readme2.txt; sync; umount /mnt; mount /dev/mmcblk0p1 /mnt; cat /mnt/readme2.txt\r' \
+    > "$artifacts/sd-write.input"
+run_to_step_limit litex-sd-fat "$sd_fat" --max-steps 620000000 \
+    --uart-event "500000000:$artifacts/sd-login.input" \
+    --uart-event "520000000:$artifacts/sd-read.input" \
+    --uart-event "550000000:$artifacts/sd-write.input"
+for marker in 'mmcblk0: mmc0:0001 RENOD 64.0 MiB' 'mmcblk0: p1' 'buildroot login: root'; do
+    rg -aqF "$marker" "$artifacts/litex-sd-fat.uart.log"
+done
+diff -u <(printf 'This is a test file\nThis is a write test\n') <(
+    tr -d '\r' < "$artifacts/litex-sd-fat.uart.log" | rg '^This is a (test file|write test)$'
+)
+# The file-backed card writes into a process-local overlay.
+prepare_assets "$sd_fat"
+printf 'Murax UART echo, LiteX Ibex BIOS, LiteX Zephyr shell, LiteX Tock UART, Arty LEDs, switches, buttons and PHY status, LiteX single-hart and SMP Linux, I2S PCM, Nexys Video framebuffer, and LiteX SD root and FAT16 verified. Logs are in %s\n' "$artifacts"

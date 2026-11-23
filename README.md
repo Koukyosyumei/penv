@@ -262,6 +262,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | --- | --- | --- |
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
 | RV32 カウンタ | `unit-tests/riscv-priv.robot` の MCYCLE / MINSTRET の増加・停止・書き込み確定境界（RV32 各 3 ケース） | `scripts/firmware/rv32-counters.S` で 6 ケースを実 ELF 化 |
+| LiteX SD | `platforms/LiteX/LiteX_VexRiscv_Linux_SDCard.robot` の `Should Load RootFS From SD Card` / `Should Mount Filesystem From SD Card` | 上流 RESC の ext4 起動・ログイン・`linuxrc` と、Robot 由来の FAT16 構成で読み出し・書き込み・再マウントを検証 |
 | LiteX Tock | `platforms/LiteX/LiteX_Tock.robot` の `Should Run Tock` | 上流 RESC と ELF で起動行と `D1 → D2` の 3 組を UART から照合 |
 | CLINT | `unit-tests/timer-reconfiguration.robot` の `Should Tick At Exact Time` | `clint_traps_at_the_exact_reprogrammed_compare_tick`。ゲストが `mtimecmp` の上下ワードを書き換え、5 ティックでは未発火、6 ティック目で機械タイマー例外に入る。virt の 10 MHz に合わせて 59 ステップと 60 ステップに適応 |
 | RV32 TVM | `unit-tests/riscv-priv.robot` の SATP 読み書き・`SFENCE.VMA` に対する `When TVM Is One/Zero` 各ケース（上流は RV64） | RV32 版の Rust テスト `privilege_controls_gate_sret_and_address_translation_operations` と `scripts/firmware/rv32-tvm.S`。実 ELF は Sv32 有効時の M→S 遷移、S→M トラップ、TVM 解除後の再実行を確認 |
@@ -291,7 +292,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
 ```
 
-`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、専用 SD ルートファイルシステム、Nexys4DDR の SPI SD は未移植です。Tock の UART 出力は下記の回帰で確認します。
+`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、Nexys4DDR の SPI SD は未移植です。Tock の UART 出力は下記の回帰で確認します。
 
 ## RV32 の権限切り替えと仮想メモリ操作
 
@@ -390,6 +391,10 @@ bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/lite
 ```
 
 RV32 ELF は 6 ケース通過の行を出力し、待機ループのステップ上限で終了コード 2 になります。Tock の検証は最初の `D1` を待つ上流と同様に、先行する `D2` を許容します。対象のケースはいずれも既存実装で通過しました。
+
+### LiteX の SD rootfs と FAT16 の再現
+
+`scripts/validate-riscv-upstream.sh` は上流 `litex_vexriscv_sdcard.resc` を使い、ext4 の root mount、`/sbin/init`、ログイン後の `linuxrc -> bin/busybox` を検査します。ここで使う上流デモの報告容量は 512 MiB です。FAT16 には `scripts/fixtures/litex-sd-fat.resc` を使い、上流 Robot と同じ 64 MiB の構成で `readme.txt` を読み、`readme2.txt` を書き込んで同期・再マウント後に読み戻します。書き込み先は実行中のオーバーレイであり、終了後にも元のカードイメージの SHA-1 が一致することを確認します。
 
 ## Renode / penv 共通計測ハーネス
 
