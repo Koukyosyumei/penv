@@ -6,6 +6,7 @@ use std::{
 
 #[derive(Default)]
 pub struct Boot {
+    pub pydev: Option<crate::pydev::Script>,
     pub binaries: Vec<(String, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
@@ -56,6 +57,17 @@ pub enum UartIrq {
 
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if content.lines().any(|line| {
+        line.trim_start()
+            .starts_with("machine PyDevFromString \"\"\"")
+    }) {
+        let script = crate::pydev::Script::parse(&content)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        return Ok(Boot {
+            pydev: Some(script),
+            ..Boot::default()
+        });
+    }
     let mut variables = HashMap::new();
     let mut macros = HashMap::new();
     let mut boot = Boot::default();

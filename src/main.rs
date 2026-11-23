@@ -13,6 +13,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod pydev;
 mod semihosting;
 mod stm32_adc;
 mod stm32_can;
@@ -431,6 +432,13 @@ fn run() -> Result<ExitCode, String> {
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
         let boot = monitor::load(&script, root)?;
+        if let Some(pydev) = boot.pydev {
+            if path.is_some() {
+                return Err("CPU-less PyDev scripts do not accept a firmware override".into());
+            }
+            pydev.run(&mut io::stdout().lock())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         platform_path = boot.platform;
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);

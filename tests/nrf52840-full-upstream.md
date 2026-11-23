@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 143 | 3 | 44 |
+| 監査した共有・混成 Robot | 190 | 144 | 3 | 43 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **174** | **3** | **44** |
+| 合計 | **221** | **175** | **3** | **43** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -548,3 +548,15 @@ Nano 33 BLE ランナーの第4引数に画像名（拡張子なし）または 
 `cargo test --locked upstream_monitor_step_escalates` と、上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ELF 回帰は先頭7命令でセットアップし、追加の1ステップで HardFault ハンドラの最初の命令を完了して `0x342` で停止することを確認する。現在の RESC は起動時の `Step` を扱う。対話型 monitor セッションと GDB ステップは別途対応が必要。
 
 ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/bus-fault-step.MUGGO2ez` の `cargo-test`、`elf`、`step`、`shell` に保存した。
+
+### CPU を持たない PyDev の QuadWord アクセス
+
+`python-engine.robot:72-96` の固定 Python ハンドラを、CPU や ELF のない RESC で実行する。ホストの `python3` でハンドラをコンパイルし、登録したアドレス範囲へのアクセス時に、同じ Python 名前空間で初期化・読み出し・書き込みの要求を処理する。アドレス `0x8` で64ビット初期値 `0x1234567890abcdef`、32ビット下位値 `0x90abcdef`、書き込み後の64ビット値 `0xfedcba0987654321` を照合した。不正なハンドラが登録時に失敗することも確認した。
+
+```sh
+cargo test --locked
+tests/nrf52840-pydev-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/pydev"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/pydev-quadword.joQdjhXD` の `cargo-test.final`、`pydev.final`、`shell.final` に保存した。対象ケースは上流から CPU と ELF を使わない。実ファームウェアへの回帰は Shell で確認した。CPU ゲストからの Python MMIO、PyDevFromFile、各種 Python フック間の診断一致は引き続き未達。
