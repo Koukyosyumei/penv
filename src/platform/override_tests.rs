@@ -531,3 +531,75 @@ fn renode_registration_resolution_ambiguous_registree() {
     let error = check_string("\nregister: Antmicro.Renode.UnitTests.Mocks.AmbiguousRegister\nperipheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ register 2.0", None).unwrap_err();
     assert!(error.contains("AmbiguousRegistree:"));
 }
+
+#[test]
+fn renode_property_fail_on_string_mismatch() {
+    let error = check_string(
+        "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    Placeholder: 8\n",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_property_fail_on_non_writable_property() {
+    let error = check_string(
+        "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    Model: \"abc\"",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("PropertyNotWritable:"));
+}
+
+#[test]
+fn renode_property_fail_on_numeric_enum_mismatch() {
+    let error = check_string(
+        "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    EnumValue: \"abc\"",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_property_fail_on_non_existing_inline_type() {
+    let error = check_string(
+        "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: new NotExistingType",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("TypeNotResolved:"));
+}
+
+#[test]
+fn renode_property_fail_on_non_existing_property() {
+    let error = check_string(
+        "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    NotExistingProperty: \"value\"",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("PropertyDoesNotExist:"));
+}
+
+#[test]
+fn renode_property_check_type_of_a_reference() {
+    let error = check_string("\none: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: two\n\ntwo: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral", None).unwrap_err();
+    assert!(error.contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_property_fail_on_incorrect_inline_object_type() {
+    let error = check_string("\none: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: new Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral", None).unwrap_err();
+    assert!(error.contains("TypeMismatch:"));
+}
+
+#[test]
+fn renode_property_fail_on_missing_reference() {
+    let error = check_string(
+        "\ndevice: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: unknown",
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("MissingReference:"));
+}

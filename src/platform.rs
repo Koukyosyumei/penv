@@ -975,6 +975,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     }
     for entry in &declarations {
         validate_entry_references(entry, &declared, &declarations)?;
+        validate_mock_cpu_properties(entry, &declared, &declarations)?;
         if entry.alias.is_some() {
             match entry.registration.as_deref() {
                 None => {
@@ -1000,10 +1001,65 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     Ok(declarations)
 }
 
+const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
+
+fn validate_mock_cpu_properties(
+    entry: &Entry,
+    declared: &HashMap<String, usize>,
+    declarations: &[Entry],
+) -> Result<(), String> {
+    if entry.model != MOCK_CPU {
+        return Ok(());
+    }
+    for (_, statement) in &entry.body {
+        let Some(key) = scalar_property(statement) else {
+            continue;
+        };
+        let value = statement.split_once(':').unwrap().1.trim();
+        let error = match key {
+            "Placeholder" if quoted_string(value).is_some() || multiline_value(value).is_some() => {
+                continue;
+            }
+            "EnumValue"
+                if number_token(value).is_some()
+                    || is_repl_identifier(value)
+                    || value
+                        .strip_prefix("TwoStateEnum.")
+                        .is_some_and(is_repl_identifier) =>
+            {
+                continue;
+            }
+            "Model" => "PropertyNotWritable",
+            "OtherCpu" => {
+                let model = if let Some(model) = value.strip_prefix("new ") {
+                    if !matches!(model, MOCK_CPU | EMPTY_PERIPHERAL) {
+                        return Err(entry.error(&format!("TypeNotResolved: {model}")));
+                    }
+                    model
+                } else {
+                    let index = *declared
+                        .get(value)
+                        .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
+                    declarations[index].model.as_str()
+                };
+                if is_cpu_model(model) {
+                    continue;
+                }
+                "TypeMismatch"
+            }
+            "Placeholder" | "EnumValue" => "TypeMismatch",
+            _ if key.as_bytes()[0].is_ascii_uppercase() => "PropertyDoesNotExist",
+            _ => continue,
+        };
+        return Err(entry.error(&format!("{error}: {key}")));
+    }
+    Ok(())
+}
+
 fn is_cpu_model(model: &str) -> bool {
     matches!(
         model,
-        "CPU.CortexM" | "CPU.RiscV32" | "CPU.VexRiscv" | "Antmicro.Renode.UnitTests.Mocks.MockCPU"
+        "CPU.CortexM" | "CPU.RiscV32" | "CPU.VexRiscv" | MOCK_CPU
     )
 }
 
