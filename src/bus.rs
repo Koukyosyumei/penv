@@ -1090,11 +1090,17 @@ impl Bus {
     pub fn atomic_update(
         &mut self,
         address: u32,
+        width: usize,
         update: impl FnOnce(u32) -> u32,
     ) -> Result<u32, BusError> {
-        let word = self.atomic_word(address)?;
-        let previous = u32::from_le_bytes(*word);
-        *word = update(previous).to_le_bytes();
+        if address as usize & (width - 1) != 0 {
+            return Err(BusError::Misaligned(address, width));
+        }
+        let memory = self.memory(address, width)?;
+        let mut bytes = [0; 4];
+        bytes[..width].copy_from_slice(memory);
+        let previous = u32::from_le_bytes(bytes);
+        memory.copy_from_slice(&update(previous).to_le_bytes()[..width]);
         Ok(previous)
     }
 
@@ -1112,7 +1118,7 @@ impl Bus {
         let mut bytes = [0; 8];
         bytes[..width].copy_from_slice(memory);
         let previous = u64::from_le_bytes(bytes);
-        if previous == expected {
+        if previous == expected & (u64::MAX >> (64 - width * 8)) {
             memory.copy_from_slice(&replacement.to_le_bytes()[..width]);
         }
         Ok(previous)

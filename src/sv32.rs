@@ -118,7 +118,7 @@ fn walk(
             if !csr.permits_page_table(address, WRITE) {
                 return Err(BusError::Denied(va));
             }
-            bus.atomic_update(address, |old| old | update)
+            bus.atomic_update(address, 4, |old| old | update)
                 .map_err(|_| BusError::Denied(va))?;
         }
         return Ok(physical);

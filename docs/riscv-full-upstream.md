@@ -864,3 +864,21 @@ python3 scripts/validate-rv32-andes-bfloat.py target/release/penv ../renode "$ev
 Rust テスト 87 件、F 38 件、D 64 件、Zfh 53 件、ZfhD 30 件の既存固定 ACT ELF と virt の UART・CLINT・PLIC が通過しました。ACT 回帰は各拡張を指定する縮小構成です。上流等価合格は累計 155 件です。Andes のベクトル BF16、他の Andes ベクトル命令と最大 ISA の V が残っています。
 
 REPL、実 ELF、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-48a16f4-TSfMx1/` に保存しました。
+
+### RV32 Zabha と Zacas のバイト・ハーフワードアトミック命令
+
+明示的な `Zabha` 指定に対応しました。バイト・ハーフワードの AMO と、Zacas 併用時の CAS は対象幅だけを更新します。読み戻した値は RV32 幅に符号拡張し、比較と符号付き最小・最大はメモリーオペランドの幅で行います。LR/SC の対応幅はワードです。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zabha.repl" --artifacts "$evidence/zabha-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/{Zabha,ZacasZabha}/*.elf
+```
+
+固定 ACT ELF は変更前に Zabha の CPU 作成で 20 件とも停止し、変更後は `rv32imac_zabha_zacas` で全件が完了コード 0 に到達しました。Rust テスト 87 件、既存 A 拡張 ELF 20 件、M/S 特権 ELF 22 件、固定 Zacas ワード ACT ELF 1 件と virt の UART・CLINT・PLIC も通過しました。
+
+固定 Robot の最大 ISA 構成では、再試行した 20 件が V の未対応で CPU 作成時に停止しました。その構成には Zabha の指定もありません。各行に縮小構成での結果を追記し、上流等価合格は累計 155 件です。
+
+REPL、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-72d2ea2-YAXBL1/` に保存しました。

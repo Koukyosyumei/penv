@@ -52,6 +52,7 @@ pub struct Hart {
     unaligned_accesses: bool,
     zicond: bool,
     zacas: bool,
+    zabha: bool,
     bitmanip: BitManip,
     pub pc: u32,
     reset_vector: u32,
@@ -185,6 +186,7 @@ impl Machine {
                 unaligned_accesses: false,
                 zicond: false,
                 zacas: false,
+                zabha: false,
                 bitmanip: BitManip::default(),
                 pc: RAM_BASE,
                 reset_vector: RAM_BASE,
@@ -564,6 +566,10 @@ impl Hart {
 
     pub fn set_sscofpmf(&mut self, enabled: bool) {
         self.csr.sscofpmf = enabled;
+    }
+
+    pub fn set_zabha(&mut self, enabled: bool) {
+        self.zabha = enabled;
     }
 
     pub fn set_zacas(&mut self, enabled: bool) {
@@ -1184,6 +1190,7 @@ impl Hart {
             0x2f if insn >> 27 == 5 && self.zacas => {
                 let rs2 = ((insn >> 20) & 31) as usize;
                 let width = match funct3 {
+                    0 | 1 if self.zabha => 1 << funct3,
                     2 => 4,
                     3 if (rd | rs2) & 1 == 0 => 8,
                     _ => return Err(illegal()),
@@ -1209,14 +1216,17 @@ impl Hart {
                 if width == 8 && rd != 0 {
                     self.registers[rd + 1] = (previous >> 32) as u32;
                 }
-                Some(previous as u32)
+                Some(sign(previous as u32, (width.min(4) * 8) as u32))
             }
-            0x2f if funct3 == 2 && self.csr.a_extension => {
+            0x2f if self.csr.a_extension && (funct3 == 2 || (self.zabha && funct3 < 2)) => {
+                let width = 1 << funct3;
+                let operand_bits = width as u32 * 8;
+                let b = b & (u32::MAX >> (32 - operand_bits));
                 let operation = insn >> 27;
                 let rs2 = (insn >> 20) & 31;
                 let (access, permissions) = match operation {
-                    2 if rs2 == 0 => (Access::Load, crate::pmp::READ),
-                    3 => (Access::Store, crate::pmp::WRITE),
+                    2 if width == 4 && rs2 == 0 => (Access::Load, crate::pmp::READ),
+                    3 if width == 4 => (Access::Store, crate::pmp::WRITE),
                     0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => {
                         (Access::Store, crate::pmp::READ | crate::pmp::WRITE)
                     }
@@ -1226,7 +1236,7 @@ impl Hart {
                     return Err(Fault::Breakpoint(a));
                 }
                 let physical = self
-                    .translate(bus, a, 4, permissions)
+                    .translate(bus, a, width, permissions)
                     .map_err(|error| Fault::Bus(access, error))?;
                 let value = match operation {
                     2 if rs2 == 0 => bus
@@ -1236,14 +1246,18 @@ impl Hart {
                         .store_conditional(self.slot, physical, b)
                         .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a))),
                     0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => bus
-                        .atomic_update(physical, |previous| match operation {
+                        .atomic_update(physical, width, |previous| match operation {
                             0 => previous.wrapping_add(b),
                             1 => b,
                             4 => previous ^ b,
                             8 => previous | b,
                             12 => previous & b,
-                            16 => (previous as i32).min(b as i32) as u32,
-                            20 => (previous as i32).max(b as i32) as u32,
+                            16 => (sign(previous, operand_bits) as i32)
+                                .min(sign(b, operand_bits) as i32)
+                                as u32,
+                            20 => (sign(previous, operand_bits) as i32)
+                                .max(sign(b, operand_bits) as i32)
+                                as u32,
                             24 => previous.min(b),
                             28 => previous.max(b),
                             _ => unreachable!(),
@@ -1251,7 +1265,7 @@ impl Hart {
                         .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a))),
                     _ => return Err(illegal()),
                 };
-                Some(value?)
+                Some(sign(value?, operand_bits))
             }
             // Every instruction fetch reads current RAM, so FENCE.I needs no invalidation.
             0x0f if funct3 <= 1 => None,

@@ -912,6 +912,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         let mut floating = (false, false, false);
         let mut zicond = false;
         let mut zacas = false;
+        let mut zabha = false;
         let mut smepmp = false;
         let mut sscofpmf = false;
         let mut bitmanip = BitManip::default();
@@ -947,6 +948,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     let mut base = architecture.as_str();
                     zicond = false;
                     zacas = false;
+                    zabha = false;
                     smepmp = false;
                     sscofpmf = false;
                     let mut zfh = false;
@@ -954,6 +956,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
+                            "zabha" if !zabha => zabha = true,
                             "zacas" if !zacas => zacas = true,
                             "sscofpmf" if !sscofpmf => sscofpmf = true,
                             "smepmp" if !smepmp => smepmp = true,
@@ -1069,13 +1072,16 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 if zacas && !atomic {
                     return Err(entry.error("Zacas requires the RV32 A extension"));
                 }
+                if zabha && !atomic {
+                    return Err(entry.error("Zabha requires the RV32 A extension"));
+                }
                 (
                     multiply,
                     atomic,
                     compressed,
                     embedded,
                     zicond,
-                    zacas,
+                    (zacas, zabha),
                     (smepmp, sscofpmf),
                     bitmanip,
                     floating,
@@ -1108,7 +1114,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 compressed,
                 embedded,
                 zicond,
-                zacas,
+                (zacas, zabha),
                 (smepmp, sscofpmf),
                 bitmanip,
                 floating,
@@ -1135,6 +1141,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
         hart.set_embedded_base(embedded);
         hart.set_zicond(zicond);
         hart.set_zacas(zacas);
+        hart.set_zabha(zabha);
         hart.set_sscofpmf(sscofpmf);
         hart.set_bitmanip(bitmanip);
         if floating.0 {
@@ -2158,6 +2165,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "xandesperf"
                     | "xandesbfhcvt"
                     | "zacas"
+                    | "zabha"
                     | "zfh"
                     | "smepmp"
                     | "sscofpmf"
@@ -2184,7 +2192,7 @@ type RiscvConfig<'a> = (
         bool,
         bool,
         bool,
-        bool,
+        (bool, bool),
         (bool, bool),
         BitManip,
         (bool, bool, bool),
