@@ -1,4 +1,4 @@
-"""Check fixed static memory-assertions Robot inputs with RV32 guest loads and stores."""
+"""Check fixed memory-assertions Robot inputs with RV32 guest loads and stores."""
 
 import argparse
 import json
@@ -17,7 +17,7 @@ BRANCH = {
 }
 
 
-def program(body):
+def program(body, sweeps):
     checks = []
     definitions = []
     symbols = {}
@@ -53,6 +53,8 @@ def program(body):
             label = f"{symbol}_{len(entries)}"
             entries.append(label)
             definitions.append(f".equ {label}, {base}")
+        elif keyword.startswith("Load Program "):
+            checks.extend(sweeps[keyword.removeprefix("Load Program ").lower()])
         elif keyword.startswith("Store "):
             width = keyword[6:].replace(" ", "")
             store = WIDTH[width][0]
@@ -65,6 +67,8 @@ def program(body):
             qualifiers = [value for value in args if value.startswith("offset=")]
             signed = "signed=true" in args
             args = [value for value in args if value not in qualifiers and value != "signed=true"]
+            if args[-1] == "timeout=3":
+                args.pop()  # The guest check runs after one sweep.
             width = args.pop()
             operand, *expected = args
             branch, operands = BRANCH[relation]
@@ -102,10 +106,20 @@ def main():
     source = (args.renode / "tests/unit-tests/memory-assertions.robot").read_text()
     cases = [(name, body) for name, body in re.findall(
         r"(?ms)^(Should Read (?:Signed )?(?:Byte|Word|Double Word)(?: Zero)? "
-        r"(?:At Raw Address|Of Symbol(?: With (?:Negative )?Offset)?|Of (?:All Symbols|Any Symbol)))\n(.*?)(?=^\S|\Z)", source,
-    ) if "Create Machine 32" in body]
-    if len(cases) != 27:
-        parser.error(f"expected 27 static RV32 memory cases, found {len(cases)}")
+        r"(?:At Raw Address|Of Symbol(?: With (?:Negative )?Offset)?|Of (?:All Symbols|Any Symbol))(?: After)?)\n(.*?)(?=^\S|\Z)", source,
+    ) if re.search(r"(?m)^ +Create Machine +32[ \t]*$", body)]
+    if len(cases) != 39:
+        parser.error(f"expected 39 RV32 memory cases, found {len(cases)}")
+    sweeps = {}
+    for width in WIDTH:
+        key = width.lower()
+        match = re.search(
+            rf"(?m)^\$\{{asm_{key}\}}[^\n]*\n((?:\.\.\.[ \t]+[^\n]+\n)+)", source,
+        )
+        instructions = [line[3:].strip() for line in match[1].splitlines()]
+        if instructions.pop() != "j .L3":
+            parser.error(f"unexpected final branch in upstream {width} sweep")
+        sweeps[key] = instructions
     isa = "rv32" + re.search(r"rv\$\{bitness\}([a-z0-9_]+)", source)[1]
     args.output.mkdir(parents=True, exist_ok=False)
     results = []
@@ -120,7 +134,8 @@ def main():
     for index, (name, body) in enumerate(cases):
         asm = args.output / f"{index}.S"
         elf = asm.with_suffix(".elf")
-        asm.write_text(program(body))
+        asm.write_text(program(body, sweeps))
+        max_steps = "210000" if name.endswith(" After") else "256"
         subprocess.run(
             ["clang", "--target=riscv32-unknown-elf", "-march=rv32imac", "-mabi=ilp32",
              "-nostdlib", "-fuse-ld=lld", f"-Wl,-T,{linker}", asm, "-o", elf],
@@ -129,7 +144,7 @@ def main():
         for mode in ("diagnostic", "fixed"):
             run = subprocess.run(
                 [args.penv.resolve(), "run", "--platform", args.output / f"{mode}.repl",
-                 "--tohost", "0x2000", "--max-steps", "256", elf],
+                 "--tohost", "0x2000", "--max-steps", max_steps, elf],
                 capture_output=True, text=True, timeout=15,
             )
             log = args.output / f"{index}-{mode}.log"

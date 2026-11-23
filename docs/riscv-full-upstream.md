@@ -1699,3 +1699,18 @@ python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repr
 同じ release バイナリで、V だけを外した診断構成は新規 6 件と既存 21 件の計 27/27 件が通過しました。全件一致のうち 2 番目だけを不一致にする試行と、いずれの値も一致しない試行は完了コード 1 でした。2 番目だけが一致する試行は完了コード 0 でした。固定 Robot 構成は 27 件とも V の未対応で CPU 作成時に停止しました。Rust テストは 88/88 件が通過しました。
 
 今回の結果は部分移植として台帳に記録しました。モニターのシンボル解決と監視付き比較は ARM 担当への既存依頼 `riscv-memory-assert-6d37343.md` の返答待ちです。上流等価合格は累計 174 件です。ケース別 JSONL、負例、ELF とソースは `~/.local/state/penv-dispatch/evidence/riscv/backlog-579ec12-EcSCPX/` に保存しました。
+
+### 固定 RV32 メモリー比較の書き込み後チェック
+
+固定 `memory-assertions.robot` の `After` 12 件を実 ELF に移植しました。Byte・Word・DoubleWord の上流アセンブリーから反復全体を繰り返す最後のジャンプを外し、一巡後に上流指定の生アドレス、単一シンボル、全シンボル、いずれかのシンボルを指定値と比較します。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repro/memory"
+```
+
+同じ release バイナリで、V を外した診断構成は新規 12 件と既存 27 件の計 39/39 件が通過しました。生アドレスの Byte 比較を 0xF0 から 0xF1 に変えた負例は完了コード 1 でした。固定構成は 39 件とも V の未対応で CPU 作成時に停止しました。`cargo test --locked` は 88/88 件が通過しました。ケース別 JSONL・ログ・終了状態・ELF は `~/.local/state/penv-dispatch/evidence/riscv/backlog-78df21e-Qtjt5n/` に保存しました。
+
+上流のウォッチポイント、3 秒のタイムアウト、複数の巡回にまたがる個別一致は未検証です。ARM 担当への既存依頼 `riscv-memory-assert-6d37343.md` が共有モニター側の残件を追跡しています。今回の 12 件は部分移植で、上流等価合格は累計 174 件です。
