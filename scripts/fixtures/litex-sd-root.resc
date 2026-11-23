@@ -1,0 +1,9 @@
+# Fixed RootFS-from-SD case of LiteX_VexRiscv_Linux_SDCard.robot.
+using sysbus
+mach create
+machine LoadPlatformDescription @platforms/cpus/litex_linux_vexriscv_sdcard.repl
+sysbus LoadBinary @https://dl.antmicro.com/projects/renode/litex_vexriscv-sdcard--kernel.bin-s_6934900-7a7291fdb880ad8e2aa75276807f8adf5fb8303a 0x40000000
+sysbus LoadBinary @https://dl.antmicro.com/projects/renode/litex_vexriscv-sdcard--rootfs_from_sdcard-rv32.dtb-s_3255-8305d2b80955418e53f5400c492dc74dccf05ac8 0x40ef0000
+sysbus LoadBinary @https://dl.antmicro.com/projects/renode/litex_vexriscv-sdcard--opensbi.bin-s_45360-71c1954133f6589f34fcb00554be44195e23e9d5 0x40f00000
+cpu PC 0x40f00000
+machine SdCardFromFile @https://dl.antmicro.com/projects/renode/riscv32-buildroot--busybox-rootfs.ext4.image-s_67108864-cd5badff81b32092c010d683c471821d4ea99af6 mmc_controller 0x4000000 False

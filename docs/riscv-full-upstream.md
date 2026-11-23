@@ -1377,3 +1377,22 @@ python3 -B scripts/validate-litex-smp-linux.py target/release/penv ../renode \
 ```
 
 公開 BIOS と SD イメージの SHA-1 は上流の指定と一致しました。Nexys4DDR の 2 ケースは通常 UART 設定で通過し、同じ release バイナリで SMP Linux のログインと CPU 0〜3 の回帰も通過しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 161 件です。残る LiteX ケースと最大 ISA 構成は未達です。UART、照合結果、プロセスの終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-e9227e4-d7en5G/` に保存しました。
+
+### LiteX Linux の SD カード起動と FAT16 再マウント
+
+固定 `LiteX_VexRiscv_Linux_SDCard.robot` の 2 ケースを、SMP Linux と Nexys4DDR で使っている対話 UART 検証に移植しました。ext4 の起動では、デモ RESC のカード容量が Robot と異なるため、Robot と同じ 64 MiB のフィクスチャを追加しました。FAT16 は既存の 64 MiB 構成を使いました。どちらも固定のカーネル、DTB、OpenSBI、SD イメージを使います。
+
+カーネルの SD 診断を順に確認し、UART プロンプトを待って操作します。ext4 では読み取り専用 rootfs と `linuxrc -> bin/busybox`、FAT16 では元ファイルの読み出し、新規書き込み、`sync`、アンマウント、再マウント後のファイル名と内容を照合します。ファイル内容は出力行で照合するため、入力のエコーでは合格しません。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+for case in root fat; do
+  python3 -B scripts/validate-litex-sd-linux.py "$case" target/release/penv ../renode \
+    "$work/regression/assets" "$repro/$case"
+done
+```
+
+同じ release バイナリと上流 SHA-1 が一致した公開イメージで 2/2 ケース、Rust テストは 88/88 件が通過しました。台帳の上流等価合格は累計 163 件です。残る LiteX ケースと最大 ISA 構成は未達です。UART、照合結果、終了状態を `~/.local/state/penv-dispatch/evidence/riscv/backlog-0651995-jnCbAd/` に保存しました。

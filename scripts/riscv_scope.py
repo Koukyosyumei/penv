@@ -43,6 +43,10 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "target", "ported", "fixed SMP images and four startup PCs; ordered boot, prompt-driven login and four cpuinfo entries checked"
     if filename == "Nexys4DDR_LiteX_VexRiscv.robot" and case in {"Should Boot", "Should List Readme File"}:
         return "target", "ported", "fixed BIOS and SPI SD image; ordered live UART waits and booted-image dependency checked"
+    if filename == "LiteX_VexRiscv_Linux_SDCard.robot" and case in {
+        "Should Mount Filesystem From SD Card", "Should Load RootFS From SD Card",
+    }:
+        return "target", "ported", "fixed DTB, kernel, OpenSBI, SD image and 64 MiB capacity; ordered UART waits and commands checked"
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:
