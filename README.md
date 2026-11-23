@@ -312,7 +312,7 @@ tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
 | --- | --- | --- |
 | `Should Run Zephyr Hello Sample` | 今回追加。 `upstream_stm32f072_hello_world_boots_elf_and_hex` の ELF 実行 | `Hello World! stm32f072b_disco` の完了行。 |
 | `Should Run Zephyr Console Echo Sample` | 既存。 `upstream_stm32f072_console_echo_accepts_resc_uart_input` と `upstream_stm32f072_console_echo_replies_after_uart_prompt` | 入力案内を受けて送信し、次に `Echo working?` を受信。 |
-| `Should Run Zephyr Blinky Sample` | 今回追加。 `upstream_stm32f072_blinky_alternates_led_states` | LED の点灯・消灯を 1 秒ずつのタイムアウトで 3 往復確認します。 |
+| `Should Run Zephyr Blinky Sample` | 移植済み。 `upstream_stm32f072_blinky_alternates_led_states` | LED の点灯・消灯を 1 秒ずつのタイムアウトで 3 往復確認します。同じ ELF で SysTick のクロック停止・再開も別途検査します。 |
 | `Should Run Zephyr Button Sample` | 今回追加。 `upstream_stm32f072_button_updates_led_and_reports_press` | 3 回の押下・解放、数値の押下時刻を含む UART 行、LED の遷移列。期待状態に達してからの 1 秒間を各操作で検査し、途中で LED が変化すれば失敗します。 |
 | `Should Read ADC` | 既存。 `upstream_stm32f072_adc_waits_for_uart_between_voltage_changes` | 起動行、0.6 V で `745`、1.2 V で `1489`。 |
 | `Should Run stm32f0-crc-test Application` | 今回追加。 `upstream_stm32f072_crc_firmware_passes_840_cases` | `test result: ok. 840 passed; 0 failed` の完了行。 |
@@ -332,7 +332,7 @@ Blinky と Button の RESC が使う `waitForLed sysbus.gpioPortC.led true "1s" 
 | 例外とイベント | `tests/unit-tests/arm-cortex-m-interrupts.robot` の `Should Wake Up From WFE When SEVONPEND Is Set` | 移植済み。 `renode_wfe_wakes_on_new_pending_irq_only_with_sevonpend` は上流と同じ IRQ 5、書込みアドレス、データを使い、SEVONPEND の有無を比較します。`renode_resc_nvic_gpio_wakes_wfe_with_sevonpend` は RESC の `OnGPIO` で IRQ 5 を操作し、RAM への書き込みの代わりに UART で復帰を観測します。 |
 | SysTick | 同ファイルの `Should Count Down SysTick With Reload Set Before Reset` と `Should Count Down SysTick With Reload Set After Reset` | 今回追加。 `renode_systick_counts_and_reloads_for_both_cvr_write_orders` で CVR/RVR の両順序、カウントダウン、COUNTFLAG の読出しによる解除、再ロードを検査します。100 Hz、リロード値 10、上流と同じ 0.09 秒・0.01 秒・0.01 秒の区間で CVR が 10 → 1 → 10 → 9 になることを検査します。 |
 | NVIC のリセット | 同ファイルの `NVIC Base Priority Mask Setting Should Not Survive Reset` | 対象外。BASEPRI は現行の Cortex-M0/M0+ の範囲外です。 |
-| Fault、クロック信号 | `tests/unit-tests/arm-cortex-m-bus-fault.robot` と `tests/unit-tests/arm-cortex-m-signals.robot` | Fault の例外配送・ロックアップ、Cortex-M Complex の外部クロックゲートと DWT は未移植です。既存の CLI テストは無効なリセットベクターをエラーとして検査します。SysTick の停止・再開を下表で検査します。 |
+| Fault、クロック信号 | `tests/unit-tests/arm-cortex-m-bus-fault.robot` と `tests/unit-tests/arm-cortex-m-signals.robot` | SysTick のクロックゲートとそのリセット時の保持を移植しました。CPU/DWT の外部クロックゲートと Fault の例外配送・ロックアップは未移植です。既存の CLI テストは無効なリセットベクターをエラーとして検査します。 |
 | UART 受信 | `tests/peripherals/STM32_UART.robot` の `Should Drop Characters When UART Or Receiver Disabled` | `renode_stm32_usart_drops_input_if_either_enable_is_clear` は F072 のレジスター配置で、上流の `0x12` と `0x34` が受信器または USART の無効中に破棄され、再有効化しても現れないことを検査します。フレーム時間、パリティ、アイドル検出の上流ケースは対象外です。 |
 | UART 端末 | `tests/platforms/STM32F072b.robot` の Console Echo と ADC、`tests/unit-tests/uart-tester.robot` の端末選択 | 既存の公開 ELF 回帰は Echo、プロンプト待機、ADC をカバーします。`uart_watch_ignores_other_ports_without_filtering_stdout` は端末選択に対応する USART 分離を検査します。Robot のテスター ID とバイナリ・正規表現モードは未移植です。 |
 | STM32 フラッシュ | `tests/unit-tests/stm32f4-erase.robot` の `Should Ignore Erase When MER And SER Are Reset`、`Should Perform Mass Erase`、`Should Perform Sector Erase`。隣接ページの観測条件は `tests/platforms/STM32L072.robot` の `Should Handle Flash Operations` | `renode_stm32_flash_erase_modes_preserve_the_expected_ranges` は F072 の 128 KiB バンク、2 KiB ページ、消去値 `0xff` を使用します。消去モードなし、指定ページ全体と隣接ページ、バンク全消去を検査します。F4/L0/H7 固有のコントローラーとフラッシュ用 ELF は対象外です。既存の `stm32f072_flash_preserves_programmed_data_on_reload_and_erases_a_page` は F072 のプログラムと再ロードを検査します。 |
@@ -351,13 +351,25 @@ STM32 フラッシュの消去操作は Rust のバス回帰で検証してい�
 | `cpu-pause-halt.robot` の `CPU Should Halt and Reset on Cortex-M` と `CPU Should Halt Pause and Reset on Cortex-M` | `renode_cortex_m_reset_observation_via_sysresetreq` は、CPUWAIT やモニターの停止操作を WFI と AIRCR に置き換えます。VECTKEY の検証、リセットベクターへの復帰、NVIC と SysTick レジスターの初期化、RAM の保持を検査します。 |
 | `arm-cortex-m-signals.robot` の `Should Stop NVIC SysTick and DWT CycleCounter When Not Clocked` | `renode_systick_counter_stops_and_resumes_via_enable` は、SysTick の観測条件を CSR.ENABLE で検査します。カウンターが停止中に変化せず、再開時に残っていたティック位相から進むことを確認します。外部クロックゲートと DWT は対象外です。 |
 
-未移植のままの主なケースは、`arm-cortex-m-signals.robot` の `Should Persist Clocked State For Cortex-M Complex On Reset` と CPUWAIT、`arm-cortex-m-interrupts.robot` の BASEPRI、`it-status.robot` の IT ブロック中の割り込み、`arm-cortex-m-bus-fault.robot` の Fault 配送・ロックアップ、例外復帰ファイルのセキュリティ状態や FNC_RETURN を扱うケースです。
+#### 対象ケースの最終突合
 
-SysTick の 100 Hz ケースでは、固定した上流の NVIC と同じくカウントがゼロに達したティックで再ロードするように変更しました。CVR への書き込みは直ちに RVR の値を読み込み、COUNTFLAG をクリアします。RVR がゼロの場合は満了後に停止します。`cargo test renode_systick` で両方の書き込み順と、ゼロリロード・CVR 書き込み時に割り込みが発生しない条件を確認できます。公開 ELF/HEX の全 8 シナリオも通過しました。Cortex-M Complex の外部クロックやリセット直後の初期 CVR の完全な一致は対象外です。[固定上流の NVIC 実装](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Cores/Arm-M/NVIC.cs)
+STM32F072B Discovery の直接対象は上表の 6 件と HEX 起動 1 件です。Cortex-M の表で未移植だった観測条件を再確認し、現行の単一 Cortex-M0/M0+ で実行できるものを追加しました。
+
+| 上流ケース | 通過した観測条件と残件 |
+| --- | --- |
+| `arm-cortex-m-signals.robot` の `Should Stop NVIC SysTick and DWT CycleCounter When Not Clocked` | SysTick 部分を移植。 `renode_systick_external_clock_gate_survives_reset` は CSR.ENABLE を保った状態で外部クロックを停止します。 `upstream_stm32f072_blinky_pauses_while_systick_is_not_clocked` は公開 ELF で点灯後にクロックを止めて 1 秒間点灯を保持し、再開後に消灯することを確認します。DWT のサイクルカウンターと独立制御は残件です。 |
+| 同ファイルの `Should Persist Clocked State For Cortex-M Complex On Reset` | SysTick 部分を移植。 同じ Rust テストで、リセット後の CVR が `0x00ffffff`、ゲートが設定されたままで、ゲストが再有効化しても凍結し、クロック再開で所定の周波数で進むことを確認します。CPU と DWT のクロック、および CPUWAIT のケースは残件です。 |
+| `arm-cortex-m-exception-return.robot` の `Should Not Return From Insecure Mode When Not Using TrustZone` | 移植済み。 `renode_nonsecure_return_token_branches_without_trustzone` は上流と同じ `0xfeffffff` と `BX r0` を使い、PC が `0xfefffffe` になり SP と例外状態が維持されることを確認します。TrustZone を有効にする `BXNS`、`BLXNS`、FNC_RETURN は残件です。 |
+
+RESC の `sysbus.nvic Clocked False` と `sysbus.nvic Clocked True` は、REPL 名で選択した NVIC の SysTick クロックを停止・再開します。再現は `cargo test renode_systick_external_clock_gate` と `cargo test renode_nonsecure_return_token`、および次節の公開イメージ回帰を使います。
+
+残件の実装依存は、`arm-cortex-m-interrupts.robot` の BASEPRI、`it-status.robot` の IT 状態を含む例外フレーム、`arm-cortex-m-bus-fault.robot` の Fault 配送とロックアップ、`per-core-registration.robot` の CPU 別メモリ登録です。これらのケースの成功は、上表の既存機能の回帰結果には含めていません。
+
+SysTick の 100 Hz ケースでは、固定した上流の NVIC と同じくカウントがゼロに達したティックで再ロードします。CVR への書き込みは直ちに RVR の値を読み込み、COUNTFLAG をクリアします。RVR がゼロの場合は満了後に停止します。`cargo test renode_systick` で両方の書き込み順と、ゼロリロード・CVR 書き込み時に割り込みが発生しない条件を確認できます。[固定上流の NVIC 実装](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Cores/Arm-M/NVIC.cs)
 
 RESC の `sysbus.nvic OnGPIO 5 true` と `sysbus.nvic OnGPIO 5 false` は、REPL で宣言された NVIC の外部 IRQ（0〜31）を操作します。`true` の直後に `false` を実行しても、CPU が次のステップに進む前に要求が保留されます。`cargo test renode_resc_nvic_gpio` で WFE の復帰、信号が非アクティブな場合のタイムアウト、REPL に存在しない名前のエラーを再現できます。[固定上流の NVIC.OnGPIO](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Cores/Arm-M/NVIC.cs#L157)
 
-通常の `cargo test` は 69 件成功しました。追加した LED の失敗経路は `cargo test led_wait_times_out` で確認できます。STM32F072 の公開 ELF/HEX は次の節の手順で 7 テスト・全 8 シナリオを再実行しました。残るケースには、外部クロックゲートと DWT、BASEPRI、Fault 配送とロックアップ、TrustZone の例外復帰が必要です。
+通常の `cargo test` は 71 件成功しました。LED の失敗経路は `cargo test led_wait_times_out` で確認できます。
 
 #### 対応表の回帰を実行する
 
@@ -375,7 +387,7 @@ PENV_RENODE_ROOT="$renode_root" PENV_RENODE_ASSETS="$assets" \
   cargo test --release upstream_stm32f072 -- --ignored
 ```
 
-公開イメージによる回帰は 7 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky、Button、CRC の計 8 シナリオを確認しました。
+公開イメージによる回帰は 8 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky の通常動作とクロック停止・再開、Button、CRC の計 9 シナリオを確認しました。
 
 Thumb-2 ELF 全体は Cortex-M85 向けです。移植元の命令と現行の実行限界は次の手順で再現できます。Cortex-M0 の最小 REPL での実行は、最初のワイド `MOVS.W`（PC `0x108e`、命令の先頭半ワード `0xf05f`）で停止します。
 

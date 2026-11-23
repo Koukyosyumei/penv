@@ -74,6 +74,12 @@ fn run_upstream_led_scenario(fixture: &str, limit: &str, states: &[&str]) -> Str
 
 #[test]
 #[ignore = "requires the upstream Renode tree and the public STM32F072 Blinky ELF"]
+fn upstream_stm32f072_blinky_pauses_while_systick_is_not_clocked() {
+    run_upstream_led_scenario("stm32f072-blinky-clock.resc", "300000000", &["on", "off"]);
+}
+
+#[test]
+#[ignore = "requires the upstream Renode tree and the public STM32F072 Blinky ELF"]
 fn upstream_stm32f072_blinky_alternates_led_states() {
     run_upstream_led_scenario(
         "stm32f072-blinky.resc",

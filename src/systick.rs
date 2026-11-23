@@ -8,7 +8,6 @@ const CURRENT: u32 = 0xe000_e018;
 const CALIBRATION: u32 = 0xe000_e01c;
 const ICSR: u32 = 0xe000_ed04;
 
-#[derive(Default)]
 pub struct SysTick {
     control: u32,
     reload: u32,
@@ -18,6 +17,25 @@ pub struct SysTick {
     pendsv_pending: bool,
     frequency: Option<u32>,
     phase: u64,
+    clock_gated: bool,
+    counting: bool,
+}
+
+impl Default for SysTick {
+    fn default() -> Self {
+        Self {
+            control: 0,
+            reload: 0,
+            current: 0xff_ffff,
+            count_flag: false,
+            pending: false,
+            pendsv_pending: false,
+            frequency: None,
+            phase: 0,
+            clock_gated: false,
+            counting: false,
+        }
+    }
 }
 
 impl SysTick {
@@ -32,6 +50,7 @@ impl SysTick {
     pub fn reset(&mut self) {
         *self = Self {
             frequency: self.frequency,
+            clock_gated: self.clock_gated,
             ..Self::default()
         };
     }
@@ -41,13 +60,17 @@ impl SysTick {
         self.phase = 0;
     }
 
+    pub fn set_clocked(&mut self, clocked: bool) {
+        self.clock_gated = !clocked;
+    }
+
     pub fn tick(&mut self) {
-        if self.control & 1 == 0 {
+        if self.clock_gated || !self.counting {
             return;
         }
         if let Some(frequency) = self.frequency {
             self.phase += u64::from(frequency);
-            while self.phase >= CORTEX_M_STEP_HZ {
+            while self.phase >= CORTEX_M_STEP_HZ && self.counting {
                 self.phase -= CORTEX_M_STEP_HZ;
                 self.cycle();
             }
@@ -65,6 +88,10 @@ impl SysTick {
             self.count_flag = true;
             self.pending |= self.control & 2 != 0;
             self.current = self.reload;
+            self.counting = self.reload != 0;
+            if !self.counting {
+                self.phase = 0;
+            }
         }
     }
 
@@ -103,21 +130,29 @@ impl SysTick {
         match address {
             CSR => {
                 // Renode starts a zero-valued counter at RELOAD when enabled.
-                if self.control & 1 == 0 && value & 1 != 0 && self.current == 0 {
-                    self.current = self.reload;
+                let enabled = value & 1 != 0;
+                if (self.control & 1 != 0) != enabled {
+                    self.counting = enabled && self.reload != 0;
+                    if self.counting && self.current == 0 {
+                        self.current = self.reload;
+                    }
                 }
                 self.control = value & 3; // Processor clock is the only source.
             }
             RELOAD => {
                 let reload = value & 0xff_ffff;
-                if self.control & 1 != 0 && self.reload == 0 && self.current == 0 {
+                if self.control & 1 != 0 && self.reload == 0 && reload != 0 && !self.counting {
                     self.current = reload;
+                    self.counting = true;
                 }
                 self.reload = reload;
             }
             CURRENT => {
                 self.current = self.reload;
                 self.count_flag = false;
+                if self.reload == 0 {
+                    self.counting = false;
+                }
             }
             CALIBRATION => {}
             ICSR => {
@@ -145,11 +180,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn renode_systick_external_clock_gate_survives_reset() {
+        // arm-cortex-m-signals.robot: SysTick portion of both Clocked cases.
+        let mut timer = SysTick::default();
+        timer.set_frequency((CORTEX_M_STEP_HZ / 2) as u32);
+        assert!(timer.write(RELOAD, 10));
+        assert!(timer.write(CURRENT, 0));
+        assert!(timer.write(CSR, 5));
+        timer.tick();
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(9));
+        timer.set_clocked(false);
+        for _ in 0..8 {
+            timer.tick();
+        }
+        assert_eq!(timer.read(CURRENT), Some(9));
+        assert_eq!(timer.read(CSR), Some(5));
+
+        timer.reset();
+        assert_eq!(timer.read(CURRENT), Some(0x00ff_ffff));
+        assert_eq!(timer.read(CSR), Some(4));
+        assert!(timer.write(RELOAD, 10));
+        assert!(timer.write(CURRENT, 0));
+        assert!(timer.write(CSR, 5));
+        for _ in 0..8 {
+            timer.tick();
+        }
+        assert_eq!(timer.read(CURRENT), Some(10));
+        timer.set_clocked(true);
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(10));
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(9));
+    }
+
+    #[test]
     fn renode_systick_counter_stops_and_resumes_via_enable() {
         // arm-cortex-m-signals.robot: adapt the stop/resume observation to CSR.ENABLE.
         let mut timer = SysTick::default();
         timer.set_frequency((CORTEX_M_STEP_HZ / 2) as u32);
         assert!(timer.write(RELOAD, 10));
+        assert!(timer.write(CURRENT, 0));
         assert!(timer.write(CSR, 5));
         for _ in 0..3 {
             timer.tick();
@@ -204,6 +275,7 @@ mod tests {
     #[test]
     fn renode_systick_current_write_reloads_without_pend_and_zero_reload_stops() {
         let mut timer = SysTick::default();
+        assert!(timer.write(CURRENT, 0));
         assert!(timer.write(CSR, 3));
         timer.tick();
         assert_eq!(timer.read(CURRENT), Some(0));

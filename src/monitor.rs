@@ -38,6 +38,7 @@ enum Action {
     RunFor(u64),
     Button(String, bool),
     NvicGpio(String, u8, bool),
+    NvicClocked(String, bool),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode),
@@ -106,6 +107,10 @@ pub fn run(
             Action::NvicGpio(target, line, high) => machine
                 .bus
                 .drive_nvic_line(target, *line, *high)
+                .map(|()| None),
+            Action::NvicClocked(target, clocked) => machine
+                .bus
+                .set_nvic_clocked(target, *clocked)
                 .map(|()| None),
             Action::Adc(name, channel, volts) => machine
                 .bus
@@ -422,6 +427,13 @@ fn execute(
         [device, state @ ("Press" | "Release")] => Some(Action::Button(
             resolve(device)?.to_owned(),
             *state == "Press",
+        )),
+        [target, "Clocked", value] => Some(Action::NvicClocked(
+            resolve(target)?.to_owned(),
+            resolve(value)?
+                .to_ascii_lowercase()
+                .parse()
+                .map_err(|_| "expected NVIC Clocked true or false")?,
         )),
         [target, "OnGPIO", line, value] => {
             let line = crate::parse_address(resolve(line)?)?;

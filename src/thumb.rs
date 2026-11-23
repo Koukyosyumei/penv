@@ -944,6 +944,29 @@ mod tests {
     }
 
     #[test]
+    fn renode_nonsecure_return_token_branches_without_trustzone() {
+        // arm-cortex-m-exception-return.robot: Should Not Return From Insecure Mode
+        // When Not Using TrustZone. Seed r0 to avoid the wide immediate load.
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        let mut output = std::io::sink();
+        bus.write(0x20, 2, 0x4700, &mut output).unwrap(); // bx r0
+        let mut thumb = Thumb::new(Some(0));
+        let mut pc = 0x20;
+        let mut registers = [0; 32];
+        registers[0] = 0xfeff_ffff;
+        registers[13] = 0x800;
+
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0xfeff_fffe, 0x800, 0)
+        );
+    }
+
+    #[test]
     fn vtor_relocates_exception_vectors_without_resetting_the_cpu() {
         use crate::nvic::VTOR;
 
@@ -1175,6 +1198,7 @@ mod tests {
         let mut output = std::io::sink();
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap(); // CPSID
         bus.write(CONTROL + 4, 4, 1, &mut output).unwrap();
+        bus.write(CONTROL + 8, 4, 0, &mut output).unwrap();
         bus.write(CONTROL, 4, 3, &mut output).unwrap();
         assert!(!thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());
         assert!(!thumb.service_interrupts(&mut pc, &mut r, &mut bus).unwrap());

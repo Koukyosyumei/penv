@@ -328,20 +328,32 @@ impl Bus {
     }
 
     pub fn drive_nvic_line(&mut self, target: &str, line: u8, high: bool) -> Result<(), String> {
-        let name = target.strip_prefix("sysbus.").unwrap_or(target);
-        let nvic = self
-            .nvic
-            .as_mut()
-            .filter(|_| self.nvic_name.as_deref() == Some(name))
-            .ok_or_else(|| format!("unknown Cortex-M NVIC {target:?}"))?;
+        self.validate_nvic_name(target)?;
         let mask = 1u32 << line;
         if high {
             self.external_nvic_levels |= mask;
             // Latch a pulse even when both commands occur before the next CPU step.
-            nvic.set_line(line, true, 0);
+            self.nvic.as_mut().unwrap().set_line(line, true, 0);
         } else {
             self.external_nvic_levels &= !mask;
         }
+        Ok(())
+    }
+
+    fn validate_nvic_name(&self, target: &str) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        if self.nvic.is_none() || self.nvic_name.as_deref() != Some(name) {
+            return Err(format!("unknown Cortex-M NVIC {target:?}"));
+        }
+        Ok(())
+    }
+
+    pub fn set_nvic_clocked(&mut self, target: &str, clocked: bool) -> Result<(), String> {
+        self.validate_nvic_name(target)?;
+        self.systick
+            .as_mut()
+            .ok_or("NVIC Clocked requires a SysTick counter")?
+            .set_clocked(clocked);
         Ok(())
     }
 
