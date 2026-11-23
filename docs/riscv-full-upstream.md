@@ -1498,3 +1498,20 @@ python3 -B scripts/validate-litex-linux-io.py target/release/penv ../renode \
 I²C の固定ステップ回帰では温度 4368 と 7724 を確認済みです。初回読み出しに同期して温度を更新する共有入口は ARM 担当に引き渡しました。依頼は `~/.local/state/penv-dispatch/shared-requests/riscv-linux-i2c-b6acf2b.md` にあります。
 
 上流 SHA-1 と一致する公開イメージ 4 個で、起動・LED・ボタン・SPI の 4/4 ケースが通過しました。初回試行では応答行の末尾とプロンプトで改行を二重に要求していたため、バッファ先頭のプロンプトも受け付けるよう修正し、同じ release バイナリで再実行しました。Rust テストは 88/88 件、上流等価合格は累計 174 件です。UART、終了状態、照合結果は `~/.local/state/penv-dispatch/evidence/riscv/backlog-b6acf2b-RKQovU/` に保存しました。
+
+### RV32I/M の固定 ACT と CLINT 共有モニターの不足
+
+固定 ACT ELF の RV32I 39 件・M 8 件を同じ release バイナリで一括検証しました。固定 REPL の CPU 型から V だけを外し、元の 1 MiB RAM のままで 47/47 件が完了コード 0 に到達しました。固定 Robot 構成では V の未対応で 47 件とも CPU 作成時に停止しました。Rust テストは 88/88 件が通過し、台帳の上流等価合格は累計 174 件です。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+sed 's/rv32gcv/rv32gc/' "$work/act-upstream.repl" > "$repro/no-v.repl"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$repro/no-v.repl" --artifacts "$repro/no-v" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/{I,M}/*.elf
+```
+
+固定 `timer-reconfiguration.robot` の代表再現は `cpu PerformanceInMips 1` を拒否して終了しました。共有モニターと実行タイミングの不足を ARM 担当への依頼 `riscv-clint-blocks-4e73e5a.md` に記録しました。3 ケースの等価判定は未達です。ケース別結果と再現用 RESC は `~/.local/state/penv-dispatch/evidence/riscv/backlog-4e73e5a-FohB4u/` に保存しました。

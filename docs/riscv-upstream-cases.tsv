@@ -2093,53 +2093,53 @@ Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/F/F-fsub.s-00.elf	target	blocked-cpu	upstream CPU creation requires V; F/D diagnostic passed with 1 MiB RAM
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/F/F-fsub.s-01.elf	target	blocked-cpu	upstream CPU creation requires V; F/D diagnostic: exceeds 1 MiB RAM, passes with 2 MiB
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/F/F-fsw-00.elf	target	blocked-cpu	upstream CPU creation requires V; F/D diagnostic passed with 1 MiB RAM
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-add-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-addi-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-and-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-andi-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-auipc-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-beq-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bge-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bgeu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-blt-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bltu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bne-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-fence-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-jal-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-jalr-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lb-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lbu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lhu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lui-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lw-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-nop-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-or-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-ori-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sb-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sll-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-slli-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-slt-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-slti-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sltiu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sltu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sra-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-srai-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-srl-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-srli-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sub-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sw-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-xor-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-xori-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-div-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-divu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mul-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mulh-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mulhsu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mulhu-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-rem-00.elf	target	blocked-cpu	upstream CPU creation requires V
-Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-remu-00.elf	target	blocked-cpu	upstream CPU creation requires V
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-add-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-addi-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-and-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-andi-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-auipc-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-beq-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bge-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bgeu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-blt-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bltu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-bne-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-fence-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-jal-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-jalr-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lb-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lbu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lh-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lhu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lui-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-lw-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-nop-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-or-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-ori-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sb-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sh-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sll-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-slli-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-slt-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-slti-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sltiu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sltu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sra-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-srai-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-srl-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-srli-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sub-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-sw-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-xor-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/I/I-xori-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-div-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-divu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mul-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mulh-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mulhsu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-mulhu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-rem-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
+Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/M/M-remu-00.elf	target	blocked-cpu	upstream CPU creation requires V; fixed ELF passed with only V omitted from ISA
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Misalign/Misalign-lh-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and unaligned accesses explicitly enabled; fixed CPU defaults to disabled
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Misalign/Misalign-lhu-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and unaligned accesses explicitly enabled; fixed CPU defaults to disabled
 Renode	tests/unit-tests/riscv-arch-tests.robot	46	Should Run Arch Tests 32	spike-rv32-max/elfs/rv32i/Misalign/Misalign-lw-00.elf	target	blocked-cpu	upstream CPU creation requires V; ELF passed with V omitted and unaligned accesses explicitly enabled; fixed CPU defaults to disabled
@@ -3110,9 +3110,9 @@ Renode	tests/unit-tests/tb_overwrite.robot	72	Shoud Invalidate Other Page When O
 Renode	tests/unit-tests/tb_overwrite.robot	86	Shoud Invalidate The Same Page When Overwritten Using Sysbus		review-variants	pending	-
 Renode	tests/unit-tests/tb_overwrite.robot	100	Should Invalidate Other Page When Overwritten By Guest		review-variants	pending	-
 Renode	tests/unit-tests/tb_overwrite.robot	114	Should Invalidate The Same Page When Overwritten By Guest		review-variants	pending	-
-Renode	tests/unit-tests/timer-reconfiguration.robot	40	Should Tick Between Chained Blocks		target	pending	Create Machine uses CPU.RiscV32 rv32ic, 1 MHz CLINT and block hooks
-Renode	tests/unit-tests/timer-reconfiguration.robot	51	Should Tick In The Same Block		target	pending	Create Machine uses CPU.RiscV32 rv32ic, 1 MHz CLINT and block hooks
-Renode	tests/unit-tests/timer-reconfiguration.robot	64	Should Tick At Exact Time		target	pending	Create Machine uses CPU.RiscV32 rv32ic, 1 MHz CLINT and block hooks
+Renode	tests/unit-tests/timer-reconfiguration.robot	40	Should Tick Between Chained Blocks		target	pending	fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM
+Renode	tests/unit-tests/timer-reconfiguration.robot	51	Should Tick In The Same Block		target	pending	fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM
+Renode	tests/unit-tests/timer-reconfiguration.robot	64	Should Tick At Exact Time		target	pending	fixed rv32ic and 1 MHz CLINT; PerformanceInMips rejected, shared timing and block observations requested from ARM
 Renode	tests/unit-tests/tlib/arm/thumb2-data-processing-instr.robot	18	Should Run All Instructions		review-shared	pending	-
 Renode	tests/unit-tests/uart-tester.robot	22	Should Fail On Non-Existing UART		review-shared	pending	-
 Renode	tests/unit-tests/uart-tester.robot	28	Should Not Require Tester Id When Single Tester		review-shared	pending	-
