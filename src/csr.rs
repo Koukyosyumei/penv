@@ -20,6 +20,8 @@ const SPIE: u32 = 1 << 5;
 const SPP: u32 = 1 << 8;
 const SUM: u32 = 1 << 18;
 const MXR: u32 = 1 << 19;
+const TVM: u32 = 1 << 20;
+const TSR: u32 = 1 << 22;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -208,7 +210,12 @@ impl Csr {
     }
 
     pub fn can_sfence(&self) -> bool {
-        self.supervisor.is_some() && self.privilege != Privilege::User
+        self.supervisor.is_some()
+            && match self.privilege {
+                Privilege::Machine => true,
+                Privilege::Supervisor => self.status & TVM == 0,
+                Privilege::User => false,
+            }
     }
 
     pub fn in_user_mode(&self) -> bool {
@@ -229,7 +236,11 @@ impl Csr {
             register_value
         };
         let error = || format!("unsupported CSR access at {address:#05x}");
-        if ((address >> 8) & 3) > self.privilege as u32 {
+        if ((address >> 8) & 3) > self.privilege as u32
+            || (address == 0x180
+                && self.privilege == Privilege::Supervisor
+                && self.status & TVM != 0)
+        {
             return Err(error());
         }
         let previous = self.read(address).ok_or_else(error)?;
@@ -346,7 +357,7 @@ impl Csr {
                 let privilege = self.decode_privilege((value & MPP) >> 11);
                 let mprv = if self.user_supported { value & MPRV } else { 0 };
                 let supervisor = if self.supervisor.is_some() {
-                    value & SSTATUS
+                    value & (SSTATUS | TVM | TSR)
                 } else {
                     0
                 };
@@ -532,7 +543,9 @@ impl Csr {
     }
 
     pub fn return_from_supervisor_trap(&mut self) -> Option<u32> {
-        if self.privilege == Privilege::User {
+        if self.privilege == Privilege::User
+            || (self.privilege == Privilege::Supervisor && self.status & TSR != 0)
+        {
             return None;
         }
         let epc = self.supervisor.as_ref()?.epc;

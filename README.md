@@ -287,7 +287,43 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
 ```
 
-`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-mret.robot` のモード切り替えによる TLB 無効化の実 ELF、`riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、専用 SD ルートファイルシステム、Nexys4DDR の SPI SD、Tock の繰り返し UART 出力はこの移植の対象外です。
+`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、専用 SD ルートファイルシステム、Nexys4DDR の SPI SD、Tock の繰り返し UART 出力はこの移植の対象外です。
+
+## RV32 の権限切り替えと仮想メモリ操作
+
+上流の `tests/unit-tests/riscv-mret.robot` の `Should Invalidate TLB After Mode Change` は、同じ ELF と Robot 定義相当のメモリ配置で検証しました。ELF は Bare モードで、M モードから呼べた関数へのフェッチが `mret` で U モードに降りた後は PMP により拒否されます。修正前後とも、ステップ 42 で PC が禁止関数 `0x10068` に達し、ステップ 43 で命令をリタイアせず期待するトラップ先 `0x10000` に遷移しました。
+
+```sh
+out=$(mktemp -d)
+robot=../renode/tests/unit-tests/riscv-mret.robot
+url=$(rg -o 'https://[^[:space:]]+' "$robot")
+curl -fsSL "$url" -o "$out/mret.elf"
+printf '%s  %s\n' "${url##*-}" "$out/mret.elf" | sha1sum --check
+cat > "$out/mret.repl" <<'REPL'
+cpu: CPU.RiscV32 @ sysbus
+    cpuType: "rv32im_zicsr"
+ram: Memory.MappedMemory @ sysbus 0x10000
+    size: 0x8000
+forbidden: Memory.MappedMemory @ sysbus 0x2000
+    size: 0x2000
+REPL
+target/release/penv run --platform "$out/mret.repl" --max-steps 43 --stats "$out/mret.elf"
+```
+
+上流の `tests/unit-tests/riscv-priv.robot` から RV32 の `Should Trap On Sret When MSTATUS.TSR Is One RV32`、対応する TSR=0 ケース、`Should Trap On SFENCE.VMA In User Mode RV32` を `privilege_controls_gate_sret_and_address_translation_operations` に移植しました。同ファイルの SATP と `sfence.vma` に対する TVM の RV64 ケースは、同じ権限規則を RV32 命令へ適用しました。TSR=1 の S モードで `sret` は違法命令になります。TVM=1 の S モードでは `satp` の読み書きと `sfence.vma` が違法命令になります。テストはトラップ時の `mcause`、`mepc`、`mtval` も確認します。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 \
+  -nostdlib -fuse-ld=lld -Wl,-T,scripts/firmware/rv32-virt.ld \
+  scripts/firmware/rv32-priv.S -o "$out/priv.elf"
+target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --max-steps 1000 "$out/priv.elf"
+bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
+```
+
+TSR の検証 ELF は変更前の `66bb839` で失敗を UART に出力し、修正後は `rv32-priv: SRET with TSR trapped at the expected PC` を出力しました。両 ELF の指定ステップ到達時の終了コードは 2 です。Sv32 の既存ページテーブル再走査テストと LiteX Linux の回帰も確認しました。残課題は、上流の RV32 権限スイート全体への拡張と、TVM ケースの実 ELF 化です。
 
 ## Cortex-M0 / Cortex-M0+
 

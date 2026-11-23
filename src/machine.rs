@@ -952,6 +952,72 @@ mod tests {
     }
 
     #[test]
+    fn privilege_controls_gate_sret_and_address_translation_operations() {
+        // Renode riscv-priv.robot: RV32 TSR and U-mode SFENCE.VMA cases,
+        // plus the equivalent RV32 instructions for its supervisor TVM cases.
+        const HANDLER: u32 = RAM_BASE + 12;
+        const SRET_TARGET: u32 = RAM_BASE + 16;
+        const SUPERVISOR: u32 = (1 << 11) | (1 << 8); // MPP=S, SPP=S
+        const TSR: u32 = 1 << 22;
+        const TVM: u32 = 1 << 20;
+        for (instruction, status, expected_pc) in [
+            (0x1020_0073u32, SUPERVISOR | TSR, HANDLER), // sret
+            (0x1020_0073, SUPERVISOR, SRET_TARGET),
+            (0x1200_0073, 0, HANDLER), // sfence.vma in U
+            (0x1200_0073, SUPERVISOR | TVM, HANDLER),
+            (0x1200_0073, SUPERVISOR, RAM_BASE + 8),
+            (0x1800_2573, SUPERVISOR | TVM, HANDLER), // csrr a0, satp
+            (0x1800_2573, SUPERVISOR, RAM_BASE + 8),
+            (0x1800_1073, SUPERVISOR | TVM, HANDLER), // csrw satp, zero
+            (0x1800_1073, SUPERVISOR, RAM_BASE + 8),
+        ] {
+            let mut machine = Machine::new(20).unwrap();
+            machine.primary.enable_user_mode();
+            machine.primary.enable_supervisor_mode();
+            machine.primary.set_mtvec(HANDLER);
+            machine.primary.csr.access(0x3000_9073, status).unwrap();
+            assert_eq!(
+                machine.primary.csr.access(0x3000_2073, 0).unwrap() & (TSR | TVM),
+                status & (TSR | TVM)
+            );
+            machine
+                .primary
+                .csr
+                .access(0x3410_9073, RAM_BASE + 4)
+                .unwrap();
+            machine
+                .primary
+                .csr
+                .access(0x1410_9073, SRET_TARGET)
+                .unwrap();
+            machine.bus.memory(RAM_BASE, 8).unwrap().copy_from_slice(
+                [0x3020_0073u32, instruction]
+                    .map(u32::to_le_bytes)
+                    .as_flattened(),
+            );
+            let mut output = std::io::sink();
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+            let trapped = status == 0 || status & (TSR | TVM) != 0;
+            assert_eq!(
+                machine.run(1, &mut output).unwrap(),
+                (Stop::Limit, u64::from(!trapped))
+            );
+            assert_eq!(machine.primary.pc, expected_pc);
+            if trapped {
+                assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 2);
+                assert_eq!(
+                    machine.primary.csr.access(0x3410_2073, 0).unwrap(),
+                    RAM_BASE + 4
+                );
+                assert_eq!(
+                    machine.primary.csr.access(0x3430_2073, 0).unwrap(),
+                    instruction
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege() {
         // Renode riscv-mret.robot: both 32-bit User Level cases.
         const HANDLER: u32 = RAM_BASE + 4;
