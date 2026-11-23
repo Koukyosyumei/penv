@@ -43,6 +43,7 @@ pub struct Isa {
     zcb: bool,
     zicboz: bool,
     xandesperf: bool,
+    xandesbfhcvt: bool,
     pub cas: bool,
     pub smepmp: bool,
     bitmanip: bitmanip::Extensions,
@@ -87,6 +88,10 @@ impl Isa {
                 "zfh" if isa.single => isa.half = true,
                 "zicboz" => isa.zicboz = true,
                 "xandesperf" => isa.xandesperf = true,
+                "xandesbfhcvt" => {
+                    isa.xandesbfhcvt = true;
+                    isa.single = true;
+                }
                 extension if isa.bitmanip.enable(extension) => {}
                 _ => return Err(format!("unsupported RV64 ISA extension {extension:?}")),
             }
@@ -118,6 +123,7 @@ impl Isa {
         zcb: false,
         zicboz: false,
         xandesperf: false,
+        xandesbfhcvt: false,
         cas: false,
         smepmp: false,
         bitmanip: bitmanip::Extensions::NONE,
@@ -563,6 +569,9 @@ impl Rv64 {
                         value
                     })
                 }
+            }
+            0x5b if self.isa.xandesbfhcvt && instruction & 0xfe0f_707f == 0x0001_405b => {
+                self.andes_scalar_bfloat16(fields, instruction & (1 << 15) != 0)?
             }
             0x5b if self.isa.xandesperf && matches!(fields.funct3(), 2 | 3) => {
                 Some(andes_bit_field(instruction, lhs, fields.funct3() == 3))

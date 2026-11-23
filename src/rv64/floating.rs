@@ -22,6 +22,34 @@ impl Rv64 {
         self.privilege.status |= FS;
     }
 
+    pub(super) fn andes_scalar_bfloat16(
+        &mut self,
+        inst: Instruction,
+        narrow: bool,
+    ) -> Result<Option<u64>, Fault> {
+        let illegal = || Fault::new(2, u64::from(inst.0));
+        if self.privilege.status & FS == 0 {
+            return Err(illegal());
+        }
+        let mut bits = self.floating[inst.rs2()];
+        if !self.isa.double {
+            bits = Format::Single.boxed(bits);
+        }
+        let (source, destination, rounding) = if narrow {
+            (
+                Format::Single,
+                Format::BFloat16,
+                Rounding::decode(7, self.privilege.fcsr).ok_or_else(illegal)?,
+            )
+        } else {
+            (Format::BFloat16, Format::Single, Rounding::NearestEven)
+        };
+        let result = destination.convert(source.decode(bits), rounding);
+        self.fp_write(inst.rd(), destination, result.bits);
+        self.privilege.fcsr |= result.flags;
+        Ok(None)
+    }
+
     pub(super) fn floating_instruction(
         &mut self,
         inst: Instruction,

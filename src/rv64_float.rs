@@ -62,6 +62,7 @@ impl Rounding {
 #[derive(Clone, Copy)]
 pub enum Format {
     Half,
+    BFloat16,
     Single,
     Double,
 }
@@ -99,7 +100,7 @@ impl ResultBits {
 impl Format {
     pub fn width(self) -> usize {
         match self {
-            Self::Half => 2,
+            Self::Half | Self::BFloat16 => 2,
             Self::Single => 4,
             Self::Double => 8,
         }
@@ -108,6 +109,7 @@ impl Format {
     fn fractional_bits(self) -> u32 {
         match self {
             Self::Half => 10,
+            Self::BFloat16 => 7,
             Self::Single => 23,
             Self::Double => 52,
         }
@@ -116,7 +118,7 @@ impl Format {
     fn bias(self) -> i32 {
         match self {
             Self::Half => 15,
-            Self::Single => 127,
+            Self::Single | Self::BFloat16 => 127,
             Self::Double => 1023,
         }
     }
@@ -131,7 +133,7 @@ impl Format {
 
     pub fn boxed(self, raw: u64) -> u64 {
         match self {
-            Self::Half => u64::from(raw as u16) | 0xffff_ffff_ffff_0000,
+            Self::Half | Self::BFloat16 => u64::from(raw as u16) | 0xffff_ffff_ffff_0000,
             Self::Single => raw | 0xffff_ffff_0000_0000,
             Self::Double => raw,
         }
@@ -155,8 +157,8 @@ impl Format {
 
     pub fn unbox(self, bits: u64) -> u64 {
         match self {
-            Self::Half if bits >> 16 != 0xffff_ffff_ffff => self.nan(),
-            Self::Half => u64::from(bits as u16),
+            Self::Half | Self::BFloat16 if bits >> 16 != 0xffff_ffff_ffff => self.nan(),
+            Self::Half | Self::BFloat16 => u64::from(bits as u16),
             Self::Single if bits >> 32 != u64::from(u32::MAX) => self.nan(),
             Self::Single => u64::from(bits as u32),
             Self::Double => bits,

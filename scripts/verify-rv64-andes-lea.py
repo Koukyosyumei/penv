@@ -72,6 +72,27 @@ def verify_bits(args, platform, tests, step):
     verify(args, platform, case, commands, expected)
 
 
+def verify_scalar_bfloat16(args, tests, step):
+    platform = args.logs / "andestar-bfloat16.repl"
+    write_platform(platform, "rv64gc_xandesbfhcvt")
+    case = "Should Handle Scalar BF16 NaN Boxing And Overflow On RV64"
+    rows = [cells[3:] for line in tests[case].splitlines()
+            if (cells := line.split())[:3] == ["Check", "Scalar", "BF16"]]
+    if len(rows) != 2:
+        raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+    commands = ["--set-mtvec", "cpu:0x1000", "--write-memory", "0x1ff0:4:0x00305073"]
+    expected = []
+    for mnemonic, source, result, flags in rows:
+        kind = {"nds.fcvt.s.bf16": 2, "nds.fcvt.bf16.s": 3}[mnemonic]
+        word = 1 << 20 | kind << 15 | 4 << 12 | 5 << 7 | 0x5b
+        commands += ["--set-mstatus", "cpu:0x2000", "--set-freg", f"cpu@f1:{source}",
+                     "--set-pc", "cpu:0x1ff0", "--step-cpu", "cpu",
+                     "--write-memory", f"0x2000:4:{word:#x}", *step,
+                     "--read-register-now", "cpu@f5", "--read-register-now", "cpu@fflags"]
+        expected += [("pc", 0x2004), ("f5", int(result, 0)), ("fflags", int(flags, 0))]
+    verify(args, platform, case, commands, expected)
+
+
 def verify_byte_search(args, platform, tests, step):
     case = "Should Search All Eight Bytes On RV64"
     functions = {"nds.ffb": 16, "nds.ffzmism": 17, "nds.ffmism": 18, "nds.flmism": 19}
@@ -172,6 +193,7 @@ def main():
     verify_bits(args, platform, tests, step)
     verify_gp(args, platform, tests, step)
     verify_byte_search(args, platform, tests, step)
+    verify_scalar_bfloat16(args, tests, step)
 
     base = args.logs / "base.repl"
     write_platform(base, "rv64imac")
