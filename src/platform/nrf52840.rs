@@ -113,6 +113,8 @@ pub(super) fn map_peripheral(
     }
     let device = if uart {
         Peripheral::uarte(base, irq as u8, name)
+    } else if entry.model == "Miscellaneous.NRF52840_EGU" {
+        Peripheral::egu(base, irq as u8, name)
     } else if entry.model == "Miscellaneous.NRF52840_ECB" {
         Peripheral::ecb(base, irq as u8, name)
     } else if entry.model == "Miscellaneous.NRF52840_RNG" {

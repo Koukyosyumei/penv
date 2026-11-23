@@ -1,3 +1,6 @@
+mod egu;
+use egu::Egu;
+
 mod ecb;
 use ecb::Ecb;
 
@@ -54,6 +57,7 @@ enum Device {
     Radio(Radio),
     Rng(Rng),
     Ecb(Ecb),
+    Egu(Egu),
     Twi(Twi),
     Spi(Spi),
     Watchdog(Watchdog),
@@ -139,6 +143,15 @@ impl Peripheral {
             irq,
             name,
             device: Device::I2s(I2s::new(loopback)),
+        }
+    }
+
+    pub fn egu(base: u32, irq: u8, name: String) -> Self {
+        Self {
+            base,
+            irq,
+            name,
+            device: Device::Egu(Egu::default()),
         }
     }
 
@@ -280,6 +293,7 @@ impl Peripheral {
                 Device::Radio(_) => Radio::event(address - self.base).is_some(),
                 Device::Rng(_) => address - self.base == rng::VALRDY,
                 Device::Ecb(_) => matches!(address - self.base, 0x100 | 0x104),
+                Device::Egu(_) => Egu::event(address - self.base),
                 _ => false,
             }
     }
@@ -295,6 +309,7 @@ impl Peripheral {
                 Device::Radio(_) => Radio::task(address - self.base),
                 Device::Rng(_) => matches!(address - self.base, 0 | 4),
                 Device::Ecb(_) => matches!(address - self.base, 0 | 4),
+                Device::Egu(_) => Egu::task(address - self.base),
                 Device::Ppi(_) => address - self.base <= 0x2c && address & 3 == 0,
                 _ => false,
             }
@@ -311,6 +326,7 @@ impl Peripheral {
             Device::Radio(radio) => std::mem::take(&mut radio.raised),
             Device::Rng(rng) => std::mem::take(&mut rng.raised),
             Device::Ecb(ecb) => std::mem::take(&mut ecb.raised),
+            Device::Egu(egu) => std::mem::take(&mut egu.raised),
             _ => return,
         };
         while raised != 0 {
@@ -429,6 +445,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.reset(),
             Device::Rng(rng) => *rng = Rng::default(),
             Device::Ecb(ecb) => *ecb = Ecb::default(),
+            Device::Egu(egu) => *egu = Egu::default(),
             Device::Gpiote(gpiote) => gpiote.reset(),
             Device::Ppi(ppi) => **ppi = Ppi::default(),
             Device::Clock(clock) => *clock = Clock::default(),
@@ -464,6 +481,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.pending(),
             Device::Rng(rng) => rng.pending(),
             Device::Ecb(ecb) => ecb.pending(),
+            Device::Egu(egu) => egu.pending(),
         }
     }
 
@@ -494,6 +512,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.read(offset),
             Device::Rng(rng) => rng.read(offset),
             Device::Ecb(ecb) => ecb.read(offset),
+            Device::Egu(egu) => egu.read(offset),
             Device::Nvmc { cache_config } => (offset == 0x540).then_some(*cache_config),
             Device::Gpio(gpio) => gpio.read(offset),
             Device::Gpiote(gpiote) => gpiote.read(offset),
@@ -544,6 +563,7 @@ impl Peripheral {
             Device::Radio(radio) => radio.write(offset, value, bus)?,
             Device::Rng(rng) => rng.write(offset, value),
             Device::Ecb(ecb) => ecb.write(offset, value, bus),
+            Device::Egu(egu) => egu.write(offset, value),
         };
         if supported {
             Ok(())

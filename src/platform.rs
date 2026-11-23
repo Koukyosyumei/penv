@@ -383,6 +383,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             | "Wireless.NRF52840_Radio"
             | "Miscellaneous.NRF52840_RNG"
             | "Miscellaneous.NRF52840_ECB"
+            | "Miscellaneous.NRF52840_EGU"
             | "Timers.NRF52840_RTC"
             | "Timers.NRF52840_Timer"
             | "Timers.NRF52840_Watchdog"

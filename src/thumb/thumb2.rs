@@ -161,6 +161,15 @@ impl Thumb {
         let rm = (low & 15) as usize;
         let rd = ((low >> 8) & 15) as usize;
         match high {
+            0xe8d0..=0xe8df if low & 0xffe0 == 0xf000 && !matches!(rm, 13 | 15) && rn != 13 => {
+                let base = if rn == 15 { *next } else { r[rn] };
+                let offset = if low & 0x10 == 0 {
+                    bus.thumb_read::<1>(base.wrapping_add(r[rm]))?
+                } else {
+                    bus.thumb_read::<2>(base.wrapping_add(r[rm].wrapping_mul(2)))?
+                };
+                *next = next.wrapping_add(offset * 2);
+            }
             0xe850..=0xe85e if low & 0xf00 == 0xf00 && !matches!(rt, 13 | 15) => {
                 let address = r[rn].wrapping_add((low & 0xff) * 4);
                 bus.check_thumb_access(address, 4, false, false)?;
@@ -466,6 +475,33 @@ impl Thumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_branches_use_unaligned_architectural_pc_and_scaled_index() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 32).unwrap();
+        let mut r = [0; 32];
+        let mut thumb = Thumb::new(Some(0));
+        thumb.thumb2 = true;
+        let mut output = Vec::new();
+        // TBB [pc, r0] at address 2, with the table beginning at address 6.
+        bus.memory(2, 6)
+            .unwrap()
+            .copy_from_slice(&[0xdf, 0xe8, 0x00, 0xf0, 1, 3]);
+        r[0] = 1;
+        let mut pc = 2;
+        thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
+        assert_eq!(pc, 12);
+
+        // TBH [r1, r0, LSL #1] at address 12, with the second halfword selected.
+        bus.memory(12, 4)
+            .unwrap()
+            .copy_from_slice(&[0xd1, 0xe8, 0x10, 0xf0]);
+        bus.memory(20, 4).unwrap().copy_from_slice(&[1, 0, 6, 0]);
+        r[1] = 20;
+        thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
+        assert_eq!(pc, 28);
+    }
 
     #[test]
     fn wide_branch_preserves_lr_and_runs_only_on_cortex_m4() {

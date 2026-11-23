@@ -6,6 +6,7 @@ pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
 const MPU_TYPE: u32 = BASE + 0xd90;
 const MPU_RASR: u32 = BASE + 0xda0;
+const STIR: u32 = BASE + 0xf00;
 const CPACR: u32 = BASE + 0xd88;
 const AIRCR: u32 = BASE + 0xd0c;
 const SCR: u32 = BASE + 0xd10;
@@ -72,6 +73,7 @@ impl Nvic {
             Some((SYSTEM_PRIORITY, SYSTEM_PRIORITY_END + 1)),
             cortex_m4.then_some((CCR, HFSR + 4)),
             cortex_m4.then_some((CPACR, CPACR + 4)),
+            cortex_m4.then_some((STIR, STIR + 4)),
             cortex_m4.then_some((MPU_TYPE, MPU_RASR + 4)),
         ]
         .into_iter()
@@ -217,6 +219,12 @@ impl Nvic {
             return false;
         }
         match (address, width) {
+            (STIR, 4) if self.cortex_m4 => {
+                let irq = value & 0x1ff;
+                if irq < 64 {
+                    self.pending |= 1 << irq;
+                }
+            }
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => {
                 return self.mpu.write(address - MPU_TYPE, value);
             }

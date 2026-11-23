@@ -7,18 +7,15 @@ if [ "$#" -ne 3 ]; then
 fi
 
 penv=$1
-repl=$2/platforms/cpus/nrf52840.repl
+resc=$2/scripts/single-node/nrf52840.resc
 elf=$3
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# The complete upstream REPL still diagnoses unsupported peripheral models.
-awk '/^[a-z]/ { keep = ($1 ~ /^(nvic|cpu|uart0|uart1|rtc[012]|wdt|ppi|twi[01]|spi2|timer[0-4]|i2s|pdm|radio|rng|ecb|gpio[01]|gpiote|flash|ram|clock|sysbus):$/) } keep' \
-    "$repl" > "$work/boot.repl"
 printf 'demo ping\r' > "$work/ping.txt"
 
 status=0
-"$penv" run --platform "$work/boot.repl" \
+"$penv" run --script "$resc" --platform-root "$2" \
     --uart-event "100000:$work/ping.txt" --reset-at 300000 \
     --uart-event "400000:$work/ping.txt" --max-steps 700000 "$elf" \
     > "$work/stdout" 2> "$work/stderr" || status=$?
