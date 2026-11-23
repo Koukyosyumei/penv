@@ -3,7 +3,7 @@ use std::io::Write;
 use crate::{
     bus::Bus,
     nvic::Nvic,
-    systick::{PENDSV, SYSTICK, SysTick},
+    systick::{NMI, PENDSV, SYSTICK, SysTick},
 };
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -353,6 +353,16 @@ impl Thumb {
             self.signal_event();
         }
         self.pending = pending;
+        if pending & (1 << NMI) != 0 && self.active_exceptions & (1 << NMI) == 0 {
+            *pc = self.exception_entry(NMI, *pc, r, bus)?;
+            bus.systick.as_mut().unwrap().acknowledge(NMI);
+            self.pending &= !(1 << NMI);
+            self.sleep = Sleep::Running;
+            return Ok(true);
+        }
+        if self.active_exceptions & (1 << NMI) != 0 {
+            return Ok(false);
+        }
         if self.interrupts_masked && self.sleep != Sleep::Interrupt {
             return Ok(false);
         }
@@ -827,6 +837,52 @@ mod tests {
             .step(&mut pc, &mut registers, &mut bus, &mut output)
             .unwrap();
         assert_eq!(pc, 0x102);
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0x20, 0x800, 0)
+        );
+    }
+
+    #[test]
+    fn renode_nmi_bx_lr_restores_interrupted_thread() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        let mut output = std::io::sink();
+        bus.map_systick().unwrap();
+        bus.write(2 * 4, 4, 0x101, &mut output).unwrap();
+        bus.write(0x20, 2, 0xe7fe, &mut output).unwrap(); // b .
+        bus.write(0x100, 2, 0xbf00, &mut output).unwrap(); // nop
+        bus.write(0x102, 2, 0x4770, &mut output).unwrap(); // bx lr
+        let mut thumb = Thumb::new(Some(0));
+        let mut pc = 0x20;
+        let mut registers = [0; 32];
+        registers[13] = 0x800;
+
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 0x20);
+        // Equivalent to the upstream nvic SetPendingIRQ 2 monitor command.
+        bus.write(0xe000_ed04, 4, 1 << 31, &mut output).unwrap();
+        assert_eq!(bus.read::<4>(0xe000_ed04).unwrap(), 1 << 31);
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(
+            (pc, registers[13], registers[14]),
+            (0x100, 0x7e0, 0xffff_fff9)
+        );
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(pc, 0x102);
+        assert_eq!(bus.read::<4>(0xe000_ed04).unwrap(), 0);
         thumb
             .step(&mut pc, &mut registers, &mut bus, &mut output)
             .unwrap();
