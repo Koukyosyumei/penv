@@ -45,9 +45,8 @@ class Guest:
         self.process.stdin.write(line + b"\r")
 
     def verify_uboot(self):
-        self.expect(rb"OpenSBI v0\.9")
-        self.expect(rb"Platform Name[ \t]+: StarFive")
-        self.expect(rb"U-Boot 2021\.01")
+        for line in (rb"OpenSBI v0\.9", rb"Platform Name\s+: StarFive", rb"U-Boot 2021\.01"):
+            self.expect(line + rb"[^\r\n]*[\r\n]")
         self.expect(rb"dwmac\.10020000")
 
     def login(self, verify_uboot=True):
@@ -71,6 +70,25 @@ class Guest:
                         "ifconfig eth0 mtu 440", f"ifconfig eth0 {ip} up"):
             self.checked_command(command)
         self.irq_baseline = self.interrupts()
+
+    def upstream_login_and_configure(self, mac, ip):
+        self.expect(rb"buildroot login:")
+        self.send(b"root")
+        self.expect(rb"root[\r\n]")
+        self.expect(rb"Password:")
+        self.send(b"starfive")
+        for command, echo in ((b"ifconfig eth0 down", True),
+                              (f"ifconfig eth0 hw ether {mac}".encode(), True),
+                              (f"ifconfig eth0 mtu 440 up {ip}".encode(), False)):
+            self.expect(rb"\r?\n# ")
+            self.send(command)
+            if echo:
+                self.expect(re.escape(command) + rb"[\r\n]")
+
+    def upstream_ping(self, ip, size):
+        self.send(f"ping -As {size} -c 10 {ip}".encode())
+        self.expect(rb"10 packets transmitted, 10 packets received, 0% packet loss[^\r\n]*[\r\n]")
+        print(f"{self.name}: {ip}, {size} bytes, 10/10 replies", flush=True)
 
     def ping(self, ip, size):
         output = self.checked_command(f"ping -A -q -c 10 -W 3 -s {size} {ip}")
@@ -197,8 +215,10 @@ def main():
                         help="connect the two guest ports to a local penv Ethernet switch")
     parser.add_argument("--upstream-cases", action="store_true",
                         help="verify the StarLight Robot cases")
+    parser.add_argument("--upstream-boot-only", action="store_true",
+                        help="verify the upstream two-machine U-Boot case")
     parser.add_argument("--external-pmp", action="store_true",
-                        help="run the three upstream cases with external PMP")
+                        help="run the selected upstream cases with external PMP")
     parser.add_argument("--recovery", action="store_true",
                         help="verify Ethernet reopen and reload one machine after Linux reboot")
     reboot = parser.add_mutually_exclusive_group()
@@ -215,8 +235,10 @@ def main():
         parser.error("--switch-port requires --ports")
     if args.upstream_cases and (args.switch_port is None or args.recovery):
         parser.error("--upstream-cases requires a switch and cannot be combined with --recovery")
-    if args.external_pmp and not args.upstream_cases:
-        parser.error("--external-pmp requires --upstream-cases")
+    if args.upstream_boot_only and (args.upstream_cases or args.ports or args.recovery):
+        parser.error("--upstream-boot-only cannot be combined with Ethernet or recovery")
+    if args.external_pmp and not (args.upstream_cases or args.upstream_boot_only):
+        parser.error("--external-pmp requires --upstream-cases or --upstream-boot-only")
     args.logs.mkdir(parents=True, exist_ok=True)
     args.script = args.renode / "scripts/single-node/beaglev_starlight.resc"
     suffix = " With External PMP" if args.external_pmp else ""
@@ -227,7 +249,13 @@ def main():
         if args.external_pmp:
             temporary = tempfile.TemporaryDirectory(prefix="penv-starlight-pmp-")
             args.script = external_pmp_script(args, temporary.name)
-        if args.ports:
+        if args.upstream_boot_only:
+            for name in ("machine0", "machine1"):
+                guests.append(Guest(args, name))
+            for guest in guests:
+                guest.verify_uboot()
+            print(f"PASS Should Boot U-Boot{suffix}", flush=True)
+        elif args.ports:
             first, second = args.ports
             if args.switch_port is not None and not args.upstream_cases:
                 switch = start_switch(args)
@@ -235,28 +263,32 @@ def main():
                 if args.switch_port is not None:
                     peer = args.switch_port
                 guests.append(Guest(args, name, ("--ethernet-loopback", f"{local}:{peer}")))
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                if args.upstream_cases:
-                    list(pool.map(Guest.verify_uboot, guests))
-                    print(f"PASS Should Boot U-Boot{suffix}", flush=True)
-                    switch = start_switch(args)
-                list(pool.map(lambda guest: guest.login(not args.upstream_cases), guests))
             first, second = guests
-            first.configure("66:34:B0:6C:DE:A0", "192.168.0.5")
-            second.configure("66:34:B0:6C:DE:A1", "192.168.0.6")
             if args.upstream_cases:
+                for guest in guests:
+                    guest.verify_uboot()
+                print(f"PASS Should Boot U-Boot{suffix}", flush=True)
+                switch = start_switch(args)
+                first.upstream_login_and_configure("66:34:B0:6C:DE:A0", "192.168.0.5")
+                second.upstream_login_and_configure("66:34:B0:6C:DE:A1", "192.168.0.6")
                 print(f"PASS Should Provide Two Linux Machines With Ethernet Connection{suffix}", flush=True)
-                second.ping("192.168.0.5", 56)
+                second.expect(rb"\r?\n# ")
+                second.upstream_ping("192.168.0.5", 56)
                 print(f"PASS Should Ping{suffix}", flush=True)
                 if not args.external_pmp:
-                    second.ping("192.168.0.5", 3200)
+                    second.expect(rb"\r?\n# ")
+                    second.upstream_ping("192.168.0.5", 3200)
                     print("PASS Should Ping Large Payload", flush=True)
             else:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    list(pool.map(Guest.login, guests))
+                first.configure("66:34:B0:6C:DE:A0", "192.168.0.5")
+                second.configure("66:34:B0:6C:DE:A1", "192.168.0.6")
                 for size in (56, 3200):
                     first.ping("192.168.0.6", size)
                     second.ping("192.168.0.5", size)
-            for guest in guests:
-                guest.verify_interrupts()
+                for guest in guests:
+                    guest.verify_interrupts()
             if args.recovery:
                 first.recover_ethernet("192.168.0.5")
                 first.ping("192.168.0.6", 56)

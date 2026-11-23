@@ -53,6 +53,9 @@ impl TranslationCache {
             _ => (7, 15),
         };
         let physical = if mode == Mode::Machine || satp >> 60 == 0 {
+            if address >> 56 != 0 {
+                return Err(Fault::illegal_physical(access_cause, address));
+            }
             address
         } else {
             let virtual_page = address >> 12;
@@ -125,7 +128,7 @@ fn walk(
         if !permitted(csr, pte_address, 8, READ, Mode::Supervisor) {
             return Err(WalkFault::Access);
         }
-        let pte = ram_read(bus, pte_address, 8).ok_or(WalkFault::Access)?;
+        let pte = ram_read(bus, None, pte_address, 8).ok_or(WalkFault::Access)?;
         let rights = ((pte >> 1) & 7) as u8;
         let ppn = (pte >> 10) & ppn_mask;
         if pte & 1 == 0 || (rights & (READ | WRITE)) == WRITE || pte >> 54 != 0 {

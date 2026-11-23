@@ -1,4 +1,7 @@
-use crate::pmp::{EXECUTE, READ, WRITE};
+use crate::{
+    pmp::{EXECUTE, READ, WRITE},
+    rv64::vector::VectorState,
+};
 
 const SIE: u64 = 1 << 1;
 const MIE: u64 = 1 << 3;
@@ -6,6 +9,7 @@ const SPIE: u64 = 1 << 5;
 const MPIE: u64 = 1 << 7;
 const SPP: u64 = 1 << 8;
 const MPP: u64 = 3 << 11;
+pub(crate) const VS: u64 = 3 << 9;
 pub const FS: u64 = 3 << 13;
 const MPRV: u64 = 1 << 17;
 pub const SUM: u64 = 1 << 18;
@@ -13,7 +17,9 @@ pub const MXR: u64 = 1 << 19;
 const TVM: u64 = 1 << 20;
 const TW: u64 = 1 << 21;
 const TSR: u64 = 1 << 22;
-const SSTATUS: u64 = SIE | SPIE | SPP | FS | SUM | MXR;
+// Fixed Renode tlib clears the defined extension fields and stores the remaining bits.
+const RENODE_MENVCFG_WRITABLE: u64 = !((0x1f << 59) | (3 << 32) | 0xfd);
+const SSTATUS: u64 = SIE | SPIE | SPP | VS | FS | SUM | MXR;
 const MSTATUS: u64 = SSTATUS | MIE | MPIE | MPP | MPRV | TVM | TW | TSR;
 const UXL: u64 = 2 << 32;
 const SXL: u64 = 2 << 34;
@@ -87,14 +93,41 @@ impl Trap {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Levels {
+    Machine,
+    MachineUser,
+    #[default]
+    MachineSupervisorUser,
+}
+
+impl Levels {
+    pub fn isa_bits(self) -> u64 {
+        (u64::from(self != Self::Machine) << 20)
+            | (u64::from(self == Self::MachineSupervisorUser) << 18)
+    }
+
+    fn lowest_mpp(self) -> u64 {
+        if self == Self::Machine { MPP } else { 0 }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Privilege {
     pub mode: Mode,
+    pub levels: Levels,
+    pub zicboz: bool,
+    pub(crate) renode_menvcfg: bool,
+    menvcfg: u64,
+    senvcfg: u64,
     pub status: u64,
     pub satp: u64,
     pub pmp: Option<Pmp>,
     pub bpm: Option<u64>,
     pub fcsr: u8,
+    pub(crate) vector: Option<Box<VectorState>>,
+    pub(crate) andes_bfloat16: bool,
+    pub(crate) andes_quad_mac: bool,
     machine: Trap,
     supervisor: Trap,
     medeleg: u64,
@@ -112,6 +145,22 @@ pub struct Privilege {
 }
 
 impl Privilege {
+    pub(crate) fn initialize_renode_reset_status(&mut self, floating_point: bool) {
+        const FS_INITIAL: u64 = 1 << 13;
+        const XS_INITIAL: u64 = 1 << 15;
+        self.status = MPP
+            | if floating_point {
+                FS_INITIAL | XS_INITIAL
+            } else {
+                0
+            };
+    }
+
+    pub fn configure_levels(&mut self, levels: Levels) {
+        self.levels = levels;
+        self.status = (self.status & !MPP) | levels.lowest_mpp();
+    }
+
     pub fn add_interrupt(&mut self, pin: u32) {
         self.platform_interrupts |= 1 << pin;
     }
@@ -202,7 +251,10 @@ impl Privilege {
             return None;
         }
         self.mode = Mode::from_field((self.status & MPP) >> 11);
-        self.status = (self.status & !(MPP | MPIE | MIE)) | MPIE | ((self.status & MPIE) >> 4);
+        self.status = (self.status & !(MPP | MPIE | MIE))
+            | self.levels.lowest_mpp()
+            | MPIE
+            | ((self.status & MPIE) >> 4);
         if self.mode != Mode::Machine {
             self.status &= !MPRV;
         }
@@ -210,7 +262,10 @@ impl Privilege {
     }
 
     pub fn sret(&mut self, epc_mask: u64) -> Option<u64> {
-        if self.mode == Mode::User || (self.mode == Mode::Supervisor && self.status & TSR != 0) {
+        if self.levels != Levels::MachineSupervisorUser
+            || self.mode == Mode::User
+            || (self.mode == Mode::Supervisor && self.status & TSR != 0)
+        {
             return None;
         }
         self.mode = Mode::from_field((self.status & SPP) >> 8);
@@ -220,7 +275,19 @@ impl Privilege {
     }
 
     pub fn allows_sfence(&self) -> bool {
-        self.mode == Mode::Machine || (self.mode == Mode::Supervisor && self.status & TVM == 0)
+        self.levels == Levels::MachineSupervisorUser
+            && (self.mode == Mode::Machine
+                || (self.mode == Mode::Supervisor && self.status & TVM == 0))
+    }
+
+    pub fn allows_cbo_zero(&self) -> bool {
+        const CBZE: u64 = 1 << 7;
+        self.zicboz
+            && (self.mode == Mode::Machine
+                || (self.menvcfg & CBZE != 0
+                    && (self.mode == Mode::Supervisor
+                        || self.levels != Levels::MachineSupervisorUser
+                        || self.senvcfg & CBZE != 0)))
     }
 
     pub fn allows_wfi(&self) -> bool {
@@ -231,31 +298,95 @@ impl Privilege {
         self.machine.write(0x05, vector);
     }
 
+    pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
+        Some(match name {
+            "vstart" => return self.vector.as_ref()?.read(0x008),
+            "mstatus" => self.status,
+            "mepc" => self.machine.epc,
+            "mcause" => self.machine.cause,
+            "mtval" => self.machine.value,
+            "sepc" if self.levels == Levels::MachineSupervisorUser => self.supervisor.epc,
+            _ => return self.external_pmp()?.read(external_pmp_csr(name)?),
+        })
+    }
+
+    pub(crate) fn write_external_pmp(&mut self, name: &str, value: u64) -> Option<()> {
+        let csr = external_pmp_csr(name)?;
+        let pmp = self.pmp.as_mut().filter(|pmp| pmp.allow_when_inactive)?;
+        pmp.write(csr, value).then_some(())
+    }
+
+    fn external_pmp(&self) -> Option<&Pmp> {
+        self.pmp.as_ref().filter(|pmp| pmp.allow_when_inactive)
+    }
+
     pub fn read(&self, csr: u32, misa: u64, epc_mask: u64) -> Option<u64> {
         if ((csr >> 8) & 3) as u64 > self.mode as u64 {
             return None;
         }
-        let sd = if self.status & FS == FS { 1 << 63 } else { 0 };
+        if self.levels != Levels::MachineSupervisorUser
+            && (csr >> 8 & 3 == 1 || matches!(csr, 0x302 | 0x303))
+        {
+            return None;
+        }
+        let sd = if self.status & FS == FS || self.status & VS == VS {
+            1 << 63
+        } else {
+            0
+        };
         Some(match csr {
             1..=3 if self.status & FS != 0 && misa & (1 << 5) != 0 => match csr {
                 1 => u64::from(self.fcsr & 31),
                 2 => u64::from(self.fcsr >> 5),
                 _ => u64::from(self.fcsr),
             },
+            0x008..=0x00a | 0x00f | 0xc20..=0xc22 if self.status & VS != 0 => {
+                self.vector.as_ref()?.read(csr)?
+            }
             0x100 => (self.status & SSTATUS) | UXL | sd,
             0x104 => self.enable & self.mideleg,
             0x106 => self.supervisor_counter_enable,
+            0x10a if self.zicboz => self.senvcfg,
             0x144 => self.pending() & self.mideleg,
             0x180 if self.allows_sfence() => self.satp,
-            0x300 => self.status | UXL | SXL | sd,
+            0x300 => {
+                self.status
+                    | sd
+                    | match self.levels {
+                        Levels::Machine => 0,
+                        Levels::MachineUser => UXL,
+                        Levels::MachineSupervisorUser => UXL | SXL,
+                    }
+            }
             0x301 => misa,
             0x302 => self.medeleg,
             0x303 => self.mideleg,
             0x304 => self.enable,
             0x306 => self.counter_enable,
+            0x30a if self.zicboz || self.renode_menvcfg => self.menvcfg,
             0x310 => return None,
             0x320 => self.inhibit,
             0x344 => self.pending(),
+            0xfc2 if self.andes_bfloat16 || self.andes_quad_mac => {
+                (u64::from(self.andes_bfloat16) << 32)
+                    | (u64::from(self.vector.is_some()) << 36)
+                    | (u64::from(self.andes_quad_mac) << 52)
+                    | 0x10020
+            }
+            0xfc3 | 0xfcb if self.andes_bfloat16 || self.andes_quad_mac => 0,
+            0xfca if self.andes_bfloat16 || self.andes_quad_mac => {
+                u64::from(self.andes_quad_mac) << 35
+            }
+            0xfc7 if self.andes_bfloat16 || self.andes_quad_mac => {
+                if self.vector.is_none() || misa & (1 << 5) == 0 {
+                    0
+                } else if misa & (1 << 3) != 0 {
+                    3 << 16
+                } else {
+                    2 << 16
+                }
+            }
+            0x747 => u64::from(self.pmp.as_ref()?.mseccfg?),
             0x7c0 => self.bpm?,
             0xb00 => self.cycle,
             0xb02 => self.retired,
@@ -275,6 +406,24 @@ impl Privilege {
         })
     }
 
+    pub(crate) fn configure_vector(&mut self, kind: u64, avl: Option<u64>) -> Option<u64> {
+        if self.status & VS == 0 {
+            return None;
+        }
+        let length = self.vector.as_mut()?.configure(kind, avl);
+        self.status |= VS;
+        Some(length)
+    }
+
+    pub(crate) fn execute_vector(&mut self, instruction: u32, scalar: u64) -> Option<()> {
+        if self.status & VS == 0 {
+            return None;
+        }
+        self.vector.as_mut()?.execute(instruction, scalar)?;
+        self.status |= VS;
+        Some(())
+    }
+
     pub fn csr_rmw_value(&self, csr: u32, read_value: u64) -> u64 {
         if csr == 0x344 {
             // MIP reads expose hardware OR software SEIP. CSRRS/CSRRC modify
@@ -289,6 +438,7 @@ impl Privilege {
         self.mode == Mode::Machine
             || (self.counter_enable & (1 << index) != 0
                 && (self.mode == Mode::Supervisor
+                    || self.levels != Levels::MachineSupervisorUser
                     || self.supervisor_counter_enable & (1 << index) != 0))
     }
 
@@ -296,16 +446,30 @@ impl Privilege {
         if (csr >> 10) == 3 || self.read(csr, misa, !1).is_none() {
             return false;
         }
-        let fp_mask = if misa & (1 << 5) == 0 { !FS } else { u64::MAX };
+        let mut extension_mask = if misa & (1 << 5) == 0 { !FS } else { u64::MAX };
+        if self.vector.is_none() {
+            extension_mask &= !VS;
+        }
         match csr {
             1..=3 => {
                 let (mask, shift) = [(31, 0), (0xe0, 5), (0xff, 0)][csr as usize - 1];
                 self.fcsr = (self.fcsr & !mask) | ((value as u8) << shift & mask);
                 self.status |= FS;
             }
-            0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS & fp_mask),
+            0x008..=0x00a | 0x00f => {
+                if !self
+                    .vector
+                    .as_mut()
+                    .is_some_and(|vector| vector.write(csr, value))
+                {
+                    return false;
+                }
+                self.status |= VS;
+            }
+            0x100 => self.status = (self.status & !SSTATUS) | (value & SSTATUS & extension_mask),
             0x104 => self.enable = (self.enable & !self.mideleg) | (value & self.mideleg),
             0x106 => self.supervisor_counter_enable = value & u64::from(u32::MAX),
+            0x10a => self.senvcfg = value & (1 << 7),
             0x144 => {
                 let writable = self.mideleg & (1 << 1);
                 self.injected = (self.injected & !writable) | (value & writable);
@@ -313,8 +477,12 @@ impl Privilege {
             0x180 if matches!(value >> 60, 0 | 8 | 9) => self.satp = value,
             0x180 | 0x301 | 0xb03..=0xb1f | 0x323..=0x33f => {}
             0x300 => {
-                self.status = value & MSTATUS & fp_mask;
-                if self.status & MPP == 2 << 11 {
+                self.status = value & MSTATUS & extension_mask;
+                if self.levels == Levels::Machine {
+                    self.status |= MPP;
+                } else if self.status & MPP == 2 << 11
+                    || (self.levels == Levels::MachineUser && self.status & MPP == 1 << 11)
+                {
                     self.status &= !MPP;
                 }
             }
@@ -322,8 +490,21 @@ impl Privilege {
             0x303 => self.mideleg = value & S_INTERRUPTS,
             0x304 => self.enable = value & (M_INTERRUPTS | S_INTERRUPTS | self.platform_interrupts),
             0x306 => self.counter_enable = value & u64::from(u32::MAX),
+            0x30a if self.renode_menvcfg => {
+                if self.levels == Levels::Machine {
+                    return false;
+                }
+                self.menvcfg = value & RENODE_MENVCFG_WRITABLE;
+            }
+            0x30a => self.menvcfg = value & (1 << 7),
             0x320 => self.inhibit = value & 5,
             0x344 => self.injected = value & S_INTERRUPTS,
+            0x747 => {
+                return self
+                    .pmp
+                    .as_mut()
+                    .is_some_and(|pmp| pmp.write_mseccfg(value));
+            }
             0x7c0 => self.bpm = Some(value),
             0xb00 => self.cycle = value,
             0xb02 => self.retired = value,
@@ -338,6 +519,21 @@ impl Privilege {
     }
 }
 
+fn external_pmp_csr(name: &str) -> Option<u32> {
+    if let Some(index) = name.strip_prefix("pmpcfg") {
+        let index: u32 = index.parse().ok()?;
+        return (index < 16).then(|| 0x3a0 + index);
+    }
+    let index: u32 = name.strip_prefix("pmpaddr")?.parse().ok()?;
+    (index < 64).then(|| 0x3b0 + index)
+}
+
+const MML: u8 = 1;
+const MMWP: u8 = 2;
+const RLB: u8 = 4;
+const PMP_LOCK: u8 = 0x80;
+const SHARED_READ_ONLY: u8 = PMP_LOCK | READ | WRITE | EXECUTE;
+
 #[derive(Clone)]
 pub struct Pmp {
     config: Vec<u8>,
@@ -345,6 +541,7 @@ pub struct Pmp {
     active: u64,
     address_mask: u64,
     allow_when_inactive: bool,
+    mseccfg: Option<u8>,
 }
 
 impl Pmp {
@@ -355,6 +552,7 @@ impl Pmp {
             active: 0,
             address_mask: (1 << address_bits) - 1,
             allow_when_inactive: false,
+            mseccfg: None,
         }
     }
 
@@ -362,6 +560,47 @@ impl Pmp {
         let mut pmp = Self::new(entries, address_bits);
         pmp.allow_when_inactive = true;
         pmp
+    }
+
+    pub fn enable_smepmp(&mut self) {
+        self.mseccfg = Some(0);
+    }
+
+    fn write_mseccfg(&mut self, value: u64) -> bool {
+        let Some(old) = self.mseccfg else {
+            return false;
+        };
+        let mut allowed = MML | MMWP;
+        if old & RLB != 0 || self.config.iter().all(|cfg| cfg & PMP_LOCK == 0) {
+            allowed |= RLB;
+        }
+        self.mseccfg = Some((old & (MML | MMWP)) | (value as u8 & allowed));
+        true
+    }
+
+    fn rule_permissions(&self, config: u8, mode: Mode) -> u8 {
+        const RWX: u8 = READ | WRITE | EXECUTE;
+        let machine = mode == Mode::Machine;
+        let locked = config & PMP_LOCK != 0;
+        if self.mseccfg.unwrap_or(0) & MML == 0 {
+            return if machine && !locked {
+                RWX
+            } else {
+                config & RWX
+            };
+        }
+        if config & SHARED_READ_ONLY == SHARED_READ_ONLY {
+            return READ;
+        }
+        if config & (READ | WRITE) == WRITE {
+            let execute_bit = config & EXECUTE != 0;
+            return if locked {
+                EXECUTE | if machine && execute_bit { READ } else { 0 }
+            } else {
+                READ | if machine || execute_bit { WRITE } else { 0 }
+            };
+        }
+        if machine == locked { config & RWX } else { 0 }
     }
 
     fn config_start(&self, csr: u32) -> Option<usize> {
@@ -380,16 +619,28 @@ impl Pmp {
     }
 
     fn write(&mut self, csr: u32, value: u64) -> bool {
+        let security = self.mseccfg.unwrap_or(0);
+        let bypass = security & RLB != 0;
+        let lockdown = security & MML != 0;
         if let Some(start) = self.config_start(csr) {
             for (index, config) in
                 (start..(start + 8).min(self.config.len())).zip(value.to_le_bytes())
             {
-                if self.config[index] & 0x80 != 0 {
+                if !bypass && self.config[index] & PMP_LOCK != 0 {
                     continue;
                 }
                 let mut config = config & 0x9f;
-                if config & (READ | WRITE) == WRITE {
+                let shared_encoding = config & (READ | WRITE) == WRITE;
+                if !lockdown && shared_encoding {
                     config &= !WRITE;
+                }
+                if lockdown
+                    && !bypass
+                    && config & PMP_LOCK != 0
+                    && (config & EXECUTE != 0 || shared_encoding)
+                    && config & SHARED_READ_ONLY != SHARED_READ_ONLY
+                {
+                    continue;
                 }
                 self.config[index] = config;
                 self.active &= !(1 << index);
@@ -410,7 +661,7 @@ impl Pmp {
             .config
             .get(index + 1)
             .is_some_and(|config| config & 0x98 == 0x88);
-        if self.config[index] & 0x80 == 0 && !locked_by_next {
+        if bypass || (self.config[index] & PMP_LOCK == 0 && !locked_by_next) {
             *address = value & self.address_mask;
         }
         true
@@ -446,17 +697,119 @@ impl Pmp {
             if lower < upper && address < upper && lower < end {
                 return address >= lower
                     && end <= upper
-                    && ((mode == Mode::Machine && config & 0x80 == 0)
-                        || config & permission == permission);
+                    && self.rule_permissions(config, mode) & permission == permission;
             }
         }
+        let security = self.mseccfg.unwrap_or(0);
         mode == Mode::Machine
+            && security & MMWP == 0
+            && (security & MML == 0 || permission & EXECUTE == 0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smepmp_lockdown_permissions_match_the_architectural_table() {
+        const R: u8 = READ;
+        const W: u8 = WRITE;
+        const X: u8 = EXECUTE;
+        let machine = [
+            0,
+            0,
+            R | W,
+            R | W,
+            0,
+            0,
+            0,
+            0,
+            0,
+            X,
+            X,
+            R | X,
+            R,
+            R | X,
+            R | W,
+            R,
+        ];
+        let lower = [
+            0,
+            X,
+            R,
+            R | W,
+            R,
+            R | X,
+            R | W,
+            R | W | X,
+            0,
+            0,
+            X,
+            X,
+            0,
+            0,
+            0,
+            R,
+        ];
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        assert!(pmp.write_mseccfg(u64::from(MML | RLB)));
+        assert!(pmp.write(0x3b0, 0x800));
+        for (index, (&m, &su)) in machine.iter().zip(&lower).enumerate() {
+            let rwx = ((index & 4) >> 2) | (index & 2) | ((index & 1) << 2);
+            let cfg = (index & 8) << 4 | rwx | 0x08;
+            assert!(pmp.write(0x3a0, cfg as u64));
+            for (mode, expected) in [(Mode::Machine, m), (Mode::Supervisor, su), (Mode::User, su)] {
+                for bit in [R, W, X, R | W] {
+                    assert_eq!(
+                        pmp.permits(0x1000, 4, bit, mode),
+                        expected & bit == bit,
+                        "{cfg:#x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn smepmp_bypass_is_locked_out_after_a_locked_tor_rule() {
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        assert!(pmp.write_mseccfg(u64::from(RLB)));
+        assert!(pmp.write(0x3a0, 0x8900));
+        assert!(pmp.write(0x3b0, 0x400));
+        assert!(pmp.write(0x3b1, 0x800));
+        assert!(pmp.write_mseccfg(u64::from(MML | MMWP)));
+        assert!(pmp.write_mseccfg(u64::MAX));
+        assert_eq!(pmp.mseccfg, Some(MML | MMWP));
+        assert!(pmp.write_mseccfg(0));
+        assert_eq!(pmp.mseccfg, Some(MML | MMWP));
+        assert!(pmp.write(0x3b0, 1));
+        assert!(pmp.write(0x3b1, 2));
+        assert_eq!(
+            (pmp.read(0x3b0), pmp.read(0x3b1)),
+            (Some(0x400), Some(0x800))
+        );
+        assert!(pmp.write(0x3a0, 0x008c_0000));
+        assert_eq!(pmp.read(0x3a0), Some(0x8900)); // executable M-only rule rejected
+        assert!(pmp.permits(0x1000, 4, READ, Mode::Machine));
+        assert!(!pmp.permits(0x1000, 4, READ, Mode::Supervisor));
+        assert!(!pmp.permits(0x3000, 4, READ, Mode::Machine));
+    }
+
+    #[test]
+    fn smepmp_unmatched_policy_and_disabled_lock() {
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        assert!(pmp.write(0x3a0, u64::from(PMP_LOCK))); // locked, A=OFF
+        assert!(pmp.write_mseccfg(u64::from(MML | RLB)));
+        assert_eq!(pmp.mseccfg, Some(MML));
+        assert!(pmp.permits(0x1000, 4, READ | WRITE, Mode::Machine));
+        assert!(!pmp.permits(0x1000, 4, EXECUTE, Mode::Machine));
+        assert!(pmp.write_mseccfg(u64::from(MMWP)));
+        assert!(!pmp.permits(0x1000, 4, READ, Mode::Machine));
+    }
 
     #[test]
     fn external_pmp_is_bypassed_only_while_no_regions_are_active() {

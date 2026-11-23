@@ -3,8 +3,42 @@ pub fn expand(insn: u32) -> Option<u32> {
     expand_integer(insn, false)
 }
 
-pub fn expand_rv64(insn: u32) -> Option<u32> {
-    expand_integer(insn, true)
+pub fn expand_rv64(insn: u32, zcb: bool) -> Option<u32> {
+    expand_integer(insn, true).or_else(|| zcb.then(|| expand_zcb(insn)).flatten())
+}
+
+fn expand_zcb(insn: u32) -> Option<u32> {
+    let base = 8 + ((insn >> 7) & 7);
+    let operand = 8 + ((insn >> 2) & 7);
+    let byte_offset = ((insn >> 4) & 2) | ((insn >> 6) & 1);
+    let half_offset = byte_offset & 2;
+    let high = (insn >> 6) & 1;
+    Some(match insn & 0xfc03 {
+        0x8000 => immediate(0x03, 4, operand, base, byte_offset),
+        0x8400 => immediate(
+            0x03,
+            if high == 0 { 5 } else { 1 },
+            operand,
+            base,
+            half_offset,
+        ),
+        0x8800 => store(base, operand, byte_offset) & !(7 << 12),
+        0x8c00 if high == 0 => (store(base, operand, half_offset) & !(7 << 12)) | (1 << 12),
+        0x9c01 => match (insn >> 5) & 3 {
+            2 => register(0, 1, base, base, operand),
+            3 => match (insn >> 2) & 7 {
+                0 => immediate(0x13, 7, base, base, 0xff),
+                1 => immediate(0x13, 1, base, base, 0x604),
+                2 => register(4, 0x04, base, base, 0) | 8,
+                3 => immediate(0x13, 1, base, base, 0x605),
+                4 => register(0, 0x04, base, base, 0) | 8,
+                5 => immediate(0x13, 4, base, base, 0xfff),
+                _ => return None,
+            },
+            _ => return None,
+        },
+        _ => return None,
+    })
 }
 
 fn expand_integer(insn: u32, rv64: bool) -> Option<u32> {

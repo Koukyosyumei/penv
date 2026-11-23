@@ -1,7 +1,8 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::VecDeque,
-    io::{Read, Write},
+    fs::File,
+    io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -11,7 +12,7 @@ use crate::{
     csr::{Csr, EXTERNAL},
     litex_panel::ButtonAction,
     litex_video::ReferenceFrame,
-    rv64::Rv64,
+    rv64::{AtomicTrace, Rv64},
     sv32::TranslationCache,
     thumb::Thumb,
     zephyr_boot::BusyWait,
@@ -20,13 +21,106 @@ use crate::{
 pub const MAX_HARTS: usize = 8;
 pub const VIRTUAL_STEPS_PER_SECOND: u32 = 1_000_000;
 
+#[derive(Clone)]
+pub(crate) struct PcTrace {
+    file: Rc<RefCell<BufWriter<File>>>,
+    binary: bool,
+    amo: bool,
+}
+
+impl PcTrace {
+    pub(crate) fn new(file: File, binary: bool, amo: bool) -> std::io::Result<Self> {
+        let mut file = BufWriter::new(file);
+        if binary {
+            if amo {
+                // The emitted opcodes are base A instructions.
+                file.write_all(b"ReTrace\x05\x08\x01\x01\x0Friscv64 rv64ima")?;
+            } else {
+                file.write_all(b"ReTrace\x05\x08\x00")?;
+            }
+        }
+        Ok(Self {
+            file: Rc::new(RefCell::new(file)),
+            binary,
+            amo,
+        })
+    }
+
+    fn write(&self, pc: u64) -> std::io::Result<()> {
+        let mut file = self.file.borrow_mut();
+        if self.binary {
+            let mut record = [0; 9];
+            record[..8].copy_from_slice(&pc.to_le_bytes());
+            file.write_all(&record)
+        } else {
+            writeln!(file, "0x{pc:X}")
+        }
+    }
+
+    fn write_atomic(&self, pc: u64, record: &AtomicTrace) -> Result<(), String> {
+        let mut file = self.file.borrow_mut();
+        let output = (|| -> std::io::Result<()> {
+            if self.binary {
+                file.write_all(&pc.to_le_bytes())?;
+                file.write_all(&[4])?;
+                file.write_all(&record.instruction.to_le_bytes())?;
+                for (phase, values) in [(0, record.before), (1, record.after)] {
+                    file.write_all(&[
+                        3,
+                        phase,
+                        if record.width == 8 { 3 } else { 2 },
+                        (record.instruction >> 27) as u8,
+                    ])?;
+                    for value in values {
+                        file.write_all(&value.to_le_bytes()[..record.width])?;
+                    }
+                }
+                file.write_all(&[0])
+            } else {
+                let input = record
+                    .instruction
+                    .to_le_bytes()
+                    .map(|byte| format!("{byte:#04x}"))
+                    .join(" ");
+                let decoded = crate::llvm_mc("+m,+a", "--disassemble", &input)
+                    .map_err(std::io::Error::other)?;
+                let text = String::from_utf8_lossy(&decoded.stdout);
+                let instruction = text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty() && *line != ".text")
+                    .filter(|_| decoded.status.success() && decoded.stderr.is_empty())
+                    .ok_or_else(|| std::io::Error::other("llvm-mc could not decode traced AMO"))?;
+                let instruction = instruction.split_whitespace().collect::<Vec<_>>().join(" ");
+                writeln!(file, "0x{pc:X}: {:08x} {instruction}", record.instruction)?;
+                for (phase, [rd, rs1, rs2, value]) in
+                    [("before", record.before), ("after", record.after)]
+                {
+                    writeln!(
+                        file,
+                        "AMO operands {phase} - RD: 0x{rd:X}, RS1: 0x{rs1:X} (memory value: 0x{value:X}), RS2: 0x{rs2:X}"
+                    )?;
+                }
+                Ok(())
+            }
+        })();
+        output.map_err(|error| format!("RV64 AMO trace: {error}"))
+    }
+
+    pub(crate) fn flush(&self) -> std::io::Result<()> {
+        self.file.borrow_mut().flush()
+    }
+}
+
 pub struct Machine {
     pub bus: Bus,
     pub primary: Hart,
     secondary: Vec<Hart>,
     next_hart: usize,
+    pc_trace: Option<(usize, PcTrace)>,
     halt_hooks: Vec<(usize, u64, usize)>,
     halted: u8,
+    pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
     reset_steps: VecDeque<u64>,
     button_events: VecDeque<(u64, usize, bool)>,
@@ -75,6 +169,8 @@ pub enum Stop {
     Tohost(u64),
     Ecall,
     Ebreak,
+    TestExit(u64),
+    AllHalted,
     Reset,
     Limit,
     ScriptComplete,
@@ -200,8 +296,10 @@ impl Machine {
             },
             secondary: Vec::new(),
             next_hart: 0,
+            pc_trace: None,
             halt_hooks: Vec::new(),
             halted: 0,
+            stop_when_halted: false,
             elapsed_steps: 0,
             reset_steps: VecDeque::new(),
             button_events: VecDeque::new(),
@@ -218,6 +316,9 @@ impl Machine {
             .map(|id| {
                 let mut hart = self.primary.clone();
                 hart.csr.hart_id = id;
+                if let Some(cpu) = &mut hart.rv64 {
+                    cpu.hart_id = id;
+                }
                 hart.name = None;
                 hart
             })
@@ -237,10 +338,33 @@ impl Machine {
         }
     }
 
+    pub(crate) fn rv64_hart_by_name(&self, name: &str) -> Result<usize, String> {
+        std::iter::once(&self.primary)
+            .chain(&self.secondary)
+            .enumerate()
+            .find_map(|(id, hart)| {
+                (hart.name.as_deref() == Some(name) && hart.rv64.is_some()).then_some(id)
+            })
+            .ok_or_else(|| format!("unknown named RV64 CPU {name:?}"))
+    }
+
+    pub(crate) fn rv64_translate_read(&mut self, name: &str, address: u64) -> Result<u64, String> {
+        let id = self.rv64_hart_by_name(name)?;
+        let hart = if id == 0 {
+            &self.primary
+        } else {
+            &self.secondary[id - 1]
+        };
+        hart.rv64
+            .as_ref()
+            .expect("validated RV64 CPU")
+            .translate_read(&mut self.bus, address)
+    }
+
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &mut hart.rv64 {
-            cpu.pc = u64::from(entry);
+            cpu.set_program_counter(u64::from(entry));
         }
         hart.pc = entry;
         Ok(())
@@ -286,7 +410,7 @@ impl Machine {
     pub fn set_entry(&mut self, entry: u32) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(cpu) = &mut hart.rv64 {
-                cpu.pc = u64::from(entry);
+                cpu.set_program_counter(u64::from(entry));
             }
             hart.pc = entry;
         }
@@ -294,7 +418,10 @@ impl Machine {
 
     pub fn set_rv64_entry(&mut self, entry: u64) {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
-            hart.rv64.as_mut().expect("RV64 machine").pc = entry;
+            hart.rv64
+                .as_mut()
+                .expect("RV64 machine")
+                .set_program_counter(entry);
         }
     }
 
@@ -593,6 +720,23 @@ impl Machine {
         self.inputs.insert(index, (step, input));
     }
 
+    pub(crate) fn trace_pc(&mut self, name: &str, trace: PcTrace) -> Result<(), String> {
+        let hart = self.rv64_hart_by_name(name)?;
+        self.hart_mut(hart)
+            .rv64
+            .as_mut()
+            .expect("named RV64 CPU")
+            .trace_amo = trace.amo;
+        self.pc_trace = Some((hart, trace));
+        Ok(())
+    }
+
+    pub(crate) fn halt_rv64_cpu(&mut self, name: &str) -> Result<(), String> {
+        let hart = self.rv64_hart_by_name(name)?;
+        self.halted |= 1 << hart;
+        Ok(())
+    }
+
     pub fn halt_on_pc(&mut self, source: &str, pc: u64, target: &str) -> Result<(), String> {
         let find = |name: &str| {
             let name = name.strip_prefix("sysbus.").unwrap_or(name);
@@ -678,6 +822,31 @@ impl Machine {
         output: &mut W,
         matched: impl Fn(&Bus, &W) -> bool,
     ) -> Result<(Stop, u64), String> {
+        self.run_selected(limit, None, output, matched)
+    }
+
+    pub(crate) fn step_rv64_cpu(
+        &mut self,
+        name: &str,
+        output: &mut impl Write,
+    ) -> Result<Stop, String> {
+        let index = self.rv64_hart_by_name(name)?;
+        self.run_selected(1, Some(index), output, |_, _| false)
+            .map(|(stop, _)| stop)
+    }
+
+    fn run_selected<W: Write>(
+        &mut self,
+        limit: u64,
+        selected: Option<usize>,
+        output: &mut W,
+        matched: impl Fn(&Bus, &W) -> bool,
+    ) -> Result<(Stop, u64), String> {
+        let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
+        let stop_when_halted = self.stop_when_halted && selected.is_none();
+        if stop_when_halted && self.halted == all_harts {
+            return Ok((Stop::AllHalted, 0));
+        }
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
@@ -760,12 +929,15 @@ impl Machine {
                 self.bus.reset_cortex_m_devices();
                 self.primary.reset_cortex_m(&mut self.bus)?;
             }
-            let index = self.next_hart;
-            if index == self.secondary.len() {
-                self.next_hart = 0;
-            } else {
-                self.next_hart += 1;
-            }
+            let index = selected.unwrap_or_else(|| {
+                let index = self.next_hart;
+                if index == self.secondary.len() {
+                    self.next_hart = 0;
+                } else {
+                    self.next_hart += 1;
+                }
+                index
+            });
             let hart = if index == 0 {
                 &mut self.primary
             } else {
@@ -816,13 +988,38 @@ impl Machine {
             for &(source, pc, target) in &self.halt_hooks {
                 if index == source && hart.rv64.as_ref().is_some_and(|cpu| cpu.pc == pc) {
                     self.halted |= 1 << target;
+                    if stop_when_halted && self.halted == all_harts {
+                        return Ok((Stop::AllHalted, retired));
+                    }
                 }
             }
             if self.halted & (1 << index) != 0 {
                 continue;
             }
+            let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
+            let pc = trace.map(|_| {
+                hart.rv64
+                    .as_ref()
+                    .expect("trace targets a named RV64 CPU")
+                    .pc
+            });
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
-                Step::Retired => retired += 1,
+                Step::Retired => {
+                    retired += 1;
+                    if let (Some((_, trace)), Some(pc)) = (trace, pc) {
+                        if trace.amo {
+                            if let Some(record) =
+                                hart.rv64.as_mut().and_then(|cpu| cpu.atomic_trace.take())
+                            {
+                                trace.write_atomic(pc, &record)?;
+                            }
+                        } else {
+                            trace
+                                .write(pc)
+                                .map_err(|error| format!("RV64 PC trace: {error}"))?;
+                        }
+                    }
+                }
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
             }
@@ -831,6 +1028,9 @@ impl Machine {
             }
             if let Some(code) = self.bus.tohost_exit {
                 return Ok((Stop::Tohost(code), retired));
+            }
+            if let Some(code) = self.bus.rv64_test_exit {
+                return Ok((Stop::TestExit(code), retired));
             }
             if self.bus.rv64_devices.reset_requested {
                 return Ok((Stop::Reset, retired));

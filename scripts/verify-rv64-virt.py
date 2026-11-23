@@ -14,7 +14,7 @@ def verify(args):
     stderr = args.logs / "virt.stderr.log"
     with uart.open("wb") as output, uart.open("rb") as capture, stderr.open("wb") as errors:
         guest = subprocess.Popen([
-            args.penv, "run", "--platform", "platforms/rv64_virt.repl",
+            args.penv, "run", "--platform", args.platform,
             "--dtb", f"0x88000000:{args.work / 'virt-padded.dtb'}",
             "--load-binary", f"0x80200000:{args.work / 'Image'}",
             "--load-binary", f"0x84000000:{args.work / 'rootfs.cpio'}",
@@ -58,6 +58,7 @@ def verify(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("work", type=Path, help="directory with OpenSBI, Image, initramfs and DTB")
+    parser.add_argument("--platform", type=Path, default=Path("platforms/rv64_virt.repl"))
     parser.add_argument("--penv", type=Path, default=Path("target/release/penv"))
     parser.add_argument("--logs", type=Path, default=Path("target/rv64-virt-verification"))
     parser.add_argument("--timeout", type=int, default=600)

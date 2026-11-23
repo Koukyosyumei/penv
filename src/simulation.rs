@@ -258,7 +258,7 @@ impl Node {
         let mut image_path = None;
         if let Some(value) = boot.image {
             let (file, path) = open(&value)?;
-            image::load(&mut machine, file, false, None)
+            image::load(&mut machine, file, false, None, false)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             image_path = Some(path);
         }

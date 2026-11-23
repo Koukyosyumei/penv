@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""Run fixed RV64 AndeStar LEA, bit operation, GP-relative and byte search cases through the Penv CLI."""
+
+import argparse
+from pathlib import Path
+import re
+import subprocess
+
+
+CASES = {
+    "Should Execute LEA B ZE On RV64": ("nds.lea.b.ze", 8),
+    "Should Execute LEA H ZE On RV64": ("nds.lea.h.ze", 9),
+    "Should Execute LEA W ZE On RV64": ("nds.lea.w.ze", 10),
+    "Should Execute LEA D ZE On RV64": ("nds.lea.d.ze", 11),
+    "Should Preserve Full Width LEA H On RV64": ("nds.lea.h", 5),
+    "Should Preserve Full Width LEA W On RV64": ("nds.lea.w", 6),
+    "Should Preserve Full Width LEA D On RV64": ("nds.lea.d", 7),
+}
+
+
+def verify(args, platform, label, commands, expected, memory=()):
+    result = subprocess.run(
+        [args.penv, "run", "--platform", platform, "--max-steps", "0", *commands],
+        capture_output=True, text=True, timeout=30,
+    )
+    (args.logs / f"{label}.stderr").write_text(result.stderr)
+    (args.logs / f"{label}.status").write_text(f"{result.returncode}\n")
+    observed = [(name, int(value, 16)) for name, value in re.findall(
+        r"^penv: register cpu@(\w+) = (0x[0-9a-f]+)$", result.stderr, re.M
+    )]
+    if (result.returncode or result.stdout or observed != expected
+            or any(line not in result.stderr for line in memory)):
+        args.failures.append(label)
+        print(f"FAIL {label}: expected {expected!r}, got {result.stderr}")
+        return
+    print(f"PASS {label}")
+
+
+def write_platform(path, isa, properties=""):
+    path.write_text(f"""cpu: CPU.RiscV64 @ sysbus
+    cpuType: "{isa}"
+    timeProvider: empty
+{properties}mem: Memory.MappedMemory @ sysbus 0x0
+    size: 0x100000
+""")
+
+
+def verify_bits(args, platform, tests, step):
+    case = "Should Test RV64 Bits Above Thirty One"
+    commands = []
+    expected = []
+    for mnemonic, source, bit, offset, pc in fixture_rows(tests[case], "Check Immediate Branch", 4):
+        bit = int(bit)
+        offset = int(offset) & 0x7ff
+        function = {"nds.bbc": 0, "nds.bbs": 1}[mnemonic]
+        word = ((offset & 0x400) << 21 | function << 30 | (offset & 0x3e0) << 20
+                | (bit & 31) << 20 | 10 << 15 | 7 << 12 | (offset & 0x1e) << 7
+                | (bit >> 5) << 7 | 0x5b)
+        commands += ["--write-memory", f"0x2000:4:{word:#x}", "--set-gpr", f"cpu@x10:{source}",
+                     *step, "--read-register-now", "cpu@x10"]
+        expected += [("pc", int(pc, 16)), ("x10", int(source, 16))]
+    verify(args, platform, case, commands, expected)
+
+    case = "Should Extract And Insert Full Width Bit Fields On RV64"
+    commands = []
+    expected = []
+    for mnemonic, source, msb, lsb, rd in fixture_rows(tests[case], "Check Bit Field", 6):
+        function = {"nds.bfoz": 2, "nds.bfos": 3}[mnemonic]
+        word = int(msb) << 26 | int(lsb) << 20 | 10 << 15 | function << 12 | 12 << 7 | 0x5b
+        commands += ["--write-memory", f"0x2000:4:{word:#x}", "--set-gpr", f"cpu@x10:{source}",
+                     *step, "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 16))]
+    verify(args, platform, case, commands, expected)
+
+
+def verify_quad_mac(args, tests, step):
+    platform = args.logs / "andestar-quad-mac.repl"
+    write_platform(platform, "rv64gc_v_xandesvqmac", "    vectorRegisterLength: 128\n")
+
+    def execute(word):
+        return ["--write-memory", f"0x2000:4:{word:#x}", *step]
+
+    def configure(sew):
+        return execute(0xc0000000 | sew << 23 | 1 << 15 | 7 << 12 | 5 << 7 | 0x57)
+
+    case = "Should Truncate Quad MAC Scalars On RV64"
+    if '.insn r 0x57, 4, 123, a2, s0, a0' not in tests[case]:
+        raise RuntimeError(f"unexpected fixed Robot instruction for {case}")
+    commands = ["--set-mstatus", "cpu:0x2200", "--write-memory", "0x4000:1:0xff",
+                "--write-memory", "0x4004:4:0", "--set-gpr", "cpu@x10:0x4000",
+                *configure(0), *execute(1 << 25 | 10 << 15 | 10 << 7 | 0x07),
+                "--set-gpr", "cpu@x10:0x4004",
+                *configure(2), *execute(1 << 25 | 10 << 15 | 6 << 12 | 12 << 7 | 0x07),
+                *configure(0), "--set-gpr", "cpu@x8:0x12345678ffffff80",
+                *execute(123 << 25 | 10 << 20 | 8 << 15 | 4 << 12 | 12 << 7 | 0x57),
+                "--read-register-now", "cpu@vstart", *configure(2),
+                "--set-gpr", "cpu@x10:0x5000",
+                *execute(1 << 25 | 10 << 15 | 6 << 12 | 12 << 7 | 0x27),
+                "--read-memory-now", "0x5000:4"]
+    expected = [("pc", 0x2004)] * 6 + [("vstart", 0)] + [("pc", 0x2004)] * 2
+    verify(args, platform, case, commands, expected,
+           ["penv: memory sysbus@0x0000000000005000:4 = 0x0000000000000080"])
+
+    case = "Should Advertise Quad MAC Configuration Registers"
+    rows = [line.split()[3:] for line in tests[case].split("Reset Emulation", 1)[1].splitlines()
+            if line.split()[:3] == ["Check", "CSR", "Bits"]]
+    commands = ["--set-mstatus", "cpu:0x2200"]
+    expected = []
+    for csr, mask, value in rows:
+        commands += [*execute(int(csr, 0) << 20 | 2 << 12 | 12 << 7 | 0x73),
+                     "--read-register-now", "cpu@x12"]
+        # Expect the additional fixed VECCFG, CCTL and HSP bits in mmsc_cfg.
+        extra = (1 << 36 | 0x10020) if int(csr, 0) == 0xfc2 else 0
+        assert extra & int(mask, 0) == 0
+        expected += [("pc", 0x2004), ("x12", int(value, 0) | extra)]
+    verify(args, platform, f"{case} (RV64 portion)", commands, expected)
+
+    # Reuse the RV32 arithmetic inputs as supplemental RV64 coverage.
+    for case, body in tests.items():
+        if not case.startswith("Should Execute VQMACC"):
+            continue
+        commands = ["--set-mstatus", "cpu:0x2200"]
+        expected = []
+        memory = []
+
+        def instruction(word):
+            commands.extend(execute(word))
+            expected.append(("pc", 0x2004))
+
+        def config(width, length):
+            sew = {1: 0, 2: 1, 4: 2, 8: 3}[width]
+            instruction(0xc0000000 | sew << 23 | length << 15 | 7 << 12 | 5 << 7 | 0x57)
+
+        def vector_memory(register, width, address, opcode):
+            function = {1: 0, 2: 5, 4: 6, 8: 7}[width]
+            commands.extend(("--set-gpr", f"cpu@x10:{address:#x}"))
+            instruction(1 << 25 | 10 << 15 | function << 12 | register << 7 | opcode)
+
+        def seed(register, width, values):
+            for lane, value in enumerate(values):
+                commands.extend(("--write-memory", f"{0x4000 + lane * width:#x}:{width}:{value:#x}"))
+            config(width, len(values))
+            vector_memory(register, width, 0x4000, 0x07)
+
+        rows = [cells[3:] for line in body.splitlines()
+                if (cells := line.split())[:3] == ["Check", "Quad", "MAC"]]
+        if len(rows) != 3:
+            raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+        for row, (function, form, width, first, second, acc, result, *masked) in enumerate(rows):
+            width = int(width) // 8
+            first, second, acc, result = (int(value, 0) for value in (first, second, acc, result))
+            seed(0, 1, [1])
+            seed(8, width, [first, first])
+            seed(10, width, [second, second])
+            seed(12, width * 4, [acc, 0x12345678 if masked else acc])
+            config(width, 2)
+            commands.extend(("--set-gpr", f"cpu@x8:{0x12340000 | first:#x}"))
+            instruction(int(function) << 26 | int(not masked) << 25 | 10 << 20 | 8 << 15
+                        | (4 if form == "vx" else 0) << 12 | 12 << 7 | 0x57)
+            commands.extend(("--read-register-now", "cpu@vstart"))
+            expected.append(("vstart", 0))
+            config(width * 4, 2)
+            result_base = 0x5000 + row * 0x20
+            vector_memory(12, width * 4, result_base, 0x27)
+            for lane, value in enumerate([result, 0x12345678 if masked else result]):
+                address = result_base + lane * width * 4
+                commands.extend(("--read-memory-now", f"{address:#x}:{width * 4}"))
+                memory.append(f"penv: memory sysbus@{address:#018x}:{width * 4} = {value:#018x}")
+        verify(args, platform, f"{case} (supplemental RV64)", commands, expected, memory)
+
+
+
+def verify_vector_bfloat16(args, tests, step):
+    platform = args.logs / "andestar-vector-bfloat16.repl"
+    write_platform(platform, "rv64gc_v_xandesvbfhcvt", "    vectorRegisterLength: 128\n")
+    case = "Should Convert Vector BF16 On RV64"
+    commands = ["--set-mstatus", "cpu:0x2200"]
+    expected = []
+    memory = []
+
+    def execute(word):
+        commands.extend(("--write-memory", f"0x2000:4:{word:#x}", *step))
+        expected.append(("pc", 0x2004))
+
+    def configure(width):
+        sew = {16: 1, 32: 2}[width]
+        execute(0xc0000000 | sew << 23 | 1 << 15 | 7 << 12 | 5 << 7 | 0x57)
+
+    for csr, mask, value in [line.split()[3:] for line in tests[case].splitlines()
+                             if line.split()[:3] == ["Check", "CSR", "Bits"]]:
+        execute(int(csr, 0) << 20 | 2 << 12 | 12 << 7 | 0x73)
+        # The fixed default cache/stack bits are the only additional set bits.
+        expected.append(("x12", int(value, 0) | (0x10020 if int(mask, 0) == 0x1100000000 else 0)))
+        commands.extend(("--read-register-now", "cpu@x12"))
+
+    rows = [line.split()[3:] for line in tests[case].splitlines()
+            if line.split()[:3] == ["Check", "Vector", "Unary"]]
+    if len(rows) != 2:
+        raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+    for mnemonic, sew, source_width, target_width, source, value, *flags in rows:
+        source_width, target_width = int(source_width), int(target_width)
+        commands.extend(("--write-memory", f"0x4000:{source_width // 8}:{source}",
+                         "--set-gpr", "cpu@x10:0x4000"))
+        configure(source_width)
+        execute(1 << 25 | 10 << 15 | {16: 5, 32: 6}[source_width] << 12 | 8 << 7 | 0x07)
+        configure(int(sew))
+        execute(0x00305073)
+        function = {"nds.vfwcvt.s.bf16": 0, "nds.vfncvt.bf16.s": 1}[mnemonic]
+        execute(8 << 20 | function << 15 | 4 << 12 | 12 << 7 | 0x5b)
+        commands.extend(("--read-register-now", "cpu@fflags", "--read-register-now", "cpu@vstart",
+                         "--set-gpr", "cpu@x10:0x5000",
+                         "--write-memory", f"0x5000:{target_width // 8}:0xffff"))
+        expected.extend((("fflags", int(flags[0]) if flags else 0), ("vstart", 0)))
+        configure(target_width)
+        execute(1 << 25 | 10 << 15 | {16: 5, 32: 6}[target_width] << 12 | 12 << 7 | 0x27)
+        commands.extend(("--read-memory-now", f"0x5000:{target_width // 8}"))
+        memory.append(f"penv: memory sysbus@{0x5000:#018x}:{target_width // 8} = {int(value, 0):#018x}")
+    verify(args, platform, case, commands, expected, memory)
+
+
+def verify_scalar_bfloat16(args, tests, step):
+    platform = args.logs / "andestar-bfloat16.repl"
+    write_platform(platform, "rv64gc_xandesbfhcvt")
+    case = "Should Handle Scalar BF16 NaN Boxing And Overflow On RV64"
+    rows = [cells[3:] for line in tests[case].splitlines()
+            if (cells := line.split())[:3] == ["Check", "Scalar", "BF16"]]
+    if len(rows) != 2:
+        raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+    commands = ["--set-mtvec", "cpu:0x1000", "--write-memory", "0x1ff0:4:0x00305073"]
+    expected = []
+    for mnemonic, source, result, flags in rows:
+        kind = {"nds.fcvt.s.bf16": 2, "nds.fcvt.bf16.s": 3}[mnemonic]
+        word = 1 << 20 | kind << 15 | 4 << 12 | 5 << 7 | 0x5b
+        commands += ["--set-mstatus", "cpu:0x2000", "--set-freg", f"cpu@f1:{source}",
+                     "--set-pc", "cpu:0x1ff0", "--step-cpu", "cpu",
+                     "--write-memory", f"0x2000:4:{word:#x}", *step,
+                     "--read-register-now", "cpu@f5", "--read-register-now", "cpu@fflags"]
+        expected += [("pc", 0x2004), ("f5", int(result, 0)), ("fflags", int(flags, 0))]
+    verify(args, platform, case, commands, expected)
+
+
+def verify_byte_search(args, platform, tests, step):
+    case = "Should Search All Eight Bytes On RV64"
+    functions = {"nds.ffb": 16, "nds.ffzmism": 17, "nds.ffmism": 18, "nds.flmism": 19}
+    commands = []
+    expected = []
+    for mnemonic, lhs, rhs, rd in fixture_rows(tests[case], "Check Register Instruction", 6):
+        word = functions[mnemonic] << 25 | 11 << 20 | 10 << 15 | 12 << 7 | 0x5b
+        commands += ["--write-memory", f"0x2000:4:{word:#x}",
+                     "--set-gpr", f"cpu@x10:{lhs}", "--set-gpr", f"cpu@x11:{rhs}",
+                     *step, "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 0))]
+    verify(args, platform, case, commands, expected)
+
+
+def gp_word(mnemonic, offset):
+    opcode, function, width = {
+        "nds.lbgp": (0x0b, 0, 1),
+        "nds.lbugp": (0x0b, 2, 1),
+        "nds.addigp": (0x0b, 1, 1),
+        "nds.lhgp": (0x2b, 1, 2),
+        "nds.lhugp": (0x2b, 5, 2),
+        "nds.lwgp": (0x2b, 2, 4),
+    }[mnemonic]
+    word = opcode | 12 << 7 | function << 12
+    word |= (offset & 0x800) << 9 | (offset & 0x7000) << 5 | (offset & 0x18000)
+    if width == 4:
+        word |= (offset & 0x7fc) << 20 | (offset & 0x20000) << 4 | (offset & 0x40000) << 13
+    else:
+        word |= (offset & 0x7fe) << 20 | (offset & 0x20000) << 14
+        if width == 1:
+            word |= (offset & 1) << 14
+    return word
+
+
+def verify_gp(args, platform, tests, step):
+    case = "Should Sign Extend GP Loads On RV64"
+    commands = ["--set-gpr", "cpu@x3:0x80000"]
+    expected = []
+    widths = {"Byte": 1, "Word": 2, "DoubleWord": 4}
+    for mnemonic, access, address, offset, value, rd in fixture_rows(tests[case], "Check GP Load", 5):
+        word = gp_word(mnemonic, int(offset, 0))
+        commands += ["--write-memory", f"{address}:{widths[access]}:{value}",
+                     "--write-memory", f"0x2000:4:{word:#x}", *step,
+                     "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 0))]
+    verify(args, platform, case, commands, expected)
+
+    case = "Should Preserve Full Width Global Pointer On RV64"
+    commands = []
+    expected = []
+    for base, offset, rd in fixture_rows(tests[case], "Check ADDIGP", 3):
+        word = gp_word("nds.addigp", int(offset, 0))
+        commands += ["--set-gpr", f"cpu@x3:{base}", "--write-memory", f"0x2000:4:{word:#x}",
+                     *step, "--read-register-now", "cpu@x12"]
+        expected += [("pc", 0x2004), ("x12", int(rd, 0))]
+    verify(args, platform, case, commands, expected)
+
+
+def fixture_rows(body, keyword, count):
+    prefix = keyword.split()
+    rows = [cells[len(prefix):] for line in body.splitlines()
+            if (cells := line.split())[:len(prefix)] == prefix]
+    if "Create Machine                  bits=64" not in body or len(rows) != count:
+        raise RuntimeError(f"unexpected fixed Robot fixture for {keyword}")
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("robot", type=Path)
+    parser.add_argument("--penv", type=Path, default=Path("target/release/penv"))
+    parser.add_argument("--logs", type=Path, required=True)
+    args = parser.parse_args()
+    args.failures = []
+    args.logs.mkdir(parents=True, exist_ok=True)
+    platform = args.logs / "andestar.repl"
+    write_platform(platform, "rv64imac_xandesperf")
+
+    tests = dict(re.findall(
+        r"^(Should [^\n]+)\n((?:[ \t]+[^\n]*\n)+)", args.robot.read_text(), re.M
+    ))
+    step = ["--set-pc", "cpu:0x2000", "--step-cpu", "cpu", "--read-register-now", "cpu@pc"]
+    for case, (mnemonic, function) in CASES.items():
+        body = tests[case]
+        operands = [line.split()[3:] for line in body.splitlines()
+                    if line.split()[:4] == ["Check", "Register", "Instruction", mnemonic]]
+        if "Create Machine                  bits=64" not in body or len(operands) != 3:
+            raise RuntimeError(f"unexpected fixed Robot fixture for {case}")
+        word = function << 25 | 11 << 20 | 10 << 15 | 12 << 7 | 0x5b
+        commands = ["--write-memory", f"0x2000:4:{word:#x}"]
+        expected = []
+        for _, lhs, rhs, rd in operands:
+            commands += ["--set-gpr", f"cpu@x10:{lhs}", "--set-gpr", f"cpu@x11:{rhs}",
+                         *step, "--read-register-now", "cpu@x12"]
+            expected += [("pc", 0x2004), ("x12", int(rd, 16))]
+        verify(args, platform, case, commands, expected)
+
+    verify_bits(args, platform, tests, step)
+    verify_gp(args, platform, tests, step)
+    verify_byte_search(args, platform, tests, step)
+    verify_scalar_bfloat16(args, tests, step)
+    verify_vector_bfloat16(args, tests, step)
+    verify_quad_mac(args, tests, step)
+
+    base = args.logs / "base.repl"
+    write_platform(base, "rv64imac")
+    verify(args, base, "extension-disabled", [
+        "--write-memory", "0x2000:4:0x0ab5065b", "--set-mtvec", "cpu:0x1000",
+        *step, "--read-register-now", "cpu@mcause", "--read-register-now", "cpu@mepc",
+    ], [("pc", 0x1000), ("mcause", 2), ("mepc", 0x2000)])
+    if args.failures:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

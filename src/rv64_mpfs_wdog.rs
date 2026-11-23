@@ -61,7 +61,7 @@ impl Watchdog {
                 Phase::Permitted => self.begin(Phase::Triggered, deadline),
                 Phase::Triggered => {
                     self.deadline = None;
-                    self.reset = true;
+                    self.request_reset();
                 }
             }
         }
@@ -69,6 +69,15 @@ impl Watchdog {
     }
 
     fn begin(&mut self, phase: Phase, now: u64) {
+        let name = match phase {
+            Phase::Forbidden => "ForbiddenRegion",
+            Phase::Permitted => "RefreshRegion",
+            Phase::Triggered => "AfterTrigger",
+        };
+        eprintln!(
+            "penv: watchdog {:#010x}: Switching state to {name}.",
+            self.base
+        );
         self.phase = phase;
         let period = match phase {
             Phase::Forbidden => {
@@ -87,6 +96,16 @@ impl Watchdog {
         self.deadline = Some(now.saturating_add(u64::from(period)));
     }
 
+    fn request_reset(&mut self) {
+        if !self.reset {
+            eprintln!(
+                "penv: watchdog {:#010x}: Watchdog reset triggered!",
+                self.base
+            );
+        }
+        self.reset = true;
+    }
+
     pub fn levels(&self) -> [bool; 2] {
         [self.control & self.status & 1 != 0, self.status & 2 != 0]
     }
@@ -99,13 +118,19 @@ impl Watchdog {
     pub fn read(&self, address: u32, width: usize) -> Option<u32> {
         Some(match self.offset(address, width)? {
             0 => {
-                self.deadline
-                    .map_or(0, |deadline| deadline.saturating_sub(self.ticks) as u32)
-                    + match self.phase {
-                        Phase::Forbidden => self.permit,
-                        Phase::Permitted => self.trigger,
-                        Phase::Triggered => 0,
-                    }
+                let stopped = if self.phase == Phase::Triggered {
+                    0
+                } else {
+                    u32::MAX
+                };
+                let timer = self.deadline.map_or(stopped, |deadline| {
+                    deadline.saturating_sub(self.ticks) as u32
+                });
+                timer.wrapping_add(match self.phase {
+                    Phase::Forbidden => self.permit,
+                    Phase::Permitted => self.trigger,
+                    Phase::Triggered => 0,
+                })
             }
             4 => self.control,
             8 => {
@@ -128,6 +153,7 @@ impl Watchdog {
                 self.begin(Phase::Triggered, self.ticks);
             }
             0 if self.phase != Phase::Triggered && value == REFRESH_KEY => {
+                eprintln!("penv: watchdog {:#010x}: Refreshing watchdog.", self.base);
                 self.begin(Phase::Forbidden, self.ticks);
             }
             4 => self.control = 2 | (value & 0x11),
@@ -136,7 +162,7 @@ impl Watchdog {
             0x10 => self.permit = value & 0xff_ffff,
             0x14 => self.trigger = value & 0xfff,
             0x18 if self.phase == Phase::Triggered && value & 0xffff == RESET_KEY => {
-                self.reset = true;
+                self.request_reset();
             }
             0x18 => self.begin(Phase::Triggered, self.ticks),
             _ => {}
@@ -151,6 +177,28 @@ impl Watchdog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_reloads_a_running_watchdog_in_the_disabled_forbidden_window() {
+        let mut watchdog = Watchdog::new(0x2000_1000, 1, 1, Default::default());
+        let base = watchdog.base;
+        // The descending LimitTimer starts disabled at ulong.MaxValue.
+        assert_eq!(watchdog.read(base, 4), Some(14_999));
+        watchdog.write(base + 0xc, 4, 10).unwrap();
+        watchdog.write(base + 0x10, 4, 5).unwrap();
+        watchdog.write(base + 0x14, 4, 2).unwrap();
+        watchdog.write(base + 4, 4, 1).unwrap();
+        watchdog.write(base, 4, 0).unwrap();
+        assert!(!watchdog.advance(2));
+        watchdog.write(base, 4, 0).unwrap();
+        assert_eq!(watchdog.read(base, 4), Some(8));
+        watchdog.write(base, 4, REFRESH_KEY).unwrap();
+        assert_eq!(watchdog.read(base, 4), Some(10));
+        assert!(!watchdog.advance(5));
+        assert_eq!(watchdog.levels(), [false, false]);
+        assert!(!watchdog.advance(7));
+        assert_eq!(watchdog.levels(), [true, false]);
+    }
 
     #[test]
     fn watchdog_reports_windows_triggers_and_resets() {
@@ -168,5 +216,6 @@ mod tests {
         assert!(!watchdog.advance(8));
         assert_eq!(watchdog.levels(), [true, true]);
         assert!(watchdog.advance(10));
+        assert_eq!(watchdog.read(base, 4), Some(0));
     }
 }

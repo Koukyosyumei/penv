@@ -11,7 +11,7 @@ use crate::{
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_mpfs_wdog::{Output as WatchdogOutput, Watchdog},
-    rv64_priv::Pmp,
+    rv64_priv::{Levels, Pmp},
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
@@ -38,11 +38,22 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         }
         match entry.model.as_str() {
             "CPU.RiscV64" => {
+                if entry.registration.as_deref() != Some("sysbus")
+                    && !entries.iter().any(|cluster| {
+                        cluster.model == "CPU.Cluster"
+                            && entry.registration.as_deref() == Some(cluster.name.as_str())
+                    })
+                {
+                    return Err(
+                        entry.error("expected RV64 CPU registered on sysbus or a CPU cluster")
+                    );
+                }
                 let hart = property(entry, "hartId").map_or(Ok(0), |value| number(entry, value))?;
                 let hart = usize::try_from(hart)
                     .map_err(|_| entry.error("hart ID exceeds host limits"))?;
                 cpus.push((hart, entry));
             }
+            "CPU.Cluster" => {}
             model if model.starts_with("CPU.") => {
                 return Err(entry.error("mixed CPU architectures"));
             }
@@ -52,7 +63,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                     .as_deref()
                     .is_some_and(|value| value.starts_with("sysbus") || value.starts_with('{')) =>
             {
-                map_memory(&mut machine, entry)?;
+                map_memory(&mut machine, entry, &entries)?;
                 ram = true;
             }
             "IRQControllers.CoreLevelInterruptor" => {
@@ -74,6 +85,13 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
         return Err("RV64 platform has no mapped RAM".into());
     }
     cpus.sort_unstable_by_key(|&(hart, _)| hart);
+    let single_mhartid = if let [(hart, _)] = cpus.as_mut_slice() {
+        let id = *hart;
+        *hart = 0;
+        (id != 0).then_some(id as u64)
+    } else {
+        None
+    };
     if cpus.is_empty()
         || cpus.len() > MAX_HARTS
         || cpus
@@ -105,10 +123,15 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     }
     machine.configure_harts(cpus.len());
     for &(hart, entry) in &cpus {
-        let cpu = create_cpu(entry, clint, external_pmps[hart])?;
+        let mut cpu = create_cpu(entry, clint, external_pmps[hart])?;
+        cpu.hart_id = hart;
+        cpu.mhartid_override = single_mhartid;
         let target = machine.hart_mut(hart);
         target.name = Some(entry.name.clone());
         target.rv64 = Some(Box::new(cpu));
+        if external_pmps[hart].is_some() {
+            eprintln!("penv: {}: Enabling External PMP", entry.name);
+        }
     }
 
     if let Some(entry) = clint {
@@ -195,7 +218,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
     }
 
     for entry in uarts {
-        let base = entry.address()?;
+        let (base, uart_harts) = uart_registration(entry, &entries)?;
         let sifive = entry.model == "UART.SiFive_UART";
         let wide = flag(entry, "wideRegisters", false)?;
         let mut source = 0;
@@ -230,7 +253,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
                 }
             }
         }
-        let uart = Uart::new(
+        let mut uart = Uart::new(
             entry.name.clone(),
             base,
             source as usize,
@@ -238,6 +261,7 @@ pub fn load(entries: Vec<Entry>, board_name: Option<&str>) -> Result<Machine, St
             sifive,
             wide,
         );
+        uart.harts = uart_harts;
         check_mapping(&machine, entry, base, uart.size())?;
         machine.bus.rv64_devices.uarts.push(uart);
     }
@@ -750,9 +774,6 @@ fn create_cpu(
     clint: Option<&Entry>,
     external_pmp: Option<&Entry>,
 ) -> Result<Rv64, String> {
-    if entry.registration.as_deref() != Some("sysbus") {
-        return Err(entry.error("expected RV64 CPU registered on sysbus"));
-    }
     let cpu_type = property(entry, "cpuType").ok_or_else(|| entry.error("missing cpuType"))?;
     let isa = Isa::parse(cpu_type.trim_matches('"')).map_err(|error| entry.error(&error))?;
     if let Some(time) = property(entry, "timeProvider")
@@ -773,13 +794,43 @@ fn create_cpu(
         return Err(entry.error("unsupported RV64 privileged architecture"));
     }
     let mut cpu = Rv64::new(isa);
+    if let Some(address) = property(entry, "resetVector").or_else(|| property(entry, "ResetVector"))
+    {
+        cpu.set_reset_vector(number(entry, address)?);
+    }
+    if let Some(length) =
+        property(entry, "vectorRegisterLength").or_else(|| property(entry, "VectorRegisterLength"))
+    {
+        if cpu.privilege.vector.is_none() {
+            return Err(entry.error("vector register length requires the V extension"));
+        }
+        let length = number(entry, length)?;
+        cpu.privilege.vector = Some(Box::new(
+            crate::rv64::vector::VectorState::new(length).map_err(|error| entry.error(error))?,
+        ));
+    }
+    let levels = match property(entry, "privilegeLevels") {
+        None | Some("PrivilegeLevels.MachineSupervisorUser") => Levels::MachineSupervisorUser,
+        Some("PrivilegeLevels.MachineUser") => Levels::MachineUser,
+        Some("PrivilegeLevels.Machine") => Levels::Machine,
+        Some(_) => return Err(entry.error("unsupported RV64 privilege levels")),
+    };
+    cpu.privilege.configure_levels(levels);
+    if flag(entry, "renodeResetMstatus", false)? {
+        cpu.privilege
+            .initialize_renode_reset_status(isa.single || isa.double);
+    }
     cpu.allow_unaligned = flag(entry, "allowUnalignedAccesses", false)?;
+    cpu.privilege.renode_menvcfg = flag(entry, "renodeMenvcfg", false)?;
     let pmp_count =
         property(entry, "pmpEntryCount").map_or(Ok(64), |value| number(entry, value))?;
     let pmp_bits =
         property(entry, "pmpNumberOfAddrBits").map_or(Ok(54), |value| number(entry, value))?;
     if pmp_count > 64 || !(1..=54).contains(&pmp_bits) {
         return Err(entry.error("unsupported RV64 PMP configuration"));
+    }
+    if isa.smepmp && (pmp_count == 0 || external_pmp.is_some()) {
+        return Err(entry.error("Smepmp requires internal PMP entries"));
     }
     if let Some(external) = external_pmp {
         let count = property(external, "numberOfPMPEntries")
@@ -789,7 +840,11 @@ fn create_cpu(
         }
         cpu.privilege.pmp = Some(Pmp::external(count as usize, pmp_bits as u32));
     } else if pmp_count != 0 {
-        cpu.privilege.pmp = Some(Pmp::new(pmp_count as usize, pmp_bits as u32));
+        let mut pmp = Pmp::new(pmp_count as usize, pmp_bits as u32);
+        if isa.smepmp {
+            pmp.enable_smepmp();
+        }
+        cpu.privilege.pmp = Some(pmp);
     }
     if entry
         .body
@@ -797,6 +852,13 @@ fn create_cpu(
         .any(|(_, value)| value == "RegisterCustomCSR \"BPM\" 0x7C0 Machine")
     {
         cpu.privilege.bpm = Some(0);
+    }
+    if flag(entry, "traceStackAccess", false)? {
+        cpu.stack_access_trace_name = Some(entry.name.clone());
+    }
+    cpu.trace_custom_csr = flag(entry, "traceCustomCsr", false)?;
+    if cpu.trace_custom_csr && cpu.privilege.bpm.is_none() {
+        return Err(entry.error("traceCustomCsr requires the custom BPM CSR registration"));
     }
     Ok(cpu)
 }
@@ -912,7 +974,148 @@ fn merge(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     Ok(merged)
 }
 
-fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
+fn registration_items(registrations: &str) -> impl Iterator<Item = &str> {
+    let mut depth = 0;
+    registrations
+        .split(move |ch| {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            ch == ';' && depth == 0
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn typed_registration<'a>(
+    entry: &Entry,
+    value: &'a str,
+) -> Result<Option<(bool, HashMap<&'a str, &'a str>)>, String> {
+    let (point, properties) =
+        if let Some(value) = value.strip_prefix("new Bus.BusPointRegistration") {
+            (true, value)
+        } else if let Some(value) = value.strip_prefix("new Bus.BusRangeRegistration") {
+            (false, value)
+        } else {
+            return Ok(None);
+        };
+    let properties = properties
+        .trim()
+        .strip_prefix('{')
+        .and_then(|text| text.strip_suffix('}'))
+        .ok_or_else(|| entry.error("invalid typed bus registration"))?;
+    let mut fields = HashMap::new();
+    for field in properties
+        .split(';')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        let (key, value) = field
+            .split_once(':')
+            .ok_or_else(|| entry.error("invalid bus registration property"))?;
+        if !matches!(
+            key.trim(),
+            "address" | "size" | "offset" | "cpu" | "cluster"
+        ) || fields.insert(key.trim(), value.trim()).is_some()
+        {
+            return Err(entry.error("unknown or duplicate bus registration property"));
+        }
+    }
+    Ok(Some((point, fields)))
+}
+
+fn registration_address(entry: &Entry, fields: &HashMap<&str, &str>) -> Result<u64, String> {
+    number(
+        entry,
+        fields
+            .get("address")
+            .ok_or_else(|| entry.error("missing bus registration address"))?,
+    )
+}
+
+fn registration_harts(
+    entry: &Entry,
+    entries: &[Entry],
+    fields: &HashMap<&str, &str>,
+) -> Result<u64, String> {
+    let mut cpus = entries.iter().filter(|candidate| {
+        candidate.model == "CPU.RiscV64" && candidate.registration.as_deref() != Some("none")
+    });
+    let single = cpus.clone().count() == 1;
+    let mask = |cpu: &Entry| {
+        if single {
+            return Ok(1);
+        }
+        let hart = property(cpu, "hartId").map_or(Ok(0), |value| number(cpu, value))?;
+        if hart >= MAX_HARTS as u64 {
+            return Err(cpu.error("hart ID exceeds supported limit"));
+        }
+        Ok(1 << hart)
+    };
+    match (fields.get("cpu"), fields.get("cluster")) {
+        (None, None) => Ok(0),
+        (Some(name), None) => cpus
+            .find(|cpu| cpu.name == *name)
+            .ok_or_else(|| entry.error("unknown CPU in bus registration"))
+            .and_then(mask),
+        (None, Some(name))
+            if entries
+                .iter()
+                .any(|candidate| candidate.model == "CPU.Cluster" && candidate.name == *name) =>
+        {
+            let mut result = 0;
+            for cpu in cpus.filter(|cpu| cpu.registration.as_deref() == Some(*name)) {
+                result |= mask(cpu)?;
+            }
+            if result == 0 {
+                return Err(entry.error("bus registration cluster has no RV64 CPUs"));
+            }
+            Ok(result)
+        }
+        _ => Err(entry.error("invalid CPU or cluster bus registration")),
+    }
+}
+
+fn uart_registration(entry: &Entry, entries: &[Entry]) -> Result<(u32, u64), String> {
+    let Some(registrations) = entry
+        .registration
+        .as_deref()
+        .and_then(|text| text.trim().strip_prefix('{'))
+        .and_then(|text| text.strip_suffix('}'))
+    else {
+        return Ok((entry.address()?, 0));
+    };
+    let mut address = None;
+    let mut harts = 0;
+    for item in registration_items(registrations) {
+        let text = item.strip_prefix("sysbus").unwrap_or("").trim();
+        let Some((true, fields)) = typed_registration(entry, text)? else {
+            return Err(entry.error("unsupported UART registration"));
+        };
+        let current = registration_address(entry, &fields)?;
+        let scope = registration_harts(entry, entries, &fields)?;
+        if scope == 0
+            || harts & scope != 0
+            || fields.contains_key("offset")
+            || fields.contains_key("size")
+            || address.is_some_and(|base| base != current)
+        {
+            return Err(
+                entry.error("UART CPU registrations must be disjoint and share one address")
+            );
+        }
+        address = Some(current);
+        harts |= scope;
+    }
+    let base = address
+        .and_then(|base| u32::try_from(base).ok())
+        .ok_or_else(|| entry.error("missing or invalid CPU-scoped UART address"))?;
+    Ok((base, harts))
+}
+
+fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result<(), String> {
     let size = required_number(entry, "size")?;
     let mut registrations = entry.registration.as_deref().unwrap().trim();
     if let Some(multiple) = registrations
@@ -922,15 +1125,36 @@ fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
         registrations = multiple.trim();
     }
     let mut windows = Vec::new();
-    for registration in registrations
-        .split(';')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    for registration in registration_items(registrations) {
         let value = registration
             .strip_prefix("sysbus")
             .ok_or_else(|| entry.error("unsupported RAM registration"))?
             .trim();
+        if let Some((point, fields)) = typed_registration(entry, value)? {
+            let address = registration_address(entry, &fields)?;
+            let length = if point {
+                if fields.contains_key("size") {
+                    return Err(entry.error("point registration cannot specify a size"));
+                }
+                size
+            } else {
+                number(
+                    entry,
+                    fields
+                        .get("size")
+                        .ok_or_else(|| entry.error("missing RAM registration size"))?,
+                )?
+            };
+            let harts = registration_harts(entry, entries, &fields)?;
+            windows.push((
+                address,
+                length,
+                number(entry, fields.get("offset").copied().unwrap_or("0"))?,
+                harts,
+                fields.contains_key("cluster"),
+            ));
+            continue;
+        }
         let (address, length) = if let Some(range) = value
             .strip_prefix('<')
             .and_then(|value| value.strip_suffix('>'))
@@ -951,26 +1175,37 @@ fn map_memory(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
         } else {
             (number(entry, value)?, size)
         };
-        windows.push((address, length));
+        windows.push((address, length, 0, 0, false));
     }
-    let Some(&(primary, _)) = windows.first() else {
-        return Err(entry.error("missing RAM registration"));
-    };
-    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
-    if windows
-        .iter()
-        .any(|&(_, length)| length == 0 || length > size)
+    if windows.is_empty()
+        || windows.iter().any(|&(_, length, offset, _, _)| {
+            length == 0 || offset.checked_add(length).is_none_or(|end| end > size)
+        })
     {
         return Err(entry.error("invalid RAM window size"));
     }
-    let backing = machine
-        .bus
-        .map_ram_backing64(primary, len, windows[0].1 as usize)
-        .map_err(|error| entry.error(&error))?;
-    for &(address, length) in &windows[1..] {
+    let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
+    let primary = windows
+        .iter()
+        .position(|&(_, _, offset, harts, _)| harts == 0 && offset == 0);
+    let backing = if let Some(primary) = primary {
+        let (base, length, _, _, _) = windows.remove(primary);
+        machine.bus.map_ram_backing64(base, len, length as usize)
+    } else {
+        machine.bus.allocate_ram_backing(len)
+    }
+    .map_err(|error| entry.error(&error))?;
+    for (address, length, offset, cpu, cluster) in windows {
         machine
             .bus
-            .map_alias64(backing, address, length as usize)
+            .map_alias64(
+                backing,
+                address,
+                length as usize,
+                offset as usize,
+                cpu,
+                cluster,
+            )
             .map_err(|error| entry.error(&error))?;
     }
     Ok(())

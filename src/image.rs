@@ -12,16 +12,26 @@ struct ArmSegment {
     physical_address: u32,
 }
 
-pub fn load_binary(machine: &mut Machine, mut file: File, address: u64) -> Result<(), String> {
+pub fn load_binary(machine: &mut Machine, file: File, address: u64) -> Result<(), String> {
+    load_binary_in_context(machine, file, address, None)
+}
+
+pub fn load_binary_in_context(
+    machine: &mut Machine,
+    mut file: File,
+    address: u64,
+    hart: Option<usize>,
+) -> Result<(), String> {
     let length = file.metadata().map_err(|e| e.to_string())?.len();
     if length == 0 {
         return Err("empty raw image".into());
     }
     let size = usize::try_from(length).map_err(|_| "raw image too large")?;
-    let memory = machine
-        .bus
-        .memory64(address, size)
-        .ok_or_else(|| format!("unmapped RAM access at {address:#010x} ({size} bytes)"))?;
+    let memory = match hart {
+        Some(hart) => machine.bus.cpu_memory64(hart, address, size),
+        None => machine.bus.memory64(address, size),
+    }
+    .ok_or_else(|| format!("unmapped RAM access at {address:#010x} ({size} bytes)"))?;
     file.read_exact(memory).map_err(|error| error.to_string())
 }
 
@@ -156,7 +166,11 @@ pub fn load(
     mut file: File,
     raw: bool,
     script_virtual_addresses: Option<bool>,
+    renode_elf_load: bool,
 ) -> Result<(), String> {
+    if raw && renode_elf_load {
+        return Err("--renode-elf-load requires an RV64 ELF".into());
+    }
     if raw {
         return load_binary(machine, file, u64::from(machine.raw_load_address()));
     }
@@ -166,7 +180,10 @@ pub fn load(
     file.read_exact(&mut header)
         .map_err(|e| format!("ELF header: {e}"))?;
     if header[..7] == *b"\x7fELF\x02\x01\x01" {
-        return crate::image64::load(machine, file, length);
+        return crate::image64::load(machine, file, length, renode_elf_load);
+    }
+    if renode_elf_load {
+        return Err("--renode-elf-load requires an RV64 ELF".into());
     }
     if machine.primary.rv64.is_some() {
         return Err("RV64 requires a little-endian RISC-V ELF64 executable".into());

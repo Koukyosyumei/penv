@@ -7,6 +7,8 @@ pub(super) struct Extensions {
     zbc: bool,
     pub(super) zbs: bool,
     zicond: bool,
+    zbkb: bool,
+    zbkx: bool,
 }
 
 impl Extensions {
@@ -16,6 +18,8 @@ impl Extensions {
         zbc: false,
         zbs: false,
         zicond: false,
+        zbkb: false,
+        zbkx: false,
     };
 
     pub(super) fn enable_b(&mut self) {
@@ -31,6 +35,8 @@ impl Extensions {
             "zbc" => &mut self.zbc,
             "zbs" => &mut self.zbs,
             "zicond" => &mut self.zicond,
+            "zbkb" => &mut self.zbkb,
+            "zbkx" => &mut self.zbkx,
             _ => return false,
         };
         *flag = true;
@@ -46,6 +52,19 @@ pub(super) fn immediate(isa: Isa, fields: Instruction, lhs: u64) -> Option<u64> 
     let funct3 = fields.funct3();
     if ext.zba && word && funct3 == 1 && bits >> 6 == 0x02 {
         return Some(u64::from(lhs as u32) << shamt);
+    }
+    if ext.zbkb && !word && funct3 == 5 && bits == 0x687 {
+        return Some(u64::from_le_bytes(lhs.to_le_bytes().map(u8::reverse_bits)));
+    }
+    if (ext.zbb || ext.zbkb) && funct3 == 5 {
+        match (word, bits) {
+            (false, 0x6b8) => return Some(lhs.swap_bytes()),
+            (true, _) if bits >> 5 == 0x30 => {
+                return Some(sign(u64::from((lhs as u32).rotate_right(shamt)), 32));
+            }
+            (false, _) if bits >> 6 == 0x18 => return Some(lhs.rotate_right(shamt)),
+            _ => {}
+        }
     }
     if ext.zbb {
         match (word, funct3, bits) {
@@ -63,11 +82,6 @@ pub(super) fn immediate(isa: Isa, fields: Instruction, lhs: u64) -> Option<u64> 
                         .map(|byte| if byte == 0 { 0 } else { u8::MAX }),
                 ));
             }
-            (false, 5, 0x6b8) => return Some(lhs.swap_bytes()),
-            (true, 5, _) if bits >> 5 == 0x30 => {
-                return Some(sign(u64::from((lhs as u32).rotate_right(shamt)), 32));
-            }
-            (false, 5, _) if bits >> 6 == 0x18 => return Some(lhs.rotate_right(shamt)),
             _ => {}
         }
     }
@@ -91,19 +105,50 @@ pub(super) fn register(isa: Isa, fields: Instruction, lhs: u64, rhs: u64) -> Opt
             _ => {}
         }
     }
+    if ext.zbkb {
+        match (word, funct3, funct7) {
+            (false, 4, 0x04) => return Some((rhs << 32) | u64::from(lhs as u32)),
+            (false, 7, 0x04) => return Some((u64::from(rhs as u8) << 8) | u64::from(lhs as u8)),
+            (true, 4, 0x04) => {
+                return Some(sign(
+                    (u64::from(rhs as u16) << 16) | u64::from(lhs as u16),
+                    32,
+                ));
+            }
+            _ => {}
+        }
+    }
+    if ext.zbkx && !word && funct7 == 0x14 && matches!(funct3, 2 | 4) {
+        let bits = funct3 * 2;
+        let mask = (1 << bits) - 1;
+        let mut result = 0;
+        for offset in (0..64).step_by(bits as usize) {
+            let index = (rhs >> offset) & mask;
+            let shift = index * u64::from(bits);
+            if shift < 64 {
+                result |= ((lhs >> shift) & mask) << offset;
+            }
+        }
+        return Some(result);
+    }
+    if ext.zbb || ext.zbkb {
+        match (word, funct3, funct7) {
+            (false, 4, 0x20) => return Some(lhs ^ !rhs),
+            (false, 6, 0x20) => return Some(lhs | !rhs),
+            (false, 7, 0x20) => return Some(lhs & !rhs),
+            (false, 1, 0x30) => return Some(lhs.rotate_left(shamt)),
+            (false, 5, 0x30) => return Some(lhs.rotate_right(shamt)),
+            (true, 1, 0x30) => return Some(sign(u64::from((lhs as u32).rotate_left(shamt)), 32)),
+            (true, 5, 0x30) => return Some(sign(u64::from((lhs as u32).rotate_right(shamt)), 32)),
+            _ => {}
+        }
+    }
     if ext.zbb {
         let result = match (word, funct3, funct7) {
-            (false, 4, 0x20) => Some(lhs ^ !rhs),
-            (false, 6, 0x20) => Some(lhs | !rhs),
-            (false, 7, 0x20) => Some(lhs & !rhs),
             (false, 4, 0x05) => Some((lhs as i64).min(rhs as i64) as u64),
             (false, 5, 0x05) => Some(lhs.min(rhs)),
             (false, 6, 0x05) => Some((lhs as i64).max(rhs as i64) as u64),
             (false, 7, 0x05) => Some(lhs.max(rhs)),
-            (false, 1, 0x30) => Some(lhs.rotate_left(shamt)),
-            (false, 5, 0x30) => Some(lhs.rotate_right(shamt)),
-            (true, 1, 0x30) => Some(sign(u64::from((lhs as u32).rotate_left(shamt)), 32)),
-            (true, 5, 0x30) => Some(sign(u64::from((lhs as u32).rotate_right(shamt)), 32)),
             (true, 4, 0x04) if fields.rs2() == 0 => Some(u64::from(lhs as u16)),
             _ => None,
         };
