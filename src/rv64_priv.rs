@@ -317,6 +317,7 @@ impl Privilege {
             0x310 => return None,
             0x320 => self.inhibit,
             0x344 => self.pending(),
+            0x747 => u64::from(self.pmp.as_ref()?.mseccfg?),
             0x7c0 => self.bpm?,
             0xb00 => self.cycle,
             0xb02 => self.retired,
@@ -392,6 +393,12 @@ impl Privilege {
             0x30a => self.menvcfg = value & (1 << 7),
             0x320 => self.inhibit = value & 5,
             0x344 => self.injected = value & S_INTERRUPTS,
+            0x747 => {
+                return self
+                    .pmp
+                    .as_mut()
+                    .is_some_and(|pmp| pmp.write_mseccfg(value));
+            }
             0x7c0 => self.bpm = Some(value),
             0xb00 => self.cycle = value,
             0xb02 => self.retired = value,
@@ -406,6 +413,12 @@ impl Privilege {
     }
 }
 
+const MML: u8 = 1;
+const MMWP: u8 = 2;
+const RLB: u8 = 4;
+const PMP_LOCK: u8 = 0x80;
+const SHARED_READ_ONLY: u8 = PMP_LOCK | READ | WRITE | EXECUTE;
+
 #[derive(Clone)]
 pub struct Pmp {
     config: Vec<u8>,
@@ -413,6 +426,7 @@ pub struct Pmp {
     active: u64,
     address_mask: u64,
     allow_when_inactive: bool,
+    mseccfg: Option<u8>,
 }
 
 impl Pmp {
@@ -423,6 +437,7 @@ impl Pmp {
             active: 0,
             address_mask: (1 << address_bits) - 1,
             allow_when_inactive: false,
+            mseccfg: None,
         }
     }
 
@@ -430,6 +445,47 @@ impl Pmp {
         let mut pmp = Self::new(entries, address_bits);
         pmp.allow_when_inactive = true;
         pmp
+    }
+
+    pub fn enable_smepmp(&mut self) {
+        self.mseccfg = Some(0);
+    }
+
+    fn write_mseccfg(&mut self, value: u64) -> bool {
+        let Some(old) = self.mseccfg else {
+            return false;
+        };
+        let mut allowed = MML | MMWP;
+        if old & RLB != 0 || self.config.iter().all(|cfg| cfg & PMP_LOCK == 0) {
+            allowed |= RLB;
+        }
+        self.mseccfg = Some((old & (MML | MMWP)) | (value as u8 & allowed));
+        true
+    }
+
+    fn rule_permissions(&self, config: u8, mode: Mode) -> u8 {
+        const RWX: u8 = READ | WRITE | EXECUTE;
+        let machine = mode == Mode::Machine;
+        let locked = config & PMP_LOCK != 0;
+        if self.mseccfg.unwrap_or(0) & MML == 0 {
+            return if machine && !locked {
+                RWX
+            } else {
+                config & RWX
+            };
+        }
+        if config & SHARED_READ_ONLY == SHARED_READ_ONLY {
+            return READ;
+        }
+        if config & (READ | WRITE) == WRITE {
+            let execute_bit = config & EXECUTE != 0;
+            return if locked {
+                EXECUTE | if machine && execute_bit { READ } else { 0 }
+            } else {
+                READ | if machine || execute_bit { WRITE } else { 0 }
+            };
+        }
+        if machine == locked { config & RWX } else { 0 }
     }
 
     fn config_start(&self, csr: u32) -> Option<usize> {
@@ -448,16 +504,28 @@ impl Pmp {
     }
 
     fn write(&mut self, csr: u32, value: u64) -> bool {
+        let security = self.mseccfg.unwrap_or(0);
+        let bypass = security & RLB != 0;
+        let lockdown = security & MML != 0;
         if let Some(start) = self.config_start(csr) {
             for (index, config) in
                 (start..(start + 8).min(self.config.len())).zip(value.to_le_bytes())
             {
-                if self.config[index] & 0x80 != 0 {
+                if !bypass && self.config[index] & PMP_LOCK != 0 {
                     continue;
                 }
                 let mut config = config & 0x9f;
-                if config & (READ | WRITE) == WRITE {
+                let shared_encoding = config & (READ | WRITE) == WRITE;
+                if !lockdown && shared_encoding {
                     config &= !WRITE;
+                }
+                if lockdown
+                    && !bypass
+                    && config & PMP_LOCK != 0
+                    && (config & EXECUTE != 0 || shared_encoding)
+                    && config & SHARED_READ_ONLY != SHARED_READ_ONLY
+                {
+                    continue;
                 }
                 self.config[index] = config;
                 self.active &= !(1 << index);
@@ -478,7 +546,7 @@ impl Pmp {
             .config
             .get(index + 1)
             .is_some_and(|config| config & 0x98 == 0x88);
-        if self.config[index] & 0x80 == 0 && !locked_by_next {
+        if bypass || (self.config[index] & PMP_LOCK == 0 && !locked_by_next) {
             *address = value & self.address_mask;
         }
         true
@@ -514,17 +582,119 @@ impl Pmp {
             if lower < upper && address < upper && lower < end {
                 return address >= lower
                     && end <= upper
-                    && ((mode == Mode::Machine && config & 0x80 == 0)
-                        || config & permission == permission);
+                    && self.rule_permissions(config, mode) & permission == permission;
             }
         }
+        let security = self.mseccfg.unwrap_or(0);
         mode == Mode::Machine
+            && security & MMWP == 0
+            && (security & MML == 0 || permission & EXECUTE == 0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smepmp_lockdown_permissions_match_the_architectural_table() {
+        const R: u8 = READ;
+        const W: u8 = WRITE;
+        const X: u8 = EXECUTE;
+        let machine = [
+            0,
+            0,
+            R | W,
+            R | W,
+            0,
+            0,
+            0,
+            0,
+            0,
+            X,
+            X,
+            R | X,
+            R,
+            R | X,
+            R | W,
+            R,
+        ];
+        let lower = [
+            0,
+            X,
+            R,
+            R | W,
+            R,
+            R | X,
+            R | W,
+            R | W | X,
+            0,
+            0,
+            X,
+            X,
+            0,
+            0,
+            0,
+            R,
+        ];
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        assert!(pmp.write_mseccfg(u64::from(MML | RLB)));
+        assert!(pmp.write(0x3b0, 0x800));
+        for (index, (&m, &su)) in machine.iter().zip(&lower).enumerate() {
+            let rwx = ((index & 4) >> 2) | (index & 2) | ((index & 1) << 2);
+            let cfg = (index & 8) << 4 | rwx | 0x08;
+            assert!(pmp.write(0x3a0, cfg as u64));
+            for (mode, expected) in [(Mode::Machine, m), (Mode::Supervisor, su), (Mode::User, su)] {
+                for bit in [R, W, X, R | W] {
+                    assert_eq!(
+                        pmp.permits(0x1000, 4, bit, mode),
+                        expected & bit == bit,
+                        "{cfg:#x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn smepmp_bypass_is_locked_out_after_a_locked_tor_rule() {
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        assert!(pmp.write_mseccfg(u64::from(RLB)));
+        assert!(pmp.write(0x3a0, 0x8900));
+        assert!(pmp.write(0x3b0, 0x400));
+        assert!(pmp.write(0x3b1, 0x800));
+        assert!(pmp.write_mseccfg(u64::from(MML | MMWP)));
+        assert!(pmp.write_mseccfg(u64::MAX));
+        assert_eq!(pmp.mseccfg, Some(MML | MMWP));
+        assert!(pmp.write_mseccfg(0));
+        assert_eq!(pmp.mseccfg, Some(MML | MMWP));
+        assert!(pmp.write(0x3b0, 1));
+        assert!(pmp.write(0x3b1, 2));
+        assert_eq!(
+            (pmp.read(0x3b0), pmp.read(0x3b1)),
+            (Some(0x400), Some(0x800))
+        );
+        assert!(pmp.write(0x3a0, 0x008c_0000));
+        assert_eq!(pmp.read(0x3a0), Some(0x8900)); // executable M-only rule rejected
+        assert!(pmp.permits(0x1000, 4, READ, Mode::Machine));
+        assert!(!pmp.permits(0x1000, 4, READ, Mode::Supervisor));
+        assert!(!pmp.permits(0x3000, 4, READ, Mode::Machine));
+    }
+
+    #[test]
+    fn smepmp_unmatched_policy_and_disabled_lock() {
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        assert!(pmp.write(0x3a0, u64::from(PMP_LOCK))); // locked, A=OFF
+        assert!(pmp.write_mseccfg(u64::from(MML | RLB)));
+        assert_eq!(pmp.mseccfg, Some(MML));
+        assert!(pmp.permits(0x1000, 4, READ | WRITE, Mode::Machine));
+        assert!(!pmp.permits(0x1000, 4, EXECUTE, Mode::Machine));
+        assert!(pmp.write_mseccfg(u64::from(MMWP)));
+        assert!(!pmp.permits(0x1000, 4, READ, Mode::Machine));
+    }
 
     #[test]
     fn external_pmp_is_bypassed_only_while_no_regions_are_active() {

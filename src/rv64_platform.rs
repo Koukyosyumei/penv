@@ -788,6 +788,9 @@ fn create_cpu(
     if pmp_count > 64 || !(1..=54).contains(&pmp_bits) {
         return Err(entry.error("unsupported RV64 PMP configuration"));
     }
+    if isa.smepmp && (pmp_count == 0 || external_pmp.is_some()) {
+        return Err(entry.error("Smepmp requires internal PMP entries"));
+    }
     if let Some(external) = external_pmp {
         let count = property(external, "numberOfPMPEntries")
             .map_or(Ok(64), |value| number(external, value))?;
@@ -796,7 +799,11 @@ fn create_cpu(
         }
         cpu.privilege.pmp = Some(Pmp::external(count as usize, pmp_bits as u32));
     } else if pmp_count != 0 {
-        cpu.privilege.pmp = Some(Pmp::new(pmp_count as usize, pmp_bits as u32));
+        let mut pmp = Pmp::new(pmp_count as usize, pmp_bits as u32);
+        if isa.smepmp {
+            pmp.enable_smepmp();
+        }
+        cpu.privilege.pmp = Some(pmp);
     }
     if entry
         .body

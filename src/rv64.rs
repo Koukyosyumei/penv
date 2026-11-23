@@ -35,6 +35,7 @@ pub struct Isa {
     half: bool,
     zicboz: bool,
     pub cas: bool,
+    pub smepmp: bool,
     bitmanip: bitmanip::Extensions,
 }
 
@@ -68,6 +69,7 @@ impl Isa {
             match extension {
                 "zicsr" | "zifencei" => {}
                 "zacas" if isa.atomic => isa.cas = true,
+                "smepmp" => isa.smepmp = true,
                 "zfh" if isa.single => isa.half = true,
                 "zicboz" => isa.zicboz = true,
                 extension if isa.bitmanip.enable(extension) => {}
@@ -96,6 +98,7 @@ impl Isa {
         half: false,
         zicboz: false,
         cas: false,
+        smepmp: false,
         bitmanip: bitmanip::Extensions::NONE,
     };
 }
@@ -308,7 +311,7 @@ impl Rv64 {
             if !self.privilege.write(index, value, misa) {
                 return None;
             }
-            if matches!(index, 0x3a0..=0x3ef) {
+            if matches!(index, 0x3a0..=0x3ef | 0x747) {
                 self.translations.clear();
             }
         }

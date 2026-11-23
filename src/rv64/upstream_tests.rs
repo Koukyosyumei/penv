@@ -683,3 +683,62 @@ fn fma_rounds_to_min_normal_but_still_raises_underflow() {
     let result = f.convert(Format::Double.decode(0x380f_ffff_ffff_ffff), Rounding::Up);
     assert_eq!((result.bits, result.flags), (0x0080_0000, 1));
 }
+
+#[test]
+fn smepmp_execution_and_data_access_trap_with_physical_protection_causes() {
+    use crate::rv64_priv::Pmp;
+    let base = u64::from(RAM_BASE);
+    for (instruction, expected, fault_address) in [
+        (0x0000_006fu32, 1, base + 0x1000), // fetch outside the executable rule
+        (0x0005_3303, 5, base + 0x1000),    // ld t1, 0(a0)
+        (0x0005_3023, 7, base + 0x1000),    // sd zero, 0(a0)
+    ] {
+        let mut cpu = Rv64::new(Isa::parse("rv64i_smepmp").unwrap());
+        let mut bus = Bus::new(8192).unwrap();
+        let mut pmp = Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        cpu.privilege.pmp = Some(pmp);
+        cpu.privilege.set_vector(base + 0x100);
+        cpu.registers[A0] = fault_address;
+        let misa = cpu.misa();
+        for (csr, value) in [
+            (0x747, 4),
+            (0x3b0, (base >> 2) | 0x1ff),
+            (0x3a0, 0x9d),
+            (0x747, 3),
+        ] {
+            assert!(cpu.privilege.write(csr, value, misa));
+        }
+        if expected == 1 {
+            cpu.pc = fault_address;
+        }
+        load_program(&mut bus, &[instruction]);
+        let fault_pc = cpu.pc;
+        assert!(matches!(
+            cpu.step(&mut bus, 0, 1, &mut Vec::new()).unwrap(),
+            Step::Trap
+        ));
+        assert_eq!(cpu.pc, base + 0x100);
+        assert_eq!(cpu.privilege.read(0x342, misa, !3), Some(expected));
+        assert_eq!(cpu.privilege.read(0x343, misa, !3), Some(fault_address));
+        assert_eq!(cpu.privilege.read(0x341, misa, !3), Some(fault_pc));
+    }
+}
+
+#[test]
+fn pmp_robot_illegal_rv64_csr_indices_still_trap_with_smepmp() {
+    // pmp.robot uses Priv1_10 and checks Renode's warning for each instruction.
+    // Here check the architectural trap using the very same opcodes and count.
+    for opcode in [0x3a12_9073, 0x3da0_5073] {
+        let mut cpu = Rv64::new(Isa::parse("rv64gc_smepmp").unwrap());
+        let mut pmp = crate::rv64_priv::Pmp::new(16, 54);
+        pmp.enable_smepmp();
+        cpu.privilege.pmp = Some(pmp);
+        let mut bus = Bus::new(4096).unwrap();
+        assert_illegal(&mut cpu, &mut bus, opcode);
+        assert_eq!(
+            cpu.privilege.read(0x343, cpu.misa(), !3),
+            Some(u64::from(opcode))
+        );
+    }
+}

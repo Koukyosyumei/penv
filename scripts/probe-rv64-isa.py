@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--penv", type=Path, default=Path("target/release/penv"))
     parser.add_argument("--logs", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--smepmp", action="store_true", help="enable Smepmp in the diagnostic profile")
     parser.add_argument("--allow-unaligned", action="store_true")
     parser.add_argument("--ram-size", type=lambda value: int(value, 0), default=0x100000)
     parser.add_argument("--elf", action="append", help="select named ELF parameters for a diagnostic variant")
@@ -57,7 +58,7 @@ def main():
         names = sorted(set(args.elf))
     platform = args.logs / "isa.repl"
     unaligned = "    allowUnalignedAccesses: true\n" if args.allow_unaligned else ""
-    isa = ROBOT_ISA if args.robot_isa else SUPPORTED_ISA
+    isa = ROBOT_ISA if args.robot_isa else SUPPORTED_ISA + ("_smepmp" if args.smepmp else "")
     platform.write_text(
         'cpu: CPU.RiscV64 @ sysbus\n'
         f'    cpuType: "{isa}"\n'
