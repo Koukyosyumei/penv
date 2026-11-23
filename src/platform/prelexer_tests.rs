@@ -133,3 +133,16 @@ fn renode_multiline_unclosed_multiline_string() {
     assert!(error.starts_with("SyntaxError:"));
     assert_eq!(error.lines().nth(1), Some("At 3:17:"));
 }
+
+#[test]
+fn renode_multiline_loader_multiline_quoted_string_in_using() {
+    let error = super::check_string("\nusing '''this is\nmultiline\nstring '''", None).unwrap_err();
+    assert!(error.contains("SyntaxError:"));
+}
+
+#[test]
+fn renode_multiline_loader_any_string_after_closed_multiline_string() {
+    let error = super::check_string("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    Placeholder: '''this is\nnot a single line ''' xx", None).unwrap_err();
+    assert!(error.contains("SyntaxError:"));
+    assert_eq!(error.lines().nth(1), Some("At 4:23:"));
+}

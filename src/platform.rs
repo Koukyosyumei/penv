@@ -671,15 +671,28 @@ fn parse_content(
             continue;
         }
         if line.starts_with(char::is_whitespace) {
-            current
+            let entry = current
                 .as_mut()
-                .ok_or_else(|| error("property has no declaration"))?
-                .body
-                .push((lineno, text.into()));
+                .ok_or_else(|| error("property has no declaration"))?;
+            let property = if let Some((_, value)) = text.split_once(':')
+                && let Some(open) = value.trim_start().strip_prefix("'''")
+            {
+                let offset = line.trim_end().len() - open.len();
+                read_multiline_property(&line, offset, lineno, &mut lines)?
+            } else {
+                text.to_owned()
+            };
+            entry.body.push((lineno, property));
             continue;
         }
         entries.extend(current.take());
         if let Some(include) = text.strip_prefix("using ") {
+            if include.trim_start().starts_with("'''") {
+                return Err(error(
+                    "SyntaxError: using requires a single-line quoted path",
+                ));
+            }
+
             let filename = quoted_string(include)
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
@@ -737,6 +750,47 @@ fn parse_content(
     }
     entries.extend(current);
     Ok(())
+}
+
+fn read_multiline_property<'a>(
+    first: &str,
+    start: usize,
+    first_line: usize,
+    remaining: &mut impl Iterator<Item = (usize, &'a str)>,
+) -> Result<String, String> {
+    let mut property = String::new();
+    let mut line = first;
+    let mut number = first_line;
+    let mut offset = start;
+    loop {
+        if let Some(close) = line[offset..]
+            .match_indices("'''")
+            .map(|(index, _)| offset + index)
+            .find(|&index| !repl_is_escaped(line, index))
+        {
+            let end = close + 3;
+            let trailing = line[end..].trim_start();
+            if !trailing.is_empty() && !trailing.starts_with("//") {
+                let column = line[..line.len() - trailing.len()].encode_utf16().count() + 1;
+                return Err(format!(
+                    "SyntaxError: Unexpected text after multiline string.\nAt {number}:{column}:"
+                ));
+            }
+            property.push_str(&line[..end]);
+            return Ok(property.trim_start().to_owned());
+        }
+        property.push_str(line);
+        property.push('\n');
+        let Some((index, next)) = remaining.next() else {
+            let column = first[..start - 3].encode_utf16().count();
+            return Err(format!(
+                "SyntaxError: Unclosed multiline string\nAt {first_line}:{column}:"
+            ));
+        };
+        line = next;
+        number = index + 1;
+        offset = 0;
+    }
 }
 
 fn resolve_using(
