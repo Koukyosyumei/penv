@@ -1617,3 +1617,31 @@ RESD ケースは未達です。
 `adc: Analog.AD4011_ADC @ spi1` と `referenceVoltage: 4.82` を加えた最初の
 プラットフォーム検査で型解決が停止します。再現ファイルとログは
 `$work/ad4011.repl` と `$work/ad4011-platform.log` です。
+
+### STM32F4 SPI の AD4011
+
+固定 Infrastructure `09ac7c563095c5410258ecc1b6b841a013db85` の
+`AD4011_ADC.cs` を基に、18 ビット変換、SPI の 3 バイト応答、設定レジスター、
+直接接続の ADCChannelSource を実装しました。
+上流の基準電圧 4.82 V と入力 0–4.5 V（0.5 V 刻み）を同じ ELF で確認し、
+10 電圧すべてで `abs(measured - input) < 0.00005 V` を満たしました。
+ELF は SPI の応答を USART2 に出力し、スクリプトが上流と同じ式で復号します。
+
+```sh
+work=target/stm32f407-ad4011
+mkdir -p "$work"
+cargo test > "$work/cargo.log" 2>&1
+cargo build --release > "$work/build.log" 2>&1
+tests/stm32f407-ad4011.sh "$work" > "$work/sweep.tsv"
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+直接入力ケースは各電圧の初期値を設定して個別に起動するため部分移植です。
+元の Robot の動的な `Volts` と `Transmit`、浮動入力の選択、入出力 MUX の
+操作・検証が残っています。共有モニターと追加 REPL 経路を ARM 担当に引き渡しました。
+
+独立した ArrayMemory ケースは、元の `ArrayMemory.robot` の
+`${PLATFORM}` を展開した `$work/array-memory.repl` を
+`target/release/penv platform check --file "$work/array-memory.repl"`
+で検査すると、CPU の `PerformanceInMips: 12` が拒否されます。
+ARM 担当にはその再現と、後続の Save/Clear/Load・UART の条件を渡しました。

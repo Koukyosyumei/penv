@@ -17,7 +17,7 @@ use crate::{
     stm32f4_flash::F4Flash,
     stm32f4_power::F4Power,
     stm32f4_rcc::F4Rcc,
-    stm32f4_spi::F4Spi,
+    stm32f4_spi::{Ad4011, F4Spi},
     stm32h7_adc_platform,
     stm32h7_exti::H7Exti,
     stm32h7_flash::FlashController,
@@ -2649,7 +2649,10 @@ fn build_entries_on_machine(
                     entry.model.as_str(),
                     F1I2c::MODEL | F1I2c::ECHO_MODEL | F1I2c::HS3001_MODEL
                 )
-                || matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL)
+                || matches!(
+                    entry.model.as_str(),
+                    F4Spi::MODEL | F4Spi::LOOPBACK_MODEL | Ad4011::MODEL | Ad4011::SOURCE_MODEL
+                )
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
             _ => {
@@ -3062,10 +3065,12 @@ fn build_entries_on_machine(
     }) {
         return Err(entry.error("STM32F1 I2C requires a Cortex-M CPU"));
     }
-    if let Some(entry) = entries
-        .iter()
-        .find(|entry| matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL))
-    {
+    if let Some(entry) = entries.iter().find(|entry| {
+        matches!(
+            entry.model.as_str(),
+            F4Spi::MODEL | F4Spi::LOOPBACK_MODEL | Ad4011::MODEL | Ad4011::SOURCE_MODEL
+        )
+    }) {
         return Err(entry.error("STM32F4 SPI requires a Cortex-M CPU"));
     }
     if let Some(entry) = entries.iter().find(|entry| {
@@ -3695,9 +3700,62 @@ fn configure_f4_spi(
             return Err(entry.error("duplicate SPI loopback"));
         }
     }
+    let mut inputs = HashMap::new();
+    for source in entries
+        .iter()
+        .filter(|entry| entry.model == Ad4011::SOURCE_MODEL)
+    {
+        let (parent, channel) = source
+            .registration
+            .as_deref()
+            .and_then(|registration| registration.split_once(char::is_whitespace))
+            .ok_or_else(|| source.error("expected AD4011 ADC and channel"))?;
+        if irq_index(channel, 1).is_err()
+            || !entries
+                .iter()
+                .any(|adc| adc.name == parent && adc.model == Ad4011::MODEL)
+        {
+            return Err(source.error("expected AD4011 ADC channel 0"));
+        }
+        let props = keys(source, &["defaultValueMicroVolts"])?;
+        let voltage = props
+            .first()
+            .map_or(Ok(0), |(_, value)| value.parse::<u32>())
+            .map_err(|_| source.error("invalid defaultValueMicroVolts"))?;
+        if inputs.insert(parent, voltage).is_some() {
+            return Err(source.error("duplicate AD4011 ADC channel 0"));
+        }
+    }
+    let mut converters = HashMap::new();
+    for adc in entries.iter().filter(|entry| entry.model == Ad4011::MODEL) {
+        let parent = adc
+            .registration
+            .as_deref()
+            .filter(|name| {
+                entries
+                    .iter()
+                    .any(|spi| spi.name == *name && spi.model == F4Spi::MODEL)
+            })
+            .ok_or_else(|| adc.error("expected AD4011 attached to STM32F4 SPI"))?;
+        let props = keys(adc, &["referenceVoltage"])?;
+        let reference = props
+            .first()
+            .and_then(|(_, value)| value.parse::<f64>().ok())
+            .filter(|volts| (2.4..=5.1).contains(volts))
+            .ok_or_else(|| adc.error("expected referenceVoltage between 2.4 and 5.1 V"))?;
+        let input = inputs.remove(adc.name.as_str()).unwrap_or(0);
+        if loopbacks.contains(parent)
+            || converters
+                .insert(parent, Ad4011::new((reference * 1e6).round() as u32, input))
+                .is_some()
+        {
+            return Err(adc.error("duplicate SPI target"));
+        }
+    }
     for entry in entries.iter().filter(|entry| entry.model == F4Spi::MODEL) {
         let mut spi = F4Spi::new(entry.address()?);
         spi.loopback = loopbacks.contains(entry.name.as_str());
+        spi.adc = converters.remove(entry.name.as_str());
         let mut series = false;
         for (_, text) in &entry.body {
             if text.split_once(':').is_some_and(|(key, value)| {

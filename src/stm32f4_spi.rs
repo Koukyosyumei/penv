@@ -15,11 +15,92 @@ const RXNE: u32 = 1;
 const TXE: u32 = 1 << 1;
 const OVR: u32 = 1 << 6;
 
+#[derive(Clone, Copy)]
+enum Ad4011Transfer {
+    Idle,
+    ReadConfig,
+    WriteConfig,
+    Sample { middle: u8, low: u8 },
+    LastByte(u8),
+}
+
+pub struct Ad4011 {
+    reference_uv: u32,
+    input_uv: u32,
+    config: u8,
+    transfer: Ad4011Transfer,
+}
+
+impl Ad4011 {
+    pub const MODEL: &str = "Analog.AD4011_ADC";
+    pub const SOURCE_MODEL: &str = "Analog.ADCChannelSource";
+
+    pub fn new(reference_uv: u32, input_uv: u32) -> Self {
+        Self {
+            reference_uv,
+            input_uv,
+            config: 1,
+            transfer: Ad4011Transfer::Idle,
+        }
+    }
+
+    fn exchange(&mut self, data: u8) -> u8 {
+        match std::mem::replace(&mut self.transfer, Ad4011Transfer::Idle) {
+            Ad4011Transfer::Idle if data & 0x14 == 0x14 => {
+                self.transfer = if data & 0x40 == 0 {
+                    Ad4011Transfer::WriteConfig
+                } else {
+                    Ad4011Transfer::ReadConfig
+                };
+                0
+            }
+            Ad4011Transfer::Idle => {
+                let span = if self.config & 8 != 0 {
+                    self.reference_uv * 4 / 5
+                } else {
+                    self.reference_uv
+                };
+                if self.input_uv > span {
+                    self.config &= !1;
+                }
+                let raw = (u64::from(self.input_uv) * 131072 / u64::from(span)).min(131071);
+                // The fixed upstream model returns the bottom eight bits in
+                // byte three, with optional status flags overwriting bits 4–5.
+                let mut low = raw as u8;
+                if self.config & 0x10 != 0 {
+                    low = (low & !0x30) | ((self.config & 1) << 5) | ((self.config & 8) << 1);
+                    self.config |= 1;
+                }
+                self.transfer = Ad4011Transfer::Sample {
+                    middle: (raw >> 2) as u8,
+                    low,
+                };
+                (raw >> 10) as u8
+            }
+            Ad4011Transfer::ReadConfig => {
+                let result = self.config;
+                self.config |= 1;
+                result
+            }
+            Ad4011Transfer::WriteConfig => {
+                self.config = (self.config & 1) | (data & 0x1e);
+                0
+            }
+            Ad4011Transfer::Sample { middle, low } => {
+                self.transfer = Ad4011Transfer::LastByte(low);
+                middle
+            }
+            Ad4011Transfer::LastByte(low) => low,
+        }
+    }
+}
+
 pub struct F4Spi {
     pub base: u32,
     pub irq: Option<Stm32Irq>,
     pub dma: Option<StreamTarget>,
     pub loopback: bool,
+    pub adc: Option<Ad4011>,
     cr1: u32,
     cr2: u32,
     crc_polynomial: u32,
@@ -40,6 +121,7 @@ impl F4Spi {
             irq: None,
             dma: None,
             loopback: false,
+            adc: None,
             cr1: 0,
             cr2: 0,
             crc_polynomial: 7,
@@ -51,7 +133,12 @@ impl F4Spi {
 
     pub fn reset(&mut self) {
         let (irq, dma, loopback) = (self.irq, self.dma, self.loopback);
+        let adc = self
+            .adc
+            .take()
+            .map(|adc| Ad4011::new(adc.reference_uv, adc.input_uv));
         *self = Self::new(self.base);
+        self.adc = adc;
         self.irq = irq;
         self.dma = dma;
         self.loopback = loopback;
@@ -132,13 +219,34 @@ impl F4Spi {
         }
         // As in the H7 model, an unpopulated bus supplies zero and completes immediately.
         let mask = if self.cr1 & DFF == 0 { 0xff } else { 0xffff };
-        self.receive = Some(if self.loopback { value & mask } else { 0 });
+        self.receive = Some(match &mut self.adc {
+            Some(adc) if mask == 0xff => u16::from(adc.exchange(value as u8)),
+            Some(adc) => {
+                let [high, low] = value.to_be_bytes();
+                u16::from_be_bytes([adc.exchange(high), adc.exchange(low)])
+            }
+            None if self.loopback => value & mask,
+            None => 0,
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renode_ad4011_direct_voltage_sweep() {
+        // AD4011.robot: Should Read Correct Voltage, including its strict tolerance.
+        let mut adc = Ad4011::new(4_820_000, 0);
+        for input in (0..4_820_000).step_by(500_000) {
+            adc.input_uv = input;
+            let raw = (u32::from(adc.exchange(0)) << 10)
+                | (u32::from(adc.exchange(0)) << 2)
+                | u32::from(adc.exchange(0) & 3);
+            assert!((f64::from(raw) * 4.82 / 131072.0 - f64::from(input) / 1e6).abs() < 0.00005);
+        }
+    }
 
     #[test]
     fn overrun_retains_first_frame_and_clears_in_dr_sr_order() {
