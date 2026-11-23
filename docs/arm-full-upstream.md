@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 61 | 41 | 11 | 239 |
-| Renode Infrastructure NUnit | 134 | 89 | 23 | 22 | 9 |
-| 合計 | **247** | **150** | **64** | **33** | **248** |
+| Renode Infrastructure NUnit | 134 | 108 | 4 | 22 | 9 |
+| 合計 | **247** | **169** | **45** | **33** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -508,4 +508,17 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-lifecycle-verification
 ```sh
 cargo test --locked renode_time_handle
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-time-latch-verification
+```
+
+## TimeHandle のスレッド間の待機と起床
+
+直列 TimeHandle の状態を mutex で保護し、要求・Wait・有効状態変更が保留中の場合は condition variable で待つアダプターを追加した。付与、継続・中断報告、無効化、Unblock、Unlatch で待機側に通知する。待機側はロックを再取得し、状態を再確認する。既存の RESC 実行は単一スレッドの TimeHandle を使う。
+
+固定 Infrastructure の部分移植19件を同じテストバイナリで再検証した。スレッドがロックを保持したまま待機直前の通知を送り、検証側がロックを再取得して処理の完了前であることを確認する。各刺激の後に返る量子、完了・再開フラグと拒否を照合する。ラッチ解除のケースでは、無効な量子の Wait 後も外側のラッチによる待機が続くことを確認する。
+
+TimeHandle の台帳42件は等価合格。TimeSource の複数のブロック中 sink 間での進捗伝播と長時間の同期は、アダプターに加えて親子の時間付与を調整する処理が必要なため未達。
+
+```sh
+cargo test --locked renode_threaded_time_handle
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-threaded-time-verification
 ```

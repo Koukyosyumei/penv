@@ -295,12 +295,12 @@ def classify_nunit(name, case, attrs, parameter):
         checks = {
             "WaitShouldNotBlockIfThereWasNoRequest": (PASS, "wait_without_request_returns_without_progress"),
             "WaitShouldNotBlockAfterContinue": (PASS, "wait_returns_after_continue_grant_first"),
-            "WaitShouldNotBlockAfterContinue2": (PARTIAL, "wait_returns_after_continue_request_first"),
-            "RequestShouldBlockWaitingForGrant": (PARTIAL, "request_waits_for_grant"),
-            "WaitShouldBlockWaitingForReport": (PARTIAL, "wait_for_report_request_first"),
-            "WaitShouldBlockWaitingForReport2": (PARTIAL, "wait_for_report_grant_first"),
-            "ContinueShouldFinishWaiting2": (PARTIAL, "continue_finishes_wait_request_first"),
-            "ContinueShouldFinishWaiting3": (PARTIAL, "continue_finishes_wait_grant_first"),
+            "WaitShouldNotBlockAfterContinue2": (PASS, "threaded:wait_after_continue_is_immediate"),
+            "RequestShouldBlockWaitingForGrant": (PASS, "threaded:request_wakes_on_grant"),
+            "WaitShouldBlockWaitingForReport": (PASS, "threaded:wait_blocks_request_first"),
+            "WaitShouldBlockWaitingForReport2": (PASS, "threaded:wait_blocks_grant_first"),
+            "ContinueShouldFinishWaiting2": (PASS, "threaded:continue_wakes_wait_request_first"),
+            "ContinueShouldFinishWaiting3": (PASS, "threaded:continue_wakes_wait_grant_first"),
         }
         checks.update({
             "ShouldNotAllowToGrantTwiceInARow": (PASS, "rejects_double_grant"),
@@ -316,33 +316,33 @@ def classify_nunit(name, case, attrs, parameter):
             "ShouldNotAllowToCallGrantAfterReportingBreak": (PASS, "rejects_grant_after_break"),
             "SecondWaitShouldReturnEmptyIntervalOnBlockingHandle": (PASS, "second_wait_after_break_returns_zero"),
             "WaitShouldNotBlockAfterBreak": (PASS, "wait_returns_after_break_grant_first"),
-            "WaitShouldNotBlockAfterBreak2": (PARTIAL, "wait_returns_after_break_request_first"),
+            "WaitShouldNotBlockAfterBreak2": (PASS, "threaded:wait_after_break_is_immediate"),
             "ShouldNotAllowToGrantTimeToBlockedHandle": (PASS, "rejects_grant_after_break"),
-            "RequestAfterBreakShouldBlockWaitingForUnblock": (PARTIAL, "request_after_break_waits_for_unblock"),
-            "ShouldUnblockHandle": (PARTIAL, "unblocks_zero_remaining_grant"),
-            "ContinueShouldFinishWaiting": (PARTIAL, "continue_after_unblock_reports_resumed_grant"),
-            "BreakingShouldFinishWaiting3": (PARTIAL, "break_after_unblock_reports_resumed_grant"),
+            "RequestAfterBreakShouldBlockWaitingForUnblock": (PASS, "threaded:request_blocks_after_break"),
+            "ShouldUnblockHandle": (PASS, "threaded:unblock_wakes_request_with_zero_ticks"),
+            "ContinueShouldFinishWaiting": (PASS, "threaded:continue_wakes_wait_after_unblock"),
+            "BreakingShouldFinishWaiting3": (PASS, "threaded:break_wakes_wait_after_unblock"),
             "HandleShouldNotBeReadyForNewTimeGrantAfterDispose": (PASS, "disposal_disables_grant_readiness"),
             "ShouldNotAllowToGrantTimeAfterDispose": (PASS, "rejects_grant_after_dispose"),
             "RequestShouldNotBlockOnDisabledHandle": (PASS, "request_returns_without_grant_when_disabled"),
-            "DisablingHanldeSinkSideShouldFinishRequest": (PARTIAL, "disabling_sink_resolves_pending_request"),
-            "DisablingHanldeSourceSideShouldFinishRequest": (PARTIAL, "deactivating_source_resolves_pending_request"),
-            "RequestShouldReturnDifferentValuesDependingOnSideEnabledState2": (PARTIAL, "request_responds_to_source_state_transitions"),
-            "GratingShouldFinishRequestAfterReEnablingSourceSide": (PARTIAL, "grant_fulfills_request_after_source_reactivation"),
+            "DisablingHanldeSinkSideShouldFinishRequest": (PASS, "threaded:disabling_sink_wakes_request"),
+            "DisablingHanldeSourceSideShouldFinishRequest": (PASS, "threaded:deactivating_source_wakes_request"),
+            "RequestShouldReturnDifferentValuesDependingOnSideEnabledState2": (PASS, "threaded:request_observes_source_activity_changes"),
+            "GratingShouldFinishRequestAfterReEnablingSourceSide": (PASS, "threaded:reactivation_allows_a_later_grant"),
             "RequestSholdNotBlockAfterGrantOnReEnabledHandle": (PASS, "request_returns_immediately_after_grant_on_reactivated_source"),
-            "WaitShouldNotBlockOnDisabledHandle": (PARTIAL, "wait_on_disabled_handle_reports_grant_used"),
+            "WaitShouldNotBlockOnDisabledHandle": (PASS, "threaded:wait_on_disabled_sink_is_immediate"),
             "WaitShouldNotBlockAfterGrantingOnReEnabledHandleS": (PASS, "reenabled_sink_waits_without_consuming_unrequested_grant"),
             "ShouldHandleDisablingBlockedHandle": (PASS, "disabling_blocked_sink_completes_the_remaining_grant"),
             "ShouldHandleProgressIncludingResiduum": (PASS, "reports_progress_without_counting_residuum_twice"),
-            "BreakingShouldFinishWaiting": (PARTIAL, "break_finishes_wait_grant_first"),
-            "BreakingShouldFinishWaiting2": (PARTIAL, "break_finishes_wait_request_first"),
-            "DisableSinkSideShouldBlockOnLatchedHandle": (PARTIAL, "defers_enable_change_until_unlatched"),
+            "BreakingShouldFinishWaiting": (PASS, "threaded:break_wakes_wait_grant_first"),
+            "BreakingShouldFinishWaiting2": (PASS, "threaded:break_wakes_wait_request_first"),
+            "DisableSinkSideShouldBlockOnLatchedHandle": (PASS, "threaded:latch_defers_reenable_until_unlatch"),
         })
         if case in checks:
             status, check = checks[case]
             note = "same operation ordering and return value or rejected transition; 1000-tick grant where required"
-            if status == PARTIAL:
-                note += "; synchronous pending/ready results, actual host-thread blocking and wakeup remain"
+            if check.startswith("threaded:"):
+                return status, COMMON, f"renode_threaded_time_handle_{check.removeprefix('threaded:')}; {note}; host-thread blocking and wakeup verified"
             return status, COMMON, f"renode_time_handle_{check}; {note}"
     if name == "TimeSourceTests":
         checks = {
