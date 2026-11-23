@@ -23,6 +23,13 @@ enum Sleep {
 }
 
 #[derive(Clone, Copy)]
+enum SynchronousFault {
+    Bus(u32),
+    NoCoprocessor,
+    InvalidState,
+}
+
+#[derive(Clone, Copy)]
 enum ReturnFault {
     Unstack,
     InvalidPc,
@@ -54,6 +61,7 @@ pub struct Thumb {
     fp_active: bool,
     active_exception: u8,
     locked_up: bool,
+    invalid_thumb_state: bool,
     return_fault_taken: bool,
     active_exceptions: u128,
     interrupts_masked: bool,
@@ -83,7 +91,7 @@ impl Thumb {
     }
 
     /// None indicates a BusFault while loading the reset context.
-    pub fn reset(&self, bus: &Bus) -> Result<Option<(u32, u32)>, String> {
+    pub fn reset(&mut self, bus: &Bus) -> Result<Option<(u32, u32)>, String> {
         let base = self.vector_base();
         let vector = base.checked_add(4).ok_or("reset vector address overflow")?;
         let words = bus
@@ -97,13 +105,16 @@ impl Thumb {
             Err(BusError::SlaveFault(_)) if self.thumb2 => return Ok(None),
             Err(error) => return Err(error.to_string()),
         };
-        if target & 1 == 0 {
+        if target & 1 == 0 && !self.thumb2 {
             return Err(format!(
                 "Cortex-M reset vector {target:#010x} must select Thumb state"
             ));
         }
-        bus.read_ram::<2>(target & !1)
-            .map_err(|error| error.to_string())?;
+        self.invalid_thumb_state = target & 1 == 0;
+        if !self.invalid_thumb_state {
+            bus.read_ram::<2>(target & !1)
+                .map_err(|error| error.to_string())?;
+        }
         Ok(Some((sp & !3, target & !1)))
     }
 
@@ -300,24 +311,22 @@ impl Thumb {
     }
 
     fn no_coprocessor(&mut self, pc: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
-        self.synchronous_fault(USAGE_FAULT, None, pc, r, bus)
+        self.synchronous_fault(SynchronousFault::NoCoprocessor, pc, r, bus)
     }
 
     fn synchronous_fault(
         &mut self,
-        exception: u8,
-        bus_address: Option<u32>,
+        fault: SynchronousFault,
         pc: u32,
         r: &mut [u32; 32],
         bus: &mut Bus,
     ) -> Result<u32, String> {
         let nvic = bus.nvic.as_mut().ok_or("Cortex-M fault requires an NVIC")?;
-        let priority = nvic.priority(exception);
-        let enabled = if bus_address.is_some() {
-            nvic.bus_fault_enabled()
-        } else {
-            nvic.usage_fault_enabled()
+        let (exception, enabled) = match fault {
+            SynchronousFault::Bus(_) => (BUS_FAULT, nvic.bus_fault_enabled()),
+            _ => (USAGE_FAULT, nvic.usage_fault_enabled()),
         };
+        let priority = nvic.priority(exception);
         let can_preempt = self.active_exception == 0
             || (self.active_exception > HARD_FAULT
                 && priority < nvic.priority(self.active_exception));
@@ -328,19 +337,25 @@ impl Thumb {
             || (self.basepri != 0 && priority >= self.basepri);
         let cannot_escalate =
             escalate && (matches!(self.active_exception, NMI | HARD_FAULT) || self.faultmask);
-        if let Some(address) = bus_address {
-            nvic.record_precise_bus_fault(address, escalate && !cannot_escalate);
-            if cannot_escalate {
-                self.locked_up = true;
-                self.sleep = Sleep::Running;
-                nvic.lockup = true;
-                return Ok(LOCKUP_PC);
+        match fault {
+            SynchronousFault::Bus(address) => {
+                nvic.record_precise_bus_fault(address, escalate && !cannot_escalate)
             }
-        } else {
-            nvic.record_no_coprocessor_fault(escalate);
-            if cannot_escalate {
-                return Err(format!("Cortex-M lockup on NOCP at {pc:#010x}"));
+            SynchronousFault::InvalidState => {
+                nvic.record_invalid_state_fault(escalate && !cannot_escalate)
             }
+            SynchronousFault::NoCoprocessor => {
+                nvic.record_no_coprocessor_fault(escalate);
+                if cannot_escalate {
+                    return Err(format!("Cortex-M lockup on NOCP at {pc:#010x}"));
+                }
+            }
+        }
+        if cannot_escalate {
+            self.locked_up = true;
+            self.sleep = Sleep::Running;
+            nvic.lockup = true;
+            return Ok(LOCKUP_PC);
         }
         self.exception_entry(if escalate { HARD_FAULT } else { exception }, pc, r, bus)
     }
@@ -355,7 +370,7 @@ impl Thumb {
             .checked_add(u32::from(exception) * 4)
             .ok_or("exception vector address overflow")?;
         match bus.read_cortex_m_ram_or_mock_word(vector) {
-            Ok(handler) if handler & 1 != 0 => Ok(Some(handler & !1)),
+            Ok(handler) if self.thumb2 || handler & 1 != 0 => Ok(Some(handler)),
             Ok(handler) => Err(format!(
                 "exception {exception} vector {handler:#010x} does not select Thumb state"
             )),
@@ -392,7 +407,7 @@ impl Thumb {
         bus.check_thumb_access(stack, frame_size, true, false)?;
         let it = u32::from(self.itstate);
         let xpsr = self.apsr()
-            | (1 << 24)
+            | (u32::from(!self.invalid_thumb_state) << 24)
             | ((sp & 4) << 7)
             | ((it & 3) << 25)
             | ((it & 0xfc) << 8)
@@ -452,6 +467,13 @@ impl Thumb {
                     );
                 }
             }
+            // A zeroed reset table starts with MSP=0. Renode's default
+            // unhandled-access policy discards these unmapped stack writes.
+            Err(BusError::Unmapped(..))
+                if self.invalid_thumb_state
+                    && self.active_exception == 0
+                    && sp == 0
+                    && !bus.fault_on_unmapped_thumb_data => {}
             Err(error) => return Err(error.to_string()),
         }
         if self.uses_psp() {
@@ -484,7 +506,8 @@ impl Thumb {
                 nvic.lockup = self.locked_up;
             }
         }
-        Ok(handler.unwrap_or(LOCKUP_PC))
+        self.invalid_thumb_state = handler.is_some_and(|address| address & 1 == 0);
+        Ok(handler.map_or(LOCKUP_PC, |address| address & !1))
     }
 
     fn exception_return_fault(
@@ -551,8 +574,11 @@ impl Thumb {
         self.fp_active = false;
         r[14] = target;
         nvic.set_active_exceptions(self.active_exceptions);
-        self.read_exception_handler(bus, exception)?
-            .ok_or_else(|| "vector BusFault during exception return is unsupported".into())
+        let handler = self
+            .read_exception_handler(bus, exception)?
+            .ok_or("vector BusFault during exception return is unsupported")?;
+        self.invalid_thumb_state = handler & 1 == 0;
+        Ok(handler & !1)
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &mut Bus) -> Result<u32, String> {
@@ -828,13 +854,17 @@ impl Thumb {
         if self.locked_up {
             return Ok(ThumbStep::Fault);
         }
+        if self.invalid_thumb_state {
+            *pc = self.synchronous_fault(SynchronousFault::InvalidState, *pc, r, bus)?;
+            return Ok(ThumbStep::Fault);
+        }
         let original_itstate = self.itstate;
         bus.thumb_negative_priority = matches!(self.active_exception, NMI | HARD_FAULT);
         let result = self.step_instruction(pc, r, bus, output);
         bus.thumb_negative_priority = false;
         if let Some(address) = bus.take_thumb_data_fault() {
             self.itstate = original_itstate;
-            *pc = self.synchronous_fault(BUS_FAULT, Some(address), *pc, r, bus)?;
+            *pc = self.synchronous_fault(SynchronousFault::Bus(address), *pc, r, bus)?;
             return Ok(ThumbStep::Fault);
         }
         if std::mem::take(&mut self.return_fault_taken) && result.is_ok() {

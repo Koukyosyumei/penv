@@ -495,3 +495,24 @@ status=0
     >"$out/retpsr.log" 2>&1 || status=$?
 [ "$status" -eq 2 ]
 grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/retpsr.log"
+
+# Robot 311-321: a zeroed vector table faults before any instruction retires.
+cat >"$out/invalid-reset.s" <<'ASM'
+.syntax unified
+.thumb
+.global entry
+.space 0x20
+.thumb_func
+entry:
+    b .
+ASM
+clang --target=arm-none-eabi -mcpu=cortex-m4 -c "$out/invalid-reset.s" -o "$out/invalid-reset.o"
+ld.lld -N -Ttext=0 --entry=entry "$out/invalid-reset.o" -o "$out/invalid-reset.elf"
+for budget in 1 2; do
+    status=0
+    "$penv" run --platform "$out/bus-fault.repl" --max-steps "$budget" "$out/invalid-reset.elf" \
+        >"$out/invalid-reset-$budget.log" 2>&1 || status=$?
+    [ "$status" -eq 2 ]
+done
+grep -Fxq 'penv: instruction limit reached at pc=0x00000000' "$out/invalid-reset-1.log"
+grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/invalid-reset-2.log"

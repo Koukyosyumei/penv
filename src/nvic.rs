@@ -212,6 +212,13 @@ impl Nvic {
         self.fault_enables & USGFAULTENA != 0
     }
 
+    pub fn record_invalid_state_fault(&mut self, escalate: bool) {
+        self.cfsr |= 1 << 17; // INVSTATE
+        if escalate {
+            self.hfsr |= FORCED;
+        }
+    }
+
     pub fn record_no_coprocessor_fault(&mut self, escalate: bool) {
         self.cfsr |= NOCP;
         if escalate {
