@@ -328,7 +328,7 @@ def triage(row):
     elif suite == 'SystemBusTests.cs' and name in {'ShouldFindAfterRegistration', 'ShouldFindAfterManyRegistrations'}:
         status, reason = 'PASS', '固定上流と同じ登録範囲・オフセット0でのワード読み取り・返却値を REPL の定数 MMIO で照合。src/platform.rs'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldFindAfterManyRegistrationsAndRemoves':
-        status, reason = 'OPEN', '上流は Ignore 指定。固定ケースのランダムな周辺機器登録・解除には周辺機器の動的登録解除が必要'
+        status, reason = 'PASS', '上流は Ignore 指定。100登録・16 KiB上限・10%解除条件を固定シードで移植し、全開始アドレスのワード読み取りを照合。src/platform.rs'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldReturnZeroAtNonExistingDevice':
         status, reason = 'PASS', 'SystemBus の既定方針で、固定上流と同じ未マップアドレス 0xABCD1234 のバイト読み取りが 0 を返すことを照合。src/bus.rs'
     elif suite == 'SystemBusTests.cs' and name == 'ShouldFindBytePattern':

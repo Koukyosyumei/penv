@@ -3060,6 +3060,41 @@ uart:
     }
 
     #[test]
+    fn upstream_find_after_many_registrations_and_removes() {
+        const MAX_SIZE: u32 = 16 * 1024;
+        let mut state = 0x12345678u32;
+        let mut next = |max| {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) % max
+        };
+        let mut end = 4;
+        let points: Vec<_> = (0..100)
+            .map(|_| {
+                let base = end + next(MAX_SIZE);
+                let size = next(MAX_SIZE) + 1;
+                end = base + size;
+                (base, size, base)
+            })
+            .collect();
+        let mut machine = registered_constant_peripherals(&points);
+        let removed: HashSet<_> = points
+            .iter()
+            .filter_map(|&(base, _, _)| (next(100) < 10).then_some(base))
+            .collect();
+        assert!(!removed.is_empty() && removed.len() < points.len());
+        for &base in &removed {
+            machine.bus.unregister_from_address(base).unwrap();
+        }
+        for (base, _, value) in points {
+            assert_eq!(
+                machine.bus.read::<4>(base).unwrap(),
+                if removed.contains(&base) { 0 } else { value },
+                "at {base:#x}"
+            );
+        }
+    }
+
+    #[test]
     fn upstream_verify_double_attribute() {
         let error = check_text(
             "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    EnumValue: One\n    EnumValue: Two",

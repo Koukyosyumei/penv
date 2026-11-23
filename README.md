@@ -1525,3 +1525,21 @@ bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
 ```
 
 `cargo test` 202件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-sysbus-lookup.hI7esteD` にあります。台帳は対象786件のうち等価合格182件、部分検証17件、未達587件です。
+
+### backlog-network-3763ff0f38c4-1
+
+`sysbus UnregisterFromAddress` で定数 MMIO の指定登録を解除できます。登録範囲内の開始アドレスからオフセットを求めるため、非整列の登録でも周辺機器にワード読み取りを渡します。固定上流の Ignore 指定ケース `ShouldFindAfterManyRegistrationsAndRemoves` は、100登録、16 KiB の上限、各登録の10%解除条件、全アドレスの照合を移植しました。上流が固定していない乱数はローカルの固定シードを使います。初回は解除済みの非整列アドレスで整列エラーが出たため、範囲全体が未マップならバスの未マップ方針を適用するよう修正しました。STM32H743 の CLI では、非整列の1バイト登録にワード読み取りを行い、解除前の周辺機器応答と解除後のゼロを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-sysbus-unregister-mmio.3EX3acF1
+target/release/penv run --script "$e/mmio.resc" --platform-root ../renode
+```
+
+`cargo test` 203件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、初回失敗、最終ログと終了状態は上記に保存しました。台帳は対象786件のうち等価合格183件、部分検証17件、未達586件です。定数 MMIO と RAM 以外の解除、CPU コンテキスト別登録、周辺機器が返すコマンド例外の伝播は残っています。

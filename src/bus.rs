@@ -338,6 +338,18 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn unregister_from_address(&mut self, address: u32) -> Result<(), String> {
+        if let Some(index) = self
+            .constant_mmio
+            .iter()
+            .position(|peripheral| peripheral.base == address)
+        {
+            self.constant_mmio.swap_remove(index);
+            return Ok(());
+        }
+        self.unregister_ram(address)
+    }
+
     pub(crate) fn unregister_ram(&mut self, address: u32) -> Result<(), String> {
         let index = self
             .regions
@@ -1981,13 +1993,11 @@ impl Bus {
         {
             return Ok(value);
         }
-        if address as usize & (N - 1) == 0
-            && let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
-                peripheral
-                    .offset(address, N)
-                    .map(|offset| peripheral.read(offset, N))
-            })
-        {
+        if let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
+            peripheral
+                .offset(address, 1)
+                .map(|offset| peripheral.read(offset, N))
+        }) {
             return Ok(value);
         }
         if N == 4
@@ -2229,6 +2239,11 @@ impl Bus {
         }
         match self.read_ram::<N>(address) {
             Err(error @ BusError::Unmapped(..)) => self.unhandled_value(address, N).ok_or(error),
+            Err(error @ BusError::Misaligned(..))
+                if !self.overlaps(u64::from(address), u64::from(address) + N as u64) =>
+            {
+                self.unhandled_value(address, N).ok_or(error)
+            }
             result => result,
         }
     }

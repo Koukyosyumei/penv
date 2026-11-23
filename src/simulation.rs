@@ -133,7 +133,7 @@ pub enum Action {
         address: u32,
         byte: bool,
     },
-    UnregisterRam {
+    UnregisterAddress {
         node: usize,
         address: u32,
     },
@@ -448,8 +448,11 @@ pub fn run(
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
                 }
-                Action::UnregisterRam { node, address } => {
-                    simulation.nodes[node].machine.bus.unregister_ram(address)?;
+                Action::UnregisterAddress { node, address } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .unregister_from_address(address)?;
                 }
                 Action::ReadBusBytes {
                     node,
