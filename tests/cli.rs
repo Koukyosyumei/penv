@@ -173,6 +173,83 @@ fn upstream_stm32f072_console_echo_replies_after_uart_prompt() {
 }
 
 #[test]
+fn renode_resc_cortex_m_evaluates_condition_codes() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-resc-condition-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+"#,
+    )
+    .unwrap();
+    let mut image = vec![0; 0x100];
+    image[..4].copy_from_slice(&0x800u32.to_le_bytes());
+    image[4..8].copy_from_slice(&0x101u32.to_le_bytes());
+    for instruction in [
+        0x267fu16, // movs r6, #127
+        0x2e81,    // cmp r6, #129
+        0x2e7f,    // cmp r6, #127
+        0x2e7e,    // cmp r6, #126
+        0x2101,    // movs r1, #1
+        0x07ca,    // lsls r2, r1, #31
+        0x1892,    // adds r2, r2, r2
+    ] {
+        image.extend_from_slice(&instruction.to_le_bytes());
+    }
+    fs::write(directory.join("firmware.bin"), image).unwrap();
+
+    let mut script = String::from(
+        "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n",
+    );
+    let mut expected = String::new();
+    for (step, conditions, flags) in [
+        (
+            2,
+            [false, false, true, false, false, false, false, true],
+            "0x81000000",
+        ),
+        (
+            1,
+            [true, true, false, false, false, true, false, true],
+            "0x61000000",
+        ),
+        (
+            1,
+            [false, true, false, false, true, true, true, true],
+            "0x21000000",
+        ),
+        (
+            3,
+            [true, true, false, true, false, false, false, true],
+            "0x71000000",
+        ),
+    ] {
+        use std::fmt::Write;
+        writeln!(script, "cpu Step {step}").unwrap();
+        for (code, result) in (0..=14).step_by(2).zip(conditions) {
+            writeln!(script, "cpu EvaluateConditionCode {code}").unwrap();
+            writeln!(expected, "{}", if result { "True" } else { "False" }).unwrap();
+        }
+        writeln!(script, "cpu GetRegister \"CPSR\"").unwrap();
+        writeln!(expected, "{flags}").unwrap();
+    }
+    let path = directory.join("boot.resc");
+    fs::write(&path, script).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--max-steps", "7", "--script"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, expected.as_bytes());
+}
+
+#[test]
 fn renode_resc_systembus_bulk_memory_commands() {
     let directory = std::env::temp_dir().join(format!("penv-resc-bulk-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

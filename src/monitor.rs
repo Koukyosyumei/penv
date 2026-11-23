@@ -36,6 +36,9 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    CpuStep(String, u64),
+    CpuCondition(String, u32),
+    CpuXpsr(String),
     CpuWait(String, bool),
     CpuReset(String),
     CpuPc(String, u32),
@@ -122,15 +125,36 @@ pub fn run(
     let mut retired = 0;
     for command in commands {
         let result = match &command.action {
-            Action::RunFor(steps) if machine.is_cortex_m() => {
-                let chunk = (*steps).min(budget);
-                machine.run(chunk, &mut output).map(|(stop, count)| {
-                    retired += count;
-                    budget -= chunk;
-                    (stop != Stop::Limit || chunk < *steps).then_some(stop)
+            Action::RunFor(steps) | Action::CpuStep(_, steps) => {
+                let valid_cpu = match &command.action {
+                    Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
+                    _ if machine.is_cortex_m() => Ok(()),
+                    _ => Err("RunFor requires a Cortex-M platform".into()),
+                };
+                valid_cpu.and_then(|()| {
+                    let chunk = (*steps).min(budget);
+                    machine.run(chunk, &mut output).map(|(stop, count)| {
+                        retired += count;
+                        budget -= chunk;
+                        (stop != Stop::Limit || chunk < *steps).then_some(stop)
+                    })
                 })
             }
-            Action::RunFor(_) => Err("RunFor requires a Cortex-M platform".into()),
+            Action::CpuCondition(cpu, condition) => machine.cortex_m_cpu(cpu).and_then(|thumb| {
+                let result = if thumb.condition(*condition) {
+                    "True"
+                } else {
+                    "False"
+                };
+                writeln!(output.output, "{result}")
+                    .map_err(|e| e.to_string())
+                    .map(|()| None)
+            }),
+            Action::CpuXpsr(cpu) => machine.cortex_m_cpu(cpu).and_then(|thumb| {
+                writeln!(output.output, "0x{:08x}", thumb.xpsr())
+                    .map_err(|e| e.to_string())
+                    .map(|()| None)
+            }),
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
@@ -687,6 +711,38 @@ fn execute(
                 return Err("expected sysbus FindBytes pattern [start [end]]".into());
             }
             Some(Action::FindBytes(pattern, start, end))
+        }
+        [target, "Step", count] => {
+            let cpu = resolve(target)?;
+            Some(Action::CpuStep(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                u64::from(crate::parse_address(resolve(count)?)?),
+            ))
+        }
+        [target, "EvaluateConditionCode", condition] => {
+            let cpu = resolve(target)?;
+            let condition = crate::parse_address(resolve(condition)?)?;
+            if condition > 15 {
+                return Err("expected an ARM condition code from 0 to 15".into());
+            }
+            Some(Action::CpuCondition(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+                condition,
+            ))
+        }
+        [target, "GetRegister", register]
+            if matches!(
+                resolve(register)?
+                    .trim_matches('"')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "cpsr" | "xpsr"
+            ) =>
+        {
+            let cpu = resolve(target)?;
+            Some(Action::CpuXpsr(
+                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
+            ))
         }
         ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset),

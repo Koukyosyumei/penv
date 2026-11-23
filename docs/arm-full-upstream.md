@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 21 | 40 | 52 | 239 |
+| Renode Robot | 113 | 22 | 40 | 51 | 239 |
 | Renode Infrastructure NUnit | 134 | 35 | 0 | 99 | 9 |
-| 合計 | **247** | **56** | **40** | **151** | **248** |
+| 合計 | **247** | **57** | **40** | **150** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植40件と未達151件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植40件と未達150件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -225,4 +225,16 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-systembus-tags-verification
 cargo test --locked renode_precise
 cargo test --locked --test cli renode_resc_systembus
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-precise-verification
+```
+
+
+## Cortex-M の条件コードと状態レジスタ
+
+固定 Renode の `it-status.robot` 112行の `Should Evaluate Condition Codes Properly` を通常の RESC で移植した。Cortex-M0 の `MOVS`、`CMP`、`LSLS`、`ADDS` で上流と同じオペランドと4つの観測点を作る。先行する `MOVS` と `LSLS` のフラグは直後の上流相当の演算で更新され、観測値に影響しない。
+
+`cpu Step 2/1/1/3` ごとに `cpu EvaluateConditionCode 0/2/4/6/8/10/12/14` と `cpu GetRegister "CPSR"` を実行し、上流の32判定と状態値 `0x81000000`、`0x61000000`、`0x21000000`、`0x71000000` を照合した。モニターの `CPSR` 名で Cortex-M の xPSR を返す。`cpu Step` は既存の仮想実行ステップを使用し、例外・スリープ境界の Renode デバッガーのステップ動作は別の検証項目。ITSTATE を必要とする残りのケースには Armv7E-M が必要。
+
+```sh
+cargo test --locked renode_resc_cortex_m_evaluates_condition_codes
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-conditions-verification
 ```

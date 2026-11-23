@@ -407,7 +407,7 @@ def classify_robot(name, case, body, parameter):
         return OUT, "Cortex-A9 / ARMv7-A", "A32/T32 switching or banked CPSR modes with SRS/RFE; no A32 state on Armv6-M"
     if name == "it-status":
         if case == "Should Evaluate Condition Codes Properly":
-            return OPEN, V6, "Cortex-M4 fixture's CMP/ADDS flags are portable; EvaluateConditionCode observations need a port"
+            return PASS, V6, "renode_resc_cortex_m_evaluates_condition_codes; same CMP/ADDS operands, Step 2/1/1/3, eight conditions and four status values"
         return OUT, "Cortex-M4 / Armv7E-M", "Assembles ITTET/ITEET and reads ITSTATE; IT is unavailable on Cortex-M0/M0+"
     if name == "tlib-thumb2":
         return PARTIAL, V6, "renode_thumb2_fixture_branches_and_reads_apsr; extracted BL/MRS, original Cortex-M85 ELF also executes ORRS.W and tests run_result"

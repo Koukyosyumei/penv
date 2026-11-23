@@ -252,6 +252,13 @@ impl Machine {
         Ok(())
     }
 
+    pub fn cortex_m_cpu(&mut self, name: &str) -> Result<&Thumb, String> {
+        self.named_hart(name)?
+            .thumb
+            .as_ref()
+            .ok_or_else(|| format!("{name:?} is not a Cortex-M CPU"))
+    }
+
     pub fn set_cortex_m_cpu_wait(&mut self, name: &str, asserted: bool) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if hart.thumb.is_none() {

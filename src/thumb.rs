@@ -166,7 +166,7 @@ impl Thumb {
         (operation != 8).then_some(value)
     }
 
-    fn condition(&self, condition: u32) -> bool {
+    pub fn condition(&self, condition: u32) -> bool {
         let positive = match condition >> 1 {
             0 => self.zero,
             1 => self.carry,
@@ -175,7 +175,7 @@ impl Thumb {
             4 => self.carry && !self.zero,
             5 => self.negative == self.overflow,
             6 => !self.zero && self.negative == self.overflow,
-            _ => unreachable!(),
+            _ => true,
         };
         positive ^ (condition & 1 != 0)
     }
@@ -185,6 +185,12 @@ impl Thumb {
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
             | (u32::from(self.overflow) << 28)
+    }
+
+    pub fn xpsr(&self) -> u32 {
+        self.apsr()
+            | (u32::from(!self.invalid_thumb_state) << 24)
+            | u32::from(self.active_exception)
     }
 
     fn set_apsr(&mut self, value: u32) {
@@ -284,10 +290,7 @@ impl Thumb {
     ) -> u32 {
         let sp = r[13];
         let stack = (sp & !7).wrapping_sub(32);
-        let xpsr = self.apsr()
-            | (u32::from(!self.invalid_thumb_state) << 24)
-            | ((sp & 4) << 7)
-            | u32::from(self.active_exception);
+        let xpsr = self.xpsr() | ((sp & 4) << 7);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
         let mut stacking_fault = false;
         // Match PushStack: allocate the whole frame and abandon writes after
