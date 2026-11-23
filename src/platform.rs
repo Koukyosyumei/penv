@@ -977,6 +977,8 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
+                            "zicsr" | "zifencei" if !ibex => {}
+                            "zihintpause" => {}
                             "zicond" if !zicond => zicond = true,
                             "zmmul" if !zmmul => zmmul = true,
                             "zaamo" if !zaamo => zaamo = true,
@@ -1025,9 +1027,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     // Renode accepts separated C even after a named extension.
                     let compressed =
                         letters.contains('c') || suffix.split('_').any(|part| part == "c");
-                    let valid_suffix = suffix
-                        .split('_')
-                        .all(|part| matches!(part, "" | "c" | "zicsr" | "zifencei"));
+                    let valid_suffix = suffix.split('_').all(|part| {
+                        matches!(part, "" | "c" | "zicsr" | "zifencei" | "zihintpause")
+                    });
                     let ibex_legacy = ibex && base == "rv32imcu_zicsr_zifencei";
                     if !ibex_legacy
                         && (!(general || embedded || letters.contains('i'))
@@ -2241,6 +2243,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                 *extension,
                 "c" | "zicsr"
                     | "zifencei"
+                    | "zihintpause"
                     | "zicond"
                     | "zba"
                     | "zbb"

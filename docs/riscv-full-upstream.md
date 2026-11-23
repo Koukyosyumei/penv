@@ -1256,3 +1256,27 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 同じ release バイナリで、縮小 ISA 構成は Zca 27/27 件、Zcf 4/4 件、Zcd 4/4 件が通過しました。従来の `rv32ifdc` 構成も 35/35 件が通過し、`rv32ifd_zca` 構成では圧縮浮動小数点命令 8 件すべてが不正命令になりました。Rust テストは 88/88 件が通過しました。
 
 固定 Robot 構成では V の未対応で 35 件すべてが CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。構成別の `results.jsonl`、ケースログ、終了状態を上記の証拠ディレクトリに保存しました。
+
+### RV32 Zihintpause と非整列アクセスの構成差
+
+固定 ACT の `Zihintpause-pause-00.elf` は、明示的な `_zihintpause` の指定で CPU 作成時に停止しました。ISA 名がこの指定を受け付けるようにしました。PAUSE は FENCE のヒント符号化で、既存の FENCE 経路で実行し、追加の待ち時間は入れません。[RISC-V Zihintpause 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zihintpause.html)
+
+同じ調査で、整数・圧縮整数・単精度・倍精度の非整列アクセス ELF 13 件は `allowUnalignedAccesses: true` の診断構成で通過しました。固定 Robot はこのプロパティを指定せず、固定 `RiscV32.cs` の既定値は false です。V のみを外した構成では代表の圧縮 `c.lw` は非整列アクセスで停止しました。このグループは構成差を台帳に記録しました。
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-cda56ed-5RmQlL"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/hints.repl" --artifacts "$repro/hints" "$elfs"/{Zihintpause,Zifencei}/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/unaligned.repl" --artifacts "$repro/unaligned" "$elfs"/Misalign*/*.elf
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" \
+  "$elfs"/{Zihintpause,Zifencei}/*.elf "$elfs"/Misalign*/*.elf
+```
+
+診断構成で固定 PAUSE と FENCE.I の ELF は 2/2 件、非整列アクセスは 13/13 件が通過しました。Rust テストは 88/88 件が通過しました。固定 Robot 構成では対象 15 件が V の未対応で CPU 作成時に停止しました。上流等価合格は累計 155 件です。構成別の `results.jsonl`、ケースログ、終了状態は上記の証拠ディレクトリに保存しました。
