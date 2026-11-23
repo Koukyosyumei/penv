@@ -19,6 +19,7 @@ pub struct Rv64 {
     pub(crate) hart_id: usize,
     pub(crate) mhartid_override: Option<u64>,
     pub(crate) trace_custom_csr: bool,
+    pub(crate) stack_access_trace_name: Option<String>,
     pub pc: u64,
     reset_vector: u64,
     pc_follows_reset_vector: bool,
@@ -191,6 +192,7 @@ impl Rv64 {
             hart_id: 0,
             mhartid_override: None,
             trace_custom_csr: false,
+            stack_access_trace_name: None,
             pc: u64::from(RAM_BASE),
             reset_vector: u64::from(RAM_BASE),
             pc_follows_reset_vector: true,
@@ -534,6 +536,7 @@ impl Rv64 {
                     _ => return Err(illegal),
                 };
                 let address = lhs.wrapping_add(fields.immediate());
+                self.trace_stack_access(fields, address, width, false);
                 let loaded = self.load(bus, address, width)?;
                 Some(if kind < 4 {
                     sign(loaded, width as u32 * 8)
@@ -548,6 +551,7 @@ impl Rv64 {
                 }
                 let immediate = ((instruction >> 25) << 5) | ((instruction >> 7) & 31);
                 let address = lhs.wrapping_add(sign(u64::from(immediate), 12));
+                self.trace_stack_access(fields, address, 1 << kind, true);
                 self.store(bus, address, 1 << kind, rhs, output)?;
                 None
             }
@@ -627,7 +631,7 @@ impl Rv64 {
             }
             0x0f if matches!(fields.funct3(), 0 | 1) => None,
             0x07 | 0x27 if self.isa.vector && matches!(fields.funct3(), 0 | 5..=7) => {
-                self.vector_unit_stride(fields, lhs, bus, output)?;
+                self.vector_memory(fields, lhs, rhs, bus, output)?;
                 None
             }
             0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
@@ -693,6 +697,18 @@ impl Rv64 {
         }
         self.pc = next;
         Ok(Step::Retired)
+    }
+
+    fn trace_stack_access(&self, inst: Instruction, address: u64, width: usize, write: bool) {
+        if inst.rs1() == 2
+            && let Some(name) = &self.stack_access_trace_name
+        {
+            let direction = if write { "True" } else { "False" };
+            eprintln!(
+                "penv: {name}: StackAccess: 0x{address:X}, {}, {direction}",
+                width * 8
+            );
+        }
     }
 
     fn load(&self, bus: &mut Bus, address: u64, width: usize) -> Result<u64, Fault> {
@@ -1022,6 +1038,7 @@ impl Rv64 {
             }
             return Ok(previous);
         }
+        self.trace_stack_access(inst, address, width, !load);
         let physical =
             self.translations
                 .translate(bus, &self.privilege, address, width, permission)?;

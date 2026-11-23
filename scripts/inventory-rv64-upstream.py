@@ -372,6 +372,8 @@ def disposition(path, name, context):
             return "pass", "Fixed RV64 Quad MAC scalar, vector output, vstart and PC verified (rv64-andes-qmac.md)"
         if name == "Should Advertise Quad MAC Configuration Registers":
             return "partial", "RV64 configuration CSR checks verified; fixed case also executes RV32 checks (rv64-andes-qmac.md)"
+    if path.name == "riscv-stack-access-hook.robot" and name.startswith("Should Trigger Stack Access Hook "):
+        return "pass", "Fixed stack access instruction, address, width and direction verified (rv64-stack-access.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

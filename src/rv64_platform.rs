@@ -853,6 +853,9 @@ fn create_cpu(
     {
         cpu.privilege.bpm = Some(0);
     }
+    if flag(entry, "traceStackAccess", false)? {
+        cpu.stack_access_trace_name = Some(entry.name.clone());
+    }
     cpu.trace_custom_csr = flag(entry, "traceCustomCsr", false)?;
     if cpu.trace_custom_csr && cpu.privilege.bpm.is_none() {
         return Err(entry.error("traceCustomCsr requires the custom BPM CSR registration"));

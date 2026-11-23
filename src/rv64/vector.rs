@@ -297,15 +297,16 @@ impl Rv64 {
         Ok(())
     }
 
-    pub(super) fn vector_unit_stride(
+    pub(super) fn vector_memory(
         &mut self,
         inst: Instruction,
         base: u64,
+        scalar_stride: u64,
         bus: &mut Bus,
         output: &mut impl Write,
     ) -> Result<(), Fault> {
         let illegal = || Fault::new(2, u64::from(inst.0));
-        if self.privilege.status & VS == 0 || inst.0 >> 25 != 1 || inst.rs2() != 0 {
+        if self.privilege.status & VS == 0 {
             return Err(illegal());
         }
         let vector = self.privilege.vector.as_ref().ok_or_else(illegal)?;
@@ -317,11 +318,17 @@ impl Rv64 {
             kind => kind - 4,
         };
         let width = 1usize << log_width;
+        let stride = match inst.0 >> 25 {
+            1 if inst.rs2() == 0 => width as u64,
+            5 => scalar_stride,
+            _ => return Err(illegal()),
+        };
         let register = inst.rd();
         let multiplier = vector.log_multiplier() + log_width as i32 - vector.sew_log_bytes() as i32;
         vector.group(register, multiplier).ok_or_else(illegal)?;
         for lane in vector.start as usize..vector.length as usize {
-            let address = base.wrapping_add((lane * width) as u64);
+            let address = base.wrapping_add((lane as u64).wrapping_mul(stride));
+            self.trace_stack_access(inst, address, width, inst.opcode() == 0x27);
             self.privilege.vector.as_mut().expect("vector state").start = lane as u64;
             self.privilege.status |= VS;
             if inst.opcode() == 0x07 {
