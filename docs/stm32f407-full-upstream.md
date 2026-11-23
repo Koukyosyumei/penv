@@ -1809,3 +1809,26 @@ PC `0x010004f0` の `BKPT #0xab` で停止し、`SUCCESS` は出ません。
 いずれもコマンド解決で停止します。再現ファイルとログは
 `$work/opcode-{16,32}.resc` と `$work/opcode-{16,32}.log` です。
 両群の共有経路を ARM 担当に引き渡しました。
+
+### Cortex-M4 の LLVM Thumb アセンブル・逆アセンブル
+
+固定 `llvm-asm-disasm.robot:317` の4展開を、元のアドレスと命令を使って
+1個のオブジェクトにまとめ、外部 `llvm-mc` と `llvm-objdump` で照合しました。
+`bic`、`ldr`、`mov.w`、`asrs` の符号化、命令長、オペランド、アドレスは
+全件一致しました。元の monitor 経路では `AssembleBlock` と
+`DisassembleBlock` が拒否されるため、台帳では部分移植です。
+
+```sh
+work=target/stm32f407-llvm-roundtrip
+mkdir -p "$work"
+python3 tests/cortex-m4-llvm-roundtrip.py "$work" > "$work/cases.tsv"
+cargo test > "$work/cargo.log" 2>&1
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+別群の `page-access-via-io.robot:76` は、元の
+`sysbus SetPageAccessViaIo 0x31000000` を含む代表 RESC でコマンド解決が
+停止しました。元のページ切り替えとログ条件は未検証です。
+診断 RESC は `$work/AssembleBlock.resc`、`$work/DisassembleBlock.resc`、
+`$work/SetPageAccessViaIo.resc` です。`penv run --script PATH --max-steps 1`
+で各コマンドの拒否を再現できます。共有経路は ARM 担当に引き渡しました。
