@@ -2537,6 +2537,26 @@ fn parse_address64(value: &str) -> Result<u64, String> {
     parsed.map_err(|_| format!("invalid 64-bit number: {value}"))
 }
 
+#[cfg(test)]
+mod upstream_nunit {
+    use super::parse_address64;
+
+    #[test]
+    fn hexadecimal_unsigned_long_1000() {
+        assert_eq!(parse_address64("0x1000"), Ok(0x1000));
+    }
+
+    #[test]
+    fn hexadecimal_unsigned_long_12ab() {
+        assert_eq!(parse_address64("0x12AB"), Ok(0x12ab));
+    }
+
+    #[test]
+    fn hexadecimal_unsigned_long_0ff() {
+        assert_eq!(parse_address64("0x0ff"), Ok(0xff));
+    }
+}
+
 fn export_peripherals(
     mut args: impl Iterator<Item = std::ffi::OsString>,
 ) -> Result<ExitCode, String> {

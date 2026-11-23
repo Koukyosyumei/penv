@@ -1767,6 +1767,18 @@ fn execute(
         });
         return Ok(());
     }
+    // A terminal tester can attach before start. The next runtime wait drives
+    // the machine with the tester already attached.
+    if words == ["start"]
+        && !boot.started
+        && matches!(
+            boot.runtime.as_slice(),
+            [RuntimeCommand { action: Action::CreateUartTester(..), .. }]
+        )
+    {
+        boot.started = true;
+        return Ok(());
+    }
     if boot.started || !boot.runtime.is_empty() {
         if matches!(
             boot.runtime.last().map(|entry| &entry.action),
