@@ -799,7 +799,14 @@ fn build_machine_with_timing(
         configure_f4_spi(&entries, nvic, &mut machine)?;
         configure_f1_i2c(&entries, nvic, &mut machine)?;
         let mut uart_irq = None;
-        if let Some(uart) = uart {
+        if let Some(uart) = uart.filter(|uart| uart.model == "UART.NS16550") {
+            keys(uart, &[])?;
+            machine
+                .bus
+                .map_ns16550(uart.address()?, None, false)
+                .map_err(|error| uart.error(&error))?;
+        }
+        if let Some(uart) = uart.filter(|uart| uart.model != "UART.NS16550") {
             if uart.model != "UART.LiteX_UART" {
                 return Err(uart.error("unsupported Cortex-M UART model"));
             }

@@ -633,6 +633,18 @@ fn load_platform(
                     .into_iter()
                     .next()
                     .ok_or_else(|| entry.error("missing memory size"))?;
+                if entry.registration_list().is_none()
+                    && let Some(address) = entry.sysbus_address()?
+                    && let Ok(base) = crate::parse_bus_address(address)
+                    && base > u64::from(u32::MAX)
+                {
+                    machine
+                        .bus
+                        .map_global_ram(base, number(size).map_err(|e| entry.error(&e))? as usize)
+                        .map_err(|e| entry.error(&e))?;
+                    ram = true;
+                    continue;
+                }
                 let addresses = entry.addresses()?;
                 machine
                     .bus
