@@ -1,7 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::{self, Write},
+    net::Ipv4Addr,
     path::{Path, PathBuf},
 };
 
@@ -11,26 +12,34 @@ use crate::{
     uart::{UartHistory, UartWaitMode},
 };
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum ImageFormat {
-    Elf,
-    Hex,
-}
-
 #[derive(Default)]
 pub struct Boot {
-    pub binaries: Vec<(String, u32)>,
+    pub binaries: Vec<(Asset, u32)>,
+    pub network: Network,
+    pub video_analyzers: Vec<String>,
+    pub pcm_inputs: Vec<(String, Asset)>,
+    pub pcm_outputs: Vec<(String, PathBuf)>,
+    pub run_steps: Option<u64>,
+    pub post_run: Vec<PostRun>,
+    pub sd_card: Option<(String, Asset, u64)>,
+    pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
+    pub silence_ranges: Vec<(u32, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
-    pub image: Option<(String, ImageFormat)>,
+    pub image: Option<Asset>,
+    pub hex: bool,
     pub vector_tables: Vec<(String, u32)>,
+    pub runtime: Vec<RuntimeCommand>,
+    pub use_virtual_elf_addresses: bool,
     pub mtvec: Option<u32>,
     pub mask: Option<u32>,
-    pub runtime: Vec<RuntimeCommand>,
+    pub supervisor_mask: Option<u32>,
+    started: bool,
 }
 
 pub struct RuntimeCommand {
     line: usize,
+    source: PathBuf,
     action: Action,
 }
 
@@ -69,7 +78,7 @@ impl<W: Write> Write for ScriptOutput<'_, W> {
 
 pub fn run(
     machine: &mut Machine,
-    script: &Path,
+    _script: &Path,
     commands: &[RuntimeCommand],
     mut budget: u64,
     output: &mut impl Write,
@@ -171,7 +180,7 @@ pub fn run(
                 .map(|()| None),
         };
         if let Some(stop) =
-            result.map_err(|e| format!("{}:{}: {e}", script.display(), command.line))?
+            result.map_err(|e| format!("{}:{}: {e}", command.source.display(), command.line))?
         {
             return Ok((stop, retired));
         }
@@ -258,12 +267,129 @@ fn wait_for_uart(
     }
 }
 
+pub enum PostRun {
+    Echo(String),
+    DisposePcm(String),
+}
+
+#[derive(Debug)]
+pub struct Asset {
+    value: String,
+    script: PathBuf,
+}
+
+#[derive(Default)]
+pub struct Network {
+    switch: Option<String>,
+    server: Option<(String, Ipv4Addr)>,
+    links: Vec<String>,
+    port: Option<u16>,
+    file: Option<(Asset, String)>,
+}
+
+pub struct TftpBoot {
+    pub ethernet: String,
+    pub ip: Ipv4Addr,
+    pub port: u16,
+    pub file: Asset,
+    pub filename: String,
+}
+
+impl Network {
+    pub fn into_tftp(self) -> Result<Option<TftpBoot>, String> {
+        if self.switch.is_none() && self.server.is_none() {
+            return Ok(None);
+        }
+        let Some((server, ip)) = self.server else {
+            return Err("expected a local network server".into());
+        };
+        if !self.links.contains(&server) {
+            return Err("expected the local network server to be connected to the switch".into());
+        }
+        let port = self
+            .port
+            .ok_or("expected StartTFTP for the local network server")?;
+        let (file, filename) = self.file.ok_or("expected a file served over local TFTP")?;
+        let mut peers = self.links.into_iter().filter(|name| *name != server);
+        let ethernet = peers
+            .next()
+            .ok_or("expected an Ethernet connection to the local switch")?;
+        if peers.next().is_some() {
+            return Err("only one Ethernet connection to the local switch is supported".into());
+        }
+        Ok(Some(TftpBoot {
+            ethernet,
+            ip,
+            port,
+            file,
+            filename,
+        }))
+    }
+
+    fn is_server(&self, name: &str) -> bool {
+        self.server
+            .as_ref()
+            .is_some_and(|(server, _)| server == name)
+    }
+}
+
+fn unquote(text: &str) -> &str {
+    text.strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .unwrap_or(text)
+}
+
+struct Macro {
+    script: PathBuf,
+    commands: Vec<(usize, String)>,
+}
+
+#[derive(Default)]
+struct ScriptState {
+    variables: HashMap<String, String>,
+    macros: HashMap<String, Macro>,
+    visiting: HashSet<PathBuf>,
+    boot: Boot,
+    machine: bool,
+}
+
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
+    let mut state = ScriptState::default();
+    load_file(path, root, &mut state)?;
+    let mut boot = state.boot;
+    if let [
+        RuntimeCommand {
+            action: Action::RunFor(steps),
+            ..
+        },
+    ] = boot.runtime.as_slice()
+    {
+        boot.run_steps = Some(*steps);
+        boot.runtime.clear();
+    } else if !boot.post_run.is_empty() {
+        return Err("post-run operations require a single RunFor".into());
+    }
+    if !state.machine
+        || boot.platform.is_none()
+        || (boot.image.is_none() && boot.binaries.is_empty())
+    {
+        return Err(format!(
+            "{}: expected machine creation, platform and firmware loading",
+            path.display()
+        ));
+    }
+    Ok(boot)
+}
+
+fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), String> {
+    let canonical = fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if state.visiting.len() >= 64 || !state.visiting.insert(canonical.clone()) {
+        return Err(format!(
+            "{}: recursive or excessively deep script include",
+            path.display()
+        ));
+    }
     let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut variables = HashMap::new();
-    let mut macros = HashMap::new();
-    let mut boot = Boot::default();
-    let mut machine = false;
     let mut cursor = content.lines().enumerate();
     while let Some((line, raw)) = cursor.next() {
         let text = raw.trim();
@@ -285,9 +411,15 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
                 if command.trim() == "\"\"\"" {
                     break;
                 }
-                body.push((index, command));
+                body.push((index, command.trim().to_string()));
             }
-            macros.insert(name, body);
+            state.macros.insert(
+                name.into(),
+                Macro {
+                    script: path.into(),
+                    commands: body,
+                },
+            );
             continue;
         }
         if let Some(assignment) = text.strip_prefix('$') {
@@ -296,74 +428,98 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
                 .ok_or_else(|| error("expected variable assignment"))?;
             let name = name.trim();
             if let Some(name) = name.strip_suffix('?') {
-                variables.entry(name.trim()).or_insert(value.trim());
+                state
+                    .variables
+                    .entry(name.trim().into())
+                    .or_insert_with(|| value.trim().into());
             } else {
-                variables.insert(name, value.trim());
+                state.variables.insert(name.into(), value.trim().into());
             }
             continue;
         }
-        if let Some(name) = text.strip_prefix("runMacro $") {
-            let body = macros
-                .get(name.trim())
-                .ok_or_else(|| error("unknown macro"))?;
-            for &(index, command) in body {
-                execute(
-                    command.trim(),
-                    &variables,
-                    &mut machine,
-                    &mut boot,
-                    path,
-                    root,
-                    index + 1,
-                )
-                .map_err(|e| format!("{}:{}: {e}", path.display(), index + 1))?;
+        let words = command_words(text).map_err(|e| error(&e))?;
+        match words.as_slice() {
+            ["set", name, value] if !state.boot.started => {
+                let name = name.strip_prefix('$').unwrap_or(name);
+                state.variables.insert(name.into(), (*value).into());
             }
-            continue;
+            ["include" | "i", value] => {
+                if state.boot.started {
+                    return Err(error(
+                        "commands after start are unsupported in a boot script",
+                    ));
+                }
+                let file = resolve(&state.variables, value)
+                    .map_err(|e| error(&e))?
+                    .strip_prefix('@')
+                    .ok_or_else(|| error("expected @script-path"))?;
+                let included = local_path(&path_value(file), path, root);
+                load_file(&included, root, state).map_err(|e| error(&e))?;
+            }
+            ["runMacro", name] if name.starts_with('$') => {
+                let body = state
+                    .macros
+                    .get(&name[1..])
+                    .ok_or_else(|| error("unknown macro"))?;
+                for (index, command) in &body.commands {
+                    let words = command_words(command)
+                        .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
+                    execute(
+                        command,
+                        &words,
+                        &state.variables,
+                        &mut state.machine,
+                        &mut state.boot,
+                        &body.script,
+                        root,
+                        index + 1,
+                    )
+                    .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
+                }
+            }
+            _ => execute(
+                text,
+                &words,
+                &state.variables,
+                &mut state.machine,
+                &mut state.boot,
+                path,
+                root,
+                line + 1,
+            )
+            .map_err(|e| error(&e))?,
         }
-        execute(
-            text,
-            &variables,
-            &mut machine,
-            &mut boot,
-            path,
-            root,
-            line + 1,
-        )
-        .map_err(|e| error(&e))?;
     }
-    if !machine || boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
-        return Err(format!(
-            "{}: expected machine creation, platform and firmware loading",
-            path.display()
-        ));
+    state.visiting.remove(&canonical);
+    Ok(())
+}
+
+fn resolve<'a>(variables: &'a HashMap<String, String>, value: &'a str) -> Result<&'a str, String> {
+    match value.strip_prefix('$') {
+        Some("") => Err("missing variable name".into()),
+        Some(name) => variables
+            .get(name)
+            .map(String::as_str)
+            .ok_or_else(|| format!("unknown variable {name}")),
+        None => Ok(value),
     }
-    Ok(boot)
 }
 
 fn execute(
     text: &str,
-    variables: &HashMap<&str, &str>,
+    words: &[&str],
+    variables: &HashMap<String, String>,
     machine: &mut bool,
     boot: &mut Boot,
     script: &Path,
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
-    if text.is_empty() || text.starts_with('#') || text == "using sysbus" {
+    if matches!(words, [] | ["using", "sysbus"]) {
         return Ok(());
     }
-    let words: Vec<_> = text.split_whitespace().collect();
-    let resolve = |value| match value {
-        "$" => Err("missing variable name".to_string()),
-        value => match value.strip_prefix('$') {
-            Some(name) => variables
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("unknown variable {name}")),
-            None => Ok(value),
-        },
-    };
-    let action = match words.as_slice() {
+    let resolve = |value| resolve(variables, value);
+    let action = match words {
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
             let expected = format!("expected {command} [USART] \"literal text\"");
@@ -476,15 +632,37 @@ fn execute(
         if boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
             return Err("runtime commands require a loaded platform and firmware".into());
         }
-        boot.runtime.push(RuntimeCommand { line, action });
+        boot.runtime.push(RuntimeCommand {
+            line,
+            source: script.to_owned(),
+            action,
+        });
         return Ok(());
     }
-    if !boot.runtime.is_empty() {
-        return Err(format!(
-            "unsupported monitor command after runtime commands: {text:?}"
-        ));
+    if boot.started || !boot.runtime.is_empty() {
+        if matches!(
+            boot.runtime.last().map(|entry| &entry.action),
+            Some(Action::RunFor(_))
+        ) {
+            match words {
+                ["echo", value] => {
+                    let value = unquote(resolve(value)?);
+                    boot.post_run.push(PostRun::Echo(path_value(
+                        value.strip_prefix('@').unwrap_or(value),
+                    )));
+                    return Ok(());
+                }
+                [device, "Dispose"] => {
+                    let name = device.strip_prefix("sysbus.").unwrap_or(device);
+                    boot.post_run.push(PostRun::DisposePcm(name.into()));
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        return Err("commands after start are unsupported in a boot script".into());
     }
-    match words.as_slice() {
+    match words {
         ["mach" | "machine", "create", name @ ..] if name.len() <= 1 => {
             if let Some(name) = name.first() {
                 resolve(*name)?;
@@ -497,36 +675,131 @@ fn execute(
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @platform-path")?;
-            boot.platform = Some(local_path(file, script, root));
+            boot.platform = Some(local_path(&path_value(file), script, root));
         }
-        ["sysbus", command @ ("LoadELF" | "LoadHEX"), value]
-            if boot.platform.is_some() && boot.image.is_none() =>
+        ["sysbus", "LoadELF", value, options @ ..]
+            if boot.platform.is_some() && boot.image.is_none() && options.len() <= 1 =>
         {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
-            let format = if *command == "LoadHEX" {
-                ImageFormat::Hex
-            } else {
-                ImageFormat::Elf
+            boot.use_virtual_elf_addresses = match options {
+                [] | ["false" | "False"] => false,
+                ["true" | "True"] => true,
+                _ => return Err("expected a boolean LoadELF address option".into()),
             };
-            boot.image = Some((file.to_string(), format));
-        }
-        ["sysbus", "LoadBinary", value, address] if boot.platform.is_some() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
-            boot.binaries
-                .push((file.to_string(), crate::parse_address(resolve(address)?)?));
+            boot.image = Some(Asset::new(file, script));
         }
-        [cpu, "PC", value] if boot.platform.is_some() => {
-            boot.boot_pcs.push((
+        ["sysbus", "LoadHEX", value] if boot.platform.is_some() && boot.image.is_none() => {
+            let file = resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @firmware-path")?;
+            boot.image = Some(Asset::new(file, script));
+            boot.hex = true;
+        }
+        [cpu, "VectorTableOffset", value] if boot.platform.is_some() => {
+            boot.vector_tables.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
                 crate::parse_address(resolve(value)?)?,
             ));
         }
-        [cpu, "VectorTableOffset", value] if boot.platform.is_some() => {
-            boot.vector_tables.push((
+        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.platform.is_some() => {
+            let file = resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @firmware-path")?;
+            boot.binaries.push((
+                Asset::new(file, script),
+                crate::parse_address(resolve(address)?)?,
+            ));
+        }
+        [
+            "machine",
+            "SdCardFromFile",
+            image,
+            controller,
+            size,
+            "False" | "false",
+        ] if boot.platform.is_some() && boot.sd_card.is_none() => {
+            let image = resolve(image)?
+                .strip_prefix('@')
+                .ok_or("expected @SD-image-path")?;
+            let size = resolve(size)?.replace('_', "");
+            let capacity = match size.strip_prefix("0x") {
+                Some(hex) => u64::from_str_radix(hex, 16),
+                None => size.parse(),
+            }
+            .map_err(|_| "invalid SD card capacity")?;
+            boot.sd_card = Some((controller.to_string(), Asset::new(image, script), capacity));
+        }
+        [device, "LoadPCM" | "Output", value] if boot.platform.is_some() => {
+            let device = device.strip_prefix("sysbus.").unwrap_or(device).to_string();
+            let path = resolve(value)?
+                .strip_prefix('@')
+                .ok_or("expected @PCM-path")?;
+            if words[1] == "LoadPCM" {
+                boot.pcm_inputs.push((device, Asset::new(path, script)));
+            } else {
+                boot.pcm_outputs.push((device, root.join(path_value(path))));
+            }
+        }
+        ["emulation", "CreateSwitch", name] if *machine && boot.network.switch.is_none() => {
+            boot.network.switch = Some(unquote(resolve(name)?).into());
+        }
+        ["emulation", "CreateNetworkServer", name, ip]
+            if *machine && boot.network.server.is_none() =>
+        {
+            let name = unquote(resolve(name)?).to_string();
+            let ip = unquote(resolve(ip)?)
+                .parse::<Ipv4Addr>()
+                .map_err(|_| "expected IPv4 network server address")?;
+            boot.network.server = Some((name, ip));
+        }
+        ["connector", "Connect", device, switch] if *machine => {
+            let switch = unquote(resolve(switch)?);
+            let device = unquote(resolve(device)?);
+            if boot.network.switch.as_deref() != Some(switch)
+                || boot.network.links.iter().any(|name| name == device)
+            {
+                return Err("invalid or duplicate local switch connection".into());
+            }
+            boot.network.links.push(device.into());
+        }
+        [name, "StartTFTP", port]
+            if boot.network.is_server(name) && boot.network.port.is_none() =>
+        {
+            boot.network.port = Some(
+                resolve(port)?
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|&port| port != 0)
+                    .ok_or("invalid TFTP port")?,
+            );
+        }
+        [module, "ServeFile", file, name]
+            if module
+                .strip_suffix(".tftp")
+                .is_some_and(|name| boot.network.is_server(name))
+                && boot.network.port.is_some()
+                && boot.network.file.is_none() =>
+        {
+            let file = resolve(file)?
+                .strip_prefix('@')
+                .ok_or("expected @TFTP-file-path")?;
+            let name = unquote(resolve(name)?);
+            boot.network.file = Some((Asset::new(file, script), name.into()));
+        }
+        ["sysbus", "SilenceRange", start, size] if boot.platform.is_some() => {
+            let start = start
+                .strip_prefix('<')
+                .ok_or("expected SilenceRange <start size>")?;
+            let size = size
+                .strip_suffix('>')
+                .ok_or("expected SilenceRange <start size>")?;
+            boot.silence_ranges
+                .push((crate::parse_address(start)?, crate::parse_address(size)?));
+        }
+        [cpu, "PC", value] if boot.platform.is_some() => {
+            boot.boot_pcs.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
                 crate::parse_address(resolve(value)?)?,
             ));
@@ -537,8 +810,28 @@ fn execute(
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
+        ["cpu" | "sysbus.cpu", "SetSupervisorIrqMask", value] if boot.platform.is_some() => {
+            boot.supervisor_mask = Some(crate::parse_address(resolve(value)?)?);
+        }
+        [button, action @ ("Press" | "Release" | "Toggle")] if boot.platform.is_some() => {
+            let action = crate::litex_panel::ButtonAction::parse(action).unwrap();
+            boot.buttons.push((button.to_string(), action));
+        }
+        ["start"]
+            if boot.platform.is_some() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
+        {
+            boot.started = true;
+        }
         ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
             // UART output is already connected to stdout.
+        }
+        ["showAnalyzer", analyzer] if boot.platform.is_some() => {
+            boot.video_analyzers.push(
+                analyzer
+                    .strip_prefix("sysbus.")
+                    .unwrap_or(analyzer)
+                    .to_string(),
+            );
         }
         _ => return Err(format!("unsupported monitor command {text:?}")),
     }
@@ -577,27 +870,79 @@ fn duration_steps(value: &str) -> Result<u64, String> {
         .ok_or_else(invalid)
 }
 
-pub fn asset_path(
-    value: &str,
-    script: &Path,
-    root: &Path,
-    assets: Option<&Path>,
-) -> Result<PathBuf, String> {
-    if let Some((_, url)) = value.split_once("://") {
-        let name = url
-            .rsplit('/')
-            .next()
-            .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-            .ok_or_else(|| format!("invalid firmware URL {value}"))?;
-        let assets = assets.ok_or_else(|| {
-            format!("script references {value}; use --asset-dir with local assets")
-        })?;
-        return Ok(assets.join(name));
-    }
-    Ok(local_path(value, script, root))
+fn path_value(value: &str) -> String {
+    value.replace(r"\ ", " ")
 }
 
-pub fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
+fn command_words(text: &str) -> Result<Vec<&str>, String> {
+    let mut words = Vec::new();
+    let mut start = None;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if std::mem::take(&mut escaped) {
+            continue;
+        }
+        if character == '\\'
+            && (quote.is_some()
+                || start.is_some_and(|start| text[start..].starts_with('@'))
+                    && text[index + 1..].starts_with(' '))
+        {
+            escaped = true;
+            continue;
+        }
+        if quote.is_none() && character == '#' && start.is_none() {
+            return Ok(words);
+        }
+        if quote.is_none() && character.is_whitespace() {
+            if let Some(start) = start.take() {
+                words.push(&text[start..index]);
+            }
+            continue;
+        }
+        let new_word = start.is_none();
+        start.get_or_insert(index);
+        if quote == Some(character) {
+            quote = None;
+        } else if new_word && matches!(character, '"' | '\'') {
+            quote = Some(character);
+        }
+    }
+    if quote.is_some() {
+        return Err("unterminated quoted argument".into());
+    }
+    if let Some(start) = start {
+        words.push(&text[start..]);
+    }
+    Ok(words)
+}
+
+impl Asset {
+    fn new(value: &str, script: &Path) -> Self {
+        Self {
+            value: path_value(value),
+            script: script.into(),
+        }
+    }
+
+    pub fn resolve(&self, root: &Path, assets: Option<&Path>) -> Result<PathBuf, String> {
+        let value = &self.value;
+        if let Some((_, url)) = value.split_once("://") {
+            let name = url
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+                .ok_or_else(|| format!("invalid firmware URL {value}"))?;
+            let assets = assets.ok_or_else(|| {
+                format!("script references {value}; use --asset-dir with local assets")
+            })?;
+            return Ok(assets.join(name));
+        }
+        Ok(local_path(value, &self.script, root))
+    }
+}
+
+fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
     let local = script.parent().unwrap_or(Path::new(".")).join(value);
     if local.is_file() {
         local
@@ -638,12 +983,13 @@ mod tests {
 
         let mut boot = Boot {
             platform: Some("board.repl".into()),
-            image: Some(("test.hex".into(), ImageFormat::Hex)),
+            image: Some(Asset::new("test.hex", Path::new("test.resc"))),
             ..Boot::default()
         };
         let script = Path::new("test.resc");
         execute(
             "sysbus.gpioPortA.button PressAndRelease",
+            &["sysbus.gpioPortA.button", "PressAndRelease"],
             &HashMap::new(),
             &mut true,
             &mut boot,
@@ -712,7 +1058,7 @@ mod tests {
     fn parses_renode_uart_write_line_endings() {
         let mut boot = Boot {
             platform: Some("board.repl".into()),
-            image: Some(("firmware.elf".into(), ImageFormat::Elf)),
+            image: Some(Asset::new("firmware.elf", Path::new("test.resc"))),
             ..Boot::default()
         };
         let mut machine = true;
@@ -731,6 +1077,7 @@ mod tests {
             let command = format!("sysbus.usart1 WriteLine \"with spaces\"{suffix}");
             execute(
                 &command,
+                &command_words(&command).unwrap(),
                 &variables,
                 &mut machine,
                 &mut boot,
@@ -748,6 +1095,7 @@ mod tests {
         assert!(
             execute(
                 "sysbus.usart1 WriteLine \"x\" invalid",
+                &["sysbus.usart1", "WriteLine", "\"x\"", "invalid"],
                 &variables,
                 &mut machine,
                 &mut boot,
@@ -785,32 +1133,31 @@ mod tests {
         let path = Path::new("test.resc");
         let root = Path::new(".");
         let vars = HashMap::new();
-        for (line, command) in [
+        for command in [
             "machine LoadPlatformDescription @board.repl",
             "sysbus LoadBinary @https://example.org/firmware.bin 0x40000000",
             "sysbus.cpu_1 PC 0x40000004",
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        ] {
             execute(
                 command,
+                &command_words(command).unwrap(),
                 &vars,
                 &mut created,
                 &mut boot,
                 path,
                 root,
-                line + 1,
+                1,
             )
             .unwrap();
         }
-        assert_eq!(
-            boot.binaries,
-            [("https://example.org/firmware.bin".into(), 0x4000_0000)]
-        );
+        assert_eq!(boot.binaries.len(), 1);
+        assert_eq!(boot.binaries[0].1, 0x4000_0000);
         assert_eq!(boot.boot_pcs, [("cpu_1".into(), 0x4000_0004)]);
         assert_eq!(
-            asset_path(&boot.binaries[0].0, path, root, Some(Path::new("assets"))).unwrap(),
+            boot.binaries[0]
+                .0
+                .resolve(root, Some(Path::new("assets")))
+                .unwrap(),
             Path::new("assets/firmware.bin")
         );
     }
@@ -821,22 +1168,26 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let script = directory.join("boot.resc");
         let content = concat!(
-            "$name?=\"Test\"\n",
-            "$bin?=@firmware.elf\n",
-            "mach create $name\n",
-            "machine LoadPlatformDescription @board.repl\n",
+            "$name?=\"Test Machine\"\n",
+            "$bin?=@firmware\\ file.elf\n",
+            "mach create \"Test Machine\"\n",
+            "machine LoadPlatformDescription @board\\ file.repl\n",
             "macro reset\n",
             "\"\"\"\n",
-            "  sysbus LoadELF $bin\n",
+            "  sysbus LoadELF $bin # boot image\n",
             "  sysbus.cpu MTVEC 0x80000020\n",
             "\"\"\"\n",
             "runMacro $reset\n",
             "cpu SetMachineIrqMask 0xffffffff\n",
+            "start\n",
         );
         fs::write(&script, content).unwrap();
         let boot = load(&script, &directory).unwrap();
-        assert_eq!(boot.platform, Some(directory.join("board.repl")));
-        assert_eq!(boot.image, Some(("firmware.elf".into(), ImageFormat::Elf)));
+        assert_eq!(boot.platform, Some(directory.join("board file.repl")));
+        assert_eq!(
+            boot.image.as_ref().map(|image| image.value.as_str()),
+            Some("firmware file.elf")
+        );
         assert_eq!(boot.mtvec, Some(0x8000_0020));
         assert_eq!(boot.mask, Some(u32::MAX));
         fs::write(&script, content.replace("MTVEC", "unknown")).unwrap();

@@ -4,28 +4,47 @@ pub const EXECUTE: u8 = 4;
 const LOCK: u8 = 0x80;
 const TOR: u8 = 1;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Pmp {
-    config: [u8; 16],
-    address: [u32; 16],
-    active: u16,
+    config: [u8; 64],
+    address: [u32; 64],
+    active: u64,
+    entries: usize,
+}
+
+impl Default for Pmp {
+    fn default() -> Self {
+        Self::new(16)
+    }
 }
 
 impl Pmp {
+    pub fn new(entries: usize) -> Self {
+        debug_assert!(matches!(entries, 16 | 64));
+        Self {
+            config: [0; 64],
+            address: [0; 64],
+            active: 0,
+            entries,
+        }
+    }
+
     pub fn read(&self, csr: u32) -> Option<u32> {
         Some(match csr {
-            0x3a0..=0x3a3 => {
+            0x3a0..=0x3af if ((csr - 0x3a0) * 4) < self.entries as u32 => {
                 let start = (csr as usize - 0x3a0) * 4;
                 u32::from_le_bytes(self.config[start..start + 4].try_into().unwrap())
             }
-            0x3b0..=0x3bf => self.address[(csr - 0x3b0) as usize],
+            0x3b0..=0x3ef if csr - 0x3b0 < self.entries as u32 => {
+                self.address[(csr - 0x3b0) as usize]
+            }
             _ => return None,
         })
     }
 
     pub fn write(&mut self, csr: u32, value: u32) -> bool {
         match csr {
-            0x3a0..=0x3a3 => {
+            0x3a0..=0x3af if ((csr - 0x3a0) * 4) < self.entries as u32 => {
                 let start = (csr as usize - 0x3a0) * 4;
                 for (index, config) in (start..start + 4).zip(value.to_le_bytes()) {
                     if self.config[index] & LOCK != 0 {
@@ -42,10 +61,9 @@ impl Pmp {
                     }
                 }
             }
-            0x3b0..=0x3bf => {
+            0x3b0..=0x3ef if csr - 0x3b0 < self.entries as u32 => {
                 let index = (csr - 0x3b0) as usize;
-                let locked_by_next = self
-                    .config
+                let locked_by_next = self.config[..self.entries]
                     .get(index + 1)
                     .is_some_and(|&config| config & LOCK != 0 && mode(config) == TOR);
                 if self.config[index] & LOCK == 0 && !locked_by_next {

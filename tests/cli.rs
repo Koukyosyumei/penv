@@ -469,7 +469,10 @@ fn loads_platform_includes_and_uses_declared_memory() {
         "cpu: CPU.RiscV32 @ sysbus
     cpuType: \"rv32i\"
     timeProvider: clint
-ram: Memory.MappedMemory @ sysbus 0x8000_0000
+ram: Memory.MappedMemory @ {
+    sysbus 0x8000_0000;
+    sysbus 0xc000_0000 // shadow
+}
     size: 0x2000
 clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x0200_0000
     [0, 1] -> cpu@[3, 7]
@@ -742,4 +745,154 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     fs::remove_dir_all(directory).unwrap();
     assert!(result.status.success(), "{result:?}");
     assert_eq!(result.stdout, b"I");
+}
+
+#[test]
+fn litex_uart_and_timer_share_shadow_registers_and_drive_vex_interrupts() {
+    let directory = std::env::temp_dir().join(format!("penv-litex-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let board = directory.join("board.repl");
+    let raw = directory.join("firmware.bin");
+    let input = directory.join("input");
+    fs::write(
+        &board,
+        r#"cpu: CPU.VexRiscv @ sysbus
+    cpuType: "rv32im"
+ram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x1000
+uart: UART.LiteX_UART @ { sysbus 0x60001800; sysbus 0xe0001800 }
+    txFifoCapacity: 0
+    -> cpu@2
+timer0: Timers.LiteX_Timer_CSR32 @ { sysbus 0x60002800; sysbus 0xe0002800 }
+    frequency: 100000000
+    IRQ -> cpu@1
+"#,
+    )
+    .unwrap();
+    let program = [
+        0x6000_22b7u32, // lui t0, 0x60002
+        0x8002_8293,    // addi t0, t0, -2048 (UART)
+        0x0020_0313,    // li t1, 2
+        0x0062_aa23,    // sw t1, 20(t0) (enable RX event)
+        0xe000_3337,    // lui t1, 0xe0003
+        0x8003_0313,    // addi t1, t1, -2048 (timer shadow)
+        0x0010_0393,    // li t2, 1
+        0x0073_2023,    // sw t2, 0(t1) (load)
+        0x0073_2e23,    // sw t2, 28(t1) (event enable)
+        0x0073_2423,    // sw t2, 8(t1) (start)
+        0xfc00_2e73,    // csrr t3, 0xfc0 (VexRiscv pending)
+        0x0060_0e93,    // li t4, 6 (UART | timer)
+        0x01de_1c63,    // bne t3, t4, +24 (skip output on mismatch)
+        0x0002_a383,    // lw t2, 0(t0) (receive byte)
+        0xe000_2337,    // lui t1, 0xe0002
+        0x8003_0313,    // addi t1, t1, -2048 (UART shadow)
+        0x0073_2023,    // sw t2, 0(t1) (transmit byte)
+        0x0010_0073,    // ebreak
+        0x0010_0073,    // ebreak
+    ];
+    fs::write(raw.as_path(), program.map(u32::to_le_bytes).as_flattened()).unwrap();
+    fs::write(&input, b"Q").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+        .args(["run", "--raw", "--platform"])
+        .arg(&board)
+        .arg("--uart-input")
+        .arg(&input)
+        .arg(&raw)
+        .output()
+        .unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"Q");
+}
+
+#[test]
+fn loads_resc_wrappers_with_shared_variables_and_relative_assets() {
+    let directory = std::env::temp_dir().join(format!("penv-resc-wrapper-{}", std::process::id()));
+    let board = directory.join("nested");
+    fs::create_dir_all(&board).unwrap();
+    let wrapper = directory.join("wrapper.resc");
+    fs::write(
+        &wrapper,
+        "set bin @local\\ board.bin\ni @nested/board.resc\nrunMacro $reset\nstart\n",
+    )
+    .unwrap();
+    fs::write(
+        board.join("board.resc"),
+        concat!(
+            "mach create \"Board wrapper\"\n",
+            "machine LoadPlatformDescription @board.repl\n",
+            "$bin?=@default.bin\n",
+            "macro reset\n",
+            "\"\"\"\n",
+            "  sysbus LoadBinary $bin 0x80000000\n",
+            "  cpu PC 0x80000000\n",
+            "\"\"\"\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        board.join("board.repl"),
+        "cpu: CPU.RiscV32 @ sysbus\n    cpuType: \"rv32i\"\nram: Memory.MappedMemory @ sysbus 0x80000000\n    size: 0x1000\n",
+    ).unwrap();
+    fs::write(board.join("local board.bin"), 0x0010_0073u32.to_le_bytes()).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--script"])
+            .arg(&wrapper)
+            .output()
+            .unwrap()
+    };
+    let boot = run();
+    fs::write(board.join("board.resc"), "include @../wrapper.resc\n").unwrap();
+    let cycle = run();
+    fs::remove_dir_all(directory).unwrap();
+
+    assert!(boot.status.success(), "{boot:?}");
+    assert_eq!(cycle.status.code(), Some(1), "{cycle:?}");
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("board.resc:1:"));
+    assert!(
+        String::from_utf8_lossy(&cycle.stderr)
+            .contains("recursive or excessively deep script include")
+    );
+}
+
+#[test]
+fn distinguishes_rv32_act_console_packets_from_tohost_completion() {
+    let directory = std::env::temp_dir().join(format!("penv-tohost-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let raw = directory.join("tohost.bin");
+    let program = [
+        0x8000_02b7u32, // lui t0, 0x80000
+        0x0802_8293,    // addi t0, t0, 128
+        0x0410_0313,    // li t1, 'A' (odd low word)
+        0x0062_a023,    // sw t1, 0(t0)
+        0x0101_0337,    // lui t1, 0x01010 (ACT console command)
+        0x0062_a223,    // sw t1, 4(t0)
+        0x0010_0313,    // li t1, 1 (pass)
+        0x0062_a023,    // sw t1, 0(t0)
+        0x0002_a223,    // sw zero, 4(t0) (ACT completion command)
+        0x0010_0073,    // ebreak
+    ];
+    fs::write(&raw, program.map(u32::to_le_bytes).as_flattened()).unwrap();
+    for (option, limit, status, uart, marker) in [
+        ("--tohost-act", "20", 0, &b"A"[..], "tohost exit code 0"),
+        (
+            "--tohost-act",
+            "4",
+            2,
+            &b""[..],
+            "instruction limit reached",
+        ),
+        ("--tohost", "20", 1, &b""[..], "tohost exit code 32"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--raw", option, "0x80000080", "--max-steps", limit])
+            .arg(&raw)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(status), "{output:?}");
+        assert_eq!(output.stdout, uart);
+        assert!(String::from_utf8_lossy(&output.stderr).contains(marker));
+    }
+    fs::remove_dir_all(directory).unwrap();
 }

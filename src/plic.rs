@@ -14,6 +14,7 @@ pub struct Plic {
     claimed: u64,
     contexts: Vec<Context>,
     sources: u32,
+    priorities_enabled: bool,
 }
 
 impl Plic {
@@ -34,7 +35,13 @@ impl Plic {
                 })
                 .collect(),
             sources,
+            priorities_enabled: true,
         }
+    }
+
+    pub fn with_priorities(mut self, enabled: bool) -> Self {
+        self.priorities_enabled = enabled;
+        self
     }
 
     pub fn set_line(&mut self, source: u32, asserted: bool) {
@@ -54,6 +61,13 @@ impl Plic {
     }
 
     fn select(&self, mut candidates: u64, mut priority: u32) -> u32 {
+        if !self.priorities_enabled {
+            return if candidates == 0 {
+                0
+            } else {
+                candidates.trailing_zeros()
+            };
+        }
         let mut selected = 0;
         while candidates != 0 {
             let source = candidates.trailing_zeros();
@@ -133,7 +147,7 @@ impl Plic {
         } else if let Some((index, register)) = self.context_register(offset) {
             let context = &mut self.contexts[index];
             match register {
-                0 => context.threshold = value,
+                0 if self.priorities_enabled => context.threshold = value,
                 4 if value > 0 && value <= self.sources => {
                     let bit = 1u64 << value;
                     if context.enabled & context.claimed & bit != 0 {
@@ -144,7 +158,7 @@ impl Plic {
                 }
                 _ => {}
             }
-        } else if offset != 0 && offset <= self.sources * 4 {
+        } else if self.priorities_enabled && offset != 0 && offset <= self.sources * 4 {
             self.priority[(offset / 4) as usize] = value;
         }
     }
@@ -189,5 +203,24 @@ mod tests {
         plic.write(0x200004, 4);
         assert!(plic.irq_outputs() != 0);
         assert_eq!(plic.read(0x200004), 4);
+    }
+
+    #[test]
+    fn virt_plic_masks_threshold_notifications_and_high_source_enables() {
+        // Source count and machine context from Renode riscv_virt.repl.
+        let mut plic = Plic::new(0, 52, &[1 << 11]);
+        plic.write(52 * 4, 3);
+        plic.write(0x2004, u32::MAX);
+        assert_eq!(plic.read(0x2004), (1 << 21) - 1);
+        plic.write(0x200000, 3);
+        plic.set_line(52, true);
+        assert_eq!(plic.irq_outputs(), 0);
+        plic.write(0x200000, 2);
+        assert_eq!(plic.irq_outputs(), 1 << 11);
+        assert_eq!(plic.read(0x200004), 52);
+        plic.set_line(52, false);
+        plic.write(0x200004, 52);
+        assert_eq!(plic.read(0x200004), 0);
+        assert_eq!(plic.irq_outputs(), 0);
     }
 }

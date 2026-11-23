@@ -9,16 +9,22 @@ struct Target {
 pub struct Clint {
     pub base: u32,
     time: u64,
+    frequency: u32,
+    fraction: u64,
     targets: Vec<Target>,
 }
 
 impl Clint {
     pub const SIZE: u64 = 0x1_0000;
 
-    pub fn new(base: u32, target_count: usize) -> Self {
+    pub const STEP_HZ: u32 = 100_000_000;
+
+    pub fn new(base: u32, target_count: usize, frequency: u32) -> Self {
         Self {
             base,
             time: 0,
+            frequency,
+            fraction: 0,
             targets: (0..target_count)
                 .map(|_| Target {
                     compare: u64::MAX,
@@ -33,7 +39,10 @@ impl Clint {
     }
 
     pub fn tick(&mut self, hart: usize) -> u32 {
-        self.time = self.time.wrapping_add(1);
+        let scaled = self.fraction + u64::from(self.frequency);
+        let step_hz = u64::from(Self::STEP_HZ);
+        self.time = self.time.wrapping_add(scaled / step_hz);
+        self.fraction = scaled % step_hz;
         self.targets.get(hart).map_or(0, |target| {
             (u32::from(target.software) * SOFTWARE)
                 | (u32::from(self.time >= target.compare) * TIMER)
@@ -84,4 +93,40 @@ impl Clint {
 
 fn set_half(register: &mut u64, value: u32, shift: u32) {
     *register = (*register & !(u64::from(u32::MAX) << shift)) | (u64::from(value) << shift);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_interrupt_uses_the_configured_fractional_clock() {
+        let mut clint = Clint::new(0, 1, 10_000_000);
+        clint.write(0x4000, 1);
+        clint.write(0x4004, 0);
+        for _ in 0..9 {
+            assert_eq!(clint.tick(0), 0);
+        }
+        assert_eq!(clint.time(), 0);
+        assert_eq!(clint.tick(0), TIMER);
+        assert_eq!(clint.time(), 1);
+        clint.write(0x4000, 2);
+        assert_eq!(clint.tick(0), 0);
+    }
+
+    #[test]
+    fn compare_low_word_rollover_waits_for_the_programmed_high_word() {
+        // Adapt the two RV32 mtimecmp stores in Renode timer-reconfiguration.robot.
+        let mut clint = Clint::new(0, 1, Clint::STEP_HZ);
+        clint.write(0xbff8, u32::MAX - 1);
+        clint.write(0x4000, u32::MAX);
+        clint.write(0x4004, 1);
+        clint.write(0x4000, 1);
+        assert_eq!(clint.tick(0), 0);
+        assert_eq!(clint.read(0xbff8), u32::MAX);
+        assert_eq!(clint.tick(0), 0);
+        assert_eq!(clint.read(0xbff8), 0);
+        assert_eq!(clint.read(0xbffc), 1);
+        assert_eq!(clint.tick(0), TIMER);
+    }
 }

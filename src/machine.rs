@@ -1,8 +1,10 @@
-use std::{collections::VecDeque, io::Write};
+use std::{collections::VecDeque, io::Write, path::PathBuf};
 
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
+    litex_panel::ButtonAction,
+    litex_video::ReferenceFrame,
     sv32::TranslationCache,
     thumb::Thumb,
 };
@@ -15,9 +17,21 @@ pub struct Machine {
     secondary: Vec<Hart>,
     next_hart: usize,
     elapsed_steps: u64,
-    uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
+    inputs: VecDeque<(u64, Input)>,
+    queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
+    intermediate_frame_matches: Vec<u64>,
+}
+
+enum Input {
+    Uart(Vec<u8>),
+    Button(String, ButtonAction),
+    PhyVendorSpecific1 { name: String, value: u16 },
+    SensorTemperature { name: String, value: i32 },
+    LedAssertion { name: String, expected: bool },
+    FramebufferCapture(PathBuf),
+    FrameWait(Box<ReferenceFrame>),
 }
 
 #[derive(Clone)]
@@ -26,12 +40,16 @@ pub struct Hart {
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    unaligned_accesses: bool,
+    zicond: bool,
     pub pc: u32,
     pub registers: [u32; 32],
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stop {
+    FrameMatched(u64),
+    Tohost(u64),
     Ecall,
     Ebreak,
     Limit,
@@ -57,6 +75,7 @@ enum Fault {
     Illegal(u32),
     InvalidCsr(u32, String),
     MisalignedTarget(u32),
+    Breakpoint(u32),
 }
 
 impl Fault {
@@ -87,10 +106,11 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) => return None,
+                BusError::Output(_) | BusError::AudioOutput(_) => return None,
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),
+            Self::Breakpoint(address) => (3, *address),
         })
     }
 }
@@ -101,6 +121,7 @@ impl std::fmt::Display for Fault {
             Self::Bus(_, error) => error.fmt(f),
             Self::Illegal(insn) => write!(f, "unsupported instruction {insn:#010x}"),
             Self::InvalidCsr(_, error) => f.write_str(error),
+            Self::Breakpoint(address) => write!(f, "address breakpoint at {address:#010x}"),
             Self::MisalignedTarget(address) => {
                 write!(f, "misaligned instruction target {address:#010x}")
             }
@@ -146,15 +167,19 @@ impl Machine {
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                unaligned_accesses: false,
+                zicond: false,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
             secondary: Vec::new(),
             next_hart: 0,
             elapsed_steps: 0,
-            uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
+            inputs: VecDeque::new(),
+            queued_frame_waits: VecDeque::new(),
+            intermediate_frame_matches: Vec::new(),
         }
     }
 
@@ -246,14 +271,16 @@ impl Machine {
         if !self.bus.has_uart_input() {
             return Err("UART input requires a platform UART".into());
         }
-        let index = self
-            .uart_input
-            .partition_point(|(scheduled, _)| *scheduled <= step);
-        self.uart_input.insert(index, (step, bytes));
+        self.schedule_input(step, Input::Uart(bytes));
         Ok(())
     }
 
-    pub fn schedule_button(&mut self, step: u64, name: &str, pressed: bool) -> Result<(), String> {
+    pub fn schedule_stm32_button(
+        &mut self,
+        step: u64,
+        name: &str,
+        pressed: bool,
+    ) -> Result<(), String> {
         let button = self
             .bus
             .board_button(name)
@@ -279,6 +306,109 @@ impl Machine {
         Ok(())
     }
 
+    pub fn schedule_button(
+        &mut self,
+        step: u64,
+        name: String,
+        action: ButtonAction,
+    ) -> Result<(), String> {
+        if !self.bus.has_litex_button(&name) {
+            return Err(format!("unknown LiteX button {name:?}"));
+        }
+        self.schedule_input(step, Input::Button(name, action));
+        Ok(())
+    }
+
+    pub fn schedule_phy_vendor_specific1(
+        &mut self,
+        step: u64,
+        name: String,
+        value: u16,
+    ) -> Result<(), String> {
+        self.bus.litex_phy_mut(&name)?;
+        self.schedule_input(step, Input::PhyVendorSpecific1 { name, value });
+        Ok(())
+    }
+
+    pub fn schedule_sensor_temperature(
+        &mut self,
+        step: u64,
+        name: String,
+        value: i32,
+    ) -> Result<(), String> {
+        self.bus.litex_sensor_mut(&name)?;
+        self.schedule_input(step, Input::SensorTemperature { name, value });
+        Ok(())
+    }
+
+    pub fn schedule_led_assertion(
+        &mut self,
+        step: u64,
+        name: String,
+        expected: bool,
+    ) -> Result<(), String> {
+        self.bus.litex_led_state(&name)?;
+        self.schedule_input(step, Input::LedAssertion { name, expected });
+        Ok(())
+    }
+
+    pub fn schedule_framebuffer_capture(&mut self, step: u64, path: PathBuf) -> Result<(), String> {
+        if self.bus.litex_video.is_none() {
+            return Err("--framebuffer-event requires a LiteX framebuffer".into());
+        }
+        self.schedule_input(step, Input::FramebufferCapture(path));
+        Ok(())
+    }
+
+    pub fn schedule_frame_wait(
+        &mut self,
+        step: u64,
+        reference: ReferenceFrame,
+    ) -> Result<(), String> {
+        if self.bus.litex_video.is_none() {
+            return Err("framebuffer wait requires a LiteX framebuffer".into());
+        }
+        let reference = Box::new(reference);
+        if self
+            .inputs
+            .iter()
+            .any(|(_, input)| matches!(input, Input::FrameWait(_)))
+        {
+            self.queued_frame_waits.push_back((step, reference));
+        } else {
+            self.schedule_input(step, Input::FrameWait(reference));
+        }
+        Ok(())
+    }
+
+    pub fn intermediate_frame_matches(&self) -> &[u64] {
+        &self.intermediate_frame_matches
+    }
+
+    pub fn verify_required_events_completed(&self) -> Result<(), String> {
+        for (step, input) in &self.inputs {
+            let event = match input {
+                Input::LedAssertion { name, .. } => format!("LED assertion for {name:?}"),
+                Input::FramebufferCapture(path) => {
+                    format!("framebuffer capture to {}", path.display())
+                }
+                Input::FrameWait(_) => {
+                    return Err("execution ended before the reference frame matched".into());
+                }
+                _ => continue,
+            };
+            return Err(format!("execution ended before {event} at step {step}"));
+        }
+        Ok(())
+    }
+
+    fn schedule_input(&mut self, step: u64, input: Input) {
+        let index = self
+            .inputs
+            .partition_point(|(scheduled, _)| *scheduled <= step);
+        self.inputs.insert(index, (step, input));
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_until(limit, output, |_, _| false)
     }
@@ -295,6 +425,67 @@ impl Machine {
     ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
+            self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            while self
+                .inputs
+                .front()
+                .is_some_and(|(step, _)| *step <= self.elapsed_steps)
+            {
+                match self.inputs.pop_front().unwrap().1 {
+                    Input::Uart(bytes) => self.bus.queue_uart_input(bytes),
+                    Input::Button(name, action) => self.bus.set_litex_button(&name, action)?,
+                    Input::PhyVendorSpecific1 { name, value } => {
+                        self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+                    }
+                    Input::SensorTemperature { name, value } => {
+                        self.bus.litex_sensor_mut(&name)?.temperature = value;
+                    }
+                    Input::FrameWait(reference) => {
+                        let video = self
+                            .bus
+                            .litex_video
+                            .as_ref()
+                            .ok_or("no LiteX framebuffer")?;
+                        if video.matches(&self.bus, &reference)? {
+                            let Some((step, reference)) = self.queued_frame_waits.pop_front()
+                            else {
+                                return Ok((Stop::FrameMatched(self.elapsed_steps), retired));
+                            };
+                            self.intermediate_frame_matches.push(self.elapsed_steps);
+                            self.schedule_input(
+                                step.max(self.elapsed_steps),
+                                Input::FrameWait(reference),
+                            );
+                        } else {
+                            const FRAME_POLL_STEPS: u64 = 1_000_000;
+                            let next = self.elapsed_steps.checked_add(FRAME_POLL_STEPS).ok_or(
+                                "step counter exhausted before the reference frame matched",
+                            )?;
+                            self.schedule_input(next, Input::FrameWait(reference));
+                        }
+                    }
+                    Input::FramebufferCapture(path) => {
+                        self.bus.capture_litex_framebuffer(&path).map_err(|error| {
+                            format!(
+                                "framebuffer capture at step {}: {error}",
+                                self.elapsed_steps
+                            )
+                        })?;
+                    }
+                    Input::LedAssertion { name, expected } => {
+                        let actual = self.bus.litex_led_state(&name)?;
+                        if actual != expected {
+                            let state = |on| if on { "on" } else { "off" };
+                            return Err(format!(
+                                "LED {name:?} at step {}: expected {}, got {}",
+                                self.elapsed_steps,
+                                state(expected),
+                                state(actual)
+                            ));
+                        }
+                    }
+                }
+            }
             let index = self.next_hart;
             if index == self.secondary.len() {
                 self.next_hart = 0;
@@ -306,15 +497,6 @@ impl Machine {
             } else {
                 &mut self.secondary[index - 1]
             };
-            self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
-            while self
-                .uart_input
-                .front()
-                .is_some_and(|(step, _)| *step <= self.elapsed_steps)
-            {
-                let (_, bytes) = self.uart_input.pop_front().unwrap();
-                self.bus.queue_uart_input(bytes);
-            }
             while self
                 .button_events
                 .front()
@@ -331,6 +513,9 @@ impl Machine {
                 let (_, channel, volts) = self.adc_events.pop_front().unwrap();
                 self.bus.set_stm32f0_adc_input(channel, volts)?;
             }
+            self.bus
+                .tick_litex_uart(self.elapsed_steps, output)
+                .map_err(|error| format!("UART: {error}"))?;
             match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
@@ -338,6 +523,9 @@ impl Machine {
             }
             if matched(&self.bus, output) {
                 return Ok((Stop::OutputMatch, retired));
+            }
+            if let Some(code) = self.bus.tohost_exit {
+                return Ok((Stop::Tohost(code), retired));
             }
         }
         Ok((Stop::Limit, retired))
@@ -369,14 +557,43 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
-    pub fn enable_vex_irq_controller(&mut self) {
-        self.csr.vex_irq_mask = Some(0);
+    pub fn set_zicond(&mut self, enabled: bool) {
+        self.zicond = enabled;
+    }
+
+    pub fn set_unaligned_accesses(&mut self, enabled: bool) {
+        self.unaligned_accesses = enabled;
+    }
+
+    pub fn enable_ibex(&mut self) {
+        self.csr.ibex = true;
+    }
+
+    pub fn enable_vex_core(&mut self, built_in_irq: bool) {
+        self.csr.vex = true;
+        self.csr.local_irq_mask = built_in_irq.then_some(0);
+    }
+
+    pub fn enable_minerva(&mut self) {
+        self.csr.minerva = true;
+        self.csr.local_irq_mask = Some(0);
+    }
+
+    pub fn set_vex_supervisor_irq_mask(&mut self, value: u32) -> Result<(), String> {
+        if !self.csr.vex || self.csr.local_irq_mask.is_none() {
+            return Err("SetSupervisorIrqMask requires a VexRiscv platform".into());
+        }
+        self.csr.vex_supervisor_irq_mask = value;
+        Ok(())
     }
 
     pub fn set_vex_irq_mask(&mut self, value: u32) -> Result<(), String> {
+        if !self.csr.vex {
+            return Err("--vex-irq-mask requires a VexRiscv platform".into());
+        }
         let mask = self
             .csr
-            .vex_irq_mask
+            .local_irq_mask
             .as_mut()
             .ok_or("--vex-irq-mask requires a VexRiscv platform")?;
         *mask = value;
@@ -391,8 +608,12 @@ impl Hart {
         self.csr.enable_supervisor_mode();
     }
 
-    pub fn enable_pmp(&mut self) {
-        self.csr.enable_pmp();
+    pub fn enable_address_triggers(&mut self) {
+        self.csr.enable_address_triggers();
+    }
+
+    pub fn enable_pmp(&mut self, entries: usize) {
+        self.csr.enable_pmp(entries);
     }
 
     fn translate(
@@ -420,12 +641,54 @@ impl Hart {
     }
 
     fn load<const N: usize>(&mut self, bus: &mut Bus, address: u32) -> Result<u32, Fault> {
+        if self.csr.address_trigger_matches(address, crate::pmp::READ) {
+            return Err(Fault::Breakpoint(address));
+        }
+        if N > 1 && address as usize & (N - 1) != 0 && self.unaligned_accesses {
+            let mut value = 0;
+            for index in 0..N {
+                let byte = self.load::<1>(bus, address.wrapping_add(index as u32))?;
+                value |= byte << (index * 8);
+            }
+            return Ok(value);
+        }
         self.translate(bus, address, N, crate::pmp::READ)
             .and_then(|physical| {
                 bus.read::<N>(physical)
                     .map_err(|error| error.at_virtual(address))
             })
             .map_err(|error| Fault::Bus(Access::Load, error))
+    }
+
+    fn store(
+        &mut self,
+        bus: &mut Bus,
+        address: u32,
+        width: usize,
+        value: u32,
+        output: &mut impl Write,
+    ) -> Result<(), Fault> {
+        if self.csr.address_trigger_matches(address, crate::pmp::WRITE) {
+            return Err(Fault::Breakpoint(address));
+        }
+        if address as usize & (width - 1) != 0 && self.unaligned_accesses {
+            for (index, byte) in value.to_le_bytes()[..width].iter().enumerate() {
+                self.store(
+                    bus,
+                    address.wrapping_add(index as u32),
+                    1,
+                    u32::from(*byte),
+                    output,
+                )?;
+            }
+            return Ok(());
+        }
+        self.translate(bus, address, width, crate::pmp::WRITE)
+            .and_then(|physical| {
+                bus.write(physical, width, value, output)
+                    .map_err(|error| error.at_virtual(address))
+            })
+            .map_err(|error| Fault::Bus(Access::Store, error))
     }
 
     pub fn set_mtvec(&mut self, value: u32) {
@@ -507,31 +770,42 @@ impl Hart {
             .clint
             .as_mut()
             .map_or(0, |clint| clint.tick(self.csr.hart_id));
-        let count_retired = self.csr.tick_counters(
-            bus.clint
-                .as_ref()
-                .map_or(elapsed_steps, |clint| clint.time()),
-        );
+        let mut pending = clint;
+        let mut time = bus
+            .clint
+            .as_ref()
+            .map_or(elapsed_steps, |clint| clint.time());
+        if let Some(timer) = bus.litex_cpu_timer.as_mut() {
+            if timer.tick() {
+                pending |= crate::clint::TIMER;
+            }
+            time = timer.time;
+        }
+        let count_retired = self.csr.tick_counters(time);
         let uart = bus
             .uart
             .as_ref()
             .is_some_and(|uart| uart.interrupt_pending());
         let timer = bus.timer.as_mut().is_some_and(|(_, timer)| timer.tick());
         let plic = bus.tick_plic();
-        let mut pending = clint;
+        let mut lines = bus.tick_litex(self.csr.hart_id, elapsed_steps);
         if self.csr.hart_id == 0 {
-            let lines = (u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER);
-            let external = if let Some(mask) = self.csr.vex_irq_mask {
-                self.csr.vex_irq_pending = lines;
-                u32::from(lines & mask != 0) * EXTERNAL
+            lines |=
+                u64::from((u32::from(uart) * EXTERNAL) | (u32::from(timer) * crate::clint::TIMER));
+            if self.csr.vex && self.csr.local_irq_mask.is_some() {
+                lines |= u64::from(plic);
             } else {
-                lines
-            };
-            pending |= plic | external;
+                pending |= plic;
+            }
         }
-        if (bus.clint.is_some()
+        pending |= self.csr.sample_local_irq(lines);
+        if (pending != 0
+            || self.csr.has_local_irq_to_clear()
+            || bus.clint.is_some()
+            || bus.litex_cpu_timer.is_some()
             || bus.uart.is_some()
             || bus.timer.is_some()
+            || bus.has_litex_irq()
             || bus.has_plic()
             || self.csr.has_injected_interrupts())
             && let Some(target) = self.csr.interrupt(self.pc, pending)
@@ -564,6 +838,9 @@ impl Hart {
 
     fn step(&mut self, bus: &mut Bus, output: &mut impl Write) -> Result<Step, Fault> {
         let pc = self.pc;
+        if self.csr.address_trigger_matches(pc, crate::pmp::EXECUTE) {
+            return Err(Fault::Breakpoint(pc));
+        }
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
@@ -636,12 +913,7 @@ impl Hart {
                     2 => 4,
                     _ => return Err(illegal()),
                 };
-                self.translate(bus, address, width, crate::pmp::WRITE)
-                    .and_then(|physical| {
-                        bus.write(physical, width, b, output)
-                            .map_err(|error| error.at_virtual(address))
-                    })
-                    .map_err(|error| Fault::Bus(Access::Store, error))?;
+                self.store(bus, address, width, b, output)?;
                 None
             }
             0x13 => Some(match funct3 {
@@ -658,6 +930,20 @@ impl Hart {
             }),
             0x33 => Some(match (funct3, funct7) {
                 (_, 1) if self.csr.m_extension => multiply_divide(funct3, a, b),
+                (5, 7) if self.zicond => {
+                    if b == 0 {
+                        0
+                    } else {
+                        a
+                    }
+                }
+                (7, 7) if self.zicond => {
+                    if b != 0 {
+                        0
+                    } else {
+                        a
+                    }
+                }
                 (0, 0) => a.wrapping_add(b),
                 (0, 0x20) => a.wrapping_sub(b),
                 (1, 0) => a << (b & 31),
@@ -681,6 +967,9 @@ impl Hart {
                     }
                     _ => return Err(illegal()),
                 };
+                if self.csr.address_trigger_matches(a, permissions) {
+                    return Err(Fault::Breakpoint(a));
+                }
                 let physical = self
                     .translate(bus, a, 4, permissions)
                     .map_err(|error| Fault::Bus(access, error))?;
@@ -711,6 +1000,8 @@ impl Hart {
             }
             // Every instruction fetch reads current RAM, so FENCE.I needs no invalidation.
             0x0f if funct3 <= 1 => None,
+            // Renode VexRiscv accepts the custom whole-data-cache flush.
+            0x0f if insn == 0x0000_500f && self.csr.vex => None,
             0x73 if insn == 0x0000_0073 => {
                 return Ok(self.environment_trap(self.csr.ecall_cause(), Stop::Ecall));
             }
@@ -733,7 +1024,7 @@ impl Hart {
                     .csr
                     .access(insn, a)
                     .map_err(|error| Fault::InvalidCsr(insn, error))?;
-                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3a3 | 0x3b0..=0x3bf) {
+                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3af | 0x3b0..=0x3ef) {
                     self.translations.clear();
                 }
                 Some(value)
@@ -826,6 +1117,70 @@ mod tests {
     }
 
     #[test]
+    fn zicond_rv32_matches_zero_nonzero_and_disabled_cases() {
+        // Renode riscv-zicond-extension.robot: RV32 data and trap cases.
+        for (funct3, selector, expected) in
+            [(5, 0, 0), (5, 1, u32::MAX), (7, 0, u32::MAX), (7, 1, 0)]
+        {
+            for enabled in [false, true] {
+                let mut machine = Machine::new(8).unwrap();
+                machine.primary.set_zicond(enabled);
+                machine.primary.set_mtvec(RAM_BASE + 4);
+                machine.primary.registers[10] = u32::MAX;
+                machine.primary.registers[11] = selector;
+                // Use rd=rs1 to also check read-before-write behavior.
+                let instruction = 0x0eb5_0533u32 | (funct3 << 12);
+                machine
+                    .bus
+                    .memory(RAM_BASE, 4)
+                    .unwrap()
+                    .copy_from_slice(&instruction.to_le_bytes());
+                let (_, retired) = machine.run(1, &mut std::io::sink()).unwrap();
+                if enabled {
+                    assert_eq!(retired, 1);
+                    assert_eq!(machine.primary.registers[10], expected);
+                } else {
+                    assert_eq!(retired, 0);
+                    assert_eq!(machine.primary.pc, RAM_BASE + 4);
+                    assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 2);
+                    assert_eq!(
+                        machine.primary.csr.access(0x3410_2073, 0).unwrap(),
+                        RAM_BASE
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vexriscv_accepts_its_data_cache_operations() {
+        let mut machine = Machine::new(16).unwrap();
+        let instructions = [
+            0x0000_500fu32, // VexRiscv data cache flush
+            0xcc0a_d073,    // csrwi 0xcc0, 21
+            0xcc00_2573,    // csrr a0, 0xcc0
+            0x0010_0073,    // ebreak
+        ];
+        machine
+            .bus
+            .memory(RAM_BASE, 16)
+            .unwrap()
+            .copy_from_slice(instructions.map(u32::to_le_bytes).as_flattened());
+        assert!(
+            machine
+                .run(1, &mut std::io::sink())
+                .unwrap_err()
+                .contains("unsupported instruction")
+        );
+        machine.primary.enable_vex_core(true);
+        assert_eq!(
+            machine.run(5, &mut std::io::sink()).unwrap(),
+            (Stop::Ebreak, 3)
+        );
+        assert_eq!(machine.primary.registers[10], 21);
+    }
+
+    #[test]
     fn handles_ecall_and_returns_to_guest_code() {
         let mut machine = Machine::new(48).unwrap();
         let program: [u32; 12] = [
@@ -874,6 +1229,192 @@ mod tests {
             machine.primary.registers[6],
             (3 << 11) | (1 << 7) | (1 << 3)
         );
+    }
+
+    #[test]
+    fn privilege_controls_gate_sret_and_address_translation_operations() {
+        // Renode riscv-priv.robot: RV32 TSR and U-mode SFENCE.VMA cases,
+        // plus the equivalent RV32 instructions for its supervisor TVM cases.
+        const HANDLER: u32 = RAM_BASE + 12;
+        const SRET_TARGET: u32 = RAM_BASE + 16;
+        const SUPERVISOR: u32 = (1 << 11) | (1 << 8); // MPP=S, SPP=S
+        const TSR: u32 = 1 << 22;
+        const TVM: u32 = 1 << 20;
+        for (instruction, status, expected_pc) in [
+            (0x1020_0073u32, SUPERVISOR | TSR, HANDLER), // sret
+            (0x1020_0073, SUPERVISOR, SRET_TARGET),
+            (0x1200_0073, 0, HANDLER), // sfence.vma in U
+            (0x1200_0073, SUPERVISOR | TVM, HANDLER),
+            (0x1200_0073, SUPERVISOR, RAM_BASE + 8),
+            (0x1800_2573, SUPERVISOR | TVM, HANDLER), // csrr a0, satp
+            (0x1800_2573, SUPERVISOR, RAM_BASE + 8),
+            (0x1800_1073, SUPERVISOR | TVM, HANDLER), // csrw satp, zero
+            (0x1800_1073, SUPERVISOR, RAM_BASE + 8),
+        ] {
+            let mut machine = Machine::new(20).unwrap();
+            machine.primary.enable_user_mode();
+            machine.primary.enable_supervisor_mode();
+            machine.primary.set_mtvec(HANDLER);
+            machine.primary.csr.access(0x3000_9073, status).unwrap();
+            assert_eq!(
+                machine.primary.csr.access(0x3000_2073, 0).unwrap() & (TSR | TVM),
+                status & (TSR | TVM)
+            );
+            machine
+                .primary
+                .csr
+                .access(0x3410_9073, RAM_BASE + 4)
+                .unwrap();
+            machine
+                .primary
+                .csr
+                .access(0x1410_9073, SRET_TARGET)
+                .unwrap();
+            machine.bus.memory(RAM_BASE, 8).unwrap().copy_from_slice(
+                [0x3020_0073u32, instruction]
+                    .map(u32::to_le_bytes)
+                    .as_flattened(),
+            );
+            let mut output = std::io::sink();
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+            let trapped = status == 0 || status & (TSR | TVM) != 0;
+            assert_eq!(
+                machine.run(1, &mut output).unwrap(),
+                (Stop::Limit, u64::from(!trapped))
+            );
+            assert_eq!(machine.primary.pc, expected_pc);
+            if trapped {
+                assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 2);
+                assert_eq!(
+                    machine.primary.csr.access(0x3410_2073, 0).unwrap(),
+                    RAM_BASE + 4
+                );
+                assert_eq!(
+                    machine.primary.csr.access(0x3430_2073, 0).unwrap(),
+                    instruction
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege() {
+        // Renode riscv-mret.robot: both 32-bit User Level cases.
+        const HANDLER: u32 = RAM_BASE + 4;
+        for (user_mode, expected_mpp) in [(false, 3), (true, 0)] {
+            let mut machine = Machine::new(8).unwrap();
+            if user_mode {
+                machine.primary.enable_user_mode();
+            }
+            machine.primary.set_mtvec(HANDLER);
+            for (address, instruction) in [
+                (RAM_BASE, 0xc000_1073u32), // csrrw zero, cycle, zero
+                (HANDLER, 0x3020_0073),     // mret
+            ] {
+                machine
+                    .bus
+                    .memory(address, 4)
+                    .unwrap()
+                    .copy_from_slice(&instruction.to_le_bytes());
+            }
+            let mut output = std::io::sink();
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+            assert_eq!(machine.primary.pc, HANDLER);
+            assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 2);
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                3
+            );
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+            assert_eq!(machine.primary.pc, RAM_BASE);
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                expected_mpp
+            );
+        }
+    }
+
+    #[test]
+    fn clint_traps_at_the_exact_reprogrammed_compare_tick() {
+        // Renode timer-reconfiguration.robot: Should Tick At Exact Time.
+        const CLINT: u32 = 0x0200_0000;
+        const HANDLER: u32 = RAM_BASE + 16;
+        let mut machine = Machine::new(20).unwrap();
+        machine
+            .bus
+            .map_clint_with_frequency(CLINT, 1, 10_000_000)
+            .unwrap();
+        machine.primary.set_mtvec(HANDLER);
+        machine
+            .primary
+            .csr
+            .access(0x3040_9073, crate::clint::TIMER)
+            .unwrap();
+        machine.primary.csr.access(0x3000_9073, 1 << 3).unwrap();
+        machine.primary.registers[1] = CLINT + 0x4000;
+        machine.primary.registers[2] = 6;
+        machine.primary.registers[3] = CLINT + 0x4004;
+        let program = [0x0000_0013u32, 0x0020_a023, 0x0001_a023, 0x0000_006f];
+        machine
+            .bus
+            .memory(RAM_BASE, 16)
+            .unwrap()
+            .copy_from_slice(program.map(u32::to_le_bytes).as_flattened());
+
+        let mut output = std::io::sink();
+        assert_eq!(machine.run(59, &mut output).unwrap(), (Stop::Limit, 59));
+        assert_eq!(machine.primary.pc, RAM_BASE + 12);
+        assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), 5);
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, HANDLER);
+        assert_eq!(
+            machine.primary.csr.access(0x3420_2073, 0).unwrap(),
+            0x8000_0007
+        );
+        assert_eq!(
+            machine.primary.csr.access(0x3410_2073, 0).unwrap(),
+            RAM_BASE + 12
+        );
+    }
+
+    #[test]
+    fn virt_ns16550_receive_interrupt_routes_through_plic() {
+        // Device addresses and source ID from Renode platforms/cpus/riscv_virt.repl.
+        const UART: u32 = 0x1000_0000;
+        const PLIC: u32 = 0x0c00_0000;
+        const CLAIM: u32 = PLIC + 0x20_0004;
+        const HANDLER: u32 = RAM_BASE + 4;
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(RAM_BASE, 8).unwrap();
+        machine.bus.map_plic(PLIC, 52, &[EXTERNAL], true).unwrap();
+        machine.bus.map_ns16550(UART, 3, false).unwrap();
+        machine.primary.set_mtvec(HANDLER);
+        machine.primary.csr.access(0x3040_9073, EXTERNAL).unwrap();
+        machine.primary.csr.access(0x3000_9073, 1 << 3).unwrap();
+        let mut output = Vec::new();
+        for (address, width, value) in [(PLIC + 12, 4, 1), (PLIC + 0x2000, 4, 8), (UART + 1, 1, 1)]
+        {
+            machine
+                .bus
+                .write(address, width, value, &mut output)
+                .unwrap();
+        }
+        machine.schedule_uart_input(1, b"Q".to_vec()).unwrap();
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, HANDLER);
+        assert_eq!(
+            machine.primary.csr.access(0x3420_2073, 0).unwrap(),
+            0x8000_000b
+        );
+        assert_eq!(machine.bus.read::<4>(CLAIM).unwrap(), 3);
+        assert_eq!(machine.bus.read::<1>(UART + 2).unwrap(), 4);
+        let received = machine.bus.read::<1>(UART).unwrap();
+        machine.bus.write(UART, 1, received, &mut output).unwrap();
+        assert_eq!(output, b"Q");
+        assert_eq!(machine.bus.read::<1>(UART + 2).unwrap(), 1);
+        assert_eq!(machine.bus.tick_plic(), 0);
+        machine.bus.write(CLAIM, 4, 3, &mut output).unwrap();
+        assert_eq!(machine.bus.tick_plic(), 0);
     }
 
     #[test]
@@ -1097,7 +1638,7 @@ mod tests {
     fn pmp_blocks_user_load_from_machine_memory() {
         let mut machine = Machine::new(64).unwrap();
         machine.primary.enable_user_mode();
-        machine.primary.enable_pmp();
+        machine.primary.enable_pmp(16);
         let user = RAM_BASE + 4;
         machine.primary.set_mtvec(RAM_BASE + 32);
         machine.primary.csr.access(0x3410_9073, user).unwrap();
@@ -1177,7 +1718,7 @@ mod tests {
         let mut machine = Machine::new(0x4000).unwrap();
         machine.primary.enable_user_mode();
         machine.primary.enable_supervisor_mode();
-        machine.primary.enable_pmp();
+        machine.primary.enable_pmp(16);
         machine.primary.set_mtvec(RAM_BASE + 0x40);
         let root = RAM_BASE + 0x1000;
         let leaf = RAM_BASE + 0x2000;
@@ -1393,7 +1934,7 @@ mod tests {
     fn uart_events_arrive_in_step_order_and_append_to_existing_input() {
         const UART: u32 = 0xf000_1800;
         let mut machine = Machine::new(8).unwrap();
-        machine.bus.map_litex_uart(UART).unwrap();
+        machine.bus.map_litex_uart(vec![UART], None).unwrap();
         machine
             .bus
             .memory(RAM_BASE, 4)
@@ -1409,6 +1950,92 @@ mod tests {
             assert_eq!(machine.bus.read::<1>(UART).unwrap(), u32::from(*byte));
         }
         assert_eq!(machine.bus.read::<4>(UART + 8).unwrap(), 1);
+    }
+
+    #[test]
+    fn led_assertions_require_the_named_state_at_the_scheduled_step() {
+        use crate::litex_panel::Panel;
+
+        const PANEL: u32 = 0xf000_6800;
+        const SHADOW: u32 = 0x6000_6800;
+        let mut machine = Machine::new(8).unwrap();
+        machine
+            .bus
+            .map_litex_panel(Panel::new(
+                vec![PANEL, SHADOW],
+                None,
+                Vec::new(),
+                vec![("cas.led0".into(), 2)],
+            ))
+            .unwrap();
+        machine
+            .bus
+            .memory(RAM_BASE, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+        assert!(
+            machine
+                .schedule_led_assertion(1, "other.led0".into(), false)
+                .is_err()
+        );
+        machine
+            .schedule_led_assertion(1, "cas.led0".into(), false)
+            .unwrap();
+        machine
+            .schedule_led_assertion(2, "sysbus.cas.led0".into(), true)
+            .unwrap();
+        machine
+            .schedule_led_assertion(3, "cas.led0".into(), false)
+            .unwrap();
+
+        let mut output = std::io::sink();
+        machine.run(1, &mut output).unwrap();
+        let missing = machine.verify_required_events_completed().unwrap_err();
+        assert!(missing.contains("at step 2"));
+        machine.bus.write(SHADOW, 4, 1 << 2, &mut output).unwrap();
+        machine.run(1, &mut output).unwrap();
+        let mismatch = machine.run(1, &mut output).unwrap_err();
+        assert!(mismatch.contains("at step 3: expected off, got on"));
+    }
+
+    #[test]
+    fn button_events_apply_at_the_scheduled_step_in_submission_order() {
+        use crate::litex_panel::{Button, Panel};
+
+        const PANEL: u32 = 0xf000_6800;
+        let mut machine = Machine::new(8).unwrap();
+        machine
+            .bus
+            .map_litex_panel(Panel::new(
+                vec![PANEL],
+                None,
+                vec![Button::new("button0".into(), 64, false)],
+                Vec::new(),
+            ))
+            .unwrap();
+        machine
+            .bus
+            .memory(RAM_BASE, 4)
+            .unwrap()
+            .copy_from_slice(&0x0000_006fu32.to_le_bytes());
+
+        assert!(
+            machine
+                .schedule_button(9, "missing".into(), ButtonAction::Press)
+                .is_err()
+        );
+        for action in [ButtonAction::Press, ButtonAction::Release] {
+            machine
+                .schedule_button(3, "cas.button0".into(), action)
+                .unwrap();
+        }
+
+        let mut output = std::io::sink();
+        machine.run(2, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(PANEL + 0xc).unwrap(), 0);
+        machine.run(1, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(PANEL + 8).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(PANEL + 0xc).unwrap(), 1);
     }
 
     #[test]

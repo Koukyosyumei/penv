@@ -20,6 +20,8 @@ const SPIE: u32 = 1 << 5;
 const SPP: u32 = 1 << 8;
 const SUM: u32 = 1 << 18;
 const MXR: u32 = 1 << 19;
+const TVM: u32 = 1 << 20;
+const TSR: u32 = 1 << 22;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,6 +30,21 @@ enum Privilege {
     Supervisor = 1,
     Machine = 3,
 }
+
+#[derive(Clone, Copy, Default)]
+struct AddressTrigger {
+    control: u32,
+    address: u32,
+}
+
+#[derive(Clone, Default)]
+struct Triggers {
+    selected: usize,
+    entries: [AddressTrigger; 2],
+}
+
+const MCONTROL: u32 = 2 << 28;
+const MCONTROL_FIELDS: u32 = 0x5f; // M/S/U and execute/store/load
 
 #[derive(Clone, Default)]
 struct Supervisor {
@@ -80,13 +97,21 @@ pub struct Csr {
     status: u32,
     counters: Counters,
     user_supported: bool,
-    pmp: Option<Pmp>,
+    pmp: Option<Box<Pmp>>,
     privilege: Privilege,
     supervisor: Option<Supervisor>,
+    triggers: Option<Box<Triggers>>,
     interrupt_enable: u32,
     pending: u32,
-    pub vex_irq_mask: Option<u32>,
-    pub vex_irq_pending: u32,
+    pub ibex: bool,
+    pub vex: bool,
+    pub minerva: bool,
+    pub local_irq_mask: Option<u32>,
+    local_irq_pending: u32,
+    pub vex_supervisor_irq_mask: u32,
+    vex_supervisor_irq_pending: u32,
+    local_irq_levels: u64,
+    vex_dcache_info: u32,
     vector: Option<u32>,
     scratch: u32,
     exception_pc: u32,
@@ -107,10 +132,18 @@ impl Default for Csr {
             pmp: None,
             privilege: Privilege::Machine,
             supervisor: None,
+            triggers: None,
             interrupt_enable: 0,
             pending: 0,
-            vex_irq_mask: None,
-            vex_irq_pending: 0,
+            ibex: false,
+            vex: false,
+            minerva: false,
+            local_irq_mask: None,
+            local_irq_pending: 0,
+            vex_supervisor_irq_mask: 0,
+            vex_supervisor_irq_pending: 0,
+            local_irq_levels: 0,
+            vex_dcache_info: 0,
             vector: None,
             scratch: 0,
             exception_pc: 0,
@@ -157,8 +190,23 @@ impl Csr {
         self.supervisor = Some(Supervisor::default());
     }
 
-    pub fn enable_pmp(&mut self) {
-        self.pmp = Some(Pmp::default());
+    pub fn enable_address_triggers(&mut self) {
+        self.triggers = Some(Box::default());
+    }
+
+    pub fn address_trigger_matches(&self, address: u32, access: u8) -> bool {
+        let mode = 1 << (3 + self.privilege as u32);
+        self.triggers.as_ref().is_some_and(|triggers| {
+            triggers.entries.iter().any(|trigger| {
+                trigger.address == address
+                    && trigger.control & mode != 0
+                    && trigger.control & u32::from(access) != 0
+            })
+        })
+    }
+
+    pub fn enable_pmp(&mut self, entries: usize) {
+        self.pmp = Some(Box::new(Pmp::new(entries)));
     }
 
     fn effective_privilege(&self, fetch: bool) -> Privilege {
@@ -194,7 +242,12 @@ impl Csr {
     }
 
     pub fn can_sfence(&self) -> bool {
-        self.supervisor.is_some() && self.privilege != Privilege::User
+        self.supervisor.is_some()
+            && match self.privilege {
+                Privilege::Machine => true,
+                Privilege::Supervisor => self.status & TVM == 0,
+                Privilege::User => false,
+            }
     }
 
     pub fn in_user_mode(&self) -> bool {
@@ -215,13 +268,17 @@ impl Csr {
             register_value
         };
         let error = || format!("unsupported CSR access at {address:#05x}");
-        if ((address >> 8) & 3) > self.privilege as u32 {
+        if ((address >> 8) & 3) > self.privilege as u32
+            || (address == 0x180
+                && self.privilege == Privilege::Supervisor
+                && self.status & TVM != 0)
+        {
             return Err(error());
         }
         let previous = self.read(address).ok_or_else(error)?;
         // A hardware SEIP level is visible to CSR reads but must not become
         // latched as a software-injected interrupt by CSRRS/CSRRC.
-        let writable_previous = if address == 0x344 {
+        let writable_previous = if matches!(address, 0x144 | 0x344) {
             self.supervisor
                 .as_ref()
                 .map_or(0, |s| s.injected_interrupts)
@@ -285,8 +342,24 @@ impl Csr {
             0x342 => self.cause,
             0x343 => self.trap_value,
             0x344 => self.pending_interrupts(),
-            0xbc0 => self.vex_irq_mask?,
-            0xfc0 if self.vex_irq_mask.is_some() => self.vex_irq_pending,
+            0x7a0 => self.triggers.as_ref()?.selected as u32,
+            0x7a1 => {
+                let triggers = self.triggers.as_ref()?;
+                MCONTROL | triggers.entries[triggers.selected].control
+            }
+            0x7a2 => {
+                let triggers = self.triggers.as_ref()?;
+                triggers.entries[triggers.selected].address
+            }
+            0x7a4 if self.triggers.is_some() => 1 << 2,
+            0x7c0 if self.ibex => 0,
+            0x9c0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_mask,
+            0xbc0 if self.vex => self.local_irq_mask?,
+            0x330 if self.minerva => self.local_irq_mask?,
+            0x360 if self.minerva => self.local_irq_pending,
+            0xdc0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_pending,
+            0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info,
+            0xfc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_pending,
             _ => return self.pmp.as_ref()?.read(address),
         })
     }
@@ -301,7 +374,17 @@ impl Csr {
                 self.interrupt_enable = (self.interrupt_enable & !mask) | (value & mask);
             }
             0x144 if let Some(supervisor) = self.supervisor.as_mut() => {
-                let mask = supervisor.interrupt_delegation & SSIP;
+                // The legacy LiteX machine-mode SBI forwards MTIP by writing STIP
+                // through SIP on VexRiscv's built-in interrupt controller.
+                let writable = if self.vex
+                    && self.local_irq_mask.is_some()
+                    && self.privilege == Privilege::Machine
+                {
+                    SSIP | STIP
+                } else {
+                    SSIP
+                };
+                let mask = supervisor.interrupt_delegation & writable;
                 supervisor.injected_interrupts =
                     (supervisor.injected_interrupts & !mask) | (value & mask);
             }
@@ -326,7 +409,7 @@ impl Csr {
                 let privilege = self.decode_privilege((value & MPP) >> 11);
                 let mprv = if self.user_supported { value & MPRV } else { 0 };
                 let supervisor = if self.supervisor.is_some() {
-                    value & SSTATUS
+                    value & (SSTATUS | TVM | TSR)
                 } else {
                     0
                 };
@@ -352,7 +435,37 @@ impl Csr {
                 set_counter_half(&mut self.counters.instret, value, address & 0x80 != 0);
                 self.counters.instret_written = true;
             }
-            0xbc0 if self.vex_irq_mask.is_some() => self.vex_irq_mask = Some(value),
+            0x7a0..=0x7a2 if let Some(triggers) = self.triggers.as_mut() => {
+                match address {
+                    0x7a0 if (value as usize) < triggers.entries.len() => {
+                        triggers.selected = value as usize;
+                    }
+                    0x7a0 => {}
+                    0x7a1 => {
+                        // Only exact-address matches with the breakpoint action are implemented.
+                        triggers.entries[triggers.selected].control =
+                            if value & !MCONTROL_FIELDS == MCONTROL {
+                                value & MCONTROL_FIELDS
+                            } else {
+                                0
+                            };
+                    }
+                    0x7a2 => triggers.entries[triggers.selected].address = value,
+                    _ => unreachable!(),
+                }
+            }
+            0x7c0 if self.ibex => {}
+            0x330 if self.minerva => self.local_irq_mask = Some(value),
+            0x360 if self.minerva => self.local_irq_pending = value,
+            0x9c0 if self.vex && self.local_irq_mask.is_some() => {
+                self.vex_supervisor_irq_mask = value
+            }
+            0xbc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_mask = Some(value),
+            0xdc0 if self.vex && self.local_irq_mask.is_some() => {
+                self.vex_supervisor_irq_pending = value
+            }
+            0xfc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_pending = value,
+            0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info = value,
             0x340 => self.scratch = value,
             0x341 => self.exception_pc = value & self.epc_mask(),
             0x342 => self.cause = value,
@@ -430,6 +543,28 @@ impl Csr {
                 .map_or(0, |s| s.injected_interrupts)
     }
 
+    pub fn sample_local_irq(&mut self, levels: u64) -> u32 {
+        let Some(mask) = self.local_irq_mask else {
+            return levels as u32;
+        };
+        let changed = levels ^ self.local_irq_levels;
+        if changed != 0 {
+            self.local_irq_levels = levels;
+            self.local_irq_pending =
+                (self.local_irq_pending & !(changed as u32)) | (levels as u32 & changed as u32);
+            let changed = (changed >> 32) as u32;
+            self.vex_supervisor_irq_pending =
+                (self.vex_supervisor_irq_pending & !changed) | ((levels >> 32) as u32 & changed);
+        }
+        (u32::from(self.local_irq_pending & mask != 0) * EXTERNAL)
+            | (u32::from(self.vex_supervisor_irq_pending & self.vex_supervisor_irq_mask != 0)
+                * SEIP)
+    }
+
+    pub fn has_local_irq_to_clear(&self) -> bool {
+        self.local_irq_mask.is_some() && self.pending & (EXTERNAL | SEIP) != 0
+    }
+
     pub fn has_injected_interrupts(&self) -> bool {
         self.supervisor
             .as_ref()
@@ -479,7 +614,9 @@ impl Csr {
     }
 
     pub fn return_from_supervisor_trap(&mut self) -> Option<u32> {
-        if self.privilege == Privilege::User {
+        if self.privilege == Privilege::User
+            || (self.privilege == Privilege::Supervisor && self.status & TSR != 0)
+        {
             return None;
         }
         let epc = self.supervisor.as_ref()?.epc;
@@ -505,4 +642,32 @@ fn vector_target(vector: u32, cause: u32) -> u32 {
         0
     };
     (vector & !3).wrapping_add(offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_vex_machine_sbi_can_forward_a_timer_interrupt_through_sip() {
+        for legacy_vex in [false, true] {
+            let mut csr = Csr::default();
+            csr.enable_supervisor_mode();
+            csr.vex = legacy_vex;
+            csr.local_irq_mask = legacy_vex.then_some(0);
+            csr.access(0x3030_9073, STIP).unwrap();
+            csr.access(0x1440_a073, STIP).unwrap(); // csrs sip, ra
+            assert_eq!(
+                csr.access(0x1440_2073, 0).unwrap(),
+                if legacy_vex { STIP } else { 0 }
+            );
+
+            csr.access(0x1440_b073, STIP).unwrap(); // csrc sip, ra
+            assert_eq!(csr.access(0x1440_2073, 0).unwrap(), 0);
+            csr.access(0x3000_9073, 1 << 11).unwrap(); // MPP=S
+            csr.return_from_trap().unwrap();
+            csr.access(0x1440_a073, STIP).unwrap();
+            assert_eq!(csr.access(0x1440_2073, 0).unwrap(), 0);
+        }
+    }
 }
