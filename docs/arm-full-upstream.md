@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 43 | 38 | 32 | 239 |
-| Renode Infrastructure NUnit | 134 | 39 | 0 | 95 | 9 |
-| 合計 | **247** | **82** | **38** | **127** | **248** |
+| Renode Infrastructure NUnit | 134 | 45 | 2 | 87 | 9 |
+| 合計 | **247** | **88** | **40** | **119** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -301,9 +301,22 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-patterns-verification
 
 上流の1 MHz と各経過時間を維持し、周期 `limit` を STM32 の `ARR=limit-1` に、比較値を CCR1 に対応させた。比較イベント数は CC1IE を有効にし、CC1IF をクリアしながら数える。65536カウント周期の途中で CCR1 を 65535 から0へ変える場合、CNT をゼロにしても CCR1 を保持する場合、ゼロへの書き込み後に次の比較を発火する場合、現在値を CNT に書き直しても余分な比較イベントが発生しない場合の4ケースを検証した。
 
-`ShouldThrowOnCompareHigherThanLimit` は専用ホスト API の例外を観測する。STM32 の CCR1 は幅でマスクされる MMIO レジスタのため、ARR を超える値をホスト例外として見せる互換動作は未達のまま。入力キャプチャや別タイマーモデルの LimitTimer ケースも別の残件。
+`ShouldThrowOnCompareHigherThanLimit` は専用ホスト API の例外を観測する。STM32 の CCR1 は幅でマスクされる MMIO レジスタのため、ARR を超える値をホスト例外として見せる互換動作は未達のまま。入力キャプチャは別の残件。
 
 ```sh
 cargo test --locked stm32_timer
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-compare-timer-verification
+```
+
+## STM32 タイマーの周波数と更新イベント
+
+固定 Infrastructure の `LimitTimerTests.cs` と `LimitTimer.cs` を参照した。RESC の `sysbus.timer2 Frequency 4000000` で REPL に登録したタイマーのカウンター周波数を変更できる。変更時に固定上流の `ClockEntry.With` と同様に CNT を保持してクロックの端数を破棄し、`machine Reset` で REPL の周波数に戻す。0 Hz はエラーになる。CLI 回帰は同じタイマーを走らせたまま 1 MHz から 4 MHz に変更し、変更直前の CNT が1、変更後の0.20 µs で1、さらに0.80 µs で5、リセット後の1 µs で1となることを確認する。
+
+周期を `ARR=period-1`、イベントの有効化を UIE、イベントの観測を更新 IRQ に対応させた。100 Hz・周期100000の昇順と降順を100秒間毎秒観測し、1 Hz・周期100の範囲を99、100、101秒で確認した。1 Hz・周期10の降順で、UIE 有効時の10秒時点の割り込みと、無効時の11秒間の割り込み抑止を確認した。この6件を等価合格とした。長い仮想間隔の Rust 回帰は、通常のバスの1ステップと同じタイマー更新処理にまとめて仮想刻みを渡す。ファームウェアや RESC の実行経路は従来どおり1ステップずつ進む。
+
+1 MHz・10 µs と 10 MHz・1 µs はどちらも周期4で2回の割り込みを観測した。終了時は STM32 の CNT が1、上流の汎用 LimitTimer の Value は2なので2件を部分移植とした。途中で降順に反転する残り1件は、汎用モデルがゼロ到達時にコールバックし、STM32 は次のアンダーフローで更新を通知する。汎用モデルの境界を再現する経路が必要。
+
+```sh
+cargo test --locked stm32_timer
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-limit-timer-verification
 ```

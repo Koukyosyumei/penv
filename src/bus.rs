@@ -443,7 +443,20 @@ impl Bus {
         Ok(())
     }
 
-    pub fn set_nvic_frequency(&mut self, target: &str, frequency: u32) -> Result<(), String> {
+    pub fn set_frequency(&mut self, target: &str, frequency: u32) -> Result<(), String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        if let Some(timer) = self
+            .stm32_timers
+            .iter_mut()
+            .find(|timer| timer.name.as_deref() == Some(name))
+        {
+            if frequency == 0 {
+                return Err("STM32 timer Frequency must be positive".into());
+            }
+            timer.set_frequency(frequency);
+            return Ok(());
+        }
+
         self.validate_nvic_name(target)?;
         if frequency == 0 {
             return Err("NVIC Frequency must be positive".into());

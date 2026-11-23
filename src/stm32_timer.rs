@@ -16,7 +16,9 @@ pub struct TimerPin {
 
 pub struct Stm32Timer {
     pub base: u32,
+    pub name: Option<String>,
     frequency: u32,
+    initial_frequency: u32,
     initial_limit: u32,
     counter_mask: u32,
     routes: [u32; 8],
@@ -44,7 +46,9 @@ impl Stm32Timer {
     pub fn new(base: u32, frequency: u32, initial_limit: u32, routes: [u32; 8]) -> Self {
         Self {
             base,
+            name: None,
             frequency,
+            initial_frequency: frequency,
             // The REPL limit defines the width by its highest set bit.
             counter_mask: u32::MAX >> initial_limit.leading_zeros(),
             routes,
@@ -71,9 +75,22 @@ impl Stm32Timer {
     pub fn reset(&mut self) {
         let outputs = std::mem::take(&mut self.gpio_outputs);
         let dma = self.dma_routes;
-        *self = Self::new(self.base, self.frequency, self.initial_limit, self.routes);
+        let name = self.name.take();
+        *self = Self::new(
+            self.base,
+            self.initial_frequency,
+            self.initial_limit,
+            self.routes,
+        );
+        self.name = name;
         self.gpio_outputs = outputs;
         self.dma_routes = dma;
+    }
+
+    pub fn set_frequency(&mut self, frequency: u32) {
+        self.frequency = frequency;
+        self.phase = 0;
+        self.prescaler = 0;
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -165,8 +182,12 @@ impl Stm32Timer {
     }
 
     pub fn tick(&mut self) -> u32 {
+        self.advance(1)
+    }
+
+    fn advance(&mut self, steps: u32) -> u32 {
         if self.registers[0] & ENABLE != 0 && self.active_arr != 0 {
-            self.phase += u64::from(self.frequency);
+            self.phase += u64::from(self.frequency) * u64::from(steps);
             while self.phase >= CORTEX_M_STEP_HZ
                 && self.registers[0] & ENABLE != 0
                 && self.active_arr != 0
@@ -342,6 +363,80 @@ mod tests {
     const CNT: u32 = 0x24;
     const CCR1: u32 = 0x34;
     const SR: u32 = 0x10;
+
+    const UPDATE_IRQ: u32 = 1 << 15;
+
+    fn limit_timer(frequency: u32, period: u32, direction: u32, interrupt: bool) -> Stm32Timer {
+        let mut timer = Stm32Timer::new(0, 48_000_000, u32::MAX, [UPDATE_IRQ, 0, 0, 0, 0, 0, 0, 0]);
+        timer.set_frequency(frequency);
+        timer.write(0x2c, period - 1);
+        timer.write(0, direction | UPDATE_OVERFLOW_ONLY);
+        timer.write(0x14, 1);
+        timer.write(0x0c, u32::from(interrupt));
+        timer.write(0, direction | UPDATE_OVERFLOW_ONLY | ENABLE);
+        timer
+    }
+
+    #[test]
+    fn renode_stm32_limit_timer_monotonic_and_bounded() {
+        for direction in [0, DOWN] {
+            let mut timer = limit_timer(100, 100_000, direction, false);
+            for _ in 0..100 {
+                let old = timer.read(CNT);
+                timer.advance(CORTEX_M_STEP_HZ as u32);
+                if direction == DOWN {
+                    assert!(timer.read(CNT) < old);
+                } else {
+                    assert!(timer.read(CNT) > old);
+                }
+            }
+
+            let mut timer = limit_timer(1, 100, direction, false);
+            for _ in 0..99 {
+                timer.advance(CORTEX_M_STEP_HZ as u32);
+            }
+            let samples = if direction == DOWN {
+                [0, 99, 98]
+            } else {
+                [99, 0, 1]
+            };
+            for expected in samples {
+                assert_eq!(timer.read(CNT), expected);
+                timer.advance(CORTEX_M_STEP_HZ as u32);
+            }
+        }
+    }
+
+    #[test]
+    fn renode_stm32_limit_timer_update_irq_gates_and_precision() {
+        for interrupt in [false, true] {
+            let mut timer = limit_timer(1, 10, DOWN, interrupt);
+            for _ in 0..9 {
+                assert_eq!(timer.advance(CORTEX_M_STEP_HZ as u32), 0);
+            }
+            assert_eq!(
+                timer.advance(CORTEX_M_STEP_HZ as u32),
+                if interrupt { UPDATE_IRQ } else { 0 }
+            );
+            assert_eq!(timer.read(SR) & 1, 1);
+            if !interrupt {
+                assert_eq!(timer.advance(CORTEX_M_STEP_HZ as u32), 0);
+            }
+        }
+
+        for (frequency, microseconds) in [(1_000_000, 10), (10_000_000, 1)] {
+            let mut timer = limit_timer(frequency, 4, DOWN, true);
+            let mut events = 0;
+            for _ in 0..microseconds * (CORTEX_M_STEP_HZ / 1_000_000) {
+                if timer.tick() == UPDATE_IRQ {
+                    events += 1;
+                    timer.write(SR, !1);
+                }
+            }
+            assert_eq!(events, 2);
+            assert_eq!(timer.read(CNT), 1); // Generic LimitTimer represents this as 2.
+        }
+    }
 
     fn comparing_timer(period: u32, compare: u32) -> Stm32Timer {
         let mut timer = Stm32Timer::new(

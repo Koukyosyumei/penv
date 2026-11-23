@@ -258,6 +258,17 @@ def classify_nunit(name, case, attrs, parameter):
             return PASS, F072, checks[case] + "; same 1 MHz, period, CNT/CCR1 values and compare-event observations"
         if case == "ShouldThrowOnCompareHigherThanLimit":
             return OPEN, COMMON, "Dedicated ComparingTimer.Compare setter throws InvalidOperationException; STM32 CCR1 is a width-masked MMIO register and does not enforce ARR as an argument limit"
+    if name == "LimitTimerTests":
+        if case in {"ShouldBeAscending", "ShouldBeDescending"}:
+            return PASS, F072, "renode_stm32_limit_timer_monotonic_and_bounded; same 100 Hz, period 100000, and 100 one-second monotonicity checks"
+        if case in {"ShouldNotExceedLimitAscending", "ShouldNotExceedLimitDescending"}:
+            return PASS, F072, "renode_stm32_limit_timer_monotonic_and_bounded; same 1 Hz, period 100, and bounds at seconds 99, 100, 101 using ARR=period-1"
+        if case in {"ShouldNotFireAlarmWhenInterruptsAreDisabled", "ShouldFireAlarmWhenInterruptsAreEnabled"}:
+            return PASS, F072, "renode_stm32_limit_timer_update_irq_gates_and_precision; same 1 Hz, period 10, and enabled or disabled alarm observation after 10 or 11 seconds"
+        if case in {"ShouldHandleMicrosecondPrecisionTimerEvents", "ShouldHandleSubMicrosecondPrecisionTimerEvents"}:
+            return PARTIAL, F072, "renode_stm32_limit_timer_update_irq_gates_and_precision; same frequency, duration and two alarms, STM32 CNT=1 differs from generic LimitTimer.Value=2"
+        if case == "ShouldSwitchDirectionProperly":
+            return OPEN, COMMON, "Generic LimitTimer fires when descending reaches zero at second 4; STM32 TIM2 update IRQ fires on the next tick (underflow), so a generic zero-boundary timer is required"
     if name == "SystemBusTests":
         if case in {
             "ShouldHandleWriteToMemorySegment",

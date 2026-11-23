@@ -244,6 +244,67 @@ ram: Memory.MappedMemory @ sysbus 0
 }
 
 #[test]
+fn renode_resc_stm32_timer_frequency_changes_counter_rate_and_resets() {
+    let directory =
+        std::env::temp_dir().join(format!("penv-timer-frequency-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join("board.repl"),
+        r#"cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: nvic
+nvic: IRQControllers.NVIC @ sysbus 0xe000e000
+    -> cpu@0
+ram: Memory.MappedMemory @ sysbus 0
+    size: 0x1000
+timer2: Timers.STM32_Timer @ sysbus 0x40000000
+    frequency: 1000000
+    initialLimit: 0xffffffff
+"#,
+    )
+    .unwrap();
+    fs::write(
+        directory.join("firmware.bin"),
+        [0x00, 0x08, 0, 0, 9, 0, 0, 0, 0xfe, 0xe7],
+    )
+    .unwrap();
+    let script = directory.join("timer.resc");
+    let setup = "mach create\nmachine LoadPlatformDescription @board.repl\nsysbus LoadBinary @firmware.bin 0\n";
+    let run = |commands: &str| {
+        fs::write(&script, format!("{setup}{commands}")).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--max-steps", "1000", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap()
+    };
+    let result = run(r#"sysbus WriteDoubleWord 0x40000000 1
+emulation RunFor "0.00000125"
+sysbus ReadDoubleWord 0x40000024
+sysbus.timer2 Frequency 4000000
+emulation RunFor "0.00000020"
+sysbus ReadDoubleWord 0x40000024
+emulation RunFor "0.00000080"
+sysbus ReadDoubleWord 0x40000024
+machine Reset
+sysbus WriteDoubleWord 0x40000000 1
+emulation RunFor "0.000001"
+sysbus ReadDoubleWord 0x40000024
+"#);
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(
+        result.stdout,
+        b"0x00000001\n0x00000001\n0x00000005\n0x00000001\n"
+    );
+    let invalid = run("timer2 Frequency 0\n");
+    assert_eq!(invalid.status.code(), Some(1), "{invalid:?}");
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr).contains("STM32 timer Frequency must be positive")
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn renode_resc_cortex_m_evaluates_condition_codes() {
     let directory =
         std::env::temp_dir().join(format!("penv-resc-condition-{}", std::process::id()));

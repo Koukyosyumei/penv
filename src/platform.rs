@@ -1135,6 +1135,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 limit.ok_or_else(|| timer.error("missing STM32 timer initialLimit"))?,
                 routes,
             );
+            device.name = Some(timer.name.clone());
             device.dma_routes = dma_routes;
             device.gpio_outputs = gpio_outputs;
             machine
