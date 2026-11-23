@@ -407,6 +407,18 @@ fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<
                     .map_constant_mmio(peripheral)
                     .map_err(|error| entry.error(&error))?;
             }
+            "Mocks.CommandErrorPeripheral" => {
+                keys(entry, &[])?;
+                let (base, size) = entry.bus_range()?;
+                machine
+                    .bus
+                    .map_command_error_peripheral(
+                        base,
+                        size,
+                        std::sync::Arc::new(crate::bus::CommandError),
+                    )
+                    .map_err(|e| entry.error(&e))?;
+            }
             "Mocks.BytePeripheral" => {
                 keys(entry, &[])?;
                 let (base, size) = entry.bus_range()?;

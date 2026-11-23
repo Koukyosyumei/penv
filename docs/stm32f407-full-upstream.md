@@ -6,8 +6,8 @@
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
 | Renode | 513 | 78 | 0 | 435 | 237 |
-| Infrastructure | 217 | 47 | 0 | 170 | 7 |
-| **合計** | **730** | **125** | **0** | **605** | **244** |
+| Infrastructure | 217 | 48 | 0 | 169 | 7 |
+| **合計** | **730** | **126** | **0** | **604** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 605 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 604 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -613,8 +613,7 @@ cargo test renode_gpio
 
 `Tag` の `throwException` はログ抑止時にも有効です。子タグで範囲を分割しても親タグの
 両側に値と例外指定が残ります。上流の `AddressError` は Cortex-M の
-`BusError::Unmapped` として検査します。周辺機器が生成した `CommandError` を
-そのまま再送出する共有ケースと、その他のログモード・タグオプションは残件です。
+`BusError::Unmapped` として検査します。その他のログモード・タグオプションは残件です。
 
 ```sh
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
@@ -731,3 +730,15 @@ cargo test renode_find_byte_pattern
     echo "$?" >"$work/freertos.status"
 ) &
 ```
+
+### SystemBus の周辺機器例外
+
+固定 Infrastructure の `ShouldPropagateBusAccessExceptionFromPeripheral` を移植しました。
+上流と同じくベース `0x1000`、サイズ `0x100` の周辺機器に対してオフセット 0 の
+32 ビット読み出しを行い、周辺機器が発生させた `CommandError` と同じインスタンスが
+呼び出し元に戻ることを `Arc::ptr_eq` で確認します。補足の Cortex-M4 ELF は
+`CFSR=0x8200` と `BFAR=0x1000` を確認し、UART に `OK` を出します。
+
+上記の未登録アクセス検証手順で `work=target/stm32f407-command-error` に設定すると
+再現できます。フォールト検証の実行ログは `faults.log`、ほかのログは手順と同じ名前で、
+各終了状態は対応する `.status` に記録しています。

@@ -123,7 +123,9 @@ impl Thumb {
             .and_then(|target| bus.read::<4>(self.vector_base()).map(|sp| (target, sp)));
         let (target, sp) = match initial {
             Ok(initial) => initial,
-            Err(BusError::Unmapped(..)) if self.thumb2 && bus.nvic.is_some() => {
+            Err(error)
+                if self.thumb2 && bus.nvic.is_some() && error.access_fault_address().is_some() =>
+            {
                 let nvic = bus.nvic.as_mut().unwrap();
                 nvic.record_vector_fault();
                 self.active_exceptions.insert(3);
@@ -465,7 +467,11 @@ impl Thumb {
                 .ok_or("exception vector address overflow")?;
             match bus.read::<4>(vector) {
                 Ok(handler) => break handler,
-                Err(BusError::Unmapped(..)) if self.thumb2 && bus.nvic.is_some() => {
+                Err(error)
+                    if self.thumb2
+                        && bus.nvic.is_some()
+                        && error.access_fault_address().is_some() =>
+                {
                     bus.nvic.as_mut().unwrap().record_vector_fault();
                     if exception <= 3 || (1..=3).contains(&self.active_exception) || self.faultmask
                     {
@@ -497,7 +503,7 @@ impl Thumb {
             Ok::<_, BusError>(())
         })();
         if let Err(error) = save {
-            if !matches!(error, BusError::Unmapped(..)) || !self.thumb2 || bus.nvic.is_none() {
+            if error.access_fault_address().is_none() || !self.thumb2 || bus.nvic.is_none() {
                 return Err(error.to_string());
             }
             bus.nvic.as_mut().unwrap().record_stacking_fault();
@@ -639,7 +645,7 @@ impl Thumb {
                     Err(error)
                         if self.thumb2
                             && bus.nvic.is_some()
-                            && matches!(error, BusError::Unmapped(..)) =>
+                            && error.access_fault_address().is_some() =>
                     {
                         return self.unstack_bus_fault(target, stack, remaining, r, bus);
                     }
@@ -669,7 +675,7 @@ impl Thumb {
                     for (index, word) in fp_frame.iter_mut().enumerate() {
                         match bus.read::<4>(stack.wrapping_add(32 + index as u32 * 4)) {
                             Ok(value) => *word = value,
-                            Err(error) if matches!(error, BusError::Unmapped(..)) => {
+                            Err(error) if error.access_fault_address().is_some() => {
                                 return self.unstack_bus_fault(target, stack, remaining, r, bus);
                             }
                             Err(error) => return Err(error.to_string()),
@@ -893,7 +899,8 @@ impl Thumb {
         bus: &mut Bus,
         result: Result<T, BusError>,
     ) -> Result<T, BusError> {
-        if let Err(BusError::Unmapped(address, _)) = result
+        if let Err(error) = &result
+            && let Some(address) = error.access_fault_address()
             && self.thumb2
             && (matches!(self.active_exception, 2 | 3) || self.faultmask)
             && let Some(nvic) = &mut bus.nvic
@@ -971,7 +978,7 @@ impl Thumb {
             Ok(true) => return Ok(Instruction::Retired),
             Ok(false) => return Ok(Instruction::Breakpoint),
             Err(ExecuteError::LazyStack(error)) => {
-                if !matches!(error, BusError::Unmapped(..)) {
+                if error.access_fault_address().is_none() {
                     return Err(error.to_string());
                 }
                 if let Some(derived) = self.derived_bus_fault(bus) {
@@ -987,10 +994,10 @@ impl Thumb {
                 }
                 return Ok(Instruction::Fault);
             }
-            Err(ExecuteError::Data(BusError::Unmapped(address, _)))
-                if self.thumb2 && bus.nvic.is_some() =>
+            Err(ExecuteError::Data(error))
+                if self.thumb2 && bus.nvic.is_some() && error.access_fault_address().is_some() =>
             {
-                (5, Some(address), None)
+                (5, error.access_fault_address(), None)
             }
             Err(ExecuteError::NoCoprocessor) if bus.nvic.is_some() => (6, None, None),
             Err(ExecuteError::NoCoprocessor) => {

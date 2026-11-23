@@ -2,6 +2,7 @@ use std::{
     alloc::{Layout, alloc_zeroed},
     fmt,
     io::{self, Write},
+    sync::Arc,
 };
 
 use crate::{
@@ -46,8 +47,24 @@ pub const RAM_BASE: u32 = 0x8000_0000;
 pub const UART_TX: u32 = 0x1000_0000;
 
 #[derive(Debug)]
+pub struct CommandError;
+
+struct CommandErrorPeripheral {
+    base: u32,
+    size: u32,
+    error: Arc<CommandError>,
+}
+
+impl CommandErrorPeripheral {
+    fn read_doubleword(&self, address: u32) -> Option<BusError> {
+        (address == self.base).then(|| BusError::Command(address, Arc::clone(&self.error)))
+    }
+}
+
+#[derive(Debug)]
 pub enum BusError {
     Unmapped(u32, usize),
+    Command(u32, Arc<CommandError>),
     Denied(u32),
     Page(u32),
     Misaligned(u32, usize),
@@ -58,7 +75,14 @@ impl BusError {
     pub fn at_virtual(self, address: u32) -> Self {
         match self {
             Self::Unmapped(_, width) => Self::Unmapped(address, width),
+            Self::Command(_, fault) => Self::Command(address, fault),
             _ => self,
+        }
+    }
+    pub fn access_fault_address(&self) -> Option<u32> {
+        match self {
+            Self::Unmapped(address, _) | Self::Command(address, _) => Some(*address),
+            _ => None,
         }
     }
 }
@@ -69,6 +93,7 @@ impl fmt::Display for BusError {
             Self::Unmapped(address, width) => {
                 write!(f, "unmapped RAM access at {address:#010x} ({width} bytes)")
             }
+            Self::Command(address, _) => write!(f, "peripheral CommandError at {address:#010x}"),
             Self::Page(address) => write!(f, "page fault at {address:#010x}"),
             Self::Denied(address) => write!(
                 f,
@@ -110,6 +135,7 @@ struct ByteSpan {
 pub struct Bus {
     regions: Vec<Region>,
     byte_peripherals: Vec<BytePeripheral>,
+    command_error_peripherals: Vec<CommandErrorPeripheral>,
     faulting_regions: Vec<(u32, Option<u32>, bool, bool)>,
     constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
@@ -1242,6 +1268,10 @@ impl Bus {
                 let base = u64::from(peripheral.base);
                 start < base + u64::from(peripheral.size) && base < end
             })
+            || self.command_error_peripherals.iter().any(|device| {
+                let base = u64::from(device.base);
+                start < base + u64::from(device.size) && base < end
+            })
             || self.byte_peripherals.iter().any(|device| {
                 let base = u64::from(device.base);
                 start < base + device.bytes.len() as u64 && base < end
@@ -1648,6 +1678,24 @@ impl Bus {
         )
     }
 
+    pub fn map_command_error_peripheral(
+        &mut self,
+        base: u32,
+        size: u32,
+        error: Arc<CommandError>,
+    ) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(size);
+        if base & 3 != 0 || size < 4 || end > 1 << 32 || self.overlaps(start, end) {
+            return Err(format!(
+                "invalid or overlapping command-error peripheral at {base:#010x}"
+            ));
+        }
+        self.command_error_peripherals
+            .push(CommandErrorPeripheral { base, size, error });
+        Ok(())
+    }
+
     pub fn map_byte_peripheral(&mut self, base: u32, size: u32) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(size);
@@ -1910,6 +1958,14 @@ impl Bus {
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         if let Some(address) = self.faulting_address(address, N, false) {
             return Err(BusError::Unmapped(address, N));
+        }
+        if N == 4
+            && let Some(error) = self
+                .command_error_peripherals
+                .iter()
+                .find_map(|device| device.read_doubleword(address))
+        {
+            return Err(error);
         }
         if N == 1
             && let Some(value) = self
@@ -2935,6 +2991,19 @@ mod unhandled_bus_tests {
         assert!(
             matches!(bus.write(address, 1, 0, &mut sink()), Err(BusError::Unmapped(a, 1)) if a == address)
         );
+    }
+
+    #[test]
+    fn renode_sysbus_preserves_identity_of_peripheral_command_error() {
+        let mut bus = bus(UnhandledAccess::Report);
+        let expected = Arc::new(CommandError);
+        bus.map_command_error_peripheral(0x1000, 0x100, Arc::clone(&expected))
+            .unwrap();
+        let Err(BusError::Command(address, actual)) = bus.read::<4>(0x1000) else {
+            panic!("expected the registered peripheral error");
+        };
+        assert_eq!(address, 0x1000);
+        assert!(Arc::ptr_eq(&actual, &expected));
     }
 
     #[test]

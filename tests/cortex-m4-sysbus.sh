@@ -39,7 +39,11 @@ reset:
     cmp r1, #0x42
     bne failure
     movw r0, #0x1000
+#ifdef COMMAND_ERROR
+    ldr r1, [r0]
+#else
     ldrb r1, [r0]
+#endif
 failure:
     bkpt #0
 
@@ -69,3 +73,13 @@ cargo build --release
 target/release/penv run --platform "$work/bus.repl" --max-steps 128 "$work/bus.elf" >"$work/uart.log"
 diff -u <(printf 'OK\n') "$work/uart.log"
 cat "$work/uart.log"
+
+sed '/"parent"/d' "$work/bus.repl" >"$work/command-error.repl"
+printf '%s\n' 'fault: Mocks.CommandErrorPeripheral @ sysbus <0x1000, +0x100>' >>"$work/command-error.repl"
+"${CLANG:-clang}" --target=arm-none-eabi -mcpu=cortex-m4 -mthumb -nostdlib -fuse-ld=lld \
+    -DCOMMAND_ERROR -Wl,-T,"$work/bus.ld" "$work/bus.S" -o "$work/command-error.elf"
+target/release/penv run --platform "$work/command-error.repl" --max-steps 128 \
+    "$work/command-error.elf" >"$work/command-error.uart"
+diff -u <(printf 'OK\n') "$work/command-error.uart"
+printf 'CommandError: '
+cat "$work/command-error.uart"
