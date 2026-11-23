@@ -875,6 +875,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             _ => None,
         };
         let mut zicond = false;
+        let mut zacas = false;
         let mut bitmanip = BitManip::default();
         let mut id = 0;
         let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
@@ -899,10 +900,12 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                     let architecture = value.trim_matches('"').to_ascii_lowercase();
                     let mut base = architecture.as_str();
                     zicond = false;
+                    zacas = false;
                     bitmanip = BitManip::default();
                     while let Some((prefix, extension)) = base.rsplit_once('_') {
                         match extension {
                             "zicond" if !zicond => zicond = true,
+                            "zacas" if !zacas => zacas = true,
                             "zba" if !bitmanip.zba => bitmanip.zba = true,
                             "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
                             "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
@@ -954,7 +957,10 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             {
                 let (multiply, atomic, compressed) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
-                (multiply, atomic, compressed, zicond, bitmanip)
+                if zacas && !atomic {
+                    return Err(entry.error("Zacas requires the RV32 A extension"));
+                }
+                (multiply, atomic, compressed, zicond, zacas, bitmanip)
             },
             pmp,
         ));
@@ -972,7 +978,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         ));
     }
     machine.configure_harts(configs.len());
-    for &(id, entry, (multiply, atomic, compressed, zicond, bitmanip), pmp) in &configs {
+    for &(id, entry, (multiply, atomic, compressed, zicond, zacas, bitmanip), pmp) in &configs {
         let hart = machine.hart_mut(id);
         hart.name = Some(entry.name.clone());
         let unaligned = entry
@@ -987,6 +993,7 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
         hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic, compressed);
         hart.set_zicond(zicond);
+        hart.set_zacas(zacas);
         hart.set_bitmanip(bitmanip);
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
@@ -1916,7 +1923,7 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
         missing.extend(parts.filter(|extension| {
             !matches!(
                 *extension,
-                "zicsr" | "zifencei" | "zicond" | "zba" | "zbb" | "zbc" | "zbs"
+                "zicsr" | "zifencei" | "zicond" | "zba" | "zbb" | "zbc" | "zbs" | "zacas"
             )
         }));
     }
@@ -1931,7 +1938,12 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
     }
 }
 
-type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool, bool, BitManip), usize);
+type RiscvConfig<'a> = (
+    usize,
+    &'a Entry,
+    (bool, bool, bool, bool, bool, BitManip),
+    usize,
+);
 
 fn uses_vex_irq(entry: &Entry) -> bool {
     entry.model == "CPU.VexRiscv"

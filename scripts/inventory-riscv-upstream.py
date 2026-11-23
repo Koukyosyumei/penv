@@ -17,7 +17,7 @@ REVISIONS = {
     "infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85",
     "ui": "5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f",
 }
-MAX_ISA_BLOCKER = "upstream CPU creation requires F, D, V, Zfh, Zacas, Smepmp"
+MAX_ISA_BLOCKER = "upstream CPU creation requires F, D, V, Zfh, Smepmp"
 BOARD_REGRESSION = {
     "Arty_LiteX_VexRiscv.robot",
     "LiteX_Linux_VexRiscv.robot",
@@ -87,12 +87,17 @@ def robot_cases(root, isa, act):
                         basis = MAX_ISA_BLOCKER
                         if bitmanip_checked:
                             basis += "; reduced-ISA bitmanip diagnostic passed"
+                        if portable == "spike-rv32-max/elfs/rv32i/Zacas/Zacas-amocas.w-00.elf":
+                            basis += "; reduced-ISA Zacas diagnostic passed"
                         yield ("Renode", name, case.lineno, case.name, portable, "target",
                                "blocked-cpu", basis)
                     continue
                 status = "outside" if case_scope == "outside" else "pending"
                 if path.name == "LiteX_VexRiscv_I2S.robot" and case.name == "Should Echo Audio":
                     status, case_reason = "ported", "validate-riscv-upstream.sh: same input, 3.2s, Dispose and cmp"
+                elif path.name == "riscv-amocas.robot" and case.name.startswith("Amocas.d On RV32"):
+                    case_scope, status = "target", "partial"
+                    case_reason = "Rust register-pair and trap checks; Robot equivalence pending"
                 elif path.name in BOARD_REGRESSION:
                     case_reason = "board regression available; compare expectations case by case"
                 elif any(type(node).__name__ == "For" for node in case.body):

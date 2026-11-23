@@ -149,3 +149,21 @@ sed 's/"rv32imac"/"rv32imac_zicsr_zifencei_zicond_zba_zbb_zbc_zbs"/' \
 python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
   --platform "$work/virt-bitmanip.repl" --artifacts "$work/act-virt-bitmanip" "${act[@]}"
 ```
+
+## RV32 Zacas と CPU 作成の再検証
+
+`full-rv32-cpu-config` は前回の最大構成の先頭ログ `0001-ExceptionsS.sig.elf.log` から着手しました。CPU 作成時の診断に出ていた Zacas を `rv32imac_zacas` で単独再現し、RV32 の `AMOCAS.W` と `AMOCAS.D` を実装しました。A 拡張を必要とし、D の偶数レジスター対、x0 対、自然境界、読み書き権限を反映します。64 ビット CAS はシミュレータの命令実行中に一括して処理します。[RISC-V Zacas 仕様](https://docs.riscv.org/reference/isa/v20260120/unpriv/zacas.html)
+
+固定 ACT の `Zacas-amocas.w-00.elf` は変更前に CPU 作成で停止し、変更後は `tohost=0` で通過しました。D の成功・比較不一致、x0 対、奇数レジスター、非整列、拡張無効時の例外は Rust テストで確認しました。上流 `riscv-amocas.robot` の該当 D ケースは台帳で部分検証として記録しています。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+sed 's/rv32gcv_zba_zbb_zbc_zbs_zfh_zacas_smepmp/rv32imac_zacas/' \
+  "$work/act-upstream.repl" > "$work/zacas.repl"
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/zacas.repl" --artifacts "$work/zacas-results" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zacas/*.elf
+```
+
+上段の最大構成の手順でも ACT 510 件、ISA 290 件を再実行しました。上流構成の通過は引き続き各 0 件です。両方とも F・D・V・Zfh・Smepmp が未対応で CPU 作成に失敗し、台帳では `blocked-cpu` を維持しています。固定 ACT の W の結果は縮小構成の診断です。

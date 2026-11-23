@@ -41,6 +41,7 @@ pub struct Hart {
     thumb: Option<Thumb>,
     unaligned_accesses: bool,
     zicond: bool,
+    zacas: bool,
     bitmanip: BitManip,
     pub pc: u32,
     pub registers: [u32; 32],
@@ -167,6 +168,7 @@ impl Machine {
                 thumb: None,
                 unaligned_accesses: false,
                 zicond: false,
+                zacas: false,
                 bitmanip: BitManip::default(),
                 pc: RAM_BASE,
                 registers: [0; 32],
@@ -468,6 +470,10 @@ impl Hart {
 
     pub fn set_bitmanip(&mut self, extensions: BitManip) {
         self.bitmanip = extensions;
+    }
+
+    pub fn set_zacas(&mut self, enabled: bool) {
+        self.zacas = enabled;
     }
 
     pub fn set_zicond(&mut self, enabled: bool) {
@@ -867,6 +873,36 @@ impl Hart {
                     .register(funct3, funct7, a, b, (insn >> 20) & 31)
                     .ok_or_else(illegal)?,
             }),
+            0x2f if insn >> 27 == 5 && self.zacas => {
+                let rs2 = ((insn >> 20) & 31) as usize;
+                let width = match funct3 {
+                    2 => 4,
+                    3 if (rd | rs2) & 1 == 0 => 8,
+                    _ => return Err(illegal()),
+                };
+                let operand = |reg| {
+                    if width == 8 && reg != 0 {
+                        u64::from(self.registers[reg]) | (u64::from(self.registers[reg + 1]) << 32)
+                    } else {
+                        u64::from(self.registers[reg])
+                    }
+                };
+                let (expected, replacement) = (operand(rd), operand(rs2));
+                let permissions = crate::pmp::READ | crate::pmp::WRITE;
+                if self.csr.address_trigger_matches(a, permissions) {
+                    return Err(Fault::Breakpoint(a));
+                }
+                let physical = self
+                    .translate(bus, a, width, permissions)
+                    .map_err(|error| Fault::Bus(Access::Store, error))?;
+                let previous = bus
+                    .atomic_compare_swap(physical, width, expected, replacement)
+                    .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a)))?;
+                if width == 8 && rd != 0 {
+                    self.registers[rd + 1] = (previous >> 32) as u32;
+                }
+                Some(previous as u32)
+            }
             0x2f if funct3 == 2 && self.csr.a_extension => {
                 let operation = insn >> 27;
                 let rs2 = (insn >> 20) & 31;
@@ -967,6 +1003,55 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rv32_amocas_double_handles_register_pairs_and_faults() {
+        let data = RAM_BASE + 16;
+        for (rd, rs2, enabled, address, initial, expected, cause) in [
+            (4, 6, true, data, 3, 5, None),
+            (4, 6, true, data, 7, 7, None),
+            (0, 6, true, data, 0, 5, None),
+            (4, 0, true, data, 3, 0, None),
+            (5, 6, true, data, 3, 3, Some(2)),
+            (4, 7, true, data, 3, 3, Some(2)),
+            (4, 6, false, data, 3, 3, Some(2)),
+            (4, 6, true, data + 4, 3, 3, Some(6)),
+        ] {
+            let mut machine = Machine::new(32).unwrap();
+            machine.primary.set_zacas(enabled);
+            machine.primary.set_mtvec(RAM_BASE + 4);
+            // aqrl, rs1=x2, funct3=3 (doubleword).
+            let instruction = 0x2e01_302fu32 | ((rs2 as u32) << 20) | ((rd as u32) << 7);
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&instruction.to_le_bytes());
+            let pair = |value: u32| u64::from(value) * 0x1_0000_0001;
+            machine
+                .bus
+                .memory(data, 8)
+                .unwrap()
+                .copy_from_slice(&pair(initial).to_le_bytes());
+            machine.primary.registers[1] = 42;
+            machine.primary.registers[2] = address;
+            machine.primary.registers[4..8].copy_from_slice(&[3, 3, 5, 5]);
+            let (_, retired) = machine.run(1, &mut std::io::sink()).unwrap();
+            assert_eq!(machine.bus.read_ram::<4>(data).unwrap(), expected);
+            assert_eq!(machine.bus.read_ram::<4>(data + 4).unwrap(), expected);
+            assert_eq!(machine.primary.registers[1], 42);
+            if let Some(cause) = cause {
+                assert_eq!(retired, 0);
+                assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), cause);
+                assert_eq!(&machine.primary.registers[4..6], &[3, 3]);
+            } else {
+                assert_eq!(retired, 1);
+                if rd != 0 {
+                    assert_eq!(&machine.primary.registers[rd..rd + 2], &[initial, initial]);
+                }
+            }
+        }
+    }
 
     #[test]
     fn zicond_rv32_matches_zero_nonzero_and_disabled_cases() {

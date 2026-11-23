@@ -1098,6 +1098,26 @@ impl Bus {
         Ok(previous)
     }
 
+    pub fn atomic_compare_swap(
+        &mut self,
+        address: u32,
+        width: usize,
+        expected: u64,
+        replacement: u64,
+    ) -> Result<u64, BusError> {
+        if address as usize & (width - 1) != 0 {
+            return Err(BusError::Misaligned(address, width));
+        }
+        let memory = self.memory(address, width)?;
+        let mut bytes = [0; 8];
+        bytes[..width].copy_from_slice(memory);
+        let previous = u64::from_le_bytes(bytes);
+        if previous == expected {
+            memory.copy_from_slice(&replacement.to_le_bytes()[..width]);
+        }
+        Ok(previous)
+    }
+
     fn atomic_word(&mut self, address: u32) -> Result<&mut [u8; 4], BusError> {
         if address & 3 != 0 {
             return Err(BusError::Misaligned(address, 4));
