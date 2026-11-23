@@ -263,6 +263,7 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 | RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
 | CLINT | `unit-tests/timer-reconfiguration.robot` の `Should Tick At Exact Time` | `clint_traps_at_the_exact_reprogrammed_compare_tick`。ゲストが `mtimecmp` の上下ワードを書き換え、5 ティックでは未発火、6 ティック目で機械タイマー例外に入る。virt の 10 MHz に合わせて 59 ステップと 60 ステップに適応 |
 | RV32 TVM | `unit-tests/riscv-priv.robot` の SATP 読み書き・`SFENCE.VMA` に対する `When TVM Is One/Zero` 各ケース（上流は RV64） | RV32 版の Rust テスト `privilege_controls_gate_sret_and_address_translation_operations` と `scripts/firmware/rv32-tvm.S`。実 ELF は Sv32 有効時の M→S 遷移、S→M トラップ、TVM 解除後の再実行を確認 |
+| RV32 Sv32 / TLB | `unit-tests/riscv-priv.robot` の `Should Not Trap On SFENCE.VMA When TVM Is Zero`（上流は RV64）と `unit-tests/riscv-mret.robot` の `Should Invalidate TLB After Mode Change` | 前者を RV32 S モードへ適応し、`rv32-tlb.S` でページテーブル更新後の命令・データ変換を検証。後者の上流 ELF は Bare/PMP の別ケースとして検証 |
 | virt UART | `platforms/cpus/riscv_virt.repl`（上流 REPL。Robot ケースの移植元ではなく配線の出典） | `virt_ns16550_receive_interrupt_routes_through_plic` と `TEST_UART_IRQ` ELF。外部割り込み、PLIC ソース 3 の claim/complete、受信バイトと割り込み解除を検査 |
 | LiteX UART | `platforms/LiteX/LiteX_Ibex.robot` の `Should Boot` と `Should Display Help` | `litex_receives_boot_abort_and_shell_command_in_separate_events` は `Q` と `help\r` を別々に投入し、バイト順と RX 割り込みの解除を検査。BIOS のプロンプトと help 応答は実 ELF を使う既存回帰で検査 |
 | LiteX の既存回帰 | `LiteX_VexRiscv_SMP.robot` の OpenSBI・Linux、`LiteX_VexRiscv_I2S.robot` のオーディオ、`Arty_LiteX_VexRiscv.robot` と `Nexys_Video_LiteX_VexRiscv.robot` の入出力 | `scripts/validate-riscv-upstream.sh` に対応する検証あり。Arty のスイッチ・ボタンは各 1 ピンを検証 |
@@ -345,7 +346,32 @@ diff -u <(printf '%s\n' \
   'rv32-tvm: Sv32 supervisor SATP read/write and SFENCE.VMA gated; MRET recovery OK') "$out/uart.log"
 ```
 
-TVM 実装前の `66bb839` は失敗マーカーを出し、`eced642` は成功マーカーを出しました。互換性の追加修正は不要でした。既存の TSR と virt のタイマー・UART 割り込みの ELF も再確認しました。残課題は、上流 Robot スイートの直接実行と、ページテーブル更新後の TLB 無効化を実 ELF で検証することです。
+TVM 実装前の `66bb839` は失敗マーカーを出し、`eced642` は成功マーカーを出しました。互換性の追加修正は不要でした。既存の TSR と virt のタイマー・UART 割り込みの ELF も再確認しました。上流 Robot スイートの直接実行は残課題です。ページテーブル更新後の TLB 無効化は次の ELF で検証します。
+
+### Sv32 ページテーブル更新後の TLB 無効化
+
+上流の `riscv-priv.robot` は `SFENCE.VMA` の実行可否を検査します。RV32 ELF ではこの権限ケースを拡張し、既存 Rust テスト `sfence_vma_rewalks_cached_mapping_after_pte_change` の再走査をゲスト命令だけで再現しました。S モードで同じ仮想ページのロードと命令フェッチを行い、両方で旧ページの値 `17` を確認します。次にゲストの `sw` でリーフ PTE を差し替え、`sfence.vma x0, x0` 後にロードと命令フェッチの両方が新ページの値 `29` を返すことを検査します。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+out=$(mktemp -d)
+sed 's/sfence.vma x0, x0.*/nop/' scripts/firmware/rv32-tlb.S > "$out/no-fence.S"
+for variant in fence no-fence; do
+  source=scripts/firmware/rv32-tlb.S
+  if [[ $variant == no-fence ]]; then source=$out/no-fence.S; fi
+  clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 \
+    -nostdlib -fuse-ld=lld -Wl,-T,scripts/firmware/rv32-virt.ld "$source" -o "$out/$variant.elf"
+  status=0
+  target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
+    --max-steps 10000 "$out/$variant.elf" > "$out/$variant.uart" || status=$?
+  test "$status" -eq 2 || exit 1
+done
+diff -u <(printf '%s\n' 'rv32-tlb: SFENCE.VMA refreshed Sv32 data and instruction translations') "$out/fence.uart"
+diff -u <(printf '%s\n' 'rv32-tlb: stale translation or unexpected trap') "$out/no-fence.uart"
+```
+
+現行実装は両検査に合格し、追加の互換性修正は不要でした。fence を省いた対照 ELF は現行のキャッシュで古い変換を観測しました。fence を省いたときに古い変換が残るかは実装に依存します。既存の TVM ELF と上流の Bare/PMP ELF も再確認しました。アドレス・ASID を指定する fence の細粒度な無効化、複数ハート間の TLB シュートダウン、Robot スイートの直接実行は残課題です。
 
 ## Cortex-M0 / Cortex-M0+
 
