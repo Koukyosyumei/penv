@@ -9,7 +9,9 @@ use std::{
 };
 
 use crate::{
+    bitmanip::BitManip,
     bus::Bus,
+    csr::{DEFAULT_MTVEC, InterruptMode},
     litex::{Gpio, GpioMode, IoDevice, Mmcm, Spi},
     litex_eth::{Ethernet, Phy, Region as EthernetRegion, Registration},
     litex_i2c::{I2c, Sensor},
@@ -424,6 +426,14 @@ pub(crate) fn validate_entry_properties<'a, S>(
 }
 
 pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<Machine, String> {
+    load_platform(path, root, true, stm32f0_console)
+}
+
+pub fn check(path: &Path) -> Result<(), String> {
+    load_platform(path, None, false, false).map(|_| ())
+}
+
+fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool, stm32f0_console: bool) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -458,6 +468,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     let cortex_m = entries.iter().any(|entry| entry.model == "CPU.CortexM");
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
+    let mut external_pmps = HashMap::new();
     let mut clint = None;
     let mut nvic = None;
     let mut exti = None;
@@ -511,6 +522,22 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
                 cpus.push(entry);
+            }
+            "Miscellaneous.RiscVExternalPMP" => {
+                let cpu = entry
+                    .registration
+                    .as_deref()
+                    .ok_or_else(|| entry.error("missing CPU attachment"))?;
+                let mut count = 64;
+                for (_, value) in keys(entry, &["numberOfPMPEntries"])? {
+                    count = number(value).map_err(|error| entry.error(&error))? as usize;
+                }
+                if !matches!(count, 16 | 64) || external_pmps.insert(cpu, (entry, count)).is_some()
+                {
+                    return Err(
+                        entry.error("expected one external PMP per CPU, with 16 or 64 entries")
+                    );
+                }
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?
@@ -794,11 +821,20 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     } else if let Some(controller) = flash_controller {
         return Err(controller.error("expected an attached Micron MT25Q flash chip"));
     }
-    if cpus.is_empty() || !ram {
+    if cpus.is_empty() || (require_ram && !ram) {
         return Err(format!(
-            "{}: platform requires at least one CPU and mapped RAM",
-            path.display()
+            "{}: platform requires at least one CPU{}",
+            path.display(),
+            if require_ram { " and mapped RAM" } else { "" }
         ));
+    }
+    for (name, (entry, _)) in &external_pmps {
+        if !cpus
+            .iter()
+            .any(|cpu| cpu.name == *name && cpu.model == "CPU.RiscV32")
+        {
+            return Err(entry.error("external PMP requires an attached CPU.RiscV32"));
+        }
     }
     if let Some(entry) = cpus.iter().find(|entry| entry.model == "CPU.CortexM") {
         if cpus.len() != 1
@@ -1708,52 +1744,167 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
     for entry in cpus {
         let ibex = entry.model == "CPU.IbexRiscV32";
         let mut isa = match entry.model.as_str() {
-            "CPU.IbexRiscV32" => Some((true, false, true)),
-            "CPU.Minerva" => Some((false, false, false)),
-            "CPU.VexRiscv" => Some((true, false, false)),
+            "CPU.IbexRiscV32" => Some((true, false, true, false)),
+            "CPU.Minerva" => Some((false, false, false, false)),
+            "CPU.VexRiscv" => Some((true, false, false, false)),
             _ => None,
         };
+        let mut compressed_float = (true, true);
+        let mut floating = (false, false, false, false, false);
+        let mut zfa = false;
+        let mut zfa_fli = false;
+        let mut zfa_min_max = false;
+        let mut zfa_quiet_compare = false;
+        let mut zfa_round = false;
         let mut zicond = false;
+        let mut zacas = false;
+        let mut zmmul = false;
+        let mut zabha = false;
+        let mut zaamo = false;
+        let mut zalrsc = false;
+        let mut smepmp = false;
+        let mut sscofpmf = false;
+        let mut bitmanip = BitManip::default();
         let mut id = 0;
+        let mut privilege_levels = (
+            entry.model != "CPU.Minerva",
+            !matches!(entry.model.as_str(), "CPU.Minerva" | "CPU.IbexRiscV32"),
+        );
         let mut pmp = if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") {
             16
         } else {
             0
         };
-        for (key, value) in keys(
+        for (key, value) in keys_in(
             entry,
+            split_rv32_init(entry).0,
             &[
                 "cpuType",
                 "hartId",
                 "timeProvider",
                 "privilegedArchitecture",
+                "privilegeLevels",
                 "pmpEntryCount",
                 "builtInIrqController",
                 "allowUnalignedAccesses",
+                "vectorBootstrap",
+                "zfaFli",
+                "zfaMinMax",
+                "zfaQuietCompare",
+                "zfaRound",
+                "interruptMode",
             ],
         )? {
             match (key, value) {
                 ("cpuType", value) => {
                     let architecture = value.trim_matches('"').to_ascii_lowercase();
-                    let base = architecture.strip_suffix("_zicond");
-                    zicond = base.is_some();
-                    isa = match base.unwrap_or(&architecture) {
-                        "rv32i" => Some((false, false, false)),
-                        "rv32im" | "rv32im_zicsr" | "rv32im_zicsr_zifencei" => {
-                            Some((true, false, false))
+                    let mut base = architecture.as_str();
+                    zfa = false;
+                    zicond = false;
+                    zacas = false;
+                    zmmul = false;
+                    zabha = false;
+                    zaamo = false;
+                    zalrsc = false;
+                    smepmp = false;
+                    sscofpmf = false;
+                    let mut zca = false;
+                    let mut zcf = false;
+                    let mut zcd = false;
+                    let mut zfh = false;
+                    let mut zfhmin = false;
+                    let mut zfbfmin = false;
+                    bitmanip = BitManip::default();
+                    while let Some((prefix, extension)) = base.rsplit_once('_') {
+                        match extension {
+                            "zicsr" | "zifencei" if !ibex => {}
+                            "zihintpause" => {}
+                            "zicond" if !zicond => zicond = true,
+                            "zmmul" if !zmmul => zmmul = true,
+                            "zaamo" if !zaamo => zaamo = true,
+                            "zalrsc" if !zalrsc => zalrsc = true,
+                            "zabha" if !zabha => zabha = true,
+                            "zacas" if !zacas => zacas = true,
+                            "sscofpmf" if !sscofpmf => sscofpmf = true,
+                            "smepmp" if !smepmp => smepmp = true,
+                            "zfbfmin" if !zfbfmin => zfbfmin = true,
+                            "zfa" if !zfa => zfa = true,
+                            "zfhmin" if !zfhmin => zfhmin = true,
+                            "zfh" if !zfh => zfh = true,
+                            "zba" if !bitmanip.zba => bitmanip.zba = true,
+                            "zbb" if !bitmanip.zbb => bitmanip.zbb = true,
+                            "zksed" if !bitmanip.zksed => bitmanip.zksed = true,
+                            "zksh" if !bitmanip.zksh => bitmanip.zksh = true,
+                            "zkne" if !bitmanip.zkne => bitmanip.zkne = true,
+                            "zknd" if !bitmanip.zknd => bitmanip.zknd = true,
+                            "zknh" if !bitmanip.zknh => bitmanip.zknh = true,
+                            "zbkc" if !bitmanip.zbkc => bitmanip.zbkc = true,
+                            "zbc" if !bitmanip.zbc => bitmanip.zbc = true,
+                            "xandesbfhcvt" if !bitmanip.xandesbfhcvt => {
+                                bitmanip.xandesbfhcvt = true
+                            }
+                            "xandes" | "xandesperf" if !bitmanip.xandesperf => {
+                                bitmanip.xandesperf = true
+                            }
+                            "zca" if !zca => zca = true,
+                            "zcf" if !zcf => zcf = true,
+                            "zcd" if !zcd => zcd = true,
+                            "zcb" if !bitmanip.zcb => bitmanip.zcb = true,
+                            "zbkx" if !bitmanip.zbkx => bitmanip.zbkx = true,
+                            "zbkb" if !bitmanip.zbkb => bitmanip.zbkb = true,
+                            "zbs" if !bitmanip.zbs => bitmanip.zbs = true,
+                            _ => break,
                         }
-                        "rv32ima" | "rv32ima_zicsr" | "rv32ima_zicsr_zifencei" => {
-                            Some((true, true, false))
-                        }
-                        "rv32imac" | "rv32imac_zicsr" | "rv32imac_zicsr_zifencei" => {
-                            Some((true, true, true))
-                        }
-                        "rv32imc" | "rv32imc_zicsr" | "rv32imc_zicsr_zifencei" => {
-                            Some((true, false, true))
-                        }
-                        "rv32imcu_zicsr_zifencei" if ibex => Some((true, false, true)),
-                        _ => return Err(entry.error(&format!("unsupported CPU type {value}"))),
-                    };
+                        base = prefix;
+                    }
+                    let (letters, suffix) = base.split_at(base.find('z').unwrap_or(base.len()));
+                    let letters = letters.strip_prefix("rv32").unwrap_or("");
+                    let letters = letters.replace('_', "");
+                    let general = letters.contains('g');
+                    let embedded = letters.contains('e');
+                    let single = general || letters.contains('f') || bitmanip.xandesbfhcvt;
+                    let double = general || letters.contains('d');
+                    // Renode accepts separated C even after a named extension.
+                    let compressed =
+                        letters.contains('c') || suffix.split('_').any(|part| part == "c");
+                    let valid_suffix = suffix.split('_').all(|part| {
+                        matches!(part, "" | "c" | "zicsr" | "zifencei" | "zihintpause")
+                    });
+                    let ibex_legacy = ibex && base == "rv32imcu_zicsr_zifencei";
+                    if !ibex_legacy
+                        && (!(general || embedded || letters.contains('i'))
+                            || !letters.chars().all(|letter| "iemafdcgb".contains(letter))
+                            || (embedded && !letters.chars().all(|letter| "emac".contains(letter)))
+                            || !valid_suffix
+                            || (double && !single))
+                    {
+                        return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
+                    }
+                    let legacy_compressed = compressed || bitmanip.zcb;
+                    if zcf && (!(legacy_compressed || zca) || !single) {
+                        return Err(entry.error("Zcf requires RV32 Zca and F"));
+                    }
+                    if zcd && (!(legacy_compressed || zca) || !double) {
+                        return Err(entry.error("Zcd requires RV32 Zca and D"));
+                    }
+                    compressed_float = (legacy_compressed || zcf, legacy_compressed || zcd);
+                    floating = (single, double, zfh, zfbfmin, zfhmin);
+                    if letters.contains('b') {
+                        // Renode enables all four supported bit-manipulation subsets for B.
+                        bitmanip = BitManip {
+                            zba: true,
+                            zbb: true,
+                            zbc: true,
+                            zbs: true,
+                            ..bitmanip
+                        };
+                    }
+                    isa = Some((
+                        general || letters.contains('m'),
+                        general || letters.contains('a'),
+                        legacy_compressed || zca,
+                        embedded,
+                    ));
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_10") => {}
@@ -1768,6 +1919,38 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     if entry.model == "CPU.VexRiscv" => {}
                 ("allowUnalignedAccesses", "true" | "false" | "True" | "False")
                     if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.IbexRiscV32") => {}
+                (
+                    "interruptMode",
+                    "InterruptMode.Auto"
+                    | "InterruptMode.Direct"
+                    | "InterruptMode.Vectored"
+                    | "0"
+                    | "1"
+                    | "2",
+                ) if entry.model == "CPU.RiscV32" => {}
+                ("privilegeLevels", value) if entry.model == "CPU.RiscV32" => {
+                    privilege_levels = match value {
+                        "PrivilegeLevels.Machine" => (false, false),
+                        "PrivilegeLevels.MachineUser" => (true, false),
+                        "PrivilegeLevels.MachineSupervisorUser" => (true, true),
+                        _ => return Err(entry.error("unsupported RV32 privilegeLevels")),
+                    };
+                }
+                ("timeProvider", "empty")
+                    if matches!(entry.model.as_str(), "CPU.RiscV32" | "CPU.VexRiscv") => {}
+                ("zfaFli", "true" | "false") if entry.model == "CPU.RiscV32" => {
+                    zfa_fli = value == "true";
+                }
+                ("zfaMinMax", "true" | "false") if entry.model == "CPU.RiscV32" => {
+                    zfa_min_max = value == "true";
+                }
+                ("zfaQuietCompare", "true" | "false") if entry.model == "CPU.RiscV32" => {
+                    zfa_quiet_compare = value == "true";
+                }
+                ("zfaRound", "true" | "false") if entry.model == "CPU.RiscV32" => {
+                    zfa_round = value == "true";
+                }
+                ("vectorBootstrap", "true") if entry.model == "CPU.RiscV32" => {}
                 ("pmpEntryCount", "0") => pmp = 0,
                 ("pmpEntryCount", "16") => pmp = 16,
                 ("pmpEntryCount", "64") => pmp = 64,
@@ -1778,28 +1961,95 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             id,
             entry,
             {
-                let (multiply, atomic, compressed) =
+                let (multiply, atomic, compressed, embedded) =
                     isa.ok_or_else(|| entry.error("missing cpuType"))?;
-                (multiply, atomic, compressed, zicond)
+                if zfa && !floating.0 {
+                    return Err(entry.error("Zfa requires the RV32 F extension"));
+                }
+                if zfa_fli && !floating.0 {
+                    return Err(entry.error("zfaFli requires the RV32 F extension"));
+                }
+                if zfa_min_max && !floating.0 {
+                    return Err(entry.error("zfaMinMax requires the RV32 F extension"));
+                }
+                if zfa_quiet_compare && !floating.0 {
+                    return Err(entry.error("zfaQuietCompare requires the RV32 F extension"));
+                }
+                if zfa_round && !floating.0 {
+                    return Err(entry.error("zfaRound requires the RV32 F extension"));
+                }
+                if floating.2 && !floating.0 {
+                    return Err(entry.error("Zfh requires the RV32 F extension"));
+                }
+                if floating.4 && !floating.0 {
+                    return Err(entry.error("Zfhmin requires the RV32 F extension"));
+                }
+                if floating.3 && !floating.0 {
+                    return Err(entry.error("Zfbfmin requires the RV32 F extension"));
+                }
+                if smepmp && pmp == 0 {
+                    return Err(entry.error("Smepmp requires internal PMP entries"));
+                }
+                if zacas && !(atomic || zaamo) {
+                    return Err(entry.error("Zacas requires RV32 Zaamo or A"));
+                }
+                if zabha && !(atomic || zaamo) {
+                    return Err(entry.error("Zabha requires RV32 Zaamo or A"));
+                }
+                (
+                    (multiply, zmmul),
+                    atomic,
+                    (compressed, compressed_float),
+                    embedded,
+                    zicond,
+                    (zacas, zabha, zaamo, zalrsc),
+                    (smepmp, sscofpmf),
+                    bitmanip,
+                    (
+                        (floating, zfa),
+                        (zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round),
+                    ),
+                )
             },
             pmp,
+            privilege_levels,
         ));
     }
     configs.sort_unstable_by_key(|config| config.0);
-    if configs.len() > MAX_HARTS
-        || configs
-            .iter()
-            .enumerate()
-            .any(|(index, config)| index != config.0)
-    {
+    if configs.len() > MAX_HARTS || configs.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return Err(format!(
-            "{}: hart IDs must be unique and contiguous from zero, up to {MAX_HARTS} harts",
+            "{}: hart IDs must be unique, up to {MAX_HARTS} harts",
             path.display()
         ));
     }
+    // A platform with RAM at the Renode reset trap vector can receive guest traps
+    // before firmware initializes MTVEC. Boards without a mapped handler can
+    // still use the CLI stop conditions until the guest or monitor sets a vector.
+    let default_vector_mapped = machine.bus.read_ram::<4>(DEFAULT_MTVEC).is_ok();
     machine.configure_harts(configs.len());
-    for &(id, entry, (multiply, atomic, compressed, zicond), pmp) in &configs {
-        let hart = machine.hart_mut(id);
+    for (
+        slot,
+        &(
+            id,
+            entry,
+            (
+                (multiply, zmmul),
+                atomic,
+                (compressed, compressed_float),
+                embedded,
+                zicond,
+                (zacas, zabha, zaamo, zalrsc),
+                (smepmp, sscofpmf),
+                bitmanip,
+                ((floating, zfa), (zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round)),
+            ),
+            pmp,
+            (user, supervisor),
+        ),
+    ) in configs.iter().enumerate()
+    {
+        let hart = machine.hart_mut(slot);
+        hart.set_hart_id(id);
         hart.name = Some(entry.name.clone());
         let unaligned = entry
             .body
@@ -1811,28 +2061,99 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             })
             .unwrap_or(entry.model == "CPU.IbexRiscV32");
         hart.set_unaligned_accesses(unaligned);
-        hart.set_integer_extensions(multiply, atomic, compressed);
+        hart.set_integer_extensions(multiply, atomic || (zaamo && zalrsc), compressed);
+        hart.set_compressed_float(compressed_float.0, compressed_float.1);
+        hart.set_atomic_subextensions(zaamo, zalrsc);
+        hart.set_zmmul(zmmul);
+        hart.set_embedded_base(embedded);
         hart.set_zicond(zicond);
+        hart.set_zacas(zacas);
+        hart.set_zabha(zabha);
+        hart.set_sscofpmf(sscofpmf);
+        hart.set_bitmanip(bitmanip);
+        if floating.0 {
+            hart.enable_floating(floating.1, floating.2);
+            hart.set_zfbfmin(floating.3);
+            hart.set_zfhmin(floating.4);
+            hart.set_zfa(zfa);
+            hart.set_zfa_diagnostics(zfa_fli, zfa_min_max, zfa_quiet_compare, zfa_round);
+        }
         match entry.model.as_str() {
             "CPU.VexRiscv" => hart.enable_vex_core(uses_vex_irq(entry)),
             "CPU.IbexRiscV32" => hart.enable_ibex(),
             "CPU.Minerva" => hart.enable_minerva(),
             _ => {}
         }
-        if entry.model != "CPU.Minerva" {
+        if user {
             hart.enable_user_mode();
-            if entry.model != "CPU.IbexRiscV32" {
-                hart.enable_supervisor_mode();
-            }
+        }
+        if supervisor {
+            hart.enable_supervisor_mode();
         }
         if entry.model == "CPU.RiscV32" {
             hart.enable_address_triggers();
+            hart.configure_reset_vector(0x1000);
+            if default_vector_mapped {
+                hart.set_mtvec(DEFAULT_MTVEC);
+            }
         }
-        if pmp != 0 {
+        if let Some((external, count)) = external_pmps.get(entry.name.as_str()) {
+            if smepmp {
+                return Err(external.error("Smepmp requires internal PMP"));
+            }
+            hart.attach_external_pmp(format!("{}.{}", entry.name, external.name), *count);
+            eprintln!("{}: Enabling External PMP", entry.name);
+        } else if pmp != 0 {
             hart.enable_pmp(pmp);
+            if smepmp {
+                hart.enable_smepmp();
+            }
+        }
+        if split_rv32_init(entry).0.iter().any(|(_, text)| {
+            text.split_once(':').is_some_and(|(key, value)| {
+                key.trim() == "vectorBootstrap" && value.trim() == "true"
+            })
+        }) {
+            hart.enable_vector_bootstrap();
+        }
+        if let Some(mode) = split_rv32_init(entry).0.iter().find_map(|(_, text)| {
+            let (key, value) = text.split_once(':')?;
+            if key.trim() != "interruptMode" {
+                return None;
+            }
+            match value.trim() {
+                "InterruptMode.Auto" | "0" => Some(InterruptMode::Auto),
+                "InterruptMode.Direct" | "1" => Some(InterruptMode::Direct),
+                "InterruptMode.Vectored" | "2" => Some(InterruptMode::Vectored),
+                _ => None,
+            }
+        }) {
+            hart.configure_interrupt_mode(mode);
+        }
+        if let Some(commands) = split_rv32_init(entry).1 {
+            if commands.is_empty() {
+                return Err(entry.error("expected an RV32 init command"));
+            }
+            for (line, command) in commands {
+                let error = |detail: &str| format!("{}:{line}: {detail}", entry.source.display());
+                let (register, value) = command
+                    .split_once(char::is_whitespace)
+                    .ok_or_else(|| error("expected RV32 init command REGISTER VALUE"))?;
+                let value = number(value.trim()).map_err(|detail| error(&detail))?;
+                match register {
+                    "MSTATUS" => hart.set_mstatus(value),
+                    "MTVEC" => hart.set_mtvec(value),
+                    _ => return Err(error("expected RV32 init register MSTATUS or MTVEC")),
+                }
+            }
         }
     }
     let cpu = configs[0].1;
+    if configs.iter().all(|config| config.1.model == "CPU.RiscV32") {
+        // Renode's system bus returns zero for an unmapped data read
+        // and discards an unmapped data write.
+        machine.bus.use_renode_unmapped_data();
+    }
     if let Some(entry) = clint {
         let mut target_count = None;
         let mut frequency = None;
@@ -1862,11 +2183,14 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             ));
         }
         let targets = target_count.unwrap_or(1) as usize;
-        if frequency == Some(0) || targets == 0 || targets > configs.len() || wires.len() != targets
+        if frequency == Some(0)
+            || targets == 0
+            || targets > configs.len()
+            || (!wires.is_empty() && wires.len() != targets)
         {
             return Err(entry.error("invalid CLINT frequency or target wiring"));
         }
-        for &(id, target, _, _) in &configs[..targets] {
+        for (slot, &(_, target, _, _, _)) in configs[..wires.len()].iter().enumerate() {
             let (software, timer) = if uses_vex_irq(target) {
                 (101, 100)
             } else {
@@ -1874,8 +2198,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             };
             let expected = format!(
                 "[{},{}]->{}@[{software},{timer}]",
-                2 * id,
-                2 * id + 1,
+                2 * slot,
+                2 * slot + 1,
                 target.name
             );
             if !wires.contains(&expected) {
@@ -1892,6 +2216,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             machine.bus.map_clint(entry.address()?, targets)
         }
         .map_err(|e| entry.error(&e))?;
+        if wires.is_empty() {
+            machine.bus.clint.as_mut().unwrap().disconnect_interrupts();
+        }
     }
     if let Some(entry) = litex_cpu_timer {
         if configs.len() != 1 || clint.is_some() || !uses_vex_irq(cpu) {
@@ -2060,8 +2387,6 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 .map_litex_uart_with_timing(entry.addresses()?, irq, timing)
                 .map_err(|e| entry.error(&e))?;
         } else {
-            let (plic, sources) =
-                plic_config.ok_or_else(|| entry.error("NS16550 requires a PLIC"))?;
             let mut source = None;
             let mut wide = None;
             for (_, line) in &entry.body {
@@ -2069,7 +2394,9 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     .split_once("->")
                     .filter(|(pin, _)| pin.trim() == "IRQ")
                     .and_then(|(_, target)| target.trim().split_once('@'))
-                    .filter(|(name, _)| name.trim() == plic.name)
+                    .filter(|(name, _)| {
+                        plic_config.is_some_and(|(plic, _)| name.trim() == plic.name)
+                    })
                     && source.is_none()
                 {
                     source = Some(number(target.1.trim()).map_err(|e| entry.error(&e))?);
@@ -2087,9 +2414,11 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("unsupported NS16550 property or wiring"));
                 }
             }
-            let source = source
-                .filter(|source| (1..=sources).contains(source))
-                .ok_or_else(|| entry.error("expected a valid NS16550 IRQ connection to PLIC"))?;
+            if let Some(source) = source
+                && !plic_config.is_some_and(|(_, sources)| (1..=sources).contains(&source))
+            {
+                return Err(entry.error("expected a valid NS16550 IRQ connection to PLIC"));
+            }
             machine
                 .bus
                 .map_ns16550(entry.address()?, source, wide.unwrap_or(false))
@@ -2863,7 +3192,106 @@ fn map_sysbus_ranges(entry: &Entry, bus: &mut Bus) -> Result<(), String> {
     Ok(())
 }
 
-type RiscvConfig<'a> = (usize, &'a Entry, (bool, bool, bool, bool), usize);
+fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
+    let mut parts = architecture.split('_');
+    let base = parts.next().and_then(|part| part.strip_prefix("rv32"));
+    let mut missing = Vec::new();
+    if let Some(base) = base {
+        if base.contains('e') && base.chars().all(|letter| "iemafdcvbg".contains(letter)) {
+            if base.contains(['i', 'g']) {
+                return "ISA string cannot contain both I and E base instruction sets at the same time.".into();
+            }
+            if base.chars().any(|letter| !"emac".contains(letter)) {
+                return "RV32E can only have M, A and C standard extensions".into();
+            }
+        }
+        for letter in base.chars() {
+            match letter {
+                'i' | 'm' | 'a' | 'c' => {}
+                'g' | 'f' | 'd' => {}
+                'v' => missing.push("V"),
+                _ => return format!("unsupported CPU type {value}"),
+            }
+        }
+        for extension in parts.clone() {
+            let remainder = extension.trim_start_matches(|letter| "iemafdcvbgu".contains(letter));
+            if remainder.starts_with(|letter: char| {
+                letter.is_ascii_alphabetic() && !matches!(letter, 's' | 'x' | 'z')
+            }) {
+                return format!("Undefined instructions set extension: '{remainder}'");
+            }
+        }
+        missing.extend(parts.filter(|extension| {
+            !matches!(
+                *extension,
+                "c" | "zicsr"
+                    | "zifencei"
+                    | "zihintpause"
+                    | "zicond"
+                    | "zba"
+                    | "zbb"
+                    | "zbc"
+                    | "zbkc"
+                    | "zkne"
+                    | "zknd"
+                    | "zknh"
+                    | "zksed"
+                    | "zksh"
+                    | "zbs"
+                    | "zbkb"
+                    | "zbkx"
+                    | "zca"
+                    | "zcf"
+                    | "zcd"
+                    | "zcb"
+                    | "xandes"
+                    | "xandesperf"
+                    | "xandesbfhcvt"
+                    | "zacas"
+                    | "zaamo"
+                    | "zalrsc"
+                    | "zabha"
+                    | "zmmul"
+                    | "zfa"
+                    | "zfhmin"
+                    | "zfh"
+                    | "zfbfmin"
+                    | "smepmp"
+                    | "sscofpmf"
+            )
+        }));
+    }
+    missing.dedup();
+    if missing.is_empty() {
+        format!("unsupported CPU type {value}")
+    } else {
+        format!(
+            "unsupported CPU type {value}; unavailable extensions: {}",
+            missing.join(", ")
+        )
+    }
+}
+
+type RiscvConfig<'a> = (
+    usize,
+    &'a Entry,
+    (
+        (bool, bool),
+        bool,
+        (bool, (bool, bool)),
+        bool,
+        bool,
+        (bool, bool, bool, bool),
+        (bool, bool),
+        BitManip,
+        (
+            ((bool, bool, bool, bool, bool), bool),
+            (bool, bool, bool, bool),
+        ),
+    ),
+    usize,
+    (bool, bool),
+);
 
 fn uses_vex_irq(entry: &Entry) -> bool {
     entry.model == "CPU.VexRiscv"
@@ -2878,9 +3306,14 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
     if let Some((pin, target)) = wire.split_once("->")
         && matches!(pin.trim(), "" | "IRQ")
         && let Some((cpu, line)) = target.split_once('@')
-        && let Some(&(hart, target, _, _)) = configs.iter().find(|(_, target, _, _)| {
-            target.name == cpu.trim() && (uses_vex_irq(target) || target.model == "CPU.Minerva")
-        })
+        && let Some((hart, &(_, target, _, _, _))) =
+            configs
+                .iter()
+                .enumerate()
+                .find(|(_, (_, target, _, _, _))| {
+                    target.name == cpu.trim()
+                        && (uses_vex_irq(target) || target.model == "CPU.Minerva")
+                })
     {
         let line = number(line.trim()).map_err(|e| entry.error(&e))?;
         return match line {
@@ -2941,10 +3374,25 @@ fn direct_irq(entry: &Entry, cpu: &str, line: u32) -> Result<bool, String> {
 }
 
 fn keys<'a>(entry: &'a Entry, allowed: &[&str]) -> Result<Vec<(&'a str, &'a str)>, String> {
+    keys_in(entry, &entry.body, allowed)
+}
+
+fn split_rv32_init(entry: &Entry) -> (&[(usize, String)], Option<&[(usize, String)]>) {
+    if entry.model == "CPU.RiscV32"
+        && let Some(index) = entry.body.iter().position(|(_, text)| text == "init:")
+    {
+        return (&entry.body[..index], Some(&entry.body[index + 1..]));
+    }
+    (&entry.body, None)
+}
+
+fn keys_in<'a>(
+    entry: &'a Entry,
+    body: &'a [(usize, String)],
+    allowed: &[&str],
+) -> Result<Vec<(&'a str, &'a str)>, String> {
     let mut seen = HashSet::new();
-    entry
-        .body
-        .iter()
+    body.iter()
         .map(|(line, text)| {
             let pair = text
                 .split_once(':')

@@ -1,3 +1,5 @@
+mod andes_csr;
+mod bitmanip;
 mod bus;
 mod clint;
 mod compressed;
@@ -8,6 +10,7 @@ mod dwt;
 mod ethernet;
 mod ethernet_switch;
 mod iis2mdc;
+mod float;
 mod image;
 mod image64;
 mod litex;
@@ -106,6 +109,7 @@ mod uart;
 mod uart_trigger;
 mod veml7700;
 mod zephyr_boot;
+mod vector_bootstrap;
 
 use std::{
     env,
@@ -126,11 +130,13 @@ const HELP: &str = "Run a bare-metal firmware image.
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_IMAGE]
        penv switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]
+       penv check-platform PATH
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
   --wait-for-frame STEP:PATH  Stop when the LiteX framebuffer matches a PNG or P6 RGB PPM
   --wait-for-frame-roi STEP:X:Y:WIDTH:HEIGHT:PATH  Wait for identical RGB pixels in a region
+  --frame-waits-after-uart STEPS:TEXT  Start queued waits on UART text and give each STEPS
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
@@ -171,6 +177,8 @@ Options:
   --adc-event STEP:CHANNEL:VOLTS  Change an STM32 ADC channel voltage at a step (repeatable)
   --stm32f0-console  Require an STM32F0 REPL (legacy console option)
   --platform-root DIR  Root for working-directory-relative REPL includes
+  --litex-panel-after-uart N:NAME:ACTION:TEXT  Toggle a button or assert an LED on UART match N
+  --litex-phy-after-uart NAME:VALUE:TEXT  Set PHY VendorSpecific1 after matching UART text
   --litex-phy-event STEP:NAME:VALUE  Set PHY VendorSpecific1 at a step (repeatable)
   --litex-panel-after-uart N:NAME:ACTION:TEXT  Apply panel action on UART match N
   --litex-phy-after-uart NAME:VALUE:TEXT  Set PHY VendorSpecific1 after matching text
@@ -462,8 +470,16 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|error| format!("Ethernet switch: {error}"))?;
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Some("check-platform")) => {
+            let path = args.next().ok_or("expected 'check-platform PATH'")?;
+            if args.next().is_some() {
+                return Err("expected 'check-platform PATH'".into());
+            }
+            platform::check(PathBuf::from(path).as_path())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run' or 'switch'; see --help".into()),
+        _ => return Err("expected 'run' or 'check-platform'; see --help".into()),
     }
 
     let mut raw = false;
@@ -512,6 +528,7 @@ fn run() -> Result<ExitCode, String> {
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
     let mut frame_waits = Vec::new();
+    let mut frame_wait_trigger = None;
     let mut framebuffer_events = Vec::new();
     let mut framebuffer_out = None;
     let mut cli_mips = None;
@@ -531,13 +548,6 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
             Some("--") => positional = true,
-            Some(option @ ("--write-memory" | "--read-memory-now")) => {
-                let argument = args
-                    .next()
-                    .and_then(|value| value.into_string().ok())
-                    .ok_or_else(|| format!("{option} requires a memory access argument"))?;
-                memory_setup.push(memory_setup::MemorySetup::parse(option, &argument)?);
-            }
             Some("--raw") => raw = true,
             Some("--hex") => hex = true,
             Some("--stm32f0-console") => stm32f0_console = true,
@@ -753,6 +763,29 @@ fn run() -> Result<ExitCode, String> {
                     framebuffer_events.push(event);
                 } else {
                     frame_waits.push((event.0, event.1, None));
+                }
+            }
+            Some("--frame-waits-after-uart") => {
+                const FORMAT: &str =
+                    "--frame-waits-after-uart requires positive STEPS and nonempty TEXT";
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let (steps, text) = value
+                    .split_once(':')
+                    .filter(|(_, text)| !text.is_empty())
+                    .ok_or(FORMAT)?;
+                let steps = steps
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|steps| *steps != 0)
+                    .ok_or(FORMAT)?;
+                if frame_wait_trigger
+                    .replace((steps, text.as_bytes().to_vec()))
+                    .is_some()
+                {
+                    return Err("--frame-waits-after-uart may only be specified once".into());
                 }
             }
             Some("--wait-for-frame-roi") => {
@@ -1042,6 +1075,10 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .and_then(|value| value.into_string().ok())
                     .ok_or_else(error)?;
+                if matches!(option, "--write-memory" | "--read-memory-now") && !value.contains('@') {
+                    memory_setup.push(memory_setup::MemorySetup::parse(option, &value)?);
+                    continue;
+                }
                 let (base, path) = value
                     .split_once(':')
                     .filter(|(_, path)| !path.is_empty())
@@ -1107,7 +1144,7 @@ fn run() -> Result<ExitCode, String> {
                 let value = args.next().ok_or("--tohost requires an address")?;
                 let value = value.to_str().ok_or("invalid tohost address")?;
                 if tohost
-                    .replace((parse_address64(value)?, option))
+                    .replace((parse_address64(value)?, option.to_owned()))
                     .is_some()
                 {
                     return Err("only one tohost address may be specified".into());
@@ -1152,6 +1189,7 @@ fn run() -> Result<ExitCode, String> {
     let mut boot_pcs = Vec::new();
     let mut vector_tables = Vec::new();
     let mut runtime = Vec::new();
+    let mut cpu_control = Vec::new();
     let mut script_elf_addresses = None;
     let mut silence_ranges = Vec::new();
     let mut vex_supervisor_irq_mask = None;
@@ -1170,6 +1208,8 @@ fn run() -> Result<ExitCode, String> {
     let mut virtual_mips = None;
     let mut boot_writes = Vec::new();
     let mut zephyr = zephyr_boot::BootOptions::default();
+    let mut cpu_registers = Vec::new();
+    let mut log_function_names = false;
     if asset_dir.is_some() && script.is_none() {
         return Err("--asset-dir requires --script".into());
     }
@@ -1253,6 +1293,8 @@ fn run() -> Result<ExitCode, String> {
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         mtvec = mtvec.or(boot.mtvec.map(u64::from));
+        cpu_registers = boot.cpu_registers;
+        log_function_names = boot.log_function_names;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         hex = boot.hex;
@@ -1289,6 +1331,7 @@ fn run() -> Result<ExitCode, String> {
         boot_pcs = boot.boot_pcs;
         vector_tables = boot.vector_tables;
         runtime = boot.runtime;
+        cpu_control = boot.cpu_control;
         silence_ranges = boot.silence_ranges;
         buttons = boot.buttons;
         video_analyzers = boot.video_analyzers;
@@ -1303,7 +1346,10 @@ fn run() -> Result<ExitCode, String> {
     let memory_only = !has_firmware
         && platform_path.is_some()
         && (max_steps == Some(0) || static_memory_script || sd_setup_only);
-    if !has_firmware && !memory_only {
+    let inspect_only = path.is_none()
+        && binaries.is_empty()
+        && (!cpu_control.is_empty() || !cpu_registers.is_empty());
+    if !has_firmware && !memory_only && !inspect_only {
         return Err("missing firmware image; see run --help".into());
     }
     if rv64 && (!raw || platform_path.is_some()) {
@@ -1495,9 +1541,33 @@ fn run() -> Result<ExitCode, String> {
                 }
             }
         }
+    let reset_state = cpu_control
+        .iter()
+        .any(|command| matches!(command, monitor::CpuControl::Reset))
+        .then(|| machine.primary.clone());
+    for command in cpu_registers.iter().cloned() {
+        match command {
+            monitor::CpuRegisterCommand::TrapVector(register, value) => {
+                if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
+                    eprintln!("{} {readback:#x}", register.name());
+                }
+            }
+            monitor::CpuRegisterCommand::ExternalPmp(path, config, index, value) => {
+                if let Some(readback) = machine.monitor_external_pmp(&path, config, index, value)? {
+                    eprintln!("{readback:#x}");
+                }
+            }
+            monitor::CpuRegisterCommand::Integer(index, value) => {
+                if let Some(readback) = machine.primary.monitor_integer_register(index, value)? {
+                    eprintln!("{readback:#x}");
+                }
+            }
+        }
+    }
         if let Some(value) = vex_supervisor_irq_mask {
             machine.primary.set_vex_supervisor_irq_mask(value)?;
         }
+        if log_function_names { machine.enable_function_logging()?; }
         if let Some(path) = path.as_deref() {
             let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
             let loaded = if hex {
@@ -1740,7 +1810,22 @@ fn run() -> Result<ExitCode, String> {
         for access in &memory_setup {
             access.apply(&mut machine.bus)?;
         }
-        if memory_only || max_steps == Some(0) {
+    for command in cpu_control.iter().cloned() {
+        match command {
+            monitor::CpuControl::Pc(cpu, value) => {
+                if let Some(pc) = machine.monitor_pc(&cpu, value)? {
+                    eprintln!("{pc:#x}");
+                }
+            }
+            monitor::CpuControl::ResetVector(address) => {
+                machine.primary.monitor_reset_vector(address)?
+            }
+            monitor::CpuControl::Reset => machine
+                .primary
+                .monitor_reset(reset_state.as_ref().unwrap())?,
+        }
+    }
+        if inspect_only || memory_only || max_steps == Some(0) {
             return Ok(machine);
         }
         zephyr_boot::configure(&mut machine, &zephyr, path.as_deref())?;
@@ -1751,7 +1836,9 @@ fn run() -> Result<ExitCode, String> {
         if uart_stdin && !machine.bus.has_uart_input() {
             return Err("--uart-stdin requires a platform UART with input support".into());
         }
-        if let Some((address, option)) = tohost {
+        if let Some((address, option)) = &tohost {
+            let address = *address;
+            let option = option.as_str();
             if machine.primary.rv64.is_some() {
                 match option {
                     "--robot-tohost" if machine.hart_count() == 1 => machine.bus.watch_robot_tohost(address)?,
@@ -1769,6 +1856,7 @@ fn run() -> Result<ExitCode, String> {
         Ok(machine)
     };
     let mut machine = boot_machine()?;
+    if inspect_only { return Ok(ExitCode::SUCCESS); }
     let mut uart_triggers = Vec::new();
     for (matches, name, action, pattern) in uart_actions {
         let trigger = UartTrigger::new(pattern, matches);

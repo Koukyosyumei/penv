@@ -5,7 +5,7 @@ use std::{
 
 pub struct Ns16550 {
     pub base: u32,
-    pub source: u32,
+    pub source: Option<u32>,
     pub wide: bool,
     receive: VecDeque<u8>,
     ier: u8,
@@ -18,7 +18,7 @@ pub struct Ns16550 {
 }
 
 impl Ns16550 {
-    pub fn new(base: u32, source: u32, wide: bool) -> Self {
+    pub fn new(base: u32, source: Option<u32>, wide: bool) -> Self {
         Self {
             base,
             source,

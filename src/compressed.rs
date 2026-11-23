@@ -1,13 +1,13 @@
 // Expand RV32 compressed integer encodings into the base decoder's format.
-pub fn expand(insn: u32) -> Option<u32> {
-    expand_integer(insn, false)
+pub fn expand(insn: u32, zcb: bool) -> Option<u32> {
+    expand_integer(insn, false).or_else(|| zcb.then(|| expand_zcb(insn, false)).flatten())
 }
 
 pub fn expand_rv64(insn: u32, zcb: bool) -> Option<u32> {
-    expand_integer(insn, true).or_else(|| zcb.then(|| expand_zcb(insn)).flatten())
+    expand_integer(insn, true).or_else(|| zcb.then(|| expand_zcb(insn, true)).flatten())
 }
 
-fn expand_zcb(insn: u32) -> Option<u32> {
+fn expand_zcb(insn: u32, rv64: bool) -> Option<u32> {
     let base = 8 + ((insn >> 7) & 7);
     let operand = 8 + ((insn >> 2) & 7);
     let byte_offset = ((insn >> 4) & 2) | ((insn >> 6) & 1);
@@ -29,9 +29,9 @@ fn expand_zcb(insn: u32) -> Option<u32> {
             3 => match (insn >> 2) & 7 {
                 0 => immediate(0x13, 7, base, base, 0xff),
                 1 => immediate(0x13, 1, base, base, 0x604),
-                2 => register(4, 0x04, base, base, 0) | 8,
+                2 => register(4, 0x04, base, base, 0) | if rv64 { 8 } else { 0 },
                 3 => immediate(0x13, 1, base, base, 0x605),
-                4 => register(0, 0x04, base, base, 0) | 8,
+                4 if rv64 => register(0, 0x04, base, base, 0) | 8,
                 5 => immediate(0x13, 4, base, base, 0xfff),
                 _ => return None,
             },
@@ -57,6 +57,22 @@ fn expand_integer(insn: u32, rv64: bool) -> Option<u32> {
                 return None;
             }
             immediate(0x13, 0, rs2_prime, 2, offset)
+        }
+        (0, kind @ (1 | 3 | 5 | 7)) if !rv64 => {
+            let double = kind & 2 == 0;
+            let (width, offset) = if double {
+                (3, (bits(5, 2) << 6) | (bits(10, 3) << 3))
+            } else {
+                (
+                    2,
+                    (bits(5, 1) << 6) | (bits(10, 3) << 3) | (bits(6, 1) << 2),
+                )
+            };
+            if kind < 4 {
+                immediate(0x07, width, rs2_prime, rs1_prime, offset)
+            } else {
+                store_format(0x27, width, rs1_prime, rs2_prime, offset)
+            }
         }
         (0, 2 | 6) => {
             let offset = (bits(5, 1) << 6) | (bits(10, 3) << 3) | (bits(6, 1) << 2);
@@ -141,6 +157,22 @@ fn expand_integer(insn: u32, rv64: bool) -> Option<u32> {
                 | ((offset & 0x800) >> 4)
                 | 0x63
         }
+        (2, 1) if !rv64 => {
+            let offset = (bits(2, 3) << 6) | (bits(12, 1) << 5) | (bits(5, 2) << 3);
+            immediate(0x07, 3, rd, 2, offset)
+        }
+        (2, 3) if !rv64 => {
+            let offset = (bits(2, 2) << 6) | (bits(12, 1) << 5) | (bits(4, 3) << 2);
+            immediate(0x07, 2, rd, 2, offset)
+        }
+        (2, 5) if !rv64 => {
+            let offset = (bits(7, 3) << 6) | (bits(10, 3) << 3);
+            store_format(0x27, 3, 2, rs2, offset)
+        }
+        (2, 7) if !rv64 => {
+            let offset = (bits(7, 2) << 6) | (bits(9, 4) << 2);
+            store_format(0x27, 2, 2, rs2, offset)
+        }
         (2, 0) if rv64 || bits(12, 1) == 0 => {
             immediate(0x13, 1, rd, rd, (bits(12, 1) << 5) | bits(2, 5))
         }
@@ -186,5 +218,14 @@ fn register(funct3: u32, funct7: u32, rd: u32, rs1: u32, rs2: u32) -> u32 {
 }
 
 fn store(rs1: u32, rs2: u32, offset: u32) -> u32 {
-    ((offset & 0xfe0) << 20) | (rs2 << 20) | (rs1 << 15) | (2 << 12) | ((offset & 31) << 7) | 0x23
+    store_format(0x23, 2, rs1, rs2, offset)
+}
+
+fn store_format(opcode: u32, funct3: u32, rs1: u32, rs2: u32, offset: u32) -> u32 {
+    ((offset & 0xfe0) << 20)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | ((offset & 31) << 7)
+        | opcode
 }

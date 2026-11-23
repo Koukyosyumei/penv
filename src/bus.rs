@@ -2050,7 +2050,12 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_ns16550(&mut self, base: u32, source: u32, wide: bool) -> Result<(), String> {
+    pub fn map_ns16550(
+        &mut self,
+        base: u32,
+        source: Option<u32>,
+        wide: bool,
+    ) -> Result<(), String> {
         let uart = Ns16550::new(base, source, wide);
         let start = u64::from(base);
         let end = start + uart.size();
@@ -3426,9 +3431,10 @@ impl Bus {
 
     pub fn tick_plic(&mut self) -> u32 {
         if let Some(uart) = self.ns16550.as_ref()
+            && let Some(source) = uart.source
             && let Some(plic) = self.plic.as_mut()
         {
-            plic.set_line(uart.source, uart.interrupt_pending());
+            plic.set_line(source, uart.interrupt_pending());
         }
         self.plic.as_ref().map_or(0, Plic::irq_outputs)
     }
@@ -3523,8 +3529,7 @@ impl Bus {
     }
 
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
-        self.memory64(u64::from(address), width)
-            .ok_or(BusError::Unmapped(address, width))
+        self.memory_for_store(address, width, None)
     }
 
     pub fn watch_rv64_tohost(&mut self, address: u64) -> Result<(), String> {
@@ -3615,8 +3620,8 @@ impl Bus {
                     *reservation = None;
                 }
             }
-            for reservation in &mut self.reservations {
-                if reservation.is_some_and(|(reserved, _)| {
+            for (slot, reservation) in self.reservations.iter_mut().enumerate() {
+                if hart != Some(slot) && reservation.is_some_and(|(reserved, _)| {
                     let reserved = reserved & !3;
                     address < u64::from(reserved) + 4
                         && u64::from(reserved) < address + width as u64
@@ -3803,6 +3808,21 @@ impl Bus {
             .ok_or(BusError::Unmapped(address, width))
     }
 
+    pub(crate) fn memory_for_store(
+        &mut self,
+        address: u32,
+        width: usize,
+        writer: Option<usize>,
+    ) -> Result<&mut [u8], BusError> {
+        if self.ram_location64(u64::from(address), width).is_some()
+            && let Some(device) = &mut self.h7_flash
+        {
+            device.note_program(address, width);
+        }
+        self.ram_write64(u64::from(address), width, writer)
+            .ok_or(BusError::Unmapped(address, width))
+    }
+
     pub fn receive_ethernet(&mut self, nic: usize, frame: &[u8]) {
         let mut dma = EthernetDma {
             regions: &mut self.regions,
@@ -3897,11 +3917,37 @@ impl Bus {
     pub fn atomic_update(
         &mut self,
         address: u32,
+        width: usize,
         update: impl FnOnce(u32) -> u32,
     ) -> Result<u32, BusError> {
-        let word = self.atomic_word(address)?;
-        let previous = u32::from_le_bytes(*word);
-        *word = update(previous).to_le_bytes();
+        if address as usize & (width - 1) != 0 {
+            return Err(BusError::Misaligned(address, width));
+        }
+        let memory = self.memory(address, width)?;
+        let mut bytes = [0; 4];
+        bytes[..width].copy_from_slice(memory);
+        let previous = u32::from_le_bytes(bytes);
+        memory.copy_from_slice(&update(previous).to_le_bytes()[..width]);
+        Ok(previous)
+    }
+
+    pub fn atomic_compare_swap(
+        &mut self,
+        address: u32,
+        width: usize,
+        expected: u64,
+        replacement: u64,
+    ) -> Result<u64, BusError> {
+        if address as usize & (width - 1) != 0 {
+            return Err(BusError::Misaligned(address, width));
+        }
+        let memory = self.memory(address, width)?;
+        let mut bytes = [0; 8];
+        bytes[..width].copy_from_slice(memory);
+        let previous = u64::from_le_bytes(bytes);
+        if previous == expected & (u64::MAX >> (64 - width * 8)) {
+            memory.copy_from_slice(&replacement.to_le_bytes()[..width]);
+        }
         Ok(previous)
     }
 
@@ -4577,16 +4623,22 @@ impl Bus {
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
+        let mut bytes = [0; 4];
+        bytes[..N].copy_from_slice(&self.read_ram_bytes::<N>(address)?);
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    pub fn read_ram_bytes<const N: usize>(&self, address: u32) -> Result<[u8; N], BusError> {
         if address as usize & (N - 1) != 0 {
             return Err(BusError::Misaligned(address, N));
         }
         self.read_unaligned_ram::<N>(address)
     }
 
-    pub fn read_unaligned_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
+    fn read_unaligned_ram<const N: usize>(&self, address: u32) -> Result<[u8; N], BusError> {
         for region in &self.regions {
             if let Some(offset) = region.offset(u64::from(address), N) {
-                let mut bytes = [0; 4];
+                let mut bytes = [0; N];
                 if region.flash_pages.is_some() {
                     for (index, byte) in bytes[..N].iter_mut().enumerate() {
                         *byte = region.flash_read(offset + index);
@@ -4594,7 +4646,7 @@ impl Bus {
                 } else {
                     bytes[..N].copy_from_slice(&region.bytes[offset..offset + N]);
                 }
-                return Ok(u32::from_le_bytes(bytes));
+                return Ok(bytes);
             }
         }
         Err(BusError::Unmapped(address, N))
@@ -4606,6 +4658,17 @@ impl Bus {
         width: usize,
         value: u32,
         uart: &mut impl Write,
+    ) -> Result<(), BusError> {
+        self.write_with_origin(address, width, value, uart, None)
+    }
+
+    pub fn write_with_origin(
+        &mut self,
+        address: u32,
+        width: usize,
+        value: u32,
+        uart: &mut impl Write,
+        writer: Option<usize>,
     ) -> Result<(), BusError> {
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
@@ -4627,7 +4690,7 @@ impl Bus {
         {
             BusError::Unmapped(address, width)
         } else {
-            match self.guest_memory(address, width) {
+            match self.memory_for_store(address, width, writer) {
                 Ok(bytes) => {
                     bytes.copy_from_slice(&value.to_le_bytes()[..width]);
                     return self.observe_tohost(address, width, uart);

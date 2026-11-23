@@ -12,6 +12,7 @@ pub struct Clint {
     frequency: u32,
     fraction: u64,
     clock: Option<StepClock>,
+    interrupts_connected: bool,
     targets: Vec<Target>,
 }
 
@@ -46,6 +47,7 @@ impl Clint {
             frequency,
             fraction: 0,
             clock: None,
+            interrupts_connected: true,
             targets: (0..target_count)
                 .map(|_| Target {
                     compare: u64::MAX,
@@ -66,6 +68,10 @@ impl Clint {
             divisor: steps_per_second,
             fraction: 0,
         });
+}
+
+    pub fn disconnect_interrupts(&mut self) {
+        self.interrupts_connected = false;
     }
 
     pub fn tick(&mut self, hart: usize) -> u32 {
@@ -76,6 +82,9 @@ impl Clint {
         let step_hz = u64::from(Self::STEP_HZ);
         self.time = self.time.wrapping_add(scaled / step_hz);
         self.fraction = scaled % step_hz;
+        }
+        if !self.interrupts_connected {
+            return 0;
         }
         self.targets.get(hart).map_or(0, |target| {
             (u32::from(target.software) * SOFTWARE)

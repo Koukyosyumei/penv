@@ -213,7 +213,11 @@ pub fn load(
             return Err("expected an ARM EABI5 ELF32 executable with a supported float ABI".into());
         }
     } else if half(&header, 18) != 243
-        || flags & !(abi_flags | u32::from(machine.primary.compressed_instructions())) != 0
+        || flags
+            & !(abi_flags
+                | u32::from(machine.primary.compressed_instructions())
+                | (u32::from(machine.primary.embedded_base()) << 3))
+            != 0
     {
         return Err("expected a RISC-V ELF32 executable with supported ISA flags".into());
     }
@@ -315,7 +319,81 @@ pub fn load(
     if !entry_is_executable {
         return Err("ELF entry is outside executable file-backed segments".into());
     }
+    if let Some(symbols) = machine.function_symbols.as_mut() {
+        load_code_symbols(&mut file, &header, length, symbols)?;
+    }
     machine.set_entry(entry);
+    Ok(())
+}
+
+fn load_code_symbols(
+    file: &mut File,
+    header: &[u8; 52],
+    length: u64,
+    symbols: &mut std::collections::BTreeMap<u32, String>,
+) -> Result<(), String> {
+    let table = u64::from(word(header, 32));
+    let count = usize::from(half(header, 48));
+    if count == 0 {
+        return Ok(());
+    }
+    if table < 52 || half(header, 46) != 40 || table + count as u64 * 40 > length {
+        return Err("invalid ELF section header table".into());
+    }
+    let mut sections = vec![[0; 40]; count];
+    for (index, section) in sections.iter_mut().enumerate() {
+        read_at(file, table + index as u64 * 40, section)?;
+    }
+    let range = |section: &[u8; 40]| {
+        let offset = u64::from(word(section, 16));
+        let size = u64::from(word(section, 20));
+        (offset + size <= length)
+            .then_some(offset..offset + size)
+            .ok_or("invalid ELF symbol or string table bounds")
+    };
+    for section in sections.iter().filter(|section| word(*section, 4) == 2) {
+        let entries = range(section)?;
+        if word(section, 36) != 16 || (entries.end - entries.start) % 16 != 0 {
+            return Err("invalid ELF symbol entry size".into());
+        }
+        let strings = sections
+            .get(word(section, 24) as usize)
+            .filter(|section| word(*section, 4) == 3)
+            .ok_or("invalid ELF symbol string table")?;
+        let strings = range(strings)?;
+        let mut names = vec![0; (strings.end - strings.start) as usize];
+        read_at(file, strings.start, &mut names)?;
+        for offset in entries.step_by(16) {
+            let mut entry = [0; 16];
+            read_at(file, offset, &mut entry)?;
+            let index = usize::from(half(&entry, 14));
+            if !matches!(entry[12] & 15, 0 | 2)
+                || index == 0
+                || !sections
+                    .get(index)
+                    .is_some_and(|section| word(section, 8) & 4 != 0)
+            {
+                continue;
+            }
+            let name = names
+                .get(word(&entry, 0) as usize..)
+                .and_then(|bytes| {
+                    bytes
+                        .iter()
+                        .position(|byte| *byte == 0)
+                        .map(|end| &bytes[..end])
+                })
+                .ok_or("invalid ELF symbol name")?;
+            if let Ok(name) = std::str::from_utf8(name)
+                && !name.is_empty()
+                && !name.starts_with('$')
+            {
+                symbols
+                    .entry(word(&entry, 4))
+                    .or_insert_with(|| name.to_owned());
+            }
+        }
+    }
     Ok(())
 }
 

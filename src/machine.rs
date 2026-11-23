@@ -1,6 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs::File,
     io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::{
+    bitmanip::BitManip,
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
     litex_panel::ButtonAction,
@@ -17,6 +18,8 @@ use crate::{
     thumb::Thumb,
     zephyr_boot::BusyWait,
 };
+
+mod floating;
 
 pub const MAX_HARTS: usize = 8;
 pub const VIRTUAL_STEPS_PER_SECOND: u32 = 1_000_000;
@@ -115,6 +118,7 @@ impl PcTrace {
 pub struct Machine {
     pub bus: Bus,
     pub primary: Hart,
+    pub function_symbols: Option<BTreeMap<u32, String>>,
     secondary: Vec<Hart>,
     next_hart: usize,
     pc_trace: Option<(usize, PcTrace)>,
@@ -128,6 +132,9 @@ pub struct Machine {
     inputs: VecDeque<(u64, Input)>,
     uart_device_events: Vec<(Rc<Cell<bool>>, Input)>,
     queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
+    frame_wait_trigger: Option<Rc<Cell<bool>>>,
+    frame_wait_budget: Option<u64>,
+    frame_wait_deadline: Option<u64>,
     intermediate_frame_matches: Vec<u64>,
 }
 
@@ -152,14 +159,31 @@ enum Input {
 #[derive(Clone)]
 pub struct Hart {
     pub name: Option<String>,
+    slot: usize,
     csr: Csr,
     translations: TranslationCache,
     thumb: Option<Thumb>,
+    zfh: bool,
+    zfhmin: bool,
+    zfbfmin: bool,
+    zfa: bool,
+    zfa_fli: bool,
+    zfa_min_max: bool,
+    zfa_quiet_compare: bool,
+    zfa_round: bool,
+    floating: Option<Box<[u64; 32]>>,
     unaligned_accesses: bool,
     zicond: bool,
     pub rv64: Option<Box<Rv64>>,
     busy_wait: Option<BusyWait>,
+    zacas: bool,
+    zabha: bool,
+    zaamo: bool,
+    zalrsc: bool,
+    bitmanip: BitManip,
     pub pc: u32,
+    reset_vector: u32,
+    pc_written: bool,
     pub registers: [u32; 32],
 }
 
@@ -282,16 +306,34 @@ impl Machine {
     pub fn without_default_ram() -> Self {
         Self {
             bus: Bus::default(),
+            function_symbols: None,
             primary: Hart {
                 name: None,
+                slot: 0,
                 csr: Csr::default(),
                 translations: TranslationCache::default(),
                 thumb: None,
+                zfh: false,
+                zfhmin: false,
+                zfbfmin: false,
+                zfa: false,
+                zfa_fli: false,
+                zfa_min_max: false,
+                zfa_quiet_compare: false,
+                zfa_round: false,
+                floating: None,
                 unaligned_accesses: false,
                 zicond: false,
                 rv64: None,
                 busy_wait: None,
+                zacas: false,
+                zabha: false,
+                zaamo: false,
+                zalrsc: false,
+                bitmanip: BitManip::default(),
                 pc: RAM_BASE,
+                reset_vector: RAM_BASE,
+                pc_written: false,
                 registers: [0; 32],
             },
             secondary: Vec::new(),
@@ -307,15 +349,28 @@ impl Machine {
             inputs: VecDeque::new(),
             uart_device_events: Vec::new(),
             queued_frame_waits: VecDeque::new(),
+            frame_wait_trigger: None,
+            frame_wait_budget: None,
+            frame_wait_deadline: None,
             intermediate_frame_matches: Vec::new(),
         }
+    }
+
+    pub fn enable_function_logging(&mut self) -> Result<(), String> {
+        if self.is_cortex_m() {
+            return Err("LogFunctionNames requires an RV32 machine".into());
+        }
+        self.function_symbols = Some(BTreeMap::new());
+        Ok(())
     }
 
     pub fn configure_harts(&mut self, count: usize) {
         self.secondary = (1..count)
             .map(|id| {
                 let mut hart = self.primary.clone();
-                hart.csr.hart_id = id;
+                hart.slot = id;
+                hart.csr.hart_id =
+                    (self.primary.csr.hart_id as u32).wrapping_add(id as u32) as usize;
                 if let Some(cpu) = &mut hart.rv64 {
                     cpu.hart_id = id;
                 }
@@ -405,6 +460,34 @@ impl Machine {
         }
         thumb.set_vector_base(address);
         Ok(())
+}
+
+    pub fn monitor_external_pmp(
+        &mut self,
+        path: &str,
+        config: bool,
+        index: u32,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(pmp) = hart.csr.external_pmp(path) {
+                let result = pmp.external_csr(config, index, value);
+                if value.is_some() {
+                    hart.translations.clear();
+                }
+                return Ok(result);
+            }
+        }
+        Err(format!("unknown external PMP {path:?}"))
+    }
+
+    pub fn monitor_pc(&mut self, name: &str, value: Option<u32>) -> Result<Option<u32>, String> {
+        if let Some(value) = value {
+            self.set_named_entry(name, value)?;
+            return Ok(None);
+        }
+        let hart = self.named_hart(name)?;
+        Ok(Some(hart.pc))
     }
 
     pub fn set_entry(&mut self, entry: u32) {
@@ -413,6 +496,7 @@ impl Machine {
                 cpu.set_program_counter(u64::from(entry));
             }
             hart.pc = entry;
+            hart.pc_written = true;
         }
     }
 
@@ -659,6 +743,11 @@ impl Machine {
         Ok(())
     }
 
+    pub fn arm_frame_waits(&mut self, trigger: Rc<Cell<bool>>, budget: u64) {
+        self.frame_wait_trigger = Some(trigger);
+        self.frame_wait_budget = Some(budget);
+    }
+
     pub fn schedule_frame_wait(
         &mut self,
         step: u64,
@@ -668,10 +757,11 @@ impl Machine {
             return Err("framebuffer wait requires a LiteX framebuffer".into());
         }
         let reference = Box::new(reference);
-        if self
-            .inputs
-            .iter()
-            .any(|(_, input)| matches!(input, Input::FrameWait(_)))
+        if self.frame_wait_trigger.is_some()
+            || self
+                .inputs
+                .iter()
+                .any(|(_, input)| matches!(input, Input::FrameWait(_)))
         {
             self.queued_frame_waits.push_back((step, reference));
         } else {
@@ -696,6 +786,9 @@ impl Machine {
             return Err(format!(
                 "execution ended before applying the LiteX UART action for {name:?}"
             ));
+        }
+        if self.frame_wait_trigger.is_some() {
+            return Err("execution ended before the framebuffer UART trigger".into());
         }
         for (step, input) in &self.inputs {
             let event = match input {
@@ -859,6 +952,21 @@ impl Machine {
                 let (_, input) = self.uart_device_events.remove(index);
                 self.schedule_input(self.elapsed_steps, input);
             }
+            if self
+                .frame_wait_trigger
+                .as_ref()
+                .is_some_and(|trigger| trigger.get())
+            {
+                self.frame_wait_trigger = None;
+                let (_, reference) = self
+                    .queued_frame_waits
+                    .pop_front()
+                    .ok_or("framebuffer trigger has no reference frame")?;
+                self.frame_wait_deadline = self
+                    .frame_wait_budget
+                    .map(|budget| self.elapsed_steps.saturating_add(budget));
+                self.schedule_input(self.elapsed_steps, Input::FrameWait(reference));
+            }
             while self
                 .inputs
                 .front()
@@ -888,6 +996,9 @@ impl Machine {
                                 return Ok((Stop::FrameMatched(self.elapsed_steps), retired));
                             };
                             self.intermediate_frame_matches.push(self.elapsed_steps);
+                            self.frame_wait_deadline = self
+                                .frame_wait_budget
+                                .map(|budget| self.elapsed_steps.saturating_add(budget));
                             self.schedule_input(
                                 step.max(self.elapsed_steps),
                                 Input::FrameWait(reference),
@@ -897,6 +1008,14 @@ impl Machine {
                             let next = self.elapsed_steps.checked_add(FRAME_POLL_STEPS).ok_or(
                                 "step counter exhausted before the reference frame matched",
                             )?;
+                            let next = if let Some(deadline) = self.frame_wait_deadline {
+                                if self.elapsed_steps >= deadline {
+                                    return Err("framebuffer wait timed out before the reference frame matched".into());
+                                }
+                                next.min(deadline)
+                            } else {
+                                next
+                            };
                             self.schedule_input(next, Input::FrameWait(reference));
                         }
                     }
@@ -1003,7 +1122,7 @@ impl Machine {
                     .expect("trace targets a named RV64 CPU")
                     .pc
             });
-            match hart.execute_step(&mut self.bus, self.elapsed_steps, output)? {
+            match hart.execute_step(&mut self.bus, self.elapsed_steps, output, self.function_symbols.as_ref())? {
                 Step::Retired => {
                     retired += 1;
                     if let (Some((_, trace)), Some(pc)) = (trace, pc) {
@@ -1038,9 +1157,30 @@ impl Machine {
         }
         Ok((Stop::Limit, retired))
     }
+
+    fn execute_hart(&mut self, index: usize, output: &mut impl Write) -> Result<Step, String> {
+        let hart = if index == 0 {
+            &mut self.primary
+        } else {
+            &mut self.secondary[index - 1]
+        };
+        self.bus
+            .tick_litex_uart(self.elapsed_steps, output)
+            .map_err(|error| format!("UART: {error}"))?;
+        hart.execute_step(
+            &mut self.bus,
+            self.elapsed_steps,
+            output,
+            self.function_symbols.as_ref(),
+        )
+    }
 }
 
 impl Hart {
+    pub fn set_hart_id(&mut self, id: usize) {
+        self.csr.hart_id = id;
+    }
+
     pub(crate) fn set_cortex_m_clocked(&mut self, clocked: bool) -> Result<(), String> {
         self.thumb
             .as_mut()
@@ -1076,10 +1216,89 @@ impl Hart {
         self.thumb = Some(thumb);
     }
 
+    pub fn set_embedded_base(&mut self, enabled: bool) {
+        self.csr.embedded_base = enabled;
+    }
+
+    pub fn embedded_base(&self) -> bool {
+        self.csr.embedded_base
+    }
+
     pub fn set_integer_extensions(&mut self, multiply: bool, atomic: bool, compressed: bool) {
         self.csr.m_extension = multiply;
         self.csr.a_extension = atomic;
         self.csr.c_extension = compressed;
+    }
+
+    pub fn set_compressed_float(&mut self, single: bool, double: bool) {
+        self.csr.compressed_single = single;
+        self.csr.compressed_double = double;
+    }
+
+    pub fn set_atomic_subextensions(&mut self, zaamo: bool, zalrsc: bool) {
+        self.zaamo = zaamo;
+        self.zalrsc = zalrsc;
+    }
+
+    pub fn set_zmmul(&mut self, enabled: bool) {
+        self.csr.zmmul = enabled;
+    }
+
+    pub fn enable_vector_bootstrap(&mut self) {
+        self.csr.enable_vector_bootstrap();
+    }
+
+    pub fn enable_floating(&mut self, double: bool, half: bool) {
+        self.csr.f_extension = true;
+        self.csr.d_extension = double;
+        self.zfh = half;
+        self.floating = Some(Box::new([0; 32]));
+    }
+
+    pub fn set_zfa(&mut self, enabled: bool) {
+        self.zfa = enabled;
+    }
+
+    pub fn set_zfa_diagnostics(
+        &mut self,
+        fli: bool,
+        min_max: bool,
+        quiet_compare: bool,
+        round: bool,
+    ) {
+        self.zfa_fli = fli;
+        self.zfa_min_max = min_max;
+        self.zfa_quiet_compare = quiet_compare;
+        self.zfa_round = round;
+    }
+
+    pub fn set_zfhmin(&mut self, enabled: bool) {
+        self.zfhmin = enabled;
+    }
+
+    pub fn set_zfbfmin(&mut self, enabled: bool) {
+        self.zfbfmin = enabled;
+    }
+
+    pub fn set_bitmanip(&mut self, extensions: BitManip) {
+        self.bitmanip = extensions;
+        self.csr.andes = (extensions.xandesperf || extensions.xandesbfhcvt).then(|| {
+            let mut csrs = crate::andes_csr::AndesCsrs::default();
+            csrs.bfloat16 = extensions.xandesbfhcvt;
+            csrs
+        });
+    }
+
+    pub fn set_sscofpmf(&mut self, enabled: bool) {
+        self.csr.sscofpmf = enabled;
+    }
+
+    pub fn set_zabha(&mut self, enabled: bool) {
+        self.zabha = enabled;
+    }
+
+    pub fn set_zacas(&mut self, enabled: bool) {
+        self.zacas = enabled;
     }
 
     pub fn set_zicond(&mut self, enabled: bool) {
@@ -1135,6 +1354,14 @@ impl Hart {
 
     pub fn enable_address_triggers(&mut self) {
         self.csr.enable_address_triggers();
+    }
+
+    pub fn enable_smepmp(&mut self) {
+        self.csr.enable_smepmp();
+    }
+
+    pub fn attach_external_pmp(&mut self, path: String, entries: usize) {
+        self.csr.attach_external_pmp(path, entries);
     }
 
     pub fn enable_pmp(&mut self, entries: usize) {
@@ -1210,11 +1437,87 @@ impl Hart {
         }
         self.translate(bus, address, width, crate::pmp::WRITE)
             .and_then(|physical| {
-                bus.write(physical, width, value, output)
+                bus.write_with_origin(physical, width, value, output, Some(self.slot))
                     .map_err(|error| error.at_virtual(address))
             })
             .map_err(|error| Fault::Bus(Access::Store, error))
     }
+
+    pub fn set_mstatus(&mut self, value: u32) {
+        self.csr.set_mstatus(value);
+        self.translations.clear();
+    }
+
+    pub fn configure_interrupt_mode(&mut self, mode: crate::csr::InterruptMode) {
+        self.csr.configure_interrupt_mode(mode);
+    }
+
+    pub fn configure_reset_vector(&mut self, address: u32) {
+        self.reset_vector = address;
+    }
+
+    pub fn initialize_reset_pc(&mut self) {
+        self.pc = self.reset_vector;
+    }
+
+    fn set_reset_vector(&mut self, address: u32) {
+        self.reset_vector = address;
+        if !self.pc_written {
+            self.pc = address;
+        }
+    }
+
+    pub fn monitor_reset_vector(&mut self, address: u32) -> Result<(), String> {
+        if self.thumb.is_some() {
+            return Err("ResetVector requires a RISC-V CPU".into());
+        }
+        self.set_reset_vector(address);
+        Ok(())
+    }
+
+    pub fn monitor_reset(&mut self, initial: &Self) -> Result<(), String> {
+        if self.thumb.is_some() {
+            return Err("CPU Reset requires a RISC-V CPU".into());
+        }
+        let reset_vector = self.reset_vector;
+        *self = initial.clone();
+        self.pc_written = false;
+        self.set_reset_vector(reset_vector);
+        Ok(())
+    }
+
+    pub fn monitor_integer_register(
+        &mut self,
+        index: u32,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        if self.thumb.is_some() {
+            return Err("RISC-V register command requires a RISC-V CPU".into());
+        }
+        let count = if self.csr.embedded_base { 16 } else { 32 };
+        let register = self.registers[..count]
+            .get_mut(index as usize)
+            .ok_or_else(|| format!("Wrong register index: {index}"))?;
+        match value {
+            Some(_) if index == 0 => Err("The 'X0' register is read-only.".into()),
+            Some(value) => {
+                *register = value;
+                Ok(None)
+            }
+            None => Ok(Some(*register)),
+        }
+    }
+
+    pub fn monitor_trap_vector(
+        &mut self,
+        register: crate::csr::TrapVector,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        if self.thumb.is_some() {
+            return Err("RISC-V trap vector command requires a RISC-V CPU".into());
+        }
+        self.csr.monitor_trap_vector(register, value)
+}
 
     pub fn program_counter(&self) -> u64 {
         self.rv64.as_ref().map_or(u64::from(self.pc), |cpu| cpu.pc)
@@ -1268,6 +1571,7 @@ impl Hart {
         bus: &mut Bus,
         elapsed_steps: u64,
         output: &mut impl Write,
+        symbols: Option<&BTreeMap<u32, String>>,
     ) -> Result<Step, String> {
         if let Some(cpu) = &mut self.rv64 {
             return cpu.step(bus, self.csr.hart_id, elapsed_steps, output);
@@ -1324,10 +1628,7 @@ impl Hart {
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }
-        let clint = bus
-            .clint
-            .as_mut()
-            .map_or(0, |clint| clint.tick(self.csr.hart_id));
+        let clint = bus.clint.as_mut().map_or(0, |clint| clint.tick(self.slot));
         let mut pending = clint;
         let mut time = bus
             .clint
@@ -1346,8 +1647,8 @@ impl Hart {
             .is_some_and(|uart| uart.interrupt_pending());
         let timer = bus.timer.as_mut().is_some_and(|(_, timer)| timer.tick());
         let plic = bus.tick_plic();
-        let mut lines = bus.tick_litex(self.csr.hart_id, elapsed_steps);
-        if self.csr.hart_id == 0 {
+        let mut lines = bus.tick_litex(self.slot, elapsed_steps);
+        if self.slot == 0 {
             lines |= u64::from(
                 (u32::from(uart) * EXTERNAL)
                     | (u32::from(timer) * crate::clint::TIMER)
@@ -1378,7 +1679,7 @@ impl Hart {
             self.pc = target;
             return Ok(Step::Trap);
         }
-        match self.step(bus, output) {
+        match self.step(bus, output, symbols) {
             Ok(Step::Retired) => {
                 self.csr.retire(count_retired);
                 Ok(Step::Retired)
@@ -1401,7 +1702,121 @@ impl Hart {
         }
     }
 
-    fn step(&mut self, bus: &mut Bus, output: &mut impl Write) -> Result<Step, Fault> {
+    fn andes_gp_operation(
+        &mut self,
+        insn: u32,
+        store_value: u32,
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<Option<u32>, Fault> {
+        // (width, store, sign extension, ADDIGP), from the custom opcode and funct bits.
+        let (width, store, signed, add) = match (insn & 0x7f, (insn >> 12) & 7) {
+            (0x0b, 0 | 4) => (1, false, true, false),
+            (0x0b, 1 | 5) => (1, false, false, true),
+            (0x0b, 2 | 6) => (1, false, false, false),
+            (0x0b, 3 | 7) => (1, true, false, false),
+            (0x2b, 0) => (2, true, false, false),
+            (0x2b, 1) => (2, false, true, false),
+            (0x2b, 2) => (4, false, false, false),
+            (0x2b, 4) => (4, true, false, false),
+            (0x2b, 5) => (2, false, false, false),
+            _ => return Err(Fault::Illegal(insn)),
+        };
+        let bits = |shift: u32, mask: u32| (insn >> shift) & mask;
+        let shared = (bits(17, 7) << 12) | (bits(15, 3) << 15);
+        let offset = if store {
+            let immediate = shared | (bits(25, 63) << 5) | (bits(7, 1) << 11);
+            if width == 4 {
+                sign(
+                    immediate | (bits(9, 7) << 2) | (bits(8, 1) << 17) | (bits(31, 1) << 18),
+                    19,
+                )
+            } else {
+                let low_bit = if width == 1 { bits(14, 1) } else { 0 };
+                sign(
+                    immediate | (bits(8, 15) << 1) | (bits(31, 1) << 17) | low_bit,
+                    18,
+                )
+            }
+        } else {
+            let immediate = shared | (bits(20, 1) << 11);
+            if width == 4 {
+                sign(
+                    immediate | (bits(22, 511) << 2) | (bits(21, 1) << 17) | (bits(31, 1) << 18),
+                    19,
+                )
+            } else {
+                let low_bit = if width == 1 { bits(14, 1) } else { 0 };
+                sign(
+                    immediate | (bits(21, 1023) << 1) | (bits(31, 1) << 17) | low_bit,
+                    18,
+                )
+            }
+        };
+        let address = self.registers[3].wrapping_add(offset);
+        if add {
+            return Ok(Some(address));
+        }
+        if store {
+            self.store(bus, address, width, store_value, output)?;
+            return Ok(None);
+        }
+        let value = match width {
+            1 => self.load::<1>(bus, address)?,
+            2 => self.load::<2>(bus, address)?,
+            _ => self.load::<4>(bus, address)?,
+        };
+        Ok(Some(if signed {
+            sign(value, width as u32 * 8)
+        } else {
+            value
+        }))
+    }
+
+    fn uses_rv32e_registers(insn: u32) -> bool {
+        const RD_HIGH: u32 = 1 << 11;
+        const RS1_HIGH: u32 = 1 << 19;
+        const RS2_HIGH: u32 = 1 << 24;
+
+        let mask = match insn & 0x7f {
+            0x17 | 0x37 | 0x6f => RD_HIGH,
+            0x03 | 0x13 | 0x67 => RD_HIGH | RS1_HIGH,
+            0x23 | 0x63 => RS1_HIGH | RS2_HIGH,
+            0x2f | 0x33 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+            0x0b => {
+                if (insn >> 12) & 3 == 3 {
+                    RS2_HIGH
+                } else {
+                    RD_HIGH
+                }
+            }
+            0x2b => match (insn >> 12) & 7 {
+                0 | 4 => RS2_HIGH,
+                1 | 2 | 5 => RD_HIGH,
+                _ => 0,
+            },
+            0x5b => match (insn >> 12) & 7 {
+                0 => RD_HIGH | RS1_HIGH | RS2_HIGH,
+                2 | 3 => RD_HIGH | RS1_HIGH,
+                5..=7 => RS1_HIGH,
+                _ => 0,
+            },
+            0x73 => match (insn >> 12) & 7 {
+                1..=3 => RD_HIGH | RS1_HIGH,
+                5..=7 => RD_HIGH,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        insn & mask == 0
+    }
+
+    fn step(
+        &mut self,
+        bus: &mut Bus,
+        output: &mut impl Write,
+        symbols: Option<&BTreeMap<u32, String>>,
+    ) -> Result<Step, Fault> {
         let pc = self.pc;
         if self.csr.address_trigger_matches(pc, crate::pmp::EXECUTE) {
             return Err(Fault::Breakpoint(pc));
@@ -1409,12 +1824,30 @@ impl Hart {
         let (encoded, width) = self
             .fetch(bus)
             .map_err(|error| Fault::Bus(Access::Fetch, error))?;
+        if let Some(name) = symbols.and_then(|symbols| symbols.get(&pc)) {
+            eprintln!("Entering function {name} at 0x{pc:X}");
+        }
         let illegal = || Fault::Illegal(encoded);
         let insn = if width == 2 {
-            crate::compressed::expand(encoded).ok_or_else(illegal)?
+            let expanded =
+                crate::compressed::expand(encoded, self.bitmanip.zcb).ok_or_else(illegal)?;
+            if matches!(expanded & 0x7f, 0x07 | 0x27) {
+                let enabled = match (expanded >> 12) & 7 {
+                    2 => self.csr.compressed_single,
+                    3 => self.csr.compressed_double,
+                    _ => unreachable!(),
+                };
+                if !enabled {
+                    return Err(illegal());
+                }
+            }
+            expanded
         } else {
             encoded
         };
+        if self.csr.embedded_base && !Self::uses_rv32e_registers(insn) {
+            return Err(illegal());
+        }
         let rd = ((insn >> 7) & 31) as usize;
         let a = self.registers[((insn >> 15) & 31) as usize];
         let b = self.registers[((insn >> 20) & 31) as usize];
@@ -1424,7 +1857,21 @@ impl Hart {
         let fallthrough = pc.wrapping_add(width);
         let mut next = fallthrough;
 
+        // Fixed Renode exposes the compressed extensions even without scalar Zbb.
+        let bitmanip = BitManip {
+            zbb: self.bitmanip.zbb || (width == 2 && self.bitmanip.zcb),
+            ..self.bitmanip
+        };
         let result = match insn & 0x7f {
+            0x07 | 0x27 | 0x43 | 0x47 | 0x4b | 0x4f | 0x53 => self
+                .floating_instruction(insn, bus, output)
+                .map_err(|fault| {
+                    if matches!(fault, Fault::Illegal(_)) {
+                        illegal()
+                    } else {
+                        fault
+                    }
+                })?,
             0x37 => Some(insn & 0xffff_f000),
             0x17 => Some(pc.wrapping_add(insn & 0xffff_f000)),
             0x6f => {
@@ -1491,10 +1938,14 @@ impl Hart {
                 5 if funct7 == 0x20 => ((a as i32) >> (imm & 31)) as u32,
                 6 => a | imm,
                 7 => a & imm,
-                _ => return Err(illegal()),
+                _ => bitmanip
+                    .immediate(funct3, funct7, a, imm)
+                    .ok_or_else(illegal)?,
             }),
             0x33 => Some(match (funct3, funct7) {
-                (_, 1) if self.csr.m_extension => multiply_divide(funct3, a, b),
+                (_, 1) if self.csr.m_extension || (self.csr.zmmul && funct3 < 4) => {
+                    multiply_divide(funct3, a, b)
+                }
                 (5, 7) if self.zicond => {
                     if b == 0 {
                         0
@@ -1519,15 +1970,57 @@ impl Hart {
                 (5, 0x20) => ((a as i32) >> (b & 31)) as u32,
                 (6, 0) => a | b,
                 (7, 0) => a & b,
-                _ => return Err(illegal()),
+                _ => bitmanip
+                    .register(funct3, funct7, a, b, (insn >> 20) & 31)
+                    .ok_or_else(illegal)?,
             }),
-            0x2f if funct3 == 2 && self.csr.a_extension => {
+            0x2f if insn >> 27 == 5 && self.zacas => {
+                let rs2 = ((insn >> 20) & 31) as usize;
+                let width = match funct3 {
+                    0 | 1 if self.zabha => 1 << funct3,
+                    2 => 4,
+                    3 if (rd | rs2) & 1 == 0 => 8,
+                    _ => return Err(illegal()),
+                };
+                let operand = |reg| {
+                    if width == 8 && reg != 0 {
+                        u64::from(self.registers[reg]) | (u64::from(self.registers[reg + 1]) << 32)
+                    } else {
+                        u64::from(self.registers[reg])
+                    }
+                };
+                let (expected, replacement) = (operand(rd), operand(rs2));
+                let permissions = crate::pmp::READ | crate::pmp::WRITE;
+                if self.csr.address_trigger_matches(a, permissions) {
+                    return Err(Fault::Breakpoint(a));
+                }
+                let physical = self
+                    .translate(bus, a, width, permissions)
+                    .map_err(|error| Fault::Bus(Access::Store, error))?;
+                let previous = bus
+                    .atomic_compare_swap(physical, width, expected, replacement)
+                    .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a)))?;
+                if width == 8 && rd != 0 {
+                    self.registers[rd + 1] = (previous >> 32) as u32;
+                }
+                Some(sign(previous as u32, (width.min(4) * 8) as u32))
+            }
+            0x2f if funct3 == 2 || (self.zabha && funct3 < 2) => {
+                let width = 1 << funct3;
+                let operand_bits = width as u32 * 8;
+                let b = b & (u32::MAX >> (32 - operand_bits));
                 let operation = insn >> 27;
                 let rs2 = (insn >> 20) & 31;
                 let (access, permissions) = match operation {
-                    2 if rs2 == 0 => (Access::Load, crate::pmp::READ),
-                    3 => (Access::Store, crate::pmp::WRITE),
-                    0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => {
+                    2 if (self.csr.a_extension || self.zalrsc) && width == 4 && rs2 == 0 => {
+                        (Access::Load, crate::pmp::READ)
+                    }
+                    3 if (self.csr.a_extension || self.zalrsc) && width == 4 => {
+                        (Access::Store, crate::pmp::WRITE)
+                    }
+                    0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28
+                        if self.csr.a_extension || self.zaamo =>
+                    {
                         (Access::Store, crate::pmp::READ | crate::pmp::WRITE)
                     }
                     _ => return Err(illegal()),
@@ -1536,24 +2029,28 @@ impl Hart {
                     return Err(Fault::Breakpoint(a));
                 }
                 let physical = self
-                    .translate(bus, a, 4, permissions)
+                    .translate(bus, a, width, permissions)
                     .map_err(|error| Fault::Bus(access, error))?;
                 let value = match operation {
                     2 if rs2 == 0 => bus
-                        .load_reserved(self.csr.hart_id, physical)
+                        .load_reserved(self.slot, physical)
                         .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(a))),
                     3 => bus
-                        .store_conditional(self.csr.hart_id, physical, b)
+                        .store_conditional(self.slot, physical, b)
                         .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a))),
                     0 | 1 | 4 | 8 | 12 | 16 | 20 | 24 | 28 => bus
-                        .atomic_update(physical, |previous| match operation {
+                        .atomic_update(physical, width, |previous| match operation {
                             0 => previous.wrapping_add(b),
                             1 => b,
                             4 => previous ^ b,
                             8 => previous | b,
                             12 => previous & b,
-                            16 => (previous as i32).min(b as i32) as u32,
-                            20 => (previous as i32).max(b as i32) as u32,
+                            16 => (sign(previous, operand_bits) as i32)
+                                .min(sign(b, operand_bits) as i32)
+                                as u32,
+                            20 => (sign(previous, operand_bits) as i32)
+                                .max(sign(b, operand_bits) as i32)
+                                as u32,
                             24 => previous.min(b),
                             28 => previous.max(b),
                             _ => unreachable!(),
@@ -1561,12 +2058,48 @@ impl Hart {
                         .map_err(|error| Fault::Bus(Access::Store, error.at_virtual(a))),
                     _ => return Err(illegal()),
                 };
-                Some(value?)
+                Some(sign(value?, operand_bits))
             }
             // Every instruction fetch reads current RAM, so FENCE.I needs no invalidation.
             0x0f if funct3 <= 1 => None,
             // Renode VexRiscv accepts the custom whole-data-cache flush.
             0x0f if insn == 0x0000_500f && self.csr.vex => None,
+            0x0b | 0x2b if bitmanip.xandesperf => self.andes_gp_operation(insn, b, bus, output)?,
+            0x5b if bitmanip.xandesbfhcvt && insn & 0xfe0f_707f == 0x0001_405b => {
+                self.andes_bfloat_instruction(insn)?;
+                None
+            }
+            0x5b if funct3 == 0 => Some(bitmanip.andes_register(funct7, a, b).ok_or_else(illegal)?),
+            0x5b if bitmanip.xandesperf && matches!(funct3, 2 | 3) && insn & 0x8200_0000 == 0 => {
+                Some(BitManip::andes_bit_field(insn, a, funct3 == 3))
+            }
+            0x5b if bitmanip.xandesperf && matches!(funct3, 5..=7) => {
+                let immediate = (insn >> 20) & 31;
+                let bit30 = (insn >> 30) & 1;
+                let bit7 = (insn >> 7) & 1;
+                let taken = if funct3 == 7 {
+                    if bit7 != 0 {
+                        return Err(illegal());
+                    }
+                    ((a >> immediate) & 1) == bit30
+                } else {
+                    let constant = (bit30 << 6) | (bit7 << 5) | immediate;
+                    (a == constant) == (funct3 == 5)
+                };
+                if taken {
+                    let offset =
+                        ((insn >> 31) << 10) | ((insn >> 20) & 0x3e0) | ((insn >> 7) & 0x1e);
+                    next = pc.wrapping_add(sign(offset, 11));
+                }
+                None
+            }
+            0x57 if !self.csr.vector_configured() => {
+                eprintln!(
+                    "PC: 0x{pc:x}, opcode: 0x{encoded:08x}, RISC-V 'V' instruction set is not enabled for this CPU!"
+                );
+                return Err(illegal());
+            }
+            0x57 if funct3 == 7 => Some(self.csr.configure_vector(insn, a, b).ok_or_else(illegal)?),
             0x73 if insn == 0x0000_0073 => {
                 return Ok(self.environment_trap(self.csr.ecall_cause(), Stop::Ecall));
             }
@@ -1589,7 +2122,13 @@ impl Hart {
                     .csr
                     .access(insn, a)
                     .map_err(|error| Fault::InvalidCsr(insn, error))?;
-                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3af | 0x3b0..=0x3ef) {
+                if insn >> 20 == crate::andes_csr::MMISC_CTL
+                    && (funct3 & 3 == 1 || (insn >> 15) & 31 != 0)
+                    && let Some(andes) = self.csr.andes.as_ref()
+                {
+                    self.unaligned_accesses = andes.unaligned_accesses();
+                }
+                if matches!(insn >> 20, 0x180 | 0x3a0..=0x3ef | 0x747) {
                     self.translations.clear();
                 }
                 Some(value)
@@ -1679,6 +2218,254 @@ mod tests {
         }
         assert_eq!(machine.bus.read::<4>(CSR).unwrap(), 4);
         assert_eq!(machine.bus.read_ram::<4>(0x80).unwrap(), 0xdead_beef);
+}
+
+    fn upstream_rv32_writes_invalidate_other_harts_reservations() {
+        // riscv-lr-sc-strong-atomicity.robot runs only the two selected RV32 harts.
+        let directory =
+            std::env::temp_dir().join(format!("penv-rv32-lr-sc-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"dram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x80000000 }
+mmio: Memory.ArrayMemory @ sysbus 0x100000 { size: 0x10000 }
+cpu32_0: CPU.RiscV32 @ sysbus
+    cpuType: "rv32gc_zicsr_zifencei"
+    hartId: 2
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+    timeProvider: empty
+    allowUnalignedAccesses: true
+cpu32_1: CPU.RiscV32 @ sysbus
+    cpuType: "rv32gc_zicsr_zifencei"
+    hartId: 3
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+    timeProvider: empty
+    allowUnalignedAccesses: true
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None, false).unwrap();
+        const CORE0: u32 = 0x8000_0000;
+        const CORE1: u32 = 0x8000_0100;
+        const NEW: u32 = 0xbeee_eeef;
+        let mut output = std::io::sink();
+        for address in [0x8100_0000, 0x0010_0000] {
+            for (name, writer) in [
+                ("lr.w/sc.w", &[0x1005_282fu32, 0x18e5_292f][..]),
+                ("amoswap.w", &[0x08e5_292f]),
+                ("amoadd.w", &[0x0005_272f]),
+                ("sb", &[0x00e5_0023]),
+                ("sh", &[0x00e5_1023]),
+                ("sw", &[0x00e5_2023]),
+            ] {
+                machine.monitor_pc("cpu32_0", Some(CORE0)).unwrap();
+                machine.monitor_pc("cpu32_1", Some(CORE1)).unwrap();
+                machine
+                    .bus
+                    .memory(address, 8)
+                    .unwrap()
+                    .copy_from_slice(&5u64.to_le_bytes());
+                for slot in 0..2 {
+                    let hart = machine.hart_mut(slot);
+                    hart.registers[10] = address;
+                    hart.registers[12] = NEW;
+                    hart.registers[14] = 5;
+                }
+                for (pc, code) in [(CORE0, &[0x1005_25afu32, 0x18c5_26af][..]), (CORE1, writer)] {
+                    for (index, instruction) in code.iter().enumerate() {
+                        machine
+                            .bus
+                            .memory(pc + index as u32 * 4, 4)
+                            .unwrap()
+                            .copy_from_slice(&instruction.to_le_bytes());
+                    }
+                }
+                let mut step = |slot| {
+                    machine.elapsed_steps += 1;
+                    assert!(matches!(
+                        machine.execute_hart(slot, &mut output).unwrap(),
+                        Step::Retired
+                    ));
+                };
+                step(0);
+                for _ in writer {
+                    step(1);
+                }
+                step(0);
+
+                let lower = machine.bus.read_ram::<4>(address).unwrap();
+                let upper = machine.bus.read_ram::<4>(address + 4).unwrap();
+                assert_ne!(
+                    u64::from(lower) | (u64::from(upper) << 32),
+                    u64::from(NEW),
+                    "{name} {address:#x}"
+                );
+                assert_eq!(machine.primary.registers[13], 1, "{name} {address:#x}");
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upstream_rv32_amocas_single_page() {
+        // Renode riscv-amocas.robot selects only cpu32 for these single-step cases.
+        let directory =
+            std::env::temp_dir().join(format!("penv-rv32-amocas-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"cpu32: CPU.RiscV32 @ sysbus
+    cpuType: "rv32gc_zicsr_zifencei_zacas"
+    hartId: 2
+    privilegedArchitecture: PrivilegedArchitecture.Priv1_10
+    timeProvider: empty
+    allowUnalignedAccesses: true
+dram: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x80000000
+mtvec: Memory.MappedMemory @ sysbus 0x1000
+    size: 0x40000
+"#,
+        )
+        .unwrap();
+        const DATA: u32 = RAM_BASE + 0x1000;
+        const OLD: u64 = 0x1afe_dead_beef_d00d;
+        const NEW: u64 = 0xbeef_f00d_babe_dead;
+        const ADJACENT: u64 = 0x2bad_c000_10ff_b0ba;
+        for (width, rd, rs2, old, expected, new, result, illegal) in [
+            (
+                4,
+                10,
+                18,
+                OLD,
+                OLD & 0xffff_ffff,
+                0xbeef_babe,
+                (OLD & !0xffff_ffff) | 0xbeef_babe,
+                false,
+            ),
+            (4, 10, 18, OLD, 0x1234, 0xbeef_babe, OLD, false),
+            (8, 10, 18, OLD, OLD, NEW, NEW, false),
+            (8, 10, 0, OLD, OLD, 0, 0, false),
+            (8, 0, 18, 0, 0, NEW, NEW, false),
+            (8, 10, 18, OLD, 0x1_2345_6789_1011, NEW, OLD, false),
+            (8, 11, 19, OLD, OLD, NEW, OLD, true),
+        ] {
+            let mut machine = crate::platform::load(&repl, None, false).unwrap();
+            assert_eq!(machine.primary.csr.access(0xf140_2073, 0).unwrap(), 2);
+            machine.set_entry(RAM_BASE);
+            let opcode = 0x2800_002fu32
+                | (rs2 as u32) << 20
+                | 13 << 15
+                | (if width == 4 { 2 } else { 3 }) << 12
+                | (rd as u32) << 7;
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+            machine
+                .bus
+                .memory(DATA, 8)
+                .unwrap()
+                .copy_from_slice(&old.to_le_bytes());
+            machine
+                .bus
+                .memory(DATA + 8, 8)
+                .unwrap()
+                .copy_from_slice(&ADJACENT.to_le_bytes());
+            let registers = &mut machine.primary.registers;
+            if rd == 0 || rs2 == 0 {
+                registers[1] = 0x1234;
+            }
+            for (register, value) in [(rd, expected), (rs2, new)] {
+                if register != 0 {
+                    registers[register] = value as u32;
+                    if width == 8 {
+                        registers[register + 1] = (value >> 32) as u32;
+                    }
+                }
+            }
+            registers[13] = DATA;
+            let before = *registers;
+            machine.run(1, &mut std::io::sink()).unwrap();
+            let read = |address| machine.bus.read_ram::<4>(address).unwrap();
+            assert_eq!(
+                u64::from(read(DATA)) | u64::from(read(DATA + 4)) << 32,
+                result
+            );
+            assert_eq!(
+                u64::from(read(DATA + 8)) | u64::from(read(DATA + 12)) << 32,
+                ADJACENT
+            );
+            let mut after = before;
+            if illegal {
+                let csr = &mut machine.primary.csr;
+                assert_eq!(machine.primary.pc, 0x1010);
+                assert_eq!(csr.access(0x3420_2073, 0).unwrap(), 2);
+                assert_eq!(csr.access(0x3430_2073, 0).unwrap(), opcode);
+                assert_eq!(csr.access(0x3410_2073, 0).unwrap(), RAM_BASE);
+            } else {
+                assert_eq!(machine.primary.pc, RAM_BASE + 4);
+                if rd != 0 {
+                    after[rd] = old as u32;
+                    if width == 8 {
+                        after[rd + 1] = (old >> 32) as u32;
+                    }
+                }
+            }
+            assert_eq!(machine.primary.registers, after, "{opcode:#010x}");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rv32_amocas_double_handles_register_pairs_and_faults() {
+        let data = RAM_BASE + 16;
+        for (rd, rs2, enabled, address, initial, expected, cause) in [
+            (4, 6, true, data, 3, 5, None),
+            (4, 6, true, data, 7, 7, None),
+            (0, 6, true, data, 0, 5, None),
+            (4, 0, true, data, 3, 0, None),
+            (5, 6, true, data, 3, 3, Some(2)),
+            (4, 7, true, data, 3, 3, Some(2)),
+            (4, 6, false, data, 3, 3, Some(2)),
+            (4, 6, true, data + 4, 3, 3, Some(6)),
+        ] {
+            let mut machine = Machine::new(32).unwrap();
+            machine.primary.set_zacas(enabled);
+            machine.primary.set_mtvec(RAM_BASE + 4);
+            // aqrl, rs1=x2, funct3=3 (doubleword).
+            let instruction = 0x2e01_302fu32 | ((rs2 as u32) << 20) | ((rd as u32) << 7);
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&instruction.to_le_bytes());
+            let pair = |value: u32| u64::from(value) * 0x1_0000_0001;
+            machine
+                .bus
+                .memory(data, 8)
+                .unwrap()
+                .copy_from_slice(&pair(initial).to_le_bytes());
+            machine.primary.registers[1] = 42;
+            machine.primary.registers[2] = address;
+            machine.primary.registers[4..8].copy_from_slice(&[3, 3, 5, 5]);
+            let (_, retired) = machine.run(1, &mut std::io::sink()).unwrap();
+            assert_eq!(machine.bus.read_ram::<4>(data).unwrap(), expected);
+            assert_eq!(machine.bus.read_ram::<4>(data + 4).unwrap(), expected);
+            assert_eq!(machine.primary.registers[1], 42);
+            if let Some(cause) = cause {
+                assert_eq!(retired, 0);
+                assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), cause);
+                assert_eq!(&machine.primary.registers[4..6], &[3, 3]);
+            } else {
+                assert_eq!(retired, 1);
+                if rd != 0 {
+                    assert_eq!(&machine.primary.registers[rd..rd + 2], &[initial, initial]);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1817,6 +2604,368 @@ mod tests {
             machine.primary.registers[6],
             (3 << 11) | (1 << 7) | (1 << 3)
         );
+    }
+
+    #[test]
+    fn upstream_rv32_andes_bfloat_flen32_raw_boxing() {
+        for (instruction, source, expected) in [
+            (0x0011_42dbu32, 0xffff_3f80, 0xffff_ffff_3f80_0000),
+            (0x0011_42db, 0xfffe_7f81, 0xffff_ffff_7fc0_0000),
+            (0x0011_c2db, 0x3f80_0000, 0xffff_ffff_ffff_3f80),
+        ] {
+            let mut machine = Machine::new(4).unwrap();
+            machine.primary.enable_floating(false, false);
+            machine.primary.set_bitmanip(BitManip {
+                xandesbfhcvt: true,
+                ..BitManip::default()
+            });
+            machine.primary.set_mstatus(0x2000);
+            machine.primary.floating.as_mut().unwrap()[1] = source;
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&instruction.to_le_bytes());
+            assert_eq!(
+                machine.run(1, &mut std::io::sink()).unwrap(),
+                (Stop::Limit, 1)
+            );
+            assert_eq!(machine.primary.pc, RAM_BASE + 4);
+            assert_eq!(machine.primary.floating.as_ref().unwrap()[5], expected);
+            assert_eq!(machine.primary.csr.fcsr & 31, 0);
+        }
+    }
+
+    #[test]
+    fn upstream_rv32_andes_self_branches_preserve_a0() {
+        for (opcode, a0) in [(0x0005_705bu32, 0), (0x4005_705b, 1)] {
+            let mut machine = Machine::new(4).unwrap();
+            machine.primary.set_bitmanip(BitManip {
+                xandesperf: true,
+                ..BitManip::default()
+            });
+            machine.primary.registers[10] = a0;
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+            assert_eq!(
+                machine.run(1, &mut std::io::sink()).unwrap(),
+                (Stop::Limit, 1)
+            );
+            assert_eq!(machine.primary.pc, RAM_BASE);
+            assert_eq!(machine.primary.registers[10], a0);
+        }
+    }
+
+    #[test]
+    fn upstream_rv32_rori() {
+        // Renode riscv-zbb-extension.robot: Should Handle RORI Properly on 32 Bit CPU.
+        let directory = std::env::temp_dir().join(format!("penv-rv32-rori-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"cpu: CPU.RiscV32 @ sysbus { cpuType: "rv32imac_zicsr_zba_zbb"; timeProvider: empty }
+mem: Memory.MappedMemory @ sysbus 0x0 { size: 0x1000 }
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None, false).unwrap();
+        machine.monitor_pc("cpu", Some(0)).unwrap();
+        for (address, opcode) in [(0, 0x4505u16), (2, 0x0505)] {
+            machine
+                .bus
+                .memory(address, 2)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+        }
+        for address in [4, 8] {
+            machine
+                .bus
+                .memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&0x6015_5513u32.to_le_bytes());
+        }
+        let mut output = std::io::sink();
+        for (pc, expected) in [(2, 1), (4, 2), (8, 1), (12, 0x8000_0000)] {
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+            assert_eq!(machine.primary.pc, pc);
+            assert_eq!(
+                machine.primary.monitor_integer_register(10, None).unwrap(),
+                Some(expected)
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upstream_rv32_zbkb() {
+        // Renode riscv-bkb.robot: exact RV32 input, result and non-trap checks.
+        let directory = std::env::temp_dir().join(format!("penv-rv32-zbkb-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"cpu: CPU.RiscV32 @ sysbus { cpuType: "rv32gc_zbkb"; timeProvider: empty }
+dram: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x80000000 }
+mtvec: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None, false).unwrap();
+        for (opcode, rd, inputs) in [
+            (
+                0x08b5_4633u32,
+                12,
+                &[(0xffff_beef, 0xffff_dead, 0xdead_beef)][..],
+            ),
+            (0x08b5_7633, 12, &[(0xffff_ffcd, 0xffff_ffab, 0xabcd)]),
+            (
+                0x08f5_1593,
+                11,
+                &[
+                    (u32::MAX, 0, u32::MAX),
+                    (0xffff, 0, 0x5555_5555),
+                    (0xffff_0000, 0, 0xaaaa_aaaa),
+                    (0xdead_beef, 0, 0xe7fc_dcf7),
+                ],
+            ),
+            (
+                0x08f5_5593,
+                11,
+                &[
+                    (u32::MAX, 0, u32::MAX),
+                    (0x5555_5555, 0, 0xffff),
+                    (0xaaaa_aaaa, 0, 0xffff_0000),
+                ],
+            ),
+            (
+                0x6875_5593,
+                11,
+                &[(u32::MAX, 0, u32::MAX), (0xdead_beaf, 0, 0x7bb5_7df5)],
+            ),
+        ] {
+            machine.set_entry(RAM_BASE);
+            for &(a, b, expected) in inputs {
+                let pc = machine.primary.pc;
+                machine.primary.registers[10] = a;
+                machine.primary.registers[11] = b;
+                machine
+                    .bus
+                    .memory(pc, 4)
+                    .unwrap()
+                    .copy_from_slice(&opcode.to_le_bytes());
+                assert_eq!(
+                    machine.run(1, &mut std::io::sink()).unwrap(),
+                    (Stop::Limit, 1)
+                );
+                assert_ne!(machine.primary.pc, 0x1010);
+                assert_eq!(
+                    machine.primary.registers[rd], expected,
+                    "{opcode:#010x}, a0={a:#010x}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upstream_rv32_monitor_rejects_writes_to_x0() {
+        let directory = std::env::temp_dir().join(format!("penv-rv32-x0-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }
+cpu: CPU.RiscV32 @ sysbus { timeProvider: clint; cpuType: "rv32gc_Zfh" }
+mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        let mut machine = crate::platform::load(&repl, None, false).unwrap();
+        machine.set_entry(0x2000);
+        let hart = &mut machine.primary;
+        let error = hart.monitor_integer_register(0, Some(1)).unwrap_err();
+        assert!(error.contains("register is read-only"), "{error}");
+        assert_eq!(hart.monitor_integer_register(0, None).unwrap(), Some(0));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upstream_rv32_unit_data_accesses() {
+        // Renode riscv-unit-tests.robot: RV32 LB/LH/LW/SB/SH/SW cases.
+        let directory = std::env::temp_dir().join(format!("penv-rv32-data-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }
+cpu: CPU.RiscV32 @ sysbus { timeProvider: clint; cpuType: "rv32gc_Zfh" }
+mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        for (name, opcode, a1, cause) in [
+            ("Should Handle LB", 0x0055_8503u32, 0, None),
+            ("Should Handle LH", 0x0055_9503, 1, None),
+            ("Should Fail LH", 0x0055_9503, 0, Some(4)),
+            ("Should Handle LW", 0x0055_a503, 3, None),
+            ("Should Fail LW", 0x0055_a503, 0, Some(4)),
+            ("Should Handle SB", 0x00a5_82a3, 0, None),
+            ("Should Handle SH", 0x00a5_92a3, 1, None),
+            ("Should Fail SH", 0x00a5_92a3, 0, Some(6)),
+            ("Should Handle SW", 0x00a5_a2a3, 3, None),
+            ("Should Fail SW", 0x00a5_a2a3, 0, Some(6)),
+        ] {
+            let mut machine = crate::platform::load(&repl, None, false).unwrap();
+            machine.set_entry(0x2000);
+            machine.primary.registers[11] = a1;
+            machine
+                .bus
+                .memory(0x2000, 4)
+                .unwrap()
+                .copy_from_slice(&opcode.to_le_bytes());
+            machine.run(1, &mut std::io::sink()).unwrap();
+            let expected_pc = if cause.is_some() { 0x1010 } else { 0x2004 };
+            assert_eq!(machine.primary.pc, expected_pc, "{name}");
+            if let Some(cause) = cause {
+                assert_eq!(
+                    machine.primary.csr.access(0x3420_2073, 0).unwrap(),
+                    cause,
+                    "{name}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upstream_rv32_unit_traps_and_sret() {
+        // Renode riscv-unit-tests.robot: three MEPC cases, EBREAK/ECALL,
+        // and SRET executed in machine mode.
+        let directory =
+            std::env::temp_dir().join(format!("penv-rv32-traps-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        std::fs::write(
+            &repl,
+            r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 { frequency: 66000000 }
+cpu: CPU.RiscV32 @ sysbus { timeProvider: clint; cpuType: "rv32gc_Zfh" }
+mem: Memory.MappedMemory @ sysbus 0x1000 { size: 0x40000 }
+"#,
+        )
+        .unwrap();
+        let write_word = |machine: &mut Machine, address, word: u32| {
+            machine
+                .bus
+                .memory(address, 4)
+                .unwrap()
+                .copy_from_slice(&word.to_le_bytes());
+        };
+        let mut output = std::io::sink();
+        for (name, word) in [
+            ("Should Set MEPC on Illegal Instruction", 0x0000_8000),
+            ("Should Set MEPC on Illegal CSR access", 0xf120_d073),
+            ("Should Set MEPC on Non-Existing CSR access", 0xfff0_d073),
+            ("Should Allow SRET In Machine Mode", 0x1020_0073),
+        ] {
+            let mut machine = crate::platform::load(&repl, None, false).unwrap();
+            machine.set_entry(0x2000);
+            write_word(&mut machine, 0x1010, 0x0000_006f); // j .
+            write_word(&mut machine, 0x2000, 0x0000_206f); // j 0x4000
+            write_word(&mut machine, 0x4000, 0x0000_0013); // nop
+            write_word(&mut machine, 0x4004, word);
+            if word == 0x1020_0073 {
+                machine.primary.csr.access(0x1410_9073, 0x1234).unwrap();
+                machine.run(3, &mut output).unwrap();
+                assert_eq!(machine.primary.pc, 0x1234, "{name}");
+            } else {
+                // penv always validates CSR accesses, as in the upstream Full mode.
+                machine.run(3, &mut output).unwrap();
+                assert_eq!(machine.primary.pc, 0x1010, "{name}");
+                let csr = &mut machine.primary.csr;
+                assert_eq!(csr.access(0x3420_2073, 0).unwrap(), 2, "{name}");
+                assert_eq!(csr.access(0x3430_2073, 0).unwrap(), word, "{name}");
+                assert_eq!(csr.access(0x3410_2073, 0).unwrap(), 0x4004, "{name}");
+            }
+        }
+
+        let mut machine = crate::platform::load(&repl, None, false).unwrap();
+        machine.primary.set_mtvec(0x1010);
+        write_word(&mut machine, 0x1010, 0x0000_006f); // j .
+        write_word(&mut machine, 0x2000, 0x0010_0073); // ebreak
+        write_word(&mut machine, 0x2004, 0x0000_0073); // ecall
+        for (address, cause) in [(0x2000, 3), (0x2004, 11)] {
+            machine.set_entry(address);
+            machine.primary.csr.access(0x3430_9073, 0x1234).unwrap();
+            machine.run(1, &mut output).unwrap();
+            assert_eq!(machine.primary.pc, 0x1010);
+            assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), cause);
+            assert_eq!(machine.primary.csr.access(0x3430_2073, 0).unwrap(), 0);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upstream_rv32_mret_restores_pc_and_sets_mpp_to_lowest_privilege() {
+        // Renode riscv-mret.robot: User Level [Does Not] Exist[s] 32Bits.
+        const START: u32 = 0x2000;
+        const TRAP: u32 = 0x4000;
+        const CLINT: u32 = 0x4400_0000;
+        let directory = std::env::temp_dir().join(format!("penv-rv32-mret-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let repl = directory.join("cpu.repl");
+        for (levels, lowest) in [("MachineUser", 0), ("Machine", 3)] {
+            std::fs::write(
+                &repl,
+                format!(
+                    r#"clint: IRQControllers.CoreLevelInterruptor @ sysbus 0x44000000 {{ frequency: 66000000 }}
+cpu: CPU.RiscV32 @ sysbus {{ timeProvider: clint; cpuType: "rv32gc"; privilegeLevels: PrivilegeLevels.{levels}; interruptMode: 1 }}
+mem: Memory.MappedMemory @ sysbus 0x1000 {{ size: 0x40000 }}
+"#
+                ),
+            )
+            .unwrap();
+            let mut machine = crate::platform::load(&repl, None, false).unwrap();
+            machine.set_entry(START);
+            machine.primary.set_mtvec(TRAP);
+            for (address, word) in [(START, 0xc000_1073u32), (TRAP, 0x3020_0073)] {
+                machine
+                    .bus
+                    .memory(address, 4)
+                    .unwrap()
+                    .copy_from_slice(&word.to_le_bytes());
+            }
+
+            let mut output = std::io::sink();
+            machine.run(1, &mut output).unwrap();
+            assert_eq!(machine.primary.pc, TRAP, "{levels}");
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                3,
+                "{levels}"
+            );
+
+            machine.run(1, &mut output).unwrap();
+            assert_eq!(machine.primary.pc, START, "{levels}");
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                lowest,
+                "{levels}"
+            );
+
+            // The fixture supplies time and MMIO without wiring interrupt outputs.
+            let clint = machine.bus.clint.as_mut().unwrap();
+            assert_eq!(clint.time(), 1);
+            clint.write(CLINT, 1);
+            clint.write(CLINT + 0x4000, 0);
+            clint.write(CLINT + 0x4004, 0);
+            assert_eq!(clint.tick(0), 0);
+            assert_eq!(clint.read(CLINT), 1);
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1965,6 +3114,94 @@ mod tests {
         );
     }
 
+    // Fixed words, registers and CLINT frequency from timer-reconfiguration.robot.
+    // The final self-loop is diagnostic padding for penv's fixed 100 MHz rate.
+    fn upstream_timer_reconfiguration(compare: u32, windows: &[u64]) {
+        const START: u32 = 0x1000;
+        const CLINT: u32 = 0x0200_0000;
+        const NOP: u32 = 0x0000_0013;
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(START, 0x1000000).unwrap();
+        machine
+            .bus
+            .map_clint_with_frequency(CLINT, 1, 1_000_000)
+            .unwrap();
+        machine.set_entry(START);
+        machine.primary.registers[1] = CLINT + 0x4000;
+        machine.primary.registers[2] = compare;
+        machine.primary.registers[3] = CLINT + 0x4004;
+        let program = [
+            NOP,
+            NOP,
+            0x0020_a023,
+            0x0001_a023,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            NOP,
+            0x0000_006f,
+        ];
+        machine
+            .bus
+            .memory(START, program.len() * 4)
+            .unwrap()
+            .copy_from_slice(program.map(u32::to_le_bytes).as_flattened());
+
+        let mut output = std::io::sink();
+        let mut steps = 0;
+        for &window in windows {
+            assert_eq!(
+                machine.run(window, &mut output).unwrap(),
+                (Stop::Limit, window)
+            );
+            steps += window;
+            assert_eq!(machine.primary.pc, START + 4 * steps as u32);
+            assert_eq!(machine.bus.read::<4>(CLINT + 0x4000).unwrap(), compare);
+            assert_eq!(machine.bus.read::<4>(CLINT + 0x4004).unwrap(), 0);
+            assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), 0);
+            assert_eq!(
+                machine.primary.csr.access(0x3440_2073, 0).unwrap() & crate::clint::TIMER,
+                0
+            );
+        }
+
+        let steps_until_irq = u64::from(compare) * 100 - steps;
+        assert_eq!(
+            machine.run(steps_until_irq - 1, &mut output).unwrap(),
+            (Stop::Limit, steps_until_irq - 1)
+        );
+        assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), compare - 1);
+        assert_eq!(
+            machine.primary.csr.access(0x3440_2073, 0).unwrap() & crate::clint::TIMER,
+            0
+        );
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), compare);
+        assert_eq!(
+            machine.primary.csr.access(0x3440_2073, 0).unwrap() & crate::clint::TIMER,
+            crate::clint::TIMER
+        );
+    }
+
+    #[test]
+    fn upstream_timer_reconfiguration_between_chained_blocks() {
+        upstream_timer_reconfiguration(5, &[12]);
+    }
+
+    #[test]
+    fn upstream_timer_reconfiguration_in_the_same_block() {
+        upstream_timer_reconfiguration(6, &[8]);
+    }
+
+    #[test]
+    fn upstream_timer_reconfiguration_at_exact_time() {
+        upstream_timer_reconfiguration(6, &[5, 1]);
+    }
+
     #[test]
     fn virt_ns16550_receive_interrupt_routes_through_plic() {
         // Device addresses and source ID from Renode platforms/cpus/riscv_virt.repl.
@@ -1975,7 +3212,7 @@ mod tests {
         let mut machine = Machine::without_default_ram();
         machine.bus.map_ram(RAM_BASE, 8).unwrap();
         machine.bus.map_plic(PLIC, 52, &[EXTERNAL], true).unwrap();
-        machine.bus.map_ns16550(UART, 3, false).unwrap();
+        machine.bus.map_ns16550(UART, Some(3), false).unwrap();
         machine.primary.set_mtvec(HANDLER);
         machine.primary.csr.access(0x3040_9073, EXTERNAL).unwrap();
         machine.primary.csr.access(0x3000_9073, 1 << 3).unwrap();
@@ -2159,6 +3396,19 @@ mod tests {
         machine.run(1, &mut output).unwrap();
         assert_eq!(machine.primary.registers[4], 1);
         assert_eq!(machine.bus.read_ram::<4>(RAM_BASE + 32).unwrap(), 0x10e);
+
+        // A guest byte store preserves the reservation held by its own hart.
+        machine.primary.pc = RAM_BASE;
+        machine.run(1, &mut output).unwrap();
+        assert!(
+            machine
+                .primary
+                .store(&mut machine.bus, RAM_BASE + 33, 1, 2, &mut output)
+                .is_ok()
+        );
+        machine.run(1, &mut output).unwrap();
+        assert_eq!(machine.primary.registers[4], 0);
+        assert_eq!(machine.bus.read_ram::<4>(RAM_BASE + 32).unwrap(), 7);
     }
 
     #[test]
@@ -2219,6 +3469,59 @@ mod tests {
                 machine.primary.csr.access(0x3000_2073, 0).unwrap() & (3 << 11),
                 0
             );
+        }
+    }
+
+    #[test]
+    fn renode_pmp_napot_and_unmatched_user_fetch() {
+        // Renode tests/unit-tests/pmp.robot: fixed PC, MEPC, MTVEC and NAPOT inputs.
+        const USER: u32 = 0x8000_1000;
+        const DATA: u32 = 0x8000_2000;
+        const TRAP: u32 = 0x8008_0000;
+        for (pmp, napot) in [(true, true), (true, false), (false, false)] {
+            let mut machine = Machine::new(0x81000).unwrap();
+            machine.primary.enable_user_mode();
+            if pmp {
+                machine.primary.enable_pmp(16);
+            }
+            machine.primary.set_mtvec(TRAP);
+            let csr = &mut machine.primary.csr;
+            csr.access(0x3410_9073, USER).unwrap();
+            if napot {
+                csr.access(0x3b00_9073, 0x7fff_ffff).unwrap();
+                csr.access(0x3a00_9073, 31).unwrap();
+            }
+            csr.access(0x3000_9073, 0).unwrap();
+            machine
+                .bus
+                .memory(RAM_BASE, 4)
+                .unwrap()
+                .copy_from_slice(&0x3020_0073u32.to_le_bytes()); // mret
+            machine.bus.memory(USER, 16).unwrap().copy_from_slice(
+                &[0x0000_0013u32, 0x8000_2437, 0x0004_2483, 0x0094_2223]
+                    .map(u32::to_le_bytes)
+                    .concat(),
+            ); // nop; lui s0, 0x80002; lw s1, 0(s0); sw s1, 4(s0)
+            machine
+                .bus
+                .memory(DATA, 4)
+                .unwrap()
+                .copy_from_slice(&0x65657au32.to_le_bytes());
+            let (_, retired) = machine
+                .run(if napot { 5 } else { 2 }, &mut std::io::sink())
+                .unwrap();
+            if napot {
+                assert_eq!(retired, 5);
+                assert_eq!(machine.bus.read_ram::<4>(DATA + 4).unwrap(), 0x65657a);
+            } else if pmp {
+                assert_eq!(retired, 1);
+                assert_eq!(machine.primary.pc, TRAP);
+                assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 1);
+                assert_eq!(machine.primary.csr.access(0x3410_2073, 0).unwrap(), USER);
+            } else {
+                assert_eq!(retired, 2);
+                assert_eq!(machine.primary.pc, USER + 4);
+            }
         }
     }
 

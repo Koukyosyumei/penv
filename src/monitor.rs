@@ -1,3 +1,5 @@
+use crate::csr::TrapVector;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -24,6 +26,8 @@ pub struct Boot {
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
+    pub mtvec: Option<u32>,
+    pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
     pub serial_analyzer: Option<String>,
     pub image: Option<Asset>,
@@ -31,7 +35,8 @@ pub struct Boot {
     pub vector_tables: Vec<(String, u32)>,
     pub runtime: Vec<RuntimeCommand>,
     pub use_virtual_elf_addresses: bool,
-    pub mtvec: Option<u32>,
+    pub log_function_names: bool,
+    pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
     pub mpfs_buttons: Vec<(String, String, bool)>,
@@ -361,6 +366,20 @@ fn wait_for_uart(
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CpuRegisterCommand {
+    TrapVector(TrapVector, Option<u32>),
+    Integer(u32, Option<u32>),
+    ExternalPmp(String, bool, u32, Option<u32>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CpuControl {
+    Pc(String, Option<u32>),
+    ResetVector(u32),
+    Reset,
+}
+
 pub enum PostRun {
     Echo(String),
     DisposePcm(String),
@@ -537,7 +556,9 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
         || (boot.image.is_none()
             && boot.binaries.is_empty()
             && !is_static_memory_script(&boot.runtime)
-            && !boot.is_sd_setup_only())
+            && !boot.is_sd_setup_only()            && boot.cpu_control.is_empty()
+            && boot.cpu_registers.is_empty())
+
     {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
@@ -1103,14 +1124,80 @@ fn execute(
         ["emulation", "SetGlobalSerialExecution", "True"] => {
             // The interpreter already executes harts serially.
         }
-        [cpu, "PC", value] if boot.platform.is_some() => {
-            boot.boot_pcs.push((
+        [cpu, "PC", arguments @ ..] if boot.platform.is_some() && arguments.len() <= 1 => {
+            let value = arguments
+                .first()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?;
+            boot.cpu_control.push(CpuControl::Pc(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
-                crate::parse_address(resolve(value)?)?,
+                value,
             ));
         }
-        ["cpu" | "sysbus.cpu", "MTVEC", value] if boot.platform.is_some() => {
-            boot.mtvec = Some(crate::parse_address(resolve(value)?)?);
+        ["cpu" | "sysbus.cpu", "ResetVector", value] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::ResetVector(crate::parse_address(resolve(
+                    value,
+                )?)?));
+        }
+        ["cpu" | "sysbus.cpu", "Reset"] if boot.platform.is_some() => {
+            boot.cpu_control.push(CpuControl::Reset);
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            register @ ("MTVEC" | "STVEC"),
+            arguments @ ..,
+        ] if boot.platform.is_some() && arguments.len() <= 1 => {
+            let register = if *register == "MTVEC" {
+                TrapVector::Machine
+            } else {
+                TrapVector::Supervisor
+            };
+            let value = arguments
+                .first()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?;
+            boot.cpu_registers
+                .push(CpuRegisterCommand::TrapVector(register, value));
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            "LogFunctionNames",
+            value @ ("true" | "false"),
+        ] if boot.platform.is_some() => {
+            boot.log_function_names = *value == "true";
+        }
+        [
+            device,
+            command @ ("ConfigCSRRead" | "AddressCSRRead" | "ConfigCSRWrite" | "AddressCSRWrite"),
+            index,
+            arguments @ ..,
+        ] if boot.platform.is_some()
+            && arguments.len() == usize::from(command.ends_with("Write")) =>
+        {
+            let path = device.strip_prefix("sysbus.").unwrap_or(device);
+            let index = crate::parse_address(resolve(index)?)?;
+            let value = arguments
+                .first()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?;
+            boot.cpu_registers.push(CpuRegisterCommand::ExternalPmp(
+                path.into(),
+                command.starts_with("Config"),
+                index,
+                value,
+            ));
+        }
+        ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.platform.is_some() => {
+            let index = crate::parse_address(unquote(resolve(index)?))?;
+            boot.cpu_registers
+                .push(CpuRegisterCommand::Integer(index, None));
+        }
+        ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.platform.is_some() => {
+            let index = crate::parse_address(unquote(resolve(index)?))?;
+            let value = crate::parse_address(resolve(value)?)?;
+            boot.cpu_registers
+                .push(CpuRegisterCommand::Integer(index, Some(value)));
         }
         ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
@@ -1614,7 +1701,10 @@ sysbus LoadELF @hss.elf
         }
         assert_eq!(boot.binaries.len(), 1);
         assert_eq!(boot.binaries[0].1, 0x4000_0000);
-        assert_eq!(boot.boot_pcs, [("cpu_1".into(), 0x4000_0004)]);
+        assert_eq!(
+            boot.cpu_control,
+            [CpuControl::Pc("cpu_1".into(), Some(0x4000_0004))]
+        );
         assert_eq!(
             boot.binaries[0]
                 .0
@@ -1694,7 +1784,13 @@ sysbus LoadELF @hss.elf
             boot.image.as_ref().map(|image| image.value.as_str()),
             Some("firmware file.elf")
         );
-        assert_eq!(boot.mtvec, Some(0x8000_0020));
+        assert_eq!(
+            boot.cpu_registers,
+            [CpuRegisterCommand::TrapVector(
+                TrapVector::Machine,
+                Some(0x8000_0020)
+            )]
+        );
         assert_eq!(boot.mask, Some(u32::MAX));
         fs::write(&script, content.replace("MTVEC", "unknown")).unwrap();
         let result = load(&script, &directory);

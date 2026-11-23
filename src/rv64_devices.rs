@@ -458,7 +458,7 @@ impl Uart {
                 divisor: 0xffff,
             }
         } else {
-            UartKind::Ns16550(Ns16550::new(base, source as u32, wide))
+            UartKind::Ns16550(Ns16550::new(base, Some(source as u32), wide))
         };
         Self {
             harts: 0,

@@ -517,6 +517,8 @@ bash scripts/validate-riscv-acceptance.sh ../renode "$(mktemp -d)"
 
 上流 Robot 一式の実行、Renode 指定の ACT ビルド、サポート外 ISA 拡張とネイティブモデルは引き続き残課題です。
 
+機種固有スイートと共有 Robot/NUnit の棚卸し、および固定 ACT/ISA の実行は [RV32 上流互換検証](docs/riscv-full-upstream.md) に記録します。
+
 ## Renode / penv 共通計測ハーネス
 
 `python3 scripts/benchmark-riscv.py manifest.json 新規出力ディレクトリ` は Linux の GNU `/usr/bin/time` を使います。現在の動作確認は `python3 scripts/test-benchmark-riscv.py` のダミープロセスのみです。実機比較は上流互換テスト全件通過後に行います。

@@ -1,12 +1,15 @@
 use crate::{
+    andes_csr::AndesCsrs,
     clint::{SOFTWARE, TIMER},
     pmp::Pmp,
+    vector_bootstrap::VectorBootstrap,
 };
 
 const MIE: u32 = 1 << 3;
 const MPIE: u32 = 1 << 7;
 const MPRV: u32 = 1 << 17;
 const MPP: u32 = 3 << 11;
+pub const DEFAULT_MTVEC: u32 = 0x1010;
 pub const EXTERNAL: u32 = 1 << 11;
 const MACHINE_INTERRUPTS: u32 = SOFTWARE | TIMER | EXTERNAL;
 
@@ -22,7 +25,42 @@ const SUM: u32 = 1 << 18;
 const MXR: u32 = 1 << 19;
 const TVM: u32 = 1 << 20;
 const TSR: u32 = 1 << 22;
+const VS: u32 = 3 << 9;
+const FS: u32 = 3 << 13;
+const SD: u32 = 1 << 31;
 const SSTATUS: u32 = SIE | SPIE | SPP | SUM | MXR;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrapVector {
+    Machine,
+    Supervisor,
+}
+
+impl TrapVector {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Machine => "MTVEC",
+            Self::Supervisor => "STVEC",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum InterruptMode {
+    Auto,
+    Direct,
+    Vectored,
+}
+
+impl InterruptMode {
+    fn correct(self, value: u32) -> u32 {
+        match self {
+            Self::Auto => value & !2,
+            Self::Direct => value & !3,
+            Self::Vectored => (value & !3) | 1,
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Privilege {
@@ -60,9 +98,7 @@ struct Supervisor {
 }
 
 const CYCLE_ENABLE: u32 = 1;
-const TIME_ENABLE: u32 = 2;
 const INSTRET_ENABLE: u32 = 4;
-const COUNTER_ENABLE: u32 = CYCLE_ENABLE | TIME_ENABLE | INSTRET_ENABLE;
 
 #[derive(Clone, Default)]
 struct Counters {
@@ -92,9 +128,19 @@ fn set_counter_half(counter: &mut u64, value: u32, high: bool) {
 pub struct Csr {
     pub hart_id: usize,
     pub m_extension: bool,
+    pub zmmul: bool,
     pub a_extension: bool,
     pub c_extension: bool,
+    pub compressed_single: bool,
+    pub compressed_double: bool,
+    pub embedded_base: bool,
+    pub sscofpmf: bool,
+    pub andes: Option<AndesCsrs>,
     status: u32,
+    pub f_extension: bool,
+    pub d_extension: bool,
+    pub fcsr: u8,
+    vector_bootstrap: Option<VectorBootstrap>,
     counters: Counters,
     user_supported: bool,
     pmp: Option<Box<Pmp>>,
@@ -113,6 +159,7 @@ pub struct Csr {
     local_irq_levels: u64,
     vex_dcache_info: u32,
     vector: Option<u32>,
+    interrupt_mode: Option<InterruptMode>,
     scratch: u32,
     exception_pc: u32,
     cause: u32,
@@ -124,9 +171,19 @@ impl Default for Csr {
         Self {
             hart_id: 0,
             m_extension: true,
+            zmmul: false,
             a_extension: false,
             c_extension: false,
+            compressed_single: true,
+            compressed_double: true,
+            embedded_base: false,
+            sscofpmf: false,
+            andes: None,
             status: MPP,
+            f_extension: false,
+            d_extension: false,
+            fcsr: 0,
+            vector_bootstrap: None,
             counters: Counters::default(),
             user_supported: false,
             pmp: None,
@@ -145,6 +202,7 @@ impl Default for Csr {
             local_irq_levels: 0,
             vex_dcache_info: 0,
             vector: None,
+            interrupt_mode: None,
             scratch: 0,
             exception_pc: 0,
             cause: 0,
@@ -175,7 +233,7 @@ impl Csr {
         if self.privilege == Privilege::Machine {
             return true;
         }
-        let bit = 1 << (address & 3);
+        let bit = 1 << (address & 31);
         self.counters.machine_enable & bit != 0
             && (self.privilege != Privilege::User
                 || self.supervisor.is_none()
@@ -205,8 +263,27 @@ impl Csr {
         })
     }
 
+    pub fn enable_smepmp(&mut self) {
+        self.pmp
+            .as_mut()
+            .expect("Smepmp requires PMP")
+            .enable_smepmp();
+    }
+
     pub fn enable_pmp(&mut self, entries: usize) {
         self.pmp = Some(Box::new(Pmp::new(entries)));
+    }
+
+    pub fn attach_external_pmp(&mut self, path: String, entries: usize) {
+        let mut pmp = Pmp::new(entries);
+        pmp.external_path = Some(path);
+        self.pmp = Some(Box::new(pmp));
+    }
+
+    pub fn external_pmp(&mut self, path: &str) -> Option<&mut Pmp> {
+        self.pmp
+            .as_deref_mut()
+            .filter(|pmp| pmp.external_path.as_deref() == Some(path))
     }
 
     fn effective_privilege(&self, fetch: bool) -> Privilege {
@@ -258,6 +335,48 @@ impl Csr {
         8 + self.privilege as u32
     }
 
+    pub fn floating_enabled(&self) -> bool {
+        self.f_extension && self.status & FS != 0
+    }
+
+    pub fn floating_dirty(&mut self) {
+        self.status |= FS;
+    }
+
+    pub fn enable_vector_bootstrap(&mut self) {
+        self.vector_bootstrap = Some(VectorBootstrap::default());
+    }
+
+    pub fn vector_configured(&self) -> bool {
+        self.vector_bootstrap.is_some()
+    }
+
+    pub fn configure_vector(&mut self, insn: u32, avl: u32, kind: u32) -> Option<u32> {
+        if self.status & VS == 0 {
+            return None;
+        }
+        let length = self.vector_bootstrap.as_mut()?.configure(insn, avl, kind)?;
+        self.status |= VS;
+        Some(length)
+    }
+
+    fn extension_status_mask(&self) -> u32 {
+        (if self.f_extension { FS } else { 0 })
+            | (if self.vector_bootstrap.is_some() {
+                VS
+            } else {
+                0
+            })
+    }
+
+    fn status_summary(&self) -> u32 {
+        if self.status & FS == FS || self.status & VS == VS {
+            SD
+        } else {
+            0
+        }
+    }
+
     pub fn access(&mut self, instruction: u32, register_value: u32) -> Result<u32, String> {
         let address = instruction >> 20;
         let operation = (instruction >> 12) & 7;
@@ -274,6 +393,24 @@ impl Csr {
                 && self.status & TVM != 0)
         {
             return Err(error());
+        }
+        if operation & 3 == 1
+            && (instruction >> 7) & 31 == 0
+            && self
+                .pmp
+                .as_ref()
+                .is_some_and(|pmp| pmp.is_external_csr(address))
+        {
+            return self.write(address, operand).then_some(0).ok_or_else(error);
+        }
+        if operation & 3 == 1
+            && (instruction >> 7) & 31 == 0
+            && self
+                .andes
+                .as_mut()
+                .is_some_and(|andes| andes.write(address, operand))
+        {
+            return Ok(0);
         }
         let previous = self.read(address).ok_or_else(error)?;
         // A hardware SEIP level is visible to CSR reads but must not become
@@ -299,7 +436,15 @@ impl Csr {
 
     fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
-            0x100 if self.supervisor.is_some() => self.status & SSTATUS,
+            0x008..=0x00a | 0x00f | 0xc20..=0xc22 if self.status & VS != 0 => {
+                return self.vector_bootstrap.as_ref()?.read(address);
+            }
+            0x001 if self.floating_enabled() => u32::from(self.fcsr & 31),
+            0x002 if self.floating_enabled() => u32::from(self.fcsr >> 5),
+            0x003 if self.floating_enabled() => u32::from(self.fcsr),
+            0x100 if self.supervisor.is_some() => {
+                self.status & (SSTATUS | self.extension_status_mask()) | self.status_summary()
+            }
             0x104 => self.interrupt_enable & self.supervisor.as_ref()?.interrupt_delegation,
             0x144 => self.pending_interrupts() & self.supervisor.as_ref()?.interrupt_delegation,
             0x303 => self.supervisor.as_ref()?.interrupt_delegation,
@@ -311,13 +456,19 @@ impl Csr {
             0x143 => self.supervisor.as_ref()?.value,
             0x180 => self.supervisor.as_ref()?.satp,
             0x302 => self.supervisor.as_ref()?.delegation,
-            0x300 => self.status,
+            0x300 => self.status | self.status_summary(),
             0x301 => {
                 (1 << 30)
                     | (u32::from(self.m_extension) << 12)
-                    | (1 << 8)
+                    | (if self.embedded_base { 1 << 4 } else { 1 << 8 })
                     | u32::from(self.a_extension)
-                    | (u32::from(self.c_extension) << 2)
+                    | (u32::from(
+                        self.c_extension
+                            && (!self.f_extension || self.compressed_single)
+                            && (!self.d_extension || self.compressed_double),
+                    ) << 2)
+                    | (u32::from(self.f_extension) << 5)
+                    | (u32::from(self.d_extension) << 3)
                     | (u32::from(self.user_supported) << 20)
                     | (u32::from(self.supervisor.is_some()) << 18)
             }
@@ -325,6 +476,10 @@ impl Csr {
             0x305 => self.vector.unwrap_or(0),
             0x306 => self.counters.machine_enable,
             0x320 => self.counters.inhibit,
+            // Fixed Renode models these HPM event selectors as hardwired zero.
+            0x330 if self.minerva => self.local_irq_mask?,
+            0x323..=0x33f => 0,
+            0x723..=0x73f | 0xda0 if self.sscofpmf => 0,
             0xb00 | 0xb80 => counter_half(self.counters.cycle, address & 0x80 != 0),
             0xb02 | 0xb82 => counter_half(self.counters.instret, address & 0x80 != 0),
             0xc00..=0xc02 | 0xc80..=0xc82 if self.counter_accessible(address) => {
@@ -335,6 +490,9 @@ impl Csr {
                 };
                 counter_half(value, address & 0x80 != 0)
             }
+            // Renode exposes unimplemented HPM counters as zero.
+            0xb03..=0xb1f | 0xb83..=0xb9f => 0,
+            0xc03..=0xc1f | 0xc83..=0xc9f if self.counter_accessible(address) => 0,
             0x310 | 0xf11..=0xf13 | 0xf15 => 0,
             0xf14 => self.hart_id as u32,
             0x340 => self.scratch,
@@ -355,19 +513,43 @@ impl Csr {
             0x7c0 if self.ibex => 0,
             0x9c0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_mask,
             0xbc0 if self.vex => self.local_irq_mask?,
-            0x330 if self.minerva => self.local_irq_mask?,
             0x360 if self.minerva => self.local_irq_pending,
             0xdc0 if self.vex && self.local_irq_mask.is_some() => self.vex_supervisor_irq_pending,
             0xcc0 if self.vex && self.local_irq_mask.is_some() => self.vex_dcache_info,
             0xfc0 if self.vex && self.local_irq_mask.is_some() => self.local_irq_pending,
-            _ => return self.pmp.as_ref()?.read(address),
+            _ => {
+                return self
+                    .andes
+                    .as_ref()
+                    .and_then(|andes| andes.read(address))
+                    .or_else(|| self.pmp.as_ref()?.read(address));
+            }
         })
     }
 
     fn write(&mut self, address: u32, value: u32) -> bool {
         match address {
+            0x008..=0x00a | 0x00f
+                if self.status & VS != 0
+                    && self
+                        .vector_bootstrap
+                        .as_mut()
+                        .is_some_and(|state| state.write(address, value)) =>
+            {
+                self.status |= VS;
+            }
+            0x001..=0x003 if self.floating_enabled() => {
+                let value = value as u8;
+                self.fcsr = match address {
+                    1 => (self.fcsr & !31) | (value & 31),
+                    2 => (self.fcsr & 31) | (value << 5),
+                    _ => value,
+                };
+                self.floating_dirty();
+            }
             0x100 if self.supervisor.is_some() => {
-                self.status = (self.status & !SSTATUS) | (value & SSTATUS);
+                let mask = SSTATUS | self.extension_status_mask();
+                self.status = (self.status & !mask) | (value & mask);
             }
             0x104 if let Some(supervisor) = self.supervisor.as_ref() => {
                 let mask = supervisor.interrupt_delegation;
@@ -391,16 +573,19 @@ impl Csr {
             0x303 if let Some(supervisor) = self.supervisor.as_mut() => {
                 supervisor.interrupt_delegation = value & SUPERVISOR_INTERRUPTS;
             }
-            0x105 | 0x140..=0x143 | 0x180 | 0x302 if self.supervisor.is_some() => {
+            0x105 if self.supervisor.is_some() => {
+                let vector = self.correct_vector("STVEC", value, true);
+                self.supervisor.as_mut().unwrap().vector = vector;
+            }
+            0x140..=0x143 | 0x180 | 0x302 if self.supervisor.is_some() => {
                 let alignment = self.epc_mask();
                 let supervisor = self.supervisor.as_mut().unwrap();
                 match address {
-                    0x105 => supervisor.vector = vector_value(value),
                     0x140 => supervisor.scratch = value,
                     0x141 => supervisor.epc = value & alignment,
                     0x142 => supervisor.cause = value,
                     0x143 => supervisor.value = value,
-                    0x180 => supervisor.satp = if value >> 31 == 0 { 0 } else { value },
+                    0x180 => supervisor.satp = value,
                     0x302 => supervisor.delegation = value & 0xb1ff,
                     _ => unreachable!(),
                 }
@@ -413,8 +598,11 @@ impl Csr {
                 } else {
                     0
                 };
-                self.status =
-                    (value & (MIE | MPIE)) | ((privilege as u32) << 11) | mprv | supervisor;
+                self.status = (value & (MIE | MPIE))
+                    | ((privilege as u32) << 11)
+                    | mprv
+                    | supervisor
+                    | (value & self.extension_status_mask());
             }
             0x304 => {
                 let supervisor_mask = if self.supervisor.is_some() {
@@ -424,11 +612,14 @@ impl Csr {
                 };
                 self.interrupt_enable = value & (MACHINE_INTERRUPTS | supervisor_mask);
             }
-            0x305 => self.set_vector(value),
-            0x306 => self.counters.machine_enable = value & COUNTER_ENABLE,
+            0x305 => self.vector = Some(self.correct_vector("MTVEC", value, true)),
+            0x306 => self.counters.machine_enable = value,
             0x106 if self.supervisor.is_some() => {
-                self.counters.supervisor_enable = value & COUNTER_ENABLE;
+                self.counters.supervisor_enable = value;
             }
+            0x330 if self.minerva => self.local_irq_mask = Some(value),
+            0x323..=0x33f => {}
+            0x723..=0x73f if self.sscofpmf => {}
             0x320 => self.counters.inhibit = value & (CYCLE_ENABLE | INSTRET_ENABLE),
             0xb00 | 0xb80 => set_counter_half(&mut self.counters.cycle, value, address & 0x80 != 0),
             0xb02 | 0xb82 => {
@@ -455,7 +646,6 @@ impl Csr {
                 }
             }
             0x7c0 if self.ibex => {}
-            0x330 if self.minerva => self.local_irq_mask = Some(value),
             0x360 if self.minerva => self.local_irq_pending = value,
             0x9c0 if self.vex && self.local_irq_mask.is_some() => {
                 self.vex_supervisor_irq_mask = value
@@ -476,9 +666,13 @@ impl Csr {
             0x301 | 0x310 | 0x344 => {} // Fixed WARL fields.
             _ => {
                 return self
-                    .pmp
+                    .andes
                     .as_mut()
-                    .is_some_and(|pmp| pmp.write(address, value));
+                    .is_some_and(|andes| andes.write(address, value))
+                    || self
+                        .pmp
+                        .as_mut()
+                        .is_some_and(|pmp| pmp.write(address, value));
             }
         }
         true
@@ -496,8 +690,65 @@ impl Csr {
         }
     }
 
+    pub fn set_mstatus(&mut self, value: u32) {
+        self.write(0x300, value);
+    }
+
+    pub fn configure_interrupt_mode(&mut self, mode: InterruptMode) {
+        self.interrupt_mode = Some(mode);
+        let machine = mode.correct(DEFAULT_MTVEC);
+        let supervisor = mode.correct(0);
+        if matches!(mode, InterruptMode::Vectored) {
+            eprintln!("Vectored interrupt mode set - updating MTVEC from 0x1010 to {machine:#x}");
+            eprintln!("Vectored interrupt mode set - updating STVEC from 0x0 to {supervisor:#x}");
+        }
+        self.vector = Some(machine);
+        if let Some(state) = self.supervisor.as_mut() {
+            state.vector = supervisor;
+        }
+    }
+
+    fn correct_vector(&self, register: &str, value: u32, software: bool) -> u32 {
+        let Some(mode) = self.interrupt_mode else {
+            return value & !2;
+        };
+        let corrected = mode.correct(value);
+        if corrected != value {
+            if software {
+                eprintln!(
+                    "{register} value written to CSR corrected from {value:#x} to {corrected:#x}"
+                );
+            } else {
+                eprintln!("modifying {register} from {value:#x} to {corrected:#x}");
+            }
+        }
+        corrected
+    }
+
+    pub fn monitor_trap_vector(
+        &mut self,
+        register: TrapVector,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        if register == TrapVector::Supervisor && self.supervisor.is_none() {
+            return Err("STVEC requires supervisor mode".into());
+        }
+        if let Some(value) = value {
+            let corrected = self.correct_vector(register.name(), value, false);
+            match register {
+                TrapVector::Machine => self.vector = Some(corrected),
+                TrapVector::Supervisor => self.supervisor.as_mut().unwrap().vector = corrected,
+            }
+            return Ok(None);
+        }
+        Ok(Some(match register {
+            TrapVector::Machine => self.vector.unwrap_or(0),
+            TrapVector::Supervisor => self.supervisor.as_ref().unwrap().vector,
+        }))
+    }
+
     pub fn set_vector(&mut self, value: u32) {
-        self.vector = Some(vector_value(value));
+        self.vector = Some(self.correct_vector("MTVEC", value, false));
     }
 
     pub fn trap(&mut self, pc: u32, cause: u32, value: u32) -> Option<u32> {
@@ -631,10 +882,6 @@ impl Csr {
     }
 }
 
-fn vector_value(value: u32) -> u32 {
-    (value & !3) | (value & 1)
-}
-
 fn vector_target(vector: u32, cause: u32) -> u32 {
     let offset = if vector & 1 != 0 && cause & INTERRUPT != 0 {
         (cause & !INTERRUPT) * 4
@@ -647,6 +894,74 @@ fn vector_target(vector: u32, cause: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hpm_counter_access_uses_each_counter_enable_bit() {
+        let mut csr = Csr::default();
+        csr.enable_supervisor_mode();
+        csr.enable_user_mode();
+        let read = |csr: &mut Csr, address: u32| csr.access((address << 20) | 0x20f3, 0);
+
+        assert_eq!(read(&mut csr, 0xb9f).unwrap(), 0);
+        assert_eq!(read(&mut csr, 0xc1f).unwrap(), 0);
+        csr.access(0x3060_9073, 1 << 31).unwrap();
+        csr.privilege = Privilege::Supervisor;
+        assert_eq!(read(&mut csr, 0xc9f).unwrap(), 0);
+        assert!(read(&mut csr, 0xc83).is_err());
+        assert!(read(&mut csr, 0xb9f).is_err());
+        csr.privilege = Privilege::User;
+        assert!(read(&mut csr, 0xc9f).is_err());
+        csr.privilege = Privilege::Supervisor;
+        csr.access(0x1060_9073, 1 << 31).unwrap();
+        csr.privilege = Privilege::User;
+        assert_eq!(read(&mut csr, 0xc9f).unwrap(), 0);
+        assert!(csr.access(0xc9f0_9073, 1).is_err());
+    }
+
+    #[test]
+    fn vector_bootstrap_gates_csrs_and_does_not_advertise_v() {
+        let mut csr = Csr::default();
+        csr.enable_supervisor_mode();
+        assert!(csr.write(0x300, VS));
+        assert_eq!(csr.read(0x300).unwrap() & (VS | SD), 0);
+
+        csr.enable_vector_bootstrap();
+        assert_eq!(csr.read(0xc22), None);
+        assert!(!csr.write(0x00f, 7));
+        assert_eq!(csr.read(0x301).unwrap() & (1 << 21), 0);
+        assert!(csr.write(0x100, 1 << 9));
+        assert_eq!(csr.read(0xc22), Some(128));
+        assert_eq!(csr.read(0x100).unwrap() & SD, 0);
+        assert!(!csr.write(0xc22, 1));
+        assert!(csr.write(0x00f, u32::MAX));
+        assert_eq!(csr.read(0x009), Some(1));
+        assert_eq!(csr.read(0x00a), Some(3));
+        assert_eq!(csr.read(0x300).unwrap() & (VS | SD), VS | SD);
+        assert!(csr.write(0x100, 0));
+        assert_eq!(csr.read(0x00f), None);
+        assert_eq!(csr.configure_vector(0x0000_70d7, 0, 0), None);
+    }
+
+    #[test]
+    fn floating_csrs_follow_fs_and_share_rounding_and_flags() {
+        let mut csr = Csr::default();
+        csr.enable_supervisor_mode();
+        assert!(csr.write(0x300, MPP | FS));
+        assert_eq!(csr.read(0x300).unwrap() & (FS | SD), 0);
+        assert!(!csr.write(0x003, 0xff));
+
+        csr.f_extension = true;
+        assert_eq!(csr.read(0x301).unwrap() & ((1 << 5) | (1 << 3)), 1 << 5);
+        assert!(csr.write(0x100, 1 << 13));
+        assert_eq!(csr.read(0x100).unwrap() & SD, 0);
+        assert!(csr.write(0x002, 4));
+        assert!(csr.write(0x001, 0x25));
+        assert_eq!(csr.read(0x003), Some(0x85));
+        assert_eq!(csr.read(0x100).unwrap() & (FS | SD), FS | SD);
+        assert!(csr.write(0x100, 0));
+        assert_eq!(csr.read(0x003), None);
+        assert_eq!(csr.read(0x300).unwrap() & (FS | SD), 0);
+    }
 
     #[test]
     fn legacy_vex_machine_sbi_can_forward_a_timer_interrupt_through_sip() {

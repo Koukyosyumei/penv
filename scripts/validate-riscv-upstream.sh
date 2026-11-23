@@ -120,12 +120,7 @@ rg -aqF 'Zephyr version' "$artifacts/litex-zephyr.uart.log"
 
 prepare_assets "$tock"
 run_to_step_limit litex-tock "$tock" --max-steps 700000000
-rg -aqF 'LiteX+VexRiscv on ArtyA7: initialization complete, entering main loop.' "$artifacts/litex-tock.uart.log"
-# The upstream tester waits for the first D1 before checking three ordered pairs.
-diff -u <(for _ in 1 2 3; do printf 'D1 says hello\nD2 says hello\n'; done) <(
-    tr -d '\r' < "$artifacts/litex-tock.uart.log" |
-        awk '/^D[12] says hello$/ && ($0 == "D1 says hello" || count) { print; if (++count == 6) exit }'
-)
+python3 "$(dirname -- "$0")/validate-litex-uart-order.py" tock "$artifacts/litex-tock.uart.log"
 
 prepare_assets "$arty"
 printf 'debug cas switches\r' > "$artifacts/arty-switches.input"
@@ -199,16 +194,9 @@ diff -u <(printf 'processor\t: 0\n') <(
 )
 
 prepare_assets "$litex"
-run_to_step_limit litex-smp "$litex" --uart-event "600000000:$artifacts/litex-login.input" \
-    --uart-event "675000000:$artifacts/litex-cpuinfo.input" --max-steps 725000000
-for marker in 'OpenSBI v0.6' 'Litex/VexRiscv SMP' 'Linux version 5.0.9' \
-    'smp: Brought up 1 node, 4 CPUs' 'Welcome to Buildroot' 'buildroot login:'; do
-    rg -aqF "$marker" "$artifacts/litex-smp.uart.log"
-done
-rg -aq 'Platform Max HARTs\s+: 4' "$artifacts/litex-smp.uart.log"
-for hart in 0 1 2 3; do
-    rg -aq "^processor[[:blank:]]*: $hart\r*$" "$artifacts/litex-smp.uart.log"
-done
+python3 -B "$(dirname -- "$0")/validate-litex-smp-linux.py" "$penv" "$renode_root" "$assets" "$artifacts" \
+    | tee "$artifacts/litex-smp.assertions.log"
+python3 "$(dirname -- "$0")/validate-litex-uart-order.py" opensbi "$artifacts/litex-smp.uart.log"
 prepare_assets "$renode_root/$i2s"
 pcm=$(awk -F= '/^\$input_file\?=@https:/ { print $2 }' "$renode_root/$i2s")
 pcm_output=$(realpath "$artifacts")/echo.raw
@@ -285,37 +273,14 @@ diff -u <(printf '%s\n' 'penv: framebuffer matched at step 708000000') <(
 )
 rg -aqF 'execution ended before the reference frame matched' "$artifacts/nexys-video-negative.stderr.log"
 rg -aqF "root login on 'console'" "$artifacts/nexys-video-negative.uart.log"
-sd_root=$renode_root/scripts/single-node/litex_vexriscv_sdcard.resc
-sd_fat=$(dirname -- "$0")/fixtures/litex-sd-fat.resc
-prepare_assets "$sd_root"
+for case in root fat; do
+    sd_script=$(dirname -- "$0")/fixtures/litex-sd-$case.resc
+    prepare_assets "$sd_script"
+    python3 -B "$(dirname -- "$0")/validate-litex-sd-linux.py" "$case" "$penv" "$renode_root" "$assets" "$artifacts" \
+        | tee "$artifacts/litex-sd-$case.assertions.log"
+done
+# The following Linux I/O fixture uses a pre-scheduled login.
 printf 'root\r' > "$artifacts/sd-login.input"
-printf 'ls -la /\r' > "$artifacts/sd-list.input"
-run_to_step_limit litex-sd-root "$sd_root" --max-steps 550000000 \
-    --uart-event "500000000:$artifacts/sd-login.input" \
-    --uart-event "530000000:$artifacts/sd-list.input"
-for marker in 'mmc0: new SD card at address 0001' 'mmcblk0: mmc0:0001 RENOD' \
-    'blk_queue_max_hw_sectors: set to minimum 8' 'blk_queue_max_segment_size: set to minimum 4096' \
-    'VFS: Mounted root (ext4 filesystem) readonly' 'Run /sbin/init as init process' 'buildroot login: root'; do
-    rg -aqF "$marker" "$artifacts/litex-sd-root.uart.log"
-done
-sed -E 's/\x1b\[[0-9;]*m//g' "$artifacts/litex-sd-root.uart.log" | rg -a 'linuxrc -> bin/busybox' > /dev/null
-
-prepare_assets "$sd_fat"
-printf 'mount /dev/mmcblk0p1 /mnt; ls /mnt; cat /mnt/readme.txt\r' > "$artifacts/sd-read.input"
-printf 'echo "This is a write test" > /mnt/readme2.txt; sync; umount /mnt; mount /dev/mmcblk0p1 /mnt; cat /mnt/readme2.txt\r' \
-    > "$artifacts/sd-write.input"
-run_to_step_limit litex-sd-fat "$sd_fat" --max-steps 620000000 \
-    --uart-event "500000000:$artifacts/sd-login.input" \
-    --uart-event "520000000:$artifacts/sd-read.input" \
-    --uart-event "550000000:$artifacts/sd-write.input"
-for marker in 'mmcblk0: mmc0:0001 RENOD 64.0 MiB' 'mmcblk0: p1' 'buildroot login: root'; do
-    rg -aqF "$marker" "$artifacts/litex-sd-fat.uart.log"
-done
-diff -u <(printf 'This is a test file\nThis is a write test\n') <(
-    tr -d '\r' < "$artifacts/litex-sd-fat.uart.log" | rg '^This is a (test file|write test)$'
-)
-# The file-backed card writes into a process-local overlay.
-prepare_assets "$sd_fat"
 linux_io=$(dirname -- "$0")/fixtures/litex-linux-io.resc
 prepare_assets "$linux_io"
 printf 'spidev_test -D /dev/spidev0.0 --speed 1000000\r' > "$artifacts/linux-io-spi.input"
@@ -354,15 +319,8 @@ diff -u <(printf '4368\n7724\n0\n1\n0\n') <(
 nexys4ddr=$(dirname -- "$0")/fixtures/nexys4ddr-spi-sd.resc
 prepare_assets "$nexys4ddr"
 printf Q > "$artifacts/nexys4ddr-abort.input"
-printf 'spisdcardboot\r' > "$artifacts/nexys4ddr-boot.input"
-run_to_step_limit nexys4ddr-spi-sd "$nexys4ddr" --max-steps 100000000 \
-    --litex-uart-legacy-console \
-    --uart-event "35000000:$artifacts/nexys4ddr-abort.input" \
-    --uart-event "80000000:$artifacts/nexys4ddr-boot.input"
-for marker in 'Press Q or ESC to abort boot completely.' 'Cancelled' '> spisdcardboot' \
-    'SD Card via SPI Initialising' 'Read FAT16 Boot Sector' '[mkfs.fat]' 'Root Directory' 'File 1 [README  .TXT]'; do
-    rg -aqF "$marker" "$artifacts/nexys4ddr-spi-sd.uart.log"
-done
+python3 -B "$(dirname -- "$0")/validate-nexys4ddr-spi-sd.py" "$penv" "$renode_root" "$assets" "$artifacts" \
+    | tee "$artifacts/nexys4ddr-spi-sd.assertions.log"
 tftp=$renode_root/scripts/single-node/litex_vexriscv_tftp.resc
 prepare_assets "$tftp"
 printf 'netboot\r' > "$artifacts/tftp-netboot.input"
