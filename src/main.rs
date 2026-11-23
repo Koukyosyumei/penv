@@ -58,6 +58,8 @@ Options:
   --ram-mib N        RAM size in MiB, 1–1024 (default: 16)
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
+  --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
+  --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
   --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
   --dtb BASE:PATH    Load an RV64 boot DTB and pass its address in a1
   --clint BASE       Map a CLINT for the configured harts (decimal or 0x-prefixed)
@@ -78,11 +80,32 @@ Options:
   --renode-unmapped-data  Warn and return zero/drop for unmapped RV64 data accesses
   --renode-elf-load  Load the mapped RAM portions of RV64 ELF segments
   --robot-tohost ADDRESS   Install a 4 KiB single-hart Renode-style watcher
-  --max-steps N      Stop after N execution steps (default: 10000000)
+  --max-steps N      Stop after N execution steps (0 configures only; default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
   -h, --help         Show help
   -V, --version      Show version";
+
+type RamRead = (Option<String>, u64, usize);
+
+enum SetupMemory {
+    Load(PathBuf, u64, Option<String>),
+    Read(RamRead),
+    Move(String, u64, u64),
+}
+
+fn report_ram(machine: &Machine, (cpu, address, width): &RamRead) -> Result<(), String> {
+    let hart = cpu
+        .as_deref()
+        .map(|cpu| machine.rv64_hart_by_name(cpu))
+        .transpose()?;
+    let value = rv64::ram_read(&machine.bus, hart, *address, *width)
+        .or_else(|| machine.bus.renode_unmapped_data.then_some(0))
+        .ok_or_else(|| format!("unmapped RAM read at {address:#018x} ({width} bytes)"))?;
+    let context = cpu.as_deref().unwrap_or("sysbus");
+    eprintln!("penv: memory {context}@{address:#018x}:{width} = {value:#018x}");
+    Ok(())
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -148,7 +171,7 @@ fn run() -> Result<ExitCode, String> {
     let mut harts = None;
     let mut max_steps = 10_000_000;
     let mut extra_ram = Vec::new();
-    let mut companion_images = Vec::new();
+    let mut setup_memory = Vec::new();
     let mut memory_reads = Vec::new();
     let mut dtb = None;
     let mut clint = None;
@@ -268,10 +291,16 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
-            Some(option @ ("--load-binary" | "--read-memory" | "--dtb")) => {
+            Some(
+                option @ ("--load-binary" | "--read-memory" | "--read-memory-now" | "--move-ram"
+                | "--dtb"),
+            ) => {
                 let error = || match option {
                     "--load-binary" => "--load-binary requires [CPU@]BASE:PATH",
-                    "--read-memory" => "--read-memory requires [CPU@]BASE:WIDTH",
+                    "--read-memory" | "--read-memory-now" => {
+                        "memory read requires [CPU@]BASE:WIDTH"
+                    }
+                    "--move-ram" => "--move-ram requires CPU@OLD:NEW",
                     _ => "--dtb requires BASE:PATH",
                 };
                 let value = args
@@ -298,14 +327,24 @@ fn run() -> Result<ExitCode, String> {
                 };
                 let address = parse_address64(base)?;
                 if option == "--load-binary" {
-                    companion_images.push((PathBuf::from(path), address, cpu));
+                    setup_memory.push(SetupMemory::Load(PathBuf::from(path), address, cpu));
+                } else if option == "--move-ram" {
+                    setup_memory.push(SetupMemory::Move(
+                        cpu.ok_or_else(error)?,
+                        address,
+                        parse_address64(path)?,
+                    ));
                 } else {
                     let width = path
                         .parse::<usize>()
                         .ok()
                         .filter(|width| matches!(width, 1 | 2 | 4 | 8))
                         .ok_or("--read-memory width must be 1, 2, 4 or 8 bytes")?;
-                    memory_reads.push((cpu, address, width));
+                    if option == "--read-memory-now" {
+                        setup_memory.push(SetupMemory::Read((cpu, address, width)));
+                    } else {
+                        memory_reads.push((cpu, address, width));
+                    }
                 }
             }
             Some("--map-ram") => {
@@ -340,7 +379,7 @@ fn run() -> Result<ExitCode, String> {
                     .next()
                     .and_then(|v| v.into_string().ok())
                     .and_then(|v| v.parse::<u64>().ok())
-                    .filter(|&v| v > 0)
+                    .filter(|&v| v > 0 || option == "--max-steps")
                     .ok_or_else(|| format!("{option} requires a positive integer"))?;
                 if option == "--ram-mib" {
                     if value > 1024 {
@@ -418,7 +457,7 @@ fn run() -> Result<ExitCode, String> {
         }
         boot_pcs = boot.boot_pcs;
     }
-    if path.is_none() && binaries.is_empty() {
+    if path.is_none() && binaries.is_empty() && !(max_steps == 0 && platform_path.is_some()) {
         return Err("missing firmware image; see run --help".into());
     }
     if rv64 && (!raw || platform_path.is_some()) {
@@ -520,14 +559,24 @@ fn run() -> Result<ExitCode, String> {
             image::load_binary(&mut machine, file, *address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        for (path, address, cpu) in &companion_images {
-            let hart = cpu
-                .as_deref()
-                .map(|cpu| machine.rv64_hart_by_name(cpu))
-                .transpose()?;
-            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            image::load_binary_in_context(&mut machine, file, *address, hart)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+        machine.bus.renode_unmapped_data = renode_unmapped_data;
+        for action in &setup_memory {
+            match action {
+                SetupMemory::Load(path, address, cpu) => {
+                    let hart = cpu
+                        .as_deref()
+                        .map(|cpu| machine.rv64_hart_by_name(cpu))
+                        .transpose()?;
+                    let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                    image::load_binary_in_context(&mut machine, file, *address, hart)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                }
+                SetupMemory::Read(read) => report_ram(&machine, read)?,
+                SetupMemory::Move(cpu, old, new) => {
+                    let hart = machine.rv64_hart_by_name(cpu)?;
+                    machine.bus.move_cpu_ram_alias(hart, *old, *new)?;
+                }
+            }
         }
         for (cpu, _, _) in &memory_reads {
             if let Some(cpu) = cpu {
@@ -560,9 +609,10 @@ fn run() -> Result<ExitCode, String> {
         if renode_lrsc && machine.hart_count() != 1 {
             return Err("--renode-lrsc requires a single RV64 hart".into());
         }
-        machine.bus.renode_unmapped_data = renode_unmapped_data;
         machine.bus.renode_lrsc = renode_lrsc;
-        machine.validate_entry()?;
+        if max_steps != 0 {
+            machine.validate_entry()?;
+        }
         if let Some((local, peer)) = ethernet_loopback {
             machine.bus.connect_rv64_ethernet(local, peer)?;
         }
@@ -585,6 +635,12 @@ fn run() -> Result<ExitCode, String> {
         Ok(machine)
     };
     let mut machine = boot_machine()?;
+    if max_steps == 0 {
+        for read in &memory_reads {
+            report_ram(&machine, read)?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
@@ -606,15 +662,8 @@ fn run() -> Result<ExitCode, String> {
             machine.primary.program_counter()
         );
     }
-    for (cpu, address, width) in memory_reads {
-        let hart = cpu
-            .as_deref()
-            .map(|cpu| machine.rv64_hart_by_name(cpu))
-            .transpose()?;
-        let value = rv64::ram_read(&machine.bus, hart, address, width)
-            .ok_or_else(|| format!("unmapped RAM read at {address:#018x} ({width} bytes)"))?;
-        let context = cpu.as_deref().unwrap_or("sysbus");
-        eprintln!("penv: memory {context}@{address:#018x}:{width} = {value:#018x}");
+    for read in &memory_reads {
+        report_ram(&machine, read)?;
     }
     if let Stop::TestExit(code) = stop {
         eprintln!("penv: TEST FINISHED");

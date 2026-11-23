@@ -236,8 +236,12 @@ def disposition(path, name, context):
             "Read Values Using Sysbus Context",
         }:
             return "pass", "Fixed REPL and ELF with matching contextual or global memory and UART assertions"
-        if name == "Cluster Memory Should Only Be Visible To Cluster":
-            return "partial", "Scoped backing and cluster visibility checked in Rust; Monitor operations remain"
+        if name in {
+            "Cluster Memory Should Only Be Visible To Cluster",
+            "Memory Should Only Be Movable Within Single CPU",
+            "Memory Move Should Only Affect Relevant CPU",
+        }:
+            return "pass", "Fixed REPL, stopped setup, move rejections and memory assertions verified by verify-rv64-ram-move.py"
     if path.name == "offset-bus-registrations.robot":
         if name in {
             "Cpu Should Read From Correct Offset From Mapped Memory",

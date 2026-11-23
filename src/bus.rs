@@ -71,6 +71,7 @@ pub(crate) struct Reservation64 {
 }
 
 struct RamAlias {
+    cluster: bool,
     backing: usize,
     offset: usize,
     harts: u64,
@@ -187,6 +188,7 @@ impl Bus {
         length: usize,
         offset: usize,
         harts: u64,
+        cluster: bool,
     ) -> Result<(), String> {
         if harts != 0 {
             let end = base
@@ -211,12 +213,39 @@ impl Bus {
             return Err("RAM alias is larger than its backing".into());
         }
         self.aliases.push(RamAlias {
+            cluster,
             backing,
             offset,
             harts,
             base,
             length,
         });
+        Ok(())
+    }
+
+    pub(crate) fn move_cpu_ram_alias(
+        &mut self,
+        hart: usize,
+        old: u64,
+        new: u64,
+    ) -> Result<(), String> {
+        let mask = 1 << hart;
+        let index = self
+            .aliases
+            .iter()
+            .position(|alias| alias.base == old && alias.harts == mask && !alias.cluster)
+            .ok_or("no RAM registration exclusive to the selected CPU at the source address")?;
+        let length = self.aliases[index].length as u64;
+        let end = new.checked_add(length).ok_or("RAM range overflow")?;
+        if self.aliases.iter().enumerate().any(|(other, alias)| {
+            other != index
+                && alias.harts & mask != 0
+                && new < alias.base + alias.length as u64
+                && alias.base < end
+        }) {
+            return Err("destination overlaps a CPU-scoped RAM registration".into());
+        }
+        self.aliases[index].base = new;
         Ok(())
     }
 

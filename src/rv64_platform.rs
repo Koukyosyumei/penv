@@ -1109,6 +1109,7 @@ fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result
                 length,
                 number(entry, fields.get("offset").copied().unwrap_or("0"))?,
                 harts,
+                fields.contains_key("cluster"),
             ));
             continue;
         }
@@ -1132,17 +1133,17 @@ fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result
         } else {
             (number(entry, value)?, size)
         };
-        windows.push((address, length, 0, 0));
+        windows.push((address, length, 0, 0, false));
     }
     let Some(primary) = windows
         .iter()
-        .position(|&(_, _, offset, cpu)| cpu == 0 && offset == 0)
+        .position(|&(_, _, offset, cpu, _)| cpu == 0 && offset == 0)
     else {
         return Err(entry.error("missing unscoped, zero-offset RAM registration"));
     };
-    let (primary, primary_length, _, _) = windows.remove(primary);
+    let (primary, primary_length, _, _, _) = windows.remove(primary);
     let len = usize::try_from(size).map_err(|_| entry.error("RAM exceeds host limits"))?;
-    if windows.iter().any(|&(_, length, offset, _)| {
+    if windows.iter().any(|&(_, length, offset, _, _)| {
         length == 0 || offset.checked_add(length).is_none_or(|end| end > size)
     }) || primary_length == 0
         || primary_length > size
@@ -1153,10 +1154,17 @@ fn map_memory(machine: &mut Machine, entry: &Entry, entries: &[Entry]) -> Result
         .bus
         .map_ram_backing64(primary, len, primary_length as usize)
         .map_err(|error| entry.error(&error))?;
-    for (address, length, offset, cpu) in windows {
+    for (address, length, offset, cpu, cluster) in windows {
         machine
             .bus
-            .map_alias64(backing, address, length as usize, offset as usize, cpu)
+            .map_alias64(
+                backing,
+                address,
+                length as usize,
+                offset as usize,
+                cpu,
+                cluster,
+            )
             .map_err(|error| entry.error(&error))?;
     }
     Ok(())

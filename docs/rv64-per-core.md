@@ -29,7 +29,7 @@
 | `per-core-registration.robot:141` Handle Being Simultaneously Registered On The Main Bus | 依存ケース完了後にグローバル別名を読み、`0xB0B0B0B0` と `0xBABABABA` を確認 |
 | `per-core-registration.robot:149` Read Values Using Sysbus Context | 同じ状態から CPU コンテキスト付きで読み、対応する2値を確認 |
 
-固定 Robot のクラスタケースは直接実行で通過しました。Penv のポートは起動前の Monitor 操作を含むケース全体の照合が残るため部分移植を維持します。実行中の登録移動と CPU 別逆アセンブルのケースも未達です。
+この段階のクラスタケースは部分移植でした。後続の [停止中の RAM 登録操作](rv64-ram-move.md) で、固定フィクスチャのクラスタケースと RAM 移動ケースを照合しました。実行中の登録移動と CPU 別逆アセンブルは未達です。
 
 ログと終了状態は `target/backlog-rv64-context/` に保存しました。`cargo test` は116件合格しました。
 
