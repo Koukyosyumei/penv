@@ -265,3 +265,23 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ none as "alias""#;
     let error = check_string(source, None).unwrap_err();
     assert!(error.contains("AliasWithNoneRegistration:"));
 }
+
+#[test]
+fn renode_attribute_duplicate_property() {
+    let source = "\nexternal: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    EnumValue: One\n    EnumValue: Two";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("PropertyOrCtorNameUsedMoreThanOnce:"));
+}
+
+#[test]
+fn renode_attribute_duplicate_init() {
+    let source = "\ndevice: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    init:\n        DoSomething\n    init add:\n        DoSomethingElse";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("MoreThanOneInitAttribute:"));
+}
+
+#[test]
+fn renode_attribute_constructor_on_existing_sysbus() {
+    let error = check_string("\nsysbus:\n    x: 5", None).unwrap_err();
+    assert!(error.contains("CtorAttributesInNonCreatingEntry:"));
+}

@@ -916,6 +916,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     let mut declarations = Vec::new();
     let mut blocks = Vec::new();
     for mut entry in entries {
+        validate_entry_attributes(&entry)?;
         if entry.model.is_empty() && entry.name != "sysbus" {
             blocks.push(entry);
             continue;
@@ -974,6 +975,29 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
         }
     }
     Ok(declarations)
+}
+
+fn validate_entry_attributes(entry: &Entry) -> Result<(), String> {
+    let mut properties = HashSet::new();
+    let mut init = false;
+    for (_, text) in &entry.body {
+        if matches!(text.as_str(), "init:" | "init add:") {
+            if std::mem::replace(&mut init, true) {
+                return Err(entry.error("MoreThanOneInitAttribute: duplicate init section"));
+            }
+        } else if let Some(key) = scalar_property(text) {
+            if !properties.insert(key) {
+                return Err(entry.error("PropertyOrCtorNameUsedMoreThanOnce: duplicate attribute"));
+            }
+            if entry.model.is_empty()
+                && entry.name == "sysbus"
+                && key.as_bytes()[0].is_ascii_lowercase()
+            {
+                return Err(entry.error("CtorAttributesInNonCreatingEntry: sysbus already exists"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn scalar_property(text: &str) -> Option<&str> {
