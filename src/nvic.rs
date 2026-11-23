@@ -50,6 +50,7 @@ pub struct Nvic {
     sleep_control: u32,
     reset_requested: bool,
     pending: u64,
+    hard_fault_pending: bool,
     priority: [u8; 64],
     system_priority: [u8; 12],
     fault_enables: u32,
@@ -79,6 +80,7 @@ impl Nvic {
             sleep_control: 0,
             reset_requested: false,
             pending: 0,
+            hard_fault_pending: false,
             priority: [0; 64],
             system_priority: [0; 12],
             fault_enables: 0,
@@ -216,7 +218,11 @@ impl Nvic {
     }
 
     pub fn pending_exceptions(&self) -> u128 {
-        u128::from(self.pending) << 16
+        (u128::from(self.pending) << 16) | (u128::from(self.hard_fault_pending) << 3)
+    }
+
+    pub fn set_hard_fault_pending(&mut self, pending: bool) {
+        self.hard_fault_pending = pending;
     }
 
     pub fn priority(&self, exception: u8) -> u8 {

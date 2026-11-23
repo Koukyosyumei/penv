@@ -566,6 +566,17 @@ impl Thumb {
             self.pending &= !(1 << NMI);
             return Ok(true);
         }
+        if pending & (1 << HARD_FAULT) != 0
+            && !self.locked_up
+            && !self.faultmask
+            && self.active_exceptions & ((1 << HARD_FAULT) | (1 << NMI)) == 0
+        {
+            *pc = self.exception_entry(HARD_FAULT, *pc, r, bus)?;
+            self.sleep = Sleep::Running;
+            bus.nvic.as_mut().unwrap().set_hard_fault_pending(false);
+            self.pending &= !(1 << HARD_FAULT);
+            return Ok(true);
+        }
         if self.locked_up
             || self.faultmask
             || (self.interrupts_masked && self.sleep != Sleep::Interrupt)

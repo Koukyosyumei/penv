@@ -316,3 +316,17 @@ for offset in 4 0; do
     grep -Fxq 'penv: instruction limit reached at pc=0xeffffffe' "$out/reset-fault-$offset.log"
     printf 'reset vector fault offset %s: lockup reached\n' "$offset"
 done
+
+# Exercise the monitor command with a readable HardFault vector. A startup
+# pend enters the handler before the fixture's reset code sets up a fault.
+cat >"$out/pending-hardfault.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @bus-fault.repl
+sysbus LoadELF @lockup.elf
+nvic SetPendingIRQ 3
+RESC
+status=0
+"$penv" run --script "$out/pending-hardfault.resc" --max-steps 15 \
+    >"$out/pending-hardfault.log" 2>&1 || status=$?
+[ "$status" -eq 2 ]
+grep -Fxq 'penv: instruction limit reached at pc=0x00000350' "$out/pending-hardfault.log"

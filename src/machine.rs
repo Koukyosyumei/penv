@@ -956,6 +956,40 @@ mod tests {
         assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0);
     }
 
+    #[test]
+    fn upstream_hard_fault_vector_bus_fault_locks_up() {
+        let mut machine = exception_vector_fault_machine(None);
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .nvic
+            .as_mut()
+            .unwrap()
+            .set_hard_fault_pending(true);
+        assert_eq!(machine.run(1, &mut out).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert_eq!(machine.primary.registers[13], 0xfe0);
+        assert_eq!(machine.primary.registers[14], 0xffff_fff9); // Armv7-M thread/MSP.
+        assert_eq!(
+            machine.primary.thumb.as_ref().unwrap().lockup_state(),
+            (true, 0, 3)
+        );
+        let nvic = machine.bus.nvic.as_ref().unwrap();
+        assert!(nvic.lockup);
+        assert_eq!(nvic.pending_exceptions() & (1 << 3), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 2);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed24).unwrap(), 1 << 2);
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+        assert_ne!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 0);
+        machine
+            .bus
+            .thumb_write(dhcsr, 4, u32::MAX, &mut out)
+            .unwrap();
+        assert_eq!(machine.bus.thumb_read::<4>(dhcsr).unwrap(), 0);
+    }
+
     fn check_reset_bus_fault(offset: usize) {
         let mut machine = Machine::new(0x1000).unwrap();
         machine

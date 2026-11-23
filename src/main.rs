@@ -383,6 +383,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_irqs = Vec::new();
     let mut performance_in_mips = None;
     let mut fault_on_unmapped_data = false;
+    let mut pend_hard_fault = false;
     let mut semihosting_arguments = None;
     let mut semihosting_directory = None;
     let mut semihosting_temporary_directory = None;
@@ -419,6 +420,7 @@ fn run() -> Result<ExitCode, String> {
         uart_irqs = boot.uart_irqs;
         performance_in_mips = boot.performance_in_mips;
         fault_on_unmapped_data = boot.fault_on_unmapped_data;
+        pend_hard_fault = boot.pend_hard_fault;
         semihosting_arguments = boot.semihosting_arguments;
         semihosting_directory = boot.semihosting_directory;
         semihosting_temporary_directory = boot.semihosting_temporary_directory;
@@ -580,6 +582,18 @@ fn run() -> Result<ExitCode, String> {
         machine.set_named_entry(&cpu, address)?;
     }
     machine.validate_entry()?;
+
+    if pend_hard_fault {
+        if !machine.has_cortex_m4() {
+            return Err("nvic SetPendingIRQ 3 requires a Cortex-M4 platform".into());
+        }
+        machine
+            .bus
+            .nvic
+            .as_mut()
+            .ok_or("nvic SetPendingIRQ 3 requires an NVIC")?
+            .set_hard_fault_pending(true);
+    }
 
     if ble_hci_controller.is_some() && ble_peer.is_none() {
         return Err("--ble-hci-controller requires --ble-peer".into());

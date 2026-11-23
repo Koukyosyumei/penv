@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 84 | 5 | 101 |
+| 監査した共有・混成 Robot | 190 | 85 | 5 | 100 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **101** | **5** | **115** |
+| 合計 | **221** | **102** | **5** | **114** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -183,7 +183,7 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 
 上記の `cargo test`、`nrf52840-bus-fault-upstream.sh`、`nrf52840-fpu-upstream.sh`、`nrf52840-shell.sh` で再現できる。今回のログと対応する終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/fp-bus-fault.WoqOVB6v/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。
 
-BusFault の適用対象31ケースのうち17件が合格、1件が部分移植、13件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
+BusFault の適用対象31ケースのうち18件が合格、1件が部分移植、12件が未達。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、連続 fault に対する monitor step 境界などの阻害点は TSV の `verification` 欄を参照。
 
 ### 未マップのデータアクセス
 
@@ -215,4 +215,10 @@ BusFault の適用対象31ケースのうち17件が合格、1件が部分移植
 
 `arm-cortex-m-bus-fault.robot:601–628, 685–709` を Rust の実行回帰に移植した。元の Thumb 命令、VTOR、モックのフォールトアドレスを使用する。外部 IRQ は NVIC の ISPR、NMI は ICSR のペンドビットで注入した。外部 IRQ のケースは HardFault 入口・単一フレーム・元の IRQ の保留と非アクティブ状態を照合した。NMI のケースは lockup・IPSR・SCB・DHCSR と HFSR の書き込みクリアを照合した。EXC_RETURN の LR は Cortex-M4 の Thread/MSP 対応値 `0xFFFFFFF9` を使う。
 
-`cargo test` と上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/exception-vectors.hSLLTaY9/` の `cargo-test.final`、`elf`、`shell` に保存した。HardFault を直接ペンドする上流ケースは同じ入口からの検証が残る。スタックアクセスとベクタアクセスが同時に失敗した場合の優先順位も未達。
+`cargo test` と上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/exception-vectors.hSLLTaY9/` の `cargo-test.final`、`elf`、`shell` に保存した。HardFault の直接ペンドは次節に記録した。スタックアクセスとベクタアクセスが同時に失敗した場合の優先順位も未達。
+
+### 直接ペンドした HardFault のベクタ BusFault
+
+`arm-cortex-m-bus-fault.robot:710–732` を移植した。上流と同じ Thumb 命令、VTOR とモックを使い、上流の `nvic SetPendingIRQ 3` と同じ NVIC 経路で HardFault をペンドした。次のステップで lockup、単一の例外フレーム、Armv7-M の Thread/MSP EXC_RETURN、IPSR・ITSTATE、CFSR・HFSR・SHCSR、CPU とデバッガの DHCSR を照合した。RESC コマンド自体は別の読み出し可能なベクタを持つ ELF で確認した。
+
+`cargo test` と上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/pending-hardfault.VonZkMGx/` の `cargo-test`、`elf`、`shell` に保存した。例外スタックとベクタの同時障害、例外復帰時の障害、遅延 FP 保存は未達。
