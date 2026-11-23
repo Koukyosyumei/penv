@@ -945,3 +945,21 @@ target/release/penv run --platform "$evidence/zbkc.repl" \
 固定 Robot の構成で再試行した 2 件は V の未対応で CPU 作成時に停止しました。縮小構成での通過を台帳に追記し、上流等価合格は累計 155 件です。
 
 REPL、実 ELF、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-e9d37fc-GWxf6L/` に保存しました。
+
+### RV32 Zknh の SHA-2 命令
+
+明示的な `Zknh` 指定に対応し、SHA-256 の 4 命令と、SHA-512 の RV32 分割演算 6 命令を実装しました。SHA-512 の上位・下位命令では、指定されたソース順序で 64 ビット値を組み立ててから対応する半分を返します。[RISC-V スカラー暗号拡張仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/scalar-crypto.html)
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$evidence/zknh.repl" --artifacts "$evidence/zknh-rerun" \
+  "$work"/act/work/spike-rv32-max/elfs/rv32i/Zknh/*.elf
+```
+
+固定 ACT ELF は従来 `rv32ic_zknh` の CPU 作成で 10 件とも停止しました。変更後は同じ構成で全件が完了コード 0 に到達し、Rust テスト 87 件、既存ビット操作 ELF 78 件、virt の UART・CLINT・PLIC も通過しました。
+
+固定 Robot の最大 ISA 構成では再試行した 10 件が V の未対応で停止します。固定 ISA には Zknh の指定もありません。縮小構成の通過を各行に記録し、上流等価合格は累計 155 件です。
+
+REPL、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-fd3fa2d-DXYSwi/` に保存しました。

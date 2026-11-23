@@ -4,6 +4,7 @@ pub struct BitManip {
     pub zbb: bool,
     pub zbc: bool,
     pub zbkc: bool,
+    pub zknh: bool,
     pub zbs: bool,
     pub zbkb: bool,
     pub zbkx: bool,
@@ -15,6 +16,15 @@ pub struct BitManip {
 impl BitManip {
     pub fn immediate(self, funct3: u32, funct7: u32, value: u32, imm: u32) -> Option<u32> {
         let index = imm & 31;
+        if self.zknh && funct3 == 1 && funct7 == 0x08 {
+            return Some(match index {
+                0 => value.rotate_right(2) ^ value.rotate_right(13) ^ value.rotate_right(22),
+                1 => value.rotate_right(6) ^ value.rotate_right(11) ^ value.rotate_right(25),
+                2 => value.rotate_right(7) ^ value.rotate_right(18) ^ (value >> 3),
+                3 => value.rotate_right(17) ^ value.rotate_right(19) ^ (value >> 10),
+                _ => return None,
+            });
+        }
         if self.zbb {
             match (funct3, funct7, index) {
                 (1, 0x30, 0) => return Some(value.leading_zeros()),
@@ -66,6 +76,7 @@ impl BitManip {
 
     pub fn register(self, funct3: u32, funct7: u32, a: u32, b: u32, rs2: u32) -> Option<u32> {
         Some(match (funct3, funct7) {
+            (0, 0x28..=0x2b | 0x2e | 0x2f) if self.zknh => sha512_half(funct7, a, b),
             (2 | 4 | 6, 0x10) if self.zba => (a << (funct3 / 2)).wrapping_add(b),
             (4, 0x20) if self.zbb || self.zbkb => !(a ^ b),
             (6, 0x20) if self.zbb || self.zbkb => a | !b,
@@ -172,4 +183,23 @@ fn permute(source: u32, selectors: u32, width: u32) -> u32 {
         }
     }
     result
+}
+
+// SHA-512 split instructions return one 32-bit half, with source order reversed for the high form.
+fn sha512_half(funct7: u32, a: u32, b: u32) -> u32 {
+    let high = matches!(funct7, 0x2e | 0x2f);
+    let (lo, hi) = if high { (b, a) } else { (a, b) };
+    let value = (u64::from(hi) << 32) | u64::from(lo);
+    let transformed = match funct7 {
+        0x28 => value.rotate_right(28) ^ value.rotate_right(34) ^ value.rotate_right(39),
+        0x29 => value.rotate_right(14) ^ value.rotate_right(18) ^ value.rotate_right(41),
+        0x2a | 0x2e => value.rotate_right(1) ^ value.rotate_right(8) ^ (value >> 7),
+        0x2b | 0x2f => value.rotate_right(19) ^ value.rotate_right(61) ^ (value >> 6),
+        _ => unreachable!(),
+    };
+    if high {
+        (transformed >> 32) as u32
+    } else {
+        transformed as u32
+    }
 }
