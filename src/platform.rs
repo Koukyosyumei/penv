@@ -323,6 +323,14 @@ fn apply_litex_irq_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
 }
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
+    load_platform(path, root, true)
+}
+
+pub fn check(path: &Path) -> Result<(), String> {
+    load_platform(path, None, false).map(|_| ())
+}
+
+fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -606,10 +614,11 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     } else if let Some(controller) = flash_controller {
         return Err(controller.error("expected an attached Micron MT25Q flash chip"));
     }
-    if cpus.is_empty() || !ram {
+    if cpus.is_empty() || (require_ram && !ram) {
         return Err(format!(
-            "{}: platform requires at least one CPU and mapped RAM",
-            path.display()
+            "{}: platform requires at least one CPU{}",
+            path.display(),
+            if require_ram { " and mapped RAM" } else { "" }
         ));
     }
     if let Some(entry) = cpus.iter().find(|entry| entry.model == "CPU.CortexM") {

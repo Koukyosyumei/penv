@@ -1,4 +1,4 @@
-"""Run pinned Renode RV32 construction-error inputs against the penv CLI."""
+"""Run pinned Renode RV32 CPU construction cases against the penv CLI."""
 import argparse
 import json
 from pathlib import Path
@@ -40,24 +40,23 @@ def main():
             for value in values
             if re.fullmatch(r"rv32(?:[imafdcgb_]+|_?e[mac]*)(?:_?z(?:icsr|ifencei|bs|icond))*", value.lower())
         ]
-        if not inputs:
-            parser.error("no fixed valid-spelling fixtures found")
+        smepmp = re.search(r"(?m)^    (RV32I_Smepmp)\s*$", extensions)
+        if not inputs or smepmp is None:
+            parser.error("the fixed valid-construction fixtures changed")
+        inputs.append(("riscv-extensions.robot", "Should Create CPUs With Supported ISAs", smepmp[1], None))
 
     args.output.mkdir(parents=True, exist_ok=False)
-    payload = args.output / "ebreak.bin"
-    payload.write_bytes(bytes.fromhex("73001000"))
     results = []
     for source, name, cpu, expected in inputs:
         fixture = args.output / f"{cpu}.repl"
-        fixture.write_text(f'cpu: CPU.RiscV32 @ sysbus {{ cpuType: "{cpu}" }}\n'
-                           "mem: Memory.MappedMemory @ sysbus 0x80000000 { size: 0x1000 }\n")
+        fixture.write_text(f'cpu: CPU.RiscV32 @ sysbus {{ cpuType: "{cpu}" }}\n')
         result = subprocess.run(
-            [args.penv.resolve(), "run", "--raw", "--platform", fixture, "--stats", "--max-steps", "2", payload],
+            [args.penv.resolve(), "check-platform", fixture],
             text=True, capture_output=True, timeout=10,
         )
         (args.output / f"{cpu}.log").write_text(result.stdout + result.stderr)
         if expected is None:
-            passed = result.returncode == 0 and "Ebreak, 0 instructions" in result.stderr
+            passed = result.returncode == 0
         else:
             passed = result.returncode == 1 and expected in result.stderr
         results.append(dict(source=source, case=name, parameter=cpu, expected=expected,

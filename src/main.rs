@@ -47,6 +47,7 @@ const HELP: &str = "Run a bare-metal firmware image.
 
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_ELF]
+       penv check-platform PATH
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
@@ -104,8 +105,16 @@ fn run() -> Result<ExitCode, String> {
             println!("penv {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
+        Some(Some("check-platform")) => {
+            let path = args.next().ok_or("expected 'check-platform PATH'")?;
+            if args.next().is_some() {
+                return Err("expected 'check-platform PATH'".into());
+            }
+            platform::check(PathBuf::from(path).as_path())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         Some(Some("run")) => {}
-        _ => return Err("expected 'run'; see --help".into()),
+        _ => return Err("expected 'run' or 'check-platform'; see --help".into()),
     }
 
     let mut raw = false;

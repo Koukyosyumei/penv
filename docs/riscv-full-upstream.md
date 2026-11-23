@@ -660,3 +660,21 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 Rust テスト 84 件、公開 Zbb ELF 36 件、同じ virt 構成の UART・CLINT・PLIC プローブが通過しました。台帳の上流等価合格は累計 114 件です。公開 ELF を実行する固定上流スイートの最大 ISA 構成には V が必要で、今回の virt 回帰結果はその合格には算入していません。
 
 ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-89b1d87-y10EU4/` に保存しました。
+
+### RAM を持たない RV32 フィクスチャの構成検証
+
+固定 `riscv-extensions.robot` の `RV32I_Smepmp` ケースは CPU の作成だけを要求します。従来の CLI はファームウェア実行用で、この REPL を RAM 不足で拒否しました。`penv check-platform PATH` は同じ REPL ローダーでプラットフォームを構成して終了します。ファームウェアの実行には引き続き RAM が必要です。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+target/release/penv check-platform "$evidence/smepmp-only.repl"
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/valid-rerun" --valid
+python3 scripts/validate-rv32-isa-errors.py target/release/penv ../renode "$evidence/invalid-rerun"
+```
+
+固定の有効構成 44 件と無効構成 5 件を、上流と同じ CPU のみの REPL で検証しました。Smepmp の実 ELF では読み書きの許可と、読み出し・書き込み・実行拒否の例外 5・7・1 を再確認しました。Rust テスト 84 件、公開 M/S 特権 ELF 22 件、virt の UART・CLINT・PLIC も通過しました。
+
+上流等価合格は累計 115 件です。同じ構成スイートの残り 8 件は Sscofpmf、V、Zvfh、Zve のいずれかで CPU 作成が止まり、各診断を台帳と `extension-blockers.json` に記録しました。
+
+再現用 REPL、ログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-12c30a2-oE46Vc/` に保存しました。
