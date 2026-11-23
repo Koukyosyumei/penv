@@ -80,6 +80,8 @@ struct Region {
 pub struct Bus {
     #[cfg(test)]
     pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
+    #[cfg(test)]
+    pub faulting_stack_writes: Option<std::ops::RangeInclusive<u32>>,
     regions: Vec<Region>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,

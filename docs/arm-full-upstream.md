@@ -30,7 +30,7 @@ scripts/verify-stm32f072.sh ../renode /tmp/新規証跡ディレクトリ
 
 ## 残件
 
-共有テストの適用可否とパラメータを、上流と同じ入力・タイミング・失敗判定まで突合する。例外復帰のうち BLX の戻り先差、Armv6-M に適用できる HardFault/ロックアップ、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+共有テストの適用可否とパラメータを、上流と同じ入力・タイミング・失敗判定まで突合する。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -55,4 +55,24 @@ cargo test --locked renode_fault_on_initial_msp
 cargo test --locked runs_cortex_m0_from_vector_table
 ```
 
-Cortex-M55 の CFSR/HFSR/BFAR、BusFault 有効化、ITSTATE、TrustZone、FP 条件は Armv6-M の結果には含めない。Fault が起きた時点の段階的な部分スタック書き込み、ベクター遅延到着、例外復帰中のアンスタック Fault とテールチェーンは未検証または未移植。
+Cortex-M55 の CFSR/HFSR/BFAR、BusFault 有効化、ITSTATE、TrustZone、FP 条件は Armv6-M の結果には含めない。実行中のベクター遅延到着は未移植。
+
+## 例外スタック書き込み・アンスタック時の Fault
+
+固定上流の `tests/unit-tests/arm-cortex-m-bus-fault.robot` から、`0x100000` の Fault 領域と MSP `0x100020` を使う6ケースを Armv6-M に移植した。ケース名と Rust テストの対応は[台帳](arm-upstream-cases.tsv)を参照。
+
+| 刺激 | 確認した結果 |
+| --- | --- |
+| スレッドから NMI または IRQ 16 に入る際にスタック書き込みが失敗 | SP は `0x100000`。NMI は起動して HardFault を保留。IRQ 16 の場合は HardFault が先に起動し、IRQ 16 は保留のまま |
+| HardFault 中の NMI でスタック書き込みが失敗。ベクターも失敗する組み合わせを含む | NMI と HardFault がともにアクティブになり、SP `0x100000`、PC `0xEFFFFFFE` でロックアップ |
+| 同じ NMI でスタックのオフセット `0x14` だけが失敗する補助ケース | 上流 tlib の `v7m_push` の順序で先に書いた xPSR と PC が残る。Fault を起こしたワードと下位アドレスのワードは初期値を保持 |
+| HardFault 中の NMI が `ldr r0, =0x100000; msr msp, r0; bx lr` を実行 | 復帰時の読み出しが失敗して NMI を終了。SP `0x100020` までフレームを消費し、HardFault の状態でロックアップ |
+| 読み出しだけが失敗するスタックで、スレッドから起動した NMI が `nop; bx lr` を実行 | SP `0x100000`、EXC_RETURN `0xFFFFFFF9` と保存フレームの8ワードを保持して HardFault へテールチェーン。Fault を解除すると同じフレームでスレッドに復帰 |
+
+上流の Cortex-M55 は一部のケースで BusFault を有効化する。Armv6-M では HardFault に昇格するため、その例外番号とベクターを検証した。CFSR、HFSR、SHCSR、ITSTATE、FP、TrustZone の観測は対象外。通常の例外復帰で保留中の割り込みを選ぶテールチェーンと、ベクター取得中に到着する割り込みの優先順位評価は残件。Fault 注入は Rust テスト内で行い、公開 STM32F072 イメージは既存動作の回帰に用いる。
+
+```sh
+cargo test --locked stacking_fault
+cargo test --locked unstack_fault
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-stack-fault-evidence
+```

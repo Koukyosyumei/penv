@@ -45,6 +45,7 @@ pub(crate) enum ThumbStep {
 
 enum InstructionError {
     GuestFault,
+    ExceptionTaken(u32),
     Host(String),
 }
 
@@ -286,17 +287,40 @@ impl Thumb {
             | ((sp & 4) << 7)
             | u32::from(self.active_exception);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        if let Ok(memory) = bus.memory(stack, 32) {
-            for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
-                *word = value.to_le_bytes();
+        let mut stacking_fault = false;
+        // Match PushStack: allocate the whole frame and abandon writes after
+        // the first fault, starting at the highest-addressed word.
+        for (index, value) in frame.into_iter().enumerate().rev() {
+            let address = stack.wrapping_add(index as u32 * 4);
+            #[cfg(test)]
+            if bus
+                .faulting_stack_writes
+                .as_ref()
+                .is_some_and(|range| range.contains(&address))
+            {
+                stacking_fault = true;
+                break;
             }
-        } else if exception == HARDFAULT && self.invalid_thumb_state && self.active_exception == 0 {
-            // Keep the invalid reset state observable at the HardFault entry
-            // boundary even when the initial MSP has no writable stack.
-        } else if matches!(exception, NMI | HARDFAULT) || !self.can_take_hardfault() {
-            return self.lockup();
-        } else {
-            exception = HARDFAULT;
+            let Ok(word) = bus.memory(address, 4) else {
+                stacking_fault = true;
+                break;
+            };
+            word.copy_from_slice(&value.to_le_bytes());
+        }
+        let mut lock_after_entry = false;
+        if stacking_fault {
+            match exception {
+                NMI if self.can_take_hardfault() => {
+                    if let Some(nvic) = bus.nvic.as_mut() {
+                        nvic.set_hardfault_pending(true);
+                    }
+                }
+                // Preserve the first exception boundary after an invalid reset.
+                HARDFAULT if self.invalid_thumb_state && self.active_exception == 0 => {}
+                NMI | HARDFAULT => lock_after_entry = true,
+                _ if self.can_take_hardfault() => exception = HARDFAULT,
+                _ => lock_after_entry = true,
+            }
         }
         if self.uses_psp() {
             self.psp = stack;
@@ -310,6 +334,15 @@ impl Thumb {
                 0xffff_fff1
             };
         }
+        let handler = self.take_exception_vector(exception, bus);
+        if lock_after_entry {
+            self.lockup()
+        } else {
+            handler
+        }
+    }
+
+    fn take_exception_vector(&mut self, mut exception: u8, bus: &Bus) -> u32 {
         let vector_base = bus
             .nvic
             .as_ref()
@@ -342,18 +375,24 @@ impl Thumb {
         &mut self,
         target: u32,
         r: &mut [u32; 32],
-        bus: &Bus,
+        bus: &mut Bus,
     ) -> Result<u32, InstructionError> {
         if self.active_exception != 0 && matches!(target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd) {
             let use_psp = target == 0xffff_fffd;
             let stack = if use_psp { self.psp } else { r[13] };
+            let remaining = self.active_exceptions & !(1 << self.active_exception);
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
-                *word = bus.read_ram::<4>(stack.wrapping_add(index as u32 * 4))?;
+                match bus.read_ram::<4>(stack.wrapping_add(index as u32 * 4)) {
+                    Ok(value) => *word = value,
+                    Err(_) => {
+                        let pc = self.unstack_fault(target, stack, &frame[..index], r, bus);
+                        return Err(InstructionError::ExceptionTaken(pc));
+                    }
+                }
             }
             let [r0, r1, r2, r3, r12, lr, pc, xpsr] = frame;
             let previous = xpsr & 0x1ff;
-            let remaining = self.active_exceptions & !(1 << self.active_exception);
             let valid_mode = if target != 0xffff_fff1 {
                 previous == 0 && remaining == 0
             } else {
@@ -388,6 +427,55 @@ impl Thumb {
         }
         self.invalid_thumb_state = target & 1 == 0;
         Ok(target & !1)
+    }
+
+    fn unstack_fault(
+        &mut self,
+        target: u32,
+        stack: u32,
+        restored_words: &[u32],
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+    ) -> u32 {
+        // The returning exception is no longer active. An eligible HardFault
+        // uses the existing frame and the original EXC_RETURN.
+        self.active_exceptions &= !(1 << self.active_exception);
+        self.active_exception = (NMI..64)
+            .filter(|number| self.active_exceptions & (1 << number) != 0)
+            .min_by_key(|number| match *number {
+                NMI | HARDFAULT => i16::from(*number) - 4,
+                _ => bus
+                    .nvic
+                    .as_ref()
+                    .map_or(0, |nvic| nvic.priority(*number))
+                    .into(),
+            })
+            .unwrap_or(0);
+        let use_psp = target == 0xffff_fffd;
+        if self.can_take_hardfault() {
+            r[14] = target;
+            if use_psp {
+                self.psp = stack;
+            } else {
+                r[13] = stack;
+            }
+            if let Some(nvic) = bus.nvic.as_mut() {
+                nvic.set_hardfault_pending(false);
+            }
+            self.take_exception_vector(HARDFAULT, bus)
+        } else {
+            for (register, value) in [0, 1, 2, 3, 12, 14].into_iter().zip(restored_words) {
+                r[register] = *value;
+            }
+            let consumed = stack.wrapping_add(32);
+            if use_psp {
+                self.msp = r[13];
+                self.psp = consumed;
+                self.thread_uses_psp = true;
+            }
+            r[13] = consumed;
+            self.lockup()
+        }
     }
 
     pub fn sleeping(&self) -> bool {
@@ -477,6 +565,9 @@ impl Thumb {
                 return Ok(false);
             }
             *pc = self.exception_entry(exception, *pc, r, bus);
+            if self.active_exception != exception {
+                return Ok(true);
+            }
             if matches!(exception, PENDSV | SYSTICK) {
                 bus.systick.as_mut().unwrap().acknowledge(exception);
             } else {
@@ -511,6 +602,10 @@ impl Thumb {
             Ok(true) => Ok(ThumbStep::Retired),
             Ok(false) => Ok(ThumbStep::Breakpoint),
             Err(InstructionError::Host(error)) => Err(error),
+            Err(InstructionError::ExceptionTaken(next)) => {
+                *pc = next;
+                Ok(ThumbStep::Exception)
+            }
             Err(InstructionError::GuestFault) => {
                 *pc = self.hardfault(*pc, r, bus);
                 Ok(ThumbStep::Exception)
@@ -710,7 +805,11 @@ impl Thumb {
                     }
                     restored[13] = sp.wrapping_add(bytes);
                     if let Some(target) = target {
-                        next = self.branch(target, &mut restored, bus)?;
+                        let branch = self.branch(target, &mut restored, bus);
+                        if matches!(branch, Err(InstructionError::ExceptionTaken(_))) {
+                            *r = restored;
+                        }
+                        next = branch?;
                     }
                     *r = restored;
                 } else {
@@ -859,6 +958,207 @@ mod tests {
         let mut registers = [0; 32];
         registers[13] = 0x1000;
         (bus, Thumb::new(Some(0)), registers)
+    }
+
+    #[test]
+    fn renode_thread_stacking_fault_pends_or_escalates_to_hardfault() {
+        for interrupt in [NMI, 16] {
+            let (mut bus, mut thumb, mut registers) = fault_fixture();
+            let mut output = std::io::sink();
+            let mut pc = 0x200;
+            bus.write(pc, 2, 0xe7fe, &mut output).unwrap(); // b .
+            bus.write(8, 4, 0x381, &mut output).unwrap();
+            bus.write(12, 4, 0x341, &mut output).unwrap();
+            bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
+            registers[13] = 0x100020;
+            bus.faulting_stack_writes = Some(0x100000..=0x100fff);
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap();
+            bus.pend_nvic_exception("nvic", u32::from(interrupt))
+                .unwrap();
+            assert!(
+                thumb
+                    .service_interrupts(&mut pc, &mut registers, &mut bus)
+                    .unwrap()
+            );
+            let (handler, active, pending) = if interrupt == NMI {
+                (0x380, NMI, HARDFAULT)
+            } else {
+                (0x340, HARDFAULT, 16)
+            };
+            assert_eq!(
+                (pc, registers[13], registers[14]),
+                (handler, 0x100000, 0xfffffff9)
+            );
+            assert_eq!(thumb.active_exceptions, 1 << active);
+            assert_eq!(
+                bus.nvic.as_ref().unwrap().pending_exceptions(),
+                1 << pending
+            );
+            assert!(!thumb.locked_up());
+        }
+    }
+
+    #[test]
+    fn renode_nmi_stacking_fault_over_hardfault_allocates_frame_and_locks_up() {
+        for (fault, vector_fault) in [
+            (0x100000..=0x100fff, false),
+            (0x100014..=0x100014, false),
+            (0x100000..=0x100fff, true),
+        ] {
+            let partial = fault.start() == fault.end();
+            let (mut bus, mut thumb, mut registers) = fault_fixture();
+            let mut output = std::io::sink();
+            let mut pc = 0x200;
+            registers[0] = 0x100000;
+            bus.write(pc, 2, 0x6802, &mut output).unwrap(); // ldr r2, [r0]
+            bus.write(8, 4, 0x381, &mut output).unwrap();
+            bus.write(12, 4, 0x341, &mut output).unwrap();
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Exception)
+            );
+            assert_eq!(pc, 0x340);
+            registers[13] = 0x100020;
+            bus.memory(0x100000, 32).unwrap().fill(0xa5);
+            bus.faulting_stack_writes = Some(fault);
+            if vector_fault {
+                bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+            }
+            bus.pend_nvic_exception("nvic", 2).unwrap();
+            assert!(
+                thumb
+                    .service_interrupts(&mut pc, &mut registers, &mut bus)
+                    .unwrap()
+            );
+            assert_eq!(
+                (pc, registers[13], registers[14]),
+                (LOCKUP_PC, 0x100000, 0xfffffff1)
+            );
+            assert_eq!(thumb.active_exception, NMI);
+            assert_eq!(thumb.active_exceptions, (1 << NMI) | (1 << HARDFAULT));
+            assert!(thumb.locked_up());
+
+            bus.faulting_accesses = None;
+            for offset in (0..32).step_by(4) {
+                let expected = match (partial, offset) {
+                    (true, 0x18) => 0x340,
+                    (true, 0x1c) => 0x01000003,
+                    _ => 0xa5a5a5a5,
+                };
+                assert_eq!(
+                    bus.read_ram::<4>(0x100000 + offset).unwrap(),
+                    expected,
+                    "frame offset {offset:#x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn renode_unstack_fault_over_hardfault_consumes_frame_and_locks_up() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        let mut pc = 0x200;
+        registers[0] = 0x100000;
+        for (address, opcode) in [
+            (0x200, 0x6802), // ldr r2, [r0]
+            (0x380, 0x4801), // ldr r0, =0x100000
+            (0x382, 0xf380), // msr msp, r0
+            (0x384, 0x8808),
+            (0x386, 0x4770), // bx lr
+        ] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        bus.write(0x388, 4, 0x100000, &mut output).unwrap();
+        bus.write(8, 4, 0x381, &mut output).unwrap();
+        bus.write(12, 4, 0x341, &mut output).unwrap();
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!(pc, 0x340);
+        bus.pend_nvic_exception("nvic", 2).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(bus.read_ram::<4>(0xfd8).unwrap(), 0x340);
+        for _ in 0..2 {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Retired)
+            );
+        }
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!(
+            (pc, registers[13], registers[14]),
+            (LOCKUP_PC, 0x100020, 0xfffffff1)
+        );
+        assert_eq!(thumb.active_exception, HARDFAULT);
+        assert_eq!(thumb.active_exceptions, 1 << HARDFAULT);
+        assert!(thumb.locked_up());
+    }
+
+    #[test]
+    fn renode_unstack_fault_tail_chains_using_existing_frame() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        let mut pc = 0x200;
+        registers[13] = 0x100020;
+        registers[0] = 0x11223344;
+        bus.write(pc, 2, 0xe7fe, &mut output).unwrap(); // b .
+        bus.write(8, 4, 0x381, &mut output).unwrap();
+        bus.write(12, 4, 0x341, &mut output).unwrap();
+        bus.write(0x380, 2, 0xbf00, &mut output).unwrap(); // nop
+        bus.write(0x382, 2, 0x4770, &mut output).unwrap(); // bx lr
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        bus.pend_nvic_exception("nvic", 2).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Retired)
+        );
+        assert_eq!(pc, 0x382);
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!(
+            (pc, registers[13], registers[14]),
+            (0x340, 0x100000, 0xfffffff9)
+        );
+        assert_eq!(thumb.active_exceptions, 1 << HARDFAULT);
+        assert!(!thumb.locked_up());
+
+        bus.faulting_accesses = None;
+        let expected = [0x11223344, 0, 0, 0, 0, 0, 0x200, 0x01000000];
+        for (index, value) in expected.into_iter().enumerate() {
+            assert_eq!(
+                bus.read_ram::<4>(0x100000 + index as u32 * 4).unwrap(),
+                value
+            );
+        }
+        bus.write(0x340, 2, 0x4770, &mut output).unwrap(); // bx lr
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Retired)
+        );
+        assert_eq!(
+            (pc, registers[13], thumb.active_exceptions),
+            (0x200, 0x100020, 0)
+        );
     }
 
     #[test]
