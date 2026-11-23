@@ -31,7 +31,9 @@ impl Plan {
         }
         for node in &plan.nodes {
             if node.boot.platform.is_none()
-                || (node.boot.image.is_none() && node.boot.binaries.is_empty())
+                || (!plan.is_monitor_only()
+                    && node.boot.image.is_none()
+                    && node.boot.binaries.is_empty())
             {
                 return Err(format!(
                     "{}: machine {:?} requires a platform and firmware",
@@ -45,6 +47,23 @@ impl Plan {
 
     pub fn is_single_boot(&self) -> bool {
         self.nodes.len() == 1 && self.actions.len() == 1
+    }
+
+    pub fn is_monitor_only(&self) -> bool {
+        self.actions.len() > self.nodes.len()
+            && self
+                .nodes
+                .iter()
+                .any(|node| node.boot.image.is_none() && node.boot.binaries.is_empty())
+            && !self.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    Action::Run(_)
+                        | Action::WaitUart { .. }
+                        | Action::WaitLed { .. }
+                        | Action::BlinkLed { .. }
+                )
+            })
     }
 
     fn command(
@@ -253,6 +272,26 @@ impl Plan {
                     sensor: (*sensor).into(),
                     axis,
                     value,
+                });
+            }
+            ["sysbus", "LogPeripheralAccess", "rcc"] => {
+                let node = self.monitor_node()?;
+                self.actions.push(Action::TraceRcc { node });
+            }
+            ["rcc", "WriteDoubleWord", offset, value] => {
+                let node = self.monitor_node()?;
+                self.actions.push(Action::RccWrite {
+                    node,
+                    offset: crate::platform::number(resolve(*offset)?)?,
+                    value: crate::platform::number(resolve(*value)?)?,
+                });
+            }
+            [name, "Frequency"] | ["sysbus", "IsPeripheralEnabled", name] => {
+                let node = self.monitor_node()?;
+                self.actions.push(Action::TimerProperty {
+                    node,
+                    name: resolve(*name)?.into(),
+                    frequency: words.len() == 2,
                 });
             }
             [timer, "OnGPIO", channel, level] => {

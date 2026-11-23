@@ -878,3 +878,23 @@ target/release/penv run --script "$e/start.resc" --platform-root ../renode \
 ```
 
 RCC スクリプトは CSI 4 の未達によりコード 1 を返します。ログと終了状態は上記の証拠ディレクトリにあり、RCC の最終実行は `rcc-rules/` です。参照 Zephyr Shell、ADC DMA、暗号サンプル、Blinky、Button、REPL ロード 7 構成は回帰を通過しました。台帳は対象 789 件のうち等価合格 52 件、部分検証 10 件、未達 727 件です。
+
+### backlog-network-3ea9295d2060-1
+
+未変更 STM32H743 REPL で、ファームウェアを実行しない `STM32H7_RCC.robot` の TIM1 3 ケースを移植しました。APB2RSTR への `0x1` で実リセットを実行し、`Resetting TIM1` を記録しました。リセット前後の周波数はどちらも 64 MHz でした。APB2ENR へ上流と同じ値を書いて、有効・無効・有効の順に確認しました。
+
+登録されたタイマーのゲートは上流モデルと同じく初期状態で有効です。タイマー周波数は RCC のシステムクロックとドメイン・APB 分周から求めます。別のプローブで HSI 64 MHz から HSE 8 MHz に切り替え、HPRE・D2PPRE2・TIMPRE による `4 → 2 → 4` MHz も確認しました。既存 TIM1/TIM8 実 ELF スモークのクロック停止確認には、APB2ENR を明示的にクリアする操作を追加しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-rcc-timer.0zFmYqdC` に保存しました。クロック構成の公開 ELF は既合格の 6 件が再度通過しました。CSI 4 は引き続き 8 仮想秒以内に USART3 出力がありません。台帳は対象 789 件のうち等価合格 55 件、部分検証 10 件、未達 724 件です。

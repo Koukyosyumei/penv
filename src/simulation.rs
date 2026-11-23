@@ -100,6 +100,19 @@ pub enum Action {
         axis: usize,
         value: f64,
     },
+    TraceRcc {
+        node: usize,
+    },
+    RccWrite {
+        node: usize,
+        offset: u32,
+        value: u32,
+    },
+    TimerProperty {
+        node: usize,
+        name: String,
+        frequency: bool,
+    },
     TimerInput {
         node: usize,
         name: String,
@@ -182,6 +195,7 @@ pub fn run(
     uart_log_dir: Option<&Path>,
 ) -> Result<ExitCode, String> {
     let mut simulation = Simulation::default();
+    let monitor_only = plan.is_monitor_only();
     let mut pending = plan.nodes.into_iter();
     let mut output = LineWriter::new(io::stdout().lock());
     let mut ran = false;
@@ -190,7 +204,7 @@ pub fn run(
             match action {
                 Action::Activate(id) => {
                     debug_assert_eq!(id, simulation.nodes.len());
-                    let mut node = Node::boot(pending.next().unwrap(), root, assets)?;
+                    let mut node = Node::boot(pending.next().unwrap(), root, assets, monitor_only)?;
                     if let Some(directory) = uart_log_dir {
                         let path = directory.join(format!("{id}.uart.log"));
                         node.uart_log = Some(BufWriter::new(
@@ -332,6 +346,35 @@ pub fn run(
                         .bus
                         .find_imu(&sensor)?
                         .set_input(axis, value);
+                }
+                Action::TraceRcc { node } => {
+                    simulation.nodes[node].machine.bus.trace_rcc()?;
+                }
+                Action::RccWrite {
+                    node,
+                    offset,
+                    value,
+                } => {
+                    let bus = &mut simulation.nodes[node].machine.bus;
+                    let address = bus
+                        .rcc_base()?
+                        .checked_add(offset)
+                        .ok_or("RCC offset overflow")?;
+                    bus.write(address, 4, value, &mut output)
+                        .map_err(|e| e.to_string())?;
+                }
+                Action::TimerProperty {
+                    node,
+                    name,
+                    frequency,
+                } => {
+                    let (hz, enabled) =
+                        simulation.nodes[node].machine.bus.timer_properties(&name)?;
+                    if frequency {
+                        writeln!(output, "{hz}").map_err(|e| e.to_string())?;
+                    } else {
+                        writeln!(output, "{enabled}").map_err(|e| e.to_string())?;
+                    }
                 }
                 Action::TimerInput {
                     node,
@@ -511,7 +554,7 @@ pub fn run(
                 }
             }
         }
-        if ran {
+        if ran || monitor_only {
             Ok(false)
         } else {
             simulation.advance(Run::Remaining, limit, &mut output)
@@ -549,7 +592,12 @@ pub fn run(
 }
 
 impl Node {
-    fn boot(node: NodeBoot, root: Option<&Path>, assets: Option<&Path>) -> Result<Self, String> {
+    fn boot(
+        node: NodeBoot,
+        root: Option<&Path>,
+        assets: Option<&Path>,
+        monitor_only: bool,
+    ) -> Result<Self, String> {
         let NodeBoot { name, boot, source } = node;
         let mut machine = platform::load(&boot.platform.unwrap(), root)?;
         let open = |value: &str| {
@@ -579,9 +627,11 @@ impl Node {
             machine.set_named_entry(&cpu, address)?;
         }
         zephyr_boot::configure(&mut machine, &boot.zephyr, image_path.as_deref())?;
-        machine
-            .validate_entry()
-            .map_err(|e| format!("{name}: {e}"))?;
+        if !monitor_only {
+            machine
+                .validate_entry()
+                .map_err(|e| format!("{name}: {e}"))?;
+        }
         Ok(Self {
             name,
             switch_by_nic: vec![None; machine.bus.ethernet.len()],

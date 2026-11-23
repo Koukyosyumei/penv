@@ -29,6 +29,7 @@ cp "$base/boot.resc" "$work/boot.resc"
 cat >> "$work/boot.resc" <<RESC
 emulation RunFor "1"
 sysbus WriteDoubleWord $clear $irq_mask
+sysbus WriteDoubleWord 0x580244f0 0
 sysbus WriteDoubleWord 0x580244e8 $rcc_bit
 sysbus ReadDoubleWord ${timer_base}2c
 sysbus WriteDoubleWord 0x580244f0 $rcc_bit

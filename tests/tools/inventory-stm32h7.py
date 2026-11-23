@@ -174,6 +174,14 @@ for file, kind in robot.items():
                 note = '固定 H743 REPL と ELF で USART3 が無出力のまま8仮想秒でタイムアウト。別の実行で PC=0x0800479c を観測'
             else:
                 status, note = 'PASS', '固定 H743 REPL と同一 ELF・USART3・8秒期限で PROJECT EXECUTION SUCCESSFUL を照合。tests/stm32h7-rcc-robot.sh'
+        elif file.endswith('STM32H7_RCC.robot') and name in {
+            'Should Reset Peripheral', 'Should Preserve Peripheral Frequency', 'Should Enable And Disable Peripheral',
+        }:
+            status, note = 'PASS', {
+                'Should Reset Peripheral': '固定 H743 REPL、RCC 0x98 に 1 を書き、実リセットのログ Resetting TIM1 を照合',
+                'Should Preserve Peripheral Frequency': '固定 H743 REPL、RCC 0x98 に 1 を書く前後の TIM1 Frequency が 64000000',
+                'Should Enable And Disable Peripheral': '固定 H743 REPL、APB2ENR への 0xFFFFFFFE・0x1 の書込みを挟み TIM1 の true/false/true を照合',
+            }[name] + '。tests/stm32h7-rcc-timer-robot.sh'
         elif file.endswith('IIS2MDC.robot'):
             status, note = 'PASS', '固定 stm32h753 REPL・I2C1 と PG11・同一 ELF。上流 csv2resd の 9 ブロックを供給し、USART2 の9組を同順・各8秒以内に照合'
         elif file.endswith('INA228.robot'):

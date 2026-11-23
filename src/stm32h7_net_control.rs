@@ -21,6 +21,7 @@ pub struct NetworkControl {
     pub rcc_base: u32,
     pub syscfg_base: Option<u32>,
     pub nic: Option<usize>,
+    pub hse_frequency: u32,
     clocks: [u32; 67],
     syscfg_power: u32,
     ahb1_reset: u32,
@@ -56,6 +57,7 @@ impl NetworkControl {
             rcc_base,
             syscfg_base,
             nic,
+            hse_frequency: 8_000_000,
             clocks: {
                 let mut regs = [0; 67];
                 regs[0] = 0x25;
@@ -212,12 +214,65 @@ impl NetworkControl {
         reset & (1 << bit) != 0
     }
 
+    pub fn enable_registered_timer(&mut self, clock: TimerClock) {
+        match clock {
+            TimerClock::Apb1Low(bit) => self.apb1l_clock |= 1 << bit,
+            TimerClock::Apb2(bit) => self.apb2_clock |= 1 << bit,
+        }
+    }
+
+    fn system_clock(&self) -> Option<u64> {
+        let hsi = 64_000_000 >> ((self.clocks[0] >> 3) & 3);
+        let oscillator = [hsi, 4_000_000, u64::from(self.hse_frequency)];
+        let source = self.clocks[0x10 / 4] & 3;
+        if source != 3 {
+            return oscillator.get(source as usize).copied();
+        }
+        let selection = self.clocks[0x28 / 4];
+        let reference = oscillator.get((selection & 3) as usize)?;
+        let m = u64::from((selection >> 4) & 0x3f).max(1);
+        let pll = self.clocks[0x30 / 4];
+        let n = u64::from(pll & 0x1ff) + 1;
+        let p = u64::from((pll >> 9) & 0x7f) + 1;
+        (n >= 4).then_some((reference / m) * n / p)
+    }
+
+    pub fn timer_frequency(&self, clock: TimerClock) -> Option<u32> {
+        let domain1 = self.clocks[0x18 / 4];
+        let domain2 = self.clocks[0x1c / 4];
+        let domain_divider = |encoded: u32| {
+            if encoded & 8 == 0 {
+                1
+            } else {
+                2u64 << (encoded & 7)
+            }
+        };
+        let apb = match clock {
+            TimerClock::Apb1Low(_) => (domain2 >> 4) & 7,
+            TimerClock::Apb2(_) => (domain2 >> 8) & 7,
+        };
+        let timpre = self.clocks[0x10 / 4] & (1 << 15) != 0;
+        let timer_divider = if apb < 5 {
+            1
+        } else {
+            1u64 << (apb - 4 - u32::from(timpre))
+        };
+        let divider =
+            domain_divider((domain1 >> 8) & 15) * domain_divider(domain1 & 15) * timer_divider;
+        u32::try_from(self.system_clock()? / divider)
+            .ok()
+            .filter(|frequency| *frequency != 0)
+    }
+
     pub fn timer_enabled(&self, clock: TimerClock) -> bool {
-        let enabled = match clock {
+        self.timer_gate_enabled(clock) && !self.timer_in_reset(clock)
+    }
+
+    pub fn timer_gate_enabled(&self, clock: TimerClock) -> bool {
+        match clock {
             TimerClock::Apb1Low(bit) => self.apb1l_clock & (1 << bit) != 0,
             TimerClock::Apb2(bit) => self.apb2_clock & (1 << bit) != 0,
-        };
-        enabled && !self.timer_in_reset(clock)
+        }
     }
 
     pub fn timer_in_reset(&self, clock: TimerClock) -> bool {

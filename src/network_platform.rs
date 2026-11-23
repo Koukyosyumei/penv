@@ -288,13 +288,19 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
     if peripherals.next().is_some() {
         return Err(rcc.error("multiple ETH1MAC clock bindings"));
     }
+    let mut hse_frequency = 8_000_000;
     for (_, property) in &rcc.body {
         let Some((key, value)) = property.split_once(':') else {
             return Err(rcc.error("expected STM32H7 RCC property"));
         };
         match key.trim() {
             "nvic" | "dwt" if !value.trim().is_empty() => {}
-            "hseFrequency" if number(value.trim()).is_ok_and(|value| value != 0) => {}
+            "hseFrequency" => {
+                hse_frequency = number(value.trim()).map_err(|e| rcc.error(&e))?;
+                if hse_frequency == 0 {
+                    return Err(rcc.error("expected a nonzero HSE frequency"));
+                }
+            }
             _ => return Err(rcc.error("unsupported STM32H7 RCC property")),
         }
     }
@@ -345,9 +351,11 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
     // Renode returns zero for unhandled MMIO. Zephyr accesses DBGMCU
     // during STM32H7 startup even though the upstream platform has no model.
     machine.bus.tag(0x5c001000..=0x5c0013ff, 0);
+    let mut control = NetworkControl::new(rcc_base, syscfg_base, nic);
+    control.hse_frequency = hse_frequency;
     machine
         .bus
-        .map_h7_network_control(NetworkControl::new(rcc_base, syscfg_base, nic))
+        .map_h7_network_control(control)
         .map_err(|error| rcc.error(&error))
 }
 

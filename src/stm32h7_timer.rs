@@ -7,7 +7,7 @@ const OPM: u32 = 1 << 3;
 const DIR: u32 = 1 << 4;
 const ARPE: u32 = 1 << 7;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum TimerClock {
     Apb1Low(u8),
     Apb2(u8),
@@ -36,6 +36,12 @@ impl TimerClock {
             .iter()
             .find_map(|&(name, clock)| (name == alias).then_some(clock))
             .ok_or_else(|| format!("unsupported STM32 timer RCC alias {alias}"))
+    }
+
+    pub fn alias(self) -> Option<&'static str> {
+        Self::ALIASES
+            .iter()
+            .find_map(|&(name, clock)| (self == clock).then_some(name))
     }
 
     pub fn apb2_mask() -> u32 {
@@ -90,7 +96,7 @@ pub struct Timer {
     pub clock: Option<TimerClock>,
     routes: [Option<Stm32Irq>; 6],
     inputs: [bool; 4],
-    frequency: u32,
+    pub frequency: u32,
     limit: u32,
     phase: u64,
     divider: u32,

@@ -102,6 +102,7 @@ pub struct Bus {
     constant_mmio: Vec<ConstantMmio>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
+    trace_rcc: bool,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -274,7 +275,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_h7_network_control(&mut self, control: NetworkControl) -> Result<(), String> {
+    pub fn map_h7_network_control(&mut self, mut control: NetworkControl) -> Result<(), String> {
         if control.rcc_base & 3 != 0
             || control.syscfg_base.is_some_and(|base| base & 3 != 0)
             || control
@@ -293,6 +294,7 @@ impl Bus {
             };
             device.set_clock(false);
         }
+        Self::initialize_timer_clocks(&mut self.h7_timers, &mut control);
         self.h7_network_control = Some(control);
         Ok(())
     }
@@ -584,7 +586,10 @@ impl Bus {
                 device.reset();
                 device.set_clock(false);
             }
+            let hse_frequency = control.hse_frequency;
             *control = NetworkControl::new(control.rcc_base, control.syscfg_base, control.nic);
+            control.hse_frequency = hse_frequency;
+            Self::initialize_timer_clocks(&mut self.h7_timers, control);
         }
         for uart in &mut self.stm32_uarts {
             uart.reset();
@@ -664,6 +669,44 @@ impl Bus {
             timer.set_input(channel, high);
         }
         Ok(())
+    }
+
+    fn initialize_timer_clocks(timers: &mut [H7Timer], control: &mut NetworkControl) {
+        for timer in timers {
+            if let Some(clock) = timer.clock {
+                control.enable_registered_timer(clock);
+                if let Some(frequency) = control.timer_frequency(clock) {
+                    timer.frequency = frequency;
+                }
+            }
+        }
+    }
+
+    pub fn rcc_base(&self) -> Result<u32, String> {
+        self.h7_network_control
+            .as_ref()
+            .map(|rcc| rcc.rcc_base)
+            .ok_or_else(|| "no STM32H7 RCC configured".into())
+    }
+
+    pub fn trace_rcc(&mut self) -> Result<(), String> {
+        self.rcc_base()?;
+        self.trace_rcc = true;
+        Ok(())
+    }
+
+    pub fn timer_properties(&self, name: &str) -> Result<(u32, bool), String> {
+        let timer = self
+            .h7_timers
+            .iter()
+            .find(|timer| timer.name == name)
+            .ok_or_else(|| format!("unknown STM32 timer {name:?}"))?;
+        let enabled = timer.clock.is_none_or(|clock| {
+            self.h7_network_control
+                .as_ref()
+                .is_some_and(|rcc| rcc.timer_gate_enabled(clock))
+        });
+        Ok((timer.frequency, enabled))
     }
 
     pub fn map_h7_timer(&mut self, timer: H7Timer) -> Result<(), String> {
@@ -2051,12 +2094,23 @@ impl Bus {
                     timer.reset();
                 }
             }
+            let offset = address.wrapping_sub(control.rcc_base);
+            let clock_changed = matches!(offset, 0 | 0x10 | 0x18 | 0x1c | 0x28 | 0x30);
             for timer in &mut self.h7_timers {
-                if timer
-                    .clock
-                    .is_some_and(|clock| control.timer_in_reset(clock))
-                {
-                    timer.reset();
+                if let Some(clock) = timer.clock {
+                    if clock_changed && let Some(frequency) = control.timer_frequency(clock) {
+                        timer.frequency = frequency;
+                    }
+                    let reset_register = match clock {
+                        crate::stm32h7_timer::TimerClock::Apb1Low(_) => 0x90,
+                        crate::stm32h7_timer::TimerClock::Apb2(_) => 0x98,
+                    };
+                    if offset == reset_register && control.timer_in_reset(clock) {
+                        if self.trace_rcc {
+                            eprintln!("Resetting {}", clock.alias().unwrap_or(&timer.name));
+                        }
+                        timer.reset();
+                    }
                 }
             }
             if control.crc_in_reset() {
