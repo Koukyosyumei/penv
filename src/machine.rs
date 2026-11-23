@@ -29,6 +29,7 @@ pub struct Machine {
     elapsed_steps: u64,
     inputs: VecDeque<(u64, Input)>,
     queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
+    uart_phy_events: Vec<(Rc<Cell<bool>>, String, u16)>,
     frame_wait_trigger: Option<Rc<Cell<bool>>>,
     frame_wait_budget: Option<u64>,
     frame_wait_deadline: Option<u64>,
@@ -221,6 +222,7 @@ impl Machine {
             elapsed_steps: 0,
             inputs: VecDeque::new(),
             queued_frame_waits: VecDeque::new(),
+            uart_phy_events: Vec::new(),
             frame_wait_trigger: None,
             frame_wait_budget: None,
             frame_wait_deadline: None,
@@ -368,6 +370,17 @@ impl Machine {
         Ok(())
     }
 
+    pub fn set_phy_after_uart(
+        &mut self,
+        trigger: Rc<Cell<bool>>,
+        name: String,
+        value: u16,
+    ) -> Result<(), String> {
+        self.bus.litex_phy_mut(&name)?;
+        self.uart_phy_events.push((trigger, name, value));
+        Ok(())
+    }
+
     pub fn schedule_sensor_temperature(
         &mut self,
         step: u64,
@@ -430,6 +443,9 @@ impl Machine {
     }
 
     pub fn verify_required_events_completed(&self) -> Result<(), String> {
+        if !self.uart_phy_events.is_empty() {
+            return Err("execution ended before the LiteX PHY UART trigger".into());
+        }
         if self.frame_wait_trigger.is_some() {
             return Err("execution ended before the framebuffer UART trigger".into());
         }
@@ -460,6 +476,10 @@ impl Machine {
         let mut retired = 0;
         for _ in 0..limit {
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            while let Some(index) = self.uart_phy_events.iter().position(|event| event.0.get()) {
+                let (_, name, value) = self.uart_phy_events.remove(index);
+                self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+            }
             if self
                 .frame_wait_trigger
                 .as_ref()

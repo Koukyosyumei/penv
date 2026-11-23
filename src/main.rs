@@ -67,6 +67,7 @@ Options:
   --litex-timer-alias BASE  Map the existing LiteX timer at an additional address
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
+  --litex-phy-after-uart NAME:VALUE:TEXT  Set PHY VendorSpecific1 after matching UART text
   --litex-phy-event STEP:NAME:VALUE  Set PHY VendorSpecific1 at a step (repeatable)
   --litex-temperature-event STEP:NAME:CELSIUS  Set an SI70xx temperature (repeatable)
   --litex-led-assert STEP:NAME:STATE  Assert a wired LiteX LED is on or off (repeatable)
@@ -143,6 +144,7 @@ fn run() -> Result<ExitCode, String> {
     let mut uart_input_at = None;
     let mut temperature_events = Vec::new();
     let mut phy_events = Vec::new();
+    let mut uart_phy_events = Vec::new();
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
@@ -181,6 +183,25 @@ fn run() -> Result<ExitCode, String> {
                 if target.replace(path).is_some() {
                     return Err(format!("{option} may only be specified once"));
                 }
+            }
+            Some("--litex-phy-after-uart") => {
+                const FORMAT: &str = "--litex-phy-after-uart requires NAME:VALUE:TEXT";
+                let argument = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let mut fields = argument.splitn(3, ':');
+                let name = fields
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .ok_or(FORMAT)?;
+                let value = u16::try_from(parse_address(fields.next().ok_or(FORMAT)?)?)
+                    .map_err(|_| "--litex-phy-after-uart requires a 16-bit register value")?;
+                let text = fields
+                    .next()
+                    .filter(|text| !text.is_empty())
+                    .ok_or(FORMAT)?;
+                uart_phy_events.push((name.to_string(), value, text.as_bytes().to_vec()));
             }
             Some("--litex-phy-event") => {
                 const FORMAT: &str = "--litex-phy-event requires STEP:NAME:VALUE";
@@ -668,20 +689,20 @@ fn run() -> Result<ExitCode, String> {
     for (step, path) in framebuffer_events {
         machine.schedule_framebuffer_capture(step, path)?;
     }
-    let frame_wait_trigger = if let Some((budget, text)) = frame_wait_trigger {
+    let mut uart_triggers = Vec::new();
+    for (name, value, text) in uart_phy_events {
+        let trigger = UartTrigger::new(text);
+        machine.set_phy_after_uart(Rc::clone(&trigger.fired), name, value)?;
+        uart_triggers.push(trigger);
+    }
+    if let Some((budget, text)) = frame_wait_trigger {
         if frame_waits.is_empty() || frame_waits.iter().any(|(step, _, _)| *step != 0) {
             return Err("--frame-waits-after-uart requires frame waits with step 0".into());
         }
-        let fired = Rc::new(Cell::new(false));
-        machine.arm_frame_waits(Rc::clone(&fired), budget);
-        Some(UartTrigger {
-            text,
-            suffix: Vec::new(),
-            fired,
-        })
-    } else {
-        None
-    };
+        let trigger = UartTrigger::new(text);
+        machine.arm_frame_waits(Rc::clone(&trigger.fired), budget);
+        uart_triggers.push(trigger);
+    }
     for (step, path, region) in frame_waits {
         let data = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         let reference = litex_video::ReferenceFrame::parse(data)
@@ -759,7 +780,7 @@ fn run() -> Result<ExitCode, String> {
     let mut output = UartOutput {
         writer: LineWriter::new(io::stdout().lock()),
         immediate: litex_uart_stdio,
-        trigger: frame_wait_trigger,
+        triggers: uart_triggers,
     };
     let start = Instant::now();
     let limit = match (max_steps, run_steps) {
@@ -838,16 +859,26 @@ struct UartTrigger {
     fired: Rc<Cell<bool>>,
 }
 
+impl UartTrigger {
+    fn new(text: Vec<u8>) -> Self {
+        Self {
+            text,
+            suffix: Vec::new(),
+            fired: Rc::new(Cell::new(false)),
+        }
+    }
+}
+
 struct UartOutput<W: Write> {
     writer: LineWriter<W>,
     immediate: bool,
-    trigger: Option<UartTrigger>,
+    triggers: Vec<UartTrigger>,
 }
 
 impl<W: Write> Write for UartOutput<W> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.writer.write(bytes)?;
-        if let Some(trigger) = &mut self.trigger {
+        self.triggers.retain_mut(|trigger| {
             trigger.suffix.extend_from_slice(&bytes[..written]);
             if trigger
                 .suffix
@@ -855,12 +886,12 @@ impl<W: Write> Write for UartOutput<W> {
                 .any(|part| part == trigger.text)
             {
                 trigger.fired.set(true);
-                self.trigger = None;
-            } else {
-                let discard = trigger.suffix.len().saturating_sub(trigger.text.len() - 1);
-                trigger.suffix.drain(..discard);
+                return false;
             }
-        }
+            let discard = trigger.suffix.len().saturating_sub(trigger.text.len() - 1);
+            trigger.suffix.drain(..discard);
+            true
+        });
         if self.immediate {
             self.writer.flush()?;
         }

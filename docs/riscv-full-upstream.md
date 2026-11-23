@@ -1429,3 +1429,20 @@ python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
 ```
 
 固定 BIOS・SD イメージと参照 PNG の実行で 2 ケースが通過しました。補助 ELF では全面不一致による期限切れ、全面一致からの領域不一致による期限切れ、両方の一致を確認しました。全面一致はステップ 16 で、実行上限 20 では領域待機中の終了、実行上限 26 では領域の期限切れを報告しました。Rust テストは 88/88 件です。台帳の上流等価合格は累計 165 件です。残る LiteX ケースと最大 ISA 構成は未達です。検証ログ、補助 ELF とソース、終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-6fbc043-ORtFS5/` に保存しました。
+
+### Arty の起動プロンプトと対話 PHY 設定
+
+固定 `Arty_LiteX_VexRiscv.robot` の起動と PHY のケースを、同じバイナリでそれぞれ新規起動して確認します。起動では `H2U` を待ちます。PHY は起動前に VendorSpecific1 を 0 にし、10 Mbps・リンクダウン行を出力した直後に `--litex-phy-after-uart NAME:VALUE:TEXT` で 0x4400 を適用します。検証側がその行を待って `mdio_status` を送り、100 Mbps・リンクアップを確認します。UART 文字列の照合処理は Nexys Video のフレーム待機と共有します。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 -B scripts/validate-litex-arty-uart.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro/arty"
+python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro/nexys"
+```
+
+上流 SHA-1 と一致する ELF で Arty の 2/2 ケースが通過しました。存在しない UART 文字列を指定した場合は、トリガー未到達として終了コード 1 を返しました。同じバイナリで Nexys Video の全面・領域待機 2/2 件と最終 PPM のハッシュを確認しました。Rust テストは 88/88 件、上流等価合格は累計 167 件です。Arty の LED・スイッチ・ボタンの等価検証は残っています。ケース別 UART と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-0cae6ea-rWZ62x/` に保存しました。
