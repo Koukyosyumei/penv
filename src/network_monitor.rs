@@ -405,10 +405,19 @@ impl Plan {
                     pressed: *verb == "Press",
                 });
             }
-            ["sysbus", "ReadDoubleWord", address] => {
+            [
+                "sysbus",
+                operation @ ("ReadByte" | "ReadDoubleWord"),
+                address,
+            ] => {
                 let node = self.monitor_node()?;
                 let address = crate::platform::number(resolve(*address)?)?;
-                self.actions.push(Action::ReadWord { node, address });
+                let byte = *operation == "ReadByte";
+                self.actions.push(Action::ReadScalar {
+                    node,
+                    address,
+                    byte,
+                });
             }
             ["tester", "ObserveUart", name] => {
                 let node = self.monitor_node()?;

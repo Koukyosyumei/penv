@@ -1451,3 +1451,22 @@ target/release/penv run --script "$e/find.resc" --platform-root ../renode
 ```
 
 `cargo test` 193件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記にあります。台帳は対象786件のうち等価合格175件、部分検証17件、未達594件です。CPU コンテキスト別の検索と、周辺機器を含む一括読み書きの上流ケースは残っています。
+
+### backlog-network-e45b5c638e96-1
+
+REPL から構築した SystemBus の既定方針を上流の `Report` に合わせ、未マップのデータ読み取りでゼロを返します。REPL を使わない raw/ELF 実行と命令フェッチの範囲チェックは従来どおりです。固定上流 `ShouldReturnZeroAtNonExistingDevice` と同じアドレス `0xABCD1234` でバイト読み取りを検証しました。STM32H743 の CLI でも既定設定のゼロと、明示した `ThrowExceptionIfNotTagged` の例外を照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-default-bus-access.T5HgC1PK
+target/release/penv run --script "$e/default.resc" --platform-root ../renode
+target/release/penv run --script "$e/strict.resc" --platform-root ../renode
+```
+
+最後のコマンドは意図したアドレスエラーで終了します。`cargo test` 195件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格176件、部分検証17件、未達593件です。上流の報告ログと、周辺機器を含む一括転送は残っています。

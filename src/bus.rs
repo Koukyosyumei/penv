@@ -99,9 +99,9 @@ struct PwmLed {
 #[derive(Default)]
 pub(crate) enum UnhandledAccess {
     ThrowException,
-    #[default]
     ThrowExceptionIfNotTagged,
     DoNotReport,
+    #[default]
     Report,
 }
 
@@ -281,6 +281,7 @@ impl Bus {
     pub fn new(size: usize) -> Result<Self, String> {
         let mut bus = Self {
             uart_tx: Some(UART_TX),
+            unhandled_access: UnhandledAccess::ThrowExceptionIfNotTagged,
             ..Self::default()
         };
         bus.map_ram(RAM_BASE, size)?;
@@ -2765,6 +2766,16 @@ mod unhandled_access_cases {
     }
 
     #[test]
+    fn upstream_default_unmapped_read_returns_zero() {
+        assert_eq!(Bus::default().read::<1>(0xabcd1234).unwrap(), 0);
+    }
+
+    #[test]
+    fn raw_bus_retains_unmapped_faults() {
+        address_error(&mut Bus::new(4096).unwrap(), 0xabcd1234);
+    }
+
+    #[test]
     fn upstream_unmapped_throw_exception() {
         let mut bus = Bus {
             unhandled_access: UnhandledAccess::ThrowException,
@@ -2775,12 +2786,19 @@ mod unhandled_access_cases {
 
     #[test]
     fn upstream_unmapped_throw_if_not_tagged() {
-        address_error(&mut Bus::default(), 0xabcd1234);
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::ThrowExceptionIfNotTagged,
+            ..Bus::default()
+        };
+        address_error(&mut bus, 0xabcd1234);
     }
 
     #[test]
     fn upstream_tagged_throw_if_not_tagged() {
-        let mut bus = Bus::default();
+        let mut bus = Bus {
+            unhandled_access: UnhandledAccess::ThrowExceptionIfNotTagged,
+            ..Bus::default()
+        };
         bus.tag(0xabcd1200..=0xabcd12ff, 0x42).unwrap();
         bus.write(0xabcd1234, 1, 0, &mut std::io::sink()).unwrap();
         assert_eq!(bus.read::<1>(0xabcd1234).unwrap(), 0x42);

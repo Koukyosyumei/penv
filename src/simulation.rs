@@ -128,9 +128,10 @@ pub enum Action {
         address: u32,
         value: u32,
     },
-    ReadWord {
+    ReadScalar {
         node: usize,
         address: u32,
+        byte: bool,
     },
     ReadMemoryBytes {
         node: usize,
@@ -422,13 +423,18 @@ pub fn run(
                     }
                     .map_err(|e| format!("{}: {e}", node.name))?;
                 }
-                Action::ReadWord { node, address } => {
+                Action::ReadScalar {
+                    node,
+                    address,
+                    byte,
+                } => {
                     let node = &mut simulation.nodes[node];
-                    let value = node
-                        .machine
-                        .bus
-                        .read::<4>(address)
-                        .map_err(|error| format!("{}: {error}", node.name))?;
+                    let result = if byte {
+                        node.machine.bus.read::<1>(address)
+                    } else {
+                        node.machine.bus.read::<4>(address)
+                    };
+                    let value = result.map_err(|error| format!("{}: {error}", node.name))?;
                     writeln!(
                         output,
                         "{}: sysbus[{address:#010x}] = {value:#010x}",
