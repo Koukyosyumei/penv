@@ -8,9 +8,21 @@
 | `src/Infrastructure` | `09ac7c563095c5410258ecc1b1a6b841a013db85` |
 | Infrastructure の `src/Emulator/Cores/tlib` | `c04522a9c886ba743c77a86b0c879103a2ef46d0` |
 
-[ケース台帳](arm-upstream-cases.tsv)は調査候補を上流パス・ケース・ソース行で記録する。例外復帰のキーワード引数行は独立させた。その他の `see source case body` の行は、パラメータの展開と照合が残っている。Infrastructure の時計、GPIO、バス、CRC 等の NUnit 候補も収録した。固定 tlib ツリーには Robot と C# テストファイルがなかった。
+## 適用範囲と集計
 
-`existing translation` は既存の移植または今回追加した移植を示し、全ケース受入の判定には使用しない。`partial` は対応する観測条件の一部、`open applicability` は適用の根拠の確認が残る候補を示す。台帳は調査途中であり、全件合格ゲートの根拠としては未完成。
+[ケース台帳](arm-upstream-cases.tsv)の候補を固定上流の Robot/NUnit フィクスチャで突合した。STM32F072B Discovery の実イメージ、Cortex-M0/M0+ に移せる命令・例外シーケンス、CPU 非依存の共有周辺機器・バス・端末・時間制御の契約を対象とする。現在の実装の有無は適用判定に使わない。別ボードの ELF、固定の周辺機器アドレス、ISA 固有のレジスタや複数コア構成に依存する場合は、必要な構成を各行に記録した。ISA の根拠は Armv6-M の命令と例外モデル、および固定 tlib の実装を参照した。[Armv6-M Architecture Reference Manual](https://developer.arm.com/documentation/ddi0419/latest/)
+
+| 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Renode Robot | 113 | 7 | 37 | 69 | 239 |
+| Renode Infrastructure NUnit | 134 | 2 | 0 | 132 | 9 |
+| 合計 | **247** | **9** | **37** | **201** | **248** |
+
+- 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
+- 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
+- `equivalent pass` は適用構成で上流と同じ主要刺激・観測を実行できたケース。UART 出力が合格しても、Console Echo の CR／未完了行の待機と Button のホスト側待ち時間には差があるため `partial` とした。M55 の Fault 状態レジスタ、F4 のフラッシュ消去範囲や TIM2 のファームウェア観測を省いた移植も部分扱い。
+- `unmet` は対象のまま、等価な回帰がない項目。独立した BusFault の優先度や置換不能な前提を必要とするケースは `out of scope`、同じ `LDR`/`STR` と保存フレームを HardFault で再現できるケースは未達に残した。上流の `Ignore` 属性付き NUnit ケースは対象外。
+- 集計はこの台帳に含まれる固定リビジョンの候補に対するもの。NUnit/Robot ランナーの上流全件実行ではなく、penv の Rust・CLI テストと実イメージによる等価性監査の結果。
 
 今回の NMI 回帰では、上流のリセットループ `0x20`、NMI ハンドラー `0x100`、`NOP` 後の `0x102`、`BX LR` 後の `0x20` と初期 SP `0x800` を Armv6-M で検査する。上流と同じ `nvic SetPendingIRQ 2` で保留を設定し、例外受理時に SCB ICSR の NMIPENDSET がクリアされることも確認する。TrustZone 行の `BXNS` は Armv8-M Security Extension に依存する。
 
@@ -26,11 +38,18 @@ scripts/verify-stm32f072.sh ../renode /tmp/新規証跡ディレクトリ
 
 上記スクリプトは固定 Renode ツリーの公開イメージ7点を取得し、サイズ・SHA-1 と照合してから STM32F072 の ELF・HEX 回帰を実行する。
 
-台帳は固定 Infrastructure ソースを展開したディレクトリを第2引数に渡し、`python3 scripts/inventory-arm-upstream.py ../renode /path/to/infrastructure` で標準出力に再生成できる。
+固定 Infrastructure のチェックアウトまたは固定コミットのアーカイブを展開し、次のコマンドで再生成と集計を照合する。
+
+```sh
+python3 scripts/inventory-arm-upstream.py ../renode /path/to/infrastructure |
+    cmp - docs/arm-upstream-cases.tsv
+awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[key] }' \
+    docs/arm-upstream-cases.tsv
+```
 
 ## 残件
 
-共有テストの適用可否とパラメータを、上流と同じ入力・タイミング・失敗判定まで突合する。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植37件と未達201件が残る。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
