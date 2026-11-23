@@ -1775,6 +1775,7 @@ fn build_entries(
         entries,
         f4_repl_timing,
         check_only,
+        validate_builtin_script,
         configure_bus_init,
     )
 }
@@ -1784,8 +1785,20 @@ fn build_entries_with_scripts(
     entries: &[Entry],
     f4_repl_timing: bool,
     check_only: bool,
+    mut validate_script: impl FnMut(&Entry, ScriptPhase, &[&str]) -> Result<(), String>,
     mut handle_script: impl FnMut(&Entry, ScriptPhase, &[&str], &mut Machine) -> Result<(), String>,
 ) -> Result<Machine, String> {
+    for entry in entries {
+        for (_, attribute) in &entry.body {
+            if let Some((phase, _, commands)) = script_commands(attribute)
+                && phase != ScriptPhase::Reset
+            {
+                validate_script(entry, phase, &commands).map_err(|detail| {
+                    entry.error(&format!("{}: {detail}", phase.validation_error()))
+                })?;
+            }
+        }
+    }
     let mut machine = Machine::without_default_ram();
     machine.bus.f4_repl_timing = f4_repl_timing;
     let mut cpus = Vec::new();
@@ -2798,6 +2811,14 @@ enum ScriptPhase {
 }
 
 impl ScriptPhase {
+    fn validation_error(self) -> &'static str {
+        match self {
+            Self::Preinit => "PreinitSectionValidationError",
+            Self::Init => "InitSectionValidationError",
+            Self::Reset => "ResetSectionValidationError",
+        }
+    }
+
     fn header(self) -> &'static str {
         match self {
             Self::Preinit => "preinit:",
@@ -2835,6 +2856,24 @@ fn script_commands(attribute: &str) -> Option<(ScriptPhase, bool, Vec<&str>)> {
         start = end + 1;
     }
     Some((phase, append, commands))
+}
+
+fn validate_builtin_script(
+    entry: &Entry,
+    phase: ScriptPhase,
+    commands: &[&str],
+) -> Result<(), String> {
+    if phase != ScriptPhase::Init || entry.name != "sysbus" {
+        return Err("no built-in handler for this section".into());
+    }
+    if let Some(command) = commands.iter().find(|command| {
+        !["UnhandledAccessBehaviour ", "ApplySVD @", "Tag <"]
+            .iter()
+            .any(|prefix| command.starts_with(prefix))
+    }) {
+        return Err(format!("unsupported sysbus init command {command:?}"));
+    }
+    Ok(())
 }
 
 fn configure_bus_init(

@@ -1504,6 +1504,7 @@ fn assert_dispatched_script(source: &str, expected_phase: ScriptPhase, expected:
         &entries,
         false,
         true,
+        |_, _, _| Ok(()),
         |entry, phase, commands, _| {
             assert_eq!(phase, expected_phase);
             assert_eq!(entry.name, entries[0].name);
@@ -1621,17 +1622,24 @@ fn renode_preinit_dispatch_order() {
     let path = Path::new("<platform string>");
     let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
     let mut calls = Vec::new();
-    build_entries_with_scripts(path, &entries, false, true, |entry, phase, commands, _| {
-        assert_eq!(phase, ScriptPhase::Preinit);
-        calls.push((
-            entry.name.clone(),
-            commands
-                .iter()
-                .map(|command| (*command).to_owned())
-                .collect::<Vec<_>>(),
-        ));
-        Ok(())
-    })
+    build_entries_with_scripts(
+        path,
+        &entries,
+        false,
+        true,
+        |_, _, _| Ok(()),
+        |entry, phase, commands, _| {
+            assert_eq!(phase, ScriptPhase::Preinit);
+            calls.push((
+                entry.name.clone(),
+                commands
+                    .iter()
+                    .map(|command| (*command).to_owned())
+                    .collect::<Vec<_>>(),
+            ));
+            Ok(())
+        },
+    )
     .unwrap();
     let calls: Vec<_> = calls
         .iter()
@@ -1655,5 +1663,61 @@ fn renode_preinit_dispatch_order() {
             ),
             ("peri2", vec!["echo '5 peri2 preinit'"]),
         ]
+    );
+}
+
+fn assert_script_validation_failure(
+    source: &str,
+    imported: &str,
+    phase: ScriptPhase,
+    commands: &[&str],
+    expected: &str,
+) {
+    let root = std::env::temp_dir().join(format!(
+        "penv-script-validation-{}-{phase:?}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("A"), imported).unwrap();
+    let parsed = description_syntax(source, &root);
+    fs::remove_dir_all(root).unwrap();
+    let entries = merge_declarations(parsed.unwrap()).unwrap();
+    let result = build_entries_with_scripts(
+        Path::new("<platform string>"),
+        &entries,
+        false,
+        true,
+        |entry, actual_phase, actual_commands| {
+            assert_eq!(entry.name, "peri");
+            assert_eq!(actual_phase, phase);
+            assert_eq!(actual_commands, commands);
+            Err(expected.to_owned())
+        },
+        |_, _, _, _| panic!("rejected section reached execution"),
+    );
+    let error = result.err().unwrap();
+    assert!(error.contains(phase.validation_error()), "{error}");
+    assert!(error.contains(expected), "{error}");
+}
+
+#[test]
+fn renode_script_validation_rejects_preinit() {
+    assert_script_validation_failure(
+        "\nusing \"A\"\n\nperi:\n    preinit:\n        echo 'c'",
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    preinit:\n        echo 'a'\n        echo 'b'",
+        ScriptPhase::Preinit,
+        &["echo 'c'"],
+        "Invalid preinit section",
+    );
+}
+
+#[test]
+fn renode_script_validation_rejects_init() {
+    assert_script_validation_failure(
+        "\nusing \"A\"\n\nperi:\n    init:\n        Increment",
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    init:\n        Increment\n        Increment",
+        ScriptPhase::Init,
+        &["Increment"],
+        "Invalid init section",
     );
 }
