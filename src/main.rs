@@ -72,6 +72,7 @@ Options:
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RISC-V harts at the image entry (1–8)
+  --tohost ADDRESS   Watch RV64 RAM for an upstream test completion write
   --max-steps N      Stop after N execution steps (default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -133,6 +134,7 @@ fn run() -> Result<ExitCode, String> {
     let mut raw = false;
     let mut rv64 = false;
     let mut stats = false;
+    let mut tohost = None;
     let mut positional = false;
     let mut ram_mib = None;
     let mut harts = None;
@@ -287,6 +289,13 @@ fn run() -> Result<ExitCode, String> {
                     usize::try_from(parse_address64(size)?)
                         .map_err(|_| "RAM size exceeds host limits")?,
                 ));
+            }
+            Some("--tohost") => {
+                let value = args.next().ok_or("--tohost requires an address")?;
+                let value = value.to_str().ok_or("invalid tohost address")?;
+                if tohost.replace(parse_address64(value)?).is_some() {
+                    return Err("only one tohost address may be specified".into());
+                }
             }
             Some(option @ ("--ram-mib" | "--max-steps" | "--harts")) => {
                 let value = args
@@ -496,6 +505,12 @@ fn run() -> Result<ExitCode, String> {
         if uart_stdin && !machine.bus.has_uart_input() {
             return Err("--uart-stdin requires a platform UART with input support".into());
         }
+        if let Some(address) = tohost {
+            if machine.primary.rv64.is_none() {
+                return Err("--tohost requires an RV64 machine".into());
+            }
+            machine.bus.watch_rv64_tohost(address)?;
+        }
         Ok(machine)
     };
     let mut machine = boot_machine()?;
@@ -519,6 +534,17 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.program_counter()
         );
+    }
+    if let Stop::TestExit(code) = stop {
+        eprintln!("penv: tohost exit code {code}");
+        return Ok(if code == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        });
+    }
+    if tohost.is_some() && stop != Stop::Limit {
+        return Err("execution stopped before a tohost completion write".into());
     }
     if stop == Stop::Limit {
         eprintln!(

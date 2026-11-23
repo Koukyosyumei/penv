@@ -11,7 +11,7 @@ use crate::{
     rv64_mpfs_ihc::FireIhc,
     rv64_mpfs_sd,
     rv64_mpfs_wdog::{Output as WatchdogOutput, Watchdog},
-    rv64_priv::Pmp,
+    rv64_priv::{Levels, Pmp},
     rv64_starfive::{ResetGenerator, StarLightResetPin},
 };
 
@@ -773,6 +773,13 @@ fn create_cpu(
         return Err(entry.error("unsupported RV64 privileged architecture"));
     }
     let mut cpu = Rv64::new(isa);
+    let levels = match property(entry, "privilegeLevels") {
+        None | Some("PrivilegeLevels.MachineSupervisorUser") => Levels::MachineSupervisorUser,
+        Some("PrivilegeLevels.MachineUser") => Levels::MachineUser,
+        Some("PrivilegeLevels.Machine") => Levels::Machine,
+        Some(_) => return Err(entry.error("unsupported RV64 privilege levels")),
+    };
+    cpu.privilege.configure_levels(levels);
     cpu.allow_unaligned = flag(entry, "allowUnalignedAccesses", false)?;
     let pmp_count =
         property(entry, "pmpEntryCount").map_or(Ok(64), |value| number(entry, value))?;

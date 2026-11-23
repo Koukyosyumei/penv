@@ -36,6 +36,7 @@ pub struct Hart {
 pub enum Stop {
     Ecall,
     Ebreak,
+    TestExit(u64),
     Reset,
     Limit,
 }
@@ -318,6 +319,9 @@ impl Machine {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
+            }
+            if let Some(code) = self.bus.rv64_test_exit {
+                return Ok((Stop::TestExit(code), retired));
             }
             if self.bus.rv64_devices.reset_requested {
                 return Ok((Stop::Reset, retired));

@@ -220,6 +220,8 @@ Linux `5.10.6-penv-gpio` で GPIO 再起動ドライバーへのバインドを�
 
 ### 上流 Renode の RV64 ケース対応
 
+全上流互換の作業状況は [RV64 上流ケース台帳](docs/rv64-full-upstream.md) に記録しています。下表はこれまでの優先ケースに対応します。
+
 棚卸しの参照点は `../renode` の `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` です。上流の `platforms/cpus/riscv_virt.repl` は RV32 定義で、このリビジョンの Robot スイートには RV64 virt の Linux 起動ケースが見当たりません。RV64 virt の実ファームウェア検証は上記の OpenSBI FW_JUMP 手順で行い、RV64 CPU に共通する次のケースを Robot から Rust に移植しました。上流の `VirtioMMIOConsole.robot` は Cortex-A53/Zephyr を対象とします。[Renode riscv_virt.repl](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/platforms/cpus/riscv_virt.repl) [Renode VirtioMMIOConsole.robot](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/peripherals/VirtioMMIOConsole.robot)
 
 | 上流ケース | 移植先と確認内容 |

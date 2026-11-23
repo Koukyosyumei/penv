@@ -87,9 +87,29 @@ impl Trap {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Levels {
+    Machine,
+    MachineUser,
+    #[default]
+    MachineSupervisorUser,
+}
+
+impl Levels {
+    pub fn isa_bits(self) -> u64 {
+        (u64::from(self != Self::Machine) << 20)
+            | (u64::from(self == Self::MachineSupervisorUser) << 18)
+    }
+
+    fn lowest_mpp(self) -> u64 {
+        if self == Self::Machine { MPP } else { 0 }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Privilege {
     pub mode: Mode,
+    pub levels: Levels,
     pub status: u64,
     pub satp: u64,
     pub pmp: Option<Pmp>,
@@ -112,6 +132,11 @@ pub struct Privilege {
 }
 
 impl Privilege {
+    pub fn configure_levels(&mut self, levels: Levels) {
+        self.levels = levels;
+        self.status = (self.status & !MPP) | levels.lowest_mpp();
+    }
+
     pub fn add_interrupt(&mut self, pin: u32) {
         self.platform_interrupts |= 1 << pin;
     }
@@ -202,7 +227,10 @@ impl Privilege {
             return None;
         }
         self.mode = Mode::from_field((self.status & MPP) >> 11);
-        self.status = (self.status & !(MPP | MPIE | MIE)) | MPIE | ((self.status & MPIE) >> 4);
+        self.status = (self.status & !(MPP | MPIE | MIE))
+            | self.levels.lowest_mpp()
+            | MPIE
+            | ((self.status & MPIE) >> 4);
         if self.mode != Mode::Machine {
             self.status &= !MPRV;
         }
@@ -210,7 +238,10 @@ impl Privilege {
     }
 
     pub fn sret(&mut self, epc_mask: u64) -> Option<u64> {
-        if self.mode == Mode::User || (self.mode == Mode::Supervisor && self.status & TSR != 0) {
+        if self.levels != Levels::MachineSupervisorUser
+            || self.mode == Mode::User
+            || (self.mode == Mode::Supervisor && self.status & TSR != 0)
+        {
             return None;
         }
         self.mode = Mode::from_field((self.status & SPP) >> 8);
@@ -220,7 +251,9 @@ impl Privilege {
     }
 
     pub fn allows_sfence(&self) -> bool {
-        self.mode == Mode::Machine || (self.mode == Mode::Supervisor && self.status & TVM == 0)
+        self.levels == Levels::MachineSupervisorUser
+            && (self.mode == Mode::Machine
+                || (self.mode == Mode::Supervisor && self.status & TVM == 0))
     }
 
     pub fn allows_wfi(&self) -> bool {
@@ -235,6 +268,11 @@ impl Privilege {
         if ((csr >> 8) & 3) as u64 > self.mode as u64 {
             return None;
         }
+        if self.levels != Levels::MachineSupervisorUser
+            && (csr >> 8 & 3 == 1 || matches!(csr, 0x302 | 0x303))
+        {
+            return None;
+        }
         let sd = if self.status & FS == FS { 1 << 63 } else { 0 };
         Some(match csr {
             1..=3 if self.status & FS != 0 && misa & (1 << 5) != 0 => match csr {
@@ -247,7 +285,15 @@ impl Privilege {
             0x106 => self.supervisor_counter_enable,
             0x144 => self.pending() & self.mideleg,
             0x180 if self.allows_sfence() => self.satp,
-            0x300 => self.status | UXL | SXL | sd,
+            0x300 => {
+                self.status
+                    | sd
+                    | match self.levels {
+                        Levels::Machine => 0,
+                        Levels::MachineUser => UXL,
+                        Levels::MachineSupervisorUser => UXL | SXL,
+                    }
+            }
             0x301 => misa,
             0x302 => self.medeleg,
             0x303 => self.mideleg,
@@ -289,6 +335,7 @@ impl Privilege {
         self.mode == Mode::Machine
             || (self.counter_enable & (1 << index) != 0
                 && (self.mode == Mode::Supervisor
+                    || self.levels != Levels::MachineSupervisorUser
                     || self.supervisor_counter_enable & (1 << index) != 0))
     }
 
@@ -314,7 +361,11 @@ impl Privilege {
             0x180 | 0x301 | 0xb03..=0xb1f | 0x323..=0x33f => {}
             0x300 => {
                 self.status = value & MSTATUS & fp_mask;
-                if self.status & MPP == 2 << 11 {
+                if self.levels == Levels::Machine {
+                    self.status |= MPP;
+                } else if self.status & MPP == 2 << 11
+                    || (self.levels == Levels::MachineUser && self.status & MPP == 1 << 11)
+                {
                     self.status &= !MPP;
                 }
             }

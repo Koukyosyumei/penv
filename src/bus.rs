@@ -81,6 +81,8 @@ pub struct Bus {
     aliases: Vec<RamAlias>,
     pub rv64_devices: crate::rv64_devices::Devices,
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
+    rv64_tohost: Option<u64>,
+    pub rv64_test_exit: Option<u64>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
@@ -451,6 +453,21 @@ impl Bus {
     pub fn memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
         self.memory64(u64::from(address), width)
             .ok_or(BusError::Unmapped(address, width))
+    }
+
+    pub fn watch_rv64_tohost(&mut self, address: u64) -> Result<(), String> {
+        if !address.is_multiple_of(8) || self.ram64(address, 8).is_none() {
+            return Err("--tohost requires an aligned 8-byte RAM address".into());
+        }
+        self.rv64_tohost = Some(address);
+        Ok(())
+    }
+
+    pub fn observe_rv64_store(&mut self, address: u64, low_byte: u8) {
+        if self.rv64_tohost == Some(address) && low_byte & 1 != 0 {
+            let bytes = self.ram64(address, 8).unwrap();
+            self.rv64_test_exit = Some(u64::from_le_bytes(bytes.try_into().unwrap()) >> 1);
+        }
     }
 
     pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {

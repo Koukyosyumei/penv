@@ -256,7 +256,7 @@ impl Rv64 {
     }
 
     fn misa(&self) -> u64 {
-        let base = (2 << 62) | (1 << 8) | (1 << 18) | (1 << 20);
+        let base = (2 << 62) | (1 << 8) | self.privilege.levels.isa_bits();
         base | (u64::from(self.isa.multiply) << 12)
             | u64::from(self.isa.atomic)
             | (u64::from(self.isa.compressed) << 2)
@@ -507,6 +507,7 @@ impl Rv64 {
             for (physical, byte) in destinations[..width].iter().zip(value.to_le_bytes()) {
                 bus.memory64(*physical, 1).unwrap()[0] = byte;
             }
+            bus.observe_rv64_store(destinations[0], value as u8);
             return Ok(());
         }
         let physical = self
@@ -514,6 +515,7 @@ impl Rv64 {
             .translate(bus, &self.privilege, address, width, WRITE)?;
         if let Some(bytes) = bus.memory64(physical, width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
+            bus.observe_rv64_store(physical, value as u8);
             return Ok(());
         }
         if let Ok(low) = u32::try_from(physical) {
@@ -580,15 +582,23 @@ impl Rv64 {
             4 if (destination | source) & 1 == 0 => 16,
             _ => return Err(Fault::new(2, u64::from(inst.0))),
         };
-        if address & (width as u64 - 1) != 0 {
+        let unaligned = address & (width as u64 - 1) != 0;
+        if unaligned && !self.allow_unaligned {
             return Err(Fault::new(6, address));
         }
-        let physical =
-            self.translations
-                .translate(bus, &self.privilege, address, width, READ | WRITE)?;
         let fault = || Fault::new(7, address);
         let mut value = [0; 16];
-        value[..width].copy_from_slice(bus.ram64(physical, width).ok_or_else(fault)?);
+        let mut locations = [0; 16];
+        let physical = if unaligned {
+            self.read_unaligned_atomic(bus, address, &mut locations[..width], &mut value[..width])?;
+            None
+        } else {
+            let physical =
+                self.translations
+                    .translate(bus, &self.privilege, address, width, READ | WRITE)?;
+            value[..width].copy_from_slice(bus.ram64(physical, width).ok_or_else(fault)?);
+            Some(physical)
+        };
         let old = u128::from_le_bytes(value);
         let (expected, replacement) = if width == 16 {
             let pair_high = |index| {
@@ -610,14 +620,42 @@ impl Rv64 {
             )
         };
         if old == expected {
-            bus.memory64(physical, width)
-                .ok_or_else(fault)?
-                .copy_from_slice(&replacement.to_le_bytes()[..width]);
+            let replacement = replacement.to_le_bytes();
+            if let Some(physical) = physical {
+                bus.memory64(physical, width)
+                    .ok_or_else(fault)?
+                    .copy_from_slice(&replacement[..width]);
+            } else {
+                // All bytes were translated and checked before committing any writes.
+                for (&location, byte) in locations[..width].iter().zip(replacement) {
+                    bus.memory64(location, 1).unwrap()[0] = byte;
+                }
+            }
         }
         if width == 16 && destination != 0 {
             self.registers[destination + 1] = (old >> 64) as u64;
         }
         Ok(Some(sign(old as u64, width.min(8) as u32 * 8)))
+    }
+
+    fn read_unaligned_atomic(
+        &self,
+        bus: &mut Bus,
+        address: u64,
+        locations: &mut [u64],
+        value: &mut [u8],
+    ) -> Result<(), Fault> {
+        for (offset, (location, byte)) in locations.iter_mut().zip(value).enumerate() {
+            let guest = address.wrapping_add(offset as u64);
+            *location =
+                self.translations
+                    .translate(bus, &self.privilege, guest, 1, READ | WRITE)?;
+            *byte = *bus
+                .ram64(*location, 1)
+                .and_then(|data| data.first())
+                .ok_or(Fault::new(7, guest))?;
+        }
+        Ok(())
     }
 
     fn atomic(
@@ -648,7 +686,18 @@ impl Rv64 {
             None
         };
         if address & (width as u64 - 1) != 0 {
-            return Err(Fault::new(if load { 4 } else { 6 }, address));
+            if !self.allow_unaligned || permission != (READ | WRITE) {
+                return Err(Fault::new(if load { 4 } else { 6 }, address));
+            }
+            let mut locations = [0; 8];
+            let mut value = [0; 8];
+            self.read_unaligned_atomic(bus, address, &mut locations[..width], &mut value[..width])?;
+            let previous = sign(u64::from_le_bytes(value), width as u32 * 8);
+            let replacement = atomic_result(operation, previous, sign(rhs, width as u32 * 8));
+            for (&location, byte) in locations[..width].iter().zip(replacement.to_le_bytes()) {
+                bus.memory64(location, 1).unwrap()[0] = byte;
+            }
+            return Ok(previous);
         }
         let physical =
             self.translations
@@ -675,23 +724,27 @@ impl Rv64 {
         } else {
             let old = sign(previous, width as u32 * 8);
             let rhs = sign(rhs, width as u32 * 8);
-            let value = match operation {
-                0 => old.wrapping_add(rhs),
-                1 => rhs,
-                4 => old ^ rhs,
-                8 => old | rhs,
-                12 => old & rhs,
-                16 => (old as i64).min(rhs as i64) as u64,
-                20 => (old as i64).max(rhs as i64) as u64,
-                24 => old.min(rhs),
-                28 => old.max(rhs),
-                _ => unreachable!(),
-            };
+            let value = atomic_result(operation, old, rhs);
             bus.memory64(physical, width)
                 .ok_or_else(fault)?
                 .copy_from_slice(&value.to_le_bytes()[..width]);
         }
         Ok(sign(previous, width as u32 * 8))
+    }
+}
+
+fn atomic_result(operation: u32, old: u64, rhs: u64) -> u64 {
+    match operation {
+        0 => old.wrapping_add(rhs),
+        1 => rhs,
+        4 => old ^ rhs,
+        8 => old | rhs,
+        12 => old & rhs,
+        16 => (old as i64).min(rhs as i64) as u64,
+        20 => (old as i64).max(rhs as i64) as u64,
+        24 => old.min(rhs),
+        28 => old.max(rhs),
+        _ => unreachable!(),
     }
 }
 
