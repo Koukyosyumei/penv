@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 510 | 113 | 0 | 397 | 240 |
+| Renode | 510 | 121 | 0 | 389 | 240 |
 | Infrastructure | 217 | 50 | 0 | 167 | 7 |
-| **合計** | **727** | **163** | **0** | **564** | **247** |
+| **合計** | **727** | **171** | **0** | **556** | **247** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 564 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 556 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -881,3 +881,34 @@ mkdir -p "$work"
 を実行すると、`parent{` に続いて `    child}` が出ます。
 通常の REPL ローダーは既存の構文解析を使います。診断 CLI での三重引用符の
 複数行文字列処理や、他の REPL パーサースイートは残課題です。
+
+### REPL の sysbus 範囲と十六進数
+
+固定上流の `ParserPrimitivesTest.cs` から 8 パラメーターを移植しました。
+sysbus の範囲登録で `<開始, 終端>` と `<開始, +長さ>` を受け付け、
+十進数と十六進数の組み合わせを解釈します。逆順の境界は拒否します。
+パーサーは 64 ビットの値を読み取り、STM32F407 の登録時には
+開始と長さを既存の 32 ビット型に変換します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+work=target/stm32f407-repl-ranges
+mkdir -p "$work"
+(
+    run() {
+        local name=$1
+        shift
+        "$@" >"$work/$name.log" 2>&1
+        echo "$?" >"$work/$name.status"
+    }
+    run focused cargo test renode_ranges
+    run cargo-test cargo test
+    run freertos tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu
+    run platform tests/stm32f407-platform-check.sh
+) &
+```
+
+`focused.log` は 3 テスト関数で上流の 8 入力を検証します。
+各 `.status` の期待値は 0 です。符号付き・小数の汎用トークン、IRQ リスト、
+引用文字列のケースは未達です。

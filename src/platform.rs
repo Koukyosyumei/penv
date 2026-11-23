@@ -61,43 +61,32 @@ impl Entry {
     }
 
     fn bus_range(&self) -> Result<(u32, u32), String> {
-        let (base, size) = self
+        let range = self
             .registration
             .as_deref()
-            .and_then(|text| text.strip_prefix("sysbus <"))
-            .and_then(|text| text.strip_suffix('>'))
-            .and_then(|text| text.split_once(','))
+            .and_then(|text| text.strip_prefix("sysbus "))
             .ok_or_else(|| self.error("expected sysbus range"))?;
-        let size = size
-            .trim()
-            .strip_prefix('+')
-            .ok_or_else(|| self.error("expected +size in sysbus range"))?;
+        let (base, size) = parse_bus_range(range).map_err(|e| self.error(&e))?;
+        let out_of_bounds = |_| self.error("sysbus range exceeds 32-bit bounds");
         Ok((
-            number(base.trim()).map_err(|e| self.error(&e))?,
-            number(size).map_err(|e| self.error(&e))?,
+            u32::try_from(base).map_err(out_of_bounds)?,
+            u32::try_from(size).map_err(out_of_bounds)?,
         ))
     }
 
     fn address_with_optional_range(&self, size: u32) -> Result<u32, String> {
-        let Some(range) = self
+        if self
             .registration
             .as_deref()
-            .and_then(|text| text.strip_prefix("sysbus <"))
-            .and_then(|text| text.strip_suffix('>'))
-        else {
-            return self.address();
-        };
-        let (address, length) = range
-            .split_once(',')
-            .ok_or_else(|| self.error("invalid sysbus range"))?;
-        let length = length
-            .trim()
-            .strip_prefix('+')
-            .ok_or_else(|| self.error("expected +size in sysbus range"))?;
-        if number(length).map_err(|e| self.error(&e))? != size {
-            return Err(self.error("invalid sysbus range size"));
+            .is_some_and(|text| text.starts_with("sysbus <"))
+        {
+            let (base, length) = self.bus_range()?;
+            if length != size {
+                return Err(self.error("invalid sysbus range size"));
+            }
+            return Ok(base);
         }
-        number(address.trim()).map_err(|e| self.error(&e))
+        self.address()
     }
 
     fn address(&self) -> Result<u32, String> {
@@ -107,12 +96,72 @@ impl Entry {
 }
 
 pub(crate) fn number(value: &str) -> Result<u32, String> {
+    unsigned_number(value)
+        .and_then(|number| u32::try_from(number).ok())
+        .ok_or_else(|| format!("invalid 32-bit number {value:?}"))
+}
+
+fn hexadecimal_unsigned(value: &str) -> Option<u64> {
+    u64::from_str_radix(value.strip_prefix("0x")?, 16).ok()
+}
+
+fn unsigned_number(value: &str) -> Option<u64> {
     let digits = value.replace('_', "");
-    match digits.strip_prefix("0x") {
-        Some(hex) => u32::from_str_radix(hex, 16),
-        None => digits.parse(),
+    if digits.starts_with("0x") {
+        hexadecimal_unsigned(&digits)
+    } else {
+        digits.parse().ok()
     }
-    .map_err(|_| format!("invalid 32-bit number {value:?}"))
+}
+
+fn parse_bus_range(value: &str) -> Result<(u64, u64), String> {
+    let invalid = || format!("invalid sysbus range {value:?}");
+    let (start, bound) = value
+        .strip_prefix('<')
+        .and_then(|text| text.strip_suffix('>'))
+        .and_then(|text| text.split_once(','))
+        .ok_or_else(invalid)?;
+    let base = unsigned_number(start.trim()).ok_or_else(invalid)?;
+    let bound = bound.trim();
+    let length = if let Some(length) = bound.strip_prefix('+') {
+        let length = unsigned_number(length.trim_start()).ok_or_else(invalid)?;
+        base.checked_add(length).ok_or_else(invalid)?;
+        length
+    } else {
+        unsigned_number(bound)
+            .and_then(|end| end.checked_sub(base))
+            .ok_or_else(invalid)?
+    };
+    Ok((base, length))
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::{hexadecimal_unsigned, parse_bus_range};
+
+    #[test]
+    fn renode_ranges_hexadecimal_unsigned() {
+        for (source, expected) in [("0x1000", 0x1000), ("0x12AB", 0x12ab), ("0x0ff", 0xff)] {
+            assert_eq!(hexadecimal_unsigned(source), Some(expected), "{source}");
+        }
+    }
+
+    #[test]
+    fn renode_ranges_parse_bounds_and_lengths() {
+        for (source, expected) in [
+            ("<100, 200>", (100, 100)),
+            ("<0x0, 0x1000>", (0, 0x1000)),
+            ("<100, +0x100>", (100, 0x100)),
+            ("<0x1000, +0x1000>", (0x1000, 0x1000)),
+        ] {
+            assert_eq!(parse_bus_range(source), Ok(expected), "{source}");
+        }
+    }
+
+    #[test]
+    fn renode_ranges_reject_reverse_bounds() {
+        assert!(parse_bus_range("<0x1000, 0x100>").is_err());
+    }
 }
 
 #[derive(Default)]
