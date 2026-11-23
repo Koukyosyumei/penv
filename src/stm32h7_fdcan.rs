@@ -64,6 +64,40 @@ impl Fdcan {
         ((self.registers[0xa0 / 4] >> 16) & 0x7f).min(64)
     }
 
+    #[allow(dead_code)] // Called by the loopback service pending shared wiring.
+    fn fifo0_filter_header(&self, ram: &[u8], identifier: u32) -> Option<u32> {
+        let global = self.registers[0x80 / 4];
+        let extended = identifier & (1 << 30) != 0;
+        let remote = identifier & (1 << 29) != 0;
+        if remote && global & (if extended { 1 } else { 2 }) != 0 {
+            return None;
+        }
+        if !extended {
+            let configuration = self.registers[0x84 / 4];
+            let base = (configuration & 0xfffc) as usize;
+            let count = ((configuration >> 16) & 0xff).min(128);
+            let id = (identifier >> 18) & 0x7ff;
+            for index in 0..count {
+                let offset = base + index as usize * 4;
+                let filter = u32::from_le_bytes(ram.get(offset..offset + 4)?.try_into().ok()?);
+                let action = (filter >> 27) & 7;
+                let first = (filter >> 16) & 0x7ff;
+                let second = filter & 0x7ff;
+                let matches = match filter >> 30 {
+                    0 => (first..=second).contains(&id),
+                    1 => id == first || id == second,
+                    2 => id & second == first & second,
+                    _ => false,
+                };
+                if action != 0 && matches {
+                    return (action == 1).then_some(index << 24);
+                }
+            }
+        }
+        let unmatched = (global >> if extended { 2 } else { 4 }) & 3;
+        (unmatched == 0).then_some(1 << 31)
+    }
+
     // Called with the board's message RAM once pending requests can be serviced.
     #[allow(dead_code)] // Shared SystemBus wiring is owned by penv-arm.
     pub(crate) fn service_loopback(&mut self, ram: &mut [u8]) {
@@ -93,19 +127,20 @@ impl Fdcan {
             let payload = ((header >> 16) & 15).min(8) as usize;
             let mut element = [0; 72];
             element[..4].copy_from_slice(&frame[..4]);
-            element[4..8].copy_from_slice(&(header & 0x000f0000).to_le_bytes());
             element[8..8 + payload].copy_from_slice(&frame[8..8 + payload]);
             self.registers[0xcc / 4] &= !bit;
             self.registers[0xd8 / 4] |= bit;
             if self.registers[0xe0 / 4] & bit != 0 {
                 self.registers[0x50 / 4] |= 1 << 9;
             }
-            let gfc = self.registers[0x80 / 4];
-            let extended = element[3] & 0x40 != 0;
-            let action = (gfc >> if extended { 2 } else { 4 }) & 3;
-            if capacity == 0 || action != 0 {
+            let identifier = u32::from_le_bytes(element[..4].try_into().unwrap());
+            let Some(filter_header) = self.fifo0_filter_header(ram, identifier) else {
+                continue;
+            };
+            if capacity == 0 {
                 continue;
             }
+            element[4..8].copy_from_slice(&(filter_header | (header & 0x000f0000)).to_le_bytes());
             if self.fifo0_count == capacity {
                 self.registers[0x50 / 4] |= 1 << 3;
                 continue;
@@ -179,6 +214,52 @@ impl Fdcan {
 mod tests {
     use super::*;
 
+    fn filtered_frame(id: u32, filters: &[u32], global: u32) -> (u32, [u8; 128]) {
+        let mut can = Fdcan::new(0, [None, None]);
+        let mut ram = [0; 128];
+        can.write(0x18, 3);
+        can.write(0x18, 0xa3);
+        can.write(0x10, 1 << 4);
+        can.write(0x80, global);
+        can.write(0x84, (filters.len() as u32) << 16);
+        can.write(0xa0, (1 << 16) | 0x20);
+        can.write(0xc0, (1 << 16) | 0x40);
+        can.write(0x18, 0xa0);
+        for (index, filter) in filters.iter().enumerate() {
+            ram[index * 4..index * 4 + 4].copy_from_slice(&filter.to_le_bytes());
+        }
+        ram[0x40..0x44].copy_from_slice(&(id << 18).to_le_bytes());
+        ram[0x44..0x48].copy_from_slice(&(1u32 << 16).to_le_bytes());
+        ram[0x48] = 0x5a;
+        can.write(0xd0, 1);
+        can.service_loopback(&mut ram);
+        (can.read(0xa4) & 0x7f, ram)
+    }
+
+    #[test]
+    fn standard_mask_filter_reports_matching_index() {
+        let filter = (2 << 30) | (1 << 27) | (0x123 << 16) | 0x7ff;
+        let (fill, ram) = filtered_frame(0x123, &[0, filter], 2 << 4);
+        assert_eq!(fill, 1);
+        assert_eq!(
+            u32::from_le_bytes(ram[0x24..0x28].try_into().unwrap()),
+            (1 << 24) | (1 << 16)
+        );
+        assert_eq!(ram[0x28], 0x5a);
+        assert_eq!(filtered_frame(0x124, &[filter], 2 << 4).0, 0);
+    }
+
+    #[test]
+    fn first_matching_standard_filter_wins() {
+        let reject_range = (3 << 27) | (0x120 << 16) | 0x125;
+        let accept_dual = (1 << 30) | (1 << 27) | (0x123 << 16) | 0x126;
+        assert_eq!(filtered_frame(0x123, &[reject_range, accept_dual], 0).0, 0);
+        assert_eq!(
+            filtered_frame(0x126, &[reject_range, accept_dual], 2 << 4).0,
+            1
+        );
+    }
+
     #[test]
     fn internal_loopback_copies_classical_frame_and_sets_interrupts() {
         let mut can = Fdcan::new(0, [Some(19), None]);
@@ -199,7 +280,12 @@ mod tests {
 
         can.service_loopback(&mut ram);
 
-        assert_eq!(&ram[0x20..0x2c], &ram[0x40..0x4c]);
+        assert_eq!(&ram[0x20..0x24], &ram[0x40..0x44]);
+        assert_eq!(
+            u32::from_le_bytes(ram[0x24..0x28].try_into().unwrap()),
+            0x80040000
+        );
+        assert_eq!(&ram[0x28..0x2c], &[1, 2, 3, 4]);
         assert_eq!(can.read(0xcc), 0);
         assert_eq!(can.read(0xd8), 1);
         assert_eq!(can.read(0xa4) & 0x7f, 1);

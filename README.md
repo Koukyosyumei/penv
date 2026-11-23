@@ -1713,3 +1713,25 @@ target/release/penv run --script "$e/can.resc" --platform-root ../renode --max-s
 `cargo test` 221件、STM32H7 REPL 7構成と公開 Zephyr Blinky・Button ELF が通過しました。CAN の CLI は上記の未達で終了状態1です。ケース別結果、UART、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
 
 共有配線の依頼 `network-fdcan-417181b.md` を登録後、独立した IIS2MDC の公開 polling・trigger ELF も再検証し、両モードが通過しました。上記の `iis2mdc/` に UART と終了状態があります。再現は `PYTHON=<construct 導入済みの仮想環境>/bin/python bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"` です。
+
+### backlog-network-b9dac4e9689d-1
+
+STM32H7 FDCAN の古典 CAN ループバックに標準 ID フィルターを追加しました。範囲・二重 ID・マスクの判定、先頭一致、拒否、FIFO0 のフィルター番号と非一致ビットを同じテストバイナリで確認しました。拡張 ID フィルター、FIFO1、TX FIFO の状態処理は残っています。
+
+固定 Nucleo と `MCAN.robot` の公開ループバック ELF は、どちらも初期化とフィルター登録を完了し、最初の `Counter received: 0` で8仮想秒タイムアウトしました。両ケースを未達のままとし、共有メッセージ RAM の配線は `network-fdcan-417181b.md` の依頼で追跡します。共有ソースの変更はありません。独立した SD ファイル装着3件を再実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-filters.43D5rrYw
+for case in can mcan; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 10000000
+done
+```
+
+`cargo test` 223件、STM32H7 REPL 7構成、公開 Zephyr Blinky・Button ELF、SD ファイル装着3件が通過しました。上記にケース別結果、UART ログと終了状態を保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
