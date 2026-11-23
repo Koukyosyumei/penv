@@ -12,6 +12,7 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod semihosting;
 mod stm32_adc;
 mod stm32_can;
 mod stm32_crc;
@@ -600,6 +601,9 @@ fn run() -> Result<ExitCode, String> {
             elapsed.as_secs_f64() * 1000.0,
             machine.primary.pc
         );
+    }
+    if let Stop::Semihosting(exit) = stop {
+        eprintln!("cpu.semihosting: {exit}");
     }
     if stop == Stop::Limit {
         eprintln!(

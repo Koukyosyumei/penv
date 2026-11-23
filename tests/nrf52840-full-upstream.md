@@ -68,14 +68,14 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 47 | 4 | 139 |
+| 監査した共有・混成 Robot | 190 | 56 | 4 | 130 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **64** | **4** | **153** |
+| 合計 | **221** | **73** | **4** | **144** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
 - CMSIS-NN の127 URLは、`hello_world` と `micro_speech` の同 SHA-1 別名を統合すると125構成。Cortex-M85 DSP 用 ELF と合わせて137個の異なる ELF の SHA-1 と逆アセンブルを確認した。固定 ELF には MVE 命令、またはリセット時の `MSPLIM` / `PSPLIM` 設定がある。別ケースや別 UART 構成で使う同一 ELF は独立に扱う。
-- semihosting の22 ELF は EABI 属性が Armv8.1-M でも、Cortex-M4 指定の逆アセンブルで未知命令が出なかった。固定の Thumb BKPT とホスト ABI のテストを対象に残し、実行による等価判定は未達とした。
+- semihosting の22 ELF は EABI 属性が Armv8.1-M でも、Cortex-M4 指定の逆アセンブルで未知命令が出なかった。固定の Thumb BKPT とホスト ABI のテストを対象に残した。実行による判定は台帳に記録する。
 - Cortex-M55 の BusFault はTrustZone を用いない Armv7-M でも成立する例外のケースを対象に残した。Secure stack integrity、NVIC のバンク化状態、MVE といった追加機能を要求するパラメータは対象外にした。
 - dts2repl の `Should Load Repls` は1件の `dynamic/unexpanded` 行として保持した。固定 gitlink は Dashboard の `LATEST_SIM`、`LATEST_SIM_RENODE`、`replkit.tar.xz`、`*.repl.diff` 一覧を固定しない。参照 CI 実行の不変アーティファクトが必要なため、件数は固定分母に含めていない。221件はこの台帳で確定した固定構成の分母。
 
@@ -145,3 +145,18 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 今回のログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/bus-fault.WbA98rJg/` の `cargo-test`、`elf`、`fpu`、`shell` に保存した。Shell は固定 `NRF52840.robot` の Zephyr Shell ELF を使い、リセット前後で応答を確認した。
 
 同スイートの適用対象31ケース中、残る26ケースの阻害点は TSV の `verification` 欄に記録した。例外入口・復帰時のバス障害、lockup と NMI、遅延 FP 保存、未マップアクセスの opt-in、モックのオフセット指定と FP フレームの検証、連続 fault に対する monitor step 境界が残る。
+
+## Cortex-M4 semihosting の出力と終了
+
+`tests/unit-tests/arm-semihosting.robot` の9構成が合格した。簡易呼び出しは固定の命令列と引数アドレスを ELF に移し、出力 `SUCCESS` と R0 = 0 を照合した。残る8構成では SHA-1 を照合した上流 ELF を使用した。同じ WRITE-TTY ELF を共用出力と分離出力の両構成で実行し、分離時は `SUCCESS` と `ERROR` がそれぞれの出力先にだけ現れることを確認した。終了理由と拡張終了コードは上流のログ文言で照合した。移植用 REPL は Cortex-M4 を選び、使用されるアドレスを維持して RAM の割当範囲を縮めた。分離出力では CLI の標準エラーを第2 UART の観測先として使う。
+
+```sh
+cargo test
+tests/nrf52840-semihosting-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/semihosting" "$ELF_CACHE"
+tests/nrf52840-bus-fault-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/bus-fault"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/semihosting.v5bABUKm/` の `cargo-test`、`elf`、`bus-fault`、`shell` に保存した。各最終実行の終了状態は `*.final.status` に記録した。
+
+同スイートの対象25構成中、ファイル操作、エラー状態、入力、起動引数、一時ディレクトリを扱う16構成が未達。各阻害点は TSV の `verification` 欄に記録した。

@@ -21,6 +21,7 @@ enum Sleep {
 pub enum ThumbStep {
     Retired,
     Fault,
+    Semihosting(crate::semihosting::Exit),
     Breakpoint,
 }
 
@@ -858,8 +859,20 @@ impl Thumb {
                     _ => return Err(unsupported()),
                 };
             }
-            // Renode reports failure from semihosting calls without a registered handler.
-            0xbeab => r[0] = u32::MAX,
+            0xbeab => {
+                if let Some(mut handler) = bus.semihosting.take() {
+                    let result = handler.call(bus, r[0], r[1], output);
+                    bus.semihosting = Some(handler);
+                    let (value, exit) = result?;
+                    r[0] = value;
+                    if let Some(exit) = exit {
+                        *pc = next;
+                        return Ok(ThumbStep::Semihosting(exit));
+                    }
+                } else {
+                    r[0] = u32::MAX;
+                }
+            }
             0xbe00..=0xbeff => return Ok(ThumbStep::Breakpoint),
             0xbf00 | 0xbf10 => {} // NOP and scheduler yield.
             0xbf20 => {

@@ -38,6 +38,7 @@ pub struct Hart {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Stop {
+    Semihosting(crate::semihosting::Exit),
     Ecall,
     Ebreak,
     Limit,
@@ -601,6 +602,7 @@ impl Hart {
                 .map(|step| match step {
                     ThumbStep::Retired => Step::Retired,
                     ThumbStep::Fault => Step::Trap,
+                    ThumbStep::Semihosting(exit) => Step::Stop(Stop::Semihosting(exit)),
                     ThumbStep::Breakpoint => Step::Stop(Stop::Ebreak),
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));

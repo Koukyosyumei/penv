@@ -234,6 +234,8 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 })
             })
     });
+    let mut semihosting_handler = None;
+    let mut semihosting_uarts = Vec::new();
     let mut nrf_peripherals = Vec::new();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
@@ -272,6 +274,16 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
                 cpus.push(entry);
+            }
+            "CPU.SemihostingHandler" if cortex_m4 => {
+                keys(entry, &[])?;
+                if semihosting_handler.replace(entry).is_some() {
+                    return Err(entry.error("multiple semihosting handlers are unsupported"));
+                }
+            }
+            "UART.SemihostingUart" if cortex_m4 => {
+                keys(entry, &[])?;
+                semihosting_uarts.push(entry);
             }
             "Mocks.BusFaultingPeripheral" if cortex_m4 => {
                 keys(entry, &[])?;
@@ -1342,6 +1354,48 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             )
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
+        if let Some(handler) = semihosting_handler {
+            if handler.registration.as_deref() != Some(entry.name.as_str()) {
+                return Err(handler.error("expected the Cortex-M CPU as parent"));
+            }
+            let mut model = crate::semihosting::Semihosting::default();
+            let mut combined = false;
+            for uart in semihosting_uarts {
+                let registration: Vec<_> = uart
+                    .registration
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .collect();
+                match registration.as_slice() {
+                    [parent, ".InputOutputError"]
+                        if *parent == handler.name && !model.console && !model.split_error =>
+                    {
+                        model.console = true;
+                        combined = true;
+                    }
+                    [parent, ".InputOutput"] if *parent == handler.name && !model.console => {
+                        model.console = true
+                    }
+                    [parent, ".Error"]
+                        if *parent == handler.name && !combined && !model.split_error =>
+                    {
+                        model.split_error = true
+                    }
+                    _ => {
+                        return Err(
+                            uart.error("invalid or duplicate semihosting UART registration")
+                        );
+                    }
+                }
+            }
+            if model.split_error && !model.console {
+                return Err(handler.error("a separate error UART requires an input/output UART"));
+            }
+            machine.bus.semihosting = Some(model);
+        } else if let Some(uart) = semihosting_uarts.first() {
+            return Err(uart.error("a semihosting UART requires a handler"));
+        }
         machine.primary.configure_cortex_m(vectors, cortex_m4);
         return Ok(machine);
     }

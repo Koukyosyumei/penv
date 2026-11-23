@@ -82,6 +82,7 @@ struct Region {
 
 #[derive(Default)]
 pub struct Bus {
+    pub semihosting: Option<crate::semihosting::Semihosting>,
     regions: Vec<Region>,
     faulting_peripherals: Vec<u32>,
     thumb_data_fault: Option<u32>,
@@ -775,6 +776,9 @@ impl Bus {
                 .any(NrfPeripheral::reset_requested)
         {
             return false;
+        }
+        if let Some(handler) = self.semihosting.as_mut() {
+            handler.reset();
         }
         self.reservations.fill(None);
         for device in &mut self.nrf_peripherals {
