@@ -650,3 +650,13 @@ tests/nrf52840-shell.sh "$PWD/target/release/penv" ../renode "$SHELL_ELF"
 Observer とコントローラを固定 RESC が指定するファイルと SHA-1 で照合する。各ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/observer-advertiser.3BATnf14` に保存した。
 
 GDB メモリの3ケースは nRF52840 REPL 上の `machine StartGdbServer 3333` で未対応を再現し、固定アドレス、値、期待値とともに ARM 担当へ `nrf52-gdb-memory-c78598b.md` を渡した。再現用 `gdb.resc` とログも同じディレクトリに保存した。
+
+### プロファイラとバス取引状態の共有依頼
+
+`profiler-trace.robot:69–156` の7件から `EnableProfiler` コマンドを取り出し、同じ Cortex-M4 フィクスチャに対してケース別に実行した。全件がコマンド登録で停止した。固定 STM32F746 REPL は Renode ルートから検証すると `Network.SynopsysEthernetMAC` で停止する。ネスト上限ケースは固定の Cortex-M4 命令列から ELF を生成し、プロファイラ登録を外した切り分けでは PC `0x2020` の `MPU_CTRL`（`0xe000ed94`）も未対応と確認した。固定の出力サイズ・終了条件と再現ファイルは `nrf52-profiler-893776c.md` で ARM 担当に渡した。
+
+`bus-isolation.robot:126–150` の2件は、`target/debug/penv run --script ../renode/tests/unit-tests/bus_isolation.resc --platform-root ../renode` で固定の C# reader の include に到達して停止した。読み出し値、コンテキストログ、条件付き同一アドレス登録の要件は `nrf52-bus-isolation-893776c.md` で ARM 担当に渡した。両グループの合否は未達を維持する。
+
+個別 RESC の再現は `target/debug/penv run --script "$ARTIFACT_DIR/perfetto.resc"` など。ネスト条件だけの再現は `nested-step.resc`。再現ファイル・ログ・終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/profiler-handoff.2VkCqhdx` に保存した。
+
+独立した回帰として `cargo test --locked`、Thumb 命令トレース、Zephyr Shell のほか、前節の Observer 広告ランナーを実行し、固定 ELF のスキャン開始と RSSI −10・type 2・データ長28の受信を再確認した。
