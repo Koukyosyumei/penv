@@ -1587,3 +1587,73 @@ fn renode_reset_dispatch_append() {
         &["Increment 1", "Increment 2", "Increment 3"],
     );
 }
+
+#[test]
+fn renode_preinit_dispatch_sysbus() {
+    assert_dispatched_script(
+        "\nsysbus:\n    preinit:\n        echo 'a'",
+        ScriptPhase::Preinit,
+        &["echo 'a'"],
+    );
+}
+
+#[test]
+fn renode_preinit_dispatch_replace() {
+    assert_dispatched_script(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>\n    preinit:\n        echo 'test 1'\n\nperi:\n    preinit:\n        echo 'test 2'\n        echo 'test 3'",
+        ScriptPhase::Preinit,
+        &["echo 'test 2'", "echo 'test 3'"],
+    );
+}
+
+#[test]
+fn renode_preinit_dispatch_append() {
+    assert_dispatched_script(
+        "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    preinit:\n        echo 'test 1'\n\nperi:\n    preinit add:\n        echo 'test 2'\n        echo 'test 3'",
+        ScriptPhase::Preinit,
+        &["echo 'test 1'", "echo 'test 2'", "echo 'test 3'"],
+    );
+}
+
+#[test]
+fn renode_preinit_dispatch_order() {
+    let source = "\nperi: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    preinit:\n        echo '3 peri preinit'\n\nsysbus:\n    preinit:\n        echo '1 sysbus preinit'\n\nperi2: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n    preinit:\n        echo '5 peri2 preinit'\n\nperi:\n    preinit add:\n        echo '4 peri preinit add'\n\nsysbus:\n    preinit add:\n        echo '2 sysbus preinit add'";
+    let path = Path::new("<platform string>");
+    let entries = merge_declarations(description_syntax(source, Path::new(".")).unwrap()).unwrap();
+    let mut calls = Vec::new();
+    build_entries_with_scripts(path, &entries, false, true, |entry, phase, commands, _| {
+        assert_eq!(phase, ScriptPhase::Preinit);
+        calls.push((
+            entry.name.clone(),
+            commands
+                .iter()
+                .map(|command| (*command).to_owned())
+                .collect::<Vec<_>>(),
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let calls: Vec<_> = calls
+        .iter()
+        .map(|(name, commands)| {
+            (
+                name.as_str(),
+                commands.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            (
+                "sysbus",
+                vec!["echo '1 sysbus preinit'", "echo '2 sysbus preinit add'"]
+            ),
+            (
+                "peri",
+                vec!["echo '3 peri preinit'", "echo '4 peri preinit add'"]
+            ),
+            ("peri2", vec!["echo '5 peri2 preinit'"]),
+        ]
+    );
+}

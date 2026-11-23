@@ -1652,20 +1652,23 @@ fn validate_entry_irq_shape(entry: &Entry) -> Result<(), String> {
 
 fn validate_entry_attributes(entry: &Entry) -> Result<(), String> {
     let mut properties = HashSet::new();
-    let mut init = false;
+    let mut scripts = Vec::new();
     for (_, text) in &entry.body {
         if scalar_property(text) == Some("empty") {
             return Err(entry.error("SyntaxError: reserved keyword empty cannot name an attribute"));
         }
 
-        if text
-            .lines()
-            .next()
-            .is_some_and(|header| matches!(header, "init:" | "init add:"))
-        {
-            if std::mem::replace(&mut init, true) {
-                return Err(entry.error("MoreThanOneInitAttribute: duplicate init section"));
+        if let Some((phase, _)) = text.lines().next().and_then(script_header) {
+            if scripts.contains(&phase) {
+                return Err(entry.error(match phase {
+                    ScriptPhase::Preinit => {
+                        "MoreThanOnePreinitAttribute: duplicate preinit section"
+                    }
+                    ScriptPhase::Init => "MoreThanOneInitAttribute: duplicate init section",
+                    ScriptPhase::Reset => "MoreThanOneResetAttribute: duplicate reset section",
+                }));
             }
+            scripts.push(phase);
         } else if let Some(key) = scalar_property(text) {
             if !properties.insert(key) {
                 return Err(entry.error("PropertyOrCtorNameUsedMoreThanOnce: duplicate attribute"));
@@ -1800,19 +1803,33 @@ fn build_entries_with_scripts(
     let mut f4_rcc = None;
     let mut plic = None;
     let mut timer = None;
+    // Run sysbus preinit first, then the other entries in declaration order.
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.name == "sysbus")
+        .chain(entries.iter().filter(|entry| entry.name != "sysbus"))
+    {
+        for (_, attribute) in &entry.body {
+            if let Some((ScriptPhase::Preinit, _, commands)) = script_commands(attribute) {
+                handle_script(entry, ScriptPhase::Preinit, &commands, &mut machine)?;
+            }
+        }
+    }
     for entry in entries {
         match entry.model.as_str() {
             "" if entry.name == "sysbus" => {
-                let [(_, attribute)] = entry.body.as_slice() else {
-                    return Err(entry.error("expected a single sysbus init section"));
-                };
-                let Some((ScriptPhase::Init, false, commands)) = script_commands(attribute) else {
-                    return Err(entry.error("expected sysbus init"));
-                };
-                if entry.registration.is_some() {
-                    return Err(entry.error("expected sysbus init"));
+                if entry.registration.is_some() || entry.body.is_empty() {
+                    return Err(entry.error("expected sysbus script section"));
                 }
-                handle_script(entry, ScriptPhase::Init, &commands, &mut machine)?;
+                for (_, attribute) in &entry.body {
+                    match script_commands(attribute) {
+                        Some((ScriptPhase::Preinit, false, _)) => {}
+                        Some((ScriptPhase::Init, false, commands)) => {
+                            handle_script(entry, ScriptPhase::Init, &commands, &mut machine)?;
+                        }
+                        _ => return Err(entry.error("unsupported sysbus script section")),
+                    }
+                }
             }
             "Miscellaneous.BitBanding" => {
                 let properties = keys(entry, &["peripheralBase"])?;
@@ -1870,7 +1887,9 @@ fn build_entries_with_scripts(
                         .map_err(|error| entry.error(&error))?;
                 }
                 for (_, attribute) in &entry.body {
-                    if let Some((phase, _, commands)) = script_commands(attribute) {
+                    if let Some((phase, _, commands)) = script_commands(attribute)
+                        && phase != ScriptPhase::Preinit
+                    {
                         handle_script(entry, phase, &commands, &mut machine)?;
                     }
                 }
@@ -2773,6 +2792,7 @@ fn json_string(value: &str) -> String {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScriptPhase {
+    Preinit,
     Init,
     Reset,
 }
@@ -2780,6 +2800,7 @@ enum ScriptPhase {
 impl ScriptPhase {
     fn header(self) -> &'static str {
         match self {
+            Self::Preinit => "preinit:",
             Self::Init => "init:",
             Self::Reset => "reset:",
         }
@@ -2788,6 +2809,8 @@ impl ScriptPhase {
 
 fn script_header(header: &str) -> Option<(ScriptPhase, bool)> {
     match header {
+        "preinit:" => Some((ScriptPhase::Preinit, false)),
+        "preinit add:" => Some((ScriptPhase::Preinit, true)),
         "init:" => Some((ScriptPhase::Init, false)),
         "init add:" => Some((ScriptPhase::Init, true)),
         "reset:" => Some((ScriptPhase::Reset, false)),
