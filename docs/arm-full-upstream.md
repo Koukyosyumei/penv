@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 8 | 37 | 68 | 239 |
+| Renode Robot | 113 | 14 | 35 | 64 | 239 |
 | Renode Infrastructure NUnit | 134 | 2 | 0 | 132 | 9 |
-| 合計 | **247** | **10** | **37** | **200** | **248** |
+| 合計 | **247** | **16** | **35** | **196** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植37件と未達200件が残る。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、STM32 USART のボーレート・IDLE・パリティ、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植35件と未達196件が残る。例外復帰のうち BLX の戻り先差、HardFault のベクター取得中の割り込み到着、CPUWAIT のリセット境界、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -109,7 +109,7 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-stack-fault-evidence
 
 上流と同様に、LF 終端のテキスト照合では CR と NUL を無視する。生の標準出力には両方を残す。8秒は上流の既定仮想時間で、penv では待機ごとの上限と全体の `--max-steps` の残量の小さい方を使う。RESC の各待機は同期的に進むため、Robot 側のホスト並行実行のスケジューリングは再現対象に含めていない。補助の CRLF・完了行回帰と ADC 回帰も維持した。
 
-同じ USART では BRR を `0x10` から `0` に変えたとき、`0x12` と `0x34` の順に RDR で読めることを確認した。受信フレームを待たず RXNE が立つため、上流の送信途中キューを排出する観測は部分移植。追加プローブでは `0x12` 投入直後も RE 解除後も RXNE が1で、RE 解除前の飛行中バイトを破棄するケースは未達。ボーレート、パリティ込みのフレーム時間、IDLE の発生と取り消しも未達。上流の複数 TerminalTester ID、バイナリモード、正規表現は別の残件。
+追加プローブで見つかった受信フレーム時間と RE 解除の差は、以下の USART 時間制御で対応した。上流の複数 TerminalTester ID、バイナリモード、正規表現は別の残件。
 
 ```sh
 # verify-stm32f072.sh で取得済みの assets を使用
@@ -117,4 +117,19 @@ PENV_RENODE_ROOT="$(realpath ../renode)" PENV_RENODE_ASSETS=/path/to/evidence/as
     cargo test --locked --test cli upstream_stm32f072_console_echo -- --ignored
 cargo test --locked text_waits_ignore_nul
 cargo test --locked renode_stm32_usart
+```
+
+
+## USART の受信フレームと IDLE
+
+出典は固定 Renode の `tests/peripherals/STM32_UART.robot` の6ケースと、固定 Infrastructure の `STM32_UART.cs` および `STM32F7_USART.cs`。上流テストの旧 STM32_UART レジスタ配置を F072 の `CR1=0x00`、`BRR=0x0c`、`ISR=0x1c`、`RDR=0x24` に置き換え、同じバイト、時刻、フラグを検査した。固定 F072 REPL の周波数も USART へ引き渡す。周波数の記載がない簡易 REPL や BRR がゼロの構成では即時入力を維持する。
+
+- 16 MHz、BRR `0x10`、1 Mbaud で `0x12`、`0x34` の各フレームは9 µsで未完了、10 µsで RXNE。8ビットワード内にパリティを含めても10 µs。
+- 最終フレーム到着後の IDLE は9 µsでは未設定、10 µsで設定。9 µsの時点で次フレームを開始すると元の期限では設定されない。F072 の IDLEIE、ICR.IDLECF と WFI 中の NVIC 保留も検査した。
+- RE の解除で受信途中のデータを破棄する。RE または UE が無効な間の入力は、再有効化後も届かない。BRR をゼロにした際は受信途中の `0x12` を排出してから即時入力の `0x34` が届く。
+- F072 の FIFO オーバーラン・パリティエラー、実行時の RCC クロック切替、個別の TX フレーム時間はこの移植では検証していない。F072 の上流 REPL が使う `STM32F7_USART` では IDLE のビットがタグ扱いで、時間・フラグの比較条件は旧 STM32_UART の Robot フィクスチャを用いた。
+
+```sh
+cargo test --locked stm32_usart
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-uart-timing-evidence
 ```

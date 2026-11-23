@@ -386,6 +386,12 @@ impl Bus {
         Ok(())
     }
 
+    pub fn tick_stm32_uarts(&mut self) {
+        for uart in &mut self.stm32_uarts {
+            uart.tick();
+        }
+    }
+
     pub fn advance_stm32_dma(&mut self, output: &mut impl Write) -> Result<(), BusError> {
         let Some(dma) = self
             .stm32_dma

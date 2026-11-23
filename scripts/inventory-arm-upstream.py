@@ -281,13 +281,15 @@ def classify_robot(name, case, body, parameter):
     if name == "ArrayMemory":
         return OPEN, V6, "Synthetic Cortex-M0+ REPL with ArrayMemory and 96b_neonkey ELF; retain save/clear/load and UART contract"
     if name == "STM32_UART":
-        if case == "Should Preserve Character Order When Baud Rate Becomes Zero":
-            return PARTIAL, F072, "renode_stm32_usart_preserves_receive_order_when_brr_becomes_zero verifies RDR=0x12 then 0x34; no pending serial frame to flush when BRR changes"
-        if case == "Should Drop Queued Character When Receiver Is Disabled":
-            return OPEN, F072, "Probe with UE|RE, BRR=0x10 and byte 0x12 observes RXNE=1 immediately and after clearing RE; upstream drops the still-in-flight byte"
-        if case == "Should Drop Characters When UART Or Receiver Disabled":
-            return PARTIAL, F072, "STM32F7_USART receive gating port; classic UART SR/DR/CR1 differ and 10 us pacing is unverified"
-        return OPEN, F072, "Shared 16 MHz STM32 UART RX frame behavior; penv raises RXNE immediately and has no timed IDLE, so the fixed 9+1 us frame/idle checks are unmet"
+        checks = {
+            "Should Receive Characters At Configured Baud Rate": "receives_at_configured_baud_rate_and_detects_idle; two 9+1 us frames and one 9+1 us idle interval",
+            "Should Account For Parity Within Word Length": "parity_is_part_of_the_programmed_word_length; 8-bit word including parity, same RX and idle timing",
+            "Should Preserve Character Order When Baud Rate Becomes Zero": "preserves_receive_order_when_brr_becomes_zero; drain in-flight 0x12 before immediate 0x34",
+            "Should Cancel Idle Detection When A New Frame Starts": "cancels_idle_when_the_next_frame_starts; start next frame after 9 us idle, no IDLE on old deadline",
+            "Should Drop Queued Character When Receiver Is Disabled": "drops_an_in_flight_byte_when_re_is_cleared; no RXNE after 10 us with RE off or 10 us after re-enable",
+            "Should Drop Characters When UART Or Receiver Disabled": "drops_input_if_either_enable_is_clear; neither RE-disabled 0x12 nor UE-disabled 0x34 arrives after re-enable",
+        }
+        return PASS, F072, "renode_stm32_usart_" + checks[case] + "; classic STM32_UART registers translated to F072 CR1/ISR/RDR"
     if name == "stm32f4-erase":
         return PARTIAL, F072, "renode_stm32_flash_erase_modes_preserve_the_expected_ranges; F4 fixture uses 0x40023cxx, SER/SNB and sector 11, F0 uses page/bank erase"
     if name == "arm-cortex-m-bus-fault":

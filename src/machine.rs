@@ -484,6 +484,7 @@ impl Hart {
             self.reset_cortex_m(bus);
         }
         if let Some(thumb) = self.thumb.as_mut() {
+            bus.tick_stm32_uarts();
             bus.advance_stm32_dma(output)
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc))?;
             if thumb
@@ -766,6 +767,44 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stm32_usart_frame_and_idle_irq_progress_while_cortex_m_sleeps() {
+        use crate::stm32_uart::{Stm32Irq, Stm32Usart};
+
+        let mut machine = Machine::without_default_ram();
+        let mut output = std::io::sink();
+        let base = 0x4001_3800;
+        let ispr = 0xe000_e200;
+        let irq = 27;
+        let mut uart = Stm32Usart::new("usart1".into(), base, Some(Stm32Irq::Nvic(irq)), false);
+        uart.frequency = Some(16_000_000);
+        machine.bus.map_stm32_usart(uart).unwrap();
+        machine.bus.map_nvic(0xc0, None).unwrap();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine.bus.write(0, 2, 0xbf30, &mut output).unwrap(); // WFI
+        machine.primary.pc = 0;
+        machine.primary.configure_cortex_m(None);
+        machine.bus.write(base, 4, 0x15, &mut output).unwrap(); // UE | RE | IDLEIE
+        machine
+            .bus
+            .write(base + 0x0c, 4, 0x10, &mut output)
+            .unwrap();
+        machine
+            .bus
+            .write_stm32_uart_line("sysbus.usart1", "A", b"")
+            .unwrap();
+
+        assert_eq!(machine.run(900, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(machine.bus.read::<4>(base + 0x1c).unwrap() & 0x30, 0);
+        assert_eq!(machine.run(100, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.bus.read::<4>(base + 0x1c).unwrap() & 0x30, 0x20);
+        assert_eq!(machine.bus.read::<4>(base + 0x24).unwrap(), u32::from(b'A'));
+        assert_eq!(machine.run(900, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.bus.read::<4>(ispr).unwrap(), 0);
+        machine.run(100, &mut output).unwrap();
+        assert_eq!(machine.bus.read::<4>(ispr).unwrap(), 1 << irq);
+    }
 
     #[test]
     fn renode_cortex_m_reset_observation_via_sysresetreq() {

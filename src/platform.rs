@@ -1203,6 +1203,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 irq,
                 low_power.unwrap_or(false),
             );
+            device.frequency = frequency;
             device.dma_rx = dma_rx;
             device.dma_tx = dma_tx;
             machine
