@@ -131,6 +131,8 @@ pub struct Csr {
     pub zmmul: bool,
     pub a_extension: bool,
     pub c_extension: bool,
+    pub compressed_single: bool,
+    pub compressed_double: bool,
     pub embedded_base: bool,
     pub sscofpmf: bool,
     pub andes: Option<AndesCsrs>,
@@ -172,6 +174,8 @@ impl Default for Csr {
             zmmul: false,
             a_extension: false,
             c_extension: false,
+            compressed_single: true,
+            compressed_double: true,
             embedded_base: false,
             sscofpmf: false,
             andes: None,
@@ -458,7 +462,11 @@ impl Csr {
                     | (u32::from(self.m_extension) << 12)
                     | (if self.embedded_base { 1 << 4 } else { 1 << 8 })
                     | u32::from(self.a_extension)
-                    | (u32::from(self.c_extension) << 2)
+                    | (u32::from(
+                        self.c_extension
+                            && (!self.f_extension || self.compressed_single)
+                            && (!self.d_extension || self.compressed_double),
+                    ) << 2)
                     | (u32::from(self.f_extension) << 5)
                     | (u32::from(self.d_extension) << 3)
                     | (u32::from(self.user_supported) << 20)

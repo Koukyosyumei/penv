@@ -909,6 +909,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             "CPU.VexRiscv" => Some((true, false, false, false)),
             _ => None,
         };
+        let mut compressed_float = (true, true);
         let mut floating = (false, false, false, false, false);
         let mut zfa = false;
         let mut zfa_fli = false;
@@ -967,6 +968,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     zalrsc = false;
                     smepmp = false;
                     sscofpmf = false;
+                    let mut zca = false;
+                    let mut zcf = false;
+                    let mut zcd = false;
                     let mut zfh = false;
                     let mut zfhmin = false;
                     let mut zfbfmin = false;
@@ -1000,6 +1004,9 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                             "xandes" | "xandesperf" if !bitmanip.xandesperf => {
                                 bitmanip.xandesperf = true
                             }
+                            "zca" if !zca => zca = true,
+                            "zcf" if !zcf => zcf = true,
+                            "zcd" if !zcd => zcd = true,
                             "zcb" if !bitmanip.zcb => bitmanip.zcb = true,
                             "zbkx" if !bitmanip.zbkx => bitmanip.zbkx = true,
                             "zbkb" if !bitmanip.zbkb => bitmanip.zbkb = true,
@@ -1031,6 +1038,14 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     {
                         return Err(entry.error(&unsupported_rv32_isa(value, &architecture)));
                     }
+                    let legacy_compressed = compressed || bitmanip.zcb;
+                    if zcf && (!(legacy_compressed || zca) || !single) {
+                        return Err(entry.error("Zcf requires RV32 Zca and F"));
+                    }
+                    if zcd && (!(legacy_compressed || zca) || !double) {
+                        return Err(entry.error("Zcd requires RV32 Zca and D"));
+                    }
+                    compressed_float = (legacy_compressed || zcf, legacy_compressed || zcd);
                     floating = (single, double, zfh, zfbfmin, zfhmin);
                     if letters.contains('b') {
                         // Renode enables all four supported bit-manipulation subsets for B.
@@ -1045,7 +1060,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     isa = Some((
                         general || letters.contains('m'),
                         general || letters.contains('a'),
-                        compressed || bitmanip.zcb,
+                        legacy_compressed || zca,
                         embedded,
                     ));
                 }
@@ -1141,7 +1156,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 (
                     (multiply, zmmul),
                     atomic,
-                    compressed,
+                    (compressed, compressed_float),
                     embedded,
                     zicond,
                     (zacas, zabha, zaamo, zalrsc),
@@ -1177,7 +1192,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             (
                 (multiply, zmmul),
                 atomic,
-                compressed,
+                (compressed, compressed_float),
                 embedded,
                 zicond,
                 (zacas, zabha, zaamo, zalrsc),
@@ -1204,6 +1219,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             .unwrap_or(entry.model == "CPU.IbexRiscV32");
         hart.set_unaligned_accesses(unaligned);
         hart.set_integer_extensions(multiply, atomic || (zaamo && zalrsc), compressed);
+        hart.set_compressed_float(compressed_float.0, compressed_float.1);
         hart.set_atomic_subextensions(zaamo, zalrsc);
         hart.set_zmmul(zmmul);
         hart.set_embedded_base(embedded);
@@ -2238,6 +2254,9 @@ fn unsupported_rv32_isa(value: &str, architecture: &str) -> String {
                     | "zbs"
                     | "zbkb"
                     | "zbkx"
+                    | "zca"
+                    | "zcf"
+                    | "zcd"
                     | "zcb"
                     | "xandes"
                     | "xandesperf"
@@ -2273,7 +2292,7 @@ type RiscvConfig<'a> = (
     (
         (bool, bool),
         bool,
-        bool,
+        (bool, (bool, bool)),
         bool,
         bool,
         (bool, bool, bool, bool),

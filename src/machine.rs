@@ -562,6 +562,11 @@ impl Hart {
         self.csr.c_extension = compressed;
     }
 
+    pub fn set_compressed_float(&mut self, single: bool, double: bool) {
+        self.csr.compressed_single = single;
+        self.csr.compressed_double = double;
+    }
+
     pub fn set_atomic_subextensions(&mut self, zaamo: bool, zalrsc: bool) {
         self.zaamo = zaamo;
         self.zalrsc = zalrsc;
@@ -1108,7 +1113,19 @@ impl Hart {
         }
         let illegal = || Fault::Illegal(encoded);
         let insn = if width == 2 {
-            crate::compressed::expand(encoded, self.bitmanip.zcb).ok_or_else(illegal)?
+            let expanded =
+                crate::compressed::expand(encoded, self.bitmanip.zcb).ok_or_else(illegal)?;
+            if matches!(expanded & 0x7f, 0x07 | 0x27) {
+                let enabled = match (expanded >> 12) & 7 {
+                    2 => self.csr.compressed_single,
+                    3 => self.csr.compressed_double,
+                    _ => unreachable!(),
+                };
+                if !enabled {
+                    return Err(illegal());
+                }
+            }
+            expanded
         } else {
             encoded
         };

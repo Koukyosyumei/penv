@@ -97,6 +97,8 @@ def robot_cases(root, isa, act):
                                 basis += "; ELF passed with Zaamo/Zalrsc after preserving reservations on same-hart stores (ACT test 238)"
                             else:
                                 basis += "; ELF passed with standalone atomic subextension and with A"
+                        if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zc[afd]/[^/]+\.elf", portable):
+                            basis += "; ELF passed with explicit compressed subsets and with legacy C"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/ZfhminD?/[^/]+\.elf", portable):
                             basis += "; ELF passed with explicit Zfhmin in reduced ISA"
                         if re.fullmatch(r"spike-rv32-max/elfs/rv32i/Zfa(?:D|F|ZfhD?|Zvfh)/[^/]+\.elf", portable):

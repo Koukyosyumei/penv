@@ -1228,3 +1228,31 @@ python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
 ```
 
 同じ release バイナリで縮小 ISA 構成は 11/11 件が通過し、固定 Robot 構成は V の未対応で 11 件とも CPU 作成時に停止しました。Rust テストは 88 件すべて通過し、他ハートのストアと AMO による予約無効化の既存回帰も通過しました。固定 Renode の挙動はソースで確認しました。実行比較は残っています。上流等価合格は累計 155 件です。ケースログ、`results.jsonl`、終了状態は上記の証拠ディレクトリに保存しました。
+
+### RV32 Zca・Zcf・Zcd の個別指定
+
+固定 ACT の `Zca-c.add-00.elf` は `rv32i_zca` の CPU 作成時に停止しました。ISA 名に Zca、Zcf、Zcd を指定できるようにし、既存の圧縮命令デコーダーで整数、単精度、倍精度の命令群を個別に有効にしました。Zca が有効な場合は 2 バイト境界で命令を取得し、`misa.C` は有効な浮動小数点形式に対応する圧縮命令群が揃った場合に立てます。[RISC-V Zc 仕様](https://docs.riscv.org/reference/isa/v20240411/unpriv/zc.html)
+
+```bash
+work=/tmp/penv-full-riscv
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-10f920b-s78XzO"
+elfs="$work/act/work/spike-rv32-max/elfs/rv32i"
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+for suite in Zca Zcf Zcd; do
+  case "$suite" in
+    Zca) isa=rv32i_zca ;;
+    Zcf) isa=rv32if_zca_zcf ;;
+    Zcd) isa=rv32ifd_zca_zcd ;;
+  esac
+  python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+    --platform "$evidence/$isa.repl" --artifacts "$repro/$suite" "$elfs/$suite/"*.elf
+done
+python3 scripts/validate-rv32-architecture.py --act --penv target/release/penv \
+  --platform "$work/act-upstream.repl" --artifacts "$repro/fixed" "$elfs"/{Zca,Zcf,Zcd}/*.elf
+```
+
+同じ release バイナリで、縮小 ISA 構成は Zca 27/27 件、Zcf 4/4 件、Zcd 4/4 件が通過しました。従来の `rv32ifdc` 構成も 35/35 件が通過し、`rv32ifd_zca` 構成では圧縮浮動小数点命令 8 件すべてが不正命令になりました。Rust テストは 88/88 件が通過しました。
+
+固定 Robot 構成では V の未対応で 35 件すべてが CPU 作成時に停止しました。台帳の上流等価合格は累計 155 件です。構成別の `results.jsonl`、ケースログ、終了状態を上記の証拠ディレクトリに保存しました。
