@@ -382,6 +382,11 @@ def disposition(path, name, context):
             "Should Trap On Unaligned LR/SC",
         }:
             return "pass", "Fixed PolarFire named stepping and LR/SC assertions verified (rv64-lrsc-step.md)"
+        if name in {
+            "Two LR/SC Loops Should Increment To Correct Sum",
+            "LR/SC And Amoadd Loops Should Increment To Correct Sum",
+        }:
+            return "pass", "Fixed PolarFire loops, both halt PCs and 20 million increments verified (rv64-lrsc-continuous.md)"
         if name == "Should Drop Other Core Reservation On SC":
             return "partial", "Fixed second hart traps before SC; exact trace and corrected SC verified separately (rv64-lrsc-step.md)"
     if path.name == "memory-access.robot":

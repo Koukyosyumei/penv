@@ -17,6 +17,7 @@ pub struct Machine {
     next_hart: usize,
     halt_hooks: Vec<(usize, u64, usize)>,
     halted: u8,
+    pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
     uart_input: VecDeque<(u64, Vec<u8>)>,
 }
@@ -37,6 +38,7 @@ pub enum Stop {
     Ecall,
     Ebreak,
     TestExit(u64),
+    AllHalted,
     Reset,
     Limit,
 }
@@ -156,6 +158,7 @@ impl Machine {
             next_hart: 0,
             halt_hooks: Vec::new(),
             halted: 0,
+            stop_when_halted: false,
             elapsed_steps: 0,
             uart_input: VecDeque::new(),
         }
@@ -294,6 +297,12 @@ impl Machine {
         self.elapsed_steps
     }
 
+    pub(crate) fn halt_rv64_cpu(&mut self, name: &str) -> Result<(), String> {
+        let hart = self.rv64_hart_by_name(name)?;
+        self.halted |= 1 << hart;
+        Ok(())
+    }
+
     pub fn halt_on_pc(&mut self, source: &str, pc: u64, target: &str) -> Result<(), String> {
         let find = |name: &str| {
             let name = name.strip_prefix("sysbus.").unwrap_or(name);
@@ -326,6 +335,11 @@ impl Machine {
         selected: Option<usize>,
         output: &mut impl Write,
     ) -> Result<(Stop, u64), String> {
+        let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
+        let stop_when_halted = self.stop_when_halted && selected.is_none();
+        if stop_when_halted && self.halted == all_harts {
+            return Ok((Stop::AllHalted, 0));
+        }
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
@@ -361,6 +375,9 @@ impl Machine {
             for &(source, pc, target) in &self.halt_hooks {
                 if index == source && hart.rv64.as_ref().is_some_and(|cpu| cpu.pc == pc) {
                     self.halted |= 1 << target;
+                    if stop_when_halted && self.halted == all_harts {
+                        return Ok((Stop::AllHalted, retired));
+                    }
                 }
             }
             if self.halted & (1 << index) != 0 {

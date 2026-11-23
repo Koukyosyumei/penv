@@ -61,6 +61,9 @@ Options:
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
   --set-mtvec CPU:VALUE  Initialize the named RV64 machine trap vector
   --translate-read CPU:ADDRESS  Translate an RV64 address for a data read
+  --halt-cpu CPU       Start the named RV64 CPU halted
+  --halt-cpu-at CPU:ADDRESS  Halt the named RV64 CPU before executing this address
+  --stop-when-halted   Stop once every CPU is halted
   --set-mstatus CPU:VALUE  Initialize the named RV64 CPU status fields
   --write-pmp-register CPU@NAME:VALUE  Write a named external PMP register
   --set-gpr CPU@xN:VALUE  Initialize an RV64 integer register (x1 through x31)
@@ -111,6 +114,8 @@ enum SetupAction {
     SetResetVector(String, u64),
     ResetCpu(String),
     StepCpu(String),
+    HaltCpu(String),
+    HaltCpuAt(String, u64),
     SetMstatus(String, u64),
     SetMtvec(String, u64),
     TranslateRead(String, u64),
@@ -228,6 +233,7 @@ fn run() -> Result<ExitCode, String> {
     let mut raw = false;
     let mut rv64 = false;
     let mut stats = false;
+    let mut stop_when_halted = false;
     let mut tohost = None;
     let mut renode_elf_load = false;
     let mut renode_unmapped_data = false;
@@ -266,6 +272,7 @@ fn run() -> Result<ExitCode, String> {
             Some("--raw") => raw = true,
             Some("--rv64") => rv64 = true,
             Some("--stats") => stats = true,
+            Some("--stop-when-halted") => stop_when_halted = true,
             Some("--uart-stdin") => uart_stdin = true,
             Some("--uart-stdin-reset") => uart_stdin_reset = true,
             Some("--ethernet-loopback") => {
@@ -358,19 +365,19 @@ fn run() -> Result<ExitCode, String> {
                     return Err("--clint may only be specified once".into());
                 }
             }
-            Some(option @ ("--reset-cpu" | "--step-cpu")) => {
+            Some(option @ ("--reset-cpu" | "--step-cpu" | "--halt-cpu")) => {
                 let cpu = args
                     .next()
                     .and_then(|arg| arg.into_string().ok())
                     .filter(|cpu| !cpu.is_empty())
                     .ok_or_else(|| format!("{option} requires CPU"))?;
-                setup_actions.push(if option == "--step-cpu" {
-                    SetupAction::StepCpu(cpu)
-                } else {
-                    SetupAction::ResetCpu(cpu)
+                setup_actions.push(match option {
+                    "--step-cpu" => SetupAction::StepCpu(cpu),
+                    "--halt-cpu" => SetupAction::HaltCpu(cpu),
+                    _ => SetupAction::ResetCpu(cpu),
                 });
             }
-            Some(option @ ("--set-pc" | "--set-reset-vector")) => {
+            Some(option @ ("--set-pc" | "--set-reset-vector" | "--halt-cpu-at")) => {
                 let error = || format!("{option} requires CPU:ADDRESS");
                 let argument = args
                     .next()
@@ -381,10 +388,10 @@ fn run() -> Result<ExitCode, String> {
                     .filter(|(cpu, _)| !cpu.is_empty())
                     .ok_or_else(error)?;
                 let address = parse_address64(address)?;
-                setup_actions.push(if option == "--set-pc" {
-                    SetupAction::SetPc(cpu.to_owned(), address)
-                } else {
-                    SetupAction::SetResetVector(cpu.to_owned(), address)
+                setup_actions.push(match option {
+                    "--set-pc" => SetupAction::SetPc(cpu.to_owned(), address),
+                    "--halt-cpu-at" => SetupAction::HaltCpuAt(cpu.to_owned(), address),
+                    _ => SetupAction::SetResetVector(cpu.to_owned(), address),
                 });
             }
             Some(option @ ("--set-freg" | "--set-gpr")) => {
@@ -700,6 +707,7 @@ fn run() -> Result<ExitCode, String> {
                 .ok_or_else(|| format!("unknown GPIO button {gpio_name}.{button_name}"))?;
             gpio.set_button(*pressed);
         }
+        machine.stop_when_halted = stop_when_halted;
         for (source, pc, target) in &halt_hooks {
             machine.halt_on_pc(source, *pc, target)?;
         }
@@ -786,6 +794,8 @@ fn run() -> Result<ExitCode, String> {
                         cpu.set_reset_vector(*address);
                     }
                 }
+                SetupAction::HaltCpu(cpu) => machine.halt_rv64_cpu(cpu)?,
+                SetupAction::HaltCpuAt(cpu, address) => machine.halt_on_pc(cpu, *address, cpu)?,
                 SetupAction::StepCpu(cpu) => {
                     let stop = machine.step_rv64_cpu(cpu, &mut io::stdout().lock())?;
                     if stop != Stop::Limit {
