@@ -952,6 +952,126 @@ mod tests {
     }
 
     #[test]
+    fn mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege() {
+        // Renode riscv-mret.robot: both 32-bit User Level cases.
+        const HANDLER: u32 = RAM_BASE + 4;
+        for (user_mode, expected_mpp) in [(false, 3), (true, 0)] {
+            let mut machine = Machine::new(8).unwrap();
+            if user_mode {
+                machine.primary.enable_user_mode();
+            }
+            machine.primary.set_mtvec(HANDLER);
+            for (address, instruction) in [
+                (RAM_BASE, 0xc000_1073u32), // csrrw zero, cycle, zero
+                (HANDLER, 0x3020_0073),     // mret
+            ] {
+                machine
+                    .bus
+                    .memory(address, 4)
+                    .unwrap()
+                    .copy_from_slice(&instruction.to_le_bytes());
+            }
+            let mut output = std::io::sink();
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+            assert_eq!(machine.primary.pc, HANDLER);
+            assert_eq!(machine.primary.csr.access(0x3420_2073, 0).unwrap(), 2);
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                3
+            );
+            assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+            assert_eq!(machine.primary.pc, RAM_BASE);
+            assert_eq!(
+                (machine.primary.csr.access(0x3000_2073, 0).unwrap() >> 11) & 3,
+                expected_mpp
+            );
+        }
+    }
+
+    #[test]
+    fn clint_traps_at_the_exact_reprogrammed_compare_tick() {
+        // Renode timer-reconfiguration.robot: Should Tick At Exact Time.
+        const CLINT: u32 = 0x0200_0000;
+        const HANDLER: u32 = RAM_BASE + 16;
+        let mut machine = Machine::new(20).unwrap();
+        machine
+            .bus
+            .map_clint_with_frequency(CLINT, 1, 10_000_000)
+            .unwrap();
+        machine.primary.set_mtvec(HANDLER);
+        machine
+            .primary
+            .csr
+            .access(0x3040_9073, crate::clint::TIMER)
+            .unwrap();
+        machine.primary.csr.access(0x3000_9073, 1 << 3).unwrap();
+        machine.primary.registers[1] = CLINT + 0x4000;
+        machine.primary.registers[2] = 6;
+        machine.primary.registers[3] = CLINT + 0x4004;
+        let program = [0x0000_0013u32, 0x0020_a023, 0x0001_a023, 0x0000_006f];
+        machine
+            .bus
+            .memory(RAM_BASE, 16)
+            .unwrap()
+            .copy_from_slice(program.map(u32::to_le_bytes).as_flattened());
+
+        let mut output = std::io::sink();
+        assert_eq!(machine.run(59, &mut output).unwrap(), (Stop::Limit, 59));
+        assert_eq!(machine.primary.pc, RAM_BASE + 12);
+        assert_eq!(machine.bus.read::<4>(CLINT + 0xbff8).unwrap(), 5);
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, HANDLER);
+        assert_eq!(
+            machine.primary.csr.access(0x3420_2073, 0).unwrap(),
+            0x8000_0007
+        );
+        assert_eq!(
+            machine.primary.csr.access(0x3410_2073, 0).unwrap(),
+            RAM_BASE + 12
+        );
+    }
+
+    #[test]
+    fn virt_ns16550_receive_interrupt_routes_through_plic() {
+        // Device addresses and source ID from Renode platforms/cpus/riscv_virt.repl.
+        const UART: u32 = 0x1000_0000;
+        const PLIC: u32 = 0x0c00_0000;
+        const CLAIM: u32 = PLIC + 0x20_0004;
+        const HANDLER: u32 = RAM_BASE + 4;
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(RAM_BASE, 8).unwrap();
+        machine.bus.map_plic(PLIC, 52, &[EXTERNAL], true).unwrap();
+        machine.bus.map_ns16550(UART, 3, false).unwrap();
+        machine.primary.set_mtvec(HANDLER);
+        machine.primary.csr.access(0x3040_9073, EXTERNAL).unwrap();
+        machine.primary.csr.access(0x3000_9073, 1 << 3).unwrap();
+        let mut output = Vec::new();
+        for (address, width, value) in [(PLIC + 12, 4, 1), (PLIC + 0x2000, 4, 8), (UART + 1, 1, 1)]
+        {
+            machine
+                .bus
+                .write(address, width, value, &mut output)
+                .unwrap();
+        }
+        machine.schedule_uart_input(1, b"Q".to_vec()).unwrap();
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, HANDLER);
+        assert_eq!(
+            machine.primary.csr.access(0x3420_2073, 0).unwrap(),
+            0x8000_000b
+        );
+        assert_eq!(machine.bus.read::<4>(CLAIM).unwrap(), 3);
+        assert_eq!(machine.bus.read::<1>(UART + 2).unwrap(), 4);
+        let received = machine.bus.read::<1>(UART).unwrap();
+        machine.bus.write(UART, 1, received, &mut output).unwrap();
+        assert_eq!(output, b"Q");
+        assert_eq!(machine.bus.read::<1>(UART + 2).unwrap(), 1);
+        assert_eq!(machine.bus.tick_plic(), 0);
+        machine.bus.write(CLAIM, 4, 3, &mut output).unwrap();
+        assert_eq!(machine.bus.tick_plic(), 0);
+    }
+
+    #[test]
     fn delivers_synchronous_faults_with_precise_pc_and_value() {
         let mut machine = Machine::new(16).unwrap();
         let handler = RAM_BASE + 8;

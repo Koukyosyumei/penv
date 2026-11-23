@@ -279,3 +279,32 @@ impl LiteXUart {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn litex_receives_boot_abort_and_shell_command_in_separate_events() {
+        // Renode LiteX_Ibex.robot: Should Boot / Should Display Help (UART input).
+        const RX: u32 = 2;
+        let mut uart = LiteXUart::new(vec![0], Some((0, 2)));
+        let mut output = std::io::sink();
+        uart.write(0x14, RX, &mut output).unwrap();
+        for input in [b"Q".as_slice(), b"help\r"] {
+            assert_eq!(uart.read(8), 1);
+            assert!(!uart.interrupt_pending());
+            uart.queue_input(input.to_vec());
+            assert!(uart.interrupt_pending());
+            for &byte in input {
+                assert_eq!(uart.read(8), 0);
+                assert_eq!(uart.read(0), u32::from(byte));
+            }
+            assert_eq!(uart.read(8), 1);
+            assert_ne!(uart.read(0x10) & RX, 0);
+            uart.write(0x10, RX, &mut output).unwrap();
+            assert_eq!(uart.read(0x10) & RX, 0);
+            assert!(!uart.interrupt_pending());
+        }
+    }
+}

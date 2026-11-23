@@ -252,7 +252,42 @@ diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
 
 変更前の `d3ba7be` では UART 出力と割り込み進入はできましたが、CLINT が REPL の `frequency: 10000000` を使わず、タイマーが期待より早く発火しました。修正後は 100 MHz の実行ステップ基準で 10 ステップにつき `mtime` が 1 進みます。テスト ELF はステップ上限まで待機ループに留まるため、終了コード 2 が期待値です。
 
-既存の LiteX VexRiscv 専用 CLINT 配線と `--clint` は従来の 1 ステップ 1 ティックを使います。LiteX の回帰は `scripts/validate-riscv-upstream.sh` で確認します。virt の PLIC 経由 UART 割り込みとマルチハートの起動はこの ELF の検証範囲外です。
+既存の LiteX VexRiscv 専用 CLINT 配線と `--clint` は従来の 1 ステップ 1 ティックを使います。LiteX の回帰は `scripts/validate-riscv-upstream.sh` で確認します。virt の PLIC 経由 UART 受信割り込みは下記の ELF で検証できます。virt のマルチハート起動は未検証です。
+
+## 上流 RV32 テストの対応表
+
+上流 Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` を参照しました。下表の Robot ファイルは上流の `tests/` からの相対パスです。
+
+| 対象 | 上流の出典とケース | penv のテストと検証範囲 |
+| --- | --- | --- |
+| RV32 CPU | `unit-tests/riscv-mret.robot` の `User Level Exists 32Bits` と `User Level Does Not Exists 32Bits` | `mret_restores_pc_and_resets_mpp_to_lowest_supported_privilege`。読み取り専用 `cycle` CSR への書き込みで例外を起こし、ハンドラ進入時の PC と MPP、`mret` 復帰後の PC と MPP を両構成で検査 |
+| CLINT | `unit-tests/timer-reconfiguration.robot` の `Should Tick At Exact Time` | `clint_traps_at_the_exact_reprogrammed_compare_tick`。ゲストが `mtimecmp` の上下ワードを書き換え、5 ティックでは未発火、6 ティック目で機械タイマー例外に入る。virt の 10 MHz に合わせて 59 ステップと 60 ステップに適応 |
+| virt UART | `platforms/cpus/riscv_virt.repl`（上流 REPL。Robot ケースの移植元ではなく配線の出典） | `virt_ns16550_receive_interrupt_routes_through_plic` と `TEST_UART_IRQ` ELF。外部割り込み、PLIC ソース 3 の claim/complete、受信バイトと割り込み解除を検査 |
+| LiteX UART | `platforms/LiteX/LiteX_Ibex.robot` の `Should Boot` と `Should Display Help` | `litex_receives_boot_abort_and_shell_command_in_separate_events` は `Q` と `help\r` を別々に投入し、バイト順と RX 割り込みの解除を検査。BIOS のプロンプトと help 応答は実 ELF を使う既存回帰で検査 |
+| LiteX の既存回帰 | `LiteX_VexRiscv_SMP.robot` の OpenSBI・Linux、`LiteX_VexRiscv_I2S.robot` のオーディオ、`Arty_LiteX_VexRiscv.robot` と `Nexys_Video_LiteX_VexRiscv.robot` の入出力 | `scripts/validate-riscv-upstream.sh` に対応する検証あり。Arty のスイッチ・ボタンは各 1 ピンを検証 |
+
+virt の機械タイマーと NS16550 を同じ ELF で再現するには、上記の手順に `-DTEST_UART_IRQ` と `--uart-input` を追加します。
+
+```sh
+cargo test --locked
+cargo build --locked --release
+out=$(mktemp -d)
+clang --target=riscv32-unknown-elf -march=rv32imac -mabi=ilp32 \
+  -nostdlib -fuse-ld=lld -DTEST_UART_IRQ -Wl,-T,scripts/firmware/rv32-virt.ld \
+  scripts/firmware/rv32-virt.S -o "$out/rv32-virt.elf"
+printf Q > "$out/uart.input"
+status=0
+target/release/penv run --platform ../renode/platforms/cpus/riscv_virt.repl \
+  --platform-root ../renode --max-steps 10000 --uart-input "$out/uart.input" \
+  "$out/rv32-virt.elf" > "$out/virt.uart" || status=$?
+test "$status" -eq 2 &&
+diff -u <(printf '%s\n' 'rv32-virt: NS16550 UART ready' \
+  'rv32-virt: 10 MHz CLINT machine timer IRQ and mret OK' Q \
+  'rv32-virt: NS16550 PLIC RX IRQ and mret OK') "$out/virt.uart"
+bash scripts/validate-riscv-upstream.sh target/release/penv ../renode "$out/litex"
+```
+
+`cargo test --locked` は 60 件、virt の実 ELF と LiteX の実ファームウェア回帰はすべて成功しました。残課題は `riscv-mret.robot` のモード切り替えによる TLB 無効化の実 ELF、`riscv-arch-tests.robot` の RV32 アーキテクチャスイート、CLINT の翻訳ブロック境界ログに依存するケースです。LiteX では Linux ボードの GPIO・SPI・I²C、専用 SD ルートファイルシステム、Nexys4DDR の SPI SD、Tock の繰り返し UART 出力はこの移植の対象外です。
 
 ## Cortex-M0 / Cortex-M0+
 
