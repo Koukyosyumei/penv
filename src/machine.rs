@@ -94,7 +94,7 @@ impl Fault {
                     },
                     *address,
                 ),
-                BusError::Output(_) => return None,
+                BusError::Output(_) | BusError::CrcConfiguration(_) => return None,
             },
             Self::Illegal(insn) | Self::InvalidCsr(insn, _) => (2, *insn),
             Self::MisalignedTarget(address) => (0, *address),

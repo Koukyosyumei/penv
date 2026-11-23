@@ -12,7 +12,7 @@ use crate::{
     plic::Plic,
     stm32_adc::Stm32F0Adc,
     stm32_can::Stm32Can,
-    stm32_crc::Stm32F0Crc,
+    stm32_crc::{CrcConfigError, Stm32F0Crc},
     stm32_dma::Stm32Dma,
     stm32_exti::Exti,
     stm32_flash::Stm32F0Flash,
@@ -45,6 +45,7 @@ pub enum BusError {
     Page(u32),
     Misaligned(u32, usize),
     Output(io::Error),
+    CrcConfiguration(CrcConfigError),
 }
 
 impl BusError {
@@ -76,6 +77,7 @@ impl fmt::Display for BusError {
                 write!(f, "misaligned {width}-byte access at {address:#010x}")
             }
             Self::Output(error) => write!(f, "UART: {error}"),
+            Self::CrcConfiguration(error) => error.fmt(f),
         }
     }
 }
@@ -519,7 +521,7 @@ impl Bus {
             .unwrap()
             .complete(transfer, result.is_ok());
         match result {
-            Err(error @ BusError::Output(_)) => Err(error),
+            Err(error @ (BusError::Output(_) | BusError::CrcConfiguration(_))) => Err(error),
             _ => Ok(()),
         }
     }
@@ -1722,7 +1724,7 @@ impl Bus {
             && let Some(crc) = self.stm32_crc.as_mut()
             && crc.contains(address)
         {
-            return Ok(crc.read(address, N));
+            return crc.read(address, N).map_err(BusError::CrcConfiguration);
         }
         self.read_ram::<N>(address)
     }
@@ -1993,8 +1995,9 @@ impl Bus {
         if let Some(crc) = self.stm32_crc.as_mut()
             && crc.contains(address)
         {
-            crc.write(address, width, value);
-            return Ok(());
+            return crc
+                .write(address, width, value)
+                .map_err(BusError::CrcConfiguration);
         }
         if self
             .stm32_flash

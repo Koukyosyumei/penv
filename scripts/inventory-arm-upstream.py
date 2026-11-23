@@ -328,7 +328,7 @@ def classify_nunit(name, case, attrs, parameter):
         if case in {"ShouldCalculateCRC32MPEG2", "ShouldCalculateCRC8"}:
             return PASS, F072, "supports_crc32_mpeg2_and_crc8_smbus_check_values; same polynomial, initial value, 123456789 input and check value"
         if case == "ShouldThrowArgumentException":
-            return OPEN, COMMON, "Host CRCConfig constructor distinguishes width out of range from an oversized polynomial; STM32 POLYSIZE encodes only 7/8/16/32 and MMIO has no constructor error API"
+            return PASS, COMMON, "renode_crc_rejects_invalid_configuration; same polynomial 0xFF and widths 7, 0, 33, with distinct polynomial-too-wide and width-out-of-range errors"
         checks = {
             "ShouldCalculateMultipleUpdates": "renode_crc_multiple_updates; empty, 0x31, then 0x32 with each intermediate value",
             "ShouldHandleReflections": "renode_crc_reflection_combinations; same 0x32/0x33 input and all three reflection configurations",
