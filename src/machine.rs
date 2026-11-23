@@ -307,18 +307,40 @@ impl Machine {
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
+        self.run_selected(limit, None, output)
+    }
+
+    pub(crate) fn step_rv64_cpu(
+        &mut self,
+        name: &str,
+        output: &mut impl Write,
+    ) -> Result<Stop, String> {
+        let index = self.rv64_hart_by_name(name)?;
+        self.run_selected(1, Some(index), output)
+            .map(|(stop, _)| stop)
+    }
+
+    fn run_selected(
+        &mut self,
+        limit: u64,
+        selected: Option<usize>,
+        output: &mut impl Write,
+    ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         let ethernet_link = self.bus.has_rv64_ethernet_link();
         for _ in 0..limit {
             if ethernet_link && self.elapsed_steps % 16_384 == 0 {
                 self.bus.poll_rv64_ethernet();
             }
-            let index = self.next_hart;
-            if index == self.secondary.len() {
-                self.next_hart = 0;
-            } else {
-                self.next_hart += 1;
-            }
+            let index = selected.unwrap_or_else(|| {
+                let index = self.next_hart;
+                if index == self.secondary.len() {
+                    self.next_hart = 0;
+                } else {
+                    self.next_hart += 1;
+                }
+                index
+            });
             let hart = if index == 0 {
                 &mut self.primary
             } else {

@@ -787,11 +787,7 @@ fn run() -> Result<ExitCode, String> {
                     }
                 }
                 SetupAction::StepCpu(cpu) => {
-                    machine.rv64_hart_by_name(cpu)?;
-                    if machine.hart_count() != 1 || harts.is_some_and(|count| count != 1) {
-                        return Err("--step-cpu requires a single RV64 CPU".into());
-                    }
-                    let (stop, _) = machine.run(1, &mut io::stdout().lock())?;
+                    let stop = machine.step_rv64_cpu(cpu, &mut io::stdout().lock())?;
                     if stop != Stop::Limit {
                         return Err(format!("CPU setup step stopped: {stop:?}"));
                     }

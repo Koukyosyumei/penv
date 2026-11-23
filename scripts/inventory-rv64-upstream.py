@@ -374,6 +374,16 @@ def disposition(path, name, context):
             return "partial", "RV64 configuration CSR checks verified; fixed case also executes RV32 checks (rv64-andes-qmac.md)"
     if path.name == "riscv-stack-access-hook.robot" and name.startswith("Should Trigger Stack Access Hook "):
         return "pass", "Fixed stack access instruction, address, width and direction verified (rv64-stack-access.md)"
+    if path.name == "riscv-lr-sc-instructions.robot":
+        if name in {
+            "Should Handle Multiple Writes To Same Reservation",
+            "Should Work On Multiple Cores",
+            "Should Handle Looping LR/SC Pairs To Same Reservation",
+            "Should Trap On Unaligned LR/SC",
+        }:
+            return "pass", "Fixed PolarFire named stepping and LR/SC assertions verified (rv64-lrsc-step.md)"
+        if name == "Should Drop Other Core Reservation On SC":
+            return "partial", "Fixed second hart traps before SC; exact trace and corrected SC verified separately (rv64-lrsc-step.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"
