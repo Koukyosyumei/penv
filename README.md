@@ -1847,3 +1847,25 @@ done
 ```
 
 `cargo test` 233件、固定 STM32H7 REPL 7構成、Zephyr ADC DMA・暗号・Blinky・Button ELF と SD 装着3件が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-8e79fd74efc6-1
+
+STM32H7 FDCAN の FIFO0 に拡張 ID フィルターを実装しました。固定 MCAN と同じ2ワードのフィルター形式、グローバルマスク有無の範囲、二重 ID、クラシックマスクと最初の一致を、同じバイナリの3テストで照合しました。Nucleo と `MCAN.robot` の公開 ELF は最初のカウンターで8仮想秒タイムアウトしました。共有 message RAM 配線は ARM の既存依頼 `network-fdcan-417181b.md` で追跡しています。
+
+配線待ちと独立に、固定 Nucleo の IS25WP 公開 ELF と上流のフラッシュ追記を実行しました。単一セクター試験の開始まで到達し、単一・複数セクターとも消去テスト中に `Flash read failed! -5` を出力しました。読み取りコマンドとステータスの追跡が残っています。共有ソースの変更はありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-extended.dY4lsY7x
+for case in can mcan is25wp; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 16000000
+done
+```
+
+`cargo test` 236件、固定 STM32H7 REPL 7構成、Zephyr Blinky・Button、SD ファイル装着3件が通過しました。公開 CAN 2件と IS25WP は未達です。ケース別結果、UART ログ、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。

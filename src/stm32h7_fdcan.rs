@@ -22,6 +22,7 @@ impl Fdcan {
         let mut registers = [0; 64];
         registers[0] = 0x3301_1200;
         registers[0x18 / 4] = 1; // INIT at reset
+        registers[0x90 / 4] = 0x1fff_ffff; // XIDAM reset mask
         registers[0x44 / 4] = 0x707; // LEC and DLEC have not changed.
         Self {
             base,
@@ -200,26 +201,55 @@ impl Fdcan {
         if remote && global & (if extended { 1 } else { 2 }) != 0 {
             return None;
         }
-        if !extended {
-            let configuration = self.registers[0x84 / 4];
-            let base = (configuration & 0xfffc) as usize;
-            let count = ((configuration >> 16) & 0xff).min(128);
-            let id = (identifier >> 18) & 0x7ff;
-            for index in 0..count {
-                let offset = base + index as usize * 4;
-                let filter = u32::from_le_bytes(ram.get(offset..offset + 4)?.try_into().ok()?);
-                let action = (filter >> 27) & 7;
-                let first = (filter >> 16) & 0x7ff;
-                let second = filter & 0x7ff;
-                let matches = match filter >> 30 {
-                    0 => (first..=second).contains(&id),
-                    1 => id == first || id == second,
-                    2 => id & second == first & second,
-                    _ => false,
-                };
-                if action != 0 && matches {
-                    return (action == 1).then_some(index << 24);
+        let configuration = self.registers[(if extended { 0x88 } else { 0x84 }) / 4];
+        let base = (configuration & 0xfffc) as usize;
+        let (count, stride, id) = if extended {
+            (
+                ((configuration >> 16) & 0x7f).min(64),
+                8,
+                identifier & 0x1fff_ffff,
+            )
+        } else {
+            (
+                ((configuration >> 16) & 0xff).min(128),
+                4,
+                (identifier >> 18) & 0x7ff,
+            )
+        };
+        for index in 0..count {
+            let offset = base + index as usize * stride;
+            let word = u32::from_le_bytes(ram.get(offset..offset + 4)?.try_into().ok()?);
+            let (action, kind, first, second) = if extended {
+                let next = u32::from_le_bytes(ram.get(offset + 4..offset + 8)?.try_into().ok()?);
+                (
+                    word >> 29,
+                    next >> 30,
+                    word & 0x1fff_ffff,
+                    next & 0x1fff_ffff,
+                )
+            } else {
+                (
+                    (word >> 27) & 7,
+                    word >> 30,
+                    (word >> 16) & 0x7ff,
+                    word & 0x7ff,
+                )
+            };
+            let matches = match kind {
+                0 => {
+                    let candidate = if extended {
+                        id & self.registers[0x90 / 4]
+                    } else {
+                        id
+                    };
+                    (first..=second).contains(&candidate)
                 }
+                1 => id == first || id == second,
+                2 => id & second == first & second,
+                _ => extended && (first..=second).contains(&id),
+            };
+            if action != 0 && matches {
+                return (action == 1).then_some(index << 24);
             }
         }
         let unmatched = (global >> if extended { 2 } else { 4 }) & 3;
@@ -473,6 +503,69 @@ mod tests {
         can.write(0xd0, 1);
         can.service_loopback(&mut ram);
         (can.read(0xa4) & 0x7f, ram)
+    }
+
+    fn extended_filter_frame(id: u32, filters: &[(u32, u32)], mask: u32) -> (u32, u32) {
+        let mut can = Fdcan::new(0, [None, None]);
+        let mut ram = [0; 128];
+        can.write(0x18, 3);
+        can.write(0x18, 0xa3);
+        can.write(0x10, 1 << 4);
+        can.write(0x80, 2 << 2);
+        can.write(0x88, (filters.len() as u32) << 16);
+        can.write(0x90, mask);
+        can.write(0xa0, (1 << 16) | 0x20);
+        can.write(0xc0, (1 << 16) | 0x40);
+        can.write(0x18, 0xa0);
+        for (index, &(first, second)) in filters.iter().enumerate() {
+            ram[index * 8..index * 8 + 4].copy_from_slice(&first.to_le_bytes());
+            ram[index * 8 + 4..index * 8 + 8].copy_from_slice(&second.to_le_bytes());
+        }
+        ram[0x40..0x44].copy_from_slice(&((1 << 30) | id).to_le_bytes());
+        ram[0x44..0x48].copy_from_slice(&(1u32 << 16).to_le_bytes());
+        can.write(0xd0, 1);
+        can.service_loopback(&mut ram);
+        (
+            can.read(0xa4) & 0x7f,
+            u32::from_le_bytes(ram[0x24..0x28].try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn extended_range_filter_applies_global_mask_and_keeps_index() {
+        let range = (1 << 29 | 0x01234560, 0x01234565);
+        assert_eq!(
+            extended_filter_frame(0x0123456b, &[(0, 0), range], 0x1fff_fff0),
+            (1, 0x0101_0000)
+        );
+        assert_eq!(
+            extended_filter_frame(0x0123456b, &[range], 0x1fff_ffff).0,
+            0
+        );
+    }
+
+    #[test]
+    fn extended_range_without_mask_ignores_global_mask() {
+        let range = (1 << 29 | 0x01234560, 3 << 30 | 0x01234565);
+        assert_eq!(extended_filter_frame(0x01234562, &[range], 0).0, 1);
+        assert_eq!(
+            extended_filter_frame(0x0123456b, &[range], 0x1fff_fff0).0,
+            0
+        );
+    }
+
+    #[test]
+    fn extended_dual_and_classic_filters_respect_first_match() {
+        let reject_dual = (3 << 29 | 0x01234562, 1 << 30 | 0x01234563);
+        let accept_classic = (1 << 29 | 0x01234560, 2 << 30 | 0x1fff_fff0);
+        assert_eq!(
+            extended_filter_frame(0x01234562, &[reject_dual, accept_classic], 0).0,
+            0
+        );
+        assert_eq!(
+            extended_filter_frame(0x01234564, &[reject_dual, accept_classic], 0),
+            (1, 0x0101_0000)
+        );
     }
 
     #[test]
