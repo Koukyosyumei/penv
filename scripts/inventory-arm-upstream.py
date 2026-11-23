@@ -106,7 +106,7 @@ BOARD_FIXTURES = {
 # original register maps or executable images are recorded in the evidence.
 BOARD_PORTS = {
     ("STM32F4_Discovery", "PWM Capture"): (
-        "renode_stm32_pwm_input_capture_routes_period_and_pulse_to_gpio; synthetic GPIO capture, F4 ELF/UART frequency and duty checks absent"),
+        "renode_stm32_pwm_input_capture_routes_period_and_pulse_to_gpio; PA6 -> PD12 captures 1000 Hz and 33%; original F4 ELF UART checks remain"),
     ("STM32F4_Discovery", "Should Fire Update Event When Counting Up"): (
         "renode_tim2_update_irq_repeats_in_both_directions; up-count MMIO/IRQ, F4 ELF/UART callbacks absent"),
     ("STM32F4_Discovery", "Should Fire Update Event When Counting Down"): (
@@ -354,7 +354,7 @@ def classify_robot(name, case, body, parameter):
     if name == "STM32L072" and case == "Should Handle Flash Operations":
         return PARTIAL, F072, "renode_stm32_flash_erase_modes_preserve_the_expected_ranges covers shared erase range; original L072 flash shell ELF, geometry and UART command sequence are absent"
     if name == "STM32F4_Discovery" and case == "PWM Capture Four Channel Capture Support":
-        return OPEN, F072, "F4 ELF uses four-channel capture; shared STM32 timer/GPIO frequency and duty checks can be driven on F072; retain distinct capture configuration"
+        return PARTIAL, F072, "renode_stm32_pwm_input_capture_routes_period_and_pulse_to_gpio; PA6 -> PD12, simultaneous CCR1-4, 1000 Hz and 33%; original F4 ELF UART checks remain"
     if (name, case) in BOARD_PORTS:
         return PARTIAL, F072, BOARD_PORTS[name, case] + "; upstream " + BOARD_FIXTURES[name][1]
     if name in BOARD_FIXTURES:

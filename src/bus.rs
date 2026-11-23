@@ -162,6 +162,7 @@ pub struct Bus {
     gpio_leds: Vec<(u32, GpioLed)>,
     gpio_buttons: Vec<Option<GpioButton>>,
     gpio_timer_inputs: Vec<(u32, u8, u32, u8)>,
+    gpio_links: Vec<(u32, u8, u32, u8)>,
     led_events: bool,
     stm32_timers: Vec<Stm32Timer>,
     stm32_spis: Vec<Stm32F0Spi>,
@@ -863,6 +864,10 @@ impl Bus {
         Ok(())
     }
 
+    pub fn route_gpio_pin(&mut self, source: u32, output: u8, target: u32, input: u8) {
+        self.gpio_links.push((source, output, target, input));
+    }
+
     pub fn route_gpio_timer_input(&mut self, port: u32, pin: u8, timer: u32, channel: u8) {
         self.gpio_timer_inputs.push((port, pin, timer, channel));
     }
@@ -931,7 +936,22 @@ impl Bus {
         }
     }
 
-    fn refresh_gpio_wiring(&mut self) {
+    pub(crate) fn refresh_gpio_wiring(&mut self) {
+        if !self.gpio_links.is_empty() {
+            for port in &mut self.stm32_gpios {
+                port.wired_inputs = 0;
+            }
+            for &(source, output, target, input) in &self.gpio_links {
+                if self
+                    .stm32_gpios
+                    .iter()
+                    .any(|port| port.base == source && port.driven_pins() & (1 << output) != 0)
+                    && let Some(port) = self.stm32_gpios.iter_mut().find(|port| port.base == target)
+                {
+                    port.wired_inputs |= 1 << input;
+                }
+            }
+        }
         let previous = self.gpio_exti_levels;
         self.gpio_exti_levels = self
             .stm32_gpios
@@ -994,6 +1014,8 @@ impl Bus {
         // propagate the cleared level to timers.
         self.refresh_gpio_wiring();
         self.gpio_timer_inputs.retain(|(port, ..)| *port != base);
+        self.gpio_links
+            .retain(|(source, _, target, _)| *source != base && *target != base);
         Ok(())
     }
 
@@ -2414,32 +2436,39 @@ mod tests {
 
         // STM32F4_Discovery.robot: both PWM Capture cases use 1 kHz / 33%.
         const GPIO: u32 = 0x4800_0000;
+        const RECEIVER: u32 = 0x4800_0c00;
         const SOURCE: u32 = 0x4000_0000;
         const CAPTURE: u32 = 0x4000_0400;
-        for pair in [0, 2] {
+        for pairs in [&[0][..], &[0, 2][..]] {
             let mut bus = Bus::default();
             bus.map_nvic(0xc0, None).unwrap();
-            bus.map_stm32_gpio(Stm32Gpio::new(GPIO, 0x400, [2, 0, 0], 8))
+            bus.map_stm32_gpio(Stm32Gpio::new(GPIO, 0x400, [2 << 12, 0, 0], 8))
                 .unwrap();
+            bus.map_stm32_gpio(Stm32Gpio::new(RECEIVER, 0x400, [0; 3], 8))
+                .unwrap();
+            bus.route_gpio_pin(GPIO, 6, RECEIVER, 12);
             let mut source = Stm32Timer::new(SOURCE, 1_000_000, u32::MAX, [0; 8]);
             source.gpio_outputs.push((
                 0,
                 TimerPin {
                     port: GPIO,
-                    pin: 0,
+                    pin: 6,
                     function: 0,
                 },
             ));
             bus.map_stm32_timer(source).unwrap();
             bus.map_stm32_timer(Stm32Timer::new(CAPTURE, 1_000_000, 0xffff, [0; 8]))
                 .unwrap();
-            bus.route_gpio_timer_input(GPIO, 0, CAPTURE, pair);
-            let flags = 6 << pair;
-            let first_ccr = CAPTURE + 0x34 + 4 * u32::from(pair);
+            let mut enable = 0;
             let mut output = io::sink();
+            for &pair in pairs {
+                bus.route_gpio_timer_input(RECEIVER, 12, CAPTURE, pair);
+                bus.write(CAPTURE + 0x18 + 2 * u32::from(pair), 4, 0x0201, &mut output)
+                    .unwrap();
+                enable |= 0x31 << (pair * 4);
+            }
             for (base, offset, value) in [
-                (CAPTURE, 0x18 + 2 * u32::from(pair), 0x0201), // direct and paired indirect input
-                (CAPTURE, 0x20, 0x31 << (pair * 4)),           // rising and falling
+                (CAPTURE, 0x20, enable),
                 (CAPTURE, 0, 1),
                 (SOURCE, 0x2c, 999),
                 (SOURCE, 0x34, 330),
@@ -2449,28 +2478,30 @@ mod tests {
             ] {
                 bus.write(base + offset, 4, value, &mut output).unwrap();
             }
-            let mut rising = Vec::new();
-            let mut falling = Vec::new();
+            let mut captures = [const { Vec::new() }; 4];
             for _ in 0..135_000 {
                 bus.sample_nvic(0);
-                let status = bus.read::<4>(CAPTURE + 0x10).unwrap();
-                if status & (2 << pair) != 0 {
-                    rising.push(bus.read::<4>(first_ccr).unwrap());
+                let flags = bus.read::<4>(CAPTURE + 0x10).unwrap() & 0x1e;
+                for (channel, samples) in captures.iter_mut().enumerate() {
+                    if flags & (2 << channel) != 0 {
+                        samples.push(bus.read::<4>(CAPTURE + 0x34 + 4 * channel as u32).unwrap());
+                    }
                 }
-                if status & (4 << pair) != 0 {
-                    falling.push(bus.read::<4>(first_ccr + 4).unwrap());
-                }
-                if status & flags != 0 {
+                if flags != 0 {
                     bus.write(CAPTURE + 0x10, 4, !flags, &mut output).unwrap();
                 }
             }
-            assert_eq!(rising.len(), 2);
-            assert_eq!(falling.len(), 2);
-            let period = rising[1] - rising[0];
-            let pulse = falling[1] - rising[1];
-            assert_eq!((period, pulse), (1000, 330));
-            assert!((1_000_000u32 / period).abs_diff(1000) <= 25);
-            assert!((pulse * 100 / period).abs_diff(33) <= 1);
+            for &pair in pairs {
+                let rising = &captures[usize::from(pair)];
+                let falling = &captures[usize::from(pair) + 1];
+                assert_eq!(rising.len(), 2);
+                assert_eq!(falling.len(), 2);
+                let period = rising[1] - rising[0];
+                let pulse = falling[1] - rising[1];
+                assert_eq!((period, pulse), (1000, 330));
+                assert!((1_000_000u32 / period).abs_diff(1000) <= 25);
+                assert!((pulse * 100 / period).abs_diff(33) <= 1);
+            }
         }
     }
 

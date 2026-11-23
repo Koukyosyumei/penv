@@ -14,9 +14,9 @@
 
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Renode Robot | 113 | 58 | 38 | 17 | 239 |
+| Renode Robot | 113 | 58 | 39 | 16 | 239 |
 | Renode Infrastructure NUnit | 134 | 54 | 4 | 76 | 9 |
-| 合計 | **247** | **112** | **42** | **93** | **248** |
+| 合計 | **247** | **112** | **43** | **92** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -362,4 +362,17 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-gpio-endpoints-verification
 ```sh
 cargo test --locked stm32_crc
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-crc-config-verification
+```
+
+## STM32 PWM のポート間配線と4チャネル入力捕捉
+
+固定上流の `STM32F4_Discovery.robot` の PWM Capture キーワードと同じ `gpioPortA: { 6 -> gpioPortD@12 }` を REPL で記述できる。GPIO の出力モードまたはタイマーの代替機能が駆動したレベルを、受信側ポートの入力へ渡してから EXTI、タイマー捕捉、LED を更新する。配線から受けたレベルはボタン入力と別に保持し、受信しただけのピンは新たな駆動元にならない。送信側か受信側ポートを登録解除すると、その配線を外す。
+
+Rust 回帰では PA6 から PD12 へ 1 kHz・33% の PWM を配線し、単一の捕捉ペアと CCR1～CCR4 の同時捕捉を別構成で確認した。2回目の立ち上がり・立ち下がりと前周期のサンプルから周期1000カウント、パルス幅330カウントを得た。上流と同じ周波数の許容差 ±25 Hz、デューティ比の許容差 ±1 パーセントポイントで検証する。
+
+F4 専用 ELF が UART へ報告する周波数・デューティ比は F4 のプラットフォーム対応が必要なため、両ケースを部分移植として記録した。F072 の実イメージ検証では上流 REPL を拡張し、通常の RESC で PA6 → PD12 の捕捉レジスタを確認してから公開 Hello World ELF の UART 完了行を確認する。
+
+```sh
+cargo test --locked renode_stm32_pwm_input_capture_routes_period_and_pulse_to_gpio
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-pwm-gpio-verification
 ```

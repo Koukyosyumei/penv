@@ -568,7 +568,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
         };
         let mut gpio_ports = HashMap::new();
         let mut led_inputs = HashMap::new();
-        for entry in stm32_gpios {
+        for &entry in &stm32_gpios {
             let mut port = make_stm32_gpio(entry)?;
             for (_, text) in &entry.body {
                 let Some((outputs, destinations)) = text.split_once("->") else {
@@ -600,6 +600,17 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                             machine
                                 .bus
                                 .route_gpio_timer_input(port.base, pin, base, channel);
+                        }
+                    } else if let Some(receiver) =
+                        stm32_gpios.iter().find(|gpio| gpio.name == target)
+                    {
+                        let (base, _) = sysbus_range(receiver, 0x400)?;
+                        let inputs = irq_list(inputs, 16).map_err(|e| entry.error(&e))?;
+                        if inputs.len() != outputs.len() {
+                            return Err(entry.error("mismatched GPIO link widths"));
+                        }
+                        for (&output, input) in outputs.iter().zip(inputs) {
+                            machine.bus.route_gpio_pin(port.base, output, base, input);
                         }
                     } else if gpio_leds.iter().any(|led| led.name == target) {
                         if inputs.trim() != "0"
@@ -665,6 +676,7 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
             let pin = irq_index(pin, 8).map_err(|e| led.error(&e))?;
             shift.leds.push(GpioLed::new(led.name.clone(), pin, invert));
         }
+        machine.bus.refresh_gpio_wiring();
         for button in gpio_buttons {
             let mut invert = None;
             let mut endpoints = GpioEndpoints::default();
