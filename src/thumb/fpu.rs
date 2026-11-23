@@ -173,7 +173,7 @@ impl Thumb {
             if high == 0xeee1 && core < 15 {
                 self.fpscr = r[core] & 0xffc0_009f;
             } else if high == 0xeef1 && core == 15 {
-                self.set_apsr(self.fpscr);
+                self.set_apsr((self.apsr() & 0x000f_0000) | (self.fpscr & 0xf000_0000));
             } else if high == 0xeef1 {
                 r[core] = self.fpscr;
             } else {

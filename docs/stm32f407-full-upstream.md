@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 56 | 0 | 457 | 237 |
+| Renode | 513 | 62 | 0 | 451 | 237 |
 | Infrastructure | 217 | 1 | 0 | 216 | 7 |
-| **合計** | **730** | **57** | **0** | **673** | **244** |
+| **合計** | **730** | **63** | **0** | **667** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -102,7 +102,7 @@ RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UA
 
 ## 未達
 
-未達 673 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
+未達 667 件には、共有フォールト配送、汎用 UART テスター、GDB・モニター・
 スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
 フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
@@ -335,3 +335,39 @@ rtc=target/stm32f407-timed-tests-rtc
 target/release/penv run --script "$rtc/rtc.resc" --platform-root "$RENODE_ROOT" \
     --f4-repl-timing --uart-check "$rtc/rtc.tsv"
 ```
+
+## Cortex-M4 Thumb DSP の GE フラグ
+
+優先グループは固定上流 `tests/unit-tests/arm-ge-flag.robot` の 6 件です。
+Cortex-M7 フィクスチャの各 10 命令を取り出し、同じオペランド・開始アドレス
+`0x0` の Cortex-M4 ELF に組み立てます。最初の 10 命令が終わった直後の R4 を
+追加した UART 出力で取得し、上流の期待値から生成した 4 バイトと照合します。
+
+`sadd8`、`sadd16`、`ssub8`、`ssub16`、`usub8`、`usub16` の順に、
+R4 が `0xff00ff00`、`0xffff0000`、`0x00ff00ff`、`0x0000ffff`、
+`0xff0000ff`、`0x0000ffff` になります。上流の `usub8` というケース名の
+実命令は `ssub8` です。上流の命令列を保持し、符号付きと符号なしの結果が
+異なるオペランドで `USUB8` 自体も別の ELF で検査しました。この追加 ELF は
+上流台帳の分母に含めていません。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+work=target/stm32f407-ge
+mkdir -p "$work"
+(
+    tests/cortex-m4-ge.sh "$work/elf" >"$work/ge-elf.log" 2>&1
+    echo "$?" >"$work/ge-elf.status"
+    cargo test >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    tests/cortex-m4f-faults.sh "$work/faults" >"$work/fault-elf.log" 2>&1
+    echo "$?" >"$work/fault-elf.status"
+    tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu >"$work/freertos.log" 2>&1
+    echo "$?" >"$work/freertos.status"
+) &
+```
+
+`cargo test` 96 件、フォールト ELF 16 件、FreeRTOS の FPU 回帰が通過しました。
+残件には CMSIS-DSP の公開 ELF と、飽和・半減など今回の命令群に含まれない
+DSP 命令の検証があります。

@@ -101,6 +101,43 @@ impl Thumb {
         true
     }
 
+    fn parallel_arithmetic(
+        &mut self,
+        lhs: u32,
+        rhs: u32,
+        bits: u32,
+        signed: bool,
+        subtract: bool,
+    ) -> u32 {
+        let lane_mask = (1 << bits) - 1;
+        let mut result = 0;
+        self.ge = 0;
+        for lane in 0..(32 / bits) {
+            let shift = lane * bits;
+            let unpack = |value: u32| {
+                let raw = (value >> shift) & lane_mask;
+                if signed {
+                    ((raw << (32 - bits)) as i32) >> (32 - bits)
+                } else {
+                    raw as i32
+                }
+            };
+            let (left, right) = (unpack(lhs), unpack(rhs));
+            let value = if subtract { left - right } else { left + right };
+            result |= (value as u32 & lane_mask) << shift;
+            let ge = if signed || subtract {
+                value >= 0
+            } else {
+                value > lane_mask as i32
+            };
+            if ge {
+                let flag_count = bits / 8;
+                self.ge |= ((1 << flag_count) - 1) << (lane * flag_count);
+            }
+        }
+        result
+    }
+
     pub(super) fn execute_thumb2(
         &mut self,
         high: u32,
@@ -276,6 +313,26 @@ impl Thumb {
                 if high & 0x10 == 0 {
                     self.set_apsr(saved);
                 }
+            }
+            0xfa80..=0xfa9f | 0xfac0..=0xfadf
+                if matches!(low & 0xf0f0, 0xf000 | 0xf040)
+                    && [rn, rd, rm].iter().all(|reg| !matches!(reg, 13 | 15)) =>
+            {
+                let bits = if high & 0x10 == 0 { 8 } else { 16 };
+                r[rd] =
+                    self.parallel_arithmetic(r[rn], r[rm], bits, low & 0x40 == 0, high & 0x40 != 0);
+            }
+            0xfaa0..=0xfaaf
+                if low & 0xf0f0 == 0xf080
+                    && [rn, rd, rm].iter().all(|reg| !matches!(reg, 13 | 15)) =>
+            {
+                let mut mask = 0;
+                for lane in 0..4 {
+                    if self.ge & (1 << lane) != 0 {
+                        mask |= 0xff << (lane * 8);
+                    }
+                }
+                r[rd] = (r[rn] & mask) | (r[rm] & !mask);
             }
             0xfa90..=0xfa9e if low & 0xf0c0 == 0xf080 && rm == rn && rd < 15 => {
                 let value = r[rn];

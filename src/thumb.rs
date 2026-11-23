@@ -64,6 +64,7 @@ pub struct Thumb {
     zero: bool,
     carry: bool,
     overflow: bool,
+    ge: u8,
     active_exception: u8,
     active_exceptions: ActiveExceptions,
     exception_parents: Vec<u8>,
@@ -242,6 +243,7 @@ impl Thumb {
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
             | (u32::from(self.overflow) << 28)
+            | (u32::from(self.ge) << 16)
     }
 
     fn set_apsr(&mut self, value: u32) {
@@ -249,6 +251,7 @@ impl Thumb {
         self.zero = value & (1 << 30) != 0;
         self.carry = value & (1 << 29) != 0;
         self.overflow = value & (1 << 28) != 0;
+        self.ge = ((value >> 16) & 0xf) as u8;
     }
 
     fn uses_psp(&self) -> bool {
@@ -1310,6 +1313,19 @@ impl Thumb {
                                 return Err(unsupported().into());
                             }
                             r[register] = self.system_read(sysm, r).ok_or_else(unsupported)?;
+                        }
+                        (0xf380..=0xf38f, 0x8400..=0x8c03)
+                            if self.thumb2
+                                && sysm <= 3
+                                && matches!(low & 0xff00, 0x8400 | 0x8800 | 0x8c00) =>
+                        {
+                            let register = (inst & 15) as usize;
+                            if matches!(register, 13 | 15) {
+                                return Err(unsupported().into());
+                            }
+                            let mask = (if low & 0x0400 != 0 { 0x000f_0000 } else { 0 })
+                                | (if low & 0x0800 != 0 { 0xf000_0000 } else { 0 });
+                            self.set_apsr((self.apsr() & !mask) | (r[register] & mask));
                         }
                         (0xf380..=0xf38f, 0x8800..=0x88ff) => {
                             let register = (inst & 15) as usize;
