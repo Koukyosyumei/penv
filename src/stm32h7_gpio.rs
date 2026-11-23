@@ -5,6 +5,8 @@ pub struct Stm32Gpio {
     pub syscfg_port: Option<u8>,
     pub syscfg_inputs: [Option<u8>; 16],
     external: u16,
+    timer_inputs: Vec<(u8, u32, u8)>,
+    published_timer_pins: u16,
     alternate_drive: u16,
     alternate_driven: u16,
     reset_values: [u32; 3],
@@ -37,6 +39,8 @@ impl Stm32Gpio {
             syscfg_port: None,
             syscfg_inputs: [None; 16],
             external: 0,
+            timer_inputs: Vec::new(),
+            published_timer_pins: 0,
             alternate_drive: 0,
             alternate_driven: 0,
             reset_values: [mode, speed, pull],
@@ -81,6 +85,30 @@ impl Stm32Gpio {
     pub fn alternate_function(&self, pin: u8) -> Option<usize> {
         ((self.mode >> (pin * 2)) & 3 == 2)
             .then(|| ((self.alternate[usize::from(pin / 8)] >> ((pin % 8) * 4)) & 15) as usize)
+    }
+
+    pub fn connect_timer_input(&mut self, pin: u8, base: u32, channel: u8) -> Result<(), String> {
+        let route = (pin, base, channel);
+        if self.timer_inputs.contains(&route) {
+            return Err("duplicate GPIO to STM32 timer connection".into());
+        }
+        self.timer_inputs.push(route);
+        Ok(())
+    }
+
+    pub fn timer_input_changes(&mut self) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+        let pins = if self.timer_inputs.is_empty() {
+            0
+        } else {
+            self.pins()
+        };
+        let changed = pins ^ std::mem::replace(&mut self.published_timer_pins, pins);
+        self.timer_inputs
+            .iter()
+            .filter_map(move |&(pin, base, channel)| {
+                let bit = 1 << pin;
+                (changed & bit != 0).then_some((base, channel, pins & bit != 0))
+            })
     }
 
     pub fn pins(&self) -> u16 {
@@ -195,4 +223,30 @@ fn spread(mut pins: u32, width: u32) -> u32 {
         pins &= pins - 1;
     }
     mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Stm32Gpio;
+
+    #[test]
+    fn pin_edges_fan_out_to_timer_inputs() {
+        let mut port = Stm32Gpio::new(0x58022800, 0x400, [1, 0, 0], 16);
+        port.connect_timer_input(0, 0x40010000, 0).unwrap();
+        port.connect_timer_input(0, 0x40010400, 2).unwrap();
+        assert!(port.connect_timer_input(0, 0x40010000, 0).is_err());
+
+        assert_eq!(port.timer_input_changes().count(), 0);
+        port.write(port.base + 0x18, 1);
+        assert!(
+            port.timer_input_changes()
+                .eq([(0x40010000, 0, true), (0x40010400, 2, true),])
+        );
+        assert_eq!(port.timer_input_changes().count(), 0);
+        port.write(port.base + 0x18, 1 << 16);
+        assert!(
+            port.timer_input_changes()
+                .eq([(0x40010000, 0, false), (0x40010400, 2, false),])
+        );
+    }
 }

@@ -231,6 +231,31 @@ fn port(entry: &Entry, entries: &[Entry], syscfg: Option<&Entry>) -> Result<Stm3
             continue;
         }
         let (pins, target) = text.split_once("->").ok_or("expected GPIO output wiring")?;
+        // These are ordinary GPIO outputs. The upstream alternate-output selector
+        // is only used for the reverse timer-to-GPIO direction.
+        if let Some(pin) = irq_index(pins, 16).ok().filter(|_| {
+            target.split('|').all(|endpoint| {
+                endpoint.split_once('@').is_some_and(|(name, _)| {
+                    entries.iter().any(|timer| {
+                        timer.name == name.trim()
+                            && timer.model == crate::stm32h7_timer::Timer::MODEL
+                    })
+                })
+            })
+        }) {
+            for endpoint in target.split('|') {
+                let (name, channel) = endpoint
+                    .split_once('@')
+                    .ok_or("missing timer input channel")?;
+                let timer = entries
+                    .iter()
+                    .find(|timer| timer.name == name.trim())
+                    .ok_or("unknown GPIO timer target")?;
+                let (base, _) = crate::stm32h7_board_platform::registration(timer, entries)?;
+                port.connect_timer_input(pin, base, irq_index(channel, 4)?)?;
+            }
+            continue;
+        }
         let (target, inputs) = target
             .split_once('@')
             .ok_or("missing GPIO destination pins")?;

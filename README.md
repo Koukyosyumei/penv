@@ -574,3 +574,41 @@ bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクト�
 TIM1 の登録と GPIO 出力追記を固定上流からそのまま取り込み、公開 Zephyr 参照 ELF の起動後に RCC・SR・NVIC ISPR0 を照合しました。APB1LENR の同じビットではゲートが開かず、APB2ENR で ARR が `0xffff` を返しました。Update、TI1 の slave reset trigger、CC1 比較一致はそれぞれ `0x02000000`、`0x04000000`、`0x08000000` を NVIC に保留し、リセットで初期値へ戻りました。固定モデルどおり Break と Commutation の保留は発生しません。TIM8 も同じスモークで回帰確認しました。
 
 未変更の上流 RESC は TIM1 を通過し、`platforms/cpus/stm32h7.repl:100` の `gpioPortK: missing SYSCFG port selector` で停止します。GPIO からタイマーへ向かう代替入力のファンアウトと、ピンの AF 選択に応じた配線が残件です。台帳の `Should Load Repls` に証拠を追記し、REPL 全体のロードが未達のため `OPEN` を維持しました。
+
+### h7-board-pass
+
+H753ZI 固有の 25 件のうち、Ethernet echo・Blinky・Button の 3 件を部分検証し、台帳に記録しました。残り 22 件は `OPEN` です。今回の上流等価合格は 0 件です。使用した上流テストは `tests/platforms/nucleo_h753zi.robot` です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+base=/tmp/Shellスモークのログディレクトリ
+bash tests/stm32h7-nucleo-board-smoke.sh "$base"
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+- **Blinky** は上流 ELF の UART 起動行と LED 状態を確認しました。GreenLED に対応する GPIOB0 を 10 ms ごとにサンプリングし、点灯・消灯とも約 1 秒の区間を計 8 回確認しました。
+- **Button** は上流 ELF の UART プロンプトを確認し、上流と同じ `UserButton1 Press` / `Release` を実行しました。UART の押下通知と GreenLED の消灯・点灯・消灯を確認しました。両ケースとも診断 REPL を使用し、Robot の LED Tester と同じ停止条件は未移植です。
+- **Ethernet echo** は上流の両 ELF を診断 REPL 上で仮想スイッチに接続しました。17 仮想秒の連続接続でサーバーの応答とクライアントの照合成功カウンター `0x44` を確認しました。クライアント UART は `<err> net_ic` の途中で止まり、8 秒後に切断する対照実験では `Received and compared … all ok` が出力されました。連続接続中に UART が止まる原因と、上流が要求する 4 組の順序照合は未確認です。
+
+GPIO の数値出力から複数のタイマー入力へ配線できるようにしました。上流の PA7 ファンアウト定義を取り込んだ診断 REPL で公開 Zephyr ELF を起動し、PA7 の立ち上がり 1 回で TIM1 と TIM8 の CNT が 0、SR が `0x40` になることを確認しました。Zephyr Shell と TIM1/TIM8 の回帰も通過しました。未変更の参照 RESC と Nucleo REPL は GPIOK を通過し、`platforms/cpus/stm32h7.repl:206` の `lpuart1: unsupported USART IRQ wiring` で停止します。USART の複数登録と EXTI 配線を次に照合する必要があります。
+
+ログ、終了状態、診断用 RESC/REPL は `~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr` に保存しました。以下は同じ診断と未変更定義の再実行コマンドです。
+
+```bash
+e=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr
+for scenario in echo-long echo-drain; do
+    target/release/penv run --script "$e/$scenario/echo.resc" \
+        --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" \
+        --max-steps 18000000 --uart-log-dir "$(mktemp -d)"
+done
+target/release/penv run --script "$e/fanout/boot.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1500000
+target/release/penv run --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+target/release/penv run --script "$e/nucleo-load.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```

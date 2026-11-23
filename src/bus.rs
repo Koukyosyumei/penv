@@ -763,6 +763,17 @@ impl Bus {
                 });
             port.drive_alternate(led.pin, level);
         }
+        for port in &mut self.h7_gpio {
+            for (base, channel, level) in port.timer_input_changes() {
+                if let Some(timer) = self
+                    .h7_timers
+                    .iter_mut()
+                    .find(|timer| timer.base == base && timer_clocked(control, timer))
+                {
+                    timer.set_input(channel, level);
+                }
+            }
+        }
         for rtc in &mut self.h7_rtc {
             if rtc_clocked(control, rtc) {
                 rtc.tick();
