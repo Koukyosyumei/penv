@@ -2645,7 +2645,10 @@ fn build_entries_on_machine(
                 || stm32h7_adc_platform::is_device(&entry.model)
                 || stm32h7_gpio_platform::is_device(&entry.model)
                 || entry.model == stm32h7_rtc_platform::RTC
-                || matches!(entry.model.as_str(), F1I2c::MODEL | F1I2c::ECHO_MODEL)
+                || matches!(
+                    entry.model.as_str(),
+                    F1I2c::MODEL | F1I2c::ECHO_MODEL | F1I2c::HS3001_MODEL
+                )
                 || matches!(entry.model.as_str(), F4Spi::MODEL | F4Spi::LOOPBACK_MODEL)
                 || entry.model == crate::stm32h7_spi::SPI
                 || crate::stm32h7_board_platform::is_device(&entry.model) => {}
@@ -3051,10 +3054,12 @@ fn build_entries_on_machine(
         )?;
         return Ok(machine);
     }
-    if let Some(entry) = entries
-        .iter()
-        .find(|entry| matches!(entry.model.as_str(), F1I2c::MODEL | F1I2c::ECHO_MODEL))
-    {
+    if let Some(entry) = entries.iter().find(|entry| {
+        matches!(
+            entry.model.as_str(),
+            F1I2c::MODEL | F1I2c::ECHO_MODEL | F1I2c::HS3001_MODEL
+        )
+    }) {
         return Err(entry.error("STM32F1 I2C requires a Cortex-M CPU"));
     }
     if let Some(entry) = entries
@@ -3626,10 +3631,12 @@ fn configure_f1_i2c(
         }
         controllers.push((entry, i2c));
     }
-    for entry in entries
-        .iter()
-        .filter(|entry| entry.model == F1I2c::ECHO_MODEL)
-    {
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry.model.as_str(),
+            F1I2c::ECHO_MODEL | F1I2c::HS3001_MODEL
+        )
+    }) {
         keys(entry, &[])?;
         let (parent, address) = entry
             .registration
@@ -3639,9 +3646,14 @@ fn configure_f1_i2c(
         let (_, controller) = controllers
             .iter_mut()
             .find(|(entry, _)| entry.name == parent)
-            .ok_or_else(|| entry.error("expected echo attached to STM32F1 I2C"))?;
+            .ok_or_else(|| entry.error("expected target attached to STM32F1 I2C"))?;
         let address = irq_index(address, 128).map_err(|error| entry.error(&error))?;
-        if !controller.attach_echo(address) {
+        let attached = if entry.model == F1I2c::HS3001_MODEL {
+            controller.attach_hs3001(address)
+        } else {
+            controller.attach_echo(address)
+        };
+        if !attached {
             return Err(entry.error("duplicate I2C target address"));
         }
     }

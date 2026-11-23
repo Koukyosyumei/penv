@@ -34,11 +34,49 @@ enum Phase {
     Nack,
 }
 
+enum Target {
+    Echo(Vec<u8>),
+    Hs3001(Hs3001),
+}
+
+#[derive(Default)]
+struct Hs3001 {
+    temperature: f64,
+    humidity: f64,
+}
+
+impl Hs3001 {
+    fn measurement(&self) -> [u8; 4] {
+        // The pinned Renode HS3001 model quantizes the physical value before
+        // applying the 14-bit transfer function, including for negative values.
+        fn quantize(value: f64) -> f64 {
+            if value == 0.0 {
+                return 0.0;
+            }
+            let divisor = (16384.0 / value).floor();
+            if divisor == 0.0 {
+                0.0
+            } else {
+                16384.0 / divisor
+            }
+        }
+        fn encode(value: f64) -> u16 {
+            value.clamp(0.0, 16383.0).round_ties_even() as u16
+        }
+
+        let humidity = encode(quantize(self.humidity) * 16383.0 / 100.0);
+        let temperature = encode((quantize(self.temperature) + 40.0) * 16383.0 / 165.0);
+        let [rh_hi, rh_lo] = humidity.to_be_bytes();
+        let [temp_hi, temp_lo] = (temperature << 2).to_be_bytes();
+        [rh_hi, rh_lo, temp_hi, temp_lo]
+    }
+}
+
 pub struct F1I2c {
     pub base: u32,
     pub event: Option<Stm32Irq>,
     pub error: Option<Stm32Irq>,
-    targets: BTreeMap<u8, Vec<u8>>,
+    targets: BTreeMap<u8, Target>,
     registers: [u32; 9],
     phase: Phase,
     status: u32,
@@ -51,6 +89,7 @@ pub struct F1I2c {
 impl F1I2c {
     pub const MODEL: &str = "I2C.STM32F1_I2C";
     pub const ECHO_MODEL: &str = "Mocks.EchoI2CDevice";
+    pub const HS3001_MODEL: &str = "Sensors.HS3001";
     pub const SIZE: u32 = 0x400;
 
     pub fn new(base: u32) -> Self {
@@ -76,10 +115,18 @@ impl F1I2c {
     }
 
     pub fn attach_echo(&mut self, address: u8) -> bool {
+        self.attach(address, Target::Echo(Vec::new()))
+    }
+
+    pub fn attach_hs3001(&mut self, address: u8) -> bool {
+        self.attach(address, Target::Hs3001(Hs3001::default()))
+    }
+
+    fn attach(&mut self, address: u8, device: Target) -> bool {
         let std::collections::btree_map::Entry::Vacant(target) = self.targets.entry(address) else {
             return false;
         };
-        target.insert(Vec::new());
+        target.insert(device);
         true
     }
 
@@ -118,7 +165,14 @@ impl F1I2c {
         let Phase::Receive(address) = self.phase else {
             return;
         };
-        let data = &self.targets[&address];
+        let measurement;
+        let data: &[u8] = match &self.targets[&address] {
+            Target::Echo(data) => data,
+            Target::Hs3001(sensor) => {
+                measurement = sensor.measurement();
+                &measurement
+            }
+        };
         while self.receive.len() < limit {
             self.receive
                 .push_back(data.get(self.transferred).copied().unwrap_or(0));
@@ -250,11 +304,12 @@ impl F1I2c {
                 }
             }
             Phase::Transmit(address) if self.status & ADDR == 0 => {
-                let data = self.targets.get_mut(&address).unwrap();
-                if self.transferred == 0 {
-                    data.clear();
+                if let Target::Echo(data) = self.targets.get_mut(&address).unwrap() {
+                    if self.transferred == 0 {
+                        data.clear();
+                    }
+                    data.push(value);
                 }
-                data.push(value);
                 self.transferred += 1;
                 self.status |= TXE | BTF;
             }

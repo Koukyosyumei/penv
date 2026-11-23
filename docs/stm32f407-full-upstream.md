@@ -1590,3 +1590,30 @@ tests/stm32f407-freertos-smoke.sh "$work/freertos" --fpu > "$work/freertos.log" 
 を実行すると、`TypeNotResolved: unsupported platform model "Sensors.HS3001"`
 で停止します。センサーの実装、温湿度の設定と RESD ストリーム、元の Zephyr
 ELF による UART 検証が残っています。
+
+### STM32F4 I²C の HS3001
+
+固定 Infrastructure `09ac7c563095c5410258ecc1b6b841a013db85` の
+`HS3001.cs` を参照し、既定の 14 ビット測定と STM32F1 I²C の子アドレス登録を実装しました。
+上流 `HS3001.robot` の Zephyr ELF を使用し、初回の
+`temp is 0.00 °C humidity is 0.00 %RH` を、元の 8 秒の待機条件で
+仮想時刻 0.058565 秒に確認しました。
+
+```sh
+work=target/stm32f407-hs3001
+mkdir -p "$work"
+cargo test > "$work/cargo-test.log" 2>&1
+cargo build --release > "$work/build.log" 2>&1
+tests/stm32f407-hs3001.sh "$work"
+tests/stm32f407-freertos-smoke.sh "$work/freertos" --upstream
+```
+
+残りは 5 組の温湿度変更と UART 照合、別ケースの RESD チャネル 0 の
+1 Hz 再生と末尾値保持、センサーの再設定モードです。元の刺激を適用する共有
+モニターと RESD の対応を ARM 担当に依頼しました。初回出力のみを部分移植とし、
+RESD ケースは未達です。
+
+独立した AD4011 の 4 件では、同じ STM32F4 定義に
+`adc: Analog.AD4011_ADC @ spi1` と `referenceVoltage: 4.82` を加えた最初の
+プラットフォーム検査で型解決が停止します。再現ファイルとログは
+`$work/ad4011.repl` と `$work/ad4011-platform.log` です。
