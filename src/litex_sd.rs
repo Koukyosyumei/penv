@@ -553,3 +553,43 @@ impl Controller {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spi_card_initializes_and_reads_one_sector_without_modifying_the_image() {
+        fn command(card: &mut SpiCard, command: u8, argument: u32) -> u8 {
+            for byte in [0x40 | command]
+                .into_iter()
+                .chain(argument.to_be_bytes())
+                .chain([0xff])
+            {
+                assert_eq!(card.transfer(byte), 0xff);
+            }
+            card.transfer(0xff)
+        }
+
+        let path = std::env::temp_dir().join(format!("penv-spi-sd-{}.img", std::process::id()));
+        let mut sector = [0; SECTOR as usize];
+        sector[0] = 0x5a;
+        std::fs::write(&path, sector).unwrap();
+        let mut card = SpiCard::new(Card::new(File::open(&path).unwrap(), 2048).unwrap());
+        assert_eq!(command(&mut card, 0, 0), 1);
+        assert_eq!(command(&mut card, 55, 0), 1);
+        card.deselect();
+        assert_eq!(command(&mut card, 41, 0), 0);
+        assert_eq!(command(&mut card, 24, 0), 4); // Write is outside the read-only subset.
+        assert_eq!(command(&mut card, 17, 0), 0);
+        assert_eq!(card.transfer(0xff), 0xff);
+        assert_eq!(card.transfer(0xff), 0xfe);
+        for byte in sector {
+            assert_eq!(card.transfer(0xff), byte);
+        }
+        assert_eq!([card.transfer(0xff), card.transfer(0xff)], [0x97, 0xcd]);
+        drop(card);
+        assert_eq!(std::fs::read(&path).unwrap(), sector);
+        std::fs::remove_file(path).unwrap();
+    }
+}
