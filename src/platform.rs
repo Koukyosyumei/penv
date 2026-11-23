@@ -101,16 +101,110 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("invalid 32-bit number {value:?}"))
 }
 
+fn digit_sequence(value: &str, valid: impl Fn(u8) -> bool) -> Option<String> {
+    if value
+        .split('_')
+        .any(|part| part.is_empty() || !part.bytes().all(&valid))
+    {
+        return None;
+    }
+    Some(value.replace('_', ""))
+}
+
+fn number_token(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (sign, body) = match value.strip_prefix('-') {
+        Some(body) => ("-", body.trim_start()),
+        None => ("", value),
+    };
+    if let Some(hex) = body.strip_prefix("0x") {
+        let digits = digit_sequence(hex, |byte| byte.is_ascii_hexdigit())?;
+        return Some(format!("{sign}0x{digits}"));
+    }
+    let (whole, fraction) = match body.split_once('.') {
+        Some((whole, fraction)) => {
+            if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            (whole, format!(".{fraction}"))
+        }
+        None => (body, String::new()),
+    };
+    let digits = digit_sequence(whole, |byte| byte.is_ascii_digit())?;
+    Some(format!("{sign}{digits}{fraction}"))
+}
+
 fn hexadecimal_unsigned(value: &str) -> Option<u64> {
-    u64::from_str_radix(value.strip_prefix("0x")?, 16).ok()
+    let digits = digit_sequence(value.strip_prefix("0x")?, |byte| byte.is_ascii_hexdigit())?;
+    u64::from_str_radix(&digits, 16).ok()
 }
 
 fn unsigned_number(value: &str) -> Option<u64> {
-    let digits = value.replace('_', "");
-    if digits.starts_with("0x") {
-        hexadecimal_unsigned(&digits)
+    let token = number_token(value)?;
+    if token.starts_with("0x") {
+        hexadecimal_unsigned(&token)
     } else {
-        digits.parse().ok()
+        token.parse().ok()
+    }
+}
+
+fn quoted_string(value: &str) -> Option<String> {
+    let mut chars = value.trim().strip_prefix('"')?.chars();
+    let mut decoded = String::new();
+    while let Some(character) = chars.next() {
+        match character {
+            '"' => return chars.as_str().trim().is_empty().then_some(decoded),
+            '\\' => match chars.next()? {
+                escaped @ ('"' | '\\') => decoded.push(escaped),
+                _ => return None,
+            },
+            character => decoded.push(character),
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod scalar_tests {
+    use super::{number_token, quoted_string};
+
+    #[test]
+    fn renode_scalar_number_tokens() {
+        for (source, expected) in [
+            ("0x1234", "0x1234"),
+            ("-0x123", "-0x123"),
+            ("- 0x36", "-0x36"),
+            ("22", "22"),
+            ("-13", "-13"),
+            ("-  45", "-45"),
+            ("1.0", "1.0"),
+            ("-3.45", "-3.45"),
+        ] {
+            assert_eq!(number_token(source).as_deref(), Some(expected), "{source}");
+        }
+    }
+
+    #[test]
+    fn renode_scalar_reject_invalid_numbers() {
+        for source in ["0xghi", "12 .34", ".45", "345-"] {
+            assert_eq!(number_token(source), None, "{source}");
+        }
+    }
+
+    #[test]
+    fn renode_scalar_quoted_string() {
+        assert_eq!(
+            quoted_string(r#""some text""#).as_deref(),
+            Some("some text")
+        );
+    }
+
+    #[test]
+    fn renode_scalar_quoted_semicolon() {
+        assert_eq!(
+            quoted_string(r#""some;text""#).as_deref(),
+            Some("some;text")
+        );
     }
 }
 
@@ -521,16 +615,13 @@ fn parse_content(
         }
         entries.extend(current.take());
         if let Some(include) = text.strip_prefix("using ") {
-            let filename = include
-                .trim()
-                .strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-                .filter(|s| !s.is_empty() && !s.contains('"'))
+            let filename = quoted_string(include)
+                .filter(|name| !name.is_empty())
                 .ok_or_else(|| error("expected using \"path.repl\""))?;
-            if !imports.insert(filename.to_owned()) {
+            if !imports.insert(filename.clone()) {
                 return Err(error("DuplicateUsing: Duplicate using entry."));
             }
-            let include_path = resolve_using(Path::new(filename), directory, root)
+            let include_path = resolve_using(Path::new(&filename), directory, root)
                 .map_err(|e| error(&e.to_string()))?
                 .filter(|path| path.is_file())
                 .ok_or_else(|| {
