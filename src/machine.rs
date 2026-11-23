@@ -385,6 +385,42 @@ impl Machine {
         Ok(())
     }
 
+    // Monitor steps count completed instructions. A precise fault redirects the
+    // CPU without completing the access, so stepping continues in the handler.
+    pub fn monitor_step_cortex_m(
+        &mut self,
+        count: u64,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        if !self.is_cortex_m() || count == 0 {
+            return Err("Step requires a Cortex-M CPU and a positive instruction count".into());
+        }
+        self.resume_cpu();
+        let result = (|| {
+            let mut remaining = count;
+            let mut missed = 0;
+            while remaining != 0 {
+                match self.run(1, output)? {
+                    (Stop::Limit, 1) => {
+                        remaining -= 1;
+                        missed = 0;
+                    }
+                    (Stop::Limit, 0) => {
+                        missed += 1;
+                        if missed == 256 || self.cpu_halted || self.cpu_clock_stopped {
+                            return Err("Cortex-M Step could not retire an instruction".into());
+                        }
+                    }
+                    (Stop::Paused | Stop::Ebreak, _) => break,
+                    (stop, _) => return Err(format!("Cortex-M Step stopped with {stop:?}")),
+                }
+            }
+            Ok(())
+        })();
+        self.pause_cpu();
+        result
+    }
+
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_steps(limit, output, None)
     }
@@ -1940,6 +1976,61 @@ mod tests {
     #[test]
     fn upstream_initial_msp_bus_fault_locks_up() {
         check_reset_bus_fault(0);
+    }
+
+    fn check_monitor_step_bus_fault(enable_bus_fault: bool) {
+        let mut machine = started_cortex_m();
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .map_bus_faulting_peripheral(0x100000, None)
+            .unwrap();
+        for (address, value) in [
+            (0, 0x1000),
+            (4, 0x201),
+            (12, 0x341),
+            (20, 0x301),
+            (0xe000_ed24, u32::from(enable_bus_fault) << 17),
+        ] {
+            machine.bus.write(address, 4, value, &mut out).unwrap();
+        }
+        for base in [0x200, 0x300] {
+            for (offset, word) in [(0, 0x6802), (2, 0x2122), (4, 0xe7fe)] {
+                machine.bus.write(base + offset, 2, word, &mut out).unwrap();
+            }
+        }
+        machine.bus.write(0x340, 2, 0xe7fe, &mut out).unwrap();
+        machine.validate_entry().unwrap();
+        machine.primary.registers[0] = 0x100000;
+        machine.primary.registers[1] = 0x11;
+        machine.primary.registers[2] = 0xa5a5_a5a5;
+        machine.monitor_step_cortex_m(1, &mut out).unwrap();
+        assert_eq!(machine.primary.pc, 0x340);
+        assert_eq!(machine.primary.registers[1], 0x11);
+        assert_eq!(machine.primary.registers[2], 0xa5a5_a5a5);
+        let (stacked_pc_address, stacked_pc) = if enable_bus_fault {
+            (0xfd8, 0x300)
+        } else {
+            (0xff8, 0x200)
+        };
+        assert_eq!(
+            machine.bus.read::<4>(stacked_pc_address).unwrap(),
+            stacked_pc
+        );
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0x8200);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed38).unwrap(), 0x100000);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0x4000_0000);
+        assert!(machine.cpu_paused);
+    }
+
+    #[test]
+    fn upstream_monitor_step_escalates_nested_bus_fault() {
+        check_monitor_step_bus_fault(true);
+    }
+
+    #[test]
+    fn upstream_monitor_step_escalates_disabled_bus_fault() {
+        check_monitor_step_bus_fault(false);
     }
 
     fn enter_instruction_time_lockup() -> Machine {

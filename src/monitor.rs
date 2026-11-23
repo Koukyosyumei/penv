@@ -37,6 +37,7 @@ pub struct Boot {
 pub enum CpuControl {
     Pause(bool),
     Halt(bool),
+    Step(u64),
     Clock(String, bool),
     Reset(crate::machine::CpuResetKind),
     ResetLog(String),
@@ -281,6 +282,12 @@ fn execute(
                     .parse()
                     .map_err(|_| "expected true or false")?,
             ));
+        }
+        ["cpu" | "sysbus.cpu", "Step", count] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::Step(u64::from(crate::parse_address(resolve(
+                    count,
+                )?)?)));
         }
         ["cpu" | "sysbus.cpu", "IsHalted", value] if boot.platform.is_some() => {
             boot.cpu_control.push(CpuControl::Halt(

@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 142 | 4 | 44 |
+| 監査した共有・混成 Robot | 190 | 143 | 3 | 44 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **173** | **4** | **44** |
+| 合計 | **221** | **174** | **3** | **44** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -540,3 +540,11 @@ tests/nrf52840-shell.sh "$PWD/target/release/penv" ../renode "$SHELL_ELF"
 Nano 33 BLE ランナーの第4引数に画像名（拡張子なし）または `circle` / `angle` を渡すと、該当ケースの UART ログとゲスト終了状態を個別に採取できる。全ケースを一括実行するときは第4引数を省略する。
 
 今回のログは `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/nano33-camera.3XmRAEZk` に保存した。`observed.tsv` と `*.observed.status` は、各ケースで上流の UART 判定を満たした時点の結果。観測成立後にゲストを停止したため、外側の固定ステップランナーの終了状態は観測結果と区別する。代表画像は `cases/person_image_0.log`、残る画像と LSM9DS1 の2ケースは `parallel/` 以下。全ケースで同じ release バイナリを使った。分類スコアの再確認待ちは解消した。全体台帳の残件は集計表を参照。
+
+### BusFault が連続する場合の monitor ステップ
+
+`arm-cortex-m-bus-fault.robot:352-368` を Cortex-M4 に移植した。1回の `cpu Step 1` は、失敗したロードを命令完了として数えず、例外ハンドラで命令が完了するまで進む。BusFault ハンドラ内で同じロードが再度失敗する場合も、同じステップで HardFault に到達する。上流と同じ自己分岐ハンドラを使い、停止時の PC `0x340`、R1/R2、`0xFD8` に保存された PC `0x300`、CFSR/BFAR/HFSR を照合した。BusFault 無効時の直接エスカレーションも同じ経路で回帰確認した。
+
+`cargo test --locked upstream_monitor_step_escalates` と、上記の BusFault ELF・Zephyr Shell スクリプトで再現できる。ELF 回帰は先頭7命令でセットアップし、追加の1ステップで HardFault ハンドラの最初の命令を完了して `0x342` で停止することを確認する。現在の RESC は起動時の `Step` を扱う。対話型 monitor セッションと GDB ステップは別途対応が必要。
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/bus-fault-step.MUGGO2ez` の `cargo-test`、`elf`、`step`、`shell` に保存した。

@@ -733,6 +733,9 @@ fn run() -> Result<ExitCode, String> {
             match command {
                 monitor::CpuControl::Pause(true) => machine.pause_cpu(),
                 monitor::CpuControl::Pause(false) => machine.resume_cpu(),
+                monitor::CpuControl::Step(count) => {
+                    machine.monitor_step_cortex_m(count, &mut output)?
+                }
                 monitor::CpuControl::Halt(halted) => machine.set_cpu_halted(halted),
                 monitor::CpuControl::Clock(target, enabled) => match target.as_str() {
                     "cpu" | "cpu0" if machine.primary.name.as_deref() == Some(&target) => {

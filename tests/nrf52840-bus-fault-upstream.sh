@@ -261,6 +261,19 @@ ASM
     printf '%s: all fault checks passed\n' "$name"
 done
 
+# Seven instructions establish the fixture state. A single subsequent
+# monitor step retires the first HardFault handler instruction.
+cat >"$out/nested-step.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @bus-fault.repl
+sysbus LoadELF @nested-handler.elf
+cpu Step 7
+cpu Step 1
+RESC
+"$penv" run --script "$out/nested-step.resc" >"$out/nested-step.log" 2>&1
+grep -Fxq 'penv: machine paused at pc=0x00000342' "$out/nested-step.log"
+printf '%s\n' 'nested-handler: monitor Step traversed both faults'
+
 # Robot 369-423. Monitor state and NMI injection are checked by cargo test.
 cat >"$out/lockup.s" <<'ASM'
 .syntax unified
