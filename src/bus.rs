@@ -1257,7 +1257,7 @@ impl Bus {
         irq: Option<Stm32Irq>,
         low_power: bool,
         clock: Option<Stm32UsartClock>,
-    ) -> Result<(), String> {
+    ) -> Result<&mut Stm32Usart, String> {
         let start = u64::from(base);
         let end = start + u64::from(Stm32Usart::SIZE);
         if base & 3 != 0 || end > 1 << 32 || self.overlaps(start, end) {
@@ -1267,7 +1267,14 @@ impl Bus {
         }
         self.stm32_uarts
             .push(Stm32Usart::new(base, irq, low_power, clock));
-        Ok(())
+        Ok(self.stm32_uarts.last_mut().unwrap())
+    }
+
+    pub fn stm32_usart_mut(&mut self, name: &str) -> Result<&mut Stm32Usart, String> {
+        self.stm32_uarts
+            .iter_mut()
+            .find(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 UART {name:?}"))
     }
 
     pub fn has_uart_input(&self) -> bool {

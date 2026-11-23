@@ -42,6 +42,8 @@ impl Stm32UsartClock {
 
 pub struct Stm32Usart {
     pub base: u32,
+    pub name: String,
+    pub observed: Option<Vec<u8>>,
     pub irq: Option<Stm32Irq>,
     pub clock: Option<Stm32UsartClock>,
     receive: VecDeque<u8>,
@@ -61,6 +63,8 @@ impl Stm32Usart {
     ) -> Self {
         Self {
             base,
+            name: String::new(),
+            observed: None,
             irq,
             clock,
             receive: VecDeque::new(),
@@ -71,7 +75,10 @@ impl Stm32Usart {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.base, self.irq, self.low_power, self.clock);
+        let mut reset = Self::new(self.base, self.irq, self.low_power, self.clock);
+        reset.name = std::mem::take(&mut self.name);
+        reset.observed = self.observed.take();
+        *self = reset;
     }
 
     pub fn contains(&self, address: u32) -> bool {
@@ -135,6 +142,9 @@ impl Stm32Usart {
                 self.registers[10] = value & 0xff;
                 if self.registers[0] & (UE | TE) == UE | TE {
                     output.write_all(&[value as u8])?;
+                    if let Some(bytes) = &mut self.observed {
+                        bytes.push(value as u8);
+                    }
                     self.complete = true;
                 }
             }

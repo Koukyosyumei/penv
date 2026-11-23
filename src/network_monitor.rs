@@ -198,6 +198,63 @@ impl Plan {
                 let address = crate::platform::number(resolve(*address)?)?;
                 self.actions.push(Action::ReadWord { node, address });
             }
+            ["tester", "ObserveUart", name] => {
+                let node = self.monitor_node()?;
+                let name = name.strip_prefix("sysbus.").unwrap_or(name).to_owned();
+                self.actions.push(Action::ObserveUart { node, name });
+            }
+            ["tester", "WaitUart", name, timeout, mode, patterns @ ..] if !patterns.is_empty() => {
+                let node = self.monitor_node()?;
+                let unfinished = match *mode {
+                    "line" => false,
+                    "partial" => true,
+                    _ => return Err("expected UART match mode line or partial".into()),
+                };
+                let patterns = patterns
+                    .iter()
+                    .map(|p| resolve(*p).map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if patterns.iter().any(String::is_empty) {
+                    return Err("expected nonempty UART patterns".into());
+                }
+                self.configured = self.nodes.len();
+                self.actions.push(Action::WaitUart {
+                    node,
+                    unfinished,
+                    patterns,
+                    name: name.strip_prefix("sysbus.").unwrap_or(name).to_owned(),
+                    timeout: rounds(resolve(*timeout)?)?,
+                });
+            }
+            ["tester", "WaitLed", name, timeout, state] => {
+                let node = self.monitor_node()?;
+                self.configured = self.nodes.len();
+                self.actions.push(Action::WaitLed {
+                    node,
+                    name: (*name).into(),
+                    timeout: rounds(resolve(*timeout)?)?,
+                    state: state
+                        .parse()
+                        .map_err(|_| "expected LED state true or false")?,
+                });
+            }
+            ["tester", "BlinkLed", name, duration, on, off] => {
+                let node = self.monitor_node()?;
+                let duration = rounds(resolve(*duration)?)?;
+                let on = rounds(resolve(*on)?)?;
+                let off = rounds(resolve(*off)?)?;
+                if [duration, on, off].contains(&0) {
+                    return Err("expected positive LED durations".into());
+                }
+                self.configured = self.nodes.len();
+                self.actions.push(Action::BlinkLed {
+                    node,
+                    name: (*name).into(),
+                    duration,
+                    on,
+                    off,
+                });
+            }
             ["start" | "s"] => self.run(Run::Remaining)?,
             ["emulation", "RunFor", duration] => {
                 self.run(Run::Rounds(rounds(resolve(*duration)?)?))?

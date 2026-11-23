@@ -75,6 +75,30 @@ pub enum Action {
         node: usize,
         address: u32,
     },
+    ObserveUart {
+        node: usize,
+        name: String,
+    },
+    WaitUart {
+        node: usize,
+        name: String,
+        timeout: u64,
+        unfinished: bool,
+        patterns: Vec<String>,
+    },
+    WaitLed {
+        node: usize,
+        name: String,
+        timeout: u64,
+        state: bool,
+    },
+    BlinkLed {
+        node: usize,
+        name: String,
+        duration: u64,
+        on: u64,
+        off: u64,
+    },
     Run(Run),
 }
 
@@ -216,6 +240,110 @@ pub fn run(
                         node.name
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::ObserveUart { node, name } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .stm32_usart_mut(&name)?
+                        .observed = Some(Vec::new());
+                }
+                Action::WaitUart {
+                    node,
+                    name,
+                    timeout,
+                    unfinished,
+                    patterns,
+                } => {
+                    ran = true;
+                    let mut scanned = None;
+                    let mut matched = false;
+                    simulation.advance_until(Run::Rounds(timeout), limit, &mut output, |sim| {
+                        let bytes = sim.nodes[node]
+                            .machine
+                            .bus
+                            .stm32_usart_mut(&name)?
+                            .observed
+                            .as_mut()
+                            .ok_or("start a UART observer before waiting")?;
+                        if scanned == Some(bytes.len()) {
+                            return Ok(false);
+                        }
+                        scanned = Some(bytes.len());
+                        matched = consume_uart_match(bytes, &patterns, unfinished);
+                        Ok(matched)
+                    })?;
+                    if !matched {
+                        return Err(format!(
+                            "UART {name} did not match {patterns:?} within {timeout} rounds"
+                        ));
+                    }
+                    writeln!(
+                        output,
+                        "UART {name} matched {patterns:?} at round {}",
+                        simulation.rounds
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Action::WaitLed {
+                    node,
+                    name,
+                    timeout,
+                    state,
+                } => {
+                    ran = true;
+                    let mut matched = false;
+                    simulation.advance_until(Run::Rounds(timeout), limit, &mut output, |sim| {
+                        matched = sim.led_state(node, &name)? == state;
+                        Ok(matched)
+                    })?;
+                    if !matched {
+                        return Err(format!(
+                            "LED {name} did not reach {state} within {timeout} rounds"
+                        ));
+                    }
+                    writeln!(
+                        output,
+                        "LED {name} reached {state} at round {}",
+                        simulation.rounds
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Action::BlinkLed {
+                    node,
+                    name,
+                    duration,
+                    on,
+                    off,
+                } => {
+                    ran = true;
+                    let start = simulation.rounds;
+                    let mut level = simulation.led_state(node, &name)?;
+                    let mut last_edge: Option<u64> = None;
+                    let mut intervals = 0;
+                    simulation.advance_until(Run::Rounds(duration), limit, &mut output, |sim| {
+                        let current = sim.led_state(node, &name)?;
+                        if current != level {
+                            if let Some(previous) = last_edge {
+                                let elapsed = sim.rounds - previous;
+                                let expected = if level { on } else { off };
+                                if u128::from(elapsed.abs_diff(expected)) * 20 > u128::from(expected) {
+                                    return Err(format!("LED {name} held {level} for {elapsed} rounds, expected {expected} ±5%"));
+                                }
+                                intervals += 1;
+                            }
+                            level = current;
+                            last_edge = Some(sim.rounds);
+                        }
+                        Ok(false)
+                    })?;
+                    if simulation.rounds - start != duration || intervals == 0 {
+                        return Err(format!(
+                            "LED {name} blinking window incomplete or no complete interval"
+                        ));
+                    }
+                    writeln!(output, "LED {name} blinked within tolerance ({intervals} complete intervals over {duration} rounds)")
+                        .map_err(|e| e.to_string())?;
                 }
                 Action::Run(run) => {
                     ran = true;
@@ -360,6 +488,28 @@ impl Simulation {
     }
 
     fn advance(&mut self, run: Run, limit: u64, output: &mut impl Write) -> Result<bool, String> {
+        self.advance_until(run, limit, output, |_| Ok(false))
+    }
+
+    fn led_state(&self, node: usize, name: &str) -> Result<bool, String> {
+        self.nodes[node]
+            .machine
+            .bus
+            .gpio_led_states()
+            .find_map(|(registered, state)| (registered == name).then_some(state))
+            .ok_or_else(|| format!("unknown GPIO LED {name:?}"))
+    }
+
+    fn advance_until(
+        &mut self,
+        run: Run,
+        limit: u64,
+        output: &mut impl Write,
+        mut done: impl FnMut(&mut Self) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        if done(self)? {
+            return Ok(false);
+        }
         let available = limit - self.rounds;
         let requested = match run {
             Run::Remaining => u64::MAX,
@@ -387,7 +537,7 @@ impl Simulation {
                 self.forward(index);
             }
             self.rounds += 1;
-            if !active {
+            if done(self)? || !active {
                 return Ok(false);
             }
         }
@@ -411,6 +561,25 @@ impl Simulation {
     }
 }
 
+fn consume_uart_match(bytes: &mut Vec<u8>, patterns: &[String], unfinished: bool) -> bool {
+    let mut consumed = 0;
+    for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+        let complete = line.ends_with(b"\n");
+        if !complete && !unfinished {
+            break;
+        }
+        if patterns.iter().any(|pattern| {
+            line.windows(pattern.len())
+                .any(|window| window == pattern.as_bytes())
+        }) {
+            bytes.drain(..consumed + line.len());
+            return true;
+        }
+        consumed += line.len();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,6 +589,22 @@ mod tests {
         litex_ethernet::{LiteXEthernet, SLOT_SIZE},
         stm32h7_ethernet::{MAC_SIZE, Stm32h7Ethernet},
     };
+
+    #[test]
+    fn uart_matches_complete_lines_unless_unfinished_is_requested() {
+        let mut bytes = b"earlier\r\nBooting".to_vec();
+        let boot = ["Booting".to_owned()];
+        assert!(!consume_uart_match(&mut bytes, &boot, false));
+        assert!(consume_uart_match(&mut bytes, &boot, true));
+        assert!(bytes.is_empty());
+        bytes.extend(b"noise\nLED state: OFF\r\nPress the button\r\n");
+        assert!(consume_uart_match(
+            &mut bytes,
+            &["LED state: ON".to_owned(), "LED state: OFF".to_owned()],
+            false
+        ));
+        assert_eq!(bytes, b"Press the button\r\n");
+    }
 
     #[test]
     fn switches_frames_between_stm32h7_dma_and_litex_slots_in_both_directions() {

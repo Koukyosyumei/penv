@@ -178,9 +178,9 @@ for file, kind in robot.items():
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Have Ethernet as Link Up in CubeMX':
             note = '同一 ELF を未変更 Nucleo REPL で試行。ARM EABI5 hard-float ELF のローダー拒否で UART 観測前に停止'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should Blink Led':
-            status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL。GPIOB0 を 10 ms ごとに観測して 8 区間を確認。Robot の LED Tester と停止条件は未移植'
+            status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3。UART 一致で停止し、GreenLED の変化を 8 仮想秒観測、点灯・消灯各 1 秒 ±5%。tests/stm32h7-nucleo-led-robot.sh'
         elif file == 'tests/platforms/nucleo_h753zi.robot' and name == 'Should See Button Press':
-            status, note = 'PARTIAL', '同一 ELF・未変更 Nucleo REPL・UserButton1 Press/Release。GPIOB0 の消灯・点灯・消灯を確認。Robot の停止条件は未移植'
+            status, note = 'PASS', '同一 ELF・未変更 Nucleo REPL・USART3・UserButton1 Press/Release。上流順に UART と GreenLED を観測し、各 LED 期待値を 1 仮想秒以内に照合。tests/stm32h7-nucleo-led-robot.sh'
         if file.endswith('/platform_descriptions.robot') and name == 'Should Load Repls':
             for configuration, decision, reason in platform_variants():
                 rows.append(('renode', file, f'{start+1}-{stop}', name, configuration, decision, reason))

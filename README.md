@@ -662,3 +662,23 @@ target/release/penv run --script tests/stm32h7-ft5336.resc \
 ```
 
 モニター出力の末尾列は順に `0x00000080 0x00800000 0x00000081 0x000000a4 0x00000000 0x00000032 0x00000000 0x00000041 0x00000051` です。検証ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-ft5336.AQ9WNxRa` に保存しました。
+
+### backlog-network-5f23f917ea51-1
+
+`nucleo_h753zi.robot` の `Should Blink Led` と `Should See Button Press` を移植しました。両方とも未変更 Nucleo REPL と固定上流の公開 ELF を使います。モニターは名前で選んだ USART3 の出力を待ち、上流と同じ順序で LED の観測とボタン操作へ進みます。
+
+- Blinky は起動バナーの途中一致と LED 状態行の完了を待ち、GreenLED の変化を 8 仮想秒追跡します。最初のエッジで同期し、その後の点灯・消灯区間を各 1 秒 ±5% で照合します。今回は 6 完全区間を確認しました。
+- Button は起動と操作案内の後に GreenLED の消灯を確認し、上流と同じ UserButton1 を押下します。UART の押下通知を待って点灯を照合し、解放後に消灯を照合します。LED の各期待値の期限は 1 仮想秒、UART の各待機期限は 8 仮想秒です。
+
+CLI の UART 待機はこの移植で使うリテラル部分一致と複数候補に対応します。Blinky の上流正規表現は等価な 2 候補で表現しました。Ethernet echo のような数値付き正規表現とクライアント出力の不足は残件です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-led.Fm3d6yZW` に保存しました。点灯期待値の変更とボタン押下の削除で、期間違反と UART タイムアウトも確認しました。全 789 件のうち等価合格 13 件、部分検証 15 件、未達 761 件です。
