@@ -1,5 +1,7 @@
 # 固定 ACT 242 ELF の実行
 
+固定 Renode を実行した対照結果と終了通知・署名の追加検証は [上流照合](rv64-act-equivalence.md) にあります。
+
 固定 Renode の `tests/unit-tests/riscv-arch-tests.robot:54` に対応する 242 パラメータを、付属の Python セレクターで取得し、生成 ELF を全件実行しました。中間署名 ELF もセレクターの結果に含まれるため実行対象に保持しました。[実行台帳](rv64-act-run.tsv)
 
 | 構成 | 終了値 0 | 失敗 |

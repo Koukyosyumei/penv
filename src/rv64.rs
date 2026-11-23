@@ -463,7 +463,10 @@ impl Rv64 {
                 let physical =
                     self.translations
                         .translate(bus, &self.privilege, virtual_address, 1, READ)?;
-                let byte = ram_read(bus, physical, 1).ok_or(Fault::new(5, virtual_address))?;
+                let byte = bus
+                    .read_rv64_tohost(physical, 1)
+                    .or_else(|| ram_read(bus, physical, 1))
+                    .ok_or(Fault::new(5, virtual_address))?;
                 value |= byte << (offset * 8);
             }
             return Ok(value);
@@ -471,7 +474,10 @@ impl Rv64 {
         let physical = self
             .translations
             .translate(bus, &self.privilege, address, width, READ)?;
-        if let Some(value) = ram_read(bus, physical, width) {
+        if let Some(value) = bus
+            .read_rv64_tohost(physical, width)
+            .or_else(|| ram_read(bus, physical, width))
+        {
             return Ok(value);
         }
         if let Ok(low) = u32::try_from(physical) {
@@ -529,12 +535,14 @@ impl Rv64 {
                 *slot =
                     self.translations
                         .translate(bus, &self.privilege, virtual_address, 1, WRITE)?;
-                if bus.ram64(*slot, 1).is_none() {
+                if bus.ram64(*slot, 1).is_none() && bus.read_rv64_tohost(*slot, 1).is_none() {
                     return Err(Fault::new(7, virtual_address));
                 }
             }
             for (physical, byte) in destinations[..width].iter().zip(value.to_le_bytes()) {
-                bus.memory64(*physical, 1).unwrap()[0] = byte;
+                if !bus.write_rv64_tohost(*physical, 1, u64::from(byte)) {
+                    bus.memory64(*physical, 1).unwrap()[0] = byte;
+                }
             }
             bus.observe_rv64_store(destinations[0], value as u8);
             return Ok(());
@@ -542,6 +550,9 @@ impl Rv64 {
         let physical = self
             .translations
             .translate(bus, &self.privilege, address, width, WRITE)?;
+        if bus.write_rv64_tohost(physical, width, value) {
+            return Ok(());
+        }
         if let Some(bytes) = bus.memory64(physical, width) {
             bytes.copy_from_slice(&value.to_le_bytes()[..width]);
             bus.observe_rv64_store(physical, value as u8);

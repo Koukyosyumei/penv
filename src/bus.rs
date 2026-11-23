@@ -75,6 +75,21 @@ struct RamAlias {
     length: usize,
 }
 
+struct Tohost {
+    address: u64,
+    bytes: Box<[u8; Self::SIZE]>,
+}
+
+impl Tohost {
+    const SIZE: usize = 0x1000;
+
+    fn range(&self, address: u64, width: usize) -> Option<std::ops::Range<usize>> {
+        let start = usize::try_from(address.checked_sub(self.address)?).ok()?;
+        let end = start.checked_add(width)?;
+        (end <= Self::SIZE && matches!(width, 1 | 2 | 4 | 8)).then_some(start..end)
+    }
+}
+
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
@@ -82,6 +97,7 @@ pub struct Bus {
     pub rv64_devices: crate::rv64_devices::Devices,
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     rv64_tohost: Option<u64>,
+    robot_tohost: Option<Tohost>,
     pub rv64_test_exit: Option<u64>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
@@ -468,6 +484,45 @@ impl Bus {
             let bytes = self.ram64(address, 8).unwrap();
             self.rv64_test_exit = Some(u64::from_le_bytes(bytes.try_into().unwrap()) >> 1);
         }
+    }
+
+    pub fn watch_robot_tohost(&mut self, address: u64) -> Result<(), String> {
+        if !address.is_multiple_of(Tohost::SIZE as u64)
+            || address.checked_add(Tohost::SIZE as u64).is_none()
+        {
+            return Err("--robot-tohost requires a page-aligned 4 KiB registration".into());
+        }
+        // Robot registers fresh ArrayMemory after LoadELF. CPU accesses see
+        // this overlay, while firmware loading and other bus masters see RAM.
+        self.robot_tohost = Some(Tohost {
+            address,
+            bytes: Box::new([0; Tohost::SIZE]),
+        });
+        self.rv64_test_exit = None;
+        Ok(())
+    }
+
+    pub fn read_rv64_tohost(&self, address: u64, width: usize) -> Option<u64> {
+        let watcher = self.robot_tohost.as_ref()?;
+        let range = watcher.range(address, width)?;
+        let mut value = [0; 8];
+        value[..width].copy_from_slice(&watcher.bytes[range]);
+        Some(u64::from_le_bytes(value))
+    }
+
+    pub fn write_rv64_tohost(&mut self, address: u64, width: usize, value: u64) -> bool {
+        let Some(watcher) = self.robot_tohost.as_mut() else {
+            return false;
+        };
+        let Some(range) = watcher.range(address, width) else {
+            return false;
+        };
+        watcher.bytes[range.clone()].copy_from_slice(&value.to_le_bytes()[..width]);
+        if self.rv64_test_exit.is_none() && range.start == 0 && value & 1 != 0 {
+            self.rv64_test_exit =
+                Some(u64::from_le_bytes(watcher.bytes[..8].try_into().unwrap()) >> 1);
+        }
+        true
     }
 
     pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {

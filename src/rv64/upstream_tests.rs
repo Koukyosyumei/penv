@@ -430,11 +430,13 @@ fn unaligned_amocas_fault_leaves_the_first_page_unchanged() {
 
 #[test]
 fn upstream_test_watcher_decodes_only_odd_writes_at_base() {
-    let address = u64::from(RAM_BASE) + 16;
-    let mut bus = Bus::new(128).unwrap();
-    bus.watch_rv64_tohost(address).unwrap();
+    let address = u64::from(RAM_BASE) + 4096;
+    let mut bus = Bus::new(8192).unwrap();
+    bus.memory64(address, 8).unwrap().fill(0xff);
+    bus.watch_robot_tohost(address).unwrap();
     let cpu = Rv64::new(Isa::IM);
     let mut output = Vec::new();
+    assert_eq!(cpu.load(&mut bus, address, 8).unwrap(), 0);
     assert!(
         cpu.store(&mut bus, address, 8, 0x0000_0002_0000_0000, &mut output)
             .is_ok()
@@ -443,6 +445,9 @@ fn upstream_test_watcher_decodes_only_odd_writes_at_base() {
     assert_eq!(bus.rv64_test_exit, None);
     assert!(cpu.store(&mut bus, address, 2, 7, &mut output).is_ok());
     assert_eq!(bus.rv64_test_exit, Some(0x1_0000_0003));
+    assert!(cpu.store(&mut bus, address, 8, 1, &mut output).is_ok());
+    assert_eq!(bus.rv64_test_exit, Some(0x1_0000_0003));
+    assert_eq!(bus.ram64(address, 8).unwrap(), [0xff; 8]);
 }
 
 fn czero(funct3: u32, rd: usize, rs1: usize, rs2: usize) -> u32 {

@@ -72,7 +72,8 @@ Options:
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RISC-V harts at the image entry (1–8)
-  --tohost ADDRESS   Watch RV64 RAM for an upstream test completion write
+  --tohost ADDRESS   Watch an RV64 test completion word in RAM
+  --robot-tohost ADDRESS   Install a 4 KiB single-hart Renode-style watcher
   --max-steps N      Stop after N execution steps (default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -290,10 +291,13 @@ fn run() -> Result<ExitCode, String> {
                         .map_err(|_| "RAM size exceeds host limits")?,
                 ));
             }
-            Some("--tohost") => {
+            Some(option @ ("--tohost" | "--robot-tohost")) => {
                 let value = args.next().ok_or("--tohost requires an address")?;
                 let value = value.to_str().ok_or("invalid tohost address")?;
-                if tohost.replace(parse_address64(value)?).is_some() {
+                if tohost
+                    .replace((parse_address64(value)?, option == "--robot-tohost"))
+                    .is_some()
+                {
                     return Err("only one tohost address may be specified".into());
                 }
             }
@@ -505,11 +509,18 @@ fn run() -> Result<ExitCode, String> {
         if uart_stdin && !machine.bus.has_uart_input() {
             return Err("--uart-stdin requires a platform UART with input support".into());
         }
-        if let Some(address) = tohost {
+        if let Some((address, robot)) = tohost {
             if machine.primary.rv64.is_none() {
-                return Err("--tohost requires an RV64 machine".into());
+                return Err("tohost monitoring requires an RV64 machine".into());
             }
-            machine.bus.watch_rv64_tohost(address)?;
+            if robot {
+                if machine.hart_count() != 1 {
+                    return Err("--robot-tohost requires a single-hart RV64 machine".into());
+                }
+                machine.bus.watch_robot_tohost(address)?;
+            } else {
+                machine.bus.watch_rv64_tohost(address)?;
+            }
         }
         Ok(machine)
     };
@@ -536,6 +547,7 @@ fn run() -> Result<ExitCode, String> {
         );
     }
     if let Stop::TestExit(code) = stop {
+        eprintln!("penv: TEST FINISHED");
         eprintln!("penv: tohost exit code {code}");
         return Ok(if code == 0 {
             ExitCode::SUCCESS
