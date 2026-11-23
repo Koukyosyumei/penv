@@ -234,6 +234,25 @@ impl Machine {
         }
     }
 
+    pub fn monitor_external_pmp(
+        &mut self,
+        path: &str,
+        config: bool,
+        index: u32,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, String> {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(pmp) = hart.csr.external_pmp(path) {
+                let result = pmp.external_csr(config, index, value);
+                if value.is_some() {
+                    hart.translations.clear();
+                }
+                return Ok(result);
+            }
+        }
+        Err(format!("unknown external PMP {path:?}"))
+    }
+
     pub fn monitor_pc(&mut self, name: &str, value: Option<u32>) -> Result<Option<u32>, String> {
         let hart = std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
@@ -603,6 +622,10 @@ impl Hart {
 
     pub fn enable_smepmp(&mut self) {
         self.csr.enable_smepmp();
+    }
+
+    pub fn attach_external_pmp(&mut self, path: String, entries: usize) {
+        self.csr.attach_external_pmp(path, entries);
     }
 
     pub fn enable_pmp(&mut self, entries: usize) {

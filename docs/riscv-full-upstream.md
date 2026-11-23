@@ -738,3 +738,19 @@ python3 scripts/validate-rv32-architecture.py --penv target/release/penv \
 固定上流の構成での CPU 作成には V が残っているため、カウンター 6 件は台帳で `blocked-cpu` を維持し、縮小構成での検証結果を追記しました。上流等価合格は累計 116 件です。
 
 REPL、実 ELF、変更前後のログと終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-e03f061-RAjzOl/` に保存しました。
+
+### RV32 外部 PMP の固定 Robot ケース
+
+`Miscellaneous.RiscVExternalPMP @ cpu` を RV32 REPL で構成できるようにし、固定 `riscv-external-pmp.robot` の RV32 5 ケースを移植しました。16 エントリーの固定フィクスチャで、開始ログ、モニターとゲストからのアドレス・設定 CSR の読み戻し、無効アクセス 8 件の診断順を照合しました。無効な番号の読み出しはゼロを返し、書き込みは破棄されます。ゲストの無効 CSR テストも後続命令まで進みました。
+
+外部 PMP は既存の保護判定を共有します。外部モデルでは全エントリーが OFF の間はアクセスを許可し、有効なロック付き TOR ルールとその前段の設定・アドレスを保護します。対応するエントリー数は 16 と 64 です。今回の固定ケースは 16 で、内部 PMP と Smepmp の結合回帰は既存の実 ELF で検証しました。
+
+```bash
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-external-pmp.py target/release/penv "$evidence/robot-rerun"
+```
+
+変更前は外部 PMP モデルが不明として REPL の読み込みが止まりました。変更後は固定 5 ケース、Rust テスト 85 件、公開 M/S 特権 ELF 22 件、Smepmp 実 ELF、virt の UART・CLINT・PLIC が通過しました。上流等価合格は累計 121 件です。外部 PMP の他のエントリー数と、固定最大 ISA 構成は残っています。
+
+再現用 REPL、RESC、ELF とログは `~/.local/state/penv-dispatch/evidence/riscv/backlog-66102ee-Bf2ray/` に保存しました。

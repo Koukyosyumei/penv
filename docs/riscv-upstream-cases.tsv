@@ -2486,15 +2486,15 @@ Renode	tests/unit-tests/riscv-extensions.robot	25	Should Create CPUs With Suppor
 Renode	tests/unit-tests/riscv-extensions.robot	26	Should Create CPUs With Supported ISAs	RV32I_Zve64f	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve64f
 Renode	tests/unit-tests/riscv-extensions.robot	27	Should Create CPUs With Supported ISAs	RV32I_Zve64d	target	blocked-cpu	fixed CPU-only fixture requires unsupported Zve64d
 Renode	tests/unit-tests/riscv-extensions.robot	29	Should Fail On Unsupported ISA	RV32GC_invalid_ISA	target	ported	fixed CPU.RiscV32 construction rejected with expected diagnostic
-Renode	tests/unit-tests/riscv-external-pmp.robot	106	Should Access All 32-Bit Config Registers From Monitor		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	109	Should Access All 64-Bit Config Registers From Monitor		outside	outside	Create RV 64 Machine; CPU.RiscV64 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	112	Should Access All 32-Bit Address Registers From Monitor		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	115	Should Access All 64-Bit Address Registers From Monitor		outside	outside	Create RV 64 Machine; CPU.RiscV64 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	118	Should Access All 32-Bit Address Registers From CPU		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	121	Should Access All 64-Bit Address Registers From CPU		outside	outside	Create RV 64 Machine; CPU.RiscV64 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	124	Should Access All 32-Bit Config Registers From CPU		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	127	Should Access All 64-Bit Config Registers From CPU		outside	outside	Create RV 64 Machine; CPU.RiscV64 and RiscVExternalPMP with 16 entries
-Renode	tests/unit-tests/riscv-external-pmp.robot	130	Should Print Error When Addessing Invalid Registers		target	pending	Create RV 32 Machine; CPU.RiscV32 and RiscVExternalPMP with 16 entries
+Renode	tests/unit-tests/riscv-external-pmp.robot	106	Should Access All 32-Bit Config Registers From Monitor		target	ported	fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked
+Renode	tests/unit-tests/riscv-external-pmp.robot	109	Should Access All 64-Bit Config Registers From Monitor		outside	outside	Create RV 64 Machine selects CPU.RiscV64 and RiscVExternalPMP
+Renode	tests/unit-tests/riscv-external-pmp.robot	112	Should Access All 32-Bit Address Registers From Monitor		target	ported	fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked
+Renode	tests/unit-tests/riscv-external-pmp.robot	115	Should Access All 64-Bit Address Registers From Monitor		outside	outside	Create RV 64 Machine selects CPU.RiscV64 and RiscVExternalPMP
+Renode	tests/unit-tests/riscv-external-pmp.robot	118	Should Access All 32-Bit Address Registers From CPU		target	ported	fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked
+Renode	tests/unit-tests/riscv-external-pmp.robot	121	Should Access All 64-Bit Address Registers From CPU		outside	outside	Create RV 64 Machine selects CPU.RiscV64 and RiscVExternalPMP
+Renode	tests/unit-tests/riscv-external-pmp.robot	124	Should Access All 32-Bit Config Registers From CPU		target	ported	fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked
+Renode	tests/unit-tests/riscv-external-pmp.robot	127	Should Access All 64-Bit Config Registers From CPU		outside	outside	Create RV 64 Machine selects CPU.RiscV64 and RiscVExternalPMP
+Renode	tests/unit-tests/riscv-external-pmp.robot	130	Should Print Error When Addessing Invalid Registers		target	ported	fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked
 Renode	tests/unit-tests/riscv-interrupt-mode.robot	53	Should Correct MTVEC From Monitor in Auto Mode	interruptMode=Auto	target	ported	CPU.RiscV32 rv32imac, Priv1_10, interruptMode=Auto; ordered monitor writes, readbacks and warnings checked
 Renode	tests/unit-tests/riscv-interrupt-mode.robot	80	Should Correct STVEC From Monitor in Auto Mode	interruptMode=Auto	target	ported	CPU.RiscV32 rv32imac, Priv1_10, interruptMode=Auto; ordered monitor writes, readbacks and warnings checked
 Renode	tests/unit-tests/riscv-interrupt-mode.robot	107	Should Correct MTVEC Written By Software in Auto Mode	interruptMode=Auto	target	ported	CPU.RiscV32 rv32imac, Priv1_10, interruptMode=Auto; fixed guest opcodes, readbacks and warning sequence checked

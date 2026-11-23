@@ -15,6 +15,7 @@ pub struct Pmp {
     active: u64,
     entries: usize,
     mseccfg: Option<u8>,
+    pub external_path: Option<String>,
 }
 
 impl Default for Pmp {
@@ -32,6 +33,7 @@ impl Pmp {
             active: 0,
             entries,
             mseccfg: None,
+            external_path: None,
         }
     }
 
@@ -75,6 +77,35 @@ impl Pmp {
         if machine == locked { config & RWX } else { 0 }
     }
 
+    pub fn external_csr(&mut self, config: bool, index: u32, value: Option<u32>) -> Option<u32> {
+        let limit = if config {
+            self.entries / 4
+        } else {
+            self.entries
+        };
+        if index as usize >= limit {
+            self.log_invalid(config, index, value.is_some());
+            return value.is_none().then_some(0);
+        }
+        let csr = if config { 0x3a0 } else { 0x3b0 } + index;
+        if let Some(value) = value {
+            self.write(csr, value);
+            None
+        } else {
+            self.read(csr)
+        }
+    }
+
+    fn log_invalid(&self, config: bool, index: u32, write: bool) {
+        let action = if write { "write to" } else { "read from" };
+        let register = if config { "config" } else { "address" };
+        eprintln!("Attempted to {action} invalid PMP {register} register {index}");
+    }
+
+    pub fn is_external_csr(&self, csr: u32) -> bool {
+        self.external_path.is_some() && matches!(csr, 0x3a0..=0x3af | 0x3b0..=0x3ef)
+    }
+
     pub fn read(&self, csr: u32) -> Option<u32> {
         Some(match csr {
             0x747 => u32::from(self.mseccfg?),
@@ -86,8 +117,19 @@ impl Pmp {
             0x3b0..=0x3ef if csr - 0x3b0 < self.entries as u32 => {
                 self.address[(csr - 0x3b0) as usize]
             }
+            _ if self.is_external_csr(csr) => {
+                let config = csr < 0x3b0;
+                self.log_invalid(config, csr - if config { 0x3a0 } else { 0x3b0 }, false);
+                0
+            }
             _ => return None,
         })
+    }
+
+    fn locked_by_next(&self, index: usize) -> bool {
+        self.config[..self.entries]
+            .get(index + 1)
+            .is_some_and(|&config| config & LOCK != 0 && mode(config) == TOR)
     }
 
     pub fn write(&mut self, csr: u32, value: u32) -> bool {
@@ -100,12 +142,15 @@ impl Pmp {
             0x3a0..=0x3af if ((csr - 0x3a0) * 4) < self.entries as u32 => {
                 let start = (csr as usize - 0x3a0) * 4;
                 for (index, config) in (start..start + 4).zip(value.to_le_bytes()) {
-                    if !bypass && self.config[index] & LOCK != 0 {
+                    if !bypass
+                        && (self.config[index] & LOCK != 0
+                            || (self.external_path.is_some() && self.locked_by_next(index)))
+                    {
                         continue;
                     }
                     let mut config = config & 0x9f;
                     let shared_encoding = config & (READ | WRITE) == WRITE;
-                    if !lockdown && shared_encoding {
+                    if self.external_path.is_none() && !lockdown && shared_encoding {
                         config &= !WRITE;
                     }
                     if lockdown
@@ -125,12 +170,13 @@ impl Pmp {
             }
             0x3b0..=0x3ef if csr - 0x3b0 < self.entries as u32 => {
                 let index = (csr - 0x3b0) as usize;
-                let locked_by_next = self.config[..self.entries]
-                    .get(index + 1)
-                    .is_some_and(|&config| config & LOCK != 0 && mode(config) == TOR);
-                if bypass || (self.config[index] & LOCK == 0 && !locked_by_next) {
+                if bypass || (self.config[index] & LOCK == 0 && !self.locked_by_next(index)) {
                     self.address[index] = value;
                 }
+            }
+            _ if self.is_external_csr(csr) => {
+                let config = csr < 0x3b0;
+                self.log_invalid(config, csr - if config { 0x3a0 } else { 0x3b0 }, true);
             }
             _ => return false,
         }
@@ -138,6 +184,9 @@ impl Pmp {
     }
 
     pub fn permits(&self, address: u32, width: usize, permission: u8, machine: bool) -> bool {
+        if self.external_path.is_some() && self.active == 0 {
+            return true;
+        }
         let start = u64::from(address);
         let end = start + width as u64;
         let mut active = self.active;
@@ -185,6 +234,23 @@ fn mode(config: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_pmp_enforces_active_rules_and_locked_tor_predecessor() {
+        let mut pmp = Pmp::new(16);
+        pmp.external_path = Some("cpu.pmp".into());
+        assert!(pmp.permits(0x1000, 4, READ, false));
+        assert!(pmp.write(0x3b0, 0x400));
+        assert!(pmp.write(0x3b1, 0x800));
+        assert!(pmp.write(0x3a0, 0x8900)); // Locked TOR [0x1000, 0x2000), read only.
+        assert!(pmp.permits(0x1000, 4, READ, false));
+        assert!(!pmp.permits(0x1000, 4, WRITE, true));
+        assert!(!pmp.permits(0x2000, 4, READ, false));
+        assert!(pmp.write(0x3a0, 0x1f));
+        assert!(pmp.write(0x3b0, 0));
+        assert_eq!(pmp.read(0x3a0), Some(0x8900));
+        assert_eq!(pmp.read(0x3b0), Some(0x400));
+    }
 
     #[test]
     fn smepmp_lockdown_permissions_match_the_architectural_table() {

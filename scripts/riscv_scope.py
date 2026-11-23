@@ -91,8 +91,9 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         selection = re.search(r"(?m)^\s+(?:Should Access All (32|64) Bit|Create RV (32|64) Machine)", source)
         if selection:
             bits = selection[1] or selection[2]
-            scope, status = ("target", "pending") if bits == "32" else ("outside", "outside")
-            return scope, status, f"Create RV {bits} Machine; CPU.RiscV{bits} and RiscVExternalPMP with 16 entries"
+            if bits == "32":
+                return "target", "ported", "fixed RV32 16-entry external PMP; monitor and guest CSR values and diagnostic ordering checked"
+            return "outside", "outside", "Create RV 64 Machine selects CPU.RiscV64 and RiscVExternalPMP"
     if filename == "riscv-zbb-extension.robot":
         selection = re.search(r"Create Machine\s+\$\{(32|64)bit_cpu}", source)
         if selection:

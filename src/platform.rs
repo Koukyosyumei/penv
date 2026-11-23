@@ -342,6 +342,7 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
     let mut machine = Machine::without_default_ram();
     let mut names = HashSet::new();
     let mut cpus = Vec::new();
+    let mut external_pmps = HashMap::new();
     let mut clint = None;
     let mut nvic = None;
     let mut exti = None;
@@ -383,6 +384,22 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                     return Err(entry.error("expected CPU registered on sysbus without an address"));
                 }
                 cpus.push(entry);
+            }
+            "Miscellaneous.RiscVExternalPMP" => {
+                let cpu = entry
+                    .registration
+                    .as_deref()
+                    .ok_or_else(|| entry.error("missing CPU attachment"))?;
+                let mut count = 64;
+                for (_, value) in keys(entry, &["numberOfPMPEntries"])? {
+                    count = number(value).map_err(|error| entry.error(&error))? as usize;
+                }
+                if !matches!(count, 16 | 64) || external_pmps.insert(cpu, (entry, count)).is_some()
+                {
+                    return Err(
+                        entry.error("expected one external PMP per CPU, with 16 or 64 entries")
+                    );
+                }
             }
             "Memory.MappedMemory" | "Memory.ArrayMemory" => {
                 let (_, size) = keys(entry, &["size"])?
@@ -620,6 +637,14 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
             path.display(),
             if require_ram { " and mapped RAM" } else { "" }
         ));
+    }
+    for (name, (entry, _)) in &external_pmps {
+        if !cpus
+            .iter()
+            .any(|cpu| cpu.name == *name && cpu.model == "CPU.RiscV32")
+        {
+            return Err(entry.error("external PMP requires an attached CPU.RiscV32"));
+        }
     }
     if let Some(entry) = cpus.iter().find(|entry| entry.model == "CPU.CortexM") {
         if cpus.len() != 1
@@ -1127,7 +1152,13 @@ fn load_platform(path: &Path, root: Option<&Path>, require_ram: bool) -> Result<
                 hart.set_mtvec(DEFAULT_MTVEC);
             }
         }
-        if pmp != 0 {
+        if let Some((external, count)) = external_pmps.get(entry.name.as_str()) {
+            if smepmp {
+                return Err(external.error("Smepmp requires internal PMP"));
+            }
+            hart.attach_external_pmp(format!("{}.{}", entry.name, external.name), *count);
+            eprintln!("{}: Enabling External PMP", entry.name);
+        } else if pmp != 0 {
             hart.enable_pmp(pmp);
             if smepmp {
                 hart.enable_smepmp();

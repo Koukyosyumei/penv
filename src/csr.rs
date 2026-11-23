@@ -267,6 +267,18 @@ impl Csr {
         self.pmp = Some(Box::new(Pmp::new(entries)));
     }
 
+    pub fn attach_external_pmp(&mut self, path: String, entries: usize) {
+        let mut pmp = Pmp::new(entries);
+        pmp.external_path = Some(path);
+        self.pmp = Some(Box::new(pmp));
+    }
+
+    pub fn external_pmp(&mut self, path: &str) -> Option<&mut Pmp> {
+        self.pmp
+            .as_deref_mut()
+            .filter(|pmp| pmp.external_path.as_deref() == Some(path))
+    }
+
     fn effective_privilege(&self, fetch: bool) -> Privilege {
         if self.privilege == Privilege::Machine && !fetch && self.status & MPRV != 0 {
             self.decode_privilege((self.status & MPP) >> 11)
@@ -374,6 +386,15 @@ impl Csr {
                 && self.status & TVM != 0)
         {
             return Err(error());
+        }
+        if operation & 3 == 1
+            && (instruction >> 7) & 31 == 0
+            && self
+                .pmp
+                .as_ref()
+                .is_some_and(|pmp| pmp.is_external_csr(address))
+        {
+            return self.write(address, operand).then_some(0).ok_or_else(error);
         }
         let previous = self.read(address).ok_or_else(error)?;
         // A hardware SEIP level is visible to CSR reads but must not become

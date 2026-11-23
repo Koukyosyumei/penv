@@ -34,6 +34,7 @@ pub struct Boot {
 pub enum CpuRegisterCommand {
     TrapVector(TrapVector, Option<u32>),
     Integer(u32, Option<u32>),
+    ExternalPmp(String, bool, u32, Option<u32>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -135,7 +136,10 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     let boot = state.boot;
     if !state.machine
         || boot.platform.is_none()
-        || (boot.image.is_none() && boot.binaries.is_empty() && boot.cpu_control.is_empty())
+        || (boot.image.is_none()
+            && boot.binaries.is_empty()
+            && boot.cpu_control.is_empty()
+            && boot.cpu_registers.is_empty())
     {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
@@ -478,6 +482,27 @@ fn execute(
             value @ ("true" | "false"),
         ] if boot.platform.is_some() => {
             boot.log_function_names = *value == "true";
+        }
+        [
+            device,
+            command @ ("ConfigCSRRead" | "AddressCSRRead" | "ConfigCSRWrite" | "AddressCSRWrite"),
+            index,
+            arguments @ ..,
+        ] if boot.platform.is_some()
+            && arguments.len() == usize::from(command.ends_with("Write")) =>
+        {
+            let path = device.strip_prefix("sysbus.").unwrap_or(device);
+            let index = crate::parse_address(resolve(index)?)?;
+            let value = arguments
+                .first()
+                .map(|value| crate::parse_address(resolve(value)?))
+                .transpose()?;
+            boot.cpu_registers.push(CpuRegisterCommand::ExternalPmp(
+                path.into(),
+                command.starts_with("Config"),
+                index,
+                value,
+            ));
         }
         ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.platform.is_some() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;

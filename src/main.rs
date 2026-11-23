@@ -471,7 +471,9 @@ fn run() -> Result<ExitCode, String> {
         buttons = boot.buttons;
         video_analyzers = boot.video_analyzers;
     }
-    let inspect_only = path.is_none() && binaries.is_empty() && !cpu_control.is_empty();
+    let inspect_only = path.is_none()
+        && binaries.is_empty()
+        && (!cpu_control.is_empty() || !cpu_registers.is_empty());
     if path.is_none() && binaries.is_empty() && !inspect_only {
         return Err("missing firmware image; see run --help".into());
     }
@@ -554,6 +556,11 @@ fn run() -> Result<ExitCode, String> {
             monitor::CpuRegisterCommand::TrapVector(register, value) => {
                 if let Some(readback) = machine.primary.monitor_trap_vector(register, value)? {
                     eprintln!("{} {readback:#x}", register.name());
+                }
+            }
+            monitor::CpuRegisterCommand::ExternalPmp(path, config, index, value) => {
+                if let Some(readback) = machine.monitor_external_pmp(&path, config, index, value)? {
+                    eprintln!("{readback:#x}");
                 }
             }
             monitor::CpuRegisterCommand::Integer(index, value) => {
