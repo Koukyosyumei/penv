@@ -48,3 +48,9 @@ CLI 20 件と公開 STM32F072 Hello World ELF の Save、Clear、Load、mach set
 RV32 `fdacacf` と `885d642` を共有実行経路に取り込み、同じ照合機能から PHY、パネル、SI70xx 温度設定を実行する。パネルは同じ文字列の N 回目を指定できる。照合は UART 書き込みをまたいで継続し、操作は次のゲストステップの前に適用する。未適用のまま実行が終わると対象名付きエラーを返す。
 
 `cargo test --locked` のユニット 210 件と CLI 21 件が通過した。固定公開 Arty ELF の Boot、LED、Switch、Button、PHY の5件を同じデバッグバイナリで確認した。証跡は `~/.local/state/penv-dispatch/evidence/integration/shared-uart-actions-96e0519/`。機種別の HS3001 と AD4011 には別のプロパティ接続が必要。
+
+## RESC の幅別 SystemBus 操作
+
+単一機の RESC で Byte、Word、DoubleWord、QuadWord の読み書きを受け付ける。1・2・4 バイトの 32 ビット空間内操作は既存の MMIO 経路を通り、8 バイトと 4 GiB 以上はグローバル RAM を使う。静的な読み書きだけのスクリプトはファームウェアなしで実行できる。既存のファームウェアに対する書き込みだけのスクリプトは、設定後も実行を続ける。
+
+固定 `memory-assertions.robot` から RV32 9 件と RV64 3 件の生アドレス操作・比較を再現した。診断用 ISA とホスト側比較を使用。公開 STM32F407 FAULTMASK ELF では TIM3 のレジスタ設定後、4回以上のタイマー割り込み UART 行に到達。ログと再現スクリプトは `~/.local/state/penv-dispatch/evidence/integration/shared-sysbus-scalars-f89b35a/`。

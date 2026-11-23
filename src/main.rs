@@ -825,10 +825,12 @@ fn run() -> Result<ExitCode, String> {
     }
     let has_firmware = path.is_some() || !binaries.is_empty();
     let setup_only = max_steps == Some(0) && !memory_setup.is_empty();
-    if max_steps == Some(0) && !setup_only {
+    let static_memory_script = monitor::is_static_memory_script(&runtime);
+    if max_steps == Some(0) && !setup_only && !static_memory_script {
         return Err("--max-steps requires a positive integer outside memory setup".into());
     }
-    let memory_only = !has_firmware && platform_path.is_some() && setup_only;
+    let memory_only =
+        !has_firmware && platform_path.is_some() && (setup_only || static_memory_script);
     if !has_firmware && !memory_only {
         return Err("missing firmware image; see run --help".into());
     }
@@ -1120,7 +1122,7 @@ fn run() -> Result<ExitCode, String> {
         machine.arm_litex_uart_action(trigger.fired.clone(), &name, action)?;
         uart_triggers.push(trigger);
     }
-    if setup_only {
+    if setup_only && !static_memory_script {
         return Ok(ExitCode::SUCCESS);
     }
     for action in &post_run {

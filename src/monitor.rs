@@ -50,11 +50,13 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    RunRemaining,
     SaveMemory(PathBuf),
     ClearMemory,
     LoadMemory(PathBuf),
     SelectMachineZero,
     FindBytes(FindBytes),
+    BusScalar(BusScalar),
     Button(String, bool),
     ButtonPulse(String),
     NvicGpio(String, u8, bool),
@@ -63,6 +65,62 @@ enum Action {
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode),
     WriteUartLine(String, String, &'static [u8]),
+}
+
+struct BusScalar {
+    address: u64,
+    width: usize,
+    value: Option<u64>,
+}
+
+impl BusScalar {
+    fn apply(&self, bus: &mut crate::bus::Bus, output: &mut impl Write) -> Result<(), String> {
+        let Self {
+            address,
+            width,
+            value,
+        } = *self;
+        let address32 = u32::try_from(address)
+            .ok()
+            .filter(|&address| address.checked_add(width as u32 - 1).is_some());
+        if let Some(value) = value {
+            return match address32 {
+                Some(address) if width <= 4 => bus
+                    .write(address, width, value as u32, output)
+                    .map_err(|error| error.to_string()),
+                _ => crate::memory_setup::write_ram(bus, address, width, value),
+            };
+        }
+        let result = match (address32, width) {
+            (Some(address), 1) => bus.read::<1>(address),
+            (Some(address), 2) => bus.read::<2>(address),
+            (Some(address), 4) => bus.read::<4>(address),
+            _ => {
+                return Self::print_value(
+                    crate::memory_setup::read_ram(bus, address, width)?,
+                    width,
+                    output,
+                );
+            }
+        };
+        Self::print_value(
+            u64::from(result.map_err(|error| error.to_string())?),
+            width,
+            output,
+        )
+    }
+
+    fn print_value(value: u64, width: usize, output: &mut impl Write) -> Result<(), String> {
+        let digits = 2 * width;
+        writeln!(output, "0x{value:0digits$x}").map_err(|error| error.to_string())
+    }
+}
+
+pub(crate) fn is_static_memory_script(commands: &[RuntimeCommand]) -> bool {
+    !commands.is_empty()
+        && commands
+            .iter()
+            .all(|command| matches!(command.action, Action::BusScalar(_) | Action::FindBytes(_)))
 }
 
 struct ScriptOutput<'a, W> {
@@ -130,9 +188,14 @@ pub fn run(
                 None
             }),
             Action::SelectMachineZero => Ok(None),
+            Action::BusScalar(access) => access.apply(&mut machine.bus, &mut output).map(|()| None),
             Action::FindBytes(search) => search
                 .write_matches(&machine.bus, "", output.output)
                 .map(|()| None),
+            Action::RunRemaining => machine.run(budget, &mut output).map(|(stop, count)| {
+                retired += count;
+                Some(stop)
+            }),
             Action::RunFor(steps) if machine.is_cortex_m() => {
                 let chunk = (*steps).min(budget);
                 machine.run(chunk, &mut output).map(|(stop, count)| {
@@ -400,9 +463,26 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     } else if !boot.post_run.is_empty() {
         return Err("post-run operations require a single RunFor".into());
     }
+    if (boot.image.is_some() || !boot.binaries.is_empty())
+        && !boot.runtime.is_empty()
+        && boot.runtime.iter().all(|command| {
+            matches!(
+                command.action,
+                Action::BusScalar(BusScalar { value: Some(_), .. })
+            )
+        })
+    {
+        boot.runtime.push(RuntimeCommand {
+            line: 0,
+            source: path.to_owned(),
+            action: Action::RunRemaining,
+        });
+    }
     if !state.machine
         || boot.platform.is_none()
-        || (boot.image.is_none() && boot.binaries.is_empty())
+        || (boot.image.is_none()
+            && boot.binaries.is_empty()
+            && !is_static_memory_script(&boot.runtime))
     {
         return Err(format!(
             "{}: expected machine creation, platform and firmware loading",
@@ -608,6 +688,40 @@ fn execute(
         }
         ["Clear"] => Some(Action::ClearMemory),
         ["mach" | "machine", "set", "0"] => Some(Action::SelectMachineZero),
+        ["sysbus", method, address, rest @ ..]
+            if matches!(
+                *method,
+                "ReadByte"
+                    | "ReadWord"
+                    | "ReadDoubleWord"
+                    | "ReadQuadWord"
+                    | "WriteByte"
+                    | "WriteWord"
+                    | "WriteDoubleWord"
+                    | "WriteQuadWord"
+            ) =>
+        {
+            let width = if method.ends_with("Byte") {
+                1
+            } else if method.ends_with("DoubleWord") {
+                4
+            } else if method.ends_with("QuadWord") {
+                8
+            } else {
+                2
+            };
+            let address = crate::parse_address64(resolve(address)?)?;
+            let value = match (method.starts_with("Write"), rest) {
+                (true, [value]) => Some(crate::memory_setup::write_value(resolve(value)?, width)?),
+                (false, []) => None,
+                _ => return Err(format!("invalid sysbus {method} arguments")),
+            };
+            Some(Action::BusScalar(BusScalar {
+                address,
+                width,
+                value,
+            }))
+        }
         ["sysbus", "FindBytes", ..] => Some(Action::FindBytes(FindBytes::parse(text, resolve)?)),
         [command @ ("waitForUart" | "waitForUartPrompt"), ..] => {
             let args = text[command.len()..].trim();
@@ -718,7 +832,11 @@ fn execute(
         _ => None,
     };
     if let Some(action) = action {
-        if boot.platform.is_none() || (boot.image.is_none() && boot.binaries.is_empty()) {
+        if boot.platform.is_none()
+            || (boot.image.is_none()
+                && boot.binaries.is_empty()
+                && !matches!(action, Action::BusScalar(_) | Action::FindBytes(_)))
+        {
             return Err("runtime commands require a loaded platform and firmware".into());
         }
         boot.runtime.push(RuntimeCommand {

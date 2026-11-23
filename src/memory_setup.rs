@@ -38,12 +38,7 @@ impl MemorySetup {
     pub fn apply(&self, bus: &mut Bus) -> Result<(), String> {
         match *self {
             Self::Read { address, width } => {
-                let source = bus.ram64(address, width).ok_or_else(|| {
-                    format!("unmapped RAM read at {address:#018x} ({width} bytes)")
-                })?;
-                let mut bytes = [0; 8];
-                bytes[..width].copy_from_slice(source);
-                let value = u64::from_le_bytes(bytes);
+                let value = read_ram(bus, address, width)?;
                 eprintln!("penv: memory sysbus@{address:#018x}:{width} = {value:#018x}");
             }
             Self::Write {
@@ -51,20 +46,39 @@ impl MemorySetup {
                 width,
                 value,
             } => {
-                let target = bus.memory64(address, width).ok_or_else(|| {
-                    format!("unmapped RAM write at {address:#018x} ({width} bytes)")
-                })?;
-                target.copy_from_slice(&value.to_le_bytes()[..width]);
+                write_ram(bus, address, width, value)?;
             }
         }
         Ok(())
     }
 }
 
-fn write_value(text: &str, width: usize) -> Result<u64, String> {
+pub(crate) fn read_ram(bus: &Bus, address: u64, width: usize) -> Result<u64, String> {
+    let source = bus
+        .ram64(address, width)
+        .ok_or_else(|| format!("unmapped RAM read at {address:#018x} ({width} bytes)"))?;
+    let mut bytes = [0; 8];
+    bytes[..width].copy_from_slice(source);
+    Ok(u64::from_le_bytes(bytes))
+}
+
+pub(crate) fn write_ram(
+    bus: &mut Bus,
+    address: u64,
+    width: usize,
+    value: u64,
+) -> Result<(), String> {
+    let target = bus
+        .memory64(address, width)
+        .ok_or_else(|| format!("unmapped RAM write at {address:#018x} ({width} bytes)"))?;
+    target.copy_from_slice(&value.to_le_bytes()[..width]);
+    Ok(())
+}
+
+pub(crate) fn write_value(text: &str, width: usize) -> Result<u64, String> {
     let bits = width * 8;
     let mask = u64::MAX >> (64 - bits);
-    let too_large = || "--write-memory value exceeds the requested width".to_owned();
+    let too_large = || "memory value exceeds the requested width".to_owned();
     if let Some(magnitude) = text.strip_prefix('-') {
         let magnitude = parse_address64(magnitude)?;
         if magnitude > 1u64 << (bits - 1) {

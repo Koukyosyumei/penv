@@ -1643,3 +1643,48 @@ fn cli_setup_memory_preserves_signed_values_on_rv64_and_cortex_m() {
     }
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn renode_resc_sysbus_scalar_memory_round_trips_on_rv32_and_cortex_m() {
+    let directory = std::env::temp_dir().join(format!("penv-sysbus-scalar-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let script = directory.join("memory.resc");
+    fs::write(
+        &script,
+        r#"mach create
+machine LoadPlatformDescription @memory.repl
+sysbus WriteByte 0x1 0x42
+sysbus ReadByte 0x1
+sysbus WriteWord 0x2 0xdead
+sysbus ReadWord 0x2
+sysbus WriteDoubleWord 0x4 0xdeadbeef
+sysbus ReadDoubleWord 0x4
+sysbus WriteQuadWord 0x8 -1000000000000000000
+sysbus ReadQuadWord 0x8
+sysbus WriteByte 0x20 -1
+sysbus ReadByte 0x20
+"#,
+    )
+    .unwrap();
+    for cpu in [
+        "cpu: CPU.RiscV32 @ sysbus\n    cpuType: \"rv32i\"\n",
+        "cpu: CPU.CortexM @ sysbus\n    cpuType: \"cortex-m4\"\n    nvic: nvic\nnvic: IRQControllers.NVIC @ sysbus 0xe000e000\n    -> cpu@0\n",
+    ] {
+        fs::write(
+            directory.join("memory.repl"),
+            format!("{cpu}ram: Memory.MappedMemory @ sysbus 0\n    size: 0x40000\n"),
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_penv"))
+            .args(["run", "--script"])
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(
+            result.stdout,
+            b"0x42\n0xdead\n0xdeadbeef\n0xf21f494c589c0000\n0xff\n"
+        );
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
