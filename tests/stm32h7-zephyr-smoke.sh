@@ -40,7 +40,7 @@ if request.Offset == 0:
 
 REPL
 awk -v RS='' -v ORS='\n\n' '
-    $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|system_flash_ro|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|ltdc|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer3|sdmmc|usb[12]|lptimer[1-5]|crc|fdcan[12]|canMessageRAM):$/ &&
+    $1 ~ /^(dwt|exti|nvicInput[0-9]+|flashController|flashBank[12]|dtcm|itcm|axiSram|system_flash_ro|sram[1-4]|backupSram|rcc|syscfg|spi4|dma[12]|dma2d|ltdc|dmamux1|bdma|adc3|adcM1S2|gpioPort[A-K]|i2c[1-4]|ethernet|pwr|fmc|rng|qspi|timer(3|15|16|17)|sdmmc|usb[12]|lptimer[1-5]|crc|fdcan[12]|canMessageRAM):$/ &&
     $2 ~ /[A-Z]/ {print}
 ' "$cpu" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 == "sysbus:" {print}' "$cpu" >> "$work/boot.repl"
@@ -56,6 +56,7 @@ awk -v RS='' -v ORS='\n\n' '$1 ~ /^(redRgbLed|greenRgbLed|blueRgbLed|gpioPortD):
 awk -v RS='' -v ORS='\n\n' '$1 ~ /^(pwmled0|pwmled3|gpioPortB):$/' "$board" >> "$work/boot.repl"
 awk -v RS='' -v ORS='\n\n' '$1 == "timer3:" && NF > 1 && $2 == "0" {print}' "$cpu" >> "$work/boot.repl"
 awk '$1 == "iis2mdc:" {print $0 "\n"}' "$board" >> "$work/boot.repl"
+awk '$1 == "tmp108:" {print $0 "\n    Temperature: 23.5\n"}' "$board" >> "$work/boot.repl"
 awk '$1 == "veml7700:" {print}' "$board" >> "$work/boot.repl"
 printf '    Illuminance: 500\n' >> "$work/boot.repl"
 sed 's|@platforms/boards/stm32h7_renode_reference_board.repl|@boot.repl|' \
@@ -65,6 +66,8 @@ printf 'kernel version\r' > "$work/kernel-version.txt"
 printf 'sensor get veml7700@10 light\r' > "$work/sensor.txt"
 
 printf 'sensor get iis2mdc@1e magn_xyz\r' > "$work/magnetometer.txt"
+
+printf 'sensor get tmp108@48 ambient_temp\r' > "$work/temperature.txt"
 
 if [[ -z ${PENV_BIN:-} ]]; then
     cargo build --locked --release
@@ -76,6 +79,7 @@ status=0
     --uart-event "1300000:$work/kernel-version.txt" \
     --uart-event "1700000:$work/sensor.txt" \
     --uart-event "2100000:$work/magnetometer.txt" \
+    --uart-event "2350000:$work/temperature.txt" \
     --stats > "$work/uart.log" 2> "$work/penv.log" || status=$?
 printf 'STM32H7 UART and simulator logs: %s\n' "$work"
 if [[ "$status" != 2 ]] ||
@@ -84,7 +88,8 @@ if [[ "$status" != 2 ]] ||
     ! rg -aqF 'Available commands:' "$work/uart.log" ||
     ! rg -aqF 'Zephyr version 4.4.99' "$work/uart.log" ||
     ! rg -aq 'channel type=18\(light\).*\(499\.000000\)' "$work/uart.log" ||
-    ! rg -aq 'channel type=11\(magn_xyz\).*\(0\.000000, 0\.000000, 0\.000000\)' "$work/uart.log"; then
+    ! rg -aq 'channel type=11\(magn_xyz\).*\(0\.000000, 0\.000000, 0\.000000\)' "$work/uart.log" ||
+    ! rg -aq 'channel type=13\(ambient_temp\).*\(23\.500000\)' "$work/uart.log"; then
     cat "$work/penv.log" >&2
     cat "$work/uart.log" >&2
     exit 1
@@ -216,5 +221,30 @@ if [[ "$status" != 2 || "$actual" != "$expected" ]] ||
     ! rg -qxF 'pwmled0=25.00%' "$work/cryp-penv.log"; then
     cat "$work/cryp-penv.log" >&2
     cat "$work/cryp-uart.log" >&2
+    exit 1
+fi
+
+# Exercise the upstream TIM17 declaration through the guest, including IRQ 118.
+events=()
+step=1000000
+for command in '0x4001482c 32' '0x580244e8 32 0x40000' '0x4001482c 32' \
+    '0x580244f0 32 0x40000' '0x4001482c 32' '0x4001482c 32 0x42' \
+    '0x4001482c 32' '0x4001480c 32 1' '0x40014814 32 1' \
+    '0x40014810 32' '0xe000e20c 32' '0x58024498 32 0x40000' \
+    '0x58024498 32' '0x4001482c 32' '0xe000e28c 32 0x400000' \
+    '0x58024498 32 0' '0x4001482c 32' '0x40014810 32' '0xe000e20c 32' \
+    '0x580244f0 32 0' '0x4001482c 32'; do
+    printf 'devmem %s\r' "$command" > "$work/tim17-$step.txt"
+    events+=(--uart-event "$step:$work/tim17-$step.txt")
+    step=$((step + 150000))
+done
+status=0
+target/release/penv run --script "$work/boot.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps "$step" \
+    "${events[@]}" > "$work/tim17-uart.log" 2> "$work/tim17-penv.log" || status=$?
+expected=$(printf '%s\n' 0x0 0x0 0xffff 0x42 0x1 0x400000 0x40000 0x0 0xffff 0x0 0x0 0x0)
+actual=$(awk '/^Read value / { sub(/\r$/, ""); print $3 }' "$work/tim17-uart.log")
+if [[ "$status" != 2 || "$actual" != "$expected" ]]; then
+    cat "$work/tim17-penv.log" "$work/tim17-uart.log" >&2
     exit 1
 fi

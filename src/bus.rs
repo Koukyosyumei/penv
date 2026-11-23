@@ -147,6 +147,7 @@ impl std::error::Error for BusError {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UnhandledAccess {
     DoNotReport,
+    Report,
     ThrowException,
     ThrowExceptionIfNotTagged,
 }
@@ -263,6 +264,7 @@ pub struct Bus {
     pub faulting_stack_writes: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
     byte_peripheral: std::collections::BTreeMap<u32, u8>,
+    mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
     regions: Vec<Region>,
     silencers: Vec<(u32, u32)>,
     tags: Vec<(u32, u32)>,
@@ -280,6 +282,7 @@ pub struct Bus {
     pub rv64_test_exit: Option<u64>,
     pub(crate) renode_unmapped_data: bool,
     pub(crate) renode_lrsc: bool,
+    trace_rcc: bool,
     uart_tx: Option<u32>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
@@ -356,6 +359,7 @@ pub struct Bus {
     h7_dma2d: Vec<Dma2d>,
     h7_hsem: Option<Hsem>,
     h7_sdmmc: Vec<Sdmmc>,
+    h7_sdmmc_names: Vec<String>,
     h7_crypto: Vec<Crypto>,
     h7_dsi: Vec<Dsi>,
     designware_usb: Vec<DesignWareUsb>,
@@ -453,7 +457,49 @@ impl<'a> EthernetDma<'a> {
     }
 }
 
+fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
+    for reservation in reservations {
+        if reservation.is_some_and(|reserved| {
+            written.start < u64::from(reserved) + 4 && u64::from(reserved) < written.end
+        }) {
+            *reservation = None;
+        }
+    }
+}
+
+fn memory_byte_range(address: u32, count: usize) -> Result<std::ops::Range<u64>, String> {
+    let start = u64::from(address);
+    let end = start
+        .checked_add(count as u64)
+        .filter(|&end| end <= 1 << 32)
+        .ok_or("SystemBus byte range exceeds address space")?;
+    Ok(start..end)
+}
+
 impl Region {
+    fn bases32(&self) -> impl Iterator<Item = u32> + '_ {
+        u32::try_from(self.base)
+            .ok()
+            .into_iter()
+            .chain(self.aliases.iter().copied())
+    }
+
+    fn byte_window(
+        &self,
+        base: u32,
+        request: &std::ops::Range<u64>,
+    ) -> Option<(std::ops::Range<usize>, std::ops::Range<usize>)> {
+        let base = u64::from(base);
+        let start = base.max(request.start);
+        let end = (base + self.bytes.len() as u64).min(request.end);
+        (start < end).then(|| {
+            (
+                (start - request.start) as usize..(end - request.start) as usize,
+                (start - base) as usize..(end - base) as usize,
+            )
+        })
+    }
+
     fn new(base: u64, size: usize, mapped: usize) -> Result<Self, String> {
         if size == 0 || mapped > size || base.checked_add(mapped as u64).is_none() {
             return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
@@ -733,6 +779,165 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn unregister_from_address(&mut self, address: u32) -> Result<(), String> {
+        if let Some(index) = self
+            .constant_mmio
+            .iter()
+            .position(|peripheral| peripheral.base == address)
+        {
+            self.constant_mmio.swap_remove(index);
+            return Ok(());
+        }
+        if let Some(index) = self
+            .h7_timers
+            .iter()
+            .position(|timer| timer.base == address)
+        {
+            self.h7_timers.swap_remove(index);
+            for port in &mut self.h7_gpio {
+                port.disconnect_timer(address);
+            }
+            for led in &mut self.gpio_pwm_leds {
+                for route in &mut led.routes {
+                    if route.is_some_and(|(base, _)| base == address) {
+                        *route = None;
+                    }
+                }
+            }
+            return Ok(());
+        }
+        self.unregister_ram(address)
+    }
+
+    pub(crate) fn unregister_ram(&mut self, address: u32) -> Result<(), String> {
+        let index = self
+            .regions
+            .iter()
+            .position(|region| {
+                region.base == u64::from(address) || region.aliases.contains(&address)
+            })
+            .ok_or_else(|| format!("no RAM registration at {address:#010x}"))?;
+        let region = &mut self.regions[index];
+        if region.base == u64::from(address) {
+            if let Some(base) = region.aliases.pop() {
+                region.base = u64::from(base);
+            } else {
+                if self.aliases.iter().any(|alias| alias.backing == index) {
+                    return Err("cannot unregister RAM with CPU-specific aliases".into());
+                }
+                self.regions.remove(index);
+                for alias in &mut self.aliases {
+                    if alias.backing > index {
+                        alias.backing -= 1;
+                    }
+                }
+            }
+        } else {
+            region.aliases.retain(|&base| base != address);
+        }
+        self.reservations.fill(None);
+        self.rv64_reservations.fill(None);
+        Ok(())
+    }
+
+    pub(crate) fn read_memory_bytes(&self, address: u32, count: usize) -> Result<Vec<u8>, String> {
+        let request = memory_byte_range(address, count)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(count)
+            .map_err(|_| "cannot allocate SystemBus byte read")?;
+        bytes.resize(count, 0);
+        for region in &self.regions {
+            for base in region.bases32() {
+                if let Some((buffer, memory)) = region.byte_window(base, &request) {
+                    bytes[buffer].copy_from_slice(&region.bytes[memory]);
+                }
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn read_bus_bytes(
+        &mut self,
+        address: u32,
+        count: usize,
+        only_memory: bool,
+    ) -> Result<Vec<u8>, String> {
+        let range = memory_byte_range(address, count)?;
+        let peripherals = !range.is_empty() && self.peripheral_overlaps(range.start, range.end);
+        if only_memory && peripherals {
+            return Err("SystemBus memory-only transfer intersects a peripheral".into());
+        }
+        let mut bytes = self.read_memory_bytes(address, count)?;
+        if peripherals {
+            for (offset, byte) in bytes.iter_mut().enumerate() {
+                let location = u64::from(address) + offset as u64;
+                if self.peripheral_overlaps(location, location + 1) {
+                    *byte = self
+                        .read::<1>(location as u32)
+                        .map_err(|error| error.to_string())? as u8;
+                }
+            }
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn write_bus_bytes(
+        &mut self,
+        address: u32,
+        bytes: &[u8],
+        only_memory: bool,
+        uart: &mut impl Write,
+    ) -> Result<(), String> {
+        let range = memory_byte_range(address, bytes.len())?;
+        if range.is_empty() || !self.peripheral_overlaps(range.start, range.end) {
+            return self.write_memory_bytes(address, bytes);
+        }
+        if only_memory {
+            return Err("SystemBus memory-only transfer intersects a peripheral".into());
+        }
+        for (location, &byte) in range.zip(bytes) {
+            if self.overlaps(location, location + 1) {
+                self.write(location as u32, 1, u32::from(byte), uart)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn find_memory_bytes(
+        &self,
+        pattern: &[u8],
+        start: u32,
+        end: u32,
+    ) -> Result<Vec<u32>, String> {
+        self.find_bytes(pattern, u64::from(start), u64::from(end))
+            .map(|hits| hits.into_iter().map(|hit| hit as u32).collect())
+    }
+
+    pub(crate) fn write_memory_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), String> {
+        let request = memory_byte_range(address, bytes.len())?;
+        let mut windows = Vec::new();
+        for (index, region) in self.regions.iter().enumerate() {
+            for base in region.bases32() {
+                if let Some((buffer, memory)) = region.byte_window(base, &request) {
+                    windows.push((buffer, index, memory));
+                }
+            }
+        }
+        windows.sort_unstable_by_key(|(buffer, _, _)| buffer.start);
+        for (buffer, index, memory) in windows {
+            let region = &mut self.regions[index];
+            let offset = memory.start;
+            let width = memory.len();
+            let destination = region.base + offset as u64;
+            self.memory64(destination, width)
+                .ok_or("RAM registration disappeared")?
+                .copy_from_slice(&bytes[buffer]);
+        }
+        Ok(())
+    }
+
     pub fn map_ethernet(&mut self, device: Controller) -> Result<(), String> {
         for (index, mapping) in device.mappings().iter().enumerate() {
             let start = u64::from(mapping.base);
@@ -755,7 +960,7 @@ impl Bus {
         Ok(())
     }
 
-    pub fn map_h7_network_control(&mut self, control: NetworkControl) -> Result<(), String> {
+    pub fn map_h7_network_control(&mut self, mut control: NetworkControl) -> Result<(), String> {
         if control.rcc_base & 3 != 0
             || control.syscfg_base.is_some_and(|base| base & 3 != 0)
             || control
@@ -774,6 +979,7 @@ impl Bus {
             };
             device.set_clock(false);
         }
+        Self::initialize_timer_clocks(&mut self.h7_timers, &mut control);
         self.h7_network_control = Some(control);
         Ok(())
     }
@@ -1134,6 +1340,25 @@ impl Bus {
         self.h7_gpio_leds.push((name, base, pin, inverted));
     }
 
+    pub fn gpio_led_states(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.h7_gpio_led_states()
+    }
+
+    pub(crate) fn tag_with_policy(
+        &mut self,
+        range: std::ops::RangeInclusive<u32>,
+        value: u32,
+        throws: bool,
+    ) -> Result<(), String> {
+        let start = *range.start();
+        let size = range
+            .end()
+            .checked_sub(start)
+            .and_then(|n| n.checked_add(1))
+            .ok_or("invalid bus tag bounds")?;
+        self.tag(start, size, value.into(), throws)
+    }
+
     pub fn h7_gpio_led_states(&self) -> impl Iterator<Item = (&str, bool)> {
         self.h7_gpio_leds
             .iter()
@@ -1356,6 +1581,56 @@ impl Bus {
         Ok(())
     }
 
+    pub fn set_timer_input(&mut self, name: &str, channel: u8, high: bool) -> Result<(), String> {
+        let timer = self
+            .h7_timers
+            .iter_mut()
+            .find(|timer| timer.name == name)
+            .ok_or_else(|| format!("unknown STM32 timer {name:?}"))?;
+        if timer_clocked(self.h7_network_control.as_ref(), timer) {
+            timer.set_input(channel, high);
+        }
+        Ok(())
+    }
+
+    fn initialize_timer_clocks(timers: &mut [H7Timer], control: &mut NetworkControl) {
+        for timer in timers {
+            if let Some(clock) = timer.clock {
+                control.enable_registered_timer(clock);
+                if let Some(frequency) = control.timer_frequency(clock) {
+                    timer.frequency = frequency;
+                }
+            }
+        }
+    }
+
+    pub fn rcc_base(&self) -> Result<u32, String> {
+        self.h7_network_control
+            .as_ref()
+            .map(|rcc| rcc.rcc_base)
+            .ok_or_else(|| "no STM32H7 RCC configured".into())
+    }
+
+    pub fn trace_rcc(&mut self) -> Result<(), String> {
+        self.rcc_base()?;
+        self.trace_rcc = true;
+        Ok(())
+    }
+
+    pub fn timer_properties(&self, name: &str) -> Result<(u32, bool), String> {
+        let timer = self
+            .h7_timers
+            .iter()
+            .find(|timer| timer.name == name)
+            .ok_or_else(|| format!("unknown STM32 timer {name:?}"))?;
+        let enabled = timer.clock.is_none_or(|clock| {
+            self.h7_network_control
+                .as_ref()
+                .is_some_and(|rcc| rcc.timer_gate_enabled(clock))
+        });
+        Ok((timer.frequency, enabled))
+    }
+
     pub fn map_h7_timer(&mut self, timer: H7Timer) -> Result<(), String> {
         self.check_peripheral_range(timer.base, H7Timer::SIZE)?;
         self.h7_timers.push(timer);
@@ -1378,6 +1653,98 @@ impl Bus {
         self.check_peripheral_range(i2c.base, F1I2c::SIZE)?;
         self.f1_i2c.push(i2c);
         Ok(())
+    }
+
+    pub fn find_imu(&mut self, name: &str) -> Result<&mut crate::lsm6dso::Lsm6dso, String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_imu(name))
+            .ok_or_else(|| format!("unknown LSM6DSO sensor {name:?}"))
+    }
+
+    pub fn feed_magnetic(&mut self, name: &str, file: &std::path::Path) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_magnetometer(name))
+            .ok_or_else(|| format!("unknown IIS2MDC sensor {name:?}"))?
+            .feed_resd(file)
+    }
+
+    pub fn feed_ina228(
+        &mut self,
+        name: &str,
+        file: &std::path::Path,
+        input: usize,
+        channel: u16,
+    ) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_power_monitor(name))
+            .ok_or_else(|| format!("unknown INA228 sensor {name:?}"))?
+            .feed(file, input, channel, self.h7_step)
+    }
+
+    pub fn feed_pressure(
+        &mut self,
+        name: &str,
+        path: &std::path::Path,
+        temperature: bool,
+    ) -> Result<(), String> {
+        if temperature
+            && let Some(sensor) = self
+                .h7_i2c
+                .iter_mut()
+                .find_map(|bus| bus.find_power_monitor(name))
+        {
+            return sensor.feed(path, 2, 0, self.h7_step);
+        }
+        let nanoseconds = self
+            .h7_step
+            .saturating_mul(1_000_000_000 / u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND));
+        self.find_pressure(name)?
+            .feed_samples(path, temperature, nanoseconds)
+    }
+
+    pub fn find_pressure(&mut self, name: &str) -> Result<&mut crate::lps25hb::Lps25hb, String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_pressure(name))
+            .ok_or_else(|| format!("unknown pressure sensor {name:?}"))
+    }
+
+    pub fn feed_illuminance(&mut self, name: &str, path: &std::path::Path) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_light(name))
+            .ok_or_else(|| format!("unknown illuminance sensor {name:?}"))?
+            .feed_illuminance(path)
+    }
+
+    pub fn set_illuminance(&mut self, name: &str, value: f64) -> Result<(), String> {
+        self.h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_light(name))
+            .ok_or_else(|| format!("unknown illuminance sensor {name:?}"))?
+            .set_illuminance(value)
+    }
+
+    pub fn touch_input(
+        &mut self,
+        name: &str,
+        event: crate::ft5336::PointerEvent,
+    ) -> Result<(), String> {
+        let device = self
+            .h7_i2c
+            .iter_mut()
+            .find_map(|bus| bus.find_touch(name))
+            .ok_or_else(|| format!("unknown touchscreen {name:?}"))?;
+        device.input(event);
+        Ok(())
+    }
+
+    pub fn feed_imu_samples(&mut self, name: &str, file: &std::path::Path) -> Result<(), String> {
+        let start = self.h7_step + u64::from(crate::machine::VIRTUAL_STEPS_PER_SECOND) / 10;
+        self.find_imu(name)?.load_samples(file, start, 12)
     }
 
     pub fn map_h7_i2c(&mut self, i2c: I2c) -> Result<(), String> {
@@ -1485,7 +1852,7 @@ impl Bus {
         self.h7_step = self.h7_step.wrapping_add(1);
         let step = self.h7_step;
         for i2c in &mut self.h7_i2c {
-            for (base, pin, level) in i2c.sample_magnetometers(step) {
+            for (base, pin, level) in i2c.sample_sensor_outputs(step) {
                 if let Some(port) = self.h7_gpio.iter_mut().find(|port| port.base == base) {
                     port.set_external(pin, level);
                 }
@@ -1494,6 +1861,11 @@ impl Bus {
         self.sample_timer_pins();
         let rate = self.step_hz();
         let control = self.h7_network_control.as_ref();
+        for uart in &mut self.stm32_uarts {
+            if usart_clocked(control, uart) {
+                uart.tick_receive();
+            }
+        }
         if let Some(display) = &mut self.h7_ltdc
             && ltdc_clocked(control, display)
         {
@@ -1528,6 +1900,17 @@ impl Bus {
                     timer.pwm_pin(channel)
                 });
             port.drive_alternate(led.pin, level);
+        }
+        for port in &mut self.h7_gpio {
+            for (base, channel, level) in port.timer_input_changes() {
+                if let Some(timer) = self
+                    .h7_timers
+                    .iter_mut()
+                    .find(|timer| timer.base == base && timer_clocked(control, timer))
+                {
+                    timer.set_input(channel, level);
+                }
+            }
         }
         for rtc in &mut self.h7_rtc {
             if rtc_clocked(control, rtc) && f4_clocked(self.f4_rcc.as_ref(), rtc.base) {
@@ -1826,7 +2209,7 @@ impl Bus {
             .ok_or(BusError::Unmapped(address, length))
     }
 
-    pub(crate) fn overlaps(&self, start: u64, end: u64) -> bool {
+    fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
         if self
             .bitbands
             .iter()
@@ -2099,6 +2482,10 @@ impl Bus {
                 let base = u64::from(peripheral.base);
                 start < base + u64::from(peripheral.size) && base < end
             })
+    }
+
+    pub(crate) fn overlaps(&self, start: u64, end: u64) -> bool {
+        self.peripheral_overlaps(start, end)
             || self.regions.iter().any(|region| {
                 let other = region.base;
                 (start < other + region.mapped as u64 && other < end)
@@ -2384,6 +2771,11 @@ impl Bus {
         true
     }
 
+    pub fn reset_cortex_m_machine_devices(&mut self) {
+        self.reset_cortex_m_devices();
+        self.reset_cortex_m_device_state(false);
+    }
+
     fn reset_cortex_m_device_state(&mut self, reload: bool) {
         self.reservations.fill(None);
         for device in &mut self.nrf_peripherals {
@@ -2471,7 +2863,10 @@ impl Bus {
             }
             let mut exti_inputs = [self.gpio_exti_levels, 0, 0];
             for uart in &self.stm32_uarts {
-                if f4_clocked(self.f4_rcc.as_ref(), uart.base) && uart.interrupt_pending() {
+                if f4_clocked(self.f4_rcc.as_ref(), uart.base)
+                    && usart_clocked(self.h7_network_control.as_ref(), uart)
+                    && uart.interrupt_pending()
+                {
                     match uart.irq {
                         Some(Stm32Irq::Nvic(line)) => nvic.set_line(line, true, active),
                         Some(Stm32Irq::Exti(line)) => {
@@ -3632,6 +4027,31 @@ impl Bus {
         Ok(())
     }
 
+    pub fn stm32_usart_mut(&mut self, name: &str) -> Result<&mut Stm32Usart, String> {
+        self.stm32_uarts
+            .iter_mut()
+            .find(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 UART {name:?}"))
+    }
+
+    pub fn write_stm32_uart_line(
+        &mut self,
+        name: &str,
+        text: &str,
+        ending: &[u8],
+    ) -> Result<(), String> {
+        let name = name.strip_prefix("sysbus.").unwrap_or(name);
+        let uart = self
+            .stm32_uarts
+            .iter_mut()
+            .find(|uart| uart.name == name)
+            .ok_or_else(|| format!("unknown STM32 UART {name:?}"))?;
+        if usart_clocked(self.h7_network_control.as_ref(), uart) {
+            uart.queue_input(text.bytes().chain(ending.iter().copied()));
+        }
+        Ok(())
+    }
+
     pub fn attach_litex_uart_input(
         &mut self,
         receiver: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
@@ -3677,6 +4097,7 @@ impl Bus {
             uart.queue_input(bytes);
         } else if let Some(uart) = self.stm32_uarts.get_mut(self.stm32_uart_input)
             && f4_clocked(self.f4_rcc.as_ref(), uart.base)
+            && usart_clocked(self.h7_network_control.as_ref(), uart)
         {
             uart.queue_input(bytes);
         } else if let Some(index) = self.nrf_peripherals.iter().position(NrfPeripheral::is_uart) {
@@ -3697,22 +4118,6 @@ impl Bus {
             .iter()
             .position(|uart| uart.name == name)
             .ok_or_else(|| format!("unknown STM32 USART {target:?}"))
-    }
-
-    pub fn write_stm32_uart_line(
-        &mut self,
-        target: &str,
-        text: &str,
-        ending: &[u8],
-    ) -> Result<(), String> {
-        let index = self.stm32_usart_index(target)?;
-        // Renode writes the low byte of each UTF-16 code unit before the ending.
-        self.stm32_uarts[index].queue_input(
-            text.encode_utf16()
-                .map(|unit| unit as u8)
-                .chain(ending.iter().copied()),
-        );
-        Ok(())
     }
 
     pub fn record_stm32_uart(&mut self, target: &str) {
@@ -4649,7 +5054,11 @@ impl Bus {
                 .iter_mut()
                 .find(|device| device.contains(address))
         {
-            return Ok(uart.read(address, N));
+            return Ok(if usart_clocked(self.h7_network_control.as_ref(), uart) {
+                uart.read(address, N)
+            } else {
+                0
+            });
         }
         if N == 4
             && address & 3 == 0
@@ -4755,13 +5164,11 @@ impl Bus {
         {
             return Ok(value);
         }
-        if address as usize & (N - 1) == 0
-            && let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
-                peripheral
-                    .offset(address, N)
-                    .map(|offset| peripheral.read(offset, N))
-            })
-        {
+        if let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
+            peripheral
+                .offset(address, 1)
+                .map(|offset| peripheral.read(offset, N))
+        }) {
             return Ok(value);
         }
         if address as usize & (N - 1) == 0
@@ -5405,6 +5812,9 @@ impl Bus {
             .enumerate()
             .find(|(_, device)| device.contains(address))
         {
+            if !usart_clocked(self.h7_network_control.as_ref(), device) {
+                return Ok(());
+            }
             return device
                 .write(address, width, value, |byte| {
                     uart.write_all(&[byte])?;
@@ -5615,6 +6025,14 @@ impl Bus {
                     rtc.reset();
                 }
             }
+            for uart in &mut self.stm32_uarts {
+                if uart
+                    .clock
+                    .is_some_and(|clock| control.usart_in_reset(clock))
+                {
+                    uart.reset();
+                }
+            }
             for i2c in &mut self.h7_i2c {
                 if i2c.clock.is_some_and(|clock| control.i2c_in_reset(clock)) {
                     i2c.reset();
@@ -5628,12 +6046,23 @@ impl Bus {
                     timer.reset();
                 }
             }
+            let offset = address.wrapping_sub(control.rcc_base);
+            let clock_changed = matches!(offset, 0 | 0x10 | 0x18 | 0x1c | 0x28 | 0x30);
             for timer in &mut self.h7_timers {
-                if timer
-                    .clock
-                    .is_some_and(|clock| control.timer_in_reset(clock))
-                {
-                    timer.reset();
+                if let Some(clock) = timer.clock {
+                    if clock_changed && let Some(frequency) = control.timer_frequency(clock) {
+                        timer.frequency = frequency;
+                    }
+                    let reset_register = match clock {
+                        crate::stm32h7_timer::TimerClock::Apb1Low(_) => 0x90,
+                        crate::stm32h7_timer::TimerClock::Apb2(_) => 0x98,
+                    };
+                    if offset == reset_register && control.timer_in_reset(clock) {
+                        if self.trace_rcc {
+                            eprintln!("Resetting {}", clock.alias().unwrap_or(&timer.name));
+                        }
+                        timer.reset();
+                    }
                 }
             }
             if control.crc_in_reset() {
@@ -5921,7 +6350,8 @@ impl Bus {
         }
         if let Some(crc) = self.h7_crc.iter_mut().find(|crc| crc.contains(address)) {
             if crc_clocked(self.h7_network_control.as_ref(), crc) {
-                crc.write(address, width, value).map_err(BusError::command_error)?;
+                crc.write(address, width, value)
+                    .map_err(BusError::command_error)?;
             }
             return Ok(());
         }
@@ -6355,8 +6785,15 @@ mod tests {
             bus.find_bytes(&pattern, 0, u64::from(u32::MAX)).unwrap(),
             [0, u64::from(BLOCK - 4)]
         );
-        assert_eq!(bus.find_bytes(&pattern, 1, u64::from(BLOCK + 3)).unwrap(), [u64::from(BLOCK - 4)]);
-        assert!(bus.find_bytes(&pattern, 1, u64::from(BLOCK + 2)).unwrap().is_empty());
+        assert_eq!(
+            bus.find_bytes(&pattern, 1, u64::from(BLOCK + 3)).unwrap(),
+            [u64::from(BLOCK - 4)]
+        );
+        assert!(
+            bus.find_bytes(&pattern, 1, u64::from(BLOCK + 2))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -6755,6 +7192,12 @@ fn f4_clocked(rcc: Option<&F4Rcc>, base: u32) -> bool {
     rcc.is_none_or(|rcc| rcc.enabled(base))
 }
 
+fn usart_clocked(control: Option<&NetworkControl>, uart: &Stm32Usart) -> bool {
+    control
+        .zip(uart.clock)
+        .is_none_or(|(control, clock)| control.usart_enabled(clock))
+}
+
 fn timer_clocked(control: Option<&NetworkControl>, timer: &H7Timer) -> bool {
     timer
         .clock
@@ -6823,5 +7266,317 @@ mod find_bytes_tests {
         assert!(bus.find_bytes(b"ab", HIGH, HIGH).unwrap().is_empty());
         assert!(bus.find_bytes(b"ab", 12, 11).unwrap().is_empty());
         assert!(bus.find_bytes(b"", 0, u64::MAX).is_err());
+    }
+}
+
+#[cfg(test)]
+mod unhandled_access_cases {
+    use super::*;
+
+    fn address_error(bus: &mut Bus, address: u32) {
+        assert!(matches!(bus.read::<1>(address), Err(BusError::Unmapped(a, 1)) if a == address));
+        assert!(
+            matches!(bus.write(address, 1, 0, &mut std::io::sink()), Err(BusError::Unmapped(a, 1)) if a == address)
+        );
+    }
+
+    #[test]
+    fn upstream_preserve_exception_when_splitting_tag() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::Report),
+            ..Bus::default()
+        };
+        bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0, true).unwrap();
+        bus.tag(0x1010, 0x101f - 0x1010 + 1, 0, false).unwrap();
+        assert!(matches!(
+            bus.read::<1>(0x1000),
+            Err(BusError::Unmapped(0x1000, 1))
+        ));
+        assert_eq!(bus.read::<1>(0x1010).unwrap(), 0);
+        assert!(matches!(
+            bus.read::<1>(0x10f0),
+            Err(BusError::Unmapped(0x10f0, 1))
+        ));
+    }
+
+    #[test]
+    fn reject_tag_spanning_multiple_ranges_without_changing_them() {
+        let mut bus = Bus::default();
+        bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0x42, false).unwrap();
+        bus.tag(0x1010, 0x101f - 0x1010 + 1, 0x12, false).unwrap();
+        assert!(bus.tag(0x1008, 0x1018 - 0x1008 + 1, 0, false).is_err());
+        assert_eq!(bus.read::<1>(0x1008).unwrap(), 0x42);
+        assert_eq!(bus.read::<1>(0x1018).unwrap(), 0x12);
+        assert_eq!(bus.read::<1>(0x1020).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn upstream_default_unmapped_read_returns_zero() {
+        assert_eq!(Bus::default().read::<1>(0xabcd1234).unwrap(), 0);
+    }
+
+    #[test]
+    fn raw_bus_retains_unmapped_faults() {
+        address_error(&mut Bus::new(4096).unwrap(), 0xabcd1234);
+    }
+
+    #[test]
+    fn upstream_unmapped_throw_exception() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::ThrowException),
+            ..Bus::default()
+        };
+        address_error(&mut bus, 0xabcd1234);
+    }
+
+    #[test]
+    fn upstream_unmapped_throw_if_not_tagged() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::ThrowExceptionIfNotTagged),
+            ..Bus::default()
+        };
+        address_error(&mut bus, 0xabcd1234);
+    }
+
+    #[test]
+    fn upstream_tagged_throw_if_not_tagged() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::ThrowExceptionIfNotTagged),
+            ..Bus::default()
+        };
+        bus.tag(0xabcd1200, 0xabcd12ff - 0xabcd1200 + 1, 0x42, false)
+            .unwrap();
+        bus.write(0xabcd1234, 1, 0, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<1>(0xabcd1234).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn upstream_tag_forces_exception() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::Report),
+            ..Bus::default()
+        };
+        bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0, true).unwrap();
+        address_error(&mut bus, 0x1000);
+    }
+
+    #[test]
+    fn upstream_tag_without_exception() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::Report),
+            ..Bus::default()
+        };
+        bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0x42, false).unwrap();
+        bus.write(0x1000, 1, 0, &mut std::io::sink()).unwrap();
+        assert_eq!(bus.read::<1>(0x1000).unwrap(), 0x42);
+    }
+
+    #[test]
+    fn upstream_tag_exception_reporting_disabled() {
+        let mut bus = Bus {
+            unhandled_access: Some(UnhandledAccess::DoNotReport),
+            ..Bus::default()
+        };
+        bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0, true).unwrap();
+        address_error(&mut bus, 0x1000);
+    }
+}
+
+#[cfg(test)]
+mod memory_segment_cases {
+    use super::*;
+
+    const BYTES: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+    fn exercise(address: u32, bytes: &[u8], expected: &[u8]) {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 16).unwrap();
+        bus.map_ram(0xc000_0000, 16).unwrap();
+        bus.write_memory_bytes(address, bytes).unwrap();
+        assert_eq!(
+            bus.read_memory_bytes(address, bytes.len()).unwrap(),
+            expected
+        );
+    }
+
+    fn unregister_fixture(size: u32) {
+        let mut bus = Bus::default();
+        bus.map_ram(0, size as usize).unwrap();
+        bus.map_ram_alias(0, size, size as usize).unwrap();
+        bus.map_ram_alias(0, 2 * size, size as usize).unwrap();
+        bus.write(0, 4, 0x12345678, &mut std::io::sink()).unwrap();
+        bus.unregister_ram(size).unwrap();
+        assert_eq!(bus.read::<4>(0).unwrap(), 0x12345678);
+        assert_eq!(bus.read::<4>(2 * size).unwrap(), 0x12345678);
+        assert_eq!(bus.read::<4>(size).unwrap(), 0);
+    }
+
+    #[test]
+    fn upstream_unregister_only_requested_range_0x800() {
+        unregister_fixture(0x800);
+    }
+
+    #[test]
+    fn upstream_unregister_only_requested_range_0x4000() {
+        unregister_fixture(0x4000);
+    }
+
+    #[test]
+    fn upstream_find_byte_pattern() {
+        const BUFFER: u32 = 1 << 20;
+        let mut bus = Bus::default();
+        bus.map_ram(0, BUFFER as usize).unwrap();
+        bus.map_ram(BUFFER, BUFFER as usize).unwrap();
+        bus.write_memory_bytes(0, &BYTES).unwrap();
+        bus.write_memory_bytes(BUFFER - 4, &BYTES).unwrap();
+        assert_eq!(
+            bus.find_memory_bytes(&BYTES, 0, u32::MAX).unwrap(),
+            [0, BUFFER - 4]
+        );
+    }
+
+    #[test]
+    fn byte_search_skips_holes_and_respects_inclusive_end() {
+        let mut bus = Bus::default();
+        bus.map_ram(10, 2).unwrap();
+        bus.map_ram(13, 2).unwrap();
+        bus.write_memory_bytes(10, &[1, 2, 0, 3, 4]).unwrap();
+        assert!(
+            bus.find_memory_bytes(&[2, 0, 3], 10, 14)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(bus.find_memory_bytes(&[3, 4], 13, 14).unwrap(), [13]);
+        assert!(bus.find_memory_bytes(&[3, 4], 13, 13).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bulk_write_invalidates_only_overlapping_reservations() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 16).unwrap();
+        bus.reservations[0] = Some((8, 4));
+        bus.reservations[1] = Some((4, 4));
+        bus.write_memory_bytes(10, &BYTES).unwrap();
+        assert_eq!(bus.reservations[..2], [None, Some((4, 4))]);
+    }
+
+    #[test]
+    fn upstream_write_to_memory_segment() {
+        exercise(4, &BYTES, &BYTES);
+    }
+
+    #[test]
+    fn upstream_partial_write_at_beginning() {
+        exercise(10, &BYTES, &[0, 1, 2, 3, 4, 5, 0, 0]);
+    }
+
+    #[test]
+    fn upstream_partial_write_at_end() {
+        exercise(0xc000_0000 - 4, &BYTES, &[0, 0, 0, 0, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn upstream_write_to_hole() {
+        exercise(100, &BYTES, &[0; 8]);
+    }
+
+    #[test]
+    fn upstream_overlapping_write() {
+        let bytes: Vec<_> = (0..32).collect();
+        let mut expected = [0; 32];
+        expected[4..20].copy_from_slice(&bytes[4..20]);
+        exercise(0xc000_0000 - 4, &bytes, &expected);
+    }
+
+    #[test]
+    fn upstream_read_bytes_both_memory() {
+        read_bytes_fixture(true, true);
+    }
+
+    #[test]
+    fn upstream_read_bytes_memory_peripheral() {
+        read_bytes_fixture(true, false);
+    }
+
+    #[test]
+    fn upstream_read_bytes_peripheral_memory() {
+        read_bytes_fixture(false, true);
+    }
+
+    #[test]
+    fn upstream_read_bytes_both_peripherals() {
+        read_bytes_fixture(false, false);
+    }
+
+    fn read_bytes_fixture(first_memory: bool, second_memory: bool) {
+        let mut bus = Bus::default();
+        for (base, memory) in [(50, first_memory), (200, second_memory)] {
+            if memory {
+                bus.map_ram(base, 100).unwrap();
+            } else {
+                bus.mock_byte_peripherals
+                    .push((u64::from(base)..u64::from(base) + 100, Default::default()));
+            }
+        }
+        let bytes: Vec<_> = (0..350).map(|value| (value % 255) as u8).collect();
+        bus.write_bus_bytes(0, &bytes, false, &mut std::io::sink())
+            .unwrap();
+        let mut expected = [0; 350];
+        for range in [50..150, 200..300] {
+            expected[range.clone()].copy_from_slice(&bytes[range]);
+        }
+        assert_eq!(bus.read_bus_bytes(0, 350, false).unwrap(), expected);
+    }
+}
+
+#[cfg(test)]
+mod gpio_detaching_cases {
+    use super::*;
+
+    fn gpio_bus(receivers: usize) -> Bus {
+        let mut bus = Bus::default();
+        let mut gpio = H7Gpio::new(0, 0x400, [0; 3], 16);
+        for index in 0..receivers {
+            let base = (index as u32 + 1) * 0x400;
+            bus.map_h7_timer(H7Timer::new(format!("timer{index}"), base, 100, 1000, None))
+                .unwrap();
+            gpio.connect_timer_input(index as u8, base, index as u32 + 1)
+                .unwrap();
+        }
+        bus.map_h7_gpio(gpio).unwrap();
+        bus
+    }
+
+    #[test]
+    fn upstream_detach_numbered_gpio_on_receiver_removal() {
+        let mut bus = gpio_bus(1);
+        bus.unregister_from_address(0x400).unwrap();
+        assert_eq!(bus.h7_gpio[0].timer_endpoints(0).count(), 0);
+    }
+
+    #[test]
+    fn unregister_receiver_removes_duplicate_free_fanout_from_multiple_sources() {
+        let mut bus = gpio_bus(2);
+        let mut gpio = H7Gpio::new(0xc00, 0x400, [0; 3], 16);
+        gpio.connect_timer_input(0, 0x800, 1).unwrap();
+        bus.map_h7_gpio(gpio).unwrap();
+        let gpio = &mut bus.h7_gpio[0];
+        gpio.connect_timer_input(0, 0x800, 1).unwrap();
+        gpio.connect_timer_input(0, 0x800, 1).unwrap();
+        assert!(gpio.timer_endpoints(0).eq([(0x400, 1), (0x800, 1)]));
+        assert!(bus.h7_gpio[1].timer_endpoints(0).eq([(0x800, 1)]));
+        bus.unregister_from_address(0x800).unwrap();
+        assert!(bus.h7_gpio[0].timer_endpoints(0).eq([(0x400, 1)]));
+        assert_eq!(bus.h7_gpio[1].timer_endpoints(0).count(), 0);
+    }
+
+    #[test]
+    fn upstream_detach_only_selected_numbered_gpio() {
+        let mut bus = gpio_bus(3);
+        bus.unregister_from_address(0x400).unwrap();
+        let gpio = &bus.h7_gpio[0];
+        assert_eq!(gpio.timer_endpoints(0).count(), 0);
+        assert!(gpio.timer_endpoints(1).eq([(0x800, 2)]));
+        assert!(gpio.timer_endpoints(2).eq([(0xc00, 3)]));
     }
 }

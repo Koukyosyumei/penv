@@ -8,6 +8,8 @@ pub struct Stm32Gpio {
     timer_output: u16,
     timer_driven: u16,
     external: u16,
+    timer_inputs: GpioConnections,
+    published_timer_pins: u16,
     alternate_drive: u16,
     alternate_driven: u16,
     wired: u16,
@@ -20,6 +22,43 @@ pub struct Stm32Gpio {
     alternate: [u32; 2],
     alternate_count: u32,
     lock: Lock,
+}
+
+#[derive(Default)]
+struct GpioConnections {
+    endpoints: Vec<(u8, u32, u8)>,
+}
+
+impl GpioConnections {
+    fn connect(
+        &mut self,
+        pin: u8,
+        receiver: u32,
+        receiver_name: &str,
+        input: u32,
+        input_count: Option<u32>,
+    ) -> Result<(), String> {
+        if let Some(count) = input_count
+            && input >= count
+        {
+            let suffix = match (input % 100, input % 10) {
+                (11..=13, _) => "th",
+                (_, 1) => "st",
+                (_, 2) => "nd",
+                (_, 3) => "rd",
+                _ => "th",
+            };
+            return Err(format!(
+                "Cannot connect {input}{suffix} input of {receiver_name}; it has only {count} GPIO inputs."
+            ));
+        }
+        let input = u8::try_from(input).map_err(|_| "GPIO input exceeds 255")?;
+        let route = (pin, receiver, input);
+        if !self.endpoints.contains(&route) {
+            self.endpoints.push(route);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -44,6 +83,8 @@ impl Stm32Gpio {
             timer_output: 0,
             timer_driven: 0,
             external: 0,
+            timer_inputs: GpioConnections::default(),
+            published_timer_pins: 0,
             alternate_drive: 0,
             alternate_driven: 0,
             wired: 0,
@@ -115,6 +156,48 @@ impl Stm32Gpio {
 
     pub fn set_wired_input(&mut self, pin: u8) {
         self.wired |= 1 << pin;
+    }
+
+    pub fn connect_timer_input(&mut self, pin: u8, base: u32, channel: u32) -> Result<(), String> {
+        self.timer_inputs.connect(
+            pin,
+            base,
+            crate::stm32h7_timer::Timer::MODEL,
+            channel,
+            Some(4),
+        )
+    }
+
+    pub(crate) fn disconnect_timer(&mut self, base: u32) {
+        self.timer_inputs
+            .endpoints
+            .retain(|&(_, receiver, _)| receiver != base);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn timer_endpoints(&self, pin: u8) -> impl Iterator<Item = (u32, u8)> + '_ {
+        self.timer_inputs
+            .endpoints
+            .iter()
+            .filter_map(move |&(source, receiver, input)| {
+                (source == pin).then_some((receiver, input))
+            })
+    }
+
+    pub fn timer_input_changes(&mut self) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+        let pins = if self.timer_inputs.endpoints.is_empty() {
+            0
+        } else {
+            self.pins()
+        };
+        let changed = pins ^ std::mem::replace(&mut self.published_timer_pins, pins);
+        self.timer_inputs
+            .endpoints
+            .iter()
+            .filter_map(move |&(pin, base, channel)| {
+                let bit = 1 << pin;
+                (changed & bit != 0).then_some((base, channel, pins & bit != 0))
+            })
     }
 
     pub fn pins(&self) -> u16 {
@@ -233,4 +316,81 @@ fn spread(mut pins: u32, width: u32) -> u32 {
         pins &= pins - 1;
     }
     mask
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Stm32Gpio;
+
+    #[test]
+    fn upstream_gpio_propagates_connected_endpoint() {
+        let mut routes = super::GpioConnections::default();
+        let receiver = 0x40010000;
+        routes
+            .connect(0, receiver, "MockReceiver", 2, None)
+            .unwrap();
+        assert_eq!(routes.endpoints[0], (0, receiver, 2));
+    }
+
+    #[test]
+    fn upstream_gpio_has_no_endpoints_until_connected() {
+        let routes = super::GpioConnections::default();
+        assert!(routes.endpoints.is_empty());
+    }
+
+    #[test]
+    fn upstream_gpio_connects_bounded_receiver() {
+        let mut routes = super::GpioConnections::default();
+        routes
+            .connect(0, 0, "MockReceiverConstrained", 2, Some(5))
+            .unwrap();
+    }
+
+    #[test]
+    fn upstream_gpio_rejects_illegal_input() {
+        let mut routes = super::GpioConnections::default();
+        let receiver = "Antmicro.Renode.UnitTests.Mocks.MockReceiverConstrained";
+        assert_eq!(
+            routes.connect(0, 0, receiver, 10, Some(5)).unwrap_err(),
+            "Cannot connect 10th input of Antmicro.Renode.UnitTests.Mocks.MockReceiverConstrained; it has only 5 GPIO inputs."
+        );
+        assert!(routes.endpoints.is_empty());
+    }
+
+    #[test]
+    fn upstream_gpio_returns_the_same_receiver() {
+        let mut routes = super::GpioConnections::default();
+        let receiver = 0x10;
+        routes
+            .connect(0, receiver, "MockReceiver", 1, None)
+            .unwrap();
+        assert_eq!(routes.endpoints.as_slice(), [(0, receiver, 1)]);
+        assert!(
+            !routes
+                .endpoints
+                .iter()
+                .any(|&(pin, _, _)| matches!(pin, 1 | 2))
+        );
+    }
+
+    #[test]
+    fn pin_edges_fan_out_to_timer_inputs() {
+        let mut port = Stm32Gpio::new(0x58022800, 0x400, [1, 0, 0], 16);
+        port.connect_timer_input(0, 0x40010000, 0).unwrap();
+        port.connect_timer_input(0, 0x40010400, 2).unwrap();
+        port.connect_timer_input(0, 0x40010000, 0).unwrap();
+
+        assert_eq!(port.timer_input_changes().count(), 0);
+        port.write(port.base + 0x18, 1);
+        assert!(
+            port.timer_input_changes()
+                .eq([(0x40010000, 0, true), (0x40010400, 2, true),])
+        );
+        assert_eq!(port.timer_input_changes().count(), 0);
+        port.write(port.base + 0x18, 1 << 16);
+        assert!(
+            port.timer_input_changes()
+                .eq([(0x40010000, 0, false), (0x40010400, 2, false),])
+        );
+    }
 }

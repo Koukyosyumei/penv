@@ -43,6 +43,85 @@ pub enum Action {
         name: String,
         pressed: bool,
     },
+    Pointer {
+        node: usize,
+        name: String,
+        event: crate::ft5336::PointerEvent,
+    },
+    MagneticFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+    },
+    VoltageFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+        input: usize,
+        channel: u16,
+    },
+    PressureFeed {
+        node: usize,
+        sensor: String,
+        temperature: bool,
+        file: std::path::PathBuf,
+    },
+    PressureInput {
+        node: usize,
+        sensor: String,
+        temperature: bool,
+        value: f64,
+    },
+    ReadPressure {
+        node: usize,
+        sensor: String,
+    },
+    IlluminanceFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+    },
+    Illuminance {
+        node: usize,
+        sensor: String,
+        value: f64,
+    },
+    ImuResd {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+        angular_rate: bool,
+    },
+    ImuFeed {
+        node: usize,
+        sensor: String,
+        file: std::path::PathBuf,
+    },
+    ImuInput {
+        node: usize,
+        sensor: String,
+        axis: usize,
+        value: f64,
+    },
+    TraceRcc {
+        node: usize,
+    },
+    RccWrite {
+        node: usize,
+        offset: u32,
+        value: u32,
+    },
+    TimerProperty {
+        node: usize,
+        name: String,
+        frequency: bool,
+    },
+    TimerInput {
+        node: usize,
+        name: String,
+        channel: u8,
+        high: bool,
+    },
     DisplayRate {
         node: usize,
         fps: u32,
@@ -56,9 +135,66 @@ pub enum Action {
         node: usize,
         search: crate::monitor::FindBytes,
     },
-    ReadWord {
+    ReadScalar {
         node: usize,
         address: u32,
+        byte: bool,
+    },
+    UnregisterAddress {
+        node: usize,
+        address: u32,
+    },
+    ReadBusBytes {
+        node: usize,
+        address: u32,
+        count: usize,
+        only_memory: bool,
+    },
+    FindMemoryBytes {
+        node: usize,
+        pattern: Vec<u8>,
+        start: u32,
+        end: u32,
+    },
+    WriteBusBytes {
+        node: usize,
+        address: u32,
+        bytes: Vec<u8>,
+        only_memory: bool,
+    },
+    ObserveUart {
+        node: usize,
+        name: String,
+    },
+    FailOnUart {
+        node: usize,
+        name: String,
+        pattern: String,
+    },
+    WriteUartLine {
+        node: usize,
+        name: String,
+        text: String,
+    },
+    WaitUart {
+        node: usize,
+        name: String,
+        timeout: u64,
+        unfinished: bool,
+        patterns: Vec<String>,
+    },
+    WaitLed {
+        node: usize,
+        name: String,
+        timeout: u64,
+        state: bool,
+    },
+    BlinkLed {
+        node: usize,
+        name: String,
+        duration: u64,
+        on: u64,
+        off: u64,
     },
     Run(Run),
 }
@@ -88,7 +224,7 @@ pub fn run(
     stats: bool,
     uart_log_dir: Option<&Path>,
 ) -> Result<ExitCode, String> {
-    let sd_setup_only = plan.is_sd_setup_only();
+    let monitor_only = plan.is_monitor_only() || plan.is_sd_setup_only();
     let mut simulation = Simulation::default();
     let mut pending = plan.nodes.into_iter();
     let mut output = LineWriter::new(io::stdout().lock());
@@ -98,8 +234,7 @@ pub fn run(
             match action {
                 Action::Activate(id) => {
                     debug_assert_eq!(id, simulation.nodes.len());
-                    let mut node =
-                        Node::boot(pending.next().unwrap(), root, assets, sd_setup_only)?;
+                    let mut node = Node::boot(pending.next().unwrap(), root, assets, monitor_only)?;
                     if let Some(directory) = uart_log_dir {
                         let path = directory.join(format!("{id}.uart.log"));
                         node.uart_log = Some(BufWriter::new(
@@ -136,10 +271,161 @@ pub fn run(
                     name,
                     pressed,
                 } => {
+                    let bus = &mut simulation.nodes[node].machine.bus;
+                    let event = if pressed {
+                        crate::ft5336::PointerEvent::Press
+                    } else {
+                        crate::ft5336::PointerEvent::Release
+                    };
+                    if bus.touch_input(&format!("sysbus.{name}"), event).is_err() {
+                        bus.gpio_button(&name, pressed)?;
+                    }
+                }
+                Action::Pointer { node, name, event } => {
                     simulation.nodes[node]
                         .machine
                         .bus
-                        .gpio_button(&name, pressed)?;
+                        .touch_input(&name, event)?;
+                }
+                Action::MagneticFeed { node, sensor, file } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_magnetic(&sensor, &file)?;
+                }
+                Action::VoltageFeed {
+                    node,
+                    sensor,
+                    file,
+                    input,
+                    channel,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_ina228(&sensor, &file, input, channel)?;
+                }
+                Action::PressureFeed {
+                    node,
+                    sensor,
+                    temperature,
+                    file,
+                } => {
+                    simulation.nodes[node].machine.bus.feed_pressure(
+                        &sensor,
+                        &file,
+                        temperature,
+                    )?;
+                }
+                Action::PressureInput {
+                    node,
+                    sensor,
+                    temperature,
+                    value,
+                } => {
+                    let device = simulation.nodes[node].machine.bus.find_pressure(&sensor)?;
+                    let accepted = if temperature {
+                        device.set_temperature(value)
+                    } else {
+                        device.set_pressure(value)
+                    };
+                    if !accepted {
+                        eprintln!("{sensor}: out-of-range input {value} ignored");
+                    }
+                }
+                Action::ReadPressure { node, sensor } => {
+                    let pressure = simulation.nodes[node]
+                        .machine
+                        .bus
+                        .find_pressure(&sensor)?
+                        .pressure();
+                    writeln!(output, "{sensor} pressure: {pressure}").map_err(|e| e.to_string())?;
+                }
+                Action::IlluminanceFeed { node, sensor, file } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_illuminance(&sensor, &file)?;
+                }
+                Action::Illuminance {
+                    node,
+                    sensor,
+                    value,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .set_illuminance(&sensor, value)?;
+                }
+                Action::ImuResd {
+                    node,
+                    sensor,
+                    file,
+                    angular_rate,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .find_imu(&sensor)?
+                        .feed_resd(&file, angular_rate)?;
+                }
+                Action::ImuFeed { node, sensor, file } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .feed_imu_samples(&sensor, &file)?;
+                }
+                Action::ImuInput {
+                    node,
+                    sensor,
+                    axis,
+                    value,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .find_imu(&sensor)?
+                        .set_input(axis, value);
+                }
+                Action::TraceRcc { node } => {
+                    simulation.nodes[node].machine.bus.trace_rcc()?;
+                }
+                Action::RccWrite {
+                    node,
+                    offset,
+                    value,
+                } => {
+                    let bus = &mut simulation.nodes[node].machine.bus;
+                    let address = bus
+                        .rcc_base()?
+                        .checked_add(offset)
+                        .ok_or("RCC offset overflow")?;
+                    bus.write(address, 4, value, &mut output)
+                        .map_err(|e| e.to_string())?;
+                }
+                Action::TimerProperty {
+                    node,
+                    name,
+                    frequency,
+                } => {
+                    let (hz, enabled) =
+                        simulation.nodes[node].machine.bus.timer_properties(&name)?;
+                    if frequency {
+                        writeln!(output, "{hz}").map_err(|e| e.to_string())?;
+                    } else {
+                        writeln!(output, "{enabled}").map_err(|e| e.to_string())?;
+                    }
+                }
+                Action::TimerInput {
+                    node,
+                    name,
+                    channel,
+                    high,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .set_timer_input(&name, channel, high)?;
                 }
                 Action::DisplayRate { node, fps } => {
                     simulation.nodes[node]
@@ -168,19 +454,205 @@ pub fn run(
                         &mut output,
                     )?;
                 }
-                Action::ReadWord { node, address } => {
+                Action::ReadScalar {
+                    node,
+                    address,
+                    byte,
+                } => {
                     let node = &mut simulation.nodes[node];
-                    let value = node
-                        .machine
-                        .bus
-                        .read::<4>(address)
-                        .map_err(|error| format!("{}: {error}", node.name))?;
+                    let result = if byte {
+                        node.machine.bus.read::<1>(address)
+                    } else {
+                        node.machine.bus.read::<4>(address)
+                    };
+                    let value = result.map_err(|error| format!("{}: {error}", node.name))?;
                     writeln!(
                         output,
                         "{}: sysbus[{address:#010x}] = {value:#010x}",
                         node.name
                     )
                     .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::UnregisterAddress { node, address } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .unregister_from_address(address)?;
+                }
+                Action::ReadBusBytes {
+                    node,
+                    address,
+                    count,
+                    only_memory,
+                } => {
+                    let node = &mut simulation.nodes[node];
+                    let bytes = node
+                        .machine
+                        .bus
+                        .read_bus_bytes(address, count, only_memory)?;
+                    writeln!(
+                        output,
+                        "{}: sysbus[{address:#010x}] = {bytes:02x?}",
+                        node.name
+                    )
+                    .map_err(|error| format!("sysbus read output: {error}"))?;
+                }
+                Action::FindMemoryBytes {
+                    node,
+                    pattern,
+                    start,
+                    end,
+                } => {
+                    let node = &simulation.nodes[node];
+                    let addresses = node.machine.bus.find_memory_bytes(&pattern, start, end)?;
+                    writeln!(output, "{}: sysbus matches = {addresses:#x?}", node.name)
+                        .map_err(|error| format!("sysbus search output: {error}"))?;
+                }
+                Action::WriteBusBytes {
+                    node,
+                    address,
+                    bytes,
+                    only_memory,
+                } => {
+                    let node = &mut simulation.nodes[node];
+                    if let Some(log) = &mut node.uart_log {
+                        node.machine
+                            .bus
+                            .write_bus_bytes(address, &bytes, only_memory, log)?;
+                    } else {
+                        node.machine.bus.write_bus_bytes(
+                            address,
+                            &bytes,
+                            only_memory,
+                            &mut output,
+                        )?;
+                    }
+                }
+                Action::ObserveUart { node, name } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .stm32_usart_mut(&name)?
+                        .observed = Some(Default::default());
+                }
+                Action::FailOnUart {
+                    node,
+                    name,
+                    pattern,
+                } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .stm32_usart_mut(&name)?
+                        .observed
+                        .as_mut()
+                        .ok_or("start a UART observer before registering failures")?
+                        .failing
+                        .push(pattern);
+                }
+                Action::WriteUartLine { node, name, text } => {
+                    simulation.nodes[node]
+                        .machine
+                        .bus
+                        .write_stm32_uart_line(&name, &text, b"\r")?;
+                }
+                Action::WaitUart {
+                    node,
+                    name,
+                    timeout,
+                    unfinished,
+                    patterns,
+                } => {
+                    ran = true;
+                    let mut scanned = None;
+                    let mut matched = false;
+                    simulation.advance_until(Run::Rounds(timeout), limit, &mut output, |sim| {
+                        let bytes = sim.nodes[node]
+                            .machine
+                            .bus
+                            .stm32_usart_mut(&name)?
+                            .observed
+                            .as_mut()
+                            .ok_or("start a UART observer before waiting")?;
+                        let bytes = &mut bytes.bytes;
+                        if scanned == Some(bytes.len()) {
+                            return Ok(false);
+                        }
+                        scanned = Some(bytes.len());
+                        matched = consume_uart_match(bytes, &patterns, unfinished);
+                        Ok(matched)
+                    })?;
+                    if !matched {
+                        return Err(format!(
+                            "UART {name} did not match {patterns:?} within {timeout} rounds"
+                        ));
+                    }
+                    writeln!(
+                        output,
+                        "UART {name} matched {patterns:?} at round {}",
+                        simulation.rounds
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Action::WaitLed {
+                    node,
+                    name,
+                    timeout,
+                    state,
+                } => {
+                    ran = true;
+                    let mut matched = false;
+                    simulation.advance_until(Run::Rounds(timeout), limit, &mut output, |sim| {
+                        matched = sim.led_state(node, &name)? == state;
+                        Ok(matched)
+                    })?;
+                    if !matched {
+                        return Err(format!(
+                            "LED {name} did not reach {state} within {timeout} rounds"
+                        ));
+                    }
+                    writeln!(
+                        output,
+                        "LED {name} reached {state} at round {}",
+                        simulation.rounds
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Action::BlinkLed {
+                    node,
+                    name,
+                    duration,
+                    on,
+                    off,
+                } => {
+                    ran = true;
+                    let start = simulation.rounds;
+                    let mut level = simulation.led_state(node, &name)?;
+                    let mut last_edge: Option<u64> = None;
+                    let mut intervals = 0;
+                    simulation.advance_until(Run::Rounds(duration), limit, &mut output, |sim| {
+                        let current = sim.led_state(node, &name)?;
+                        if current != level {
+                            if let Some(previous) = last_edge {
+                                let elapsed = sim.rounds - previous;
+                                let expected = if level { on } else { off };
+                                if u128::from(elapsed.abs_diff(expected)) * 20 > u128::from(expected) {
+                                    return Err(format!("LED {name} held {level} for {elapsed} rounds, expected {expected} ±5%"));
+                                }
+                                intervals += 1;
+                            }
+                            level = current;
+                            last_edge = Some(sim.rounds);
+                        }
+                        Ok(false)
+                    })?;
+                    if simulation.rounds - start != duration || intervals == 0 {
+                        return Err(format!(
+                            "LED {name} blinking window incomplete or no complete interval"
+                        ));
+                    }
+                    writeln!(output, "LED {name} blinked within tolerance ({intervals} complete intervals over {duration} rounds)")
+                        .map_err(|e| e.to_string())?;
                 }
                 Action::Run(run) => {
                     ran = true;
@@ -190,7 +662,7 @@ pub fn run(
                 }
             }
         }
-        if ran || sd_setup_only {
+        if ran || monitor_only {
             Ok(false)
         } else {
             simulation.advance(Run::Remaining, limit, &mut output)
@@ -232,7 +704,7 @@ impl Node {
         node: NodeBoot,
         root: Option<&Path>,
         assets: Option<&Path>,
-        sd_setup_only: bool,
+        monitor_only: bool,
     ) -> Result<Self, String> {
         let NodeBoot { name, boot, source } = node;
         let mut machine = network_repl::load(&boot.platform.unwrap(), root)?;
@@ -277,7 +749,7 @@ impl Node {
                 .map_err(|error| error.to_string())?;
         }
         zephyr_boot::configure(&mut machine, &boot.zephyr, image_path.as_deref())?;
-        if !sd_setup_only {
+        if !monitor_only {
             machine
                 .validate_entry()
                 .map_err(|e| format!("{name}: {e}"))?;
@@ -346,6 +818,28 @@ impl Simulation {
     }
 
     fn advance(&mut self, run: Run, limit: u64, output: &mut impl Write) -> Result<bool, String> {
+        self.advance_until(run, limit, output, |_| Ok(false))
+    }
+
+    fn led_state(&self, node: usize, name: &str) -> Result<bool, String> {
+        self.nodes[node]
+            .machine
+            .bus
+            .gpio_led_states()
+            .find_map(|(registered, state)| (registered == name).then_some(state))
+            .ok_or_else(|| format!("unknown GPIO LED {name:?}"))
+    }
+
+    fn advance_until(
+        &mut self,
+        run: Run,
+        limit: u64,
+        output: &mut impl Write,
+        mut done: impl FnMut(&mut Self) -> Result<bool, String>,
+    ) -> Result<bool, String> {
+        if done(self)? {
+            return Ok(false);
+        }
         let available = limit - self.rounds;
         let requested = match run {
             Run::Remaining => u64::MAX,
@@ -373,7 +867,7 @@ impl Simulation {
                 self.forward(index);
             }
             self.rounds += 1;
-            if !active {
+            if done(self)? || !active {
                 return Ok(false);
             }
         }
@@ -397,6 +891,25 @@ impl Simulation {
     }
 }
 
+fn consume_uart_match(bytes: &mut Vec<u8>, patterns: &[String], unfinished: bool) -> bool {
+    let mut consumed = 0;
+    for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+        let complete = line.ends_with(b"\n");
+        if !complete && !unfinished {
+            break;
+        }
+        if patterns.iter().any(|pattern| {
+            line.windows(pattern.len())
+                .any(|window| window == pattern.as_bytes())
+        }) {
+            bytes.drain(..consumed + line.len());
+            return true;
+        }
+        consumed += line.len();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +919,22 @@ mod tests {
         litex_ethernet::{LiteXEthernet, SLOT_SIZE},
         stm32h7_ethernet::{MAC_SIZE, Stm32h7Ethernet},
     };
+
+    #[test]
+    fn uart_matches_complete_lines_unless_unfinished_is_requested() {
+        let mut bytes = b"earlier\r\nBooting".to_vec();
+        let boot = ["Booting".to_owned()];
+        assert!(!consume_uart_match(&mut bytes, &boot, false));
+        assert!(consume_uart_match(&mut bytes, &boot, true));
+        assert!(bytes.is_empty());
+        bytes.extend(b"noise\nLED state: OFF\r\nPress the button\r\n");
+        assert!(consume_uart_match(
+            &mut bytes,
+            &["LED state: ON".to_owned(), "LED state: OFF".to_owned()],
+            false
+        ));
+        assert_eq!(bytes, b"Press the button\r\n");
+    }
 
     #[test]
     fn switches_frames_between_stm32h7_dma_and_litex_slots_in_both_directions() {

@@ -136,7 +136,7 @@ impl Entry {
     }
 }
 
-fn number(value: &str) -> Result<u32, String> {
+pub(crate) fn number(value: &str) -> Result<u32, String> {
     let digits = value.replace('_', "");
     match digits.strip_prefix("0x") {
         Some(hex) => u32::from_str_radix(hex, 16),
@@ -3399,7 +3399,7 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
     Err(entry.error("expected IRQ wired to a VexRiscv external interrupt"))
 }
 
-fn irq_index(value: &str, count: u32) -> Result<u8, String> {
+pub(crate) fn irq_index(value: &str, count: u32) -> Result<u8, String> {
     let index = number(value.trim())?;
     if index >= count || index > u32::from(u8::MAX) {
         return Err(format!("IRQ index {index} is out of range"));
@@ -3549,3 +3549,16 @@ clock0: Miscellaneous.LiteX_MMCM_CSR32 @ sysbus 0xe0004800
         assert_eq!(read_phy_status(&mut machine.bus), 0);
     }
 }
+
+pub(crate) fn irq_receiver(target: &str) -> Result<(&str, Option<u32>), String> {
+    let Some((name, index)) = target.split_once('#') else {
+        return Ok((target.trim(), None));
+    };
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("missing local IRQ receiver name".into());
+    }
+    Ok((name, Some(number(index.trim())?)))
+}
+
+pub(crate) use crate::repl_parser::{ListItem, boolean_value, list_value, object_fields};

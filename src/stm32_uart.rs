@@ -33,12 +33,44 @@ impl UsartLayout {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stm32UsartClock {
+    Apb1Low(u8),
+    Apb2(u8),
+    Apb4(u8),
+}
+
+impl Stm32UsartClock {
+    pub fn from_alias(alias: &str) -> Result<Self, String> {
+        Ok(match alias {
+            "USART1" => Self::Apb2(4),
+            "USART6" => Self::Apb2(5),
+            "USART2" => Self::Apb1Low(17),
+            "USART3" => Self::Apb1Low(18),
+            "UART4" => Self::Apb1Low(19),
+            "UART5" => Self::Apb1Low(20),
+            "UART7" => Self::Apb1Low(30),
+            "UART8" => Self::Apb1Low(31),
+            "LPUART1" => Self::Apb4(3),
+            _ => return Err(format!("unsupported STM32 USART RCC alias {alias}")),
+        })
+    }
+}
+
+#[derive(Default)]
+pub struct UartObservation {
+    pub bytes: Vec<u8>,
+    pub failing: Vec<String>,
+}
+
 pub struct Stm32Usart {
     pub name: String,
     pub dma_rx: u8,
     pub dma_tx: u8,
     pub base: u32,
+    pub observed: Option<UartObservation>,
     pub irq: Option<Stm32Irq>,
+    pub clock: Option<Stm32UsartClock>,
     receive: VecDeque<u8>,
     pending_receive: VecDeque<u8>,
     // Counts down to delivery of the next byte, or IDLE when the queue is empty.
@@ -68,7 +100,9 @@ impl Stm32Usart {
             dma_rx: 0,
             dma_tx: 0,
             base,
+            observed: None,
             irq,
+            clock: None,
             receive: VecDeque::new(),
             pending_receive: VecDeque::new(),
             receive_deadline: None,
@@ -83,6 +117,10 @@ impl Stm32Usart {
     }
 
     pub fn reset(&mut self) {
+        self.observed
+            .as_mut()
+            .into_iter()
+            .for_each(|observation| observation.bytes.clear());
         self.receive.clear();
         self.cancel_receive();
         self.idle = false;
@@ -106,14 +144,18 @@ impl Stm32Usart {
         address.wrapping_sub(self.base) < self.size()
     }
 
-    fn receiver_enabled(&self) -> bool {
+    pub fn receiver_enabled(&self) -> bool {
         let enables = self.enable_bit() | RE;
         self.registers[0] & enables == enables
     }
 
     fn frame_ticks(&self) -> Option<u64> {
         let low_power = matches!(self.layout, UsartLayout::F7 { low_power: true });
+        const PRESCALERS: [u64; 16] = [
+            1, 2, 4, 6, 8, 10, 12, 16, 32, 64, 128, 256, 256, 256, 256, 256,
+        ];
         let frequency = u64::from(self.frequency?);
+        let prescaler = PRESCALERS[(self.registers[11] & 0xf) as usize];
         let control = self.registers[0];
         let brr = if low_power {
             self.registers[3] & 0x000f_ffff
@@ -142,7 +184,7 @@ impl Stm32Usart {
         // so the calculation also covers fractional stop-bit settings.
         let stop_half_bits = [2, 1, 4, 3][(self.registers[1] >> 12 & 3) as usize];
         let frame_half_bits = 2 + 2 * word_bits + stop_half_bits;
-        let ticks = (CORTEX_M_STEP_HZ * u64::from(divisor) * frame_half_bits)
+        let ticks = (CORTEX_M_STEP_HZ * u64::from(divisor) * prescaler * frame_half_bits)
             .div_ceil(2 * frequency * multiplier);
         Some(ticks)
     }
@@ -189,6 +231,10 @@ impl Stm32Usart {
             self.idle = true;
             self.receive_deadline = None;
         }
+    }
+
+    pub fn tick_receive(&mut self) {
+        self.tick();
     }
 
     fn status(&self) -> u32 {
@@ -239,6 +285,19 @@ impl Stm32Usart {
         if self.registers[0] & enables == enables {
             send(value as u8)?;
             self.complete = true;
+            if let Some(observation) = &mut self.observed {
+                observation.bytes.push(value as u8);
+                if let Some(pattern) = observation
+                    .failing
+                    .iter()
+                    .find(|pattern| observation.bytes.ends_with(pattern.as_bytes()))
+                {
+                    return Err(io::Error::other(format!(
+                        "UART {} matched failing text {pattern:?}",
+                        self.name
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -614,6 +673,43 @@ mod tests {
         assert_eq!(uart.read(RDR, 4), 0x12);
         assert_eq!(uart.read(RDR, 4), 0x34);
         assert_empty(&mut uart);
+    }
+
+    #[test]
+    fn registered_usart_uses_rcc_gate_reset_and_exti_route() {
+        use crate::{
+            bus::Bus, nvic::ActiveExceptions, stm32h7_exti::H7Exti,
+            stm32h7_net_control::NetworkControl,
+        };
+
+        const RCC: u32 = 0x58024400;
+        const BASE: u32 = 0x40004800;
+        let mut bus = Bus::default();
+        bus.map_h7_network_control(NetworkControl::new(RCC, None, None))
+            .unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        let mut lines = [None; H7Exti::LINES];
+        lines[28] = Some(39);
+        bus.map_h7_exti(0x58000000, lines).unwrap();
+        let mut uart = Stm32Usart::new("usart3".into(), BASE, Some(Stm32Irq::Exti(28)), false);
+        uart.clock = Some(Stm32UsartClock::from_alias("USART3").unwrap());
+        bus.map_stm32_usart(uart).unwrap();
+        let write = |bus: &mut Bus, address, value| {
+            bus.write(address, 4, value, &mut io::sink()).unwrap();
+        };
+        write(&mut bus, BASE, UE | RE | RXNE);
+        write(&mut bus, RCC + 0xf0, 1 << 18);
+        assert_eq!(bus.read::<4>(BASE + 0x1c).unwrap(), 0);
+        write(&mut bus, RCC + 0xe8, 1 << 18);
+        assert_eq!(bus.read::<4>(BASE).unwrap(), 0);
+        write(&mut bus, BASE, UE | RE | RXNE);
+        bus.queue_uart_input(b"A".to_vec());
+        bus.sample_nvic(&ActiveExceptions::default(), false);
+        assert_eq!(bus.read::<4>(0xe000e204).unwrap(), 1 << (39 - 32));
+        assert_eq!(bus.read::<4>(BASE + 0x24).unwrap(), u32::from(b'A'));
+        write(&mut bus, RCC + 0x90, 1 << 18);
+        write(&mut bus, RCC + 0x90, 0);
+        assert_eq!(bus.read::<4>(BASE).unwrap(), 0);
     }
 
     #[test]

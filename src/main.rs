@@ -12,10 +12,12 @@ mod ethernet;
 mod ethernet_switch;
 mod event_trace;
 mod float;
+mod ft5336;
 mod host_pty;
 mod iis2mdc;
 mod image;
 mod image64;
+mod ina228;
 mod litex;
 mod litex_eth;
 mod litex_ethernet;
@@ -26,6 +28,8 @@ mod litex_panel;
 mod litex_sd;
 mod litex_tftp;
 mod litex_video;
+mod lps25hb;
+mod lsm6dso;
 mod machine;
 mod memory_setup;
 mod mii_phy;
@@ -42,7 +46,9 @@ mod nvic;
 mod platform;
 mod plic;
 mod pmp;
+mod repl_parser;
 mod repl_syntax;
+mod resd;
 mod rtc_clock;
 mod rv64;
 mod rv64_devices;
@@ -112,6 +118,7 @@ mod systick;
 mod thumb;
 pub mod time_handle;
 pub mod time_source;
+mod tmp108;
 mod uart;
 mod uart_trigger;
 mod vector_bootstrap;
@@ -137,7 +144,8 @@ const HELP: &str = "Run a bare-metal firmware image.
 Usage: penv run [OPTIONS] IMAGE
        penv run --script PATH [OPTIONS] [LOCAL_IMAGE]
        penv switch LISTEN_PORT GUEST_PORT GUEST_PORT [GUEST_PORT ...]
-       penv check-platform PATH
+       penv check-platform PATH [--platform-root PATH]
+       penv check-platform --from-string REPL [--platform-root PATH]
 
 Options:
   --framebuffer-event STEP:PATH  Save a LiteX framebuffer as PPM at a step (repeatable)
@@ -478,11 +486,39 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("check-platform")) => {
-            let path = args.next().ok_or("expected 'check-platform PATH'")?;
+            let input = args
+                .next()
+                .ok_or("expected a platform path or --from-string REPL")?;
+            let from_string = input == "--from-string";
+            let input = if from_string {
+                args.next()
+                    .ok_or("expected REPL text after --from-string")?
+            } else {
+                input
+            };
+            let root = match args.next() {
+                None => None,
+                Some(flag) if flag == "--platform-root" => Some(PathBuf::from(
+                    args.next().ok_or("expected a platform root")?,
+                )),
+                _ => return Err("expected --platform-root PATH".into()),
+            };
             if args.next().is_some() {
-                return Err("expected 'check-platform PATH'".into());
+                return Err("unexpected check-platform argument".into());
             }
-            platform::check(PathBuf::from(path).as_path())?;
+            if from_string {
+                network_repl::check_text(
+                    input.to_str().ok_or("REPL text must be UTF-8")?,
+                    root.as_deref(),
+                )?;
+            } else {
+                let path = PathBuf::from(input);
+                if root.is_none() && platform::check(&path).is_ok() {
+                    return Ok(ExitCode::SUCCESS);
+                }
+                load_platform(&path, root.as_deref(), false)
+                    .or_else(|_| network_repl::load(&path, root.as_deref()))?;
+            }
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("run")) => {}
@@ -2313,9 +2349,10 @@ fn parse_address(value: &str) -> Result<u32, String> {
 }
 
 fn parse_address64(value: &str) -> Result<u64, String> {
-    let parsed = match value.strip_prefix("0x") {
+    let digits = value.replace('_', "");
+    let parsed = match digits.strip_prefix("0x") {
         Some(hex) => u64::from_str_radix(hex, 16),
-        None => value.parse(),
+        None => digits.parse(),
     };
     parsed.map_err(|_| format!("invalid 64-bit number: {value}"))
 }

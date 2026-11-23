@@ -1,6 +1,10 @@
+use crate::ft5336::Ft5336;
+use crate::ina228::Ina228;
 use crate::{
     designware_usb::DesignWareUsb,
     iis2mdc::Iis2mdc,
+    lps25hb::Lps25hb,
+    lsm6dso::Lsm6dso,
     machine::Machine,
     network_repl::{Entry, irq_index, number},
     nvic::IRQ_LINES,
@@ -18,7 +22,8 @@ use crate::{
     stm32h7_qspi::Qspi,
     stm32h7_rng::Rng,
     stm32h7_sdmmc::Sdmmc,
-    stm32h7_timer::Timer,
+    stm32h7_timer::{Timer, TimerClock, TimerOutput},
+    tmp108::Tmp108,
     veml7700::Veml7700,
 };
 
@@ -41,9 +46,15 @@ pub fn is_device(model: &str) -> bool {
         || matches!(
             model,
             Qspi::FLASH
+                | Qspi::MACRONIX_FLASH
                 | Fdcan::MODEL
+                | Ina228::MODEL
                 | Veml7700::MODEL
                 | Iis2mdc::MODEL
+                | Ft5336::MODEL
+                | Tmp108::MODEL
+                | Lps25hb::MODEL
+                | Lsm6dso::MODEL
                 | Iwdg::MODEL
                 | Sdmmc::MODEL
                 | DesignWareUsb::MODEL
@@ -53,6 +64,14 @@ pub fn is_device(model: &str) -> bool {
 }
 
 pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
+    if entry.model == Timer::MODEL {
+        return TimerClock::ALIASES.iter().any(|(alias, _)| {
+            crate::network_platform::rcc_alias(
+                entry,
+                &format!("RegistrationPeripheralAlias.{alias}"),
+            ) == Some(&rcc.name)
+        });
+    }
     let accepted: &[&str] = match entry.model.as_str() {
         I2C => &["I2C1", "I2C2", "I2C3", "I2C4"],
         Dma2d::MODEL => &["DMA2D"],
@@ -61,9 +80,6 @@ pub fn has_rcc_binding(entry: &Entry, rcc: &Entry) -> bool {
         LpTimer::MODEL => &LpTimer::RCC_ALIASES,
         Rng::MODEL => &["RNG"],
         Qspi::MODEL => &["QSPI"],
-        Timer::MODEL => &[
-            "TIM2", "TIM3", "TIM4", "TIM5", "TIM6", "TIM7", "TIM12", "TIM13", "TIM14",
-        ],
         Stm32Crc::MODEL => &["CRC"],
         _ => return false,
     };
@@ -303,10 +319,18 @@ pub fn configure(
         let i2c = parse_i2c(entry, entries, nvic, exti, exti_lines).map_err(|e| entry.error(&e))?;
         buses.push((entry, i2c));
     }
-    for entry in entries
-        .iter()
-        .filter(|entry| matches!(entry.model.as_str(), Veml7700::MODEL | Iis2mdc::MODEL))
-    {
+    for entry in entries.iter().filter(|entry| {
+        matches!(
+            entry.model.as_str(),
+            Ina228::MODEL
+                | Veml7700::MODEL
+                | Iis2mdc::MODEL
+                | Tmp108::MODEL
+                | Lps25hb::MODEL
+                | Lsm6dso::MODEL
+                | Ft5336::MODEL
+        )
+    }) {
         let (parent, address) = entry
             .registration
             .as_deref()
@@ -317,6 +341,86 @@ pub fn configure(
             .iter_mut()
             .find(|(target, _)| target.name == parent)
             .ok_or_else(|| entry.error("unknown sensor I2C parent"))?;
+        if entry.model == Ina228::MODEL {
+            if !entry.body.is_empty() {
+                return Err(entry.error("unsupported INA228 properties"));
+            }
+            bus.attach(
+                u16::from(address),
+                Target::PowerMonitor(
+                    format!("sysbus.{parent}.{}", entry.name),
+                    Box::new(Ina228::new()),
+                ),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
+        if entry.model == Ft5336::MODEL {
+            let device = parse_touch(entry, entries).map_err(|e| entry.error(&e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Touch(format!("sysbus.{parent}.{}", entry.name), device),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
+        if entry.model == Lsm6dso::MODEL {
+            let sensor = parse_imu(entry, entries).map_err(|e| entry.error(&e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Imu(format!("sysbus.{parent}.{}", entry.name), Box::new(sensor)),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
+        if entry.model == Lps25hb::MODEL {
+            let mut sensor = Lps25hb::new();
+            let mut set = [false; 2];
+            for (_, text) in &entry.body {
+                let (key, value) = text
+                    .split_once(':')
+                    .ok_or_else(|| entry.error("invalid LPS25HB property"))?;
+                let value = value
+                    .trim()
+                    .parse::<f64>()
+                    .map_err(|_| entry.error("invalid LPS25HB input"))?;
+                let accepted = match key.trim() {
+                    "Temperature" if !std::mem::replace(&mut set[0], true) => {
+                        sensor.set_temperature(value)
+                    }
+                    "Pressure" if !std::mem::replace(&mut set[1], true) => {
+                        sensor.set_pressure(value)
+                    }
+                    _ => return Err(entry.error("invalid or duplicate LPS25HB property")),
+                };
+                if !accepted {
+                    return Err(entry.error("LPS25HB input is outside operating range"));
+                }
+            }
+            bus.attach(
+                u16::from(address),
+                Target::Pressure(format!("sysbus.{parent}.{}", entry.name), sensor),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
+        if entry.model == Tmp108::MODEL {
+            let celsius = match entry.body.as_slice() {
+                [] => 0.0,
+                [(_, text)] => text
+                    .strip_prefix("Temperature:")
+                    .and_then(|value| value.trim().parse::<f64>().ok())
+                    .filter(|value| (-128.0..=127.9375).contains(value))
+                    .ok_or_else(|| entry.error("expected TMP108 Temperature in sensor range"))?,
+                _ => return Err(entry.error("unsupported TMP108 properties")),
+            };
+            bus.attach(
+                u16::from(address),
+                Target::Temperature(Tmp108::new(celsius)),
+            )
+            .map_err(|e| entry.error(e))?;
+            continue;
+        }
         if entry.model == Iis2mdc::MODEL {
             let mut values = [None; 3];
             let mut sample_csv = None;
@@ -373,8 +477,11 @@ pub fn configure(
             if let Some((base, pin)) = route {
                 sensor.set_route(base, pin);
             }
-            bus.attach(u16::from(address), Target::Magnetometer(sensor))
-                .map_err(|e| entry.error(e))?;
+            bus.attach(
+                u16::from(address),
+                Target::Magnetometer(format!("sysbus.{parent}.{}", entry.name), sensor),
+            )
+            .map_err(|e| entry.error(e))?;
             continue;
         }
         let illuminance = match entry.body.as_slice() {
@@ -389,7 +496,10 @@ pub fn configure(
         };
         bus.attach(
             u16::from(address),
-            Target::Light(Veml7700::new(illuminance)),
+            Target::Light(
+                format!("sysbus.{parent}.{}", entry.name),
+                Veml7700::new(illuminance),
+            ),
         )
         .map_err(|e| entry.error(e))?;
     }
@@ -517,6 +627,82 @@ pub fn configure(
     Ok(())
 }
 
+fn parse_touch(entry: &Entry, entries: &[Entry]) -> Result<Ft5336, String> {
+    let mut device = Ft5336::default();
+    let mut seen = std::collections::HashSet::new();
+    for (_, property) in &entry.body {
+        if property.contains("->") {
+            let (pin, name, target) = wire(property)?;
+            if !matches!(pin, "" | "IRQ") || device.irq.is_some() {
+                return Err("expected a single FT5336 GPIO route".into());
+            }
+            let port = entries
+                .iter()
+                .find(|port| port.name == name && port.model == crate::stm32h7_gpio_platform::GPIO)
+                .ok_or("unknown FT5336 GPIO route")?;
+            let (base, _, _) = crate::stm32h7_gpio_platform::registration(port, entries)?;
+            device.irq = Some((base, irq_index(target, 16)?));
+            continue;
+        }
+        let (key, value) = property.split_once(':').ok_or("expected FT5336 property")?;
+        let (key, value) = (key.trim(), value.trim());
+        if !seen.insert(key) {
+            return Err(format!("duplicate FT5336 property {key}"));
+        }
+        match key {
+            "isRotated" => device.rotated = value.parse().map_err(|_| "invalid isRotated")?,
+            "isInvertedX" => {
+                device.inverted_x = value.parse().map_err(|_| "invalid isInvertedX")?
+            }
+            "isInvertedY" => {
+                device.inverted_y = value.parse().map_err(|_| "invalid isInvertedY")?
+            }
+            "MaxX" => device.max_x = value.parse().map_err(|_| "invalid MaxX")?,
+            "MaxY" => device.max_y = value.parse().map_err(|_| "invalid MaxY")?,
+            _ => return Err(format!("unsupported FT5336 property {key}")),
+        }
+    }
+    Ok(device)
+}
+
+fn parse_imu(entry: &Entry, entries: &[Entry]) -> Result<Lsm6dso, String> {
+    let mut input = [None; 6];
+    let mut route = None;
+    for (_, property) in &entry.body {
+        if property.contains("->") {
+            let (pin, name, target) = wire(property)?;
+            if pin != "Interrupt1" || route.is_some() {
+                return Err("expected a single LSM6DSO Interrupt1 GPIO route".into());
+            }
+            let port = entries
+                .iter()
+                .find(|port| port.name == name && port.model == crate::stm32h7_gpio_platform::GPIO)
+                .ok_or("unknown LSM6DSO GPIO route")?;
+            let (base, _, _) = crate::stm32h7_gpio_platform::registration(port, entries)?;
+            route = Some((base, irq_index(target, 16)?));
+            continue;
+        }
+        let (key, value) = property
+            .split_once(':')
+            .ok_or("expected LSM6DSO property")?;
+        let value = value.trim();
+        match key.trim() {
+            axis => {
+                let index = crate::lsm6dso::input_axis(axis).ok_or("invalid LSM6DSO property")?;
+                let value = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .ok_or("invalid LSM6DSO input")?;
+                if input[index].replace(value).is_some() {
+                    return Err("duplicate LSM6DSO input axis".into());
+                }
+            }
+        }
+    }
+    Ok(Lsm6dso::new(input.map(|value| value.unwrap_or(0.0)), route))
+}
+
 fn parse_timer(
     entry: &Entry,
     entries: &[Entry],
@@ -525,25 +711,10 @@ fn parse_timer(
     exti_lines: u32,
 ) -> Result<Timer, String> {
     let (base, alias) = registration(entry, entries)?;
-    let clock = if let Some(alias) = alias {
-        Some(match alias {
-            "TIM2" => 0,
-            "TIM3" => 1,
-            "TIM4" => 2,
-            "TIM5" => 3,
-            "TIM6" => 4,
-            "TIM7" => 5,
-            "TIM12" => 6,
-            "TIM13" => 7,
-            "TIM14" => 8,
-            _ => return Err("expected an APB1L STM32 timer RCC alias".into()),
-        })
-    } else {
-        None
-    };
+    let clock = alias.map(TimerClock::from_alias).transpose()?;
     let mut frequency = None;
     let mut limit = None;
-    let mut irq = [None; 5];
+    let mut routes = Vec::new();
     for (_, text) in &entry.body {
         if let Some((key, value)) = text.split_once(':') {
             let value = number(value.trim())?;
@@ -579,41 +750,39 @@ fn parse_timer(
                 continue;
             }
             let (output, target, input) = wire(text)?;
-            let route = match output {
-                "" | "IRQ" => 0,
-                "BreakInterrupt" => 1,
-                "UpdateInterrupt" => 2,
-                "TriggerInterrupt"
-                | "CommutationInterrupt"
-                | "[TriggerInterrupt, CommutationInterrupt]" => 3,
-                "CaptureCompareInterrupt" => 4,
-                _ => return Err("unsupported STM32 timer output".into()),
-            };
-            let lines = crate::network_repl::irq_list(input, IRQ_LINES as u32)?;
-            let [line, ..] = lines.as_slice() else {
-                return Err("missing STM32 timer IRQ".into());
-            };
-            if lines.iter().any(|value| value != line) || irq[route].is_some() {
-                return Err("conflicting STM32 timer IRQ".into());
-            }
-            irq[route] = Some(
-                if nvic.is_some_and(|controller| controller.name == target) {
-                    Stm32Irq::Nvic(*line)
-                } else if exti.is_some_and(|controller| controller.name == target) {
-                    Stm32Irq::Exti(irq_index(input, exti_lines)?)
+            let outputs = output
+                .strip_prefix('[')
+                .and_then(|list| list.strip_suffix(']'))
+                .unwrap_or(output);
+            let outputs = outputs
+                .split(',')
+                .map(TimerOutput::parse)
+                .collect::<Result<Vec<_>, _>>()?;
+            let (count, route): (_, fn(u8) -> Stm32Irq) =
+                if nvic.is_some_and(|nvic| nvic.name == target) {
+                    (IRQ_LINES as u32, Stm32Irq::Nvic)
+                } else if exti.is_some_and(|exti| exti.name == target) {
+                    (exti_lines, Stm32Irq::Exti)
                 } else {
                     return Err("expected STM32 timer IRQ connected to NVIC or EXTI".into());
-                },
-            );
+                };
+            let inputs = crate::network_repl::irq_list(input, count)?;
+            if outputs.len() != inputs.len() {
+                return Err("STM32 timer output and destination list lengths differ".into());
+            }
+            routes.extend(outputs.into_iter().zip(inputs.into_iter().map(route)));
         }
     }
     let mut timer = Timer::new(
+        entry.name.clone(),
         base,
         frequency.ok_or("missing STM32 timer frequency")?,
         limit.unwrap_or(0xffff),
         clock,
     );
-    timer.irq = irq;
+    for (output, irq) in routes {
+        timer.route(output, irq)?;
+    }
     Ok(timer)
 }
 
@@ -641,13 +810,16 @@ fn configure_qspi(
         }
         controllers.push(Qspi::new(entry.name.clone(), base, alias.is_some(), irq));
     }
-    for entry in entries.iter().filter(|entry| entry.model == Qspi::FLASH) {
+    for entry in entries
+        .iter()
+        .filter(|entry| matches!(entry.model.as_str(), Qspi::FLASH | Qspi::MACRONIX_FLASH))
+    {
         let qspi = controllers
             .iter_mut()
             .find(|device| Some(device.name.as_str()) == entry.registration.as_deref())
             .ok_or_else(|| entry.error("expected an STM32H7 QuadSPI parent"))?;
         let [(_, property)] = entry.body.as_slice() else {
-            return Err(entry.error("expected underlyingMemory for ISSI flash"));
+            return Err(entry.error("expected underlyingMemory for SPI flash"));
         };
         let memory = property
             .split_once(':')
@@ -657,7 +829,7 @@ fn configure_qspi(
                     memory.name == name.trim() && memory.model == "Memory.MappedMemory"
                 })
             })
-            .ok_or_else(|| entry.error("unknown underlyingMemory for ISSI flash"))?;
+            .ok_or_else(|| entry.error("unknown underlyingMemory for SPI flash"))?;
         let capacity = memory
             .body
             .iter()
@@ -665,9 +837,12 @@ fn configure_qspi(
                 let (key, value) = property.split_once(':')?;
                 (key.trim() == "size").then_some(value.trim())
             })
-            .ok_or_else(|| memory.error("missing ISSI flash memory size"))?;
-        qspi.attach(number(capacity).map_err(|e| memory.error(&e))?)
-            .map_err(|e| entry.error(e))?;
+            .ok_or_else(|| memory.error("missing SPI flash memory size"))?;
+        qspi.attach(
+            number(capacity).map_err(|e| memory.error(&e))?,
+            entry.model == Qspi::MACRONIX_FLASH,
+        )
+        .map_err(|e| entry.error(e))?;
     }
     for controller in controllers {
         machine.bus.map_h7_qspi(controller)?;
@@ -758,8 +933,17 @@ pub fn registration<'a>(
 
 pub fn wire(text: &str) -> Result<(&str, &str, &str), &'static str> {
     let (from, to) = text.split_once("->").ok_or("expected peripheral wiring")?;
-    let (target, pins) = to
+    let (target, pins) = wire_destination(to)?;
+    Ok((from.trim(), target, pins))
+}
+
+pub(crate) fn wire_destination(text: &str) -> Result<(&str, &str), &'static str> {
+    let (target, pins) = text
         .split_once('@')
         .ok_or("missing wiring destination index")?;
-    Ok((from.trim(), target.trim(), pins.trim()))
+    let (target, pins) = (target.trim(), pins.trim());
+    if target.is_empty() || pins.is_empty() {
+        return Err("missing wiring destination target or index");
+    }
+    Ok((target, pins))
 }

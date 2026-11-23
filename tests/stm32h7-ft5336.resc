@@ -1,0 +1,38 @@
+mach create "disco"
+machine LoadPlatformDescription @platforms/boards/stm32h747-disco.repl
+sysbus LoadELF @https://dl.antmicro.com/projects/renode/zephyr-stm32h747i-display.elf-s_1312828-55334a5ed1b3104c7033b0f3f55e9eb451fafc71
+cpu VectorTableOffset `sysbus GetSymbolAddress "_vector_table"`
+emulation RunFor "0.1"
+sysbus WriteDoubleWord 0x580244e0 0x400
+sysbus WriteDoubleWord 0x580244f4 0x82
+sysbus WriteDoubleWord 0x58022800 0
+sysbus WriteDoubleWord 0x5800040c 0xa000
+sysbus WriteDoubleWord 0x58000080 0x80
+sysbus WriteDoubleWord 0x58000000 0x80
+sysbus WriteDoubleWord 0x58001c00 1
+sysbus.i2c4.touchscreen MoveTo 50 60
+sysbus.i2c4.touchscreen Press
+emulation RunFor "0.000010"
+sysbus ReadDoubleWord 0x58000088
+sysbus ReadDoubleWord 0xe000e200
+sysbus WriteDoubleWord 0x58001c04 0x12070
+sysbus WriteDoubleWord 0x58001c28 3
+sysbus WriteDoubleWord 0x58001c04 0x2042470
+sysbus ReadDoubleWord 0x58001c24
+sysbus ReadDoubleWord 0x58001c24
+sysbus ReadDoubleWord 0x58001c24
+sysbus ReadDoubleWord 0x58001c24
+sysbus.i2c4.touchscreen Release
+emulation RunFor "0.000010"
+sysbus WriteDoubleWord 0x58001c04 0x12070
+sysbus WriteDoubleWord 0x58001c28 2
+sysbus WriteDoubleWord 0x58001c04 0x2012470
+sysbus ReadDoubleWord 0x58001c24
+sysbus WriteDoubleWord 0x58001c04 0x12070
+sysbus WriteDoubleWord 0x58001c28 3
+sysbus WriteDoubleWord 0x58001c04 0x2012470
+sysbus ReadDoubleWord 0x58001c24
+sysbus WriteDoubleWord 0x58001c04 0x12070
+sysbus WriteDoubleWord 0x58001c28 0xa8
+sysbus WriteDoubleWord 0x58001c04 0x2012470
+sysbus ReadDoubleWord 0x58001c24

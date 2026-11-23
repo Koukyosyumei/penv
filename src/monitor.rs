@@ -130,15 +130,15 @@ impl BusScalar {
         if let Some(value) = value {
             return match address32 {
                 Some(address) if width <= 4 => bus
-                    .write(address, width, value as u32, output)
+                    .write_scalar(address, width, value as u32, output, true)
                     .map_err(|error| error.to_string()),
                 _ => crate::memory_setup::write_ram(bus, address, width, value),
             };
         }
         let result = match (address32, width) {
-            (Some(address), 1) => bus.read::<1>(address),
-            (Some(address), 2) => bus.read::<2>(address),
-            (Some(address), 4) => bus.read::<4>(address),
+            (Some(address), 1) => bus.read_scalar::<1>(address, true),
+            (Some(address), 2) => bus.read_scalar::<2>(address, true),
+            (Some(address), 4) => bus.read_scalar::<4>(address, true),
             _ => {
                 return Self::print_value(
                     crate::memory_setup::read_ram(bus, address, width)?,

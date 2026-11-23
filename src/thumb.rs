@@ -235,6 +235,9 @@ impl Thumb {
     }
 
     pub fn condition(&self, condition: u32) -> bool {
+        if condition >= 14 {
+            return true;
+        }
         let positive = match condition >> 1 {
             0 => self.zero,
             1 => self.carry,
@@ -666,6 +669,25 @@ impl Thumb {
             r[13] = consumed;
             self.lockup()
         }
+    }
+
+    fn priority_boost(&self, ignore_primask: bool) -> i16 {
+        if self.faultmask {
+            -1
+        } else if self.interrupts_masked && !ignore_primask {
+            0
+        } else if self.basepri != 0 {
+            i16::from(self.basepri)
+        } else {
+            256
+        }
+    }
+
+    fn can_take_sync_exception(&self, exception: u8, nvic: &crate::nvic::Nvic) -> bool {
+        let priority = nvic.priority(exception);
+        i16::from(priority) < self.priority_boost(false)
+            && (self.active_exception == 0
+                || (self.active_exception > 3 && priority < nvic.priority(self.active_exception)))
     }
 
     fn exception_entry(
@@ -1386,6 +1408,17 @@ impl Thumb {
                     next = architectural_pc.wrapping_add(((inst as i8 as i32) * 2) as u32);
                 }
             }
+            0xde00..=0xdeff if self.thumb2 => {
+                let nvic = bus.nvic.as_mut().ok_or_else(unsupported)?;
+                let usage_fault_allowed = self.can_take_sync_exception(6, nvic);
+                let exception = nvic.record_undefined_instruction(usage_fault_allowed);
+                if exception == 3 && (self.faultmask || matches!(self.active_exception, 2 | 3)) {
+                    return Err(InstructionError::Host(
+                        "Cortex-M lockup on undefined instruction".into(),
+                    ));
+                }
+                next = self.exception_entry(exception, *pc, r, bus)?;
+            }
             0xdf00..=0xdfff
                 if self.active_exception == 0 && !self.interrupts_masked && !self.faultmask =>
             {
@@ -1450,6 +1483,20 @@ impl Thumb {
                                 return Err(unsupported().into());
                             }
                             r[register] = self.system_read(sysm, r).ok_or_else(unsupported)?;
+                        }
+                        (0xf380..=0xf38f, 0x8400..=0x8403 | 0x8800..=0x8803 | 0x8c00..=0x8c03) => {
+                            let register = (inst & 15) as usize;
+                            if matches!(register, 13 | 15) || (!self.thumb2 && low & 0x400 != 0) {
+                                return Err(unsupported().into());
+                            }
+                            let mut mask = 0;
+                            if low & 0x800 != 0 {
+                                mask |= 0xf800_0000;
+                            }
+                            if low & 0x400 != 0 {
+                                mask |= 0x000f_0000;
+                            }
+                            self.set_apsr((self.apsr() & !mask) | (r[register] & mask));
                         }
                         (0xf380..=0xf38f, 0x8800..=0x88ff) => {
                             let register = (inst & 15) as usize;
@@ -2806,4 +2853,67 @@ mod wait_tests {
     }
 
     // Instructions from the ELF in tlib/arm/thumb2-data-processing-instr.robot.
+}
+
+#[cfg(test)]
+mod ge_upstream;
+
+#[cfg(test)]
+mod h7_upstream {
+    use super::*;
+
+    #[test]
+    fn upstream_wfe_wakes_from_disabled_irq_with_sevonpend() {
+        const START: u32 = 0x2000_0000;
+        const TARGET: u32 = 0x2000_1000;
+        let mut bus = Bus::default();
+        bus.map_ram(START, 0x40000).unwrap();
+        bus.map_nvic(0xf0, None).unwrap();
+        let mut output = std::io::sink();
+        bus.write(0xe000ed10, 4, 0x10, &mut output).unwrap();
+        bus.memory(START, 6)
+            .unwrap()
+            .copy_from_slice(&[0x20, 0xbf, 0x01, 0x60, 0xfe, 0xe7]);
+        let mut thumb = Thumb::new(None);
+        thumb.thumb2 = true;
+        let mut r = [0; 32];
+        r[0] = TARGET;
+        r[1] = 0xdeadbeef;
+        r[13] = 0x2004_0000;
+        let mut pc = START;
+        let mut step = |thumb: &mut Thumb, bus: &mut Bus| {
+            if !thumb.service_interrupts(&mut pc, &mut r, bus).unwrap() && !thumb.sleeping() {
+                thumb.step(&mut pc, &mut r, bus, &mut output).unwrap();
+            }
+        };
+        for _ in 0..crate::machine::VIRTUAL_STEPS_PER_SECOND / 1000 {
+            step(&mut thumb, &mut bus);
+        }
+        assert_eq!(bus.read::<4>(TARGET).unwrap(), 0);
+        bus.nvic
+            .as_mut()
+            .unwrap()
+            .set_line(5, true, &ActiveExceptions::default());
+        for _ in 0..crate::machine::VIRTUAL_STEPS_PER_SECOND {
+            step(&mut thumb, &mut bus);
+            if bus.read::<4>(TARGET).unwrap() == 0xdeadbeef {
+                break;
+            }
+        }
+        assert_eq!(bus.read::<4>(TARGET).unwrap(), 0xdeadbeef);
+        assert_eq!(thumb.active_exception, 0);
+    }
+
+    #[test]
+    fn upstream_basepri_priority_boost_clears_on_reset() {
+        let mut thumb = Thumb::new(None);
+        thumb.thumb2 = true;
+        let mut registers = [0; 32];
+        assert!(thumb.system_write(17, 0x50, &mut registers));
+        let basepri = thumb.system_read(17, &registers).unwrap();
+        let before_reset = thumb.priority_boost(false);
+        assert_eq!(i16::try_from(basepri).unwrap(), before_reset);
+        thumb.reset_state();
+        assert_ne!(thumb.priority_boost(false), before_reset);
+    }
 }

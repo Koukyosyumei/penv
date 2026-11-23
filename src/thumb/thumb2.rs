@@ -410,6 +410,42 @@ impl Thumb {
                 }
                 r[rd] = u32::from_le_bytes(value);
             }
+            0xfa80..=0xfa8e | 0xfa90..=0xfa9e | 0xfac0..=0xface | 0xfad0..=0xfade
+                if rt == 15
+                    && matches!(low & 0xf0, 0 | 0x40)
+                    && rn != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let width = if high & 0x10 == 0 { 8 } else { 16 };
+                let mask = (1 << width) - 1;
+                let subtract = high & 0x40 != 0;
+                let signed = low & 0x40 == 0;
+                let operand = |value: u32, shift| {
+                    let raw = ((value >> shift) & mask) as i32;
+                    if signed {
+                        (raw << (32 - width)) >> (32 - width)
+                    } else {
+                        raw
+                    }
+                };
+                let mut value = 0;
+                self.greater_equal = 0;
+                for shift in (0..32).step_by(width) {
+                    let lhs = operand(r[rn], shift);
+                    let rhs = operand(r[rm], shift);
+                    let result = if subtract { lhs - rhs } else { lhs + rhs };
+                    value |= (result as u32 & mask) << shift;
+                    if if signed || subtract {
+                        result >= 0
+                    } else {
+                        result as u32 > mask
+                    } {
+                        self.greater_equal |= ((1 << (width / 8)) - 1) << (shift / 8);
+                    }
+                }
+                r[rd] = value;
+            }
             0xfaa0..=0xfaae
                 if rt == 15
                     && low & 0xf0 == 0x80
@@ -455,6 +491,42 @@ impl Thumb {
                 r[rd] = self.data_processing(operation, r[rn], r[rm]).unwrap();
                 if high & 0x10 == 0 {
                     self.set_apsr(flags);
+                }
+            }
+            0xfb80..=0xfb8e | 0xfba0..=0xfbae | 0xfbc0..=0xfbce | 0xfbe0..=0xfbee
+                if low & 0xf0 == 0
+                    && ![rn, rt, rd, rm].iter().any(|r| matches!(r, 13 | 15))
+                    && rt != rd =>
+            {
+                let product = if high & 0x20 != 0 {
+                    u64::from(r[rn]) * u64::from(r[rm])
+                } else {
+                    (i64::from(r[rn] as i32) * i64::from(r[rm] as i32)) as u64
+                };
+                let product = if high & 0x40 != 0 {
+                    product.wrapping_add((u64::from(r[rd]) << 32) | u64::from(r[rt]))
+                } else {
+                    product
+                };
+                r[rt] = product as u32;
+                r[rd] = (product >> 32) as u32;
+            }
+            0xfb10..=0xfb1e
+                if low & 0xc0 == 0
+                    && rn != 13
+                    && rt != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = (r[rn] >> if low & 0x20 == 0 { 0 } else { 16 }) as i16;
+                let b = (r[rm] >> if low & 0x10 == 0 { 0 } else { 16 }) as i16;
+                let product = i32::from(a) * i32::from(b);
+                if rt == 15 {
+                    r[rd] = product as u32;
+                } else {
+                    let (sum, overflow) = product.overflowing_add(r[rt] as i32);
+                    r[rd] = sum as u32;
+                    self.saturation |= overflow;
                 }
             }
             0xfb00..=0xfb0e

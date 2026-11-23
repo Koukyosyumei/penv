@@ -1,7 +1,10 @@
-// VEML7700 register protocol and static light input.
+use crate::resd::Samples;
+
+// VEML7700 register protocol and light input.
 pub struct Veml7700 {
     registers: [u16; 4],
     illuminance: f64,
+    samples: Option<Samples<u32>>,
     selected: Option<u8>,
 }
 
@@ -12,8 +15,29 @@ impl Veml7700 {
         Self {
             registers: [1, 0, 0, 0],
             illuminance,
+            samples: None,
             selected: None,
         }
+    }
+
+    pub fn set_illuminance(&mut self, value: f64) -> Result<(), String> {
+        if !value.is_finite() || value < 0.0 {
+            return Err("expected a nonnegative finite illuminance".into());
+        }
+        if self.samples.is_some() {
+            return Err("cannot set illuminance while using a RESD stream".into());
+        }
+        self.illuminance = value;
+        Ok(())
+    }
+
+    pub fn feed_illuminance(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        self.samples = Some(
+            Samples::decode(&bytes, 0x0a, u32::from_le_bytes)
+                .map_err(|error| format!("{}: {error}", path.display()))?,
+        );
+        Ok(())
     }
 
     pub fn write(&mut self, data: &[u8]) {
@@ -40,7 +64,7 @@ impl Veml7700 {
         }
     }
 
-    pub fn read(&mut self) -> [u8; 2] {
+    pub fn read(&mut self, nanoseconds: u64) -> [u8; 2] {
         let config = self.registers[0];
         let integration_ms = match (config >> 6) & 15 {
             1 => 200.0,
@@ -51,7 +75,10 @@ impl Veml7700 {
             _ => 100.0,
         };
         let gain = [1.0, 2.0, 0.125, 0.25][usize::from((config >> 11) & 3)];
-        let counts = (self.illuminance * gain * integration_ms / 5.76)
+        let illuminance = self.samples.as_ref().map_or(self.illuminance, |samples| {
+            f64::from(samples.sample_at(nanoseconds, true).unwrap_or(0)) / 1000.0
+        });
+        let counts = (illuminance * gain * integration_ms / 5.76)
             .round_ties_even()
             .clamp(0.0, f64::from(u16::MAX)) as u16;
         let value = match self.selected.take() {

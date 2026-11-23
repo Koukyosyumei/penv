@@ -1878,6 +1878,1470 @@ V11.1.0（`dbf70559b27d39c1fdb68dfb9a32140b6a6777a0`）を取得し、公式
 リンクします。起動コード、メモリー配置、タスクは
 `tests/fixtures/stm32f407-freertos/` にあります。
 [FreeRTOS-Kernel V11.1.0 の ARM_CM3 ポート](https://github.com/FreeRTOS/FreeRTOS-Kernel/tree/dbf70559b27d39c1fdb68dfb9a32140b6a6777a0/portable/GCC/ARM_CM3)
+### full-upstream-network
+
+[上流ケース台帳](tests/stm32h7-full-upstream.tsv) は固定 Renode とサブモジュールの初回棚卸しです。Nucleo H753ZI の機種固有 Robot スイートは全 25 ケースを含みます。各行はリポジトリ、ファイル、行範囲、ケース名、パラメータ参照、判定、判定根拠を記録します。共有 NUnit の DMA 転送マトリクスは、入出力の格納先とアクセス幅の全組み合わせを個別行に展開しました。
+
+- Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`
+- Infrastructure `09ac7c563095c5410258ecc1b1a6b841a013db85`
+- Infrastructure の tlib `c04522a9c886ba743c77a86b0c879103a2ef46d0`
+- Packet.Net `20e0f2fe40743fed4e6a81bb8fe9523c257f168b`
+- UI `5bc51e6eb4b1c36421527c1fab8c0fc3f6b6947f`
+
+初回棚卸しの 984 行のうち、適用範囲の確認待ち `REVIEW` が 704、未達 `OPEN` が 82、部分移植 `PARTIAL` が 7、適用外の根拠を確認した `OUT` が 191 です。初回台帳は完全な適用性判定やパラメータ展開を終えていません。機種固有の未実装・失敗・ビルド依存を除外理由にはしていません。上流と等価な合格はまだ記録していません。既存の `network-ready` は診断スモークのゲートです。全上流ケース用の `network-full-upstream-ready` は未作成です。
+
+固定の Infrastructure と Packet.Net は作業ディレクトリの外で展開し、`../renode` は読み取り専用の参照にしました。tlib と UI の固定アーカイブに Robot/NUnit のテストファイルは見つかりませんでした。対象 NUnit プロジェクトは .NET 10 を指定しており、今回の環境では `dotnet` と Renode/Robot ランナーを検出できませんでした。直接実行の確認は残件です。
+
+```bash
+scan=$(mktemp -d)
+curl -fsSL https://codeload.github.com/renode/renode-infrastructure/tar.gz/09ac7c563095c5410258ecc1b1a6b841a013db85 |
+    tar -xz -C "$scan" --strip-components=1
+mkdir "$scan/packetnet"
+curl -fsSL https://codeload.github.com/antmicro/Packet.Net/tar.gz/20e0f2fe40743fed4e6a81bb8fe9523c257f168b |
+    tar -xz -C "$scan/packetnet" --strip-components=1
+python3 tests/tools/inventory-stm32h7.py ../renode "$scan" "$scan/inventory.tsv"
+cmp tests/stm32h7-full-upstream.tsv "$scan/inventory.tsv"
+```
+
+TMP108 は固定温度、ビッグエンディアンの温度・閾値、ワンショットからの復帰を実装しました。診断 Shell で `sensor get tmp108@48 ambient_temp` が `23.500000` を返します。時系列入力、比較器と IRQ は残件です。未変更の上流参照 RESC は TMP108 を通過し、`platforms/boards/stm32h7_renode_reference_board.repl:52` の `Sensors.LPS25HB` で停止します。実行コマンドは前節のスモーク 3 本と、SDMMC・USB・sysbus タグ節の未変更 RESC 用コマンドを使います。
+
+### full-h7-triage-and-lps25hb
+
+固定版の [ケース台帳](tests/stm32h7-full-upstream.tsv) で、機種固有の Nucleo H753ZI Robot は全 25 ケースを適用対象に維持しました。既存の 984 行の内訳は、適用対象 778 行（`OPEN` 768、`PARTIAL` 10）、適用外 206 行です。既存行の `REVIEW` は 0 です。この分母は現台帳の行単位で、上流全体の追加発見や未展開のパラメータは含みません。汎用 Cortex-M・REPL・モニター・DMA・バス・パケットの共有契約は対象側に残しました。新たな適用外の行には Zynq 固定 Linux ゲスト、NXP K6xF 固定 ELF、Cortex-M33/TrustZone、Windows 固有操作、PPP または Linux cooked キャプチャ形式の根拠を記録しました。性能ケースは対象に残し、実行は後工程です。
+
+LPS25HB はサブアドレスと自動インクリメント、`WHO_AM_I=0xbd`、設定レジスター、温度と圧力の換算を実装しました。前節の Shell スモークが作る診断 REPL を使い、`stm32h7-io-smoke.sh` が `LPS25HB.robot` 指定の Zephyr 4.2・4.4 ELF を SHA-1 照合して実行します。実行ログはスモークが出力するディレクトリの `pressure/` 配下に残ります。
+
+| 上流ケース | 上流期待値との照合と残件 |
+| --- | --- |
+| Should Read Temperature And Pressure | v4.2 ELF で初期値、100 °C、−10 °C の UART と既知の 101.325000 kPa を個別に照合。範囲外入力の保持は単体テストで確認。1 回の実行内の入力変更と順序の検証は残件。 |
+| Should Correctly Calculate Pressure | 1023.346923828125 hPa が `8d f5 3f` になることを I²C サブアドレス読み出しで照合。Robot のプロパティ getter と直接 Read の再現は残件。 |
+| Should Read Samples From RESD | 未達。再生、サンプル切替、終端後に静的値へ戻る処理が必要。 |
+| Should Work After Errata Driver Update | v4.4 の同一 ELF が `temp 100.31 Cel, pressure 101.325000 kPa` を出力。元の REPL と実行時入力の等価性は未確定。 |
+
+未変更の上流 RESC は `lps25hb` を通過し、ボード REPL の 54 行目にある `Sensors.LSM6DSO_IMU` で停止します。診断スモークの合格を全上流ケースの合格数には算入していません。
+
+### full-h7-lsm6dso
+
+`Sensors.LSM6DSO_IMU` の I²C ユーザーバンク、加速度・角速度のフルスケールと ODR、DRDY と `Interrupt1` の GPIO 配線に対応しました。RESC では上流と同じ `DefaultAccelerationX/Y/Z` と `DefaultAngularRateX/Y/Z` を設定できます。ストリームの移植は `FeedSamplesFromCsv` で上流の CSV を 12 Hz、開始オフセット 100 ms で再生します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-lsm6dso-smoke.sh /tmp/Shellスモークのログディレクトリ
+```
+
+スモークは固定上流 `LSM6DSO_IMU.robot` の ELF 3 本を SHA-1 照合し、5 シナリオの UART を Robot と同じ数値・順序で照合します。
+
+| 上流ケース | ログ | 照合 |
+| --- | --- | --- |
+| I2C polling | `poll-basic/0.uart.log` | ゼロ値のあと、加速度 1/−1/0 g と角速度 100/200/300 dps を順に設定 |
+| RESD polling | `poll-stream/0.uart.log` | 同じ CSV の 3 区間と終端後のゼロ復帰 |
+| I2C interrupt | `irq-basic/0.uart.log` | GPIOC13 の DRDY を有効にした trigger ELF で polling と同じ刺激 |
+| RESD interrupt | `irq-stream/0.uart.log` | trigger ELF で同じ 3 区間と終端後のゼロ復帰 |
+| Driver errata | `errata/0.uart.log` | Zephyr 4.4 polling ELF の起動と加速度の期待値 |
+
+いずれも診断 REPL と固定の仮想実行区間を使うため台帳は部分移植です。上流 REPL での実行、Robot の各 UART 待機タイムアウト、RESD コンテナー、FIFO と追加バンクは残件です。未変更の参照 RESC は IMU 定義を通過し、`platforms/cpus/stm32h7.repl:267` の TIM17 に対して `expected an APB1L STM32 timer RCC alias` を返します。対象分母 778 行は維持し、内訳は未達 763、部分移植 15 行です。
+
+### full-h7-tim17
+
+固定上流 REPL の TIM17 宣言を、APB2ENR のビット 18 と APB2RSTR のビット 18 に接続しました。同じ APB2 バンクの TIM15 と TIM16 にも各ビット 16 と 17 を割り当てました。APB1L の既存タイマーは従来のゲートを使います。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-io-smoke.sh /tmp/Shellスモークのログディレクトリ
+bash tests/stm32h7-lsm6dso-smoke.sh /tmp/Shellスモークのログディレクトリ
+target/release/penv run \
+    --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```
+
+公開参照 ELF の Shell で TIM17 の ARR を読み、クロック停止中と APB1LENR の同ビットを有効にした場合の両方で 0 を確認しました。APB2ENR を有効にすると ARR は `0xffff` を返し、ゲストが書いた `0x42` も読み出せました。EGR で発行した更新イベントで SR の UIF と NVIC IRQ 118 の保留を読み出し、APB2RSTR でリセット後に ARR が初期値へ戻り、IRQ が再保留されないことを確認しました。ログは `tim17-uart.log` と `tim17-penv.log` です。TIM15 と TIM16 は同じバンクへの宣言取り込みまで確認しました。
+
+未変更の上流 RESC は TIM15・TIM16・TIM17 を通過し、`platforms/cpus/stm32h7.repl:305` の `timer8: unsupported STM32 timer RCC alias TIM8` で停止します。TIM8 の APB2 結合と複数 IRQ ルートは残件です。このゲスト検証は診断スモークのため、上流ケース台帳の等価合格数には算入しません。
+
+### scope-audit-network
+
+固定版から現台帳を再生成し、**対象 785 実行構成**を確定しました。適用外 426 構成を含む総数は 1,211 です。機種固有の Nucleo H753ZI は 25 ケースすべて対象です。
+
+| 判定 | 実行構成数 |
+| --- | ---: |
+| 上流等価の合格 | 0 |
+| 部分移植 | 15 |
+| 未達 | 770 |
+| 適用外 | 426 |
+| 判定待ち | 0 |
+
+Robot の `Should Load Repls` は Linux x64 のブラックリスト条件で 225 構成に展開しました。実際の `using` を追跡すると、STM32H7 の Cortex-M7 ベースを継承するのは、参照・Discovery・Nucleo の 3 ボードと CPU の 4 定義です。残る 218 行には、ケースが要求する個別 REPL と STM32H7 継承がないことを記録しました。NUnit `ShouldGuardPeripheralReads` は `cpuCount=1,2,3,4` をそれぞれ含めます。汎用 ICPU のモック台数で、実機のコア数は条件に含まれません。
+
+固定 STM32F746G のボタン割り込みと STM32L072 ELF のシンボルケースは、必要なボード・ファームウェア・観測点を記録して適用外としました。一方、F4 の REPL を足場にした共通 Cortex-M の WFE・BASEPRI・SysTick と、Cortex-M4F の CMSIS-DSP は H7 に移植可能なため対象です。繰り返し指定とテスト本文のループは、同一構成での回数・刺激・順序として判定条件に残します。同一リポジトリ・ファイル・ケース・構成の重複だけを除くよう生成器を更新し、今回の生成結果には重複がありませんでした。
+
+再生成には `full-upstream-network` 節の固定アーカイブ取得と `inventory-stm32h7.py` の手順を使います。`cargo test` と Shell・I/O・表示/SD・LSM6DSO の診断スモークを実行しました。固定上流との差分を残す部分移植は等価合格数に含まれません。対象ケースの実装・等価検証は残っています。
+
+### full-h7-tim8-upstream
+
+固定上流 `stm32h7.repl` の TIM8 登録を APB2ENR/APB2RSTR のビット 1 に接続しました。名前付き IRQ と出力・入力リストを読み込み、Break は NVIC 43、Update は 44、Trigger/Commutation は 45、CaptureCompare は 46 に接続します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクトリ
+target/release/penv run \
+    --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```
+
+TIM8 スモークは上流の登録と GPIO 出力追記をそのまま診断 REPL に加え、上流参照の Zephyr ELF を起動します。固定 `STM32_Timer.cs` の `EventGeneration`、`HandleResetMode`、`UpdateInterrupts` と照合した刺激・観測点は次のとおりです。
+
+| 刺激 | 実測した TIM8 SR と NVIC ISPR1 |
+| --- | --- |
+| EGR の CCxG/COMG/TG と予約ビット | SR 0、関連 IRQ 保留なし |
+| DIER.UIE と EGR.UG | SR `0x1`、IRQ 44 の `0x1000` |
+| TI1 入力・slave reset mode・DIER.TIE | CNT 0、SR `0x40`、IRQ 45 の `0x2000` |
+| タイマーの CC1 比較一致・DIER.CC1IE | SR `0x2`、IRQ 46 の `0x4000` |
+
+固定モデルでは Break・Commutation の出力は低レベルです。スモークでは APB1L が TIM8 を有効にしないことと、APB2 リセット後に ARR が `0xffff`、DIER が 0 に戻ることも確認します。証拠は `monitor.log`、`0.uart.log`、`boot.resc` です。今回の刺激は固定モデルのソースから導出しました。固定 Renode の直接実行や既存 Robot の等価実行は未確認なので、上流ケース台帳の合格数には加えていません。外部トリガーは `timer8 OnGPIO` を使用し、GPIO ポートからタイマーへの代替入力配線は残件です。
+
+未変更 RESC は TIM8 を通過し、`platforms/cpus/stm32h7.repl:316` の `timer1: unsupported STM32 timer RCC alias TIM1` で停止します。上流 TIM1 は APB2 のビット 0、IRQ 24〜27 と GPIO 代替機能の追記を使用します。
+
+### h7-tim1
+
+TIM1 を APB2ENR/APB2RSTR のビット 0 に結合しました。TIM8 で実装した分離出力を使い、固定上流 REPL の Break → NVIC 24、Update → 25、Trigger/Commutation → 26、CaptureCompare → 27 を読み込みます。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクトリ timer1
+bash tests/stm32h7-tim8-smoke.sh /tmp/Shellスモークのログディレクトリ
+```
+
+TIM1 の登録と GPIO 出力追記を固定上流からそのまま取り込み、公開 Zephyr 参照 ELF の起動後に RCC・SR・NVIC ISPR0 を照合しました。APB1LENR の同じビットではゲートが開かず、APB2ENR で ARR が `0xffff` を返しました。Update、TI1 の slave reset trigger、CC1 比較一致はそれぞれ `0x02000000`、`0x04000000`、`0x08000000` を NVIC に保留し、リセットで初期値へ戻りました。固定モデルどおり Break と Commutation の保留は発生しません。TIM8 も同じスモークで回帰確認しました。
+
+未変更の上流 RESC は TIM1 を通過し、`platforms/cpus/stm32h7.repl:100` の `gpioPortK: missing SYSCFG port selector` で停止します。GPIO からタイマーへ向かう代替入力のファンアウトと、ピンの AF 選択に応じた配線が残件です。台帳の `Should Load Repls` に証拠を追記し、REPL 全体のロードが未達のため `OPEN` を維持しました。
+
+### h7-board-pass
+
+H753ZI 固有の 25 件のうち、Ethernet echo・Blinky・Button の 3 件を部分検証し、台帳に記録しました。残り 22 件は `OPEN` です。今回の上流等価合格は 0 件です。使用した上流テストは `tests/platforms/nucleo_h753zi.robot` です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+bash tests/stm32h7-zephyr-smoke.sh
+base=/tmp/Shellスモークのログディレクトリ
+bash tests/stm32h7-nucleo-board-smoke.sh "$base"
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+- **Blinky** は上流 ELF の UART 起動行と LED 状態を確認しました。GreenLED に対応する GPIOB0 を 10 ms ごとにサンプリングし、点灯・消灯とも約 1 秒の区間を計 8 回確認しました。
+- **Button** は上流 ELF の UART プロンプトを確認し、上流と同じ `UserButton1 Press` / `Release` を実行しました。UART の押下通知と GreenLED の消灯・点灯・消灯を確認しました。両ケースとも診断 REPL を使用し、Robot の LED Tester と同じ停止条件は未移植です。
+- **Ethernet echo** は上流の両 ELF を診断 REPL 上で仮想スイッチに接続しました。17 仮想秒の連続接続でサーバーの応答とクライアントの照合成功カウンター `0x44` を確認しました。クライアント UART は `<err> net_ic` の途中で止まり、8 秒後に切断する対照実験では `Received and compared … all ok` が出力されました。連続接続中に UART が止まる原因と、上流が要求する 4 組の順序照合は未確認です。
+
+GPIO の数値出力から複数のタイマー入力へ配線できるようにしました。上流の PA7 ファンアウト定義を取り込んだ診断 REPL で公開 Zephyr ELF を起動し、PA7 の立ち上がり 1 回で TIM1 と TIM8 の CNT が 0、SR が `0x40` になることを確認しました。Zephyr Shell と TIM1/TIM8 の回帰も通過しました。未変更の参照 RESC と Nucleo REPL は GPIOK を通過し、`platforms/cpus/stm32h7.repl:206` の `lpuart1: unsupported USART IRQ wiring` で停止します。USART の複数登録と EXTI 配線を次に照合する必要があります。
+
+ログ、終了状態、診断用 RESC/REPL は `~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr` に保存しました。以下は同じ診断と未変更定義の再実行コマンドです。
+
+```bash
+e=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr
+for scenario in echo-long echo-drain; do
+    target/release/penv run --script "$e/$scenario/echo.resc" \
+        --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" \
+        --max-steps 18000000 --uart-log-dir "$(mktemp -d)"
+done
+target/release/penv run --script "$e/fanout/boot.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1500000
+target/release/penv run --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+target/release/penv run --script "$e/nucleo-load.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1000000
+```
+
+### backlog-network-e9661f3ff43b-1
+
+複数登録を持つ上流 STM32H7 USART/LPUART を読み込み、既存の EXTI ルートに接続しました。RCC の APB1L、APB2、APB4 の有効化・リセットを適用し、UART 入力はクロックと受信が有効な最初の USART に渡します。リンクした USART3 でゲート、受信、EXTI28 → NVIC39、リセットをテストしました。上流定義では未配置の DBGMCU 領域は固定 Renode の未配置アクセスに合わせて 0 を返します。従来の診断 REPL にある DBGMCU モデルは引き続き使用できます。
+
+上流 `tests/unit-tests/platform_descriptions.robot` の `Should Load Repls` を STM32H7 の固定パラメーター 7 件で移植しました。各 CLI プロセスで新規マシンを作成し、同じ REPL のロードの成否を観測して破棄します。Nucleo、参照ボード、CPU 定義 4 件の計 6 件が等価合格です。Disco は I²C4 アドレス `0x38` の `Input.FT5336` と GPIOK7 の割り込みが未対応です。台帳全体では対象 785 件のうち 6 件が等価合格、17 件が部分検証、762 件が未達です。
+
+未変更の参照 RESC で公開 Zephyr が起動し、UART の `kernel version` に `Zephyr version 4.4.99` と応答しました。未変更 Nucleo REPL でも上流の Blinky、Button のスモークは通過しました。LED Tester と停止条件が未移植のため部分検証のままです。Ethernet echo は同じ構成で 10 仮想秒以内にサーバー応答 10 回と照合成功カウンター `0x2c` を観測しました。クライアント UART の比較行と順序条件は未達です。CubeMX の Ethernet リンクケースは公開 ELF の hard-float ABI をローダーが拒否しました。上流の `netif link up` は未観測です。
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-usart.gG85D2ya` に保存しました。参照 RESC のシェルは応答後に手順中の命令上限に達するため、コード 2 で終了します。ロードスクリプトは Disco の未達によりコード 1 を返し、全構成の個別終了状態を記録します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-board-smoke.sh
+input=$(mktemp)
+printf 'kernel version\r' > "$input"
+target/release/penv run --script ../renode/scripts/single-node/stm32h7_renode_reference_board.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1800000 \
+    --uart-event "1250000:$input"
+e=~/.local/state/penv-dispatch/evidence/h7-usart.gG85D2ya
+target/release/penv run --script "$e/echo/echo.resc" --platform-root ../renode \
+    --asset-dir "$PENV_ASSET_DIR" --max-steps 11000000 --uart-log-dir "$(mktemp -d)"
+target/release/penv run --platform ../renode/platforms/boards/nucleo_h753zi.repl \
+    --platform-root ../renode --max-steps 3000000 "$PENV_ASSET_DIR"/cubemx--stm32h7-eth-test.elf-s_1231644-3e808bfc20a3a96ad304acbc94c7dbd6b06245e5
+```
+
+### backlog-network-e51dff8e297b-1
+
+STM32H747 Disco の未変更 REPL が登録する FT5336 を実装しました。I²C4 の `0x38` に接続し、ボード指定の回転と Y 軸反転、接触・解放・座標の報告、ベンダー ID、GPIOK7 の割り込みパルスを扱います。入力にはモニターの `sysbus.i2c4.touchscreen MoveTo 50 60`、`Press`、`Release` を使います。
+
+- `Should Load Repls` の STM32H7 対象 7 構成が合格しました。以前失敗していた Disco を含みます。
+- 固定 Infrastructure の `FT5336Test.cs` 4 件を同じ回転・反転、最大座標、移動・押下、読み出し長、状態・座標の期待値で移植しました。4 件を台帳の分母に追加しました。対象 789 件のうち等価合格 11 件、部分検証 17 件、未達 761 件です。
+- Disco の未変更 REPL で公開 STM32H747 表示 ELF を実行し、モニターで I²C4 の送受信レジスターを操作しました。接触座標 `(420, 50)`、解放状態、ベンダー ID `0x51`、EXTI7 と NVIC23 の保留を確認しました。この試行の I²C 操作はモニターから行っています。表示 ELF の単独実行では最初の 1 仮想秒に UART 出力が得られず、ゲストドライバーからのタッチ処理と表示連携は未確認です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-board-smoke.sh
+target/release/penv run --script tests/stm32h7-ft5336.resc \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1500000
+```
+
+モニター出力の末尾列は順に `0x00000080 0x00800000 0x00000081 0x000000a4 0x00000000 0x00000032 0x00000000 0x00000041 0x00000051` です。検証ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-ft5336.AQ9WNxRa` に保存しました。
+
+### backlog-network-5f23f917ea51-1
+
+`nucleo_h753zi.robot` の `Should Blink Led` と `Should See Button Press` を移植しました。両方とも未変更 Nucleo REPL と固定上流の公開 ELF を使います。モニターは名前で選んだ USART3 の出力を待ち、上流と同じ順序で LED の観測とボタン操作へ進みます。
+
+- Blinky は起動バナーの途中一致と LED 状態行の完了を待ち、GreenLED の変化を 8 仮想秒追跡します。最初のエッジで同期し、その後の点灯・消灯区間を各 1 秒 ±5% で照合します。今回は 6 完全区間を確認しました。
+- Button は起動と操作案内の後に GreenLED の消灯を確認し、上流と同じ UserButton1 を押下します。UART の押下通知を待って点灯を照合し、解放後に消灯を照合します。LED の各期待値の期限は 1 仮想秒、UART の各待機期限は 8 仮想秒です。
+
+CLI の UART 待機はこの移植で使うリテラル部分一致と複数候補に対応します。Blinky の上流正規表現は等価な 2 候補で表現しました。Ethernet echo のような数値付き正規表現とクライアント出力の不足は残件です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-led.Fm3d6yZW` に保存しました。点灯期待値の変更とボタン押下の削除で、期間違反と UART タイムアウトも確認しました。全 789 件のうち等価合格 13 件、部分検証 15 件、未達 761 件です。
+
+### backlog-network-d636d1885df8-1
+
+未変更 Nucleo REPL と上流の公開 ELF で、ADC DMA と Zephyr Encryption Sample の 2 ケースが等価合格しました。ADC DMA は USART3 で上流と同じ 7 件の `PASS` 行を順番に照合しました。暗号サンプルは従来の ECB の次に CBC で停止していたため、STM32H7 CRYPTO に CBC の IV 更新と CTR の 32 ビットカウンターを実装しました。ECB・CBC・CTR の暗号化と復号の `Match` 行が上流と同じ順序で出ました。
+
+長文 UART ケース向けに、名前付き USART への行入力、禁止文字列の監視、REPL 周波数と UART 設定に基づく受信間隔を実装しました。上流と同じコマンドと CR を入力し、50 ms の実行後にプロンプトを照合しました。さらに 0.7 仮想秒の対照観測を追加すると `RX ring buffer full` が出るため、部分検証に留めています。モニターが禁止文字列を検出して失敗することも、この対照で確認しました。
+
+CAN ループバックは初期化後の `Counter received: 0` が 8 仮想秒以内に出ず、FDCAN の送信・受信 FIFO ループバックが未実装です。割り込みケースは `test_arm_esf_collection` 中に `0x0800c460` の Thumb `0xde5a` で停止します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+logs=$(mktemp -d)
+bash tests/stm32h7-nucleo-uart-line.sh "$logs"
+printf 'emulation RunFor "0.7"\n' >> "$logs/case.resc"
+target/release/penv run --script "$logs/case.resc" --platform-root ../renode \
+    --asset-dir "$PENV_ASSET_DIR" --max-steps 18000000 --uart-log-dir "$(mktemp -d)"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-uart-line.m4RnjA3M` にあります。ADC DMA・暗号サンプルは `ztest/`、長文の対照は `paced-after/` です。台帳は対象 789 件のうち等価合格 15 件、部分検証 16 件、未達 758 件です。
+
+### backlog-network-160de3171208-1
+
+Cortex-M の 16 ビット `UDF` を同期例外として処理し、命令アドレスを例外フレームに保存します。UsageFault が有効で優先度が許せば UsageFault に入り、それ以外では HardFault に昇格します。CFSR.UNDEFINSTR と HFSR.FORCED の記録とクリア、およびハンドラー内の SVC の優先度判定を実装しました。
+
+未変更の Nucleo REPL と `nucleo_h753zi.robot` の公開割り込み ELF で `test_arm_esf_collection` が合格しました。後続 `test_arm_interrupt` は期待した reason 2 が処理されず失敗し、`test_arm_user_interrupt` は PC `0x08001c0c` から Thumb 状態を選ばないアドレス 0 に分岐して停止します。UART と停止理由を記録し、Robot ケース全体は部分検証としました。
+
+共通 SysTick モデルを上流の即時リロードと周期に合わせ、`arm-cortex-m-interrupts.robot` のリロード設定順が異なる 2 ケースを移植しました。各テストは上流と同じ 100 Hz、RELOAD 10、同じ CSR・RVR・CVR 書き込み順を使い、0/90/100/110 ms 時点の CVR が 10/1/10/9 になることを確認します。汎用タイマーの検証なので F4 のボード固有機器への刺激はありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test upstream_count_down_with_reload
+cargo build --release
+e=~/.local/state/penv-dispatch/evidence/h7-usagefault.F5wFPNUj
+target/release/penv run --script "$e/interrupt.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --uart-log-dir "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+ログと終了状態は上記の証拠ディレクトリに保存しています。割り込み ELF の最終ログは `final/` にあります。台帳は対象 789 件のうち等価合格 17 件、部分検証 17 件、未達 755 件です。
+
+### backlog-network-53ae79821516-1
+
+共通 Cortex-M/NVIC モデルに WFE の待機と SEV のイベントを実装しました。SCR.SEVONPEND が有効な場合、無効化されている IRQ も保留への遷移でイベントを発生させます。WFE はイベントで再開し、IRQ の許可と優先度に基づく例外処理は従来どおりです。BASEPRI・PRIMASK・FAULTMASK から求める優先度の下限判定を共通化しました。
+
+上流 `arm-cortex-m-interrupts.robot` の残り 2 件を Rust テストに移植しました。WFE ケースは同じ `WFE; STR; B`、SCR=0x10、IRQ5 で、刺激前の対象メモリーが 0、刺激後 1 仮想秒以内に `0xDEADBEEF` になることを照合します。BASEPRI ケースは同じ `0x50` と優先度の比較を行い、リセット前の一致とリセット後の不一致を確認します。両ケースとも F4 固有の周辺機器を使わないため、H7 でも使用する共通モデルで検証しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test upstream_wfe` と `cargo test upstream_basepri` で個別に再現できます。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-wfe.Vp3mSKus` に保存しました。台帳は対象 789 件のうち等価合格 19 件、部分検証 17 件、未達 753 件です。Nucleo の公開割り込み ELF の後続サブテストには、前記の例外理由とユーザーモード分岐の未達が残っています。
+
+### backlog-network-1d4470862620-1
+
+上流 `tests/unit-tests/arm-ge-flag.robot` の固定 Cortex-M7 ケース 6 件を移植しました。Thumb-2 の符号付き・符号なし並列加減算で、各 8/16 ビット演算の結果と GE ビットを更新し、`SEL` が GE に従ってバイトを選択します。APSR の GE を読み出し・書き込みと例外フレームに反映します。命令実装とテストは担当ローカルの nRF52 作業ツリーにある共通部分を参照しました。
+
+各テストは上流と同じ 10 命令を実行し、R4 を照合します。固定上流のアセンブリを Cortex-M7 向けに再アセンブルし、6 件それぞれの 40 バイトと R4 の期待値が移植版と一致することを確認しました。タイトルが `usub8` のケースでは、固定上流本文どおり `ssub8` を実行しています。このケースが符号なしバイト減算のカバレッジを与えるわけではありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test thumb::ge_upstream
+cargo build --release
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+未変更 Nucleo REPL と公開 Zephyr ELF で ADC DMA、暗号サンプル、Blinky、Button の回帰が通過しました。アセンブリ照合、実行ログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ge.aGNitIHh` にあります。台帳は対象 789 件のうち等価合格 25 件、部分検証 17 件、未達 747 件です。
+
+### backlog-network-1d617f3607ae-1
+
+上流 `VEML7700.robot` のポーリング 4 ケースを移植しました。Nucleo の未変更上流 REPL に、Robot と同じ `als: Sensors.VEML7700 @ i2c1 0x10` を追加します。モニターからの名前付き照度変更を実装し、公開 Zephyr 4.2 と 4.4 ELF で同じ設定値と USART3 の出力を比較しました。4.2 は `0 → 499 → 29 → 10000`、4.4 は `0 → 499` です。
+
+固定上流の CSV を上流の `csv2resd.py` で定周期・タイムスタンプ付き RESD に変換し、それぞれを同じ公開 Zephyr 4.2 ELF に供給しました。センサーは仮想時刻に対応するサンプルを読み、終了後は最後の値を保持します。両ケースで `0 → 499 → 12000 → 12000` を確認しました。実装対象は RESD v1 の照度チャンネル 0 の単一ブロックです。
+
+上流 VEML7700 Shell ELF は USART3 のプロンプトまで起動しました。500 lx を設定して上流コマンドを送った後、8 仮想秒以内にセンサー応答を観測できず、このケースは部分検証のままです。参照ボードの Zephyr Shell と上流 REPL ロード 7 構成は回帰確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-veml7700-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-veml.QF6dq3bd
+target/release/penv run --script "$e/shell-wait/case.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 17000000
+```
+
+RESD、UART、終了状態は `~/.local/state/penv-dispatch/evidence/h7-veml.QF6dq3bd` に保存しました。台帳は対象 789 件のうち等価合格 29 件、部分検証 17 件、未達 743 件です。
+
+### backlog-network-a8bb256e028f-1
+
+上流 `LPS25HB.robot` の 4 ケースを移植しました。公開 Zephyr 4.2/4.4 ELF を未変更の Nucleo REPL と上流と同じ `i2c1 0x5D` のセンサー登録で実行しました。実行時の温度・気圧変更、範囲外の入力で前の値が維持される動作、各段階の USART3 出力を上流順に照合しました。圧力プロパティの設定と読み戻しは `1023.346923828125`、直接レジスター読み出しは `8D F5 3F` を確認しました。
+
+共有 RESD v1 デコーダーでチャンネル 0 の温度・気圧を読み、固定モデルと同じセンサー出力データレートでサンプルの反映時刻を求めます。上流変換器が生成した 25 Hz・開始 70 ms の RESD で、3 組のサンプルと終端後の既定値への復帰 2 回を確認しました。RESD はサンプル種別ごとに単一ブロックを扱い、LPS25HB の終端復帰は定周期ブロックで検証しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test upstream_pressure_property_and_direct_read
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-veml7700-robot.sh "$(mktemp -d)"
+```
+
+検証ログ、RESD、終了状態は `~/.local/state/penv-dispatch/evidence/h7-lps-live.w4haoFY7` にあります。LPS25HB の最終ログは `paced/` にあり、VEML7700 ポーリング 4 件と参照 Zephyr Shell の回帰も通過しました。台帳は対象 789 件のうち等価合格 33 件、部分検証 14 件、未達 742 件です。
+
+### backlog-network-961099fa88c2-1
+
+LSM6DSO に加速度・角速度の独立した RESD ストリームを追加しました。固定上流の CSV と変換器で、チャンネル 0、12 Hz、開始 100 ms の RESD を生成します。ゲストが設定した出力データレートでサンプルを更新し、ストリーム終了後は設定された既定値へ戻ります。従来の CSV 診断入力も引き続き使えます。
+
+未変更 Nucleo REPL に Robot と同じ I²C1 の `0x6A` と PC13 の割り込み配線を追加し、固定上流の ELF で USART3 の順序と 2 仮想秒の各期限を照合しました。基本ポーリング、基本割り込み、割り込み RESD、Errata 対応ドライバーの 4 件が合格しました。
+
+ポーリング RESD は部分検証です。第 3 組の加速度は 3,149,860 ラウンドで一致します。次の角速度には第 3 組の期待値が出ず、ゲストは既定値を出力します。固定 RESD は約 3.1 仮想秒で終了するため、このポーリングでの出力サンプルの保持とゲスト読み出しの時系列が残件です。移植スクリプトは全 5 件を実行し、この未達をコード 1 で報告します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-lsm6dso-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+```
+
+検証ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-lsm-resd.YFHMg3EA` にあります。LSM6DSO の最終実行は `final/` です。台帳は対象 789 件のうち等価合格 37 件、部分検証 10 件、未達 742 件です。
+
+### backlog-network-89ddefe9bc0e-1
+
+IIS2MDC の RESD 入力を実装し、固定上流のポーリングとトリガーの 2 ケースが等価合格しました。上流コンバーターは開始 3 秒、2 Hz の 9 ブロックを生成します。共有デコーダーは隣接する定周期ブロックを連結できます。未変更の STM32H753 CPU REPL に上流と同じ I²C1 と GPIOG11 を配線し、同じ ELF で USART2 の全 9 組と各 8 秒の期限を照合しました。
+
+INA228 の I²C 設定・測定レジスター、ADC 周期、電力量と電荷の積算、電圧 2 チャンネルと温度の RESD 入力を実装しました。定周期・タイムスタンプ付きの両ケースで、同じ上流 ELF・RESD・3 秒の行待機期限を使いました。電圧・電流・電力・温度は全行で許容差内でした。電力量と電荷が許容差外のため、両ケースは部分検証です。
+
+INA228 の最初の非ゼロ行は約 2.186 仮想秒で出力され、電力量 330.813184 J、電荷 6.896582 C でした。固定上流の期待値は 288.29 J と 6.01 C です。積算区間を左右する ADC 更新・ゲスト読み出し・リセットの時系列の照合が残っています。許容差を保持しており、INA228 のスクリプトはコード 1 を返します。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-ina228-robot.sh "$(mktemp -d)"
+PYTHON="$venv/bin/python" bash tests/stm32h7-lps25hb-robot.sh "$(mktemp -d)"
+```
+
+ログ、RESD、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ina228.lLR6tsyx` にあります。INA228 の比較結果は `ina-final/*/compare.log` に保存しました。LPS25HB と上流 REPL 7 構成の回帰も通過しました。台帳は対象 789 件のうち等価合格 39 件、部分検証 10 件、未達 740 件です。
+
+### backlog-network-fa475fcf2125-1
+
+STM32H7 RCC の発振器・PLL の書き込み制約とリセット値を修正しました。選択中のシステムクロック、動作中の PLL のクロックソース、HSE CSS の保持、PLL1 の無効な DIVP1 値を固定上流の NUnit 7 件と照合しました。公開 Zephyr ELF が使う `SMLAxy` と APSR.Q、内部クロック校正レジスターも実装しました。
+
+未変更 STM32H743 REPL と上流 ELF で、HSE 8、HSE 8 CSS、HSI 64、PLL CSI 96、PLL HSE 96、PLL HSI 96 の 6 Robot ケースが等価合格しました。CSI 4 は USART3 が無出力のまま 8 仮想秒でタイムアウトします。短い追試の命令上限時点では PC `0x0800479c` を観測しましたが、停止原因は未確定です。RCC の TIM1 リセットログ、周波数照会、ゲート状態照会を使う残り 3 Robot ケースも未達です。
+
+LTDC ではボタン登録にピン番号を省き、接続先のピンだけを書く固定 REPL の構文に対応しました。その構成の公開表示 ELF は、上流 STM32H743 REPL に未配置の DSI 領域 `0x50000430` をアクセスして停止します。シャドーレジスターの両ケースは既存の診断検証に基づく部分検証のままです。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test upstream_rcc_tests
+cargo build --release
+bash tests/stm32h7-rcc-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-ltdc-robot.GpG8dofF
+target/release/penv run --script "$e/start.resc" --platform-root ../renode \
+    --asset-dir "$PENV_ASSET_DIR" --max-steps 45000000
+```
+
+RCC スクリプトは CSI 4 の未達によりコード 1 を返します。ログと終了状態は上記の証拠ディレクトリにあり、RCC の最終実行は `rcc-rules/` です。参照 Zephyr Shell、ADC DMA、暗号サンプル、Blinky、Button、REPL ロード 7 構成は回帰を通過しました。台帳は対象 789 件のうち等価合格 52 件、部分検証 10 件、未達 727 件です。
+
+### backlog-network-3ea9295d2060-1
+
+未変更 STM32H743 REPL で、ファームウェアを実行しない `STM32H7_RCC.robot` の TIM1 3 ケースを移植しました。APB2RSTR への `0x1` で実リセットを実行し、`Resetting TIM1` を記録しました。リセット前後の周波数はどちらも 64 MHz でした。APB2ENR へ上流と同じ値を書いて、有効・無効・有効の順に確認しました。
+
+登録されたタイマーのゲートは上流モデルと同じく初期状態で有効です。タイマー周波数は RCC のシステムクロックとドメイン・APB 分周から求めます。別のプローブで HSI 64 MHz から HSE 8 MHz に切り替え、HPRE・D2PPRE2・TIMPRE による `4 → 2 → 4` MHz も確認しました。既存 TIM1/TIM8 実 ELF スモークのクロック停止確認には、APB2ENR を明示的にクリアする操作を追加しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-rcc-timer.0zFmYqdC` に保存しました。クロック構成の公開 ELF は既合格の 6 件が再度通過しました。CSI 4 は引き続き 8 仮想秒以内に USART3 出力がありません。台帳は対象 789 件のうち等価合格 55 件、部分検証 10 件、未達 724 件です。
+
+### backlog-network-6caf4b37ab9c-1
+
+STM32 タイマーの出力比較で、対応する CCxIE が有効な場合に CCxIF を立てるようにしました。固定 Renode の STM32_Timer と同じ条件です。比較割り込みをマスクしたまま PWM 出力は動作します。
+
+上流 `ComparingTimerTests.cs` から 4 件を移植しました。1 MHz、比較値、経過時間、CNT への書き戻しを揃え、CNT・CCR1 と各区間の比較イベント数を照合しました。汎用タイマーが周期を上限とするフィクスチャに対し、STM32 の ARR にはラップ直前の値である周期 − 1 を設定しています。汎用 `Compare` setter の範囲外例外は、STM32 の CCR 書き込みで観測する契約が違うため未達のままです。
+
+公開 Zephyr 参照 ELF を実行し、TIM3 の PWM 出力を有効にした状態で CC1IE の前後を観測しました。ステータスはマスク中が `0x1`、有効化後が `0x3` で、比較フラグだけが追加されました。TIM1/TIM8 実 ELF スモークと RCC の TIM1 3 ケースも通過しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test comparing_timer_cases
+cargo build --release
+e=~/.local/state/penv-dispatch/evidence/h7-compare.z8PftPwj
+target/release/penv run --script "$e/tim3-final/boot.resc" \
+    --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 1500000
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+```
+
+ログと終了状態は上記の証拠ディレクトリに保存しました。台帳は対象 789 件のうち等価合格 59 件、部分検証 10 件、未達 720 件です。
+
+### backlog-network-d77017f82834-1
+
+`penv check-platform --from-string REPL` を追加し、ファイル入力と同じ REPL パーサーと構築処理を使うようにしました。上流 `tests/unit-tests/platform_descriptions.robot` のインライン 3 ケースを移植しました。空文字列は正常終了し、存在しない `using "invalid"` と抽象 `CPU.TranslationCPU` は上流の期待診断を含むエラーで終了します。上流ではモニターコマンドで渡す 3 つの入力を、移植版は CLI のインライン検証に渡します。既存マシンにインライン定義を追加するモニター操作は残件です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+インラインから有効な STM32H743 REPL を `using` する経路、固定上流 REPL のロード 7 構成、公開 Nucleo Zephyr ELF の Blinky と Button も通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-errors.6QAE3tnn` に保存しました。台帳は対象 789 件のうち等価合格 62 件、部分検証 10 件、未達 717 件です。
+
+### backlog-network-503a5ccb5864-1
+
+共有 `UsingTests.cs` の 8 件を移植しました。同じ REPL 内の重複 `using`、直接・間接循環、存在しないファイルを、上流と同じインクルード構成と診断条件で確認しました。Unix では絶対パス、同一・親ディレクトリへの相対パス、バックスラッシュを含むファイル名を、上流と同じ入力と解決結果で照合しました。
+
+Windows パス 3 件は固定上流が非 Windows ホストで `Assert.Ignore` とするため、台帳を対象外に訂正しました。参照と `local` スコープ、合成グラフの属性上書き順を扱う残り 9 件は引き続き対象です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test platform::using_cases
+cargo build --release
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+固定 REPL の 7 構成、インライン REPL の 3 ケース、公開 Nucleo Zephyr ELF の Blinky と Button は回帰を通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-using.iKgL0z6U` に保存しました。台帳は対象 786 件のうち等価合格 70 件、部分検証 10 件、未達 706 件です。
+
+### backlog-network-51d0b6ddb4c3-1
+
+REPL の `using` グラフを子から親へ合成し、同じ階層では宣言順に属性を適用します。型付き宣言が後に現れる場合も、先行する属性の追記先を解決します。型付き宣言の重複と、同じ宣言内で重複したプロパティは既存の診断を維持します。
+
+固定上流 `UsingTests.cs` の属性上書き順 5 件を移植しました。固定 REPL 文字列を使い、上流の MockCPU が保持する文字列 `Placeholder` の期待値を合成結果で照合します。実 STM32H743 でも、`using` より前に置いた GPIO の属性が構築後の MMIO に反映されることを確認しました。MockCPU の参照解決と `local` スコープを扱う 4 件は残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test should_follow_attribute_override_order
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-using-order.bX4dvaHY
+target/release/penv run --script "$e/gpio.resc" --platform-root ../renode
+```
+
+検証ログと終了状態は上記のディレクトリに保存しました。台帳は対象 786 件のうち等価合格 75 件、部分検証 10 件、未達 701 件です。
+
+### backlog-network-35d1690c36de-1
+
+REPL にブロックコメント処理を追加し、引用符の内側にあるコメント記号を保持しました。固定上流 `PreLexerTests.cs` の 3 件を移植し、閉じていない文字列、インデント構文で複数行コメントの終了直後にコードが続く入力、行頭のブロックコメント直後にコードが続く入力を、同じ入力で構文エラーとして検出しました。実 STM32H743 REPL の GPIO 追記でも、コメントを含む入力が構築され、設定値 `0x55555555` が MMIO に反映されることを確認しました。
+
+`UsingTests.cs` の参照 4 件にはファイル単位の `local` スコープと型付き前方・後方参照が必要です。これらは未達のままです。ブロックコメントの処理と、任意の複数行インライン属性ブロックの構文解析は別の段階であり、後者の対応も残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo test platform::comment_cases
+cargo build --release
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-repl-comments.Zk9Rz9Cz
+target/release/penv run --script "$e/probe.resc" --platform-root ../renode
+```
+
+ログと終了状態は上記のディレクトリに保存しました。台帳は対象 786 件のうち等価合格 78 件、部分検証 10 件、未達 698 件です。
+
+### backlog-network-58f9301a8fe9-1
+
+REPL の波括弧内で複数行の属性を読み込み、属性間のセミコロンと任意の末尾セミコロンを処理します。固定上流 `ParserTests.cs` の 9 件を移植し、同じ入力で 4 件の解析結果と 5 件の構文エラーを照合しました。STM32H743 では、複数行コメントを含む GPIO 属性ブロックを組み立て、MMIO で設定値 `0x55555555` を確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-inline-attrs.hEQbdrTE
+target/release/penv run --script "$e/gpio.resc" --platform-root ../renode
+```
+
+上記の証拠ディレクトリに実行ログと終了状態を保存しました。固定 STM32H7 REPL 7 構成、構文診断 3 件、公開 Zephyr ELF の Blinky と Button が通過しました。台帳は対象 786 件のうち等価合格 87 件、部分検証 10 件、未達 689 件です。型付き参照と `local` スコープ、登録ブロックを含む他の構文ケースは引き続き未達です。
+
+### backlog-network-7bccc7d5790b-1
+
+REPL の波括弧付き登録リストを、周辺機器の型に依存せず構文解析します。登録の順序を保持し、登録間のセミコロンと任意の末尾セミコロンを処理します。登録先が空か、上流で識別子に使えない文字で始まる場合は構文エラーにします。登録値の文字列や入れ子のオブジェクトに含まれるセミコロンは登録の区切りにしません。固定上流 `ParserTests.cs` の8件を同じ入力で実行し、4件の受理と4件の拒否を照合しました。2登録のケースでは名前、型なし宣言、登録先、アドレス、順序も照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` は119件が通過し、STM32H7 と LiteX の双方向フレーム交換も含みます。固定 STM32H7 REPL 7構成、構文診断3件、公開 Nucleo Zephyr の Blinky・Button ELF も通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-registration.iw73Tr6H` にあります。
+
+台帳は対象786件のうち等価合格95件、部分検証10件、未達681件です。登録値の完全な型別構文検証、単一登録の範囲・文字列の専用ケース、型付き参照と `local` スコープのケースは残っています。
+
+### backlog-network-aa7e424888f6-1
+
+単一登録と登録リストで登録先・登録値の解析を共有しました。固定上流 `ParserTests.cs` の3件を同じ入力で実行し、宣言名、型なし宣言、登録先、登録値なし・範囲・文字列の各期待値を照合しました。メモリーのマッピングも同じ範囲解析を使い、従来の `+サイズ` と絶対終端の両方を受け付けます。STM32H743 に絶対終端で追加した 4 KiB の RAM では、末尾ワード `0x50000ffc` に書いた `0x12345678` を読み戻しました。最初の試行は既存の SRAM バンクと重複したため、空き領域に移して再検証しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-single-registration.PjfmFq83
+target/release/penv run --script "$e/range.resc" --platform-root ../renode
+```
+
+上記ディレクトリにログと終了状態を保存しました。`cargo test` 120件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Nucleo Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格98件、部分検証10件、未達678件です。その他の登録値の型別検証、型付き参照、`local` スコープは残っています。
+
+### backlog-network-2b82dcec1e69-1
+
+字下げ構文の `init:` では、見出しより深い行をコマンドとして集め、同階層に戻った後の属性を通常どおり処理します。コマンドの順序と引用符内のセミコロンを保持します。固定上流 `ParserTests.cs` の3件を同じ入力と期待コマンド列で移植しました。STM32H743 では、`size` を `init:` の後に置いた RAM を構築し、初期化した2ワードを読み戻しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-init-indent.OQ0aCyhl
+target/release/penv run --script "$e/init.resc" --platform-root ../renode
+```
+
+ログと終了状態は上記に保存しました。`cargo test` 121件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格101件、部分検証10件、未達675件です。波括弧内の init、`init add`、汎用モニターコマンドの実行は今回の検証範囲外です。
+
+### backlog-network-39a4f746e4d8-1
+
+REPL の `using` で、引用符付きパスのエスケープと末尾のセミコロン列を解析します。固定上流 `ParserTests.cs` の5件を同じ入力と期待パス列で移植しました。STM32H743 では、バックスラッシュを名前に含む追記ファイルを読み込み、GPIO の設定値 `0x55555555` を MMIO から読み戻しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-using-syntax.FiABTsvM
+target/release/penv run --script "$e/include.resc" --platform-root ../renode
+```
+
+上記にログと終了状態を保存しました。`cargo test` 122件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。対象786件のうち等価合格106件、部分検証10件、未達670件です。宣言と混在する `using` の専用ケース、一般プロパティ文字列のエスケープ、型付き参照と `local` スコープの検証は残っています。
+
+### backlog-network-13672a4487f3-1
+
+REPL の引用符付き文字列のデコーダーを `using`、登録値、IIS2MDC の `SampleCsv` で共有しました。固定上流 `ParserTests.cs` の2件を同じ入力で移植し、属性内のエスケープ済み引用符・連続バックスラッシュの復号値と、引用符付き値に続く属性の個数を照合しました。実 STM32H753 REPL でバックスラッシュを含む名前の CSV をセンサーに読み込ませました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-repl-quoted-values.VK7sb1IJ
+target/release/penv check-platform "$e/sensor.repl" --platform-root ../renode
+venv=$(mktemp -d)
+python3 -m venv "$venv"
+"$venv/bin/pip" install -r ../renode/tools/csv2resd/requirements.txt
+PYTHON="$venv/bin/python" bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"
+```
+
+対象786件のうち等価合格108件、部分検証10件、未達668件です。その他のモデル固有プロパティへの文字列デコーダーの適用、複数行文字列、型付き参照は残っています。
+
+`cargo test` 123件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button と IIS2MDC polling・trigger ELF が通過しました。ログと終了状態は上記の証拠ディレクトリに保存しました。センサーの初回実行はシステム Python に `construct` がなく停止し、依存導入済みの仮想環境で再実行しました。
+
+### backlog-network-90e05f242bfb-1
+
+REPL のインライン属性名に固定上流と同じ先頭文字の制約を適用しました。固定 `ParserTests.cs` の6件を同じ入力で実行し、空ブロックと属性・IRQ 混在ブロックの受理、空文または裸の識別子を含む4入力の拒否を照合しました。STM32H743 では空の GPIO 追記を含む構成をロードし、範囲登録とインライン属性で追加した RAM の読み書きを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-inline-members.IMCTbep4
+target/release/penv run --script "$e/inline.resc" --platform-root ../renode
+```
+
+ログと終了状態は上記に保存しました。`cargo test` 124件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。台帳は対象786件のうち等価合格114件、部分検証10件、未達662件です。IRQ 専用の構文ケースやオブジェクト値・辞書値を含むケースは残っています。
+
+### backlog-network-6bc447f3a884-1
+
+REPL の IRQ リストで範囲と単一端点の展開を共通化し、STM32H7 EXTI の配線で宛先の解析を使用しました。固定上流 `ShouldParseEntryWithMultiIrqEntries` では、混在する番号・名前の送信元と宛先の番号順を照合しました。複数宛先のケースでも全宛先と展開順を照合しました。個別の範囲グループ境界を観測する上流のアサーションは残っているため、台帳では部分検証としています。EXTI モデルで複数宛先に同時配信する動作も残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 125件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-irq-attributes.9rE3Kilw` にあります。台帳は対象786件のうち等価合格115件、部分検証11件、未達660件です。
+
+### backlog-network-80d50622371d-1
+
+REPL の IRQ 解析で、範囲と単一端点のグループを宛先ごとに保持します。固定上流 `ShouldParseEntryWithMultiplexedMultiIrqEntries` と同じ入力で送信元の展開順、3宛先の順序、各宛先の端点とグループ境界を照合し、部分検証から等価合格に更新しました。STM32H7 の既存 IRQ 配線はグループを展開した番号列を使います。EXTI の複数宛先への同時配信は残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 125件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-irq-groups.3Clg0yOD` に保存しました。台帳は対象786件のうち等価合格116件、部分検証10件、未達660件です。
+
+### backlog-network-ea160469cec9-1
+
+REPL の IRQ 宛先で `名前#番号` を分解する処理を STM32H7 GPIO の SYSCFG 配線と共有しました。固定上流 `ParserTests.cs` の3件を同じ入力で移植し、番号付き・名前付き・既定の送信元、複数宛先の順序、ローカル受信先番号と入力番号を照合しました。これらは構文ケースです。実行時の複数宛先への配信は残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-simple-irqs.RiE7SzEV` に保存しました。台帳は対象786件のうち等価合格119件、部分検証10件、未達657件です。
+
+### backlog-network-d851b265aa4a-1
+
+REPL の真偽値、参照、列挙値を分類し、STM32H7 の LED とボタンの `invert` に適用しました。真偽値として認識する綴りは `true`、`false`、`True`、`False` です。固定 `ParserTests.cs` の3件を同じ入力で移植し、真偽値と参照の区別、型名付きと省略形の列挙値を照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-boolean-values.zehmtRdP
+target/release/penv check-platform "$e/bool.repl" --platform-root ../renode
+```
+
+`cargo test` 128件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF、タイトルケースの真偽値を使う Nucleo 追記の構築が通過しました。ケース別結果は上記の `cases.tsv` に記録しました。対象786件のうち等価合格122件、部分検証10件、未達654件です。型付き参照の解決と、他の周辺機器への真偽値処理の適用は残っています。
+
+### backlog-network-a41f984d1aaa-1
+
+REPL の宣言パーサーで `local` 修飾子を保持します。空入力、単一宣言、複数宣言、同名の短縮宣言、ローカルとグローバルの区別、LF と CRLF の混在を扱う固定上流6件を一括実行しました。実行時のファイル単位の名前解決は未実装です。構築時にローカル宣言を検出すると専用診断を返すことを STM32H743 の追記で確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-declarations.nWqeeFrI
+target/release/penv check-platform "$e/local.repl" --platform-root ../renode
+```
+
+`cargo test` 134件、固定 STM32H7 REPL 7構成、構文診断3件、Zephyr Blinky・Button ELF が通過しました。ケース別の結果は上記の `cases.tsv` に保存しました。台帳は対象786件のうち等価合格128件、部分検証10件、未達648件です。実行時のローカルスコープは、ファイル別の名前空間と、型付き参照および追記先の解決が必要です。
+
+### backlog-network-02c4dcdab82b-1
+
+REPL の字下げ属性で、スカラーのキーと値からなる辞書を解析します。固定上流の7ケースを個別の Rust テストとして移植し、同じバイナリで実行しました。空辞書、項目順、引用符付きキーと数値トークン、末尾セミコロンを照合しました。閉じ波括弧、区切り、コロンの誤りは上流が照合する診断文字列で確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 141件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-dictionaries.5HgKaeRf` に保存しました。対象786件のうち等価合格135件、部分検証10件、未達641件です。入れ子の辞書・リスト・オブジェクトを辞書値に使う構文、波括弧付き属性ブロック内の辞書、辞書のモデルへの受け渡しは残っています。
+
+### backlog-network-ffda2a9e813b-1
+
+REPL のリスト値を解析し、STM32H7 GPIO の `invertedAFPins` に共通パーサーを適用しました。固定上流 `ParserTests.cs` の4件を個別のテストとして同じバイナリで実行し、空リスト、末尾カンマ、入れ子、数値・文字列・真偽値・参照・範囲の混在を照合しました。リスト内のインラインオブジェクトは、オブジェクトの属性ブロックを解析する処理が必要なため未達です。リストの入れ子は64レベルまでです。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 145件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、ログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-lists.pQCV9IG8` にあります。対象786件のうち等価合格139件、部分検証10件、未達637件です。
+
+### backlog-network-66e060011c57-1
+
+REPL の字下げ付きオブジェクト値とリスト内のインラインオブジェクトを解析します。波括弧内の属性処理は STM32H7 Ethernet の領域登録と共有しました。固定上流 `ShouldParseObjectValue` と `ShouldParseListWithInlineObject` を同じバイナリで実行し、オブジェクト型、項目数、属性名、数値トークンを照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 147件に STM32H7 と LiteX の双方向 Ethernet 回帰を含みます。固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF も通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-objects.NqbMFJGf` に保存しました。対象786件のうち等価合格141件、部分検証10件、未達635件です。入れ子のオブジェクト属性、字下げ属性間の空行、一般の型の実行時インスタンス化は残っています。
+
+### backlog-network-964c2dda4c3b-1
+
+REPL のリストと辞書でスカラー値の解析を共有し、字下げ属性に書いたインラインオブジェクトの構文を検証します。固定上流 `ParserTests.cs` の残り3件を同じバイナリで実行し、型が混在する属性、登録・IRQ・init を含む複合例、`using` と宣言の組み合わせを照合しました。固定 `ParserTests.cs` の台帳66件が等価合格になりました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 150件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-parser-remaining.36hNSlvg` に保存しました。台帳全体は対象786件のうち等価合格144件、部分検証10件、未達632件です。汎用オブジェクトのインスタンス化、型付き参照の解決、ファイル単位のローカルスコープは残っています。
+
+### backlog-network-47aff51c222c-1
+
+REPL のコメント処理で、字下げモードにある複数行コメントの終端行を空行として扱い、波括弧内では後続コードの UTF-16 列を保持します。固定上流 `PreLexerTests.cs` の8件を同じバイナリで個別実行し、コメント除去後の行、空白、引用符内のコメント記号と波括弧を照合しました。上流プリレクサが後段で挿入するセミコロンは、行境界を直接処理する実装の観測点に合わせて正規化しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 159件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-comment-cases.1rP2Az0a` にあります。台帳は対象786件のうち等価合格152件、部分検証10件、未達624件です。字下げと複数段のアウトデントを扱うプリレクサケースは残っています。
+
+### backlog-network-6b71b3744382-1
+
+REPL の最初の有効行を字句処理で確認し、字下げされている場合に専用診断を返します。固定上流 `PreLexerTests.cs` の3件を同じバイナリで個別実行し、空入力、先頭行の通過、初期字下げでの拒否を照合しました。STM32H743 の `using` を最初の有効行で字下げした CLI 入力も、2行目を指す診断で拒否しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-prelexer-first-line.aEsZ3BA2
+target/release/penv check-platform "$e/initial-indent.repl" --platform-root ../renode
+```
+
+最後のコマンドは構文エラーで終了します。`cargo test` 162件、固定 STM32H7 REPL 7構成、既存の構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格155件、部分検証10件、未達621件です。段階的な字下げと EOF での境界ケースは、上流が文字列に挿入する区切りと現行パーサーが内部で扱う属性境界の対応を検証する処理が必要です。
+
+### backlog-network-131f440804a5-1
+
+REPL の字下げ境界判定を `init:` と字下げ付きオブジェクト属性で共有し、オブジェクト属性間の空行を許容しました。固定上流 `PreLexerTests.cs` の残り7件を個別テストとして移植しました。初回は明示波括弧の終端でテスト用レンダラーが閉じ波括弧を一つ余分に生成したため、有効な字下げレベルを保持するよう修正しました。
+
+7件とも上流出力と一致しました。テスト用レンダラーは実装と字下げ判定を共有しますが、EOF、空行、明示波括弧が混在する境界を本番パーサーからすべて観測する仕組みが残るため、台帳では部分検証です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 169件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、初回失敗と再実行のログ、終了状態は `~/.local/state/penv-dispatch/evidence/h7-indent-boundaries.Mupqb4ab` に保存しました。対象786件のうち等価合格155件、部分検証17件、未達614件です。
+
+### backlog-network-6af6bb158270-1
+
+REPL の構築前に、空宣言と型の重複宣言を診断します。同じ宣言内の `init:` と `init add:` も重複として診断します。固定上流 `VerificationTests.cs` の3件を個別テストとして先に移植し、同じバイナリで各診断と該当行を照合しました。空の追記 `name: {}` は構文として受理し、上流と同じく構築時に空宣言として拒否します。単独の `init add:` を実行する処理と型・プロパティの一般的な検証は残っています。以前の字下げ7件は、本番の境界を観測する仕組みが必要なため部分検証のままです。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 172件、固定 STM32H7 REPL 7構成、既存の構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-declaration-verification.qM3fX7GY` に保存しました。台帳は対象786件のうち等価合格158件、部分検証17件、未達611件です。
+
+### backlog-network-b374c0eff2fa-1
+
+REPL の宣言で引用符付きエイリアスを解析し、登録の省略と明示的な `@ none` を別々に診断します。固定上流 `VerificationTests.cs` の2件を同じバイナリで実行し、同じ入力で診断の種類と該当行を照合しました。正当なエイリアスを実行時に公開する上流ケースは、REPL 宣言名からバス上の公開名を分離する名前解決が必要なため未達です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 174件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-alias-validation.4RXZtf3f` に保存しました。台帳は対象786件のうち等価合格160件、部分検証17件、未達609件です。
+
+### backlog-network-aea5570f5fc1-1
+
+REPL は同じ宣言内の重複属性を、追記の合成や周辺機器の構築より前に診断します。固定上流の `ShouldFailOnDoubleAttribute` で、同じ入力の2回目の属性を指す診断を照合しました。後続の追記が同名の属性を設定する場合にも元の重複を検出し、既存テストで正常な追記の上書きも確認しました。NVIC の同一宣言内の重複は、モデル固有の診断から属性名と行を示す共通診断に変わります。属性の存在・可書性・型の検証にはモデルの属性情報が必要です。正当なエイリアスの実行時公開には、宣言名とバス上の名前を分ける処理が残っています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 176件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-property-validation.E48XqaDp` にあります。対象786件のうち等価合格161件、部分検証17件、未達608件です。
+
+### backlog-network-3d3a3ae16697-1
+
+SystemBus の未マップアクセス方針とタグ単位の例外を REPL から設定できます。固定上流 `SystemBusTests.cs` の6件を個別テストとして同じバイナリで実行し、同じアドレスへのバイト読み書き、タグ既定値、アドレス例外を照合しました。STM32H743 の CLI プローブは初回に上流とローカルの `sysbus:` 追記が重複扱いになったため、両方を読み込み順に適用するよう修正しました。再実行ではタグ値 `0x42`、タグなしの `0`、例外タグのアドレスエラーを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-unhandled.IKQerYGw
+target/release/penv run --script "$e/read.resc" --platform-root ../renode
+target/release/penv run --script "$e/fault.resc" --platform-root ../renode
+```
+
+最後のコマンドは意図したアドレスエラーで終了します。`cargo test` 182件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格167件、部分検証17件、未達602件です。既定未マップ方針の差、上流の報告ログ、タグ分割時の例外保持は残っています。UART の失敗文字列群は固定 Tock 構成を使い、正規表現と失敗文字列の登録解除も必要なため、今回の検証は SystemBus に切り替えました。
+
+### backlog-network-863d546a9dff-1
+
+SystemBus の子タグ追加で親範囲を分割し、左右に残る親タグの既定値と例外方針を保持します。タグは上流と同じくアクセスの開始アドレスで選びます。複数の既存範囲にまたがる追加は拒否し、既存タグを保持します。固定上流 `ShouldPreserveThrowExceptionWhenSplittingTag` の同じ入力で、左右の親範囲の例外と子範囲の読み取り成功を確認しました。STM32H743 の CLI でも同じ3観測をワード読み取りで確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-tag-split.NLpdOJdr
+for address in 0x50000000 0x50000010 0x500000f0; do
+    target/release/penv run --script "$e/$address.resc" --platform-root ../renode
+done
+```
+
+CLI の期待終了状態は順に 1、0、1 です。`cargo test` 184件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格168件、部分検証17件、未達601件です。上流既定の未マップアクセス方針、タグの階層名を用いた報告、周辺機器からのアドレス以外のバス例外の伝播が残っています。
+
+### backlog-network-dc6513219158-1
+
+SystemBus の RAM 一括読み書きを実装しました。書き込みは RAM 範囲との交差部分に適用し、読み取りでは穴をゼロで埋めます。書き込みと重なる排他アクセス予約を解除します。固定上流 `SystemBusTests.cs` の6件を同じバイナリで実行し、同じアドレス、RAM 範囲、入力バイト列、期待値を照合しました。固定フィクスチャが同一 RAM を二重登録する5件では、各ケースが片側の範囲だけに触れるため、独立した同サイズ RAM で同じ観測点を再現しています。STM32H743 の CLI でも RAM 終端を越える8バイトの読み書きで、末尾2バイトがゼロになることを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-memory-bytes.fzZp4oFY
+target/release/penv run --script "$e/bytes.resc" --platform-root ../renode
+```
+
+`cargo test` 191件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。上記にケース別結果と終了状態を保存しました。台帳は対象786件のうち等価合格174件、部分検証17件、未達595件です。`ShouldReadBytes` の残り3構成にはバイト幅の周辺機器転送が必要です。今回の CLI コマンドは RAM 転送に限り、上流が `onlyMemory` 指定時に行う周辺機器交差の診断と RAM の別名登録は残っています。
+
+### backlog-network-d749d8e280de-1
+
+SystemBus の `FindBytes` を実装しました。隣接する RAM を連続した範囲として検索し、バッファー境界をまたぐ一致を拾います。未マップの穴は検索範囲から外します。固定上流 `ShouldFindBytePattern` と同じ 1 MiB RAM 二領域とバイト列で、全一致位置を照合しました。STM32H743 の CLI プローブでは、初回の RAM アドレスが LTDC と重なったため空き範囲に移し、`0x54000000` と `0x540ffffc` を確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-find-bytes.vgeb8aAf
+target/release/penv run --script "$e/find.resc" --platform-root ../renode
+```
+
+`cargo test` 193件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記にあります。台帳は対象786件のうち等価合格175件、部分検証17件、未達594件です。CPU コンテキスト別の検索と、周辺機器を含む一括読み書きの上流ケースは残っています。
+
+### backlog-network-e45b5c638e96-1
+
+REPL から構築した SystemBus の既定方針を上流の `Report` に合わせ、未マップのデータ読み取りでゼロを返します。REPL を使わない raw/ELF 実行と命令フェッチの範囲チェックは従来どおりです。固定上流 `ShouldReturnZeroAtNonExistingDevice` と同じアドレス `0xABCD1234` でバイト読み取りを検証しました。STM32H743 の CLI でも既定設定のゼロと、明示した `ThrowExceptionIfNotTagged` の例外を照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-default-bus-access.T5HgC1PK
+target/release/penv run --script "$e/default.resc" --platform-root ../renode
+target/release/penv run --script "$e/strict.resc" --platform-root ../renode
+```
+
+最後のコマンドは意図したアドレスエラーで終了します。`cargo test` 195件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格176件、部分検証17件、未達593件です。上流の報告ログと、周辺機器を含む一括転送は残っています。
+
+### backlog-network-5d68e000c930-1
+
+SystemBus の `ReadBytes` と `WriteBytes` は、RAM とバイト幅アクセスを実装する周辺機器を一つの転送で扱えます。未マップ区間の読み取りはゼロで、書き込みはスキップします。`onlyMemory=true` では周辺機器との交差を転送前に拒否します。固定上流 `ShouldReadBytes` の4構成を一括実行し、バイト周辺機器を含む残り3構成を等価合格に更新しました。テスト用周辺機器は上流モックと同じオフセット別の書き込みと読み戻しを再現します。STM32H743 の CLI では公開上流 REPL の USART2 に `[34, 12]` を書いて読み戻し、同じ範囲のメモリー専用読み取りが拒否されることを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-bus-mixed-bytes.n7OGEM8c
+target/release/penv run --script "$e/normal.resc" --platform-root ../renode
+target/release/penv run --script "$e/memory-only.resc" --platform-root ../renode
+```
+
+最後のコマンドは意図した診断で終了します。`cargo test` 198件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。上記にケース別結果と終了状態を保存しました。台帳は対象786件のうち等価合格179件、部分検証17件、未達590件です。CPU コンテキスト別登録と、バイト幅を持たない周辺機器の上流アクセス幅変換は残っています。
+
+### backlog-network-b18e8b6d9069-1
+
+REPL の複数 RAM 登録で、一つの記憶領域を複数のバスアドレスに割り当てます。`sysbus UnregisterFromAddress` は指定した RAM 登録だけを解除します。固定上流 `Should Unregister Only The Requested Range` の `0x800` と `0x4000` の両構成を移植し、先頭に書いた値を末尾の別名から読めること、中央の解除済み範囲がゼロを返すことを照合しました。CLI の構築に必要な Cortex-M7 宣言を加え、CPU は実行せず、固定上流と同じバス操作を実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-ram-aliases.0iTbYDsD
+for size in 0x800 0x4000; do
+    target/release/penv run --script "$e/$size.resc" --platform-root ../renode
+done
+```
+
+`cargo test` 200件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格180件、部分検証17件、未達589件です。対象を RAM に限定しており、周辺機器の動的登録解除と CPU コンテキスト別登録は残っています。
+
+### backlog-network-1f7c0ba5f3a3-1
+
+定数 MMIO 周辺機器を REPL の明示範囲で登録できるようにし、範囲サイズの検証を RAM と共有しました。固定上流 `ShouldFindAfterRegistration` と `ShouldFindAfterManyRegistrations` を同じバイナリで実行しました。上流モックのオフセット0での応答を定数 MMIO で再現し、同じ登録範囲・ワード読み取り・戻り値を照合しました。構築に必要な CPU と RAM はバス操作に参加しません。上流の `ShouldFindAfterManyRegistrationsAndRemoves` は Ignore 指定で、周辺機器の動的登録解除が必要なため台帳に未達として残しています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 202件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-sysbus-lookup.hI7esteD` にあります。台帳は対象786件のうち等価合格182件、部分検証17件、未達587件です。
+
+### backlog-network-3763ff0f38c4-1
+
+`sysbus UnregisterFromAddress` で定数 MMIO の指定登録を解除できます。登録範囲内の開始アドレスからオフセットを求めるため、非整列の登録でも周辺機器にワード読み取りを渡します。固定上流の Ignore 指定ケース `ShouldFindAfterManyRegistrationsAndRemoves` は、100登録、16 KiB の上限、各登録の10%解除条件、全アドレスの照合を移植しました。上流が固定していない乱数はローカルの固定シードを使います。初回は解除済みの非整列アドレスで整列エラーが出たため、範囲全体が未マップならバスの未マップ方針を適用するよう修正しました。STM32H743 の CLI では、非整列の1バイト登録にワード読み取りを行い、解除前の周辺機器応答と解除後のゼロを確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-sysbus-unregister-mmio.3EX3acF1
+target/release/penv run --script "$e/mmio.resc" --platform-root ../renode
+```
+
+`cargo test` 203件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、初回失敗、最終ログと終了状態は上記に保存しました。台帳は対象786件のうち等価合格183件、部分検証17件、未達586件です。定数 MMIO と RAM 以外の解除、CPU コンテキスト別登録、周辺機器が返すコマンド例外の伝播は残っています。
+
+### backlog-network-66faec789434-1
+
+STM32 TIM の周期処理で、経過した仮想ステップからクロックサイクルを求める処理を共有しました。固定上流 `LimitTimerTests.cs` の4件を同じバイナリで実行し、カウントアップとダウンの単調性、上限前後での値の範囲を照合しました。周波数、初期値、上限と仮想秒の刻みは上流と同じです。STM32 TIM は ARR を含めてカウントするため、折り返しとイベント発火の厳密な時刻を観測する残り5件は、上流 LimitTimer と STM32 の周期およびイベント通知の対応を検証する必要があります。SystemBus の周辺機器コマンド例外も、周辺機器の戻り値とバスの例外型に共通経路が必要なため残しています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+`cargo test` 207件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果、ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-counter.HiJSBsgZ` にあります。台帳は対象786件のうち等価合格187件、部分検証17件、未達582件です。
+
+### backlog-network-9ee4c5869953-1
+
+STM32 TIM の仮想ステップ処理で、割り込み許可中の更新イベント回数を確認できます。固定上流 `LimitTimerTests.cs` の4件を同じバイナリで実行し、1 MHz で 10 µs と 10 MHz で 1 µs の両方で2イベントと現在値2、1 Hz では割り込み許可の有無に応じた通知を照合しました。上流の下降周期は STM32 の `ARR=limit−1`、現在値は `CNT+1` に対応させています。方向切替ケースは上流がゼロ到達、STM32 TIM がゼロからのアンダーフローで通知するため、汎用 LimitTimer の方向変更セマンティクスが必要です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+`cargo test` 211件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 の3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-events.6PIr5DnN` に保存しました。対象786件のうち等価合格191件、部分検証17件、未達578件です。
+
+### backlog-network-5966ef07b946-1
+
+固定上流 `ShouldSwitchDirectionProperly` の100 Hz、上限100000、上昇2秒、方向切替、下降2秒を STM32 TIM で再現しました。ゼロ到達の通知は既存の `CCR1=0` の比較割り込みを使用します。切替で CNT が保持され、到達直前に通知がなく、到達時に比較割り込みが立つことを照合しました。STM32 の更新割り込みはアンダーフローで発火するため、比較割り込みを観測点に選びました。固定 `LimitTimerTests.cs` の台帳9件はすべて等価合格です。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+`cargo test` 212件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 の3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果と終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-direction.xwyONkQv` に保存しました。台帳は対象786件のうち等価合格192件、部分検証17件、未達577件です。共通 ComparingTimer の上限を超える比較値の拒否は STM32 TIM の CCR 書き込みと意味が異なるため、別の未達項目です。
+
+### backlog-network-3902aaeb6c9e-1
+
+STM32H7 GPIO からタイマーへの接続で、接続先の保持と入力上限の検証を共通化しました。固定上流 `GPIOTests.cs` の4件を同じバイナリで実行し、接続先と入力番号、未接続の空リスト、入力上限、および不正入力の診断全文を照合しました。上流のモック受信先には5入力、実 STM32H743 の TIM2 には4入力を使用しました。実 REPL に追記した入力2は受理され、入力10は受信先の入力数を示す診断で拒否されました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gpio-endpoints.KfA5tzQp
+target/release/penv check-platform "$e/channel-2.repl" --platform-root ../renode
+target/release/penv check-platform "$e/channel-10.repl" --platform-root ../renode
+```
+
+最後のコマンドは意図した診断で終了します。`cargo test` 216件、STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格196件、部分検証17件、未達573件です。GPIO の動的切断は残っています。ComparingTimer の上限を超える比較値の拒否は、書き込み可能な STM32 TIM の CCR と契約が異なるため、汎用比較タイマーの経路が必要です。
+
+### backlog-network-12ea45ec088d-1
+
+`sysbus UnregisterFromAddress` で STM32H7 TIM を解除すると、そのタイマーへの GPIO 入力接続と PWM 参照を削除します。固定上流 `GPIODetachingTests.cs` の番号付き接続2件を同じバイナリで実行しました。上流モックの代わりに STM32H7 GPIO と TIM を使い、MMIO 領域のサイズに合わせて登録アドレスを変更しました。入力番号と接続関係を維持し、解除対象の端点が空になり、他の端点が残ることを照合しました。STM32H743 の CLI では TIM2 の解除後にその ARR がゼロ、TIM3 の ARR が元の値を返しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gpio-detach.9xXurQ8I
+target/release/penv run --script "$e/unregister.resc" --platform-root ../renode
+```
+
+`cargo test` 218件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 3件と公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格198件、部分検証17件、未達571件です。中継周辺機器の入出力を同時に切断する汎用 GPIO グラフと、外部接続・別マシンの破棄を扱うケースは残っています。
+
+### backlog-network-66b4cd80a9d2-1
+
+GPIO で同一の送信ピン・受信先・入力番号を再接続しても、端点は一つに保たれます。固定上流 `ShouldConnectGPIOToReceiverAndReturnTheSameReceiver` の受信先同一性と、他の送信ピンが空であることを照合しました。`ShouldDisconnectEndpointOfUnregisteredPeripheral` は、複数送信元、重複抑止、対象端点だけの解除を STM32H7 GPIO/TIM で確認しました。上流の中継ノードは送信元と受信先を兼ねるため、後者は部分検証です。固定 STM32H743 の CLI で重複した接続を受理し、TIM3 解除後に TIM2 だけが残ることも確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-rcc-timer-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gpio-reconnect.Hc85piXC
+target/release/penv run --script "$e/reconnect.resc" --platform-root ../renode
+```
+
+`cargo test` 220件、STM32H7 REPL 7構成、構文診断3件、RCC/TIM1 3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。対象786件のうち等価合格199件、部分検証18件、未達569件です。中継ノードと外部・別マシンの接続解除が残っています。
+
+### backlog-network-bb984cbcaa5f-1
+
+上流 `SDCard.robot` のファイル装着3件を移植しました。固定 H743 REPL の同型 SDMMC で、上流 Robot ファイル自身を容量 `0x1000` で装着できることと、存在しないファイル・空パスの上流診断を確認しました。このプローブでは SDHC の最小容量までメモリー上でゼロ埋めします。元ファイルへの永続化と、アドレスを指定しない単体 SDMMC の構築は残っています。共有変更は ARM 担当へ引き渡しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-display-sd-smoke.sh ~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+```
+
+`cargo test` 220件、固定 STM32H7 REPL 7構成、構文診断3件、Zephyr Blinky・Button・表示・SD の実 ELF が通過しました。証拠は `~/.local/state/penv-dispatch/evidence/h7-sd-file.5coRI4Lq` にあります。台帳は等価合格202件、部分検証18件、未達566件です。GPIO の中継ケースには同一ノードの受信・再送信を表す接続モデルが必要です。
+
+### 担当変更後の独立検証
+
+共有の SD ファイル装着は `network-sd-card-03830d3.md` で ARM 担当に引き渡しました。STM32H753ZI では別に長文 UART と GCM の公開 ELF を再現しました。長文 UART は固定手順で2回のプロンプト照合を通過し、追加の0.7仮想秒で `RX ring buffer full` を再現したため部分検証のままです。GCM のポーリング版と割り込み版は、両方の ELF が EABI5 hard-float として読み込み段階で拒否されました。共有の ELF 対応は `network-h7-hardfloat-03830d3.md` で ARM 担当に依頼し、CRYP の GCM 処理と LED 判定は機種固有の残件として台帳に保持しています。
+
+```bash
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+bash tests/stm32h7-nucleo-uart-line.sh "$(mktemp -d)"
+u=~/.local/state/penv-dispatch/evidence/h7-uart-independent.szDKA2I0
+g=~/.local/state/penv-dispatch/evidence/h7-gcm-baseline.zrPeub83
+target/release/penv run --script "$u/extended/case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 18000000
+for test in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$g/$test.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+各証拠ディレクトリにケースのログと終了状態を保存しました。拡張 UART と両 GCM は終了状態1です。
+
+### backlog-network-27146221a294-1
+
+STM32H7 FDCAN のデバイス側に、内部ループバックの古典 CAN フレーム転送を追加しました。メッセージ RAM の TX 要素を RX FIFO0 に複製し、送信完了、受信通知、FIFO 状態、ACK を単体テストで照合しました。固定 Nucleo の公開 CAN ELF は初期化とカウンターフィルターの登録まで進み、最初の `Counter received: 0` を8仮想秒待ったところで停止します。現行の共有バスは FDCAN にメッセージ RAM を渡さないため、接続を ARM 担当に依頼します。Zephyr が設定するフィルターと CAN FD はデバイス側の残件です。SD と hard-float の先行依頼は今回確認時点で応答ファイルがありませんでした。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-loopback.2Merc2Mj
+target/release/penv run --script "$e/can.resc" --platform-root ../renode --max-steps 10000000
+```
+
+`cargo test` 221件、STM32H7 REPL 7構成と公開 Zephyr Blinky・Button ELF が通過しました。CAN の CLI は上記の未達で終了状態1です。ケース別結果、UART、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+共有配線の依頼 `network-fdcan-417181b.md` を登録後、独立した IIS2MDC の公開 polling・trigger ELF も再検証し、両モードが通過しました。上記の `iis2mdc/` に UART と終了状態があります。再現は `PYTHON=<construct 導入済みの仮想環境>/bin/python bash tests/stm32h7-iis2mdc-robot.sh "$(mktemp -d)"` です。
+
+### backlog-network-b9dac4e9689d-1
+
+STM32H7 FDCAN の古典 CAN ループバックに標準 ID フィルターを追加しました。範囲・二重 ID・マスクの判定、先頭一致、拒否、FIFO0 のフィルター番号と非一致ビットを同じテストバイナリで確認しました。拡張 ID フィルター、FIFO1、TX FIFO の状態処理は残っています。
+
+固定 Nucleo と `MCAN.robot` の公開ループバック ELF は、どちらも初期化とフィルター登録を完了し、最初の `Counter received: 0` で8仮想秒タイムアウトしました。両ケースを未達のままとし、共有メッセージ RAM の配線は `network-fdcan-417181b.md` の依頼で追跡します。共有ソースの変更はありません。独立した SD ファイル装着3件を再実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-filters.43D5rrYw
+for case in can mcan; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 10000000
+done
+```
+
+`cargo test` 223件、STM32H7 REPL 7構成、公開 Zephyr Blinky・Button ELF、SD ファイル装着3件が通過しました。上記にケース別結果、UART ログと終了状態を保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-503aa8981709-1
+
+FDCAN の TX FIFO とキューで、空き数・読み出し位置・書き込み位置・満杯状態を返します。送信要求の登録範囲、キャンセル後の空きスロット、スロット再利用時の完了フラグを同じバイナリで照合しました。固定 H753 REPL の CLI でも、2スロットの FIFO が空・満杯・1スロット空きになることを確認しました。優先度付き送信の選択と TX イベント FIFO は残っています。
+
+Nucleo と `MCAN.robot` の固定 ELF は両方とも `Counter received: 0` で8仮想秒タイムアウトしました。共有 message RAM の接続は既存依頼 `network-fdcan-417181b.md` で追跡しています。ARM からは、最小構成で hard-float GCM ELF 2本がロードできるとの結果が届きました。統合側の全 H753 構成で残る TIM17 と LED テスターの阻害点は、既存ローカルコミットを添えて `network-h7-gcm-platform-503aa89.md` に引き渡しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-tx-fifo.B1Ctk6HX
+for case in fifo can mcan; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 10000000
+done
+```
+
+`cargo test` 225件、STM32H7 REPL 7構成、Zephyr Blinky・Button、独立した SD 装着3件が通過しました。ログと終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-947817b5689c-1
+
+STM32H7 FDCAN の送信イベント FIFO を実装しました。固定上流 MCAN のイベント要素に従って ID・DLC・マーカーをメッセージ RAM に記録し、新規登録・ウォーターマーク・満杯・欠落と ACK 後の空状態を検証しました。タイムスタンプは固定上流モデルと同じゼロです。広幅マーカー用の外部タイムスタンプ機構は未対応です。
+
+Nucleo と `MCAN.robot` の公開ループバック ELF を再実行しました。両方とも最初の `Counter received: 0` で8仮想秒タイムアウトしたため、台帳は未達のままです。共有 message RAM の配線は ARM の既存依頼 `network-fdcan-417181b.md` で追跡しています。独立した SD ファイル装着3件も再実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-tx-events.rH2f7XFi
+for case in can mcan; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 10000000
+done
+```
+
+`cargo test` 227件、STM32H7 REPL 7構成、Zephyr Blinky・Button、SD ファイル装着3件が通過しました。上記にケース別結果、UART と終了状態を保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-eba880b30233-1
+
+FDCAN の共有 message RAM 配線は ARM からの返答待ちのため、独立した STM32H7 CRYP を進めました。AES-GCM の初期化、整列ヘッダー・ペイロード、最終タグをデバイスに実装しました。128ビットの既知ベクトルで、ポーリング暗号化と IRQ 復号のデータ、タグ、FIFO が空になった後の IRQ 解除を同じバイナリで照合しました。AES-192/256 の経路も実装しました。今回の既知ベクトルは AES-128 です。端数ブロックと上流 HAL の CTR 切替ワークアラウンドは残っています。
+
+固定上流 GCM ELF 2本はローカルの共有ローダーで hard-float ABI を拒否され、LED の観測まで進みませんでした。ARM の最小構成ではロード済みで、全 H753 構成への接続は既存の `network-h7-gcm-platform-503aa89.md` で追跡しています。共有ソースの変更はありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gcm-aligned.vaMiF7Ll
+for case in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+`cargo test` 229件、固定 STM32H7 REPL 7構成、公開 Zephyr ADC DMA・暗号・Blinky・Button ELF が通過しました。ケース別結果と終了状態は上記に保存しました。GCM の Robot 2件は未達です。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-36174e540c9e-1
+
+STM32H7 CRYP の AES-GCM が、最終フェーズで渡されたビット長を使って端数ブロックのタグを計算します。AAD と暗号文で最後のブロックだけを保留し、長さに含まれないパディングを認証から除きます。7バイトの暗号化と、6バイトの AAD および19バイトの復号を同じバイナリで検証しました。期待出力は Python `cryptography` の AESGCM でも照合し、ログに保存しました。上流 HAL の CTR 切替ワークアラウンドは残っています。
+
+固定公開 GCM ELF 2本はローカルの hard-float ローダーで停止し、LED 判定には到達しませんでした。全 H753 構成の共有阻害点は既存の ARM 依頼 `network-h7-gcm-platform-503aa89.md` で追跡しています。別経路として ADC DMA、既存暗号サンプル、SD ファイル装着を再実行しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gcm-partial.ricAgiKH
+for case in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+`cargo test` 231件、固定 STM32H7 REPL 7構成、Zephyr ADC DMA・暗号・Blinky・Button ELF、SD 装着3件が通過しました。ケース別結果、公開 ELF の停止ログと終了状態は上記にあります。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-aee087314a38-1
+
+STM32H7 CRYP が AES-GCM のペイロード処理中に HAL の CTR 切替を受けても、認証状態を保持します。固定上流モデルと同じく、最初の Final ブロックに対して HAL が読み捨てる4ワードを返し、次の長さブロックで有効なタグを返します。7バイトのポーリング暗号化と IRQ 復号を同じバイナリで照合しました。
+
+固定公開 GCM ELF 2本はローカルでは hard-float ABI の読み込みエラーで停止しました。全 H753 構成の共有阻害点は既存の ARM 依頼 `network-h7-gcm-platform-503aa89.md` で追跡しており、LED 判定は未達です。独立した ADC DMA と SD ファイル装着を回帰確認しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-ztest-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-gcm-ctr.S0mDzHKq
+for case in CRYPTO_GCM CRYPTO_GCM_IT; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --asset-dir "$PENV_ASSET_DIR" --max-steps 3000000
+done
+```
+
+`cargo test` 233件、固定 STM32H7 REPL 7構成、Zephyr ADC DMA・暗号・Blinky・Button ELF と SD 装着3件が通過しました。ケース別結果と終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-8e79fd74efc6-1
+
+STM32H7 FDCAN の FIFO0 に拡張 ID フィルターを実装しました。固定 MCAN と同じ2ワードのフィルター形式、グローバルマスク有無の範囲、二重 ID、クラシックマスクと最初の一致を、同じバイナリの3テストで照合しました。Nucleo と `MCAN.robot` の公開 ELF は最初のカウンターで8仮想秒タイムアウトしました。共有 message RAM 配線は ARM の既存依頼 `network-fdcan-417181b.md` で追跡しています。
+
+配線待ちと独立に、固定 Nucleo の IS25WP 公開 ELF と上流のフラッシュ追記を実行しました。単一セクター試験の開始まで到達し、単一・複数セクターとも消去テスト中に `Flash read failed! -5` を出力しました。読み取りコマンドとステータスの追跡が残っています。共有ソースの変更はありません。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+e=~/.local/state/penv-dispatch/evidence/h7-fdcan-extended.dY4lsY7x
+for case in can mcan is25wp; do
+    target/release/penv run --script "$e/$case.resc" --platform-root ../renode --max-steps 16000000
+done
+```
+
+`cargo test` 236件、固定 STM32H7 REPL 7構成、Zephyr Blinky・Button、SD ファイル装着3件が通過しました。公開 CAN 2件と IS25WP は未達です。ケース別結果、UART ログ、終了状態は上記に保存しました。台帳は対象786件のうち等価合格202件、部分検証18件、未達566件です。
+
+### backlog-network-2e61e3575da9-1
+
+STM32H7 QuadSPI の ISSI IS25WP で、間接読み取り、書き込み許可付きページプログラム、セクター消去を実装しました。最初の修正で実 ELF は消去確認まで進み、ページ書き込みで停止しました。レジスタートレースで HAL の同一 CCR 再書き込みが転送を中断することを確認し、転送状態を保持するよう修正しました。固定上流 `Should Read and Write IS25WP Flash` の同じ ELF、REPL 追記、8仮想秒の期限、UART 7行を使い、単一・複数セクターの消去と書き戻し照合を通過しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-is25wp-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-sd-file-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 238件、STM32H7 REPL 7構成、Zephyr Blinky・Button、独立した SD 装着3件も通過しました。ケース別結果、初回失敗とレジスタートレース、最終 UART ログは `~/.local/state/penv-dispatch/evidence/h7-is25wp-data.B7xtH7T6` に保存しました。台帳は対象786件のうち等価合格203件、部分検証18件、未達565件です。メモリーマップ読み取りと XIP、Macronix フラッシュの上流ケースは残っています。共有ソースの変更はありません。
+
+### H753ZI Macronix QuadSPI
+
+固定上流の Macronix MX25R を H7 QuadSPI に接続し、256 MiB 構成の JEDEC ID `c2 28 22`、間接 Quad Program (`0x38`)、完了 IRQ、間接読み戻しを単体テストで照合しました。固定公開 ELF 3個はファイル名の SHA-1 と照合済みです。
 
 ```sh
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
@@ -2071,6 +3535,18 @@ IWDG 後の再起動を実行できます。タイマーと GPIO の追加宣言
 分割 IRQ、GPIO の代替機能・EXTI・LED の配線、ボタンの初期状態、2 つのビットバンド領域を
 扱います。CRC と RNG の F4 指定を受理します。複数 UART がある構成では
 `showAnalyzer sysbus.uart4` が UART4 を入力先に選びます。
+cargo build --release
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+bash tests/stm32h7-mx25r-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-is25wp-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 239件、IS25WP の UART 7観測、Blinky・Button が通過しました。Macronix の間接転送 ELF は `Mocks.DummyI2CSlave` の登録で停止し、MemoryMapped と XIP は hard-float ELF の読み込みで停止しました。次の検証には間接転送とバス窓のデータ共有、XIP の最終 PC `0x90000010` の照合が残ります。再現用 REPL/RESC、SHA-1、ケース別ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-mx25r.Md9KKNw9` に保存しました。台帳は対象786件のうち等価合格203件、部分検証18件、未達565件です。
+
+### H753ZI Ethernet PTP
+
+固定上流 Zephyr PTP ELF の起動は、変更前に UART 無出力で停止しました。H7 MAC にタイムスタンプ初期化・更新レジスターと仮想経過時間を受ける時計を実装すると、同じ上流 REPL で Port 1 の初期化、シェルプロンプト、`ptp_clock set PTP_CLOCK 25` 後の `25.00` を確認できました。現状は共有経路から経過時間が渡らず、7.48 仮想秒後の読み出しも `25.000000000` でした。デバイス単体では同じ経過時間で `32.48` に到達します。
 
 ```sh
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
@@ -2203,3 +3679,28 @@ OTG FS リセット値を使用します。参照した `STM32F40x.svd.gz` の S
 受け入れの対象は上表のゲスト起動と入出力です。Discovery の `Peripheral Export File Created` は
 Renode モニターが書き出す Peripheral Map ファイルを検査するツール機能として対象外です。
 USB データ転送、汎用 SVD 展開、フラッシュ書き込み、CAN 通常モードでのノード間通信は残課題です。
+cargo build --release
+PENV_ASSET_DIR=/tmp/penv-h7-assets bash tests/stm32h7-ptp-clock-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` 241件が通過しました。STM32H7 と LiteX の双方向フレーム交換を含みます。PTP 時計ケースは部分検証、送信2件は未達です。残件は仮想時刻接続、TX 記述子の時刻書き戻し、Sync/Follow_Up のフレームと時刻差、SMMUv3 バイパス構成です。公開 ELF のハッシュ、UART、終了状態は `~/.local/state/penv-dispatch/evidence/h7-ptp.P7JnxuwT` に保存しました。台帳は対象786件のうち等価合格203件、部分検証19件、未達564件です。
+
+PTP 送信側では、通常 TX 記述子で TTSE を要求し、MAC でタイムスタンプを有効にすると、DMA が秒・サブ秒と TTSS を書き戻すようにしました。MMIO 経由でキャプチャ、未要求、無効、コンテキスト記述子の各条件を確認しました。個別再現は `cargo test ptp_tx_descriptor` です。
+
+同じ公開 ELF と上記手順で再実行すると、UART に Sync 送信ログが出ました。時計は 7.48 仮想秒後も `25.000000000` でした。TX の上流2件は、共有仮想時刻の接続、実フレームの Sync/Follow_Up 順序とタイムスタンプの照合、SMMUv3 ケースの実行が残っています。`cargo test` 243件と公開 IS25WP ELF が通過しました。
+
+結果と終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/h7-ptp-tx.jduubeFl` に保存しました。
+
+### H753ZI DHCP と長文 UART
+
+```sh
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+bash tests/stm32h7-dhcp-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-uart-line.sh "$(mktemp -d)"
+```
+
+固定 Zephyr ELF 2台を未変更 Nucleo REPL と仮想スイッチで実行しました。上流の既定動作と同じく各 UART コマンドのエコーを待つと、サーバーが起動しました。クライアントは15仮想秒のリース待ちでタイムアウトしました。両ノードの MAC は `00:80:e1:ab:10:c1` でした。診断で両スイッチポートを promiscuous にすると `122.101.101.2` を受け取りましたが、クライアントからの ping 応答待ちで停止しました。移植スクリプトは固定プール先頭アドレスを照合します。上流の正規表現による動的なアドレス取得と双方向 ping は残件です。
+
+同じ ELF の長文 UART ケースは、同じ入力、50 ms 後のプロンプト、リングバッファ警告の失敗条件を照合して通過しました。`cargo test` 243件も通過しました。台帳は対象786件のうち等価合格204件、部分検証19件、未達563件です。
+
+ケース別ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/h7-dhcp.tHotLqIl` に保存しました。

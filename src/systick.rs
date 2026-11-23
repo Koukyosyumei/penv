@@ -1,3 +1,6 @@
+#[cfg(test)]
+use crate::machine::VIRTUAL_STEPS_PER_SECOND;
+
 use crate::bus::CORTEX_M_STEP_HZ;
 
 pub const NMI: u8 = 2;
@@ -248,6 +251,37 @@ impl SysTick {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_upstream_reload_order(reload_before_clear: bool) {
+        let mut timer = SysTick::default();
+        timer.set_frequency(100);
+        timer.write(CSR, 0);
+        if reload_before_clear {
+            timer.write(RELOAD, 10);
+            timer.write(CURRENT, 0);
+        } else {
+            timer.write(CURRENT, 0);
+            timer.write(RELOAD, 10);
+        }
+        timer.write(CSR, 5);
+        assert_eq!(timer.read(CURRENT), Some(10));
+        for (milliseconds, expected) in [(90, 1), (10, 10), (10, 9)] {
+            for _ in 0..milliseconds * (VIRTUAL_STEPS_PER_SECOND / 1000) {
+                timer.tick();
+            }
+            assert_eq!(timer.read(CURRENT), Some(expected));
+        }
+    }
+
+    #[test]
+    fn upstream_count_down_with_reload_set_before_reset() {
+        check_upstream_reload_order(false);
+    }
+
+    #[test]
+    fn upstream_count_down_with_reload_set_after_reset() {
+        check_upstream_reload_order(true);
+    }
 
     #[test]
     fn renode_systick_external_clock_gate_survives_reset() {

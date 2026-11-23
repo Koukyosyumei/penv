@@ -635,7 +635,7 @@ impl Machine {
         if !self.is_cortex_m() {
             return Err("machine Reset requires a Cortex-M CPU".into());
         }
-        self.bus.reset_cortex_m_devices();
+        self.bus.reset_cortex_m_machine_devices();
         self.primary.monitor_paused = false;
         self.primary.reset_cortex_m(&mut self.bus)?;
         Ok(())

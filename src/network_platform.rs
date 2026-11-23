@@ -14,10 +14,6 @@ const STM32H7_RCC: &str = "Miscellaneous.STM32H7_RCC";
 const STM32_SYSCFG: &str = "Miscellaneous.STM32_SYSCFG";
 const STM32H7_MAC: &str = "Network.SynopsysDWCEthernetQualityOfService";
 
-pub fn has_regions(model: &str) -> bool {
-    is_litex(model) || matches!(model, STM32H7_MAC | STM32_SYSCFG)
-}
-
 fn is_litex(model: &str) -> bool {
     matches!(
         model,
@@ -288,13 +284,19 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
     if peripherals.next().is_some() {
         return Err(rcc.error("multiple ETH1MAC clock bindings"));
     }
+    let mut hse_frequency = 8_000_000;
     for (_, property) in &rcc.body {
         let Some((key, value)) = property.split_once(':') else {
             return Err(rcc.error("expected STM32H7 RCC property"));
         };
         match key.trim() {
             "nvic" | "dwt" if !value.trim().is_empty() => {}
-            "hseFrequency" if number(value.trim()).is_ok_and(|value| value != 0) => {}
+            "hseFrequency" => {
+                hse_frequency = number(value.trim()).map_err(|e| rcc.error(&e))?;
+                if hse_frequency == 0 {
+                    return Err(rcc.error("expected a nonzero HSE frequency"));
+                }
+            }
             _ => return Err(rcc.error("unsupported STM32H7 RCC property")),
         }
     }
@@ -342,9 +344,17 @@ fn configure_board_control(entries: &[Entry], machine: &mut Machine) -> Result<(
                 .ok_or_else(|| ethernet.error("missing STM32H7 Ethernet controller"))
         })
         .transpose()?;
+    // Renode returns zero for unhandled MMIO. Zephyr accesses DBGMCU
+    // during STM32H7 startup even though the upstream platform has no model.
     machine
         .bus
-        .map_h7_network_control(NetworkControl::new(rcc_base, syscfg_base, nic))
+        .tag(0x5c001000, 0x400, 0, false)
+        .map_err(|error| rcc.error(&error))?;
+    let mut control = NetworkControl::new(rcc_base, syscfg_base, nic);
+    control.hse_frequency = hse_frequency;
+    machine
+        .bus
+        .map_h7_network_control(control)
         .map_err(|error| rcc.error(&error))
 }
 
@@ -434,16 +444,8 @@ fn region(properties: &str, qos: bool) -> Result<Mapping, String> {
     let mut address = None;
     let mut size = None;
     let mut region = None;
-    for property in properties
-        .split(';')
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-    {
-        let (key, value) = property
-            .split_once(':')
-            .ok_or("expected Ethernet region property")?;
-        let value = value.trim();
-        match key.trim() {
+    for (key, value) in crate::platform::object_fields(properties)? {
+        match key {
             "address" if address.is_none() => address = Some(number(value)?),
             "size" if size.is_none() => size = Some(number(value)?),
             "region" if region.is_none() => {
@@ -467,4 +469,8 @@ fn region(properties: &str, qos: bool) -> Result<Mapping, String> {
         size: size.ok_or("missing Ethernet region size")?,
         region: region.ok_or("missing Ethernet region name")?,
     })
+}
+
+pub fn has_regions(model: &str) -> bool {
+    matches!(model, "Network.DWC_ETH_QOS" | "Network.STM32H7_Ethernet")
 }

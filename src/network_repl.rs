@@ -52,6 +52,35 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
+    pub(crate) fn sized_sysbus_address(&self, size: u32) -> Result<u32, String> {
+        let registration = self
+            .registration
+            .as_deref()
+            .ok_or("missing sysbus registration")?;
+        crate::repl_parser::sized_sysbus_address(registration, size)
+    }
+
+    pub(crate) fn from_parsed(
+        name: String,
+        model: String,
+        registration: Option<String>,
+        body: Vec<(Rc<Path>, usize, String)>,
+        source: PathBuf,
+        line: usize,
+    ) -> Self {
+        Self {
+            name,
+            model,
+            registration,
+            body: body
+                .into_iter()
+                .map(|(path, line, value)| (SourceLine { path, line }, value))
+                .collect(),
+            source,
+            line,
+        }
+    }
+
     pub(crate) fn error(&self, detail: &str) -> String {
         format!(
             "{}:{}: {}: {detail}",
@@ -340,6 +369,13 @@ fn apply_overlays(entries: Vec<Entry>) -> Vec<Entry> {
 }
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
+    load_basic(path, root).or_else(|original| {
+        load_parsed(path, root.unwrap_or(Path::new(".")))
+            .map_err(|error| format!("{original}; REPL syntax: {error}"))
+    })
+}
+
+fn load_basic(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
     let mut entries = Vec::new();
     parse(
         path,
@@ -352,7 +388,22 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             format!("{source}: {}: duplicate REPL property {key:?}", entry.name)
         })?;
     }
-    let entries = apply_overlays(entries);
+    build_machine(apply_overlays(entries), path)
+}
+
+pub(crate) fn load_parsed(path: &Path, root: &Path) -> Result<Machine, String> {
+    build_machine(crate::repl_parser::load(path, root)?, path)
+}
+
+pub(crate) fn check_text(content: &str, root: Option<&Path>) -> Result<(), String> {
+    let entries = crate::repl_parser::parse_inline(content, root.unwrap_or(Path::new(".")))?;
+    if entries.is_empty() {
+        return Ok(());
+    }
+    build_machine(entries, Path::new("<inline REPL>")).map(|_| ())
+}
+
+fn build_machine(entries: Vec<Entry>, path: &Path) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
     let mut cpus = Vec::new();
     let mut clint = None;
@@ -823,14 +874,18 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
                 }
             };
             let base = uart.address_with_optional_range(layout.size())?;
+            let mut device =
+                crate::stm32_uart::Stm32Usart::with_layout(uart.name.clone(), base, irq, layout);
+            device.frequency = frequency;
+            if let Some(alias) = crate::network_platform::rcc_alias(uart, "rcc") {
+                device.clock = Some(
+                    crate::stm32_uart::Stm32UsartClock::from_alias(alias)
+                        .map_err(|e| uart.error(&e))?,
+                );
+            }
             machine
                 .bus
-                .map_stm32_usart(crate::stm32_uart::Stm32Usart::with_layout(
-                    uart.name.clone(),
-                    base,
-                    irq,
-                    layout,
-                ))
+                .map_stm32_usart(device)
                 .map_err(|e| uart.error(&e))?;
         }
         if let Some(rcc) = f4_rcc {

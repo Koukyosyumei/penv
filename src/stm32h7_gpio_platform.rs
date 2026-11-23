@@ -60,23 +60,27 @@ pub fn configure(
         let registration = entry
             .registration
             .as_deref()
-            .ok_or_else(|| entry.error("missing button GPIO registration"))?;
+            .ok_or_else(|| entry.error("expected button registered on a GPIO port"))?;
         let (name, pin) = if let Some((name, pin)) = registration.split_once(char::is_whitespace) {
-            (name, pin.trim())
+            (name, irq_index(pin, 16).map_err(|e| entry.error(&e))?)
         } else {
-            let pin = entry
+            let mut wires = entry
                 .body
                 .iter()
-                .find_map(|(_, text)| {
-                    text.strip_prefix("->")
-                        .and_then(|wire| wire.trim().split_once('@'))
-                })
+                .filter_map(|(_, text)| text.strip_prefix("->"));
+            let pin = wires
+                .next()
+                .and_then(|wire| wire.split_once('@'))
                 .filter(|(target, _)| target.trim() == registration)
-                .map(|(_, pin)| pin)
-                .ok_or_else(|| entry.error("expected button output connected to a GPIO pin"))?;
-            (registration, pin)
+                .ok_or_else(|| entry.error("expected button wired to a pin on its GPIO port"))?;
+            if wires.next().is_some() {
+                return Err(entry.error("expected a single GPIO button wire"));
+            }
+            (
+                registration,
+                irq_index(pin.1, 16).map_err(|e| entry.error(&e))?,
+            )
         };
-        let pin = irq_index(pin, 16).map_err(|e| entry.error(&e))?;
         let (_, port) = ports
             .iter_mut()
             .find(|(parent, _)| *parent == name)
@@ -84,10 +88,8 @@ pub fn configure(
         let mut invert = false;
         for (_, text) in &entry.body {
             if let Some(value) = text.strip_prefix("invert:") {
-                invert = value
-                    .trim()
-                    .parse()
-                    .map_err(|_| entry.error("invalid button inversion"))?;
+                invert = crate::platform::boolean_value(value)
+                    .ok_or_else(|| entry.error("invalid button inversion"))?;
             } else if text
                 .strip_prefix("->")
                 .and_then(|wire| wire.split_once('@'))
@@ -125,7 +127,7 @@ pub fn configure(
             [] => false,
             [(_, property)] => property
                 .strip_prefix("invert:")
-                .and_then(|value| value.trim().parse().ok())
+                .and_then(crate::platform::boolean_value)
                 .ok_or_else(|| led.error("expected LED invert property"))?,
             _ => return Err(led.error("unsupported LED properties")),
         };
@@ -238,15 +240,21 @@ fn port(
         return Err("GPIO alternate-function count must be in 1–16".into());
     }
     if let Some(inverted) = inverted {
-        let groups = inverted
-            .strip_prefix("[[")
-            .and_then(|text| text.strip_suffix("]]"))
-            .ok_or("expected GPIO inverted AF pin lists")?;
-        for group in groups.split("],") {
-            let mut values = group.trim().trim_start_matches('[').split(',');
-            irq_index(values.next().ok_or("missing inverted AF pin")?, 16)?;
+        use crate::platform::{ListItem, list_value};
+
+        let index = |item, count| match item {
+            ListItem::Number(number) => irq_index(number, count),
+            _ => Err("expected numeric GPIO inverted AF pin or function".into()),
+        };
+        let groups = list_value(inverted)?;
+        for group in groups {
+            let ListItem::List(values) = group else {
+                return Err("expected GPIO inverted AF pin lists".into());
+            };
+            let mut values = values.into_iter();
+            index(values.next().ok_or("missing inverted AF pin")?, 16)?;
             for value in values {
-                irq_index(value, alternate_count)?;
+                index(value, alternate_count)?;
             }
         }
     }
@@ -257,7 +265,30 @@ fn port(
             continue;
         }
         let (pins, target) = text.split_once("->").ok_or("expected GPIO output wiring")?;
-        if !target.contains('#') {
+        // These are ordinary GPIO outputs. The upstream alternate-output selector
+        // is only used for the reverse timer-to-GPIO direction.
+        if let Some(pin) = irq_index(pins, 16).ok().filter(|_| {
+            target.split('|').all(|endpoint| {
+                endpoint.split_once('@').is_some_and(|(name, _)| {
+                    entries.iter().any(|timer| {
+                        timer.name == name.trim()
+                            && timer.model == crate::stm32h7_timer::Timer::MODEL
+                    })
+                })
+            })
+        }) {
+            for endpoint in target.split('|') {
+                let (name, channel) = endpoint
+                    .split_once('@')
+                    .ok_or("missing timer input channel")?;
+                let timer = entries
+                    .iter()
+                    .find(|timer| timer.name == name.trim())
+                    .ok_or("unknown GPIO timer target")?;
+                let (base, _) = crate::stm32h7_board_platform::registration(timer, entries)?;
+                port.connect_timer_input(pin, base, number(channel.trim())?)?;
+            }
+        } else if !target.contains('#') {
             for wire in target.split('|') {
                 let (name, inputs) = wire.split_once('@').ok_or("missing GPIO destination pin")?;
                 if exti.is_some_and(|exti| exti.name == name.trim()) {
@@ -298,14 +329,13 @@ fn port(
             }
             continue;
         }
-        let (name, selector) = target
-            .trim()
-            .split_once('#')
-            .ok_or("missing SYSCFG port selector")?;
+        let (name, selector) = crate::platform::irq_receiver(target)?;
         if !syscfg.is_some_and(|syscfg| syscfg.name == name) {
             return Err("expected GPIO routed through SYSCFG".into());
         }
-        let selector = irq_index(selector, 16)?;
+        let selector = selector
+            .filter(|&index| index < 16)
+            .ok_or("expected SYSCFG port selector from 0 to 15")? as u8;
         if port.syscfg_port.is_some_and(|port| port != selector) {
             return Err("GPIO must use one SYSCFG port selector".into());
         }
