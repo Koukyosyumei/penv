@@ -320,6 +320,13 @@ def triage(row):
         status, reason = 'PASS', '固定 Cortex-M7 と同じ 10 命令と R4 の期待値を照合。src/thumb/ge_upstream.rs'
         if '(usub8)' in name:
             reason += '。タイトルは usub8、固定フィクスチャの実命令は ssub8'
+    elif suite == 'LimitTimerTests.cs' and name in {
+        'ShouldBeAscending',
+        'ShouldBeDescending',
+        'ShouldNotExceedLimitAscending',
+        'ShouldNotExceedLimitDescending',
+    }:
+        status, reason = 'PASS', 'STM32 TIM の CNT で上流と同じ周波数・上限・初期値・仮想秒刻みを使用し、単調性または上限を照合。src/stm32h7_timer.rs'
     elif suite == 'ComparingTimerTests.cs':
         if name == 'ShouldThrowOnCompareHigherThanLimit':
             status, reason = 'OPEN', '汎用 ComparingTimer の Compare setter 拒否条件は STM32 TIM の CCR で観測できない。汎用 API の等価移植が残る'

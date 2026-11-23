@@ -1543,3 +1543,22 @@ target/release/penv run --script "$e/mmio.resc" --platform-root ../renode
 ```
 
 `cargo test` 203件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button ELF が通過しました。ケース別結果、初回失敗、最終ログと終了状態は上記に保存しました。台帳は対象786件のうち等価合格183件、部分検証17件、未達586件です。定数 MMIO と RAM 以外の解除、CPU コンテキスト別登録、周辺機器が返すコマンド例外の伝播は残っています。
+
+### backlog-network-66faec789434-1
+
+STM32 TIM の周期処理で、経過した仮想ステップからクロックサイクルを求める処理を共有しました。固定上流 `LimitTimerTests.cs` の4件を同じバイナリで実行し、カウントアップとダウンの単調性、上限前後での値の範囲を照合しました。周波数、初期値、上限と仮想秒の刻みは上流と同じです。STM32 TIM は ARR を含めてカウントするため、折り返しとイベント発火の厳密な時刻を観測する残り5件は、上流 LimitTimer と STM32 の周期およびイベント通知の対応を検証する必要があります。SystemBus の周辺機器コマンド例外も、周辺機器の戻り値とバスの例外型に共通経路が必要なため残しています。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+base=~/.local/state/penv-dispatch/evidence/h7-board-pass.aBYgFTkr/shell
+bash tests/stm32h7-tim8-smoke.sh "$base" timer1
+bash tests/stm32h7-tim8-smoke.sh "$base" timer8
+```
+
+`cargo test` 207件、固定 STM32H7 REPL 7構成、構文診断3件、公開 Zephyr Blinky・Button と TIM1/TIM8 の実 ELF 回帰が通過しました。ケース別結果、ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-limit-counter.HiJSBsgZ` にあります。台帳は対象786件のうち等価合格187件、部分検証17件、未達582件です。

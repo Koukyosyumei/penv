@@ -311,11 +311,15 @@ impl Timer {
     }
 
     pub fn tick(&mut self) {
+        self.advance_steps(1);
+    }
+
+    fn advance_steps(&mut self, steps: u32) {
         if self.registers[0] & CEN == 0 || self.active_arr == 0 {
             return;
         }
         let step_hz = u64::from(VIRTUAL_STEPS_PER_SECOND);
-        self.phase += u64::from(self.frequency);
+        self.phase += u64::from(self.frequency) * u64::from(steps);
         let cycles = self.phase / step_hz;
         self.phase %= step_hz;
         for _ in 0..cycles {
@@ -355,6 +359,71 @@ impl Timer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod limit_timer_cases {
+    use super::*;
+
+    const CR1: u32 = 0;
+    const CNT: u32 = 0x24;
+
+    fn enabled_timer(frequency: u32, limit: u32, descending: bool) -> Timer {
+        let mut timer = Timer::new("timer2".into(), 0, frequency, limit, None);
+        if descending {
+            timer.write(CNT, limit);
+        }
+        timer.write(CR1, CEN | if descending { DIR } else { 0 });
+        timer
+    }
+
+    fn advance_seconds(timer: &mut Timer, seconds: u32) {
+        timer.advance_steps(seconds * VIRTUAL_STEPS_PER_SECOND);
+    }
+
+    #[test]
+    fn upstream_should_be_ascending() {
+        let mut timer = enabled_timer(100, 100_000, false);
+        let mut previous = 0;
+        for _ in 0..100 {
+            advance_seconds(&mut timer, 1);
+            let value = timer.read(CNT);
+            assert!(value > previous);
+            previous = value;
+        }
+    }
+
+    #[test]
+    fn upstream_should_be_descending() {
+        let mut timer = enabled_timer(100, 100_000, true);
+        let mut previous = 100_000;
+        for _ in 0..100 {
+            advance_seconds(&mut timer, 1);
+            let value = timer.read(CNT);
+            assert!(value < previous);
+            previous = value;
+        }
+    }
+
+    fn assert_limit(descending: bool) {
+        let limit = 100;
+        let mut timer = enabled_timer(1, limit, descending);
+        advance_seconds(&mut timer, limit - 1);
+        for _ in 0..3 {
+            assert!((0..=i64::from(limit)).contains(&i64::from(timer.read(CNT))));
+            advance_seconds(&mut timer, 1);
+        }
+    }
+
+    #[test]
+    fn upstream_should_not_exceed_limit_ascending() {
+        assert_limit(false);
+    }
+
+    #[test]
+    fn upstream_should_not_exceed_limit_descending() {
+        assert_limit(true);
     }
 }
 
