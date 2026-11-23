@@ -129,6 +129,7 @@ fn run() -> Result<ExitCode, String> {
     let mut harts = None;
     let mut max_steps = 10_000_000;
     let mut virtual_mips = None;
+    let mut boot_writes = Vec::new();
     let mut extra_ram = Vec::new();
     let mut clint = None;
     let mut mtvec = None;
@@ -305,6 +306,8 @@ fn run() -> Result<ExitCode, String> {
         }
         let boot = plan.nodes.pop().unwrap().boot;
         platform_path = boot.platform;
+        virtual_mips = virtual_mips.or(boot.mips);
+        boot_writes = boot.writes;
         mtvec = mtvec.or(boot.mtvec);
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         if path.is_some() && boot.image.is_none() {
@@ -396,6 +399,12 @@ fn run() -> Result<ExitCode, String> {
             return Err("--harts cannot override multiple CPU declarations".into());
         }
         machine.configure_harts(count);
+    }
+    for (address, value) in boot_writes {
+        machine
+            .bus
+            .write(address, 4, value, &mut std::io::sink())
+            .map_err(|e| e.to_string())?;
     }
     for (cpu, address) in boot_pcs {
         machine.set_named_entry(&cpu, address)?;

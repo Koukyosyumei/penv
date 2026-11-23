@@ -126,6 +126,9 @@ impl Node {
     fn boot(node: NodeBoot, root: Option<&Path>, assets: Option<&Path>) -> Result<Self, String> {
         let NodeBoot { name, boot, source } = node;
         let mut machine = platform::load(&boot.platform.unwrap(), root)?;
+        if boot.mips.is_some() {
+            return Err("PerformanceInMips requires single-machine execution".into());
+        }
         if let Some(uart) = &boot.uart_input {
             machine.bus.select_uart_input(uart);
         }
@@ -151,6 +154,12 @@ impl Node {
             let (file, path) = open(&value)?;
             image::load_binary(&mut machine, file, address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        for (address, value) in boot.writes {
+            machine
+                .bus
+                .write(address, 4, value, &mut std::io::sink())
+                .map_err(|e| e.to_string())?;
         }
         for (cpu, address) in boot.boot_pcs {
             machine.set_named_entry(&cpu, address)?;

@@ -8,17 +8,39 @@ assets=${PENV_ASSET_DIR:-"$work/assets"}
 mkdir -p "$work" "$assets"
 
 tests/stm32f407-freertos-smoke.sh "$work" --upstream
+tests/stm32f407-freertos-smoke.sh "$work/cm4f" --fpu
 
-run_case() {
-    local name=$1 asset=$2 sha=$3 platform=$4 limit=$5 status=0
-    shift 5
+fetch_asset() {
+    local asset=$1 sha=$2
     local firmware="$assets/$asset"
     if [[ ! -f "$firmware" ]]; then
         curl --fail --location "https://dl.antmicro.com/projects/renode/$asset" --output "$firmware.part"
         mv "$firmware.part" "$firmware"
     fi
     printf '%s  %s\n' "$sha" "$firmware" | sha1sum --check -
-    cp "$firmware" "$work/$name.elf"
+}
+
+sha=827a0dedd3790f4559d7518320006613768b5e72
+fetch_asset "stm32f4discovery.elf-s_445441-$sha" "$sha"
+status=0
+target/release/penv run --script "$renode/scripts/single-node/stm32f4_discovery.resc" \
+    --platform-root "$renode" --asset-dir "$assets" --max-steps 16000000 \
+    > "$work/contiki.log" 2> "$work/contiki-penv.log" || status=$?
+if [[ "$status" != 2 ]] ||
+    ! rg -q '^penv: instruction limit reached ' "$work/contiki-penv.log" ||
+    ! rg -aqF 'Contiki 3.x started.' "$work/contiki.log" ||
+    ! rg -aqF 'ETH_BSP_Config done!' "$work/contiki.log" ||
+    ! rg -aqF 'UDP server started' "$work/contiki.log"; then
+    cat "$work/contiki-penv.log" "$work/contiki.log" >&2
+    exit 1
+fi
+rg -a 'Contiki 3.x started|ETH_BSP_Config done|UDP server started' "$work/contiki.log"
+
+run_case() {
+    local name=$1 asset=$2 sha=$3 platform=$4 limit=$5 status=0
+    shift 5
+    fetch_asset "$asset" "$sha"
+    cp "$assets/$asset" "$work/$name.elf"
     cat > "$work/$name.resc" <<RESC
 mach create "$name"
 machine LoadPlatformDescription @$platform

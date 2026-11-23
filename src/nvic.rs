@@ -1,5 +1,6 @@
 pub const BASE: u32 = 0xe000_e000;
 pub const VTOR: u32 = BASE + 0xd08;
+const CPUID: u32 = BASE + 0xd00;
 const AIRCR: u32 = BASE + 0xd0c;
 pub const IRQ_LINES: usize = 240;
 const BANKS: usize = IRQ_LINES.div_ceil(32);
@@ -8,6 +9,7 @@ const DISABLE: u32 = BASE + 0x180;
 const SET_PENDING: u32 = BASE + 0x200;
 const CLEAR_PENDING: u32 = BASE + 0x280;
 const PRIORITY: u32 = BASE + 0x400;
+const FPCCR: u32 = BASE + 0xf34;
 const CPACR: u32 = BASE + 0xd88;
 const SYSTEM_PRIORITY: u32 = BASE + 0xd18;
 const SYSTEM_PRIORITY_END: u32 = SYSTEM_PRIORITY + 11;
@@ -45,6 +47,7 @@ pub struct Nvic {
     scr: u32,
     ccr: u32,
     cpacr: u32,
+    fpccr: Option<u32>,
     fault_enables: u32,
     mpu: Option<Mpu>,
     has_cache: bool,
@@ -112,6 +115,7 @@ impl Nvic {
             scr: 0,
             ccr: 1 << 9,
             cpacr: 0,
+            fpccr: None,
             fault_enables: 0,
             mpu: None,
             has_cache: false,
@@ -120,10 +124,28 @@ impl Nvic {
         }
     }
 
-    pub const RANGES: [(u32, u32); 8] = [
+    pub fn enable_fpu(&mut self) {
+        self.fpccr = Some(3 << 30);
+    }
+
+    pub fn has_fpu(&self) -> bool {
+        self.fpccr.is_some()
+    }
+
+    pub fn fpu_access(&self) -> bool {
+        self.has_fpu() && self.cpacr & (0xf << 20) == 0xf << 20
+    }
+
+    pub fn fpu_auto_preserve(&self) -> bool {
+        self.fpccr.is_some_and(|value| value & (1 << 31) != 0)
+    }
+
+    pub const RANGES: [(u32, u32); 10] = [
         (ENABLE, PRIORITY_END + 1),
+        (CPUID, CPUID + 4),
         (VTOR, AIRCR + 4),
         (CPACR, CPACR + 4),
+        (FPCCR, FPCCR + 4),
         (BASE + 0xd24, BASE + 0xd30),
         (BASE + 0xd90, BASE + 0xdbc),
         (BASE + 0xd78, BASE + 0xd88),
@@ -147,7 +169,11 @@ impl Nvic {
 
     pub fn reset(&mut self) {
         let mpu = self.mpu.as_ref().map(|mpu| (mpu.count, self.has_cache));
+        let fpu = self.has_fpu();
         *self = Self::new(self.priority_mask, self.uart_irq);
+        if fpu {
+            self.enable_fpu();
+        }
         if let Some((count, has_cache)) = mpu {
             self.configure_mpu(count, has_cache);
         }
@@ -268,6 +294,12 @@ impl Nvic {
             if matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
                 return Some(0);
             }
+            if address == CPUID && self.has_fpu() {
+                return Some(0x410f_c241);
+            }
+            if address == FPCCR {
+                return self.fpccr;
+            }
             if address == CPACR {
                 return Some(self.cpacr);
             }
@@ -341,6 +373,13 @@ impl Nvic {
             return true;
         }
         if width == 4 && matches!(address.wrapping_sub(BASE), 0xd28 | 0xd2c) {
+            return true;
+        }
+        if width == 4
+            && address == FPCCR
+            && let Some(fpccr) = &mut self.fpccr
+        {
+            *fpccr = value & (3 << 30);
             return true;
         }
         if width == 4 && address == CPACR {

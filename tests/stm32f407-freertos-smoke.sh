@@ -8,15 +8,18 @@ platform_args=()
 expected="$fixture/expected-uart.txt"
 case "${2:-}" in
     "") "$fixture/build.sh" "$work" ;;
-    --upstream)
-        "$fixture/build.sh" "$work" --upstream
+    --upstream|--fpu)
+        "$fixture/build.sh" "$work" "$2"
         platform_args=(--platform-root "${RENODE_ROOT:-../renode}")
         expected="$work/expected-upstream-uart.txt"
         sed -e '/^RCC PLL/i Discovery bit-band GPIO and SRAM OK' \
             -e 's/^I2C echo 01 23 and NACK OK$/I2C unpopulated bus NACK OK/' \
             "$fixture/expected-uart.txt" > "$expected"
+        if [[ "$2" == --fpu ]]; then
+            sed -i -e '/^task A tick=05$/i FPU context OK: A' -e '/^task B tick=07$/i FPU context OK: B' "$expected"
+        fi
         ;;
-    *) echo "usage: $0 [OUTPUT_DIR] [--upstream]" >&2; exit 1 ;;
+    *) echo "usage: $0 [OUTPUT_DIR] [--upstream|--fpu]" >&2; exit 1 ;;
 esac
 
 printf X > "$work/uart-x.txt"

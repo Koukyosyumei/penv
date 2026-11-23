@@ -809,6 +809,9 @@ pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
             .map_nvic(priority.unwrap_or(0xc0), uart_irq)
             .map_err(|e| entry.error(&e))?;
         machine.primary.name = Some(entry.name.clone());
+        if cpu_type == Some(r#""cortex-m4""#) {
+            machine.bus.nvic.as_mut().unwrap().enable_fpu();
+        }
         machine.primary.configure_cortex_m(vectors, thumb2);
         if thumb2 {
             machine

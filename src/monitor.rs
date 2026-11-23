@@ -8,6 +8,8 @@ use crate::zephyr_boot::{BootOptions, VectorAddress};
 
 #[derive(Default)]
 pub struct Boot {
+    pub mips: Option<u32>,
+    pub writes: Vec<(u32, u32)>,
     pub binaries: Vec<(String, u32)>,
     pub boot_pcs: Vec<(String, u32)>,
     pub platform: Option<PathBuf>,
@@ -47,12 +49,26 @@ fn walk_file(
     active.push(canonical);
     let content = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut macros = HashMap::new();
+    let mut random_imported = false;
+    let mut random_word = None;
     let mut cursor = content.lines().enumerate();
     while let Some((line, raw)) = cursor.next() {
         let text = raw.trim();
         let error = |message: &str| format!("{}:{}: {message}", path.display(), line + 1);
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
             continue;
+        }
+        match text {
+            r#"python "import _random""# => {
+                random_imported = true;
+                continue;
+            }
+            r#"python "rand = _random.Random()""# if random_imported => {
+                // Keep the Contiki board's simulated UID reproducible.
+                random_word = Some(0x407d_15c0u32);
+                continue;
+            }
+            _ => {}
         }
         if let Some(name) = text.strip_prefix("macro ") {
             let name = name.trim();
@@ -83,7 +99,18 @@ fn walk_file(
                     .entry(name.trim().into())
                     .or_insert_with(|| value.trim().into());
             } else {
-                variables.insert(name.into(), value.trim().into());
+                let value = if value.trim() == r#"`python "print rand.getrandbits(32)"`"# {
+                    let word = random_word
+                        .as_mut()
+                        .ok_or_else(|| error("missing random generator"))?;
+                    *word ^= *word << 13;
+                    *word ^= *word >> 17;
+                    *word ^= *word << 5;
+                    word.to_string()
+                } else {
+                    value.trim().into()
+                };
+                variables.insert(name.into(), value);
             }
             continue;
         }
@@ -205,6 +232,19 @@ pub fn execute(
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
             boot.image = Some(firmware_reference(file, script));
+        }
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.platform.is_some() => {
+            let mips = crate::parse_address(resolve(value)?)?;
+            if mips == 0 || mips.checked_mul(1_000_000).is_none() {
+                return Err("PerformanceInMips is out of range".into());
+            }
+            boot.mips = Some(mips);
+        }
+        ["sysbus", "WriteDoubleWord", address, value] if boot.image.is_some() => {
+            boot.writes.push((
+                crate::parse_address(resolve(address)?)?,
+                crate::parse_address(resolve(value)?)?,
+            ));
         }
         ["sysbus", "LoadBinary", value, address] if boot.platform.is_some() => {
             let file = resolve(value)?

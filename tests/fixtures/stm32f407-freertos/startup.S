@@ -91,3 +91,32 @@ reset_handler:
 watchdog_marker:
     .space 4
 .size watchdog_marker, . - watchdog_marker
+
+#ifdef F407_FPU
+.fpu fpv4-sp-d16
+.section .text.fp_delay,"ax",%progbits
+.global fp_delay
+.thumb_func
+fp_delay:
+    push {r4-r6, lr}
+    vpush {s30-s31}
+    vmrs r6, fpscr
+    mov r4, r1
+    eor r5, r1, #0x80000000
+    vmov s0, r4
+    vmov s31, r5
+    vmsr fpscr, r4
+    bl vTaskDelay
+    vmov r0, s0
+    cmp r0, r4
+    bne firmware_fault
+    vmov r0, s31
+    cmp r0, r5
+    bne firmware_fault
+    vmrs r0, fpscr
+    cmp r0, r4
+    bne firmware_fault
+    vmsr fpscr, r6
+    vpop {s30-s31}
+    pop {r4-r6, pc}
+#endif

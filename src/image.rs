@@ -45,8 +45,11 @@ pub fn load(machine: &mut Machine, mut file: File, raw: bool) -> Result<(), Stri
 
     let flags = word(&header, 36);
     if cortex_m {
-        if half(&header, 18) != 40 || flags >> 24 != 5 || flags & 0x400 != 0 {
-            return Err("expected an ARM EABI5 ELF32 executable without the hard-float ABI".into());
+        if half(&header, 18) != 40 || flags >> 24 != 5 {
+            return Err("expected an ARM EABI5 ELF32 executable".into());
+        }
+        if flags & 0x400 != 0 && !machine.bus.nvic.as_ref().is_some_and(|nvic| nvic.has_fpu()) {
+            return Err("the hard-float ABI requires a Cortex-M with an FPU".into());
         }
     } else if half(&header, 18) != 243
         || flags & !u32::from(machine.primary.compressed_instructions()) != 0

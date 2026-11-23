@@ -172,6 +172,28 @@ impl Timer {
         }
     }
 
+    pub fn read_halfword(&mut self, address: u32) -> u32 {
+        (self.read(address & !3) >> ((address & 2) * 8)) & 0xffff
+    }
+
+    pub fn write_halfword(&mut self, address: u32, value: u32) {
+        let aligned = address & !3;
+        let offset = aligned - self.base;
+        let shift = (address & 2) * 8;
+        let mask = 0xffff << shift;
+        let unchanged = match offset {
+            0x10 => u32::MAX, // Status bits are cleared by writing zero.
+            0x14 => 0,        // EGR is write-only and its bits trigger events.
+            0x24 => self.counter,
+            _ => self
+                .registers
+                .get((offset / 4) as usize)
+                .copied()
+                .unwrap_or(0),
+        };
+        self.write(aligned, (unchanged & !mask) | ((value & 0xffff) << shift));
+    }
+
     pub fn read(&mut self, address: u32) -> u32 {
         match address - self.base {
             0x14 => 0,

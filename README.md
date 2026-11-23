@@ -184,7 +184,7 @@ Thumb-2 実装で実行します。NVIC、SysTick、SVC、PendSV、PSP/MSP の�
 `UART.STM32_UART` は F4 の SR/DR/CR1 レイアウトを使用し、既存の STM32 USART の
 入出力と割り込み配送を共用します。
 
-上流の `stm32f4_discovery.resc` は Contiki 用で、`PerformanceInMips` の解釈で停止します。
+上流の `stm32f4_discovery.resc` は Contiki 用です。未変更の RESC での起動手順は下記にあります。
 未変更の上流ボード定義で FreeRTOS を起動する手順は下記の「未変更の上流 REPL」にあります。
 FreeRTOS 検証用の REPL には、上流を参照して UART4（`0x40004c00`、IRQ 52）、
 TIM2（`0x40000000`、IRQ 28）、GPIOC、NVIC の配線を含めました。メモリー容量は STM32F407VG の 1 MiB フラッシュと
@@ -254,7 +254,7 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 61 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 62 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
@@ -454,7 +454,37 @@ PWM は初回の校正値を読み飛ばし、2 回目が 1000 Hz ±25 Hz、デ�
 この設定は SysTick や周辺タイマーにも共通です。未変更 kit の FreeRTOS 回帰は既定値で実行します。
 
 残課題は入力のデジタルフィルター、GPIO の多段伝搬・競合、ADC 変換、PLLI2S の出力クロック、
-デバッグ時の停止動作、`ApplySVD` のレジスター展開、Contiki 用 RESC のモニターコマンド、
-AIRCR のソフトウェアリセット要求、FPU と ARM_CM4F ポート、実機確認です。
+デバッグ時の停止動作、`ApplySVD` のレジスター展開、
+AIRCR のソフトウェアリセット要求、実機確認です。
 フラッシュプログラム動作、UART のビット時間、CAN の通常モードでのノード間通信も
 残課題です。
+
+### Contiki の上流 RESC と Cortex-M4F FreeRTOS
+
+上流スモークテストは公開 Contiki ELF を SHA-1 で照合し、未変更の
+`scripts/single-node/stm32f4_discovery.resc` と kit REPL から実行します。
+最初の停止原因だった `cpu PerformanceInMips 125` を仮想時間に反映し、
+リセットマクロの UID 書き込みには再現可能な疑似乱数を使用します。
+ファームウェアの初期化には TIM7 の半ワードアクセス、SYSCFG の GPIO–EXTI 選択と
+MII/RMII 選択レジスターが必要でした。`contiki.log` の UART4 出力で
+`Contiki 3.x started.`、`ETH_BSP_Config done!`、`UDP server started` を確認します。
+[上流 Contiki RESC](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/scripts/single-node/stm32f4_discovery.resc)
+
+同じテストは FreeRTOS-Kernel V11.1.0 の公式 ARM_CM4F ポートを
+`-mfloat-abi=hard -mfpu=fpv4-sp-d16` でビルドし、未変更の kit REPL で実行します。
+2 タスクは別々の S0、S31、FPSCR の値を保持し、`vTaskDelay` 後に照合します。
+`cm4f/uart.log` には `FPU context OK: A` と `FPU context OK: B` が現れます。
+TIM2 の IRQ とキュー、CAN ループバック、UART エコー、IWDG 再起動後の出力も照合します。
+[公式 FreeRTOS ARM_CM4F ポート](https://github.com/FreeRTOS/FreeRTOS-Kernel/tree/dbf70559b27d39c1fdb68dfb9a32140b6a6777a0/portable/GCC/ARM_CM4F)
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+cargo test
+tests/stm32f407-upstream-smoke.sh target/close-f407-platform
+# ARM_CM4F のみをビルド・実行する場合
+tests/stm32f407-freertos-smoke.sh target/stm32f407-cm4f --fpu
+```
+
+残課題は FPv4-SP の算術命令、FPCCR の遅延スタック保存（現状は例外進入時に保存）、
+FPU アクセス違反時の UsageFault、一般の Python モニターコマンド、
+Contiki の DHCP リース取得と UDP 疎通の検証です。

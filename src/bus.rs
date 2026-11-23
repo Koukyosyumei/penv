@@ -512,10 +512,13 @@ impl Bus {
         let rcc = self.f4_rcc.as_mut().unwrap();
         let backup_unlocked = self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked);
         rcc.write(address, width, value, backup_unlocked);
-        if rcc.adc_in_reset()
-            && let Some(system) = &mut self.f4_system
-        {
-            system.reset_adc();
+        if let Some(system) = &mut self.f4_system {
+            if rcc.adc_in_reset() {
+                system.reset_adc();
+            }
+            if rcc.syscfg_in_reset() {
+                system.reset_syscfg();
+            }
         }
         if rcc.timer9_in_reset()
             && let Some(timer) = self
@@ -1226,9 +1229,15 @@ impl Bus {
             }
             for gpio in &self.h7_gpio {
                 let pins = gpio.pins();
+                let port = gpio.base.wrapping_sub(0x4002_0000) / 0x400;
                 for (pin, line) in gpio.exti_inputs.iter().enumerate() {
                     if let Some(line) = line
                         && pins & (1 << pin) != 0
+                        && (*line >= 16
+                            || self
+                                .f4_system
+                                .as_ref()
+                                .is_none_or(|sys| sys.exti_port(*line) == port))
                     {
                         exti_inputs[usize::from(line / 32)] |= 1 << (line % 32);
                     }
@@ -1485,10 +1494,8 @@ impl Bus {
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         if N == 4
             && let Some(system) = &self.f4_system
-            && let Some(value) = system.read(
-                address,
-                self.f4_rcc.as_ref().is_some_and(F4Rcc::adc_common_enabled),
-            )
+            && let Some(rcc) = &self.f4_rcc
+            && let Some(value) = system.read(address, rcc)
         {
             return Ok(value);
         }
@@ -1757,17 +1764,19 @@ impl Bus {
                 },
             );
         }
-        if N == 4
-            && address & 3 == 0
+        if matches!(N, 2 | 4)
+            && address as usize & (N - 1) == 0
             && let Some(timer) = self
                 .h7_timers
                 .iter_mut()
                 .find(|timer| timer.contains(address))
         {
-            return Ok(if timer_clocked(self.h7_network_control.as_ref(), timer) {
-                timer.read(address)
-            } else {
+            return Ok(if !timer_clocked(self.h7_network_control.as_ref(), timer) {
                 0
+            } else if N == 2 {
+                timer.read_halfword(address)
+            } else {
+                timer.read(address)
             });
         }
         if address as usize & (N - 1) == 0
@@ -1840,11 +1849,8 @@ impl Bus {
         }
         if width == 4
             && let Some(system) = &mut self.f4_system
-            && system.write(
-                address,
-                value,
-                self.f4_rcc.as_ref().is_some_and(F4Rcc::adc_common_enabled),
-            )
+            && let Some(rcc) = &self.f4_rcc
+            && system.write(address, value, rcc)
         {
             return Ok(());
         }
@@ -2237,14 +2243,18 @@ impl Bus {
             }
             return Ok(());
         }
-        if width == 4
+        if matches!(width, 2 | 4)
             && let Some(timer) = self
                 .h7_timers
                 .iter_mut()
                 .find(|timer| timer.contains(address))
         {
             if timer_clocked(self.h7_network_control.as_ref(), timer) {
-                timer.write(address, value);
+                if width == 2 {
+                    timer.write_halfword(address, value);
+                } else {
+                    timer.write(address, value);
+                }
             }
             return Ok(());
         }

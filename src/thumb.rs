@@ -1,3 +1,4 @@
+mod fpu;
 mod thumb2;
 
 use std::io::Write;
@@ -26,6 +27,9 @@ pub struct Thumb {
     thread_uses_psp: bool,
     msp: u32,
     psp: u32,
+    fp_active: bool,
+    fp: [u32; 32],
+    fpscr: u32,
 }
 
 impl Thumb {
@@ -219,12 +223,12 @@ impl Thumb {
             16 => u32::from(self.interrupts_masked),
             17 if self.thumb2 => u32::from(self.basepri),
             19 if self.thumb2 => u32::from(self.faultmask),
-            20 => u32::from(self.uses_psp()) << 1,
+            20 => (u32::from(self.uses_psp()) << 1) | (u32::from(self.fp_active) << 2),
             _ => return None,
         })
     }
 
-    fn system_write(&mut self, register: u32, value: u32, r: &mut [u32; 32]) -> bool {
+    fn system_write(&mut self, register: u32, value: u32, r: &mut [u32; 32], bus: &Bus) -> bool {
         match register {
             0..=3 => self.set_apsr(value),
             5..=7 => {}
@@ -241,7 +245,11 @@ impl Thumb {
                 }
             }
             19 if self.thumb2 => self.faultmask = value & 1 != 0,
-            20 => self.select_thread_stack(value & 2 != 0, r),
+            20 => {
+                self.select_thread_stack(value & 2 != 0, r);
+                self.fp_active =
+                    value & 4 != 0 && bus.nvic.as_ref().is_some_and(|nvic| nvic.has_fpu());
+            }
             _ => return false,
         }
         true
@@ -270,7 +278,10 @@ impl Thumb {
             ));
         }
         let sp = r[13];
-        let stack = (sp & !7).wrapping_sub(32);
+        // The extended frame follows the core frame and reserves 18 words.
+        // Save it on entry even when the firmware requests lazy stacking.
+        let extra = if self.fp_active { 72 } else { 0 };
+        let stack = (sp & !7).wrapping_sub(32 + extra);
         let it = u32::from(self.it_state);
         let xpsr = self.apsr()
             | (1 << 24)
@@ -280,10 +291,20 @@ impl Thumb {
             | ((it & 0xfc) << 8);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
         let memory = bus
-            .guest_memory(stack, 32)
+            .guest_memory(stack, (32 + extra) as usize)
             .map_err(|error| error.to_string())?;
         for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
             *word = value.to_le_bytes();
+        }
+        if self.fp_active {
+            for (word, value) in memory[32..100]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(self.fp[..16].iter().copied().chain([self.fpscr]))
+            {
+                *word = value.to_le_bytes();
+            }
         }
         if self.uses_psp() {
             self.psp = stack;
@@ -297,6 +318,10 @@ impl Thumb {
                 0xffff_fff1
             };
         }
+        if self.fp_active {
+            r[14] &= !0x10;
+            self.fp_active = false;
+        }
         bus.clear_reservation(0);
         self.it_state = 0;
         self.active_exceptions.insert(exception);
@@ -305,8 +330,15 @@ impl Thumb {
     }
 
     fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &Bus) -> Result<u32, String> {
-        if self.active_exception != 0 && matches!(target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd) {
-            let use_psp = target == 0xffff_fffd;
+        let basic_return = target | 0x10;
+        if self.active_exception != 0
+            && matches!(basic_return, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd)
+        {
+            let use_psp = basic_return == 0xffff_fffd;
+            let extended = target & 0x10 == 0;
+            if extended && !bus.nvic.as_ref().is_some_and(|nvic| nvic.has_fpu()) {
+                return Err("extended Cortex-M exception return requires an FPU".into());
+            }
             let stack = if use_psp { self.psp } else { r[13] };
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
@@ -318,7 +350,7 @@ impl Thumb {
             let previous = xpsr & 0x1ff;
             let mut remaining = self.active_exceptions;
             remaining.remove(self.active_exception);
-            let valid_mode = if target != 0xffff_fff1 {
+            let valid_mode = if basic_return != 0xffff_fff1 {
                 previous == 0 && remaining.is_empty()
             } else {
                 previous != 0
@@ -327,6 +359,17 @@ impl Thumb {
             if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
                 return Err("invalid Cortex-M exception return frame".into());
             }
+            if extended {
+                let mut fp_frame = [0; 17];
+                for (index, word) in fp_frame.iter_mut().enumerate() {
+                    *word = bus
+                        .read_ram::<4>(stack.wrapping_add(32 + index as u32 * 4))
+                        .map_err(|error| error.to_string())?;
+                }
+                self.fp[..16].copy_from_slice(&fp_frame[..16]);
+                self.fpscr = fp_frame[16];
+            }
+            self.fp_active = extended;
             r[..4].copy_from_slice(&[r0, r1, r2, r3]);
             r[12] = r12;
             if use_psp {
@@ -335,7 +378,7 @@ impl Thumb {
             if previous == 0 {
                 self.thread_uses_psp = use_psp;
             }
-            r[13] = stack.wrapping_add(32 + ((xpsr >> 7) & 4));
+            r[13] = stack.wrapping_add(32 + 72 * u32::from(extended) + ((xpsr >> 7) & 4));
             r[14] = lr;
             self.faultmask = false;
             self.set_apsr(xpsr);
@@ -841,7 +884,7 @@ impl Thumb {
                         (0xf380..=0xf38f, 0x8800..=0x88ff) => {
                             let register = (inst & 15) as usize;
                             if matches!(register, 13 | 15)
-                                || !self.system_write(sysm, r[register], r)
+                                || !self.system_write(sysm, r[register], r, bus)
                             {
                                 return Err(unsupported());
                             }
@@ -937,8 +980,8 @@ mod tests {
         let other_task = 0x2000_0040;
         r[0] = other_task;
         r[13] = 0x2000_0200;
-        thumb.system_write(9, 0x2000_0100, &mut r);
-        thumb.system_write(20, 2, &mut r);
+        thumb.system_write(9, 0x2000_0100, &mut r, &bus);
+        thumb.system_write(20, 2, &mut r, &bus);
         let frame = [42u32, 0, 0, 0, 0, 0, 0xa0, 1 << 24];
         bus.memory(other_task, 32)
             .unwrap()
@@ -958,6 +1001,49 @@ mod tests {
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
         thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap();
         assert_eq!((pc, r[0], r[13]), (0xa0, 42, other_task + 32));
+    }
+
+    #[test]
+    fn nested_exception_restores_extended_msp_frames() {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x400).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        bus.nvic.as_mut().unwrap().enable_fpu();
+        for (vector, handler) in [(11, 0x81u32), (16, 0x91)] {
+            bus.memory(vector * 4, 4)
+                .unwrap()
+                .copy_from_slice(&handler.to_le_bytes());
+        }
+        let mut thumb = Thumb::new(Some(0));
+        let mut r = [0; 32];
+        r[13] = 0x3fc;
+        thumb.fp_active = true;
+        thumb.fp[15] = 0x1122_3344;
+        thumb.fpscr = 0x0040_0001;
+        assert_eq!(
+            thumb.exception_entry(11, 0x60, &mut r, &mut bus).unwrap(),
+            0x80
+        );
+        assert_eq!((r[13], r[14]), (0x390, 0xffff_ffe9));
+        thumb.fp_active = true;
+        thumb.fp[15] = 0xaabb_ccdd;
+        thumb.fpscr = 0x0080_0002;
+        assert_eq!(
+            thumb.exception_entry(16, 0x82, &mut r, &mut bus).unwrap(),
+            0x90
+        );
+        assert_eq!(r[14], 0xffff_ffe1);
+        assert_eq!(thumb.branch(r[14], &mut r, &bus).unwrap(), 0x82);
+        assert_eq!(
+            (r[13], thumb.fp[15], thumb.fpscr),
+            (0x390, 0xaabb_ccdd, 0x0080_0002)
+        );
+        assert_eq!(thumb.branch(r[14], &mut r, &bus).unwrap(), 0x60);
+        assert_eq!(
+            (r[13], thumb.fp[15], thumb.fpscr),
+            (0x3fc, 0x1122_3344, 0x0040_0001)
+        );
+        assert!(thumb.fp_active);
     }
 
     #[test]

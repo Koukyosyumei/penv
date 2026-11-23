@@ -210,6 +210,10 @@ impl F4Rcc {
         self.bdcr & BD_RST != 0
     }
 
+    pub fn syscfg_in_reset(&self) -> bool {
+        self.resets[BusClock::Apb2 as usize] & (1 << 14) != 0
+    }
+
     pub fn adc_in_reset(&self) -> bool {
         self.resets[BusClock::Apb2 as usize] & (1 << 8) != 0
     }
@@ -240,6 +244,7 @@ impl F4Rcc {
             0x4000_7000 => Some((Apb1, 28)),
             0x4001_1000 => Some((Apb2, 4)),
             0x4001_3000 => Some((Apb2, 12)),
+            0x4001_3800 => Some((Apb2, 14)),
             _ => timer_clock(base),
         };
         route.is_none_or(|(bus, bit)| {

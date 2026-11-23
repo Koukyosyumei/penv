@@ -2,16 +2,24 @@
 set -euo pipefail
 
 fixture=$(cd "$(dirname "$0")" && pwd)
-work=${1:?usage: build.sh OUTPUT_DIR [--upstream]}
+work=${1:?usage: build.sh OUTPUT_DIR [--upstream|--fpu]}
 boot=boot.resc
 defines=()
+arch=( -mfloat-abi=soft )
+port_name=ARM_CM3
 case "${2:-}" in
     "") ;;
     --upstream)
         boot=upstream.resc
         defines=(-DF407_UPSTREAM_BOARD)
         ;;
-    *) echo "usage: build.sh OUTPUT_DIR [--upstream]" >&2; exit 1 ;;
+    --fpu)
+        boot=upstream.resc
+        defines=(-DF407_UPSTREAM_BOARD -DF407_FPU)
+        arch=( -mfloat-abi=hard -mfpu=fpv4-sp-d16 )
+        port_name=ARM_CM4F
+        ;;
+    *) echo "usage: build.sh OUTPUT_DIR [--upstream|--fpu]" >&2; exit 1 ;;
 esac
 mkdir -p "$work"
 work=$(cd "$work" && pwd)
@@ -27,8 +35,8 @@ if [[ "$(git -C "$kernel" rev-parse HEAD)" != "$revision" ]] ||
     exit 1
 fi
 
-port="$kernel/portable/GCC/ARM_CM3"
-"${CLANG:-clang}" --target=arm-none-eabi -mcpu=cortex-m4 -mthumb -mfloat-abi=soft \
+port="$kernel/portable/GCC/$port_name"
+"${CLANG:-clang}" --target=arm-none-eabi -mcpu=cortex-m4 -mthumb "${arch[@]}" \
     "${defines[@]}" -std=c11 -Os -ffreestanding -ffunction-sections -fdata-sections \
     -I"$fixture" -I"$fixture/freestanding" -I"$kernel/include" -I"$port" \
     -nostdlib -fuse-ld=lld -Wl,--gc-sections -T "$fixture/memory.ld" \

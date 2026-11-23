@@ -311,6 +311,10 @@ struct worker {
     TickType_t period;
 };
 
+#ifdef F407_FPU
+void fp_delay(TickType_t ticks, uint32_t pattern);
+#endif
+
 static void task(void *arg)
 {
     const struct worker *worker = arg;
@@ -328,7 +332,18 @@ static void task(void *arg)
         uart_char((char)('0' + tick % 10));
         uart_char('\n');
         taskEXIT_CRITICAL();
+#ifdef F407_FPU
+        fp_delay(worker->period, worker->name == 'A' ? 0x00400001 : 0x00800002);
+        if (iteration == 0) {
+            taskENTER_CRITICAL();
+            uart_text("FPU context OK: ");
+            uart_char(worker->name);
+            uart_char('\n');
+            taskEXIT_CRITICAL();
+        }
+#else
         vTaskDelay(worker->period);
+#endif
     }
 
     for (;;) {
