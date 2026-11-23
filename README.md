@@ -330,12 +330,28 @@ tail -c 4 "$assets/prompt-stop.out" | od -An -tx1
 | 例外とイベント | `tests/unit-tests/arm-cortex-m-interrupts.robot` の `Should Wake Up From WFE When SEVONPEND Is Set` | 移植済み。 `renode_wfe_wakes_on_new_pending_irq_only_with_sevonpend` は上流と同じ IRQ 5、書込みアドレス、データを使い、SEVONPEND の有無を比較します。 |
 | SysTick | 同ファイルの `Should Count Down SysTick With Reload Set Before Reset` と `Should Count Down SysTick With Reload Set After Reset` | 今回追加。 `renode_systick_counts_and_reloads_for_both_cvr_write_orders` で CVR/RVR の両順序、カウントダウン、COUNTFLAG の読出しによる解除、再ロードを検査します。4 実行ステップを 1 ティックに縮尺し、penv ではゼロを観測してから次ティックで再ロードします。上流の仮想時間境界と同じ結果を保証するテストは残課題です。 |
 | NVIC のリセット | 同ファイルの `NVIC Base Priority Mask Setting Should Not Survive Reset` | 対象外。BASEPRI は現行の Cortex-M0/M0+ の範囲外です。 |
-| Fault、クロック信号 | `tests/unit-tests/arm-cortex-m-bus-fault.robot` と `tests/unit-tests/arm-cortex-m-signals.robot` | Fault の例外配送・ロックアップ、Cortex-M Complex の外部クロックゲートと DWT を対象とするため未移植。既存の CLI テストは無効なリセットベクターをエラーとして検査します。 |
+| Fault、クロック信号 | `tests/unit-tests/arm-cortex-m-bus-fault.robot` と `tests/unit-tests/arm-cortex-m-signals.robot` | Fault の例外配送・ロックアップ、Cortex-M Complex の外部クロックゲートと DWT は未移植です。既存の CLI テストは無効なリセットベクターをエラーとして検査します。SysTick の停止・再開を下表で検査します。 |
 | UART 受信 | `tests/peripherals/STM32_UART.robot` の `Should Drop Characters When UART Or Receiver Disabled` | `renode_stm32_usart_drops_input_if_either_enable_is_clear` は F072 のレジスター配置で、上流の `0x12` と `0x34` が受信器または USART の無効中に破棄され、再有効化しても現れないことを検査します。フレーム時間、パリティ、アイドル検出の上流ケースは対象外です。 |
 | UART 端末 | `tests/platforms/STM32F072b.robot` の Console Echo と ADC、`tests/unit-tests/uart-tester.robot` の端末選択 | 既存の公開 ELF 回帰は Echo、プロンプト待機、ADC をカバーします。`uart_watch_ignores_other_ports_without_filtering_stdout` は端末選択に対応する USART 分離を検査します。Robot のテスター ID とバイナリ・正規表現モードは未移植です。 |
 | STM32 フラッシュ | `tests/unit-tests/stm32f4-erase.robot` の `Should Ignore Erase When MER And SER Are Reset`、`Should Perform Mass Erase`、`Should Perform Sector Erase`。隣接ページの観測条件は `tests/platforms/STM32L072.robot` の `Should Handle Flash Operations` | `renode_stm32_flash_erase_modes_preserve_the_expected_ranges` は F072 の 128 KiB バンク、2 KiB ページ、消去値 `0xff` を使用します。消去モードなし、指定ページ全体と隣接ページ、バンク全消去を検査します。F4/L0/H7 固有のコントローラーとフラッシュ用 ELF は対象外です。既存の `stm32f072_flash_preserves_programmed_data_on_reload_and_erases_a_page` は F072 のプログラムと再ロードを検査します。 |
 
 STM32 フラッシュの消去操作は Rust のバス回帰で検証しています。
+
+#### NVIC・SysTick・例外の追加移植
+
+同じ固定リビジョンで、前回の `BX LR`、`SEVONPEND`、SysTick の CVR/RVR 書き込み順の回帰に加え、次の観測条件を移植しました。
+
+| 上流のケース（`tests/unit-tests/` 内） | 追加した Rust テストと差分 |
+| --- | --- |
+| `arm-cortex-m-exception-return.robot` の `Should Not Return From Exception When In Thread Mode` と `Should Not Return From Exception When Not Using Allowed Instruction` | `renode_thread_bx_and_handler_blx_do_not_unstack` は、スレッドの `BX` とハンドラーの `BLX LR` が Cortex-M0 の `0xfffffff9` を分岐先として扱い、例外フレームを解除しないことを検査します。TrustZone の `BLXNS` は対象外です。 |
+| 同ファイルの `Should Not Return From Exception When Loading PC From Vector Table` | `renode_exception_vector_load_does_not_unstack_an_exc_return_value` は、上流の MPU/HardFault の準備を外部 IRQ に置き換えます。ベクター内の `0xfffffff9` が PC にロードされ、IRQ がアクティブでスタックが保持されることを検査します。 |
+| `profiler-trace.robot` の `Should Disable Profiler After Reaching Maximum Nested Context Count` | `renode_profiler_fixture_pendsv_dispatches_from_icsr` は、先頭の PendSV を抜き出し、上流と同じ ICSR とベクター・ハンドラーのアドレスで、要求の設定・取り消し・受理・復帰を検査します。MPU の MemManageFault とプロファイラーの判定は対象外です。 |
+| `cpu-pause-halt.robot` の `CPU Should Halt and Reset on Cortex-M` と `CPU Should Halt Pause and Reset on Cortex-M` | `renode_cortex_m_reset_observation_via_sysresetreq` は、CPUWAIT やモニターの停止操作を WFI と AIRCR に置き換えます。VECTKEY の検証、リセットベクターへの復帰、NVIC と SysTick レジスターの初期化、RAM の保持を検査します。 |
+| `arm-cortex-m-signals.robot` の `Should Stop NVIC SysTick and DWT CycleCounter When Not Clocked` | `renode_systick_counter_stops_and_resumes_via_enable` は、SysTick の観測条件を CSR.ENABLE で検査します。カウンターが停止中に変化せず、再開時に残っていたティック位相から進むことを確認します。外部クロックゲートと DWT は対象外です。 |
+
+未移植のままの主なケースは、`arm-cortex-m-signals.robot` の `Should Persist Clocked State For Cortex-M Complex On Reset` と CPUWAIT、`arm-cortex-m-interrupts.robot` の BASEPRI、`it-status.robot` の IT ブロック中の割り込み、`arm-cortex-m-bus-fault.robot` の Fault 配送・ロックアップ、例外復帰ファイルのセキュリティ状態や FNC_RETURN を扱うケースです。SysTick の上流仮想時間と同じリロード境界も未検証です。
+
+追加テストは `cargo test renode_` で実行できます。通常の `cargo test` は 66 件成功しました。STM32F072 の公開 ELF/HEX は次の節の手順で 7 テスト・全 8 シナリオを再実行しました。
 
 #### 対応表の回帰を実行する
 
@@ -353,7 +369,7 @@ PENV_RENODE_ROOT="$renode_root" PENV_RENODE_ASSETS="$assets" \
   cargo test --release upstream_stm32f072 -- --ignored
 ```
 
-通常の `cargo test` は 61 件成功しました。公開イメージによる回帰は 7 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky、Button、CRC の計 8 シナリオを確認しました。
+公開イメージによる回帰は 7 テストで、Hello World の ELF/HEX の 2 形式、Console Echo の 2 経路、ADC、Blinky、Button、CRC の計 8 シナリオを確認しました。
 
 Thumb-2 ELF 全体は Cortex-M85 向けです。移植元の命令と現行の実行限界は次の手順で再現できます。Cortex-M0 の最小 REPL での実行は、最初のワイド `MOVS.W`（PC `0x108e`、命令の先頭半ワード `0xf05f`）で停止します。
 

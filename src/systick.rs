@@ -132,6 +132,27 @@ impl SysTick {
 mod tests {
     use super::*;
 
+    #[test]
+    fn renode_systick_counter_stops_and_resumes_via_enable() {
+        // arm-cortex-m-signals.robot: adapt the stop/resume observation to CSR.ENABLE.
+        let mut timer = SysTick::default();
+        timer.set_frequency((CORTEX_M_STEP_HZ / 2) as u32);
+        assert!(timer.write(RELOAD, 10));
+        assert!(timer.write(CSR, 5));
+        for _ in 0..3 {
+            timer.tick();
+        }
+        assert_eq!(timer.read(CURRENT), Some(10));
+        assert!(timer.write(CSR, 4));
+        for _ in 0..8 {
+            timer.tick();
+        }
+        assert_eq!(timer.read(CURRENT), Some(10));
+        assert!(timer.write(CSR, 5));
+        timer.tick();
+        assert_eq!(timer.read(CURRENT), Some(9));
+    }
+
     // arm-cortex-m-interrupts.robot, the two SysTick reload/CVR write orders.
     #[test]
     fn renode_systick_counts_and_reloads_for_both_cvr_write_orders() {

@@ -767,6 +767,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn renode_cortex_m_reset_observation_via_sysresetreq() {
+        // cpu-pause-halt.robot: adapt the Cortex-M reset observation to WFI/AIRCR.
+        const AIRCR: u32 = 0xe000_ed0c;
+        const ISER: u32 = 0xe000_e100;
+        const ISPR: u32 = 0xe000_e200;
+        const IPR: u32 = 0xe000_e400;
+        const CSR: u32 = 0xe000_e010;
+        const RVR: u32 = 0xe000_e014;
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(0, 0x400).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.bus.map_nvic(0xc0, None).unwrap();
+        machine.primary.configure_cortex_m(Some(0));
+        let mut output = std::io::sink();
+        for (address, width, value) in [
+            (0, 4, 0x400),
+            (4, 4, 0x21),
+            (0x20, 2, 0xbf30), // wfi
+            (0x22, 2, 0xbe00), // bkpt
+            (0x80, 4, 0xdead_beef),
+        ] {
+            machine
+                .bus
+                .write(address, width, value, &mut output)
+                .unwrap();
+        }
+        machine.validate_entry().unwrap();
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+        machine.primary.registers[0] = 0x42;
+        machine.bus.write(AIRCR, 4, 4, &mut output).unwrap(); // incorrect VECTKEY
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.registers[0], 0x42);
+
+        for (address, value) in [
+            (ISER, 1),
+            (ISPR, 1),
+            (IPR, 0xff),
+            (crate::nvic::VTOR, 0x100),
+            (RVR, 5),
+            (CSR, 3),
+            (AIRCR, 0x05fa_0004),
+        ] {
+            machine.bus.write(address, 4, value, &mut output).unwrap();
+        }
+        assert_eq!(machine.bus.read::<4>(IPR).unwrap(), 0xc0);
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 1));
+        assert_eq!(
+            (machine.primary.pc, machine.primary.registers[13]),
+            (0x22, 0x400)
+        );
+        assert_eq!(machine.primary.registers[0], 0);
+        for address in [ISER, ISPR, IPR, crate::nvic::VTOR, RVR] {
+            assert_eq!(machine.bus.read::<4>(address).unwrap(), 0, "{address:#x}");
+        }
+        assert_eq!(machine.bus.read::<4>(CSR).unwrap(), 4);
+        assert_eq!(machine.bus.read_ram::<4>(0x80).unwrap(), 0xdead_beef);
+    }
+
+    #[test]
     fn handles_ecall_and_returns_to_guest_code() {
         let mut machine = Machine::new(48).unwrap();
         let program: [u32; 12] = [

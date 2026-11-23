@@ -837,6 +837,113 @@ mod tests {
     }
 
     #[test]
+    fn renode_thread_bx_and_handler_blx_do_not_unstack() {
+        // arm-cortex-m-exception-return.robot: Thread BX and Handler BLX.
+        const EXC_RETURN: u32 = 0xffff_fff9;
+        for (opcode, handler_mode) in [(0x4700, false), (0x47f0, true)] {
+            let mut bus = Bus::default();
+            bus.map_ram(0, 0x1000).unwrap();
+            let mut output = std::io::sink();
+            bus.write(16 * 4, 4, 0x101, &mut output).unwrap();
+            let mut thumb = Thumb::new(Some(0));
+            let mut pc = 0x20;
+            let mut registers = [0; 32];
+            registers[0] = EXC_RETURN;
+            registers[13] = 0x800;
+            if handler_mode {
+                pc = thumb
+                    .exception_entry(16, pc, &mut registers, &mut bus)
+                    .unwrap();
+                assert_eq!(registers[14], EXC_RETURN);
+            }
+            let sp = registers[13];
+            let link = pc + 3;
+            bus.write(pc, 2, opcode, &mut output).unwrap();
+            thumb
+                .step(&mut pc, &mut registers, &mut bus, &mut output)
+                .unwrap();
+            assert_eq!(pc, EXC_RETURN & !1);
+            assert_eq!(registers[13], sp);
+            assert_eq!(thumb.active_exception, if handler_mode { 16 } else { 0 });
+            assert_eq!(registers[14], if handler_mode { link } else { 0 });
+        }
+    }
+
+    #[test]
+    fn renode_exception_vector_load_does_not_unstack_an_exc_return_value() {
+        // arm-cortex-m-exception-return.robot: use an IRQ vector in place of the MPU fault.
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        let mut output = std::io::sink();
+        bus.write(16 * 4, 4, 0xffff_fff9, &mut output).unwrap();
+        bus.write(0xe000_e100, 4, 1, &mut output).unwrap();
+        bus.write(0xe000_e200, 4, 1, &mut output).unwrap();
+        let mut thumb = Thumb::new(Some(0));
+        let mut pc = 0x20;
+        let mut registers = [0; 32];
+        registers[13] = 0x800;
+
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0xffff_fff8, 0x7e0, 16)
+        );
+        assert_eq!(bus.read_ram::<4>(0x7e0 + 24).unwrap(), 0x20);
+    }
+
+    #[test]
+    fn renode_profiler_fixture_pendsv_dispatches_from_icsr() {
+        // profiler-trace.robot: the initial PendSV, before the MPU/profiler checks.
+        const ICSR: u32 = 0xe000_ed04;
+        const PENDSVSET: u32 = 1 << 28;
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x3000).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        bus.map_systick().unwrap();
+        let mut output = std::io::sink();
+        bus.write(0x38, 4, 0x1001, &mut output).unwrap();
+        bus.write(0x2000, 2, 0x6001, &mut output).unwrap(); // str r1, [r0]
+        bus.write(0x1000, 2, 0x4770, &mut output).unwrap(); // bx lr
+        let mut thumb = Thumb::new(Some(0));
+        let mut pc = 0x2000;
+        let mut registers = [0; 32];
+        registers[0] = ICSR;
+        registers[1] = PENDSVSET;
+        registers[13] = 0x100;
+
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(bus.read::<4>(ICSR).unwrap() & PENDSVSET, PENDSVSET);
+        bus.write(ICSR, 4, 1 << 27, &mut output).unwrap(); // PENDSVCLR
+        assert!(
+            !thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        bus.write(ICSR, 4, PENDSVSET, &mut output).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!((pc, thumb.active_exception), (0x1000, PENDSV));
+        assert_eq!(bus.read::<4>(ICSR).unwrap() & PENDSVSET, 0);
+        thumb
+            .step(&mut pc, &mut registers, &mut bus, &mut output)
+            .unwrap();
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (0x2002, 0x100, 0)
+        );
+    }
+
+    #[test]
     fn vtor_relocates_exception_vectors_without_resetting_the_cpu() {
         use crate::nvic::VTOR;
 
