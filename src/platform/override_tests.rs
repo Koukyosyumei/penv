@@ -347,3 +347,17 @@ fn renode_irq_model_same_named_and_default() {
     let error = check_string("\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    -> receiver@0\n    Irq -> receiver @1", None).unwrap_err();
     assert!(error.contains("IrqSourceUsedMoreThanOnce:"));
 }
+
+#[test]
+fn renode_irq_capabilities_rejects_non_receiver() {
+    let source = "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU\nsender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender\n    Irq -> cpu@0";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("IrqDestinationIsNotIrqReceiver:"));
+}
+
+#[test]
+fn renode_irq_capabilities_rejects_missing_source_pin() {
+    let source = "\nreceiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver\nsender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral\n    gpios: 2\n    2 -> receiver@1";
+    let error = check_string(source, None).unwrap_err();
+    assert!(error.contains("IrqSourcePinDoesNotExist:"));
+}

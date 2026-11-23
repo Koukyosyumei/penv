@@ -962,7 +962,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
         target.body.extend(block.body);
     }
     for entry in &declarations {
-        validate_entry_references(entry, &declared)?;
+        validate_entry_references(entry, &declared, &declarations)?;
         if entry.alias.is_some() {
             match entry.registration.as_deref() {
                 None => {
@@ -982,12 +982,16 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     for check in irq_checks {
         check?;
     }
+    for entry in &declarations {
+        validate_numbered_irq_pins(entry)?;
+    }
     Ok(declarations)
 }
 
 fn validate_entry_references(
     entry: &Entry,
     declared: &HashMap<String, usize>,
+    declarations: &[Entry],
 ) -> Result<(), String> {
     if let Some(reference) = entry
         .registration
@@ -1013,8 +1017,50 @@ fn validate_entry_references(
             continue;
         };
         let target = target.trim();
-        if is_repl_identifier(target) && !declared.contains_key(target) && target != "sysbus" {
-            return Err(entry.error(&format!("IrqDestinationDoesNotExist: {target:?}")));
+        if !is_repl_identifier(target) || target == "sysbus" {
+            continue;
+        }
+        let index = *declared
+            .get(target)
+            .ok_or_else(|| entry.error(&format!("IrqDestinationDoesNotExist: {target:?}")))?;
+        if matches!(
+            declarations[index].model.as_str(),
+            "Antmicro.Renode.UnitTests.Mocks.MockCPU"
+                | "Antmicro.Renode.UnitTests.Mocks.MockIrqSender"
+                | "Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts"
+        ) {
+            return Err(entry.error(&format!("IrqDestinationIsNotIrqReceiver: {target:?}")));
+        }
+    }
+    Ok(())
+}
+
+fn validate_numbered_irq_pins(entry: &Entry) -> Result<(), String> {
+    let count = match entry.model.as_str() {
+        "CAN.STMCAN" => 4,
+        "Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral" => {
+            let Some(count) = entry.body.iter().find_map(|(_, text)| {
+                text.strip_prefix("gpios:")
+                    .and_then(|value| unsigned_number(value.trim()))
+            }) else {
+                return Ok(());
+            };
+            count
+        }
+        _ => return Ok(()),
+    };
+    for (_, text) in &entry.body {
+        let Some((source, _)) = text.split_once("->") else {
+            continue;
+        };
+        if let Ok(sources) = irq_endpoints(source, 256) {
+            for endpoint in sources {
+                if let IrqEndpoint::Number(pin) = endpoint
+                    && u64::from(pin) >= count
+                {
+                    return Err(entry.error(&format!("IrqSourcePinDoesNotExist: {pin}")));
+                }
+            }
         }
     }
     Ok(())
