@@ -389,6 +389,13 @@ def disposition(path, name, context):
             return "pass", "Fixed PolarFire loops, both halt PCs and 20 million increments verified (rv64-lrsc-continuous.md)"
         if name == "Should Drop Other Core Reservation On SC":
             return "partial", "Fixed second hart traps before SC; exact trace and corrected SC verified separately (rv64-lrsc-step.md)"
+    if path.name == "per-core-registration.robot" and name == "Disassemble Code From Per Core Memory":
+        return "pass", "Fixed public ELF and CPU-scoped compressed instruction disassembly verified (rv64-disassembly.md)"
+    if path.name == "llvm-asm-disasm.robot" and name in {
+        "Should Handle Illegal Instruction When Disassembling",
+        "Should Handle Disassembly From Invalid Address",
+    }:
+        return "pass", "Fixed RV64G disassembly encodings, valid decode and error diagnostics verified (rv64-disassembly.md)"
     if path.name == "memory-access.robot":
         if name == "Should Report Illegal Address For Instruction Fetch":
             return "pass", "Fixed RV64 illegal physical fetch diagnostic and abort verified (rv64-physical-address.md)"

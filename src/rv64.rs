@@ -113,6 +113,22 @@ impl Isa {
         Ok(isa)
     }
 
+    pub(crate) fn llvm_decode_features(self) -> String {
+        [
+            (self.multiply, "+m"),
+            (self.atomic, "+a"),
+            (self.compressed, "+c"),
+            (self.single, "+f"),
+            (self.double, "+d"),
+            (self.half, "+zfh"),
+            (self.vector, "+v"),
+        ]
+        .into_iter()
+        .filter_map(|(enabled, feature)| enabled.then_some(feature))
+        .collect::<Vec<_>>()
+        .join(",")
+    }
+
     pub fn elf(compressed: bool) -> Self {
         Self {
             compressed,

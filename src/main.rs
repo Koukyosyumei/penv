@@ -75,6 +75,7 @@ Options:
   --step-cpu CPU     Execute one setup step on a named, single RV64 CPU
   --reset-cpu CPU    Restore a named RV64 CPU during setup, preserving the reset vector
   --write-memory [CPU@]BASE:WIDTH:VALUE  Write a little-endian RAM value during setup
+  --disassemble CPU@BASE:WIDTH  Decode one RV64 instruction with llvm-mc (2 or 4 bytes)
   --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
   --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
   --dtb BASE:PATH    Load an RV64 boot DTB and pass its address in a1
@@ -110,6 +111,7 @@ enum SetupAction {
     Write(RamRead, u64),
     Move(String, u64, u64),
     ReadRegister(String, String),
+    Disassemble(String, u64, usize),
     SetPc(String, u64),
     SetResetVector(String, u64),
     ResetCpu(String),
@@ -160,6 +162,66 @@ fn report_ram(machine: &Machine, (cpu, address, width): &RamRead) -> Result<(), 
         .ok_or_else(|| format!("unmapped RAM read at {address:#018x} ({width} bytes)"))?;
     let context = cpu.as_deref().unwrap_or("sysbus");
     eprintln!("penv: memory {context}@{address:#018x}:{width} = {value:#018x}");
+    Ok(())
+}
+
+fn report_disassembly(
+    machine: &mut Machine,
+    cpu: &str,
+    address: u64,
+    width: usize,
+) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+
+    let hart = machine.rv64_hart_by_name(cpu)?;
+    let features = machine
+        .hart_mut(hart)
+        .rv64
+        .as_ref()
+        .expect("validated RV64 CPU")
+        .isa()
+        .llvm_decode_features();
+    let Some(word) = rv64::ram_read(&machine.bus, Some(hart), address, width) else {
+        eprintln!("penv: Disassembly error detected at {cpu}@{address:#x}: unmapped RAM");
+        return Ok(());
+    };
+    let mut decoder = Command::new("llvm-mc")
+        .args([
+            "--disassemble",
+            "--triple=riscv64",
+            &format!("--mattr={features}"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not start llvm-mc for RV64 disassembly: {error}"))?;
+    let mut input = decoder.stdin.take().expect("piped stdin");
+    for byte in &word.to_le_bytes()[..width] {
+        write!(input, "{byte:#04x} ").map_err(|error| format!("llvm-mc input: {error}"))?;
+    }
+    drop(input);
+    let output = decoder
+        .wait_with_output()
+        .map_err(|error| format!("llvm-mc: {error}"))?;
+    let decoded = String::from_utf8_lossy(&output.stdout);
+    let mut lines = decoded
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && *line != ".text");
+    if output.status.success()
+        && output.stderr.is_empty()
+        && let Some(line) = lines.next()
+        && lines.next().is_none()
+    {
+        let assembly = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        let digits = width * 2;
+        eprintln!("penv: disassembly {cpu}@{address:#x}: {word:0digits$x} {assembly}");
+    } else {
+        eprintln!(
+            "penv: Disassembly error detected at {cpu}@{address:#x}: invalid instruction encoding"
+        );
+    }
     Ok(())
 }
 
@@ -487,6 +549,27 @@ fn run() -> Result<ExitCode, String> {
                     register_reads.push((cpu.to_owned(), value.to_ascii_lowercase()));
                 }
             }
+            Some("--disassemble") => {
+                let error = "--disassemble requires CPU@BASE:WIDTH (2 or 4 bytes)";
+                let operand = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or(error)?;
+                let (cpu, operand) = operand
+                    .split_once('@')
+                    .filter(|(name, _)| !name.is_empty())
+                    .ok_or(error)?;
+                let (address, width) = operand.split_once(':').ok_or(error)?;
+                let width = ram_width(width)?;
+                if !matches!(width, 2 | 4) {
+                    return Err(error.into());
+                }
+                setup_actions.push(SetupAction::Disassemble(
+                    cpu.to_owned(),
+                    parse_address64(address)?,
+                    width,
+                ));
+            }
             Some(
                 option @ ("--load-binary" | "--read-memory" | "--read-memory-now" | "--move-ram"
                 | "--write-memory" | "--dtb"),
@@ -778,6 +861,9 @@ fn run() -> Result<ExitCode, String> {
         machine.bus.renode_unmapped_data = renode_unmapped_data;
         for action in &setup_actions {
             match action {
+                SetupAction::Disassemble(cpu, address, width) => {
+                    report_disassembly(&mut machine, cpu, *address, *width)?;
+                }
                 SetupAction::ReadRegister(cpu, name) => {
                     report_registers(&mut machine, &[(cpu.clone(), name.clone())])?;
                 }
