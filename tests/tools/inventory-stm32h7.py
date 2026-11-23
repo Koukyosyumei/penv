@@ -324,6 +324,14 @@ def triage(row):
         else:
             status, reason = 'PASS', 'STM32 タイマーで上流と同じ 1 MHz・周期・比較値・CNT 書込みを実行。各区間の CNT/CCR1 と CC1 イベント数を照合。src/stm32h7_timer.rs'
     elif suite == 'ParserTests.cs' and name in {
+        'ShouldParseSingleRegistrationPointInBraces',
+        'ShouldParseSingleRegistrationPointInBracesWithSemicolon',
+        'ShouldParseEntryWithManyRegistrationPoints',
+        'ShouldParseEntryWithManyRegistrationPointsWithSemicolons',
+        'ShouldFailOnNonIdentifierRegistrationPointInBraces',
+        'ShouldFailOnNonIdentifierRegistrationPointInBracesWithSemicolon',
+        'ShouldFailOnNonIdentifierRegistrationPointInBracesWithLeadingSemicolon',
+        'ShouldFailOnMultipleRegistrationPointsWithNonIdentifierInBracesWithSemicolons',
         'ShouldParseEntryWithOneAttributeInBraces',
         'ShouldParseEntryWithOneAttributeInBracesWithSemicolon',
         'ShouldParseEntryWithTwoAttributesInBracesAndOneSemicolon',
@@ -334,7 +342,7 @@ def triage(row):
         'ShouldFailOnEntryWithAttributeAndNonIdentifierInBraces',
         'ShouldFailOnEntryWithTwoAttributesInBracesWithTrailingSemicolon',
     }:
-        status, reason = 'PASS', '固定上流の REPL 入力で属性の解析結果または構文エラーを照合。src/platform.rs'
+        status, reason = 'PASS', '固定上流の REPL 入力で解析結果または構文エラーを照合。src/platform.rs'
     elif suite == 'PreLexerTests.cs' and name in {
         'ShouldFailOnUnterminatedString',
         'ShouldFailIfTheMultilineCommentFinishesBeforeEndOfLine',

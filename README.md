@@ -1014,3 +1014,21 @@ target/release/penv run --script "$e/gpio.resc" --platform-root ../renode
 ```
 
 上記の証拠ディレクトリに実行ログと終了状態を保存しました。固定 STM32H7 REPL 7 構成、構文診断 3 件、公開 Zephyr ELF の Blinky と Button が通過しました。台帳は対象 786 件のうち等価合格 87 件、部分検証 10 件、未達 689 件です。型付き参照と `local` スコープ、登録ブロックを含む他の構文ケースは引き続き未達です。
+
+### backlog-network-7bccc7d5790b-1
+
+REPL の波括弧付き登録リストを、周辺機器の型に依存せず構文解析します。登録の順序を保持し、登録間のセミコロンと任意の末尾セミコロンを処理します。登録先が空か、上流で識別子に使えない文字で始まる場合は構文エラーにします。登録値の文字列や入れ子のオブジェクトに含まれるセミコロンは登録の区切りにしません。固定上流 `ParserTests.cs` の8件を同じ入力で実行し、4件の受理と4件の拒否を照合しました。2登録のケースでは名前、型なし宣言、登録先、アドレス、順序も照合しました。
+
+```bash
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export PENV_ASSET_DIR=/tmp/penv-h7-assets
+cargo test
+cargo build --release
+bash tests/stm32h7-platform-load.sh "$(mktemp -d)"
+bash tests/stm32h7-platform-errors-robot.sh "$(mktemp -d)"
+bash tests/stm32h7-nucleo-led-robot.sh "$(mktemp -d)"
+```
+
+`cargo test` は119件が通過し、STM32H7 と LiteX の双方向フレーム交換も含みます。固定 STM32H7 REPL 7構成、構文診断3件、公開 Nucleo Zephyr の Blinky・Button ELF も通過しました。ログと終了状態は `~/.local/state/penv-dispatch/evidence/h7-repl-registration.iw73Tr6H` にあります。
+
+台帳は対象786件のうち等価合格95件、部分検証10件、未達681件です。登録値の完全な型別構文検証、単一登録の範囲・文字列の専用ケース、型付き参照と `local` スコープのケースは残っています。

@@ -178,21 +178,72 @@ fn unquoted_delimiters<'a>(
     })
 }
 
+fn registration_points(list: &str) -> Result<Vec<(&str, Option<&str>)>, &'static str> {
+    let mut points = Vec::new();
+    let mut depth = 0;
+    let mut start = 0;
+    for (end, delimiter) in
+        unquoted_delimiters(list, &['{', '}', '[', ']', ';']).chain([(list.len(), ';')])
+    {
+        match delimiter {
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            ';' if depth == 0 => {
+                let item = list[start..end].trim();
+                if item.is_empty() && end == list.len() && !points.is_empty() {
+                    break;
+                }
+                let register_end = item.find(char::is_whitespace).unwrap_or(item.len());
+                let (register, value) = item.split_at(register_end);
+                let mut chars = register.chars();
+                if !chars.next().is_some_and(char::is_alphabetic)
+                    || !chars.all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    return Err("expected a register reference");
+                }
+                let value = value.trim();
+                points.push((register, (!value.is_empty()).then_some(value)));
+                start = end + 1;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return Err("unbalanced registration value");
+    }
+    Ok(points)
+}
+
 fn inline_body<'a>(
     declaration: &'a str,
     source: &SourceLine,
 ) -> Result<(&'a str, Properties), &'static str> {
     let mut braces = unquoted_delimiters(declaration, &['{', '}']);
-    let Some((begin, '{')) = braces.next() else {
+    let Some((mut begin, '{')) = braces.next() else {
         return if unquoted_delimiters(declaration, &['}']).next().is_some() {
             Err("unexpected closing brace")
         } else {
             Ok((declaration, Vec::new()))
         };
     };
-    // A brace immediately after @ begins a registration expression.
     if declaration[..begin].trim_end().ends_with('@') {
-        return Ok((declaration, Vec::new()));
+        let mut depth = 1;
+        let end = braces
+            .find_map(|(index, brace)| {
+                depth += if brace == '{' { 1 } else { -1 };
+                (depth == 0).then_some(index)
+            })
+            .ok_or("expected a closing brace for registrations")?;
+        registration_points(&declaration[begin + 1..end])?;
+        match braces.next() {
+            Some((index, '{')) if declaration[end + 1..index].trim().is_empty() => {
+                begin = index;
+            }
+            None if declaration[end + 1..].trim().is_empty() => {
+                return Ok((declaration, Vec::new()));
+            }
+            _ => return Err("unexpected text after registrations"),
+        }
     }
     let Some((end, '}')) = braces.next() else {
         return Err("expected a closing brace for inline properties");
@@ -300,7 +351,6 @@ fn parse_text(
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
     let mut definitions = Vec::new();
-    let mut registration_depth = 0;
     let mut seen_usings = HashSet::new();
     let mut comments = ReplComments::default();
     let mut lines = content.lines().enumerate();
@@ -316,16 +366,6 @@ fn parse_text(
         };
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
         if text.is_empty() {
-            continue;
-        }
-        if registration_depth != 0 {
-            let registration = current.as_mut().unwrap().registration.as_mut().unwrap();
-            registration.push(' ');
-            registration.push_str(text);
-            registration_depth += brace_depth(text);
-            if registration_depth < 0 {
-                return Err(error("unexpected closing registration brace"));
-            }
             continue;
         }
         if text == "script: '''"
@@ -389,15 +429,12 @@ fn parse_text(
         }
         let mut block = String::new();
         let mut depth = brace_depth(declaration);
-        let first_brace = unquoted_delimiters(declaration, &['{']).next();
-        let declaration = if depth > 0
-            && first_brace.is_some_and(|(index, _)| !declaration[..index].trim_end().ends_with('@'))
-        {
+        let declaration = if depth > 0 {
             block.push_str(declaration);
             while depth > 0 {
                 let (index, raw) = lines
                     .next()
-                    .ok_or_else(|| error("expected a closing brace for inline properties"))?;
+                    .ok_or_else(|| error("expected a closing brace for inline declaration"))?;
                 let line = comments
                     .line(raw)
                     .map_err(|error| format!("{}:{}: {error}", path.display(), index + 1))?;
@@ -411,21 +448,18 @@ fn parse_text(
         };
         let (declaration, body) = inline_body(declaration, &source).map_err(error)?;
         let (model, registration) = match declaration.split_once('@') {
-            Some((model, registration)) => (model.trim(), Some(registration.trim().to_string())),
+            Some((model, registration)) => (
+                model.trim(),
+                Some(
+                    registration
+                        .lines()
+                        .map(str::trim)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+            ),
             None => (declaration.trim(), None),
         };
-        if (crate::network_platform::has_regions(model)
-            || stm32h7_adc_platform::has_regions(model)
-            || model == stm32h7_gpio_platform::GPIO
-            || model == "UART.STM32F7_USART"
-            || model == stm32h7_rtc_platform::RTC
-            || model == crate::stm32h7_spi::SPI
-            || crate::stm32h7_board_platform::has_regions(model))
-            && let Some(registration) = &registration
-            && registration.starts_with('{')
-        {
-            registration_depth = brace_depth(registration);
-        }
         current = Some(Entry {
             name: name.into(),
             model: model.into(),
@@ -437,9 +471,6 @@ fn parse_text(
     }
     if comments.in_block {
         return Err(format!("{}: unterminated block comment", path.display()));
-    }
-    if registration_depth != 0 {
-        return Err(current.unwrap().error("unterminated Ethernet registration"));
     }
     definitions.extend(current);
     entries.extend(definitions);
@@ -2011,6 +2042,37 @@ mod inline_attribute_cases {
             &mut entries,
         )?;
         Ok(entries)
+    }
+
+    #[test]
+    fn upstream_registration_lists() {
+        for source in [
+            "\nuart: @{ sysbus 0x100 }",
+            "\nuart: @{ sysbus 0x100; }",
+            "\nuart: @{ sysbus 0x100;\n         sysbus 0x200;}",
+        ] {
+            assert!(parse(source).is_ok(), "{source}");
+        }
+
+        let entries = parse("\nuart: @{ sysbus 0x100;\n         sysbus 0x200}").unwrap();
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.name, "uart");
+        assert!(entry.model.is_empty());
+        let list = entry.registration.as_deref().unwrap();
+        assert_eq!(
+            registration_points(&list[1..list.len() - 1]).unwrap(),
+            [("sysbus", Some("0x100")), ("sysbus", Some("0x200"))]
+        );
+
+        for source in [
+            "\nuart: @{ _nonIdentifier }",
+            "\nuart: @{ _nonIdentifier; }",
+            "\nuart: @{ ;_nonIdentifier }",
+            "\nuart: @{\n    sysbus 0x100;\n    sysbus 0x200;\n    _nonIdentifier\n}",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
     }
 
     #[test]
