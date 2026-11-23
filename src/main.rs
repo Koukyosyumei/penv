@@ -2,6 +2,7 @@ mod bus;
 mod clint;
 mod compressed;
 mod csr;
+mod event_trace;
 mod host_pty;
 mod image;
 mod machine;

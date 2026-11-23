@@ -1,8 +1,9 @@
-use std::{collections::VecDeque, io::Write};
+use std::{collections::VecDeque, io::Write, path::Path};
 
 use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
+    event_trace::{self, ExternalEvent, Recorder},
     rtc_clock::RtcClock,
     sv32::TranslationCache,
     sync_action::SyncAction,
@@ -22,6 +23,8 @@ pub struct Machine {
     uart_input: VecDeque<(u64, Vec<u8>)>,
     button_events: VecDeque<(u64, usize, bool)>,
     adc_events: VecDeque<(u64, usize, f64)>,
+    recorder: Option<Recorder>,
+    replay: VecDeque<(u64, ExternalEvent)>,
 }
 
 #[derive(Clone)]
@@ -183,6 +186,8 @@ impl Machine {
             uart_input: VecDeque::new(),
             button_events: VecDeque::new(),
             adc_events: VecDeque::new(),
+            recorder: None,
+            replay: VecDeque::new(),
         }
     }
 
@@ -317,6 +322,50 @@ impl Machine {
         Ok(())
     }
 
+    pub fn record_to(&mut self, path: &Path) -> Result<(), String> {
+        if !self.replay.is_empty() {
+            return Err("cannot start recording while replay is pending".into());
+        }
+        self.recorder = Some(Recorder::create(path)?);
+        Ok(())
+    }
+
+    pub fn play_from(&mut self, path: &Path) -> Result<(), String> {
+        if self.recorder.is_some() || !self.replay.is_empty() {
+            return Err("external event recording or replay is already active".into());
+        }
+        let trace = event_trace::read(path)?;
+        if trace
+            .front()
+            .is_some_and(|(step, _)| *step < self.elapsed_steps())
+        {
+            return Err("event trace begins before the current emulation time".into());
+        }
+        self.replay = trace;
+        Ok(())
+    }
+
+    pub fn external_event(&mut self, event: ExternalEvent) -> Result<(), String> {
+        self.apply_external_event(&event)?;
+        let step = self.elapsed_steps();
+        if let Some(recorder) = &mut self.recorder {
+            recorder.record(step, &event)?;
+        }
+        Ok(())
+    }
+
+    fn apply_external_event(&mut self, event: &ExternalEvent) -> Result<(), String> {
+        match event {
+            ExternalEvent::Button(name, pressed) => self.bus.set_named_button(name, *pressed),
+            ExternalEvent::Adc(name, channel, volts) => {
+                self.bus.set_named_adc_input(name, *channel, *volts)
+            }
+            ExternalEvent::UartLine(name, text, ending) => {
+                self.bus.write_stm32_uart_line(name, text, ending)
+            }
+        }
+    }
+
     pub fn schedule_uart_input(&mut self, step: u64, bytes: Vec<u8>) -> Result<(), String> {
         if !self.bus.has_uart_input() {
             return Err("UART input requires a platform UART".into());
@@ -377,6 +426,14 @@ impl Machine {
         }
         let mut retired = 0;
         for _ in 0..limit {
+            while self
+                .replay
+                .front()
+                .is_some_and(|(step, _)| *step <= self.elapsed_steps())
+            {
+                let (_, event) = self.replay.pop_front().unwrap();
+                self.apply_external_event(&event)?;
+            }
             self.time_source
                 .grant_until(self.time_source.elapsed().saturating_add(1));
             let elapsed_steps = self.time_source.elapsed();

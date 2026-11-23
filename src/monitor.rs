@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     bus::{CORTEX_M_STEP_HZ, UartWatch, UnhandledAccess},
+    event_trace::ExternalEvent,
     machine::{CpuHook, Machine, Stop},
     rtc_clock::RtcMode,
     time_handle::TimeHandle,
@@ -39,6 +40,8 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    RecordTo(PathBuf),
+    PlayFrom(PathBuf),
     RtcMode(RtcMode),
     RtcDateTime,
     CreateHostPty(String, PathBuf, bool),
@@ -169,6 +172,8 @@ pub fn run(
     let mut host_terminals = HashMap::new();
     for command in commands {
         let result = match &command.action {
+            Action::RecordTo(path) => machine.record_to(path).map(|()| None),
+            Action::PlayFrom(path) => machine.play_from(path).map(|()| None),
             Action::RtcMode(mode) => machine.rtc_clock.set_mode(*mode).map(|()| None),
             Action::RtcDateTime => {
                 let value = machine.rtc_clock.date_time(machine.elapsed_steps());
@@ -334,16 +339,15 @@ pub fn run(
                 .write_bytes(*address, bytes, &mut output)
                 .map_err(|error| error.to_string())
                 .map(|()| None),
-            Action::Button(name, pressed) => {
-                machine.bus.set_named_button(name, *pressed).map(|()| None)
-            }
+            Action::Button(name, pressed) => machine
+                .external_event(ExternalEvent::Button(name.clone(), *pressed))
+                .map(|()| None),
             Action::UnregisterGpio(target) => {
                 machine.bus.unregister_stm32_gpio(target).map(|()| None)
             }
             Action::ButtonPulse(name) => machine
-                .bus
-                .set_named_button(name, true)
-                .and_then(|()| machine.bus.set_named_button(name, false))
+                .external_event(ExternalEvent::Button(name.clone(), true))
+                .and_then(|()| machine.external_event(ExternalEvent::Button(name.clone(), false)))
                 .map(|()| None),
             Action::NvicGpio(target, line, high) => machine
                 .bus
@@ -361,8 +365,7 @@ pub fn run(
                 .set_nvic_clocked(target, *clocked)
                 .map(|()| None),
             Action::Adc(name, channel, volts) => machine
-                .bus
-                .set_named_adc_input(name, *channel, *volts)
+                .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
             Action::CreateUartTester(target, binary) => machine
                 .bus
@@ -455,8 +458,11 @@ pub fn run(
                 None
             }),
             Action::WriteUartLine(target, text, ending) => machine
-                .bus
-                .write_stm32_uart_line(target, text, ending)
+                .external_event(ExternalEvent::UartLine(
+                    target.clone(),
+                    text.clone(),
+                    ending.to_vec(),
+                ))
                 .map(|()| None),
         };
         if let Some(stop) =
@@ -776,6 +782,22 @@ fn execute(
         },
     };
     let action = match words.as_slice() {
+        ["machine", verb @ ("RecordTo" | "PlayFrom"), path, mode @ ..] => {
+            let path = resolve(path)?
+                .strip_prefix('@')
+                .ok_or("expected @event-trace-path")?;
+            let path = script.parent().unwrap_or_else(|| Path::new(".")).join(path);
+            match (*verb, mode) {
+                ("RecordTo", ["DomainExternal"]) => Some(Action::RecordTo(path)),
+                ("PlayFrom", []) => Some(Action::PlayFrom(path)),
+                _ => {
+                    return Err(
+                        "expected machine RecordTo @path DomainExternal or machine PlayFrom @path"
+                            .into(),
+                    );
+                }
+            }
+        }
         ["machine", "RealTimeClockMode", mode] => {
             Some(Action::RtcMode(RtcMode::parse(resolve(mode)?)?))
         }

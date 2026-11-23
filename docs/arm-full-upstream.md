@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 61 | 41 | 11 | 239 |
-| Renode Infrastructure NUnit | 134 | 111 | 4 | 19 | 9 |
-| 合計 | **247** | **172** | **45** | **30** | **248** |
+| Renode Infrastructure NUnit | 134 | 111 | 5 | 18 | 9 |
+| 合計 | **247** | **172** | **46** | **29** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -534,4 +534,15 @@ scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-threaded-time-verification
 ```sh
 cargo test --locked renode_time_source
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-blocked-sinks-verification
+```
+
+## 外部入力の記録・再生
+
+`machine RecordTo @events.txt DomainExternal` は通常の RESC ボタン、ADC 電圧、UART 行入力を、マシンの仮想ステップとともに記録する。`machine PlayFrom @events.txt` は新しいマシン上の同じステップ境界で入力を適用し、同時刻の順序を保つ。UART の行終端も記録する。相対パスは RESC の位置を基準にする。
+
+固定 Infrastructure の `ShouldRecordAndPlayEvents` に対応し、同時刻に2種類の入力を置く100組と UART 行の往復を Rust で検証した。公開 STM32F072 のファームウェアを使う検証では、記録時と再生時の UART 出力を比較する。記録ファイルは penv の形式。Renode の汎用周辺機器メソッド、Migrant 形式、RESC 外から入るイベントは未対応なので部分移植。
+
+```sh
+cargo test --locked renode_time_source_records
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-events-verification
 ```

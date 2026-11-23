@@ -371,6 +371,8 @@ def classify_nunit(name, case, attrs, parameter):
         if case in blocked:
             check, observation = blocked[case]
             return PASS, COMMON, f"renode_time_source_{check}; {observation}; threaded requests and reports drive both clocks and the next grant automatically"
+        if case == "ShouldRecordAndPlayEvents":
+            return PARTIAL, F072, "renode_time_source_records_and_replays_external_events_in_order; timestamped STM32F072 button, ADC and UART input trace; upstream generic peripheral method serialization remains"
         if case == "ShouldNotSleepOnAdvanceImmediately":
             return OPEN, COMMON, "Requires host stopwatch comparison for a paced versus immediate time source; deferred to explicit performance work"
         return OPEN, COMMON, "Requires blocked-sink grant and report synchronization or record/replay; serial complete grants are implemented"
