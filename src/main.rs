@@ -56,6 +56,7 @@ mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod uart_transcript;
 mod zephyr_boot;
 
 use std::{
@@ -90,6 +91,9 @@ Options:
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
+  --f4-repl-timing   Preserve STM32F4 REPL timer and SysTick clocks
+  --uart-transcript PATH  Record UART lines with their virtual step
+  --uart-reply LINE FILE  Inject file bytes after the first matching UART line
   --virtual-mips N   Set Cortex-M steps per virtual microsecond (default: 1)
   --max-steps N      Stop after N execution steps or simulation rounds (default: 10000000)
   --stats            Print execution statistics to stderr
@@ -131,6 +135,9 @@ fn run() -> Result<ExitCode, String> {
     let mut harts = None;
     let mut max_steps = 10_000_000;
     let mut virtual_mips = None;
+    let mut f4_repl_timing = false;
+    let mut transcript = None;
+    let mut uart_reply = None;
     let mut boot_writes = Vec::new();
     let mut extra_ram = Vec::new();
     let mut clint = None;
@@ -153,9 +160,23 @@ fn run() -> Result<ExitCode, String> {
             Some("--") => positional = true,
             Some("--raw") => raw = true,
             Some("--stats") => stats = true,
+            Some("--f4-repl-timing") => f4_repl_timing = true,
+            Some("--uart-reply") => {
+                let line = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or("--uart-reply requires LINE FILE")?;
+                let file = args
+                    .next()
+                    .map(PathBuf::from)
+                    .ok_or("--uart-reply requires LINE FILE")?;
+                if uart_reply.replace((line, file)).is_some() {
+                    return Err("--uart-reply may only be specified once".into());
+                }
+            }
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir"),
+                | "--asset-dir" | "--uart-transcript"),
             ) => {
                 let path = args
                     .next()
@@ -165,6 +186,7 @@ fn run() -> Result<ExitCode, String> {
                     "--platform" => &mut platform_path,
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
+                    "--uart-transcript" => &mut transcript,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
                 };
@@ -293,6 +315,9 @@ fn run() -> Result<ExitCode, String> {
                 || uart_input_at.is_some()
                 || !uart_events.is_empty()
                 || virtual_mips.is_some()
+                || f4_repl_timing
+                || transcript.is_some()
+                || uart_reply.is_some()
             {
                 return Err(
                     "single-machine overrides cannot be combined with a simulation script".into(),
@@ -344,7 +369,7 @@ fn run() -> Result<ExitCode, String> {
                         .into(),
                 );
             }
-            platform::load(&platform_path, platform_root.as_deref())?
+            platform::load_with_timing(&platform_path, platform_root.as_deref(), f4_repl_timing)?
         }
         None => {
             if platform_root.is_some() {
@@ -416,7 +441,17 @@ fn run() -> Result<ExitCode, String> {
 
     let mut output = LineWriter::new(io::stdout().lock());
     let start = Instant::now();
-    let result = machine.run(max_steps, &mut output);
+    let result = if transcript.is_some() || uart_reply.is_some() {
+        uart_transcript::run(
+            &mut machine,
+            max_steps,
+            &mut output,
+            transcript.as_deref(),
+            uart_reply,
+        )
+    } else {
+        machine.run(max_steps, &mut output)
+    };
     let elapsed = start.elapsed();
     output.flush().map_err(|e| format!("UART: {e}"))?;
     let (stop, steps) = result?;

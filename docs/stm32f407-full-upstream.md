@@ -47,11 +47,31 @@ target/release/penv peripherals export target/stm32f407-peripherals.json \
 `cargo test renode_stmcan_init_test` は、上流の初期化モード、送受信メールボックス、
 フィルター制御と 28 バンクの比較を再現します。
 
+## 部分移植 5 件の再検証条件
+
+- PWM 2 件は未変更の CPU REPL に上流と同じ PA6 → PD12 を追加します。
+  CPU は固定 Renode の既定 100 MIPS、タイマーは REPL の 10 MHz、SysTick は 72 MHz です。
+  周波数で最初に一致した行を読み飛ばし、次の測定値を Robot と同様に整数部で比較します。
+  確認値は通常版が 1000 Hz・33.0%、4 チャネル版が 1001 Hz・32.9% でした。
+- RTC は 32 kHz の上流オーバーレイを使用し、プロンプト行の次の実行ステップで `s` を渡します。
+  `rtc-alarm.tsv` の行末時刻から Renode の `Elapsed Virtual Time` の秒フィールドを再現し、
+  2・4・6・8 秒を確認します。4 行目の後は UART の未改行出力も含め、3 秒間無出力を要求します。
+- FAULTMASK 2 件は RCC の事前書き込みを除き、上流 REPL の TIM3 周波数を使用します。
+  `faultmask.tsv` の `Sleeping` 行末から次の UART バイトまで 1 秒以上と、
+  マスク解除後 3 回、例外復帰テストで 4 回の割り込み出力を確認します。
+
+`--uart-transcript PATH` の各行は仮想開始ステップ、終了ステップ、UART テキストの TSV です。
+RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UART 観測条件を検査します。
+この 2 スイートの CPU 命令実行速度は固定 Renode の既定 100 MIPS と異なります。
+スモークは既知 ELF の実行を仮想ステップ上限で区切ります。Robot の端末待機の既定タイムアウト
+（待機ごとに 8 秒）は汎用機能として再実装していません。
+
 ## 未達
 
-Discovery の PWM 2 件、RTC アラーム、FAULTMASK 2 件はスモークで動作を確認しています。
-上流 PWM のマッチ条件と仮想時間、RTC のプロンプト連動とアラーム発火時刻、
-FAULTMASK の TIM3 クロックおよび UART の待機開始からの無出力区間の等価性は未確定です。
+共有台帳では、Cortex-M4F にも適用される精密 BusFault と NOCP を移植待ちとして残し、
+TrustZone、MVE、ARMv8-M MPU や例外復帰トークンに依存するパラメーターには対象外理由を付けました。
+`expanded` 行の下には、元のケースに対応する命令別パラメーターがあります。
+
 フラッシュ消去はデータ結果を移植済みで、モードなしの消去要求に対する上流ログの検査が残ります。
 共有スイートでは Cortex-M4F の NOCP・Fault 配送、UART ビット時間・パリティー、
 別ボードの FPU/DSP 公開 ELF の適用判定と実行、NUnit の残りのパラメーター展開が残ります。

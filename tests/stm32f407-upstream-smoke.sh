@@ -50,12 +50,6 @@ rg -a 'Contiki 3.x started|ETH_BSP_Config done|UDP server started' "$work/contik
 run_case() {
     local name=$1 asset=$2 sha=$3 platform=$4 limit=$5
     shift 5
-    local provision=
-    if [[ "${1:-}" == --tim3-clock ]]; then
-        # The two upstream FAULTMASK ELFs assume TIM3 is already clocked.
-        provision='sysbus WriteDoubleWord 0x40023840 0x00000002'
-        shift
-    fi
     fetch_asset "$asset" "$sha"
     cp "$assets/$asset" "$work/$name.elf"
     cat > "$work/$name.resc" <<RESC
@@ -63,7 +57,6 @@ mach create "$name"
 machine LoadPlatformDescription @$platform
 sysbus LoadELF @$name.elf
 showAnalyzer sysbus.usart2
-$provision
 RESC
     run_to_limit "$name" --script "$work/$name.resc" --max-steps "$limit" "$@"
 }
@@ -129,32 +122,31 @@ ASSETS
 
 sha=080256edf201b1e2f7c67bf15000ba1ffa031990
 faultmask="stm32f4disco-faultmask.elf-s_434744-$sha"
-run_case faultmask-masked "$faultmask" "$sha" platforms/cpus/stm32f4.repl 1000000 --tim3-clock
-if ! rg -aqx 'Sleeping\r?' "$work/faultmask-masked.log" ||
-    rg -aq 'Setting FAULTMASK to 0|Timer interrupt' "$work/faultmask-masked.log"; then
-    cat "$work/faultmask-masked.log" >&2
-    exit 1
-fi
-run_case faultmask "$faultmask" "$sha" platforms/cpus/stm32f4.repl 1800000 --tim3-clock
-if ! awk '
-    { sub(/\r$/, "") }
-    $0 == "Setting FAULTMASK to 1" && state == 0 { state = 1 }
-    $0 == "Timer IRQ enabled" && state == 1 { state = 2 }
-    $0 == "Sleeping" && state == 2 { state = 3 }
-    $0 == "Setting FAULTMASK to 0" && state == 3 { state = 4 }
-    $0 == "Timer interrupt" { if (state != 4) exit 1; ++interrupts }
-    END { if (interrupts < 3) exit 1 }' "$work/faultmask.log"; then
-    cat "$work/faultmask.log" >&2
+run_case faultmask "$faultmask" "$sha" platforms/cpus/stm32f4.repl 2600000 \
+    --f4-repl-timing --uart-transcript "$work/faultmask.tsv"
+if ! awk -F '\t' '
+    $3 == "Setting FAULTMASK to 1" && state == 0 { state = 1; next }
+    $3 == "Timer IRQ enabled" && state == 1 { state = 2; next }
+    $3 == "Sleeping" && state == 2 { state = 3; sleep_end = $2; next }
+    state == 3 {
+        if ($3 != "Setting FAULTMASK to 0" || $1 - sleep_end < 1000000) invalid = 1
+        state = 4
+        printf "FAULTMASK: UART idle for %.6f s after Sleeping\n", ($1 - sleep_end) / 1000000
+        next
+    }
+    $3 == "Timer interrupt" { if (state != 4) invalid = 1; ++interrupts }
+    END { exit invalid || interrupts < 3 }' "$work/faultmask.tsv"; then
+    cat "$work/faultmask.tsv" >&2
     exit 1
 fi
 sha=802f85357028150b4586bb3a54a5e44e7a3c2ec5
-run_case faultmask-noclearing "stm32f4disco-faultmask-noclearing.elf-s_433676-$sha" "$sha" platforms/cpus/stm32f4.repl 500000 --tim3-clock
+run_case faultmask-noclearing "stm32f4disco-faultmask-noclearing.elf-s_433676-$sha" "$sha" platforms/cpus/stm32f4.repl 500000 --f4-repl-timing
 if ! awk '{ sub(/\r$/, "") } $0 == "Timer interrupt" { ++interrupts }
     END { exit interrupts < 4 }' "$work/faultmask-noclearing.log"; then
     cat "$work/faultmask-noclearing.log" >&2
     exit 1
 fi
-printf 'FAULTMASK: IRQ deferred until unmask, repeated IRQ after exception return\n'
+printf 'FAULTMASK: repeated IRQ after exception return\n'
 
 # Use the original RESC with the Zephyr ELF override from the Robot case.
 sha=2180a4018e82fcbc8821ef4330c9b5f3caf2dcdb
@@ -189,19 +181,24 @@ rtc:
 REPL
 printf s > "$work/rtc-start.txt"
 sha=ca2effb6a0a8bcde39496b99bcb8b160a4ed292e
-for window in 0:2000000 1:2200000 2:4200000 3:6200000 4:8200000 4:11200000; do
-    name="rtc-alarm-${window#*:}"
-    run_case "$name" "stm32f4_discovery--riot-tests_periph_rtc.elf-s_1249644-$sha" "$sha" \
-        rtc-32khz.repl "${window#*:}" --uart-event "100000:$work/rtc-start.txt"
-    if ! rg -aqF 'Help: Press s to start test' "$work/$name.log" ||
-        ! rg -aqF 'RIOT RTC low-level driver test' "$work/$name.log" ||
-        ! awk -v expected="${window%:*}" '/^Alarm!$/ { ++alarms }
-            END { exit alarms != expected }' "$work/$name.log"; then
-        cat "$work/$name.log" >&2
-        exit 1
-    fi
-done
-printf 'RTC: four RIOT alarms at two-second intervals, then three seconds idle\n'
+rtc_limit=11100000
+run_case rtc-alarm "stm32f4_discovery--riot-tests_periph_rtc.elf-s_1249644-$sha" "$sha" \
+    rtc-32khz.repl "$rtc_limit" --f4-repl-timing --uart-transcript "$work/rtc-alarm.tsv" \
+    --uart-reply 'Help: Press s to start test, r to print it is ready' "$work/rtc-start.txt"
+if ! awk -F '\t' -v limit="$rtc_limit" '
+    $3 == "Help: Press s to start test, r to print it is ready" && state == 0 { state = 1; next }
+    $3 ~ /This is RIOT!/ && state == 1 { state = 2; next }
+    $3 == "RIOT RTC low-level driver test" && state == 2 { state = 3; next }
+    $3 ~ /^This test will display .Alarm!. every 2 seconds for 4 times$/ && state == 3 { state = 4; next }
+    $3 == "Alarm!" {
+        if (state != 4 || int($2 / 1000000) != 2 * ++alarms) invalid = 1
+        printf "RTC: Alarm! at %.6f s\n", $2 / 1000000
+    }
+    END { exit invalid || alarms != 4 || $3 != "Alarm!" || limit - $2 < 3000000 }' "$work/rtc-alarm.tsv"; then
+    cat "$work/rtc-alarm.tsv" >&2
+    exit 1
+fi
+printf 'RTC: four RIOT alarms followed by three seconds of UART silence\n'
 
 while read -r name size sha; do
     run_case "$name" "stm32f4--cube_mx-hello_world.elf-s_$size-$sha" "$sha" platforms/cpus/stm32f4.repl 3500000
@@ -229,24 +226,29 @@ gpioPortD:
     13 -> gpioPortA@7
 REPL
 
-while read -r name sha mips limit; do
-    run_case "$name" "stm32f4disco-$name.elf-s_575008-$sha" "$sha" pwm-pins.repl "$limit" --virtual-mips "$mips"
-    # Like the upstream case, disregard the initial calibration sample.
+# Renode BaseCPU defaults to 100 MIPS; both peripherals keep the REPL clocks.
+while read -r name sha; do
+    run_case "$name" "stm32f4disco-$name.elf-s_575008-$sha" "$sha" pwm-pins.repl 250000000 \
+        --virtual-mips 100 --f4-repl-timing
+    # Robot skips the first matching frequency and captures only the integer part of duty.
     if ! awk -v name="$name" '
-        /^freq=[0-9]+ Hz duty=[0-9.]+ %/ {
-            if (++samples != 2) next
-            freq = substr($1, 6) + 0
-            duty = substr($3, 6) + 0
+        !first && /freq=[[:alnum:]_]+ / { first = 1; next }
+        first && !checked && match($0, /freq=[0-9]+ .*duty=[0-9]+/) {
+            checked = 1
+            capture = substr($0, RSTART, RLENGTH)
+            freq = substr(capture, 6) + 0
+            sub(/^.*duty=/, "", capture)
+            duty = capture + 0
             valid = freq >= 975 && freq <= 1025 && duty >= 32 && duty <= 34
-            printf "%s: %d Hz, %.1f%% duty\n", name, freq, duty
+            printf "%s: %d Hz, %d%% duty (Robot capture)\n", name, freq, duty
         }
         END { exit !valid }' "$work/$name.log"; then
         cat "$work/$name.log" >&2
         exit 1
     fi
 done <<'ASSETS'
-pwm-capture 5743073970bd27bb63e78a9a3990ed0b9e8db373 1 1200000
-pwm-capture-four-channel-capture-support af21ada0861c0be7406f52dbe4280d413b96fbd4 24 26500000
+pwm-capture 5743073970bd27bb63e78a9a3990ed0b9e8db373
+pwm-capture-four-channel-capture-support af21ada0861c0be7406f52dbe4280d413b96fbd4
 ASSETS
 
 sha=c521785d34d4e4afd660947f14dd6123972a7ff8

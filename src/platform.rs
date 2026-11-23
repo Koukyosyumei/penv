@@ -349,11 +349,20 @@ fn declarations(path: &Path, root: Option<&Path>) -> Result<Vec<Entry>, String> 
 }
 
 pub fn load(path: &Path, root: Option<&Path>) -> Result<Machine, String> {
-    load_entries(path, &declarations(path, root)?)
+    load_with_timing(path, root, false)
 }
 
-fn load_entries(path: &Path, entries: &[Entry]) -> Result<Machine, String> {
+pub fn load_with_timing(
+    path: &Path,
+    root: Option<&Path>,
+    f4_repl_timing: bool,
+) -> Result<Machine, String> {
+    load_entries(path, &declarations(path, root)?, f4_repl_timing)
+}
+
+fn load_entries(path: &Path, entries: &[Entry], f4_repl_timing: bool) -> Result<Machine, String> {
     let mut machine = Machine::without_default_ram();
+    machine.bus.f4_repl_timing = f4_repl_timing;
     let mut cpus = Vec::new();
     let mut clint = None;
     let mut dwt = None;
@@ -1134,7 +1143,7 @@ fn load_entries(path: &Path, entries: &[Entry]) -> Result<Machine, String> {
 /// Export the system-bus peripheral tree using Renode's Peripheral Map schema.
 pub fn export_peripherals(path: &Path, root: Option<&Path>, output: &Path) -> Result<(), String> {
     let entries = declarations(path, root)?;
-    load_entries(path, &entries)?;
+    load_entries(path, &entries, false)?;
     let mut nodes = Vec::new();
     for entry in &entries {
         let addresses = match entry.registration.as_deref() {

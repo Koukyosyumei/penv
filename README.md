@@ -434,11 +434,10 @@ CPU REPL を読み込み、Robot テストと同じ配線を追加します。PW
 直交位相は PD12 → PA6 と PD13 → PA7 です。FreeRTOS 回帰には未変更の kit REPL を使います。
 [上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
 
-PWM は初回の校正値を読み飛ばし、2 回目が 1000 Hz ±25 Hz、デューティ比 33% ±1 ポイント
-であることを検査します。直交位相の最初の 2 出力は 10°・20°（各 ±1°）です。
-確認時の値は通常版が 1000 Hz・33.0%、4 チャネル版が 1002 Hz・32.8%、直交位相が 10°・20°
-でした。実行ログは出力ディレクトリの `pwm-capture.log`、
-`pwm-capture-four-channel-capture-support.log`、`qdec.log` に残ります。
+PWM は初回の周波数行を読み飛ばし、2 回目の周波数とデューティ比の整数部を
+Robot と同じ許容範囲（1000 Hz ±25 Hz、33% ±1 ポイント）で照合します。
+直交位相の最初の 2 出力は 10°・20°（各 ±1°）です。実行ログは出力先の
+`pwm-capture.log`、`pwm-capture-four-channel-capture-support.log`、`qdec.log` です。
 
 タイマーモデルは直接・間接キャプチャ、TI1/TI2 トリガーでのカウンターリセット、
 キャプチャフラグとオーバーキャプチャ、エンコーダーモードの方向とカウンター境界を
@@ -448,9 +447,10 @@ PWM は初回の校正値を読み飛ばし、2 回目が 1000 Hz ±25 Hz、デ�
 [RM0090 の STM32F407 タイマー章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-407-415-417-437-455-469-application-note-stmicroelectronics.pdf)
 
 4 チャネル版は最初のエッジを受けた ISR でカウンターをリセットします。
-`--virtual-mips 24` で 1 仮想マイクロ秒あたりの Cortex-M 実行ステップを指定し、
-既定の 1 ステップでは大きくなる ISR とエッジ間の時間を再現可能な範囲に収めます。
-この設定は SysTick や周辺タイマーにも共通です。未変更 kit の FreeRTOS 回帰は既定値で実行します。
+PWM では固定 Renode の既定 CPU 設定に合わせて `--virtual-mips 100` を指定し、
+`--f4-repl-timing` で REPL の TIMx 周波数と SysTick 周波数を保持します。
+FreeRTOS 回帰は RCC のゲートと周波数設定を使う既定モードで実行します。
+[Renode Infrastructure BaseCPU](https://github.com/renode/renode-infrastructure/blob/09ac7c563095c5410258ecc1b1a6b841a013db85/src/Emulator/Peripherals/Peripherals/CPU/BaseCPU.cs#L384)
 
 残課題は入力のデジタルフィルター、GPIO の多段伝搬・競合、ADC 変換、PLLI2S の出力クロック、
 デバッグ時の停止動作、`ApplySVD` の汎用レジスター展開、
@@ -495,7 +495,7 @@ Renode の参照リビジョンは `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` �
 | 対象 | 上流ケースと penv での検査 |
 |---|---|
 | PWM・直交位相 | Discovery の `PWM Capture` 2 件と `Quadrature Decoder` を公開 ELF と同じ GPIO 接続で実行。2 番目の周波数とデューティ比、最初の 2 つの角度を照合 |
-| タイマー IRQ・FAULTMASK | Discovery の TIM2 上り・下りと FAULTMASK 2 件を公開 ELF で実行。FAULTMASK ELF は TIM3 を直接設定するため、生成 RESC が起動前に `RCC_APB1ENR.TIM3EN` を設定。マスク中に出力がないこと、解除後 3 回以上、例外復帰後 4 回以上の割り込みを照合。FreeRTOS では TIM9 と TIM2 のキュー配送も検査 |
+| タイマー IRQ・FAULTMASK | Discovery の TIM2 上り・下りと FAULTMASK 2 件を公開 ELF で実行。FAULTMASK ELF は上流 REPL と同じ TIM3 クロックで実行し、`Sleeping` 後に仮想時間で 1 秒間 UART が無出力であること、解除後 3 回以上、例外復帰後 4 回以上の割り込みを照合。FreeRTOS では TIM9 と TIM2 のキュー配送も検査 |
 | RTC | Discovery の `Should Not Crash On RTC Writes` を公開 Zephyr ELF で実行し、初期値、月変更後、時変更後の UART 出力を順に照合。`Configure RTC Alarm` は公開 RIOT ELF に上流と同じ 32 kHz オーバーレイと UART 入力 `s` を使い、2 秒間隔で計 4 回の `Alarm!` とその後 3 秒間の無出力を検査 |
 | I²C | Discovery に専用の上流 ELF ケースは見当たりませんでした。FreeRTOS の検証用 REPL で `01 23` の書き込み・読み戻しとイベント IRQ、未接続アドレスの NACK とエラー IRQ を検査。未変更 kit でも NACK を確認 |
 | SPI | Discovery に専用の上流 ELF ケースは見当たりませんでした。別 SoC の上流ループバックケースと同様に、検証用 REPL の FreeRTOS で 8/16 ビット転送、RX/TX 割り込み、DMA を検査。未変更 kit では未接続の応答を確認 |
@@ -518,13 +518,13 @@ tests/stm32f407-upstream-smoke.sh target/close-f407-tests
 
 公開 ELF は自動取得と SHA-1 照合の対象です。ログは指定ディレクトリに残ります。
 IRQ は `faultmask*.log`、I²C/SPI/CAN は `loopback/uart.log`、再起動は各構成の
-`watchdog-uart.log` で確認できます。`cargo test` は 70 件です。
+`watchdog-uart.log` で確認できます。
 
 RIOT は、例外フレームに Thumb 関数ポインターを格納します。例外復帰では保存された
 xPSR の Thumb 状態を検査し、PC の下位ビットを落として命令をフェッチします。
 RTC のステータスフラグ消去はバックアップドメイン保護中でも受け付けます。
-アラームの検査は仮想開始後 0.1 秒に `s` を注入し、絶対時刻 2.0・2.2・4.2・6.2・8.2・11.2 秒
-で停止した各実行の累積アラーム数が 0・1・2・3・4・4 になることを照合します。
+アラームの検査では開始プロンプトの直後に `s` を注入し、UART の行末の仮想時刻が
+2・4・6・8 秒台であることと、最終行の後に 3 秒間 UART 出力がないことを 1 回の実行で照合します。
 
 CubeMX の USB 初期化には、上流 REPL の明示的な USB リセットタグと、SVD 由来の
 OTG FS リセット値を使用します。参照した `STM32F40x.svd.gz` の SHA-256 は
