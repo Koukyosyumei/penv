@@ -2225,3 +2225,25 @@ fn renode_collection_reference_duplicate() {
         "RecoverableException: ArgumentException: An item with the same key has already been added."
     ));
 }
+
+#[test]
+fn renode_cpu_enum_default_none_after_override() {
+    let source = "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    EnumValue: TwoStateEnum.Two\n\ncpu:\n    EnumValue: none";
+    let machine = mock_registration_machine(source).unwrap();
+    assert_eq!(machine.bus.fixture_cpu_enum("sysbus.cpu"), Some(0));
+}
+
+#[test]
+fn renode_cpu_enum_default_empty() {
+    let source = "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    EnumValue: empty";
+    let machine = mock_registration_machine(source).unwrap();
+    assert_eq!(machine.bus.fixture_cpu_enum("sysbus.cpu"), Some(0));
+}
+
+#[test]
+fn renode_cpu_enum_default_does_not_replace_explicit_value() {
+    let source =
+        "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n    EnumValue: TwoStateEnum.Two";
+    let machine = mock_registration_machine(source).unwrap();
+    assert_eq!(machine.bus.fixture_cpu_enum("sysbus.cpu"), Some(1));
+}

@@ -1493,6 +1493,20 @@ fn construct_dependency(entry: &Entry) -> Result<(), String> {
 const MOCK_REGISTER: &str = "Antmicro.Renode.UnitTests.Mocks.MockRegister";
 const NULL_REGISTER: &str = "Antmicro.Renode.UnitTests.Mocks.NullRegister";
 
+fn fixture_cpu_enum(value: &str) -> Option<u8> {
+    match scalar_value(value)? {
+        ScalarValue::Reference("empty" | "none" | "One")
+        | ScalarValue::Enum(None | Some("TwoStateEnum"), "One") => Some(0),
+        ScalarValue::Reference("Two") | ScalarValue::Enum(None | Some("TwoStateEnum"), "Two") => {
+            Some(1)
+        }
+        ScalarValue::Number(number) => unsigned_number(&number)
+            .and_then(|value| u8::try_from(value).ok())
+            .filter(|&value| value <= 1),
+        _ => None,
+    }
+}
+
 fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(), String> {
     let mut occupied = HashSet::new();
     for entry in entries.iter().filter(|entry| entry.model == MOCK_CPU) {
@@ -1503,10 +1517,20 @@ fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(),
         else {
             continue;
         };
+        let enum_value = entry
+            .body
+            .iter()
+            .find_map(|(_, item)| {
+                let (key, value) = item.split_once(':')?;
+                (key.trim() == "EnumValue")
+                    .then(|| fixture_cpu_enum(value))
+                    .flatten()
+            })
+            .unwrap_or(0);
         if registration == "sysbus" {
             machine
                 .bus
-                .register_fixture_cpu("sysbus", entry.registered_name(), &entry.name)
+                .register_fixture_cpu("sysbus", entry.registered_name(), &entry.name, enum_value)
                 .map_err(|error| entry.error(&error))?;
             continue;
         }
@@ -1536,7 +1560,7 @@ fn register_fixture_cpus(entries: &[Entry], machine: &mut Machine) -> Result<(),
             }
             machine
                 .bus
-                .register_fixture_cpu(&path, entry.registered_name(), &entry.name)
+                .register_fixture_cpu(&path, entry.registered_name(), &entry.name, enum_value)
                 .map_err(|error| entry.error(&error))?;
         }
     }
@@ -1561,18 +1585,7 @@ fn validate_mock_cpu_properties(
         let parsed = scalar_value(value);
         let error = match key {
             "Placeholder" if matches!(parsed, Some(ScalarValue::Text(_))) => continue,
-            "EnumValue"
-                if matches!(
-                    parsed,
-                    Some(
-                        ScalarValue::Number(_)
-                            | ScalarValue::Reference(_)
-                            | ScalarValue::Enum(None | Some("TwoStateEnum"), _)
-                    )
-                ) =>
-            {
-                continue;
-            }
+            "EnumValue" if fixture_cpu_enum(value).is_some() => continue,
             "Model" => "PropertyNotWritable",
             "OtherCpu" => {
                 let model = if let Some(model) = inline_model(statement) {

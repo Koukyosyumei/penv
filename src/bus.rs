@@ -164,6 +164,7 @@ pub struct Bus {
     constant_mmio: Vec<ConstantMmio>,
     empty_peripherals: HashMap<String, Vec<(u32, u32)>>,
     fixture_cpus: HashMap<String, Arc<str>>,
+    fixture_cpu_enums: HashMap<Arc<str>, u8>,
     fixture_values: HashMap<String, FixtureValue>,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
@@ -516,6 +517,7 @@ impl Bus {
         parent: &str,
         name: &str,
         variable: &str,
+        enum_value: u8,
     ) -> Result<(), String> {
         if parent != "sysbus" && !self.empty_peripherals.contains_key(parent) {
             return Err(format!(
@@ -531,6 +533,7 @@ impl Bus {
             .unwrap_or_else(|| Arc::from(variable));
         match self.fixture_cpus.entry(path) {
             std::collections::hash_map::Entry::Vacant(slot) => {
+                self.fixture_cpu_enums.insert(identity.clone(), enum_value);
                 slot.insert(identity);
                 Ok(())
             }
@@ -543,6 +546,11 @@ impl Bus {
     #[cfg(test)]
     pub fn fixture_cpu_name(&self, path: &str) -> Option<&str> {
         self.fixture_cpu(path).map(AsRef::as_ref)
+    }
+
+    #[cfg(test)]
+    pub fn fixture_cpu_enum(&self, path: &str) -> Option<u8> {
+        self.fixture_cpu_enums.get(self.fixture_cpu(path)?).copied()
     }
 
     pub(crate) fn fixture_cpu(&self, path: &str) -> Option<&Arc<str>> {
