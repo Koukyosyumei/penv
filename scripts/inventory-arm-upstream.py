@@ -252,6 +252,21 @@ def classify_nunit(name, case, attrs, parameter):
             return OUT, "Generic CRCEngine with arbitrary polynomial width", "31-bit width cannot be selected on STM32F072 CRC"
         if case in {"ShouldCalculateCRC32MPEG2", "ShouldCalculateCRC8"}:
             return PASS, F072, "supports_crc32_mpeg2_and_crc8_smbus_check_values; same polynomial, initial value, 123456789 input and check value"
+        if case == "ShouldThrowArgumentException":
+            return OPEN, COMMON, "Host CRCConfig constructor distinguishes width out of range from an oversized polynomial; STM32 POLYSIZE encodes only 7/8/16/32 and MMIO has no constructor error API"
+        checks = {
+            "ShouldCalculateMultipleUpdates": "renode_crc_multiple_updates; empty, 0x31, then 0x32 with each intermediate value",
+            "ShouldHandleReflections": "renode_crc_reflection_combinations; same 0x32/0x33 input and all three reflection configurations",
+            "ShouldInitConfigProperly": "renode_crc_default_configurations; default CRCEngine parameters programmed through CR/POL/INIT, same input and check values",
+        }
+        if case in checks:
+            return PASS, F072, checks[case]
+        if case in {
+            "ShouldCalculateCRC32", "ShouldCalculateCRC32BZIP", "ShouldCalculateCRC32JAMCRC",
+            "ShouldCalculateCRC32POSIX", "ShouldCalculateCRC32SATA", "ShouldCalculateCRC16CCITT",
+            "ShouldCalculateCRC16", "ShouldCalculateCRC7",
+        }:
+            return PASS, F072, "renode_crc_polynomial_check_values; same polynomial, init, reflections, 123456789 and final XOR (applied after DR read)"
     return OPEN, COMMON, NUNIT_FIXTURES[name] + "; exact NUnit observations still to port"
 
 

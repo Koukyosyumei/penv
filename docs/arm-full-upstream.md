@@ -15,8 +15,8 @@
 | 出典 | 対象の分母 | 上流等価合格 | 部分移植 | 未達 | 対象外の台帳行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Renode Robot | 113 | 21 | 35 | 57 | 239 |
-| Renode Infrastructure NUnit | 134 | 2 | 0 | 132 | 9 |
-| 合計 | **247** | **23** | **35** | **189** | **248** |
+| Renode Infrastructure NUnit | 134 | 17 | 0 | 117 | 9 |
+| 合計 | **247** | **38** | **35** | **174** | **248** |
 
 - 分母は対象の実行構成。例外復帰のキーワード引数、CPU の停止・リセット順序、NUnit の `Values` と `Range`、個別に初期化する CRC 入力などを展開した。同じ構成の `Repeat(5)` や一連の操作中の繰り返し観測は1行とした。対象外の ISA 専用スイートの内部ループは、必要構成を記した親ケースの行にまとめた。
 - 重複のキーは出典・ソースパス・ケース名・固定パラメータ・構成。上流の Hello World ELF と HEX はローダと刺激が違うので独立に数える。ローカルの Console Echo プロンプトと Blinky のクロック操作は補助回帰で、対応する上流ケースの数を増やさない。F072 の同じ HEX を使う CPU1/CPU2 選択は別の Cortex-M4 2コア構成。
@@ -49,7 +49,7 @@ awk -F '\t' 'NR>1 { total[$1,$6]++ } END { for (key in total) print key, total[k
 
 ## 残件
 
-対象のうち部分移植35件と未達189件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
+対象のうち部分移植35件と未達174件が残る。MPU 起因のアンスタック Fault、HardFault のベクター取得中の割り込み到着、CPU pause/halt とリセットマクロの順序、Robot UART テスター、GPIO とタイマーの NUnit 条件が未完了。既存の公開イメージ回帰と部分移植は個別の証拠として維持する。
 
 ## HardFault・ロックアップ
 
@@ -152,4 +152,18 @@ cargo test --locked renode_thread_bx
 cargo test --locked renode_exception_vector
 cargo test --locked renode_irq_vector
 scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-exception-boundaries-evidence
+```
+
+
+## STM32F072 CRC 設定と計算
+
+固定 Infrastructure の `CRCTests.cs` と `STM32_CRC.cs` を参照した。CR または POL の書き込みを保留し、次の CRC_DR 読み出しまたは書き込みで、その時点の INIT と POLYSIZE から計算状態を初期化する。INIT だけの書き込みは進行中の計算状態を変更しない。固定上流の F072 REPL は `configurablePoly: true` を指定する。
+
+上流データの逐次更新1構成、入出力反転3構成、初期設定3構成、多項式チェック値8構成を移植した。入力、初期値、多項式、反転条件、期待値を上流と揃え、反転には CRC_CR の設定を用いた。上流設定で最終 XOR を行う3構成では、STM32 が CRC_DR に返した値にソフトウェア側で同じ XOR を適用して比較する。
+
+`CRCConfig` コンストラクタの無効幅 0/33 と、幅7に収まらない多項式の例外を観測する3構成は未達。F072 のレジスタには無効幅を指定できる符号化やホストのコンストラクタ例外を返す経路がない。台帳の分母を維持した。31ビット構成は従来どおり対象外。
+
+```sh
+cargo test --locked stm32_crc
+scripts/verify-stm32f072.sh ../renode /tmp/penv-arm-crc-verification
 ```

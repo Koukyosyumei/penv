@@ -1305,7 +1305,7 @@ impl Bus {
             return Ok(adc.read(address));
         }
         if address as usize & (N - 1) == 0
-            && let Some(crc) = &self.stm32_crc
+            && let Some(crc) = self.stm32_crc.as_mut()
             && crc.contains(address)
         {
             return Ok(crc.read(address, N));
