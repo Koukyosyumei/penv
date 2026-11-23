@@ -5,9 +5,9 @@
 
 | 出典 | 対象実行ケース | 上流等価合格 | 部分移植 | 未達 | 対象外 |
 |---|---:|---:|---:|---:|---:|
-| Renode | 513 | 34 | 7 | 472 | 237 |
+| Renode | 513 | 38 | 3 | 472 | 237 |
 | Infrastructure | 217 | 1 | 0 | 216 | 7 |
-| **合計** | **730** | **35** | **7** | **688** | **244** |
+| **合計** | **730** | **39** | **3** | **688** | **244** |
 
 分母は対象の具象行です。未判定行は 0 件です。BusFault の命令別行への参照を
 保持する親行 1 件（`expanded`）には実行件数を割り当てません。
@@ -80,7 +80,7 @@ target/release/penv peripherals export target/stm32f407-peripherals.json \
 `cargo test renode_stmcan_init_test` は、上流の初期化モード、送受信メールボックス、
 フィルター制御と 28 バンクの比較を再現します。
 
-## 部分移植 5 件の再検証条件
+## 既存スモークの時刻条件
 
 - PWM 2 件は未変更の CPU REPL に上流と同じ PA6 → PD12 を追加します。
   CPU は固定 Renode の既定 100 MIPS、タイマーは REPL の 10 MHz、SysTick は 72 MHz です。
@@ -96,17 +96,16 @@ target/release/penv peripherals export target/stm32f407-peripherals.json \
 `--uart-transcript PATH` の各行は仮想開始ステップ、終了ステップ、UART テキストの TSV です。
 RTC と FAULTMASK は既定の 1 ステップ/µs で上流の仮想時刻と UART 観測条件を検査します。
 この 2 スイートの CPU 命令実行速度は固定 Renode の既定 100 MIPS と異なります。
+100 MIPS の個別検証には下記の時刻条件付きランナーを使います。
 スモークは既知 ELF の実行を仮想ステップ上限で区切ります。Robot の端末待機の既定タイムアウト
 （待機ごとに 8 秒）は汎用機能として再実装していません。
 
 ## 未達
 
-部分移植 7 件は、Discovery RTC アラームと FAULTMASK 2 件の CPU 実行速度、
-フラッシュのモードなし消去診断、無効なリセット状態の初期 MSP、WFE/SEVONPEND、
-NVIC BASEPRI のリセット手順に差があります。未達 688 件には、共有フォールト配送、
-UART ビット時間・パリティー、GDB・モニター・スナップショットの操作、
-実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit フィクスチャの等価検証が残ります。
-全件合格ゲートの条件は未達です。
+RTC アラームと FAULTMASK 2 件は 100 MIPS と Robot の待機条件を使う実 ELF の検証対象です。
+未達 688 件には、共有フォールト配送、UART ビット時間・パリティー、GDB・モニター・
+スナップショットの操作、実ファームウェアの DSP/FPU/MPU、Ethernet、NUnit
+フィクスチャの等価検証が残ります。全件合格ゲートの条件は未達です。
 
 ### 適用監査時の再検証
 
@@ -180,6 +179,50 @@ NMI 進入時にベクター取得とスタック書き込みが同時に失敗�
 上流 Robot の Cortex-M55 フィクスチャは、Cortex-M4F の EXC_RETURN
 （スレッド・MSP の基本フレームでは `0xfffffff9`）に置き換えました。
 上流の SHCSR に現れる NMI・HardFault のアクティブ状態は Rust テストで内部状態を照合します。
-無効なリセット状態はマップ済みスタックで INVSTATE とロックアップを確認しており、
-上流の MSP がゼロのケースは部分移植です。一般のスタック単独障害、例外復帰時の
+初期 MSP がゼロのリセットでは、2 ステップ目の INVSTATE ロックアップと DHCSR の
+CPU・デバッガー別の読出しを確認します。一般のスタック単独障害、例外復帰時の
 フレーム読み出し障害、遅延 FP 保存、ロックアップからの NMI 復帰は残件です。
+
+## Robot の時間条件を移植した 7 件
+
+`--uart-check PATH` はタブ区切りの `wait 秒 文字列`、`send 文字列`、
+`second 秒`、`idle 秒` を順に実行します。`wait` は完了行の部分一致、
+`send` は次の実行ステップで改行なしの入力、`second` は経過仮想時刻の秒整数部、
+`idle` は未改行バイトも含む無出力を検査します。テスト計画が全行通過すると終了コード
+0、未一致・タイムアウト・無通信中の出力では非 0 です。診断ログには仮想時刻を記録します。
+
+```sh
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+export RENODE_ROOT="$(realpath ../renode)"
+export PENV_F407_TIMED_RENODE_ROOT="$RENODE_ROOT"
+test "$(git -C "$RENODE_ROOT" rev-parse HEAD)" = c38ac3babcd38a7144b9498e3ca4c2226b76aa37
+work=target/stm32f407-timed-tests
+mkdir -p "$work"
+(
+    cargo test -- --nocapture >"$work/cargo-test.log" 2>&1
+    echo "$?" >"$work/cargo-test.status"
+    cargo test renode_f407_flash_ignores_erase_without_mer_or_ser -- --nocapture >"$work/flash.log" 2>&1 &&
+        rg -qF 'Tried to erase flash, but MER and SER are reset. This should be forbidden, ignoring...' "$work/flash.log" &&
+        rg -qF 'FLASH[0x08000000] = 0xDEADBEEF before and after erase request' "$work/flash.log"
+    echo "$?" >"$work/flash.status"
+    tests/stm32f407-timed-tests.sh "$work" >"$work/timed.log" 2>&1
+    echo "$?" >"$work/timed.status"
+) &
+```
+
+`PENV_F407_TIMED_RENODE_ROOT` を指定すると WFE・BASEPRI・フラッシュの Rust テストは
+固定 upstream REPL をロードします。ゼロ MSP は上流の合成フィクスチャを Cortex-M4F に
+移植します。期待ログは `WFE: 0 at 0.001 s`、`BASEPRI: priority boost 0x50 before reset, 0x100 after reset`、
+`zero MSP: two steps` と、対象フラッシュ要求と同時に出る警告です。フラッシュの
+Robot は要求の直後に既に出ているログを最長 3 仮想秒待ちます。移植は同期書き込みの
+その診断を照合し、同じ書き込みの前後で `0xDEADBEEF` を確認します。
+
+公開 ELF 3 本は SHA-1 を照合し、100 MIPS、上流の周辺クロック、USART2、行ごとの
+8 仮想秒の待機で実行します。RTC はプロンプト後に `s` を 1 バイト送信し、
+アラームの時刻 2・4・6・8 秒とその後 3 秒の無通信を検査します。FAULTMASK は
+`Sleeping` の後 1 秒の無通信と解除後 3 回の IRQ、例外復帰のケースは 4 回の IRQ を検査します。
+実行は `rtc` または `faultmask` を第 2 引数に渡すと個別に選択できます。
+
+今回の検証ログでは Rust の 80 テスト、Cortex-M4F フォールト ELF 16 件、FreeRTOS
+FPU 回帰、フラッシュ診断の終了状態が 0 でした。`terminal/` には UART チェック
+の小型 ELF と、成功、未改行バイトによるアイドル違反、8 秒の待ち時間切れのログがあります。

@@ -27,6 +27,7 @@ pub struct Hart {
     translations: TranslationCache,
     thumb: Option<Thumb>,
     busy_wait: Option<BusyWait>,
+    cortex_m_entry: Option<u32>,
     pub pc: u32,
     pub registers: [u32; 32],
 }
@@ -146,6 +147,7 @@ impl Machine {
                 translations: TranslationCache::default(),
                 thumb: None,
                 busy_wait: None,
+                cortex_m_entry: None,
                 pc: RAM_BASE,
                 registers: [0; 32],
             },
@@ -181,7 +183,12 @@ impl Machine {
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
-        self.named_hart(name)?.pc = entry;
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_some() {
+            hart.cortex_m_entry = Some(entry);
+        } else {
+            hart.pc = entry;
+        }
         Ok(())
     }
 
@@ -241,7 +248,11 @@ impl Machine {
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if let Some(thumb) = &mut hart.thumb {
-                hart.pc = thumb.reset(&mut self.bus, &mut hart.registers)?;
+                hart.pc = if let Some(entry) = hart.cortex_m_entry.take() {
+                    thumb.debug_entry(entry)
+                } else {
+                    thumb.reset(&mut self.bus, &mut hart.registers)?
+                };
                 if let Some(nvic) = self.bus.nvic.as_mut() {
                     nvic.set_vector_base(thumb.vector_base());
                 }
@@ -280,6 +291,19 @@ impl Machine {
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
+        self.run_until(limit, output, |_| false)
+    }
+
+    pub fn elapsed_steps(&self) -> u64 {
+        self.elapsed_steps
+    }
+
+    pub fn run_until<W: Write>(
+        &mut self,
+        limit: u64,
+        output: &mut W,
+        done: impl Fn(&W) -> bool,
+    ) -> Result<(Stop, u64), String> {
         let mut retired = 0;
         for _ in 0..limit {
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
@@ -314,6 +338,9 @@ impl Machine {
                 Step::Retired => retired += 1,
                 Step::Trap => {}
                 Step::Stop(stop) => return Ok((stop, retired)),
+            }
+            if done(output) {
+                break;
             }
         }
         Ok((Stop::Limit, retired))
@@ -748,6 +775,128 @@ impl Hart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cortex_m4_fault_fixture() -> Machine {
+        let mut machine = Machine::without_default_ram();
+        machine.bus.map_ram(0, 0x1000).unwrap();
+        machine.bus.map_nvic(0xf0, None).unwrap();
+        machine.bus.map_systick().unwrap();
+        machine.bus.map_faulting_memory(0x100000, None).unwrap();
+        machine.primary.configure_cortex_m(Some(0), true);
+        machine.validate_entry().unwrap();
+        machine
+    }
+
+    fn f407_timed_fixture() -> Option<Machine> {
+        let root = std::env::var_os("PENV_F407_TIMED_RENODE_ROOT")?;
+        let root = std::path::Path::new(&root);
+        let mut machine = crate::platform::load_with_timing(
+            &root.join("platforms/cpus/stm32f4.repl"),
+            Some(root),
+            true,
+        )
+        .unwrap();
+        machine.bus.set_step_hz(100_000_000);
+        Some(machine)
+    }
+
+    fn f407_interrupt_fixture() -> Machine {
+        f407_timed_fixture().unwrap_or_else(|| {
+            let mut machine = cortex_m4_fault_fixture();
+            machine.bus.map_ram(0x2000_0000, 0x40000).unwrap();
+            machine.primary.name = Some("cpu".into());
+            machine.bus.set_step_hz(100_000_000);
+            machine
+        })
+    }
+
+    #[test]
+    fn renode_zero_msp_invalid_reset_state_locks_up_after_two_steps() {
+        let mut machine = cortex_m4_fault_fixture();
+        let mut output = std::io::sink();
+        let dhcsr = crate::nvic::DHCSR;
+        assert_eq!(machine.primary.registers[13], 0);
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.bus.read::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.run(1, &mut output).unwrap(), (Stop::Limit, 0));
+        assert_eq!(machine.primary.pc, 0xefff_fffe);
+        assert!(machine.primary.thumb.as_ref().unwrap().sleeping());
+        assert_eq!(machine.bus.read_cortex_data::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(dhcsr).unwrap() & (1 << 19), 1 << 19);
+        machine.bus.write(dhcsr, 4, u32::MAX, &mut output).unwrap();
+        assert_eq!(machine.bus.read_cortex_data::<4>(dhcsr).unwrap(), 0);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap(), 0x0002_0000);
+        assert_eq!(machine.bus.read::<4>(0xe000_ed2c).unwrap(), 0x4000_0000);
+        println!(
+            "zero MSP: two steps, PC=0xEFFFFFFE, DHCSR.S_LOCKUP=1 (debugger), CFSR=0x00020000, HFSR=0x40000000"
+        );
+    }
+
+    #[test]
+    fn renode_f407_wfe_sevonpend_at_one_millisecond() {
+        const CODE: u32 = 0x2000_0000;
+        const TARGET: u32 = 0x2000_1000;
+        const DATA: u32 = 0xdead_beef;
+        let mut machine = f407_interrupt_fixture();
+        let mut output = std::io::sink();
+        machine
+            .bus
+            .write(0xe000_ed10, 4, 0x10, &mut output)
+            .unwrap();
+        machine.set_named_entry("cpu", CODE).unwrap();
+        machine.validate_entry().unwrap();
+        machine.primary.registers[13] = 0x2004_0000;
+        machine.primary.registers[0] = TARGET;
+        machine.primary.registers[1] = DATA;
+        for (offset, opcode) in [(0, 0xbf20), (2, 0x6001), (4, 0xe7fe)] {
+            machine
+                .bus
+                .write(CODE + offset, 2, opcode, &mut output)
+                .unwrap();
+        }
+        let rate = u64::from(machine.bus.step_hz());
+        machine.run(rate / 1000, &mut output).unwrap();
+        assert_eq!(machine.primary.pc, CODE + 2);
+        assert!(machine.primary.thumb.as_ref().unwrap().sleeping());
+        assert_eq!(machine.bus.read::<4>(TARGET).unwrap(), 0);
+        machine
+            .bus
+            .nvic
+            .as_mut()
+            .unwrap()
+            .set_line(5, true, &Default::default());
+
+        let deadline = machine.elapsed_steps() + rate;
+        while machine.bus.read::<4>(TARGET).unwrap() != DATA && machine.elapsed_steps() < deadline {
+            assert_eq!(machine.run(1, &mut output).unwrap().0, Stop::Limit);
+        }
+        assert_eq!(machine.bus.read::<4>(TARGET).unwrap(), DATA);
+        println!(
+            "WFE: 0 at 0.001 s; IRQ 5 raised; 0xDEADBEEF at {:.8} s within 1 s",
+            machine.elapsed_steps() as f64 / rate as f64
+        );
+    }
+
+    #[test]
+    fn renode_f407_basepri_priority_boost_after_machine_reset() {
+        let mut machine = f407_interrupt_fixture();
+        let cpu = &mut machine.primary;
+        let thumb = cpu.thumb.as_mut().unwrap();
+        assert!(thumb.system_write(17, 0x50, &mut cpu.registers, &machine.bus));
+        let register = thumb.system_read(17, &cpu.registers).unwrap();
+        let before = thumb.basepri_threshold(&machine.bus);
+        assert_eq!(register, u32::from(before));
+        machine.reset_cortex_m().unwrap();
+        let after = machine
+            .primary
+            .thumb
+            .as_ref()
+            .unwrap()
+            .basepri_threshold(&machine.bus);
+        assert_ne!(before, after);
+        assert_eq!((before, after), (0x50, 0x100));
+        println!("BASEPRI: priority boost {before:#x} before reset, {after:#x} after reset");
+    }
 
     #[test]
     fn handles_ecall_and_returns_to_guest_code() {

@@ -95,9 +95,9 @@ impl Thumb {
             };
             let wide = low & 0x100 != 0;
             if load {
-                let low_word = bus.read::<4>(address)?;
+                let low_word = bus.read_cortex_data::<4>(address)?;
                 if wide {
-                    self.fp[first + 1] = bus.read::<4>(address.wrapping_add(4))?;
+                    self.fp[first + 1] = bus.read_cortex_data::<4>(address.wrapping_add(4))?;
                 }
                 self.fp[first] = low_word;
             } else {

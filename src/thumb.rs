@@ -135,6 +135,11 @@ impl Thumb {
         Ok(target & !1)
     }
 
+    pub fn debug_entry(&mut self, address: u32) -> u32 {
+        self.invalid_thumb_state = false;
+        address & !1
+    }
+
     fn lockup(&mut self, bus: &mut Bus) -> u32 {
         self.locked_up = true;
         if let Some(nvic) = &mut bus.nvic {
@@ -258,7 +263,7 @@ impl Thumb {
         self.thread_uses_psp = use_psp;
     }
 
-    fn system_read(&self, register: u32, r: &[u32; 32]) -> Option<u32> {
+    pub(crate) fn system_read(&self, register: u32, r: &[u32; 32]) -> Option<u32> {
         let ipsr = u32::from(self.active_exception);
         Some(match register {
             0 => self.apsr(),
@@ -290,7 +295,13 @@ impl Thumb {
         })
     }
 
-    fn system_write(&mut self, register: u32, value: u32, r: &mut [u32; 32], bus: &Bus) -> bool {
+    pub(crate) fn system_write(
+        &mut self,
+        register: u32,
+        value: u32,
+        r: &mut [u32; 32],
+        bus: &Bus,
+    ) -> bool {
         match register {
             0..=3 => self.set_apsr(value),
             5..=7 => {}
@@ -315,6 +326,17 @@ impl Thumb {
             _ => return false,
         }
         true
+    }
+
+    pub(crate) fn basepri_threshold(&self, bus: &Bus) -> u16 {
+        if self.basepri == 0 {
+            return 0x100;
+        }
+        u16::from(
+            bus.nvic
+                .as_ref()
+                .map_or(self.basepri, |nvic| nvic.preemption_priority(self.basepri)),
+        )
     }
 
     fn exception_entry(
@@ -368,7 +390,7 @@ impl Thumb {
             | ((it & 0xfc) << 8);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
         match bus.cortex_exception_stack(stack, (32 + extra) as usize) {
-            Ok(memory) => {
+            Ok(Some(memory)) => {
                 for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
                     *word = value.to_le_bytes();
                 }
@@ -383,6 +405,7 @@ impl Thumb {
                     }
                 }
             }
+            Ok(None) => {}
             Err(BusError::Unmapped(..)) if locked => {
                 // A terminal vector fault still leaves the exception entry's
                 // stack address and any simultaneous stack syndrome observable.
@@ -565,7 +588,7 @@ impl Thumb {
         }
         if let Some((exception, _)) = selected.filter(|(_, priority)| {
             u16::from(preemption(*priority)) < current_priority
-                && (self.basepri == 0 || preemption(*priority) < preemption(self.basepri))
+                && u16::from(preemption(*priority)) < self.basepri_threshold(bus)
         }) {
             self.waiting_for_interrupt = false;
             if self.interrupts_masked {
@@ -651,7 +674,7 @@ impl Thumb {
         if address as usize & (N - 1) != 0 && self.allows_unaligned(bus) {
             bus.read_unaligned_ram::<N>(address)
         } else {
-            bus.read::<N>(address)
+            bus.read_cortex_data::<N>(address)
         }
     }
 
@@ -711,6 +734,7 @@ impl Thumb {
             Err(ExecuteError::Other(error)) => return Err(error),
         };
         self.it_state = it_state;
+        let basepri_threshold = self.basepri_threshold(bus);
         let nvic = bus.nvic.as_mut().unwrap();
         if let Some(invalid_state) = instruction_fault {
             nvic.record_instruction_fault(invalid_state);
@@ -725,7 +749,7 @@ impl Thumb {
             && can_preempt
             && !self.interrupts_masked
             && !self.faultmask
-            && (self.basepri == 0 || priority < nvic.preemption_priority(self.basepri))
+            && u16::from(priority) < basepri_threshold
         {
             exception
         } else {

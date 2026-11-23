@@ -56,6 +56,7 @@ mod sv32;
 mod systick;
 mod thumb;
 mod uart;
+mod uart_check;
 mod uart_transcript;
 mod zephyr_boot;
 
@@ -92,6 +93,7 @@ Options:
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
   --f4-repl-timing   Preserve STM32F4 REPL timer and SysTick clocks
+  --uart-check PATH       Execute a timed UART expectation script
   --uart-transcript PATH  Record UART lines with their virtual step
   --uart-reply LINE FILE  Inject file bytes after the first matching UART line
   --virtual-mips N   Set Cortex-M steps per virtual microsecond (default: 1)
@@ -138,6 +140,7 @@ fn run() -> Result<ExitCode, String> {
     let mut f4_repl_timing = false;
     let mut transcript = None;
     let mut uart_reply = None;
+    let mut uart_check = None;
     let mut boot_writes = Vec::new();
     let mut extra_ram = Vec::new();
     let mut clint = None;
@@ -176,7 +179,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some(
                 option @ ("--platform" | "--platform-root" | "--uart-input" | "--script"
-                | "--asset-dir" | "--uart-transcript"),
+                | "--asset-dir" | "--uart-transcript" | "--uart-check"),
             ) => {
                 let path = args
                     .next()
@@ -187,6 +190,7 @@ fn run() -> Result<ExitCode, String> {
                     "--script" => &mut script,
                     "--asset-dir" => &mut asset_dir,
                     "--uart-transcript" => &mut transcript,
+                    "--uart-check" => &mut uart_check,
                     "--platform-root" => &mut platform_root,
                     _ => &mut uart_input,
                 };
@@ -318,6 +322,7 @@ fn run() -> Result<ExitCode, String> {
                 || f4_repl_timing
                 || transcript.is_some()
                 || uart_reply.is_some()
+                || uart_check.is_some()
             {
                 return Err(
                     "single-machine overrides cannot be combined with a simulation script".into(),
@@ -440,6 +445,16 @@ fn run() -> Result<ExitCode, String> {
     machine.validate_entry()?;
 
     let mut output = LineWriter::new(io::stdout().lock());
+    if let Some(check) = uart_check {
+        if transcript.is_some() || uart_reply.is_some() {
+            return Err(
+                "--uart-check cannot be combined with --uart-transcript or --uart-reply".into(),
+            );
+        }
+        uart_check::run(&mut machine, &mut output, &check)?;
+        output.flush().map_err(|e| format!("UART: {e}"))?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let start = Instant::now();
     let result = if transcript.is_some() || uart_reply.is_some() {
         uart_transcript::run(

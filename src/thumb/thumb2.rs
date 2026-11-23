@@ -122,7 +122,7 @@ impl Thumb {
             0xe8d0..=0xe8df if low & 0xffe0 == 0xf000 && rm < 15 => {
                 let base = if rn == 15 { *next } else { r[rn] };
                 let offset = if low & 0x10 == 0 {
-                    bus.read::<1>(base.wrapping_add(r[rm]))
+                    bus.read_cortex_data::<1>(base.wrapping_add(r[rm]))
                 } else {
                     self.read_data::<2>(bus, base.wrapping_add(r[rm].wrapping_mul(2)))
                 }?;
@@ -148,7 +148,7 @@ impl Thumb {
                         continue;
                     }
                     if load {
-                        r[register] = bus.read::<4>(address)?;
+                        r[register] = bus.read_cortex_data::<4>(address)?;
                     } else {
                         bus.write(address, 4, r[register], output)?;
                     }
@@ -187,8 +187,8 @@ impl Thumb {
                 let address = if high & 0x100 != 0 { indexed } else { r[rn] };
                 let second = address.wrapping_add(4);
                 if high & 0x10 != 0 {
-                    let first = bus.read::<4>(address)?;
-                    let second = bus.read::<4>(second)?;
+                    let first = bus.read_cortex_data::<4>(address)?;
+                    let second = bus.read_cortex_data::<4>(second)?;
                     r[rt] = first;
                     r[rd] = second;
                 } else {

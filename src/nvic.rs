@@ -1,4 +1,5 @@
 pub const BASE: u32 = 0xe000_e000;
+pub const DHCSR: u32 = BASE + 0xdf0;
 pub const VTOR: u32 = BASE + 0xd08;
 const CPUID: u32 = BASE + 0xd00;
 const AIRCR: u32 = BASE + 0xd0c;
@@ -367,7 +368,7 @@ impl Nvic {
                         | (u32::from(self.active.contains(6)) << 3),
                 );
             }
-            if address == BASE + 0xdf0 {
+            if address == DHCSR {
                 return Some(u32::from(self.locked_up) << 19);
             }
             if let Some(bank) = address
@@ -449,6 +450,10 @@ impl Nvic {
             && let Some(mpu) = &mut self.mpu
         {
             mpu.write(offset, value);
+            return true;
+        }
+        if width == 4 && address == DHCSR {
+            // Halting debug controls are not implemented.
             return true;
         }
         if width == 4 && address == BASE + 0xd10 {

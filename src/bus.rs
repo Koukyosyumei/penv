@@ -1466,7 +1466,7 @@ impl Bus {
     }
 
     pub fn read_exclusive(&mut self, address: u32) -> Result<u32, BusError> {
-        let value = self.read::<4>(address)?;
+        let value = self.read_cortex_data::<4>(address)?;
         self.reservations[0] = Some(address);
         Ok(value)
     }
@@ -1867,11 +1867,24 @@ impl Bus {
         &mut self,
         address: u32,
         width: usize,
-    ) -> Result<&mut [u8], BusError> {
+    ) -> Result<Option<&mut [u8]>, BusError> {
         if let Some(address) = self.faulting_address(address, width) {
             return Err(BusError::Unmapped(address, width));
         }
-        self.guest_memory(address, width)
+        match self.guest_memory(address, width) {
+            Ok(memory) => Ok(Some(memory)),
+            // The default system bus discards unhandled stack writes. An
+            // explicitly faulting mapping above still signals a BusFault.
+            Err(BusError::Unmapped(..)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn read_cortex_data<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N == 4 && address == crate::nvic::DHCSR && self.nvic.is_some() {
+            return Ok(0);
+        }
+        self.read::<N>(address)
     }
 
     pub fn read_cortex_instruction<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
