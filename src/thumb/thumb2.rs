@@ -381,23 +381,41 @@ impl Thumb {
                 let high = ((base >> 16) as u16).wrapping_add(extend((value >> 16) as u8));
                 r[rd] = u32::from(low) | (u32::from(high) << 16);
             }
-            0xfa80..=0xfa8e
+            0xfa80..=0xfa8e | 0xfa90..=0xfa9e | 0xfac0..=0xface | 0xfad0..=0xfade
                 if rt == 15
-                    && low & 0xf0 == 0x40
+                    && matches!(low & 0xf0, 0 | 0x40)
                     && rn != 13
                     && !matches!(rd, 13 | 15)
                     && !matches!(rm, 13 | 15) =>
             {
-                let a = r[rn].to_le_bytes();
-                let b = r[rm].to_le_bytes();
-                let mut value = [0; 4];
+                let width = if high & 0x10 == 0 { 8 } else { 16 };
+                let mask = (1 << width) - 1;
+                let subtract = high & 0x40 != 0;
+                let signed = low & 0x40 == 0;
+                let operand = |value: u32, shift| {
+                    let raw = ((value >> shift) & mask) as i32;
+                    if signed {
+                        (raw << (32 - width)) >> (32 - width)
+                    } else {
+                        raw
+                    }
+                };
+                let mut value = 0;
                 self.greater_equal = 0;
-                for index in 0..4 {
-                    let (sum, carry) = a[index].overflowing_add(b[index]);
-                    value[index] = sum;
-                    self.greater_equal |= u32::from(carry) << index;
+                for shift in (0..32).step_by(width) {
+                    let lhs = operand(r[rn], shift);
+                    let rhs = operand(r[rm], shift);
+                    let result = if subtract { lhs - rhs } else { lhs + rhs };
+                    value |= (result as u32 & mask) << shift;
+                    if if signed || subtract {
+                        result >= 0
+                    } else {
+                        result as u32 > mask
+                    } {
+                        self.greater_equal |= ((1 << (width / 8)) - 1) << (shift / 8);
+                    }
                 }
-                r[rd] = u32::from_le_bytes(value);
+                r[rd] = value;
             }
             0xfaa0..=0xfaae
                 if rt == 15

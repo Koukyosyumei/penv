@@ -932,6 +932,8 @@ impl Thumb {
 }
 
 #[cfg(test)]
+mod ge_upstream;
+#[cfg(test)]
 mod it_upstream;
 
 #[cfg(test)]
