@@ -396,6 +396,7 @@ fn run() -> Result<ExitCode, String> {
     let mut performance_in_mips = None;
     let mut fault_on_unmapped_data = false;
     let mut pend_hard_fault = false;
+    let mut thumb_trace = None;
     let mut opcode_counters = Vec::new();
     let mut opcode_counting = None;
     let mut opcode_queries = Vec::new();
@@ -437,6 +438,7 @@ fn run() -> Result<ExitCode, String> {
         performance_in_mips = boot.performance_in_mips;
         fault_on_unmapped_data = boot.fault_on_unmapped_data;
         pend_hard_fault = boot.pend_hard_fault;
+        thumb_trace = boot.thumb_trace;
         opcode_counters = boot.opcode_counters;
         opcode_counting = boot.opcode_counting;
         opcode_queries = boot.opcode_queries;
@@ -625,6 +627,12 @@ fn run() -> Result<ExitCode, String> {
             machine.bus.thumb_opcodes.get(name)?;
         }
     }
+    if let Some(config) = thumb_trace {
+        if !machine.has_cortex_m4() || ble_peer.is_some() {
+            return Err("execution tracing requires a single Cortex-M4 machine".into());
+        }
+        machine.bus.thumb_trace = Some(thumb::trace::Trace::create(&config.path, config.binary)?);
+    }
     if pend_hard_fault {
         if !machine.has_cortex_m4() {
             return Err("nvic SetPendingIRQ 3 requires a Cortex-M4 platform".into());
@@ -689,6 +697,9 @@ fn run() -> Result<ExitCode, String> {
         && let Some(pcm) = machine.bus.nrf_i2s_pcm_output()
     {
         fs::write(&path, pcm).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    if let Some(trace) = machine.bus.thumb_trace.take() {
+        trace.finish()?;
     }
     let (stop, steps) = result?;
     for name in opcode_queries {

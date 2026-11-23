@@ -108,6 +108,7 @@ impl FaultingPeripheral {
 
 #[derive(Default)]
 pub struct Bus {
+    pub thumb_trace: Option<crate::thumb::trace::Trace>,
     pub thumb_opcodes: crate::thumb::opcode_counter::OpcodeCounters,
     pub thumb_opcode_hooks: crate::thumb::opcode_counter::OpcodeLogHooks,
     pub semihosting: Option<crate::semihosting::Semihosting>,

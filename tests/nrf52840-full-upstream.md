@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 109 | 5 | 76 |
+| 監査した共有・混成 Robot | 190 | 112 | 5 | 73 |
 | Infrastructure GPIO NUnit | 14 | 0 | 0 | 14 |
-| 合計 | **221** | **126** | **5** | **90** |
+| 合計 | **221** | **129** | **5** | **87** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -313,3 +313,16 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 `llvm-asm-disasm.robot:535–542` の共有ケースのうち Cortex-M4 に適用できる2入力を移植した。不明命令は上流の `illegalinstruction123`、不正オペランドは Thumb の `str r0, [sp, #65536]` を使用する。LLVM MC の詳細診断、終了コード 1、空の標準出力を照合した。正常命令が不正命令より前にある複数行ソースでも、前半のバイト列が出力されないことを検証した。RISC-V V 拡張の診断は固定の別 ISA 構成であり、既存の対象外に該当する。
 
 前節と同じコマンドで再現できる。ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-assembler-errors.ImBrXqLR/` の `cargo-test`、`llvm-errors`、`llvm`、`shell` に保存した。監査対象の LLVM アセンブル・逆アセンブル6ケースはすべて合格した。台帳全体の残数は固定構成の集計を参照。
+
+### Thumb 実行トレース
+
+`execution-tracing.robot:600–626, 854–859` の3ケースを移植した。元の4命令を元のアドレスに配置した ELF を実行し、`PCAndOpcode` のテキスト4行と ReTrace v5 の63バイトを比較する。ヘッダーの CPU モデル名は移植先の `thumb cortex-m4` を使う。バイナリの禁止書式 `Disassembly` は設定時に診断し、ファイルを作成しない。
+
+```sh
+cargo test
+tests/nrf52840-thumb-trace-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/trace"
+tests/nrf52840-opcode-count-upstream.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/opcode-count"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+ログと終了状態は `~/.local/state/penv-dispatch/evidence/nrf52/thumb-trace.DU40efTQ/` の `cargo-test`、`trace`、`opcode`、`shell` に保存した。現行 RESC は起動からの単一トレースを実行終了時に閉じる。対話中の有効・無効切り替えと他の形式は残る。

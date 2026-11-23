@@ -17,6 +17,7 @@ pub struct Boot {
     pub performance_in_mips: Option<u32>,
     pub fault_on_unmapped_data: bool,
     pub pend_hard_fault: bool,
+    pub thumb_trace: Option<crate::thumb::trace::TraceConfig>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
     pub opcode_queries: Vec<String>,
@@ -181,6 +182,28 @@ fn execute(
         }
         ["cpu" | "sysbus.cpu", "GetOpcodeCounter", name] if boot.platform.is_some() => {
             boot.opcode_queries.push(name.trim_matches('"').into());
+        }
+        [
+            "cpu" | "sysbus.cpu",
+            "CreateExecutionTracing",
+            _,
+            path,
+            format,
+            binary @ ..,
+        ] if boot.platform.is_some() && binary.len() <= 1 => {
+            let path = resolve(path)?.trim_matches('"');
+            let path = path.strip_prefix('@').unwrap_or(path);
+            let path = script.parent().unwrap_or(Path::new(".")).join(path);
+            let binary = binary
+                .first()
+                .map(|value| value.parse())
+                .transpose()
+                .map_err(|_| "expected true or false")?
+                .unwrap_or(false);
+            if boot.thumb_trace.is_some() {
+                return Err("multiple execution tracers are unsupported".into());
+            }
+            boot.thumb_trace = Some(crate::thumb::trace::TraceConfig::new(path, format, binary)?);
         }
         ["sysbus", "UnhandledAccessBehaviour", "ThrowException"] if boot.platform.is_some() => {
             boot.fault_on_unmapped_data = true;

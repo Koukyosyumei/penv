@@ -1,6 +1,7 @@
 mod fpu;
 pub(crate) mod opcode_counter;
 mod thumb2;
+pub(crate) mod trace;
 
 use std::io::Write;
 
@@ -911,7 +912,10 @@ impl Thumb {
         }
         let address = *pc;
         let inst = bus.thumb_fetch(address)?;
-        let opcode = if bus.thumb_opcodes.enabled || !bus.thumb_opcode_hooks.is_empty() {
+        let opcode = if bus.thumb_opcodes.enabled
+            || !bus.thumb_opcode_hooks.is_empty()
+            || bus.thumb_trace.is_some()
+        {
             let opcode = if inst >= 0xe800 {
                 (inst << 16) | bus.thumb_fetch(address.wrapping_add(2))?
             } else {
@@ -941,6 +945,9 @@ impl Thumb {
         if let Some(opcode) = opcode
             && matches!(result, Ok(ThumbStep::Retired))
         {
+            if let Some(trace) = bus.thumb_trace.as_mut() {
+                trace.record(address, opcode, inst >= 0xe800)?;
+            }
             bus.thumb_opcode_hooks.emit(
                 opcode_counter::HookPhase::Post,
                 address,
