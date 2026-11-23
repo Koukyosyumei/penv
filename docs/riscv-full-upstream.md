@@ -1684,3 +1684,18 @@ python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repr
 同じ release バイナリで、V だけを外した診断構成の 21/21 件が通過しました。書き込み側だけでオフセットを除いた負例は完了コード 1 でした。固定構成では 21 件とも V の未対応で CPU 作成時に停止しました。Rust テストは 88/88 件が通過しました。
 
 上流のモニターによるシンボル解決と比較は ARM 担当への既存依頼 `riscv-memory-assert-6d37343.md` の返答待ちです。追加した 12 件は部分移植として記録し、複数シンボル、エラー、監視付き比較は残っています。上流等価合格は累計 174 件です。ケース別ログ、ELF とソースは `~/.local/state/penv-dispatch/evidence/riscv/backlog-4629434-USNwjd/` に保存しました。
+
+### 固定 RV32 メモリー比較の複数シンボル
+
+固定 `memory-assertions.robot` の静的な `All Symbols`・`Any Symbol` 6 件を実 ELF に追加しました。上流のインデックス付き書き込みと比較条件を読み取り、複数の固定アドレスをゲストコードで検証します。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repro/memory"
+```
+
+同じ release バイナリで、V だけを外した診断構成は新規 6 件と既存 21 件の計 27/27 件が通過しました。全件一致のうち 2 番目だけを不一致にする試行と、いずれの値も一致しない試行は完了コード 1 でした。2 番目だけが一致する試行は完了コード 0 でした。固定 Robot 構成は 27 件とも V の未対応で CPU 作成時に停止しました。Rust テストは 88/88 件が通過しました。
+
+今回の結果は部分移植として台帳に記録しました。モニターのシンボル解決と監視付き比較は ARM 担当への既存依頼 `riscv-memory-assert-6d37343.md` の返答待ちです。上流等価合格は累計 174 件です。ケース別 JSONL、負例、ELF とソースは `~/.local/state/penv-dispatch/evidence/riscv/backlog-579ec12-EcSCPX/` に保存しました。

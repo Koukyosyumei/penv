@@ -20,40 +20,71 @@ BRANCH = {
 def program(body):
     checks = []
     definitions = []
+    symbols = {}
     widths = {"Byte": 1, "Word": 2, "DoubleWord": 4}
 
     def address(operand, width, qualifiers):
-        if not qualifiers:
-            return operand
-        offset, = qualifiers
-        return f"{operand} + ({int(offset.removeprefix('offset=')) * widths[width]})"
+        index = None
+        offset = 0
+        for qualifier in qualifiers:
+            key, value = qualifier.split("=", 1)
+            if key == "index":
+                index = int(value)
+            elif key == "offset":
+                offset = int(value)
+            else:
+                raise ValueError(f"unknown memory qualifier {qualifier!r}")
+        if operand in symbols:
+            names = symbols[operand]
+            if index is None:
+                name, = names
+            else:
+                name = names[index]
+        else:
+            name = operand
+        return f"{name} + ({offset * widths[width]})" if offset else name
 
     for line in body.splitlines():
         fields = re.split(r"\s{2,}", line.strip())
         keyword, *args = fields
         if keyword == "Add Symbol":
             symbol, base, _size = args
-            definitions.append(f".equ {symbol}, {base}")
+            entries = symbols.setdefault(symbol, [])
+            label = f"{symbol}_{len(entries)}"
+            entries.append(label)
+            definitions.append(f".equ {label}, {base}")
         elif keyword.startswith("Store "):
             width = keyword[6:].replace(" ", "")
             store = WIDTH[width][0]
             operand, value, *qualifiers = args
             checks += [f"li t0, {address(operand, width, qualifiers)}",
                        f"li t1, {value}", f"{store} t1, 0(t0)"]
-        elif keyword.startswith(("Memory Should ", "Symbol Should ")):
-            relation = keyword[14:].removeprefix("Be ")
+        elif " Should " in keyword:
+            selector, relation = keyword.split(" Should ", 1)
+            relation = relation.removeprefix("Be ")
             qualifiers = [value for value in args if value.startswith("offset=")]
             signed = "signed=true" in args
             args = [value for value in args if value not in qualifiers and value != "signed=true"]
             width = args.pop()
             operand, *expected = args
             branch, operands = BRANCH[relation]
+            addresses = (
+                symbols[operand] if selector in {"All Symbols", "Any Symbol"}
+                else [address(operand, width, qualifiers)]
+            )
+            any_symbol = selector == "Any Symbol"
+            if any_symbol:
+                branch = {"bne": "beq", "beq": "bne", "blt": "bge", "bge": "blt"}[branch]
             if branch in {"bge", "blt"} and not signed:
                 branch += "u"
-            checks += [
-                f"li t0, {address(operand, width, qualifiers)}", f"{WIDTH[width][1 if signed else 2]} t1, 0(t0)",
-                f"li t2, {expected[0] if expected else 0}", f"{branch} {operands}, fail",
-            ]
+            for target in addresses:
+                checks += [
+                    f"li t0, {target}", f"{WIDTH[width][1 if signed else 2]} t1, 0(t0)",
+                    f"li t2, {expected[0] if expected else 0}",
+                    f"{branch} {operands}, {'1f' if any_symbol else 'fail'}",
+                ]
+            if any_symbol:
+                checks += ["j fail", "1:"]
     if not checks:
         raise ValueError("missing fixed raw memory inputs")
     return "\n".join([
@@ -71,10 +102,10 @@ def main():
     source = (args.renode / "tests/unit-tests/memory-assertions.robot").read_text()
     cases = [(name, body) for name, body in re.findall(
         r"(?ms)^(Should Read (?:Signed )?(?:Byte|Word|Double Word)(?: Zero)? "
-        r"(?:At Raw Address|Of Symbol(?: With (?:Negative )?Offset)?))\n(.*?)(?=^\S|\Z)", source,
+        r"(?:At Raw Address|Of Symbol(?: With (?:Negative )?Offset)?|Of (?:All Symbols|Any Symbol)))\n(.*?)(?=^\S|\Z)", source,
     ) if "Create Machine 32" in body]
-    if len(cases) != 21:
-        parser.error(f"expected 21 static RV32 memory cases, found {len(cases)}")
+    if len(cases) != 27:
+        parser.error(f"expected 27 static RV32 memory cases, found {len(cases)}")
     isa = "rv32" + re.search(r"rv\$\{bitness\}([a-z0-9_]+)", source)[1]
     args.output.mkdir(parents=True, exist_ok=False)
     results = []
@@ -98,7 +129,7 @@ def main():
         for mode in ("diagnostic", "fixed"):
             run = subprocess.run(
                 [args.penv.resolve(), "run", "--platform", args.output / f"{mode}.repl",
-                 "--tohost", "0x2000", "--max-steps", "128", elf],
+                 "--tohost", "0x2000", "--max-steps", "256", elf],
                 capture_output=True, text=True, timeout=15,
             )
             log = args.output / f"{index}-{mode}.log"
