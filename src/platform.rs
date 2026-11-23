@@ -653,7 +653,7 @@ fn parse_content(
     let mut imports = HashSet::new();
     let mut current: Option<Entry> = None;
     let mut registration_depth = 0;
-    let mut lines = content.lines().enumerate();
+    let mut lines = content.lines().enumerate().peekable();
     let mut comments = ReplComments::default();
     while let Some((index, raw)) = lines.next() {
         let lineno = index + 1;
@@ -689,11 +689,24 @@ fn parse_content(
             continue;
         }
         if line.starts_with(char::is_whitespace) {
+            let mut attribute = text.to_owned();
+            if inline_model(text).is_some() {
+                let indent = line.len() - line.trim_start().len();
+                while let Some((_, nested)) = lines.peek() {
+                    if !nested.trim().is_empty()
+                        && nested.len() - nested.trim_start().len() <= indent
+                    {
+                        break;
+                    }
+                    attribute.push('\n');
+                    attribute.push_str(lines.next().unwrap().1);
+                }
+            }
             current
                 .as_mut()
                 .ok_or_else(|| error("property has no declaration"))?
                 .body
-                .push((lineno, text.to_owned()));
+                .push((lineno, attribute));
             continue;
         }
         entries.extend(current.take());
@@ -976,6 +989,7 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     for entry in &declarations {
         validate_entry_references(entry, &declared, &declarations)?;
         validate_mock_cpu_properties(entry, &declared, &declarations)?;
+        validate_dependency_constructor(entry)?;
         if entry.alias.is_some() {
             match entry.registration.as_deref() {
                 None => {
@@ -1001,6 +1015,66 @@ fn merge_declarations(entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
     Ok(declarations)
 }
 
+const MOCK_DEPENDENCY: &str = "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency";
+
+fn inline_model(attribute: &str) -> Option<&str> {
+    let first = attribute.lines().next()?;
+    let model = first.split_once(':')?.1.trim().strip_prefix("new ")?;
+    (!model.is_empty() && model.split('.').all(is_repl_identifier)).then_some(model)
+}
+
+fn inline_entry(parent: &Entry, line: usize, statement: &str, model: &str) -> Entry {
+    let mut body: Properties = Vec::new();
+    let mut indent = None;
+    for (offset, text) in statement.lines().enumerate().skip(1) {
+        if text.trim().is_empty() {
+            continue;
+        }
+        let trimmed = text.trim_start();
+        let base = *indent.get_or_insert(text.len() - trimmed.len());
+        if text.len() - trimmed.len() > base {
+            if let Some((_, previous)) = body.last_mut() {
+                previous.push('\n');
+                previous.push_str(text);
+            }
+        } else {
+            body.push((line + offset, trimmed.into()));
+        }
+    }
+    Entry {
+        name: parent.name.clone(),
+        model: model.into(),
+        registration: None,
+        alias: None,
+        body,
+        source: parent.source.clone(),
+        line,
+    }
+}
+
+fn validate_dependency_constructor(entry: &Entry) -> Result<(), String> {
+    if entry.model != MOCK_DEPENDENCY {
+        return Ok(());
+    }
+    for (line, statement) in &entry.body {
+        match scalar_property(statement) {
+            Some("other") => {
+                if let Some(model) = inline_model(statement) {
+                    let nested = inline_entry(entry, *line, statement, model);
+                    match nested.model.as_str() {
+                        MOCK_DEPENDENCY => validate_dependency_constructor(&nested)?,
+                        EMPTY_PERIPHERAL => validate_empty_peripheral_constructor(&nested)?,
+                        _ => return Err(nested.error("TypeNotResolved: unknown inline dependency")),
+                    }
+                }
+            }
+            Some("throwException") => {}
+            _ => return Err(entry.error("NoCtor: unsupported dependency constructor attribute")),
+        }
+    }
+    Ok(())
+}
+
 const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 
 fn validate_mock_cpu_properties(
@@ -1011,7 +1085,7 @@ fn validate_mock_cpu_properties(
     if entry.model != MOCK_CPU {
         return Ok(());
     }
-    for (_, statement) in &entry.body {
+    for (line, statement) in &entry.body {
         let Some(key) = scalar_property(statement) else {
             continue;
         };
@@ -1031,10 +1105,12 @@ fn validate_mock_cpu_properties(
             }
             "Model" => "PropertyNotWritable",
             "OtherCpu" => {
-                let model = if let Some(model) = value.strip_prefix("new ") {
+                let model = if let Some(model) = inline_model(statement) {
                     if !matches!(model, MOCK_CPU | EMPTY_PERIPHERAL) {
                         return Err(entry.error(&format!("TypeNotResolved: {model}")));
                     }
+                    let nested = inline_entry(entry, *line, statement, model);
+                    validate_mock_cpu_properties(&nested, declared, declarations)?;
                     model
                 } else {
                     let index = *declared

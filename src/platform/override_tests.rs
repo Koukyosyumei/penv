@@ -603,3 +603,21 @@ fn renode_property_fail_on_missing_reference() {
     .unwrap_err();
     assert!(error.contains("MissingReference:"));
 }
+
+#[test]
+fn renode_nested_inline_property_type() {
+    let error = check_string("\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU\n        OtherCpu: new Antmicro.Renode.UnitTests.Mocks.MockCPU\n            EnumValue: \"string\"", None).unwrap_err();
+    assert!(error.contains("TypeMismatch:"), "{error}");
+}
+
+#[test]
+fn renode_nested_inline_no_constructor() {
+    let error = check_string("\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n        other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n            x: 7", None).unwrap_err();
+    assert!(error.contains("NoCtor:"), "{error}");
+}
+
+#[test]
+fn renode_nested_inline_ambiguous_constructor() {
+    let error = check_string("\nperipheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n        other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency\n            other: new Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral\n                value: 4", None).unwrap_err();
+    assert!(error.contains("AmbiguousCtor:"), "{error}");
+}
