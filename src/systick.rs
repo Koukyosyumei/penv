@@ -54,11 +54,11 @@ impl SysTick {
         self.frequency = frequency;
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, step_hz: u32) {
         if self.control & 1 == 0 {
             return;
         }
-        let steps_per_second = u64::from(VIRTUAL_STEPS_PER_SECOND);
+        let steps_per_second = u64::from(step_hz);
         self.phase += u64::from(self.frequency);
         let cycles = (self.phase / steps_per_second) as u32;
         self.phase %= steps_per_second;
@@ -152,10 +152,10 @@ mod tests {
         timer.set_frequency(2_500_000);
         timer.write(RELOAD, 3);
         timer.write(CSR, 3);
-        timer.tick(); // 2 cycles, down to 2.
+        timer.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND); // 2 cycles, down to 2.
         assert_eq!(timer.read(CURRENT), Some(2));
         assert!(!timer.pending(SYSTICK));
-        timer.tick(); // 3 cycles, two to reach 0 and one to reload.
+        timer.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND); // 3 cycles, two to reach 0 and one to reload.
         assert_eq!(timer.read(CURRENT), Some(3));
         assert!(timer.pending(SYSTICK));
         assert_eq!(timer.read(CSR), Some(0x10007));

@@ -1,4 +1,4 @@
-use crate::{machine::VIRTUAL_STEPS_PER_SECOND, stm32_uart::Stm32Irq};
+use crate::stm32_uart::Stm32Irq;
 
 const FORMAT_12H: u32 = 1 << 6;
 const ALARM_ENABLE: u32 = 1 << 8;
@@ -166,11 +166,11 @@ impl Stm32Rtc {
         *self = reset;
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, step_hz: u32) {
         self.phase += u64::from(self.frequency);
-        if self.phase >= u64::from(VIRTUAL_STEPS_PER_SECOND) {
-            let cycles = self.phase / u64::from(VIRTUAL_STEPS_PER_SECOND);
-            self.phase %= u64::from(VIRTUAL_STEPS_PER_SECOND);
+        if self.phase >= u64::from(step_hz) {
+            let cycles = self.phase / u64::from(step_hz);
+            self.phase %= u64::from(step_hz);
             for _ in 0..cycles {
                 self.advance();
             }

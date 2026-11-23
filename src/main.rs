@@ -32,6 +32,7 @@ mod stm32f4_flash;
 mod stm32f4_power;
 mod stm32f4_rcc;
 mod stm32f4_spi;
+mod stm32f4_system;
 mod stm32h7_adc;
 mod stm32h7_adc_dma;
 mod stm32h7_adc_platform;
@@ -88,6 +89,7 @@ Options:
   --mtvec ADDRESS    Set the initial machine trap vector
   --vex-irq-mask N   Set the initial VexRiscv external interrupt mask
   --harts N          Start N RV32 harts at the image entry (1–8)
+  --virtual-mips N   Set Cortex-M steps per virtual microsecond (default: 1)
   --max-steps N      Stop after N execution steps or simulation rounds (default: 10000000)
   --stats            Print execution statistics to stderr
   --                 Treat remaining arguments as positional
@@ -126,6 +128,7 @@ fn run() -> Result<ExitCode, String> {
     let mut ram_mib = None;
     let mut harts = None;
     let mut max_steps = 10_000_000;
+    let mut virtual_mips = None;
     let mut extra_ram = Vec::new();
     let mut clint = None;
     let mut mtvec = None;
@@ -223,7 +226,7 @@ fn run() -> Result<ExitCode, String> {
                     .ok_or("--map-ram requires BASE:SIZE")?;
                 extra_ram.push((parse_address(base)?, parse_address(size)? as usize));
             }
-            Some(option @ ("--ram-mib" | "--max-steps" | "--harts")) => {
+            Some(option @ ("--ram-mib" | "--max-steps" | "--harts" | "--virtual-mips")) => {
                 let value = args
                     .next()
                     .and_then(|v| v.into_string().ok())
@@ -243,6 +246,11 @@ fn run() -> Result<ExitCode, String> {
                         ));
                     }
                     harts = Some(value as usize);
+                } else if option == "--virtual-mips" {
+                    if value > u64::from(u32::MAX / 1_000_000) {
+                        return Err("--virtual-mips is too large".into());
+                    }
+                    virtual_mips = Some(value as u32);
                 } else {
                     max_steps = value;
                 }
@@ -281,6 +289,7 @@ fn run() -> Result<ExitCode, String> {
                 || uart_input.is_some()
                 || uart_input_at.is_some()
                 || !uart_events.is_empty()
+                || virtual_mips.is_some()
             {
                 return Err(
                     "single-machine overrides cannot be combined with a simulation script".into(),
@@ -339,6 +348,12 @@ fn run() -> Result<ExitCode, String> {
             Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
         }
     };
+    if let Some(mips) = virtual_mips {
+        if !machine.is_cortex_m() {
+            return Err("--virtual-mips requires Cortex-M".into());
+        }
+        machine.bus.set_step_hz(mips * 1_000_000);
+    }
     for (base, size) in extra_ram {
         machine.bus.map_ram(base, size)?;
     }

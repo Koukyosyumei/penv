@@ -8,6 +8,7 @@ pub struct Stm32Gpio {
     timer_output: u16,
     timer_driven: u16,
     external: u16,
+    wired: u16,
     reset_values: [u32; 3],
     mode: u32,
     output_type: u32,
@@ -41,6 +42,7 @@ impl Stm32Gpio {
             timer_output: 0,
             timer_driven: 0,
             external: 0,
+            wired: 0,
             reset_values: [mode, speed, pull],
             mode,
             output_type: 0,
@@ -59,6 +61,7 @@ impl Stm32Gpio {
         self.output = 0;
         self.alternate.fill(0);
         self.clear_timer_output();
+        self.clear_wired_input();
         self.lock = Lock::Idle;
     }
 
@@ -87,16 +90,25 @@ impl Stm32Gpio {
         self.timer_output = (self.timer_output & !bit) | (u16::from(high) << pin);
     }
 
+    pub fn clear_wired_input(&mut self) {
+        self.wired = 0;
+    }
+
+    pub fn set_wired_input(&mut self, pin: u8) {
+        self.wired |= 1 << pin;
+    }
+
     pub fn pins(&self) -> u16 {
         let mut pins = 0;
-        let mut active = self.external | self.output as u16 | self.timer_output;
+        let external = self.external | self.wired;
+        let mut active = external | self.output as u16 | self.timer_output;
         while active != 0 {
             let pin = active.trailing_zeros();
             active &= active - 1;
             let mask = 1 << pin;
             match (self.mode >> (pin * 2)) & 3 {
-                0 => pins |= self.external & mask,
-                2 => pins |= (self.timer_output | (self.external & !self.timer_driven)) & mask,
+                0 => pins |= external & mask,
+                2 => pins |= (self.timer_output | (external & !self.timer_driven)) & mask,
                 1 => pins |= self.output as u16 & mask,
                 _ => {}
             }

@@ -3,6 +3,7 @@ const HSE: u32 = 8_000_000;
 const HSION: u32 = 1;
 const HSEON: u32 = 1 << 16;
 const PLLON: u32 = 1 << 24;
+const PLLI2SON: u32 = 1 << 26;
 const PLLSRC: u32 = 1 << 22;
 const PLL_FIELDS: u32 = 0x0f43_7fff;
 const BD_RST: u32 = 1 << 16;
@@ -24,6 +25,7 @@ pub struct F4Rcc {
     pub timer9: Option<u32>,
     cr: u32,
     pll: u32,
+    plli2s: u32,
     cfgr: u32,
     source: u32,
     gates: [u32; 6],
@@ -44,6 +46,7 @@ impl F4Rcc {
             timer9,
             cr: 0x481,
             pll: 0x2400_3010,
+            plli2s: 0x2000_3000,
             cfgr: 0,
             source: 0,
             gates: [1 << 20, 0, 0, 0, 0, 0],
@@ -68,12 +71,19 @@ impl F4Rcc {
     pub fn read(&self, address: u32, width: usize) -> u32 {
         let offset = address - self.base;
         let value = match offset & !3 {
-            0 => self.cr | ((self.cr & (HSION | HSEON)) << 1) | (u32::from(self.pll_ready()) << 25),
+            0 => {
+                self.cr
+                    | ((self.cr & (HSION | HSEON)) << 1)
+                    | (u32::from(self.pll_ready()) << 25)
+                    | (u32::from(self.cr & PLLI2SON != 0 && self.cr & self.pll_input().0 != 0)
+                        << 27)
+            }
             4 => self.pll,
             8 => self.cfgr | (self.source << 2),
             0x10..=0x24 => self.resets[((offset - 0x10) / 4) as usize],
             0x30..=0x44 => self.gates[((offset - 0x30) / 4) as usize],
             0x70 => self.bdcr | ((self.bdcr & 1) << 1),
+            0x84 => self.plli2s,
             0x74 => self.reset_flags | (u32::from(self.lsi) * 3),
             _ => 0,
         };
@@ -94,13 +104,14 @@ impl F4Rcc {
                 } else {
                     1 << (16 * self.source)
                 };
-                let pll_input = if self.cr & PLLON == 0 {
+                let pll_input = if self.cr & (PLLON | PLLI2SON) == 0 {
                     0
                 } else {
                     self.pll_input().0
                 };
-                self.cr = merge(self.cr, 0x010f_00f9) | (self.cr & (source | pll_input));
+                self.cr = merge(self.cr, 0x050f_00f9) | (self.cr & (source | pll_input));
             }
+            0x84 if self.cr & PLLI2SON == 0 => self.plli2s = merge(self.plli2s, 0x7000_7fc0),
             4 if self.cr & PLLON == 0 => self.pll = merge(self.pll, PLL_FIELDS),
             8 => self.cfgr = merge(self.cfgr, 0xffff_fcf3),
             0x10..=0x24 if offset & !3 != 0x1c => {
@@ -197,6 +208,14 @@ impl F4Rcc {
 
     pub fn rtc_in_reset(&self) -> bool {
         self.bdcr & BD_RST != 0
+    }
+
+    pub fn adc_in_reset(&self) -> bool {
+        self.resets[BusClock::Apb2 as usize] & (1 << 8) != 0
+    }
+
+    pub fn adc_common_enabled(&self) -> bool {
+        self.gates[BusClock::Apb2 as usize] & (7 << 8) != 0 && !self.adc_in_reset()
     }
 
     pub fn timer9_in_reset(&self) -> bool {

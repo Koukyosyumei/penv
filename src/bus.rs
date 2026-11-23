@@ -23,6 +23,7 @@ use crate::{
     stm32f4_power::F4Power,
     stm32f4_rcc::F4Rcc,
     stm32f4_spi::F4Spi,
+    stm32f4_system::F4System,
     stm32h7_adc::Adc,
     stm32h7_adc_dma::{AdcDma, DmaMux, StreamTarget},
     stm32h7_bdma::Bdma,
@@ -101,6 +102,7 @@ pub struct Bus {
     stm32_uart_names: Vec<String>,
     stm32_uart_input: usize,
     iwdgs: Vec<Iwdg>,
+    step_hz: Option<u32>,
     exti: Option<Exti>,
     h7_exti: Option<H7Exti>,
     h7_adc: Vec<Adc>,
@@ -110,6 +112,7 @@ pub struct Bus {
     f4_flash: Option<F4Flash>,
     f4_power: Option<F4Power>,
     f4_rcc: Option<F4Rcc>,
+    f4_system: Option<F4System>,
     f4_gated_ranges: Vec<(u32, u32)>,
     h7_flash: Option<FlashController>,
     h7_gpio: Vec<Stm32Gpio>,
@@ -127,6 +130,7 @@ pub struct Bus {
     bitbands: Vec<(u32, u32, u32)>,
     bus_tags: Vec<(u32, u32, u32)>,
     timer_pins: Vec<TimerPin>,
+    gpio_wires: Vec<GpioWire>,
     gpio_leds: Vec<(String, u32, u8)>,
     gpio_exti_outputs: [Option<u8>; 16],
     plic: Option<Plic>,
@@ -136,6 +140,12 @@ pub struct Bus {
     pub clint: Option<Clint>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
+}
+
+pub struct GpioWire {
+    pub source: (u32, u8),
+    pub target: (u32, u8),
+    pub level: bool,
 }
 
 pub struct TimerPin {
@@ -330,8 +340,25 @@ impl Bus {
         Ok(())
     }
 
+    pub fn set_step_hz(&mut self, rate: u32) {
+        self.step_hz = Some(rate);
+    }
+
+    pub fn step_hz(&self) -> u32 {
+        self.step_hz
+            .unwrap_or(crate::machine::VIRTUAL_STEPS_PER_SECOND)
+    }
+
+    pub fn tick_systick(&mut self) {
+        let rate = self.step_hz();
+        if let Some(timer) = &mut self.systick {
+            timer.tick(rate);
+        }
+    }
+
     pub fn tick_watchdogs(&mut self) -> bool {
-        self.iwdgs.iter_mut().any(Iwdg::tick)
+        let rate = self.step_hz();
+        self.iwdgs.iter_mut().any(|watchdog| watchdog.tick(rate))
     }
 
     pub fn reset_cortex_m_devices(&mut self) {
@@ -417,11 +444,22 @@ impl Bus {
         if let Some(rcc) = &mut self.f4_rcc {
             rcc.watchdog_reset();
         }
+        if let Some(system) = &mut self.f4_system {
+            *system = F4System::default();
+        }
         self.refresh_f4_clocks();
     }
 
     pub fn map_f4_rcc(&mut self, rcc: F4Rcc) -> Result<(), String> {
         self.check_peripheral_range(rcc.base, F4Rcc::SIZE)?;
+        for address in F4System::REGISTERS {
+            self.check_peripheral_range(address, 4)?;
+            if u64::from(address) >= u64::from(rcc.base)
+                && u64::from(address) < u64::from(rcc.base) + u64::from(F4Rcc::SIZE)
+            {
+                return Err("STM32F4 RCC overlaps a system register".into());
+            }
+        }
         self.f4_gated_ranges.extend(
             self.stm32_uarts
                 .iter()
@@ -440,6 +478,7 @@ impl Bus {
                 .chain(self.h7_rtc.iter().map(|rtc| (rtc.base, Stm32Rtc::SIZE))),
         );
         self.f4_rcc = Some(rcc);
+        self.f4_system = Some(F4System::default());
         self.refresh_f4_clocks();
         Ok(())
     }
@@ -473,6 +512,11 @@ impl Bus {
         let rcc = self.f4_rcc.as_mut().unwrap();
         let backup_unlocked = self.f4_power.as_ref().is_none_or(F4Power::backup_unlocked);
         rcc.write(address, width, value, backup_unlocked);
+        if rcc.adc_in_reset()
+            && let Some(system) = &mut self.f4_system
+        {
+            system.reset_adc();
+        }
         if rcc.timer9_in_reset()
             && let Some(timer) = self
                 .h7_timers
@@ -682,16 +726,18 @@ impl Bus {
             .map(|port| port.pins() & (1 << pin) != 0)
     }
 
-    pub fn set_timer_pins(&mut self, pins: Vec<TimerPin>) {
+    pub fn set_gpio_links(&mut self, pins: Vec<TimerPin>, wires: Vec<GpioWire>) {
         self.timer_pins = pins;
+        self.gpio_wires = wires;
     }
 
     fn sample_timer_pins(&mut self) {
-        if self.timer_pins.is_empty() {
+        if self.timer_pins.is_empty() && self.gpio_wires.is_empty() {
             return;
         }
         for gpio in &mut self.h7_gpio {
             gpio.clear_timer_output();
+            gpio.clear_wired_input();
         }
         let clocked = |timer: &H7Timer| {
             timer_clocked(self.h7_network_control.as_ref(), timer)
@@ -709,10 +755,22 @@ impl Bus {
                 gpio.drive_timer_output(route.pin, high);
             }
         }
+        for wire in &mut self.gpio_wires {
+            let (base, pin) = wire.source;
+            wire.level = self
+                .h7_gpio
+                .iter()
+                .any(|gpio| gpio.base == base && gpio.pins() & (1 << pin) != 0);
+        }
+        for wire in self.gpio_wires.iter().filter(|wire| wire.level) {
+            let (base, pin) = wire.target;
+            if let Some(gpio) = self.h7_gpio.iter_mut().find(|gpio| gpio.base == base) {
+                gpio.set_wired_input(pin);
+            }
+        }
         for timer in self.h7_timers.iter_mut().filter(|timer| clocked(timer)) {
-            for channel in 0..4 {
-                let high = self
-                    .timer_pins
+            let levels = std::array::from_fn(|channel| {
+                self.timer_pins
                     .iter()
                     .filter(|wire| {
                         wire.capture && wire.timer == timer.base && wire.channel == channel
@@ -723,14 +781,15 @@ impl Bus {
                                 && gpio.alternate_selected(wire.pin, wire.function)
                                 && gpio.pins() & (1 << wire.pin) != 0
                         })
-                    });
-                timer.sample_input(channel, high);
-            }
+                    })
+            });
+            timer.sample_inputs(levels);
         }
     }
 
     pub fn tick_h7_peripherals(&mut self) {
         self.sample_timer_pins();
+        let rate = self.step_hz();
         let control = self.h7_network_control.as_ref();
         let mut dma = EthernetDma {
             regions: &mut self.regions,
@@ -738,12 +797,12 @@ impl Bus {
         };
         for timer in &mut self.h7_timers {
             if timer_clocked(control, timer) && f4_clocked(self.f4_rcc.as_ref(), timer.base) {
-                timer.tick();
+                timer.tick(rate);
             }
         }
         for rtc in &mut self.h7_rtc {
             if rtc_clocked(control, rtc) && f4_clocked(self.f4_rcc.as_ref(), rtc.base) {
-                rtc.tick();
+                rtc.tick(rate);
             }
         }
         for controller in &mut self.h7_bdma {
@@ -755,7 +814,7 @@ impl Bus {
             if !adc_clocked(control, adc) {
                 continue;
             }
-            adc.tick();
+            adc.tick(rate);
             let Some((request, value)) = adc.take_request() else {
                 continue;
             };
@@ -855,6 +914,11 @@ impl Bus {
                 let other = u64::from(uart.base);
                 start < other + u64::from(LiteXUart::SIZE) && other < end
             })
+            || (self.f4_system.is_some()
+                && F4System::REGISTERS.into_iter().any(|address| {
+                    let base = u64::from(address);
+                    start < base + 4 && base < end
+                }))
             || self.f4_rcc.as_ref().is_some_and(|device| {
                 let base = u64::from(device.base);
                 start < base + u64::from(F4Rcc::SIZE) && base < end
@@ -1420,6 +1484,15 @@ impl Bus {
 
     pub fn read<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
         if N == 4
+            && let Some(system) = &self.f4_system
+            && let Some(value) = system.read(
+                address,
+                self.f4_rcc.as_ref().is_some_and(F4Rcc::adc_common_enabled),
+            )
+        {
+            return Ok(value);
+        }
+        if N == 4
             && address & 3 == 0
             && let Some((target, bit)) = self.bitband(address)
         {
@@ -1686,7 +1759,10 @@ impl Bus {
         }
         if N == 4
             && address & 3 == 0
-            && let Some(timer) = self.h7_timers.iter().find(|timer| timer.contains(address))
+            && let Some(timer) = self
+                .h7_timers
+                .iter_mut()
+                .find(|timer| timer.contains(address))
         {
             return Ok(if timer_clocked(self.h7_network_control.as_ref(), timer) {
                 timer.read(address)
@@ -1761,6 +1837,16 @@ impl Bus {
     ) -> Result<(), BusError> {
         if self.uart_tx == Some(address) && width == 1 {
             return uart.write_all(&[value as u8]).map_err(BusError::Output);
+        }
+        if width == 4
+            && let Some(system) = &mut self.f4_system
+            && system.write(
+                address,
+                value,
+                self.f4_rcc.as_ref().is_some_and(F4Rcc::adc_common_enabled),
+            )
+        {
+            return Ok(());
         }
         if address as usize & (width - 1) != 0 {
             return Err(BusError::Misaligned(address, width));

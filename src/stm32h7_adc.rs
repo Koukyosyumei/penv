@@ -1,4 +1,4 @@
-use crate::{machine::VIRTUAL_STEPS_PER_SECOND, stm32_uart::Stm32Irq, stm32h7_adc_dma::DmaRequest};
+use crate::{stm32_uart::Stm32Irq, stm32h7_adc_dma::DmaRequest};
 
 pub const CHANNELS: usize = 19;
 const READY: u32 = 1;
@@ -116,7 +116,7 @@ impl Adc {
         self.service_regular = self.regular.is_some();
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, step_hz: u32) {
         if std::mem::take(&mut self.service_regular) {
             self.sample_regular();
         }
@@ -127,8 +127,8 @@ impl Adc {
             return;
         }
         let phase = u64::from(self.phase) + u64::from(self.frequency);
-        self.phase = (phase % u64::from(VIRTUAL_STEPS_PER_SECOND)) as u32;
-        if phase >= u64::from(VIRTUAL_STEPS_PER_SECOND)
+        self.phase = (phase % u64::from(step_hz)) as u32;
+        if phase >= u64::from(step_hz)
             && self.regular.is_none()
             && (self.registers[3] & WAIT == 0 || self.registers[0] & EOC == 0)
         {

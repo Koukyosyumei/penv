@@ -300,8 +300,9 @@ impl Machine {
                 &mut self.secondary[index - 1]
             };
             self.bus.tick_h7_peripherals();
+            let rate = self.bus.step_hz();
             if let Some(dwt) = &mut self.bus.dwt {
-                dwt.tick();
+                dwt.tick(rate);
             }
             while self
                 .uart_input
@@ -444,9 +445,7 @@ impl Hart {
     ) -> Result<Step, String> {
         if let Some(thumb) = self.thumb.as_mut() {
             if self.busy_wait.as_mut().is_some_and(BusyWait::waiting) {
-                if let Some(timer) = &mut bus.systick {
-                    timer.tick();
-                }
+                bus.tick_systick();
                 return Ok(Step::Trap);
             }
             if thumb
@@ -470,7 +469,7 @@ impl Hart {
                 self.pc = return_address & !1;
                 let delay = self.registers[0];
                 if delay != 0 {
-                    wait.skip(delay);
+                    wait.skip(delay, bus.step_hz());
                     return Ok(Step::Trap);
                 }
             }

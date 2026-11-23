@@ -254,7 +254,7 @@ UART4 echo=Z
   取り出します。スモークテストは `X` と `YZ` を 2 回に分けて注入し、UART4 の
   応答順を照合します。一時 REPL で IRQ 28 と IRQ 52 の配線を個別に外した確認では、
   それぞれに対応する出力だけが消えました。
-- `cargo test` はユニットテスト 59 件、CLI テスト 5 件が通過しました。既存の
+- `cargo test` はユニットテスト 61 件、CLI テスト 5 件が通過しました。既存の
   `tests/stm32h7-zephyr-smoke.sh` も通過し、USART2 で `Zephyr version 4.4.99`
   を確認しました。
 - 別々の出力ディレクトリでビルドした ELF はバイト単位で一致しました。この環境での
@@ -382,7 +382,7 @@ LSE による RTC の有効化とバックアップレジスターの消去を�
 `RCC PLL 32 MHz, RTC and TIM9 OK` を出力します。IWDG 再起動時には HSI とクロックゲートの
 初期状態、`RCC_CSR.IWDGRSTF`、`RMVF` によるフラグ消去を確認してから同じ設定を実行します。
 
-発振器の起動時間、PLL の電気的制約、IWDG による LSI の強制有効化、補助 PLL、RCC IRQ、
+発振器の起動時間、PLL の電気的制約、IWDG による LSI の強制有効化、補助 PLL の出力クロック、RCC IRQ、
 低電力モードのクロック、TIM9 以外の個別周辺機器リセットは残課題です。
 
 ### 未変更の上流 REPL
@@ -427,9 +427,34 @@ FAULTMASK の 2 ケースはクロックを有効にした TIM9 で FreeRTOS ELF
 [上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
 [上流フラッシュ消去テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/unit-tests/stm32f4-erase.robot)
 
-残課題は上流の PWM キャプチャ・直交位相デコーダー用の外部ピン配線とタイマー動作、
-`ApplySVD` からのレジスター展開、Contiki 用 RESC のモニターコマンド、
-AIRCR のソフトウェアリセット要求、FPU と ARM_CM4F ポート、実機での確認です。
-GPIO の PWM 出力と直接入力キャプチャはモデルのテストで検証しています。
+### 上流の PWM キャプチャと直交位相デコーダー
+
+上記の `tests/stm32f407-upstream-smoke.sh` は、公開 ELF を使用した PWM キャプチャの
+通常版・4 チャネル版と、直交位相デコーダーも実行します。テスト用 REPL は未変更の
+CPU REPL を読み込み、Robot テストと同じ配線を追加します。PWM は PA6 → PD12、
+直交位相は PD12 → PA6 と PD13 → PA7 です。FreeRTOS 回帰には未変更の kit REPL を使います。
+[上流 STM32F4 Discovery テスト](https://github.com/renode/renode/blob/c38ac3babcd38a7144b9498e3ca4c2226b76aa37/tests/platforms/STM32F4_Discovery.robot)
+
+PWM は初回の校正値を読み飛ばし、2 回目が 1000 Hz ±25 Hz、デューティ比 33% ±1 ポイント
+であることを検査します。直交位相の最初の 2 出力は 10°・20°（各 ±1°）です。
+確認時の値は通常版が 1000 Hz・33.0%、4 チャネル版が 1002 Hz・32.8%、直交位相が 10°・20°
+でした。実行ログは出力ディレクトリの `pwm-capture.log`、
+`pwm-capture-four-channel-capture-support.log`、`qdec.log` に残ります。
+
+タイマーモデルは直接・間接キャプチャ、TI1/TI2 トリガーでのカウンターリセット、
+キャプチャフラグとオーバーキャプチャ、エンコーダーモードの方向とカウンター境界を
+扱います。GPIO 間の配線は出力レベルを入力側に伝え、選択された代替機能へ渡します。
+公開 ELF の初期化に必要な PLLI2S の設定・レディ状態、DBGMCU_CR、ADC 共通の
+クロック分周設定にも対応しました。
+[RM0090 の STM32F407 タイマー章](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-407-415-417-437-455-469-application-note-stmicroelectronics.pdf)
+
+4 チャネル版は最初のエッジを受けた ISR でカウンターをリセットします。
+`--virtual-mips 24` で 1 仮想マイクロ秒あたりの Cortex-M 実行ステップを指定し、
+既定の 1 ステップでは大きくなる ISR とエッジ間の時間を再現可能な範囲に収めます。
+この設定は SysTick や周辺タイマーにも共通です。未変更 kit の FreeRTOS 回帰は既定値で実行します。
+
+残課題は入力のデジタルフィルター、GPIO の多段伝搬・競合、ADC 変換、PLLI2S の出力クロック、
+デバッグ時の停止動作、`ApplySVD` のレジスター展開、Contiki 用 RESC のモニターコマンド、
+AIRCR のソフトウェアリセット要求、FPU と ARM_CM4F ポート、実機確認です。
 フラッシュプログラム動作、UART のビット時間、CAN の通常モードでのノード間通信も
 残課題です。

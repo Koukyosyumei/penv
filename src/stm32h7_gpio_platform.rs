@@ -1,5 +1,5 @@
 use crate::{
-    bus::TimerPin,
+    bus::{GpioWire, TimerPin},
     machine::Machine,
     platform::{Entry, irq_index, irq_list, number},
     stm32h7_gpio::Stm32Gpio,
@@ -183,7 +183,7 @@ fn port(
                     }
                 } else if !entries.iter().any(|device| {
                     device.name == name.trim()
-                        && matches!(device.model.as_str(), LED | Timer::MODEL)
+                        && matches!(device.model.as_str(), GPIO | LED | Timer::MODEL)
                 }) {
                     return Err("unknown GPIO output target".into());
                 }
@@ -271,6 +271,7 @@ fn configure_gpio_links(
             }
         }
     }
+    let mut gpio_wires = Vec::new();
     for gpio in entries.iter().filter(|entry| entry.model == GPIO) {
         let base = port(&gpio.name).unwrap();
         for (_, text) in &gpio.body {
@@ -281,6 +282,15 @@ fn configure_gpio_links(
                 let Some((target, index)) = wire.trim().split_once('@') else {
                     continue;
                 };
+                if let Some(target) = port(target.trim()) {
+                    let input = irq_index(index, 16).map_err(|error| gpio.error(&error))?;
+                    let output = irq_index(pin, 16).map_err(|error| gpio.error(&error))?;
+                    gpio_wires.push(GpioWire {
+                        source: (base, output),
+                        target: (target, input),
+                        level: false,
+                    });
+                }
                 if let Some((_, timer)) = timers.iter().find(|(name, _)| *name == target.trim()) {
                     let pin = irq_index(pin, 16).map_err(|error| gpio.error(&error))?;
                     let channel = irq_index(index, 4).map_err(|error| gpio.error(&error))?;
@@ -301,7 +311,7 @@ fn configure_gpio_links(
             }
         }
     }
-    machine.bus.set_timer_pins(routes);
+    machine.bus.set_gpio_links(routes, gpio_wires);
     for led in entries.iter().filter(|entry| entry.model == LED) {
         if !led.body.is_empty() {
             return Err(led.error("unsupported GPIO LED properties"));

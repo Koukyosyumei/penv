@@ -363,9 +363,7 @@ impl Thumb {
         bus: &mut Bus,
     ) -> Result<bool, String> {
         bus.sample_nvic(&self.active_exceptions);
-        if let Some(timer) = bus.systick.as_mut() {
-            timer.tick();
-        }
+        bus.tick_systick();
         if self.faultmask || (self.interrupts_masked && !self.waiting_for_interrupt) {
             return Ok(false);
         }

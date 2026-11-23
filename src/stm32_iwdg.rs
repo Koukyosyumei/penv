@@ -1,5 +1,3 @@
-use crate::machine::VIRTUAL_STEPS_PER_SECOND;
-
 pub struct Iwdg {
     pub base: u32,
     frequency: u32,
@@ -93,14 +91,14 @@ impl Iwdg {
         self.phase = 0;
     }
 
-    pub fn tick(&mut self) -> bool {
+    pub fn tick(&mut self, step_hz: u32) -> bool {
         if self.reset_requested {
             return true;
         }
         if !self.running {
             return false;
         }
-        let divisor = u64::from(VIRTUAL_STEPS_PER_SECOND) << (2 + self.prescaler.min(6));
+        let divisor = u64::from(step_hz) << (2 + self.prescaler.min(6));
         self.phase += u64::from(self.frequency);
         let ticks = (self.phase / divisor) as u16;
         self.phase %= divisor;
@@ -172,8 +170,8 @@ mod tests {
         watchdog.write(8, 10);
         watchdog.write(0x10, 5);
         watchdog.write(0, 0xcccc);
-        assert!(!watchdog.tick());
+        assert!(!watchdog.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND));
         watchdog.write(0, 0xaaaa);
-        assert!(watchdog.tick());
+        assert!(watchdog.tick(crate::machine::VIRTUAL_STEPS_PER_SECOND));
     }
 }
