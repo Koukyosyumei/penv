@@ -285,3 +285,38 @@ impl Script {
         Ok(())
     }
 }
+
+pub fn check_hook_source(source: &str) -> Result<(), String> {
+    const CHECK: &str = r#"
+import re
+import sys
+
+source = sys.argv[1]
+try:
+    compile(source, "<hook>", "exec")
+except SyntaxError as error:
+    line = (error.text or "").rstrip("\r\n")
+    message = error.msg
+    if (error.lineno == len(source.splitlines()) and error.offset == len(line) + 1
+            and re.match(r"^\s*(if|elif|else|for|while|def|class|with|try|except|finally)\b", line)
+            and not line.endswith(":")):
+        message = "unexpected EOF while parsing"
+    print(f"[FatalError] {message} (Line {error.lineno}, Column {error.offset})")
+    sys.exit(1)
+"#;
+    let result = Command::new("python3")
+        .args(["-c", CHECK, source])
+        .output()
+        .map_err(|error| format!("start Python hook syntax checker: {error}"))?;
+    if result.status.success() {
+        return Ok(());
+    }
+    let diagnostic = String::from_utf8_lossy(&result.stdout);
+    if diagnostic.trim().is_empty() {
+        return Err(format!(
+            "Python hook syntax checker failed: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ));
+    }
+    Err(diagnostic.trim().into())
+}

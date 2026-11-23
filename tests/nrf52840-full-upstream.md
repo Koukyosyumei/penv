@@ -68,9 +68,9 @@ Renode は `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`、Infrastructure は `09ac
 | 対象範囲 | 固定実行ケース | 上流等価の合格 | 部分移植 | 未達 |
 |---|---:|---:|---:|---:|
 | `tests/platforms/NRF52840.robot` | 17 | 17 | 0 | 0 |
-| 監査した共有・混成 Robot | 190 | 145 | 3 | 42 |
+| 監査した共有・混成 Robot | 190 | 145 | 4 | 41 |
 | Infrastructure GPIO NUnit | 14 | 14 | 0 | 0 |
-| 合計 | **221** | **176** | **3** | **42** |
+| 合計 | **221** | **176** | **4** | **41** |
 
 固定台帳には対象外の記録489行もある。対象外の MVE 命令単体スイートの一部は、同じ ISA 要件を持つパラメータ群として記録した。対象分母は固定の実行構成を数える。再起動・再生成される条件の組を展開し、同一実行の途中で繰り返すレジスタ確認や UART 行は元のケース内の判定として保持する。同じ上流ケース、同じ CPU・UART・バイナリの組は一つにまとめる。
 
@@ -573,3 +573,19 @@ tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
 ```
 
 ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/pydev-watchpoint.RSpSTF7v` の `cargo-test`、`watch`、`quadword`、`shell` に保存した。今回のウォッチポイントは、アドレスと幅が一致するゲスト読み出しの停止を扱う。Python フック本体、書き込みウォッチポイント、GDB 経由の操作、Python 周辺機器のリセット連動は残課題。
+
+### Python フックの構文診断
+
+`python-engine.robot:26-57` の7診断のうち、ブロック・割り込み・周辺機器・ウォッチポイント・UART・マシン状態の6入力を同じバイナリで検証した。固定の `if error` をホストの `python3` でコンパイルし、不完全な複合文の末尾エラーを上流形式の `[FatalError] unexpected EOF while parsing (Line 1, Column 9)` で返す。構文上有効な `pass` は、未対応フック実行の診断になる。
+
+```sh
+cargo test --locked
+tests/nrf52840-python-hook-errors.sh "$PWD/target/debug/penv" "$ARTIFACT_DIR/hooks"
+tests/nrf52840-pydev-watchpoint-upstream.sh "$PWD/target/debug/penv" ../renode "$ARTIFACT_DIR/watch"
+tests/nrf52840-monitor-hook-upstream.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF" "$ARTIFACT_DIR/monitor"
+tests/nrf52840-shell.sh "$PWD/target/debug/penv" ../renode "$SHELL_ELF"
+```
+
+各フックは個別 RESC で登録時の失敗を判定する。CPU は起動しない。パケットフックの再現には `block.resc` の末尾を `emulation CreateIEEE802_15_4Medium "wireless"` と `wireless SetPacketHookFromScript radio "if error"` に置き換える。媒体作成で停止するため台帳では部分移植とした。汎用 Python フックの実行は残課題。
+
+ログと終了状態は `/home/ec2-user/.local/state/penv-dispatch/evidence/nrf52/python-hook-errors.xzNlFAQ2` に保存した。`cases/` に6診断、パケットの阻害点、有効な構文を与えた対照のログがある。

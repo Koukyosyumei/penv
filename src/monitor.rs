@@ -140,6 +140,15 @@ pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     Ok(boot)
 }
 
+fn check_unsupported_python_hook(body: &str) -> Result<(), String> {
+    let source = body
+        .strip_prefix('"')
+        .and_then(|body| body.strip_suffix('"'))
+        .ok_or("expected a quoted Python hook")?;
+    crate::pydev::check_hook_source(&source.replace(r#"\""#, "\""))?;
+    Err("execution of this Python hook is unsupported".into())
+}
+
 fn execute(
     text: &str,
     variables: &HashMap<&str, &str>,
@@ -273,14 +282,43 @@ fn execute(
                     .ok_or("expected AddHook address and body")?;
                 (Some(crate::parse_address(resolve(pc)?)? & !1), body)
             };
-            let message = body
+            let Some(message) = body
                 .trim()
                 .strip_prefix(r#""monitor.Parse('log \""#)
                 .and_then(|body| body.strip_suffix(r#"\"')""#))
                 .filter(|message| !message.contains(['"', '\\', '\'']))
-                .ok_or("AddHook requires monitor.Parse with a single quoted log argument")?;
+            else {
+                return check_unsupported_python_hook(body.trim());
+            };
             boot.cpu_hooks
                 .push((pc, crate::bus::CpuHook::Log(message.into())));
+        }
+        ["cpu" | "sysbus.cpu", "AddHookAtInterruptBegin", ..]
+        | [
+            "sysbus",
+            "SetHookAfterPeripheralRead" | "AddWatchpointHook",
+            ..,
+        ]
+        | [_, "AddLineHook", ..]
+        | ["machine", "AddUserStateHook", ..]
+            if boot.platform.is_some()
+                && !matches!(
+                    words.as_slice(),
+                    ["sysbus", "AddWatchpointHook", _, _, "Read", "\"\""]
+                ) =>
+        {
+            let (_, body) = text
+                .split_once(" \"")
+                .ok_or("expected a quoted Python hook")?;
+            // UART and user-state hooks take an additional quoted selector.
+            let body = match words[1] {
+                "AddLineHook" | "AddUserStateHook" => body
+                    .split_once("\" \"")
+                    .map(|(_, body)| body)
+                    .ok_or("expected a quoted selector and Python hook")?,
+                _ => body,
+            };
+            return check_unsupported_python_hook(&format!("\"{body}"));
         }
         ["cpu" | "sysbus.cpu", command @ ("Pause" | "Resume")] if boot.platform.is_some() => {
             boot.cpu_control
