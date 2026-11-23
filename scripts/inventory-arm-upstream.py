@@ -42,7 +42,21 @@ def status(name,case):
     if name=='stm32_uart':
         return ('partial','classic STM32_UART bench uses SR/DR/CR1; F072 equivalent still needs timed RX, IDLE and parity boundary audit') if 'Disabled' in case and 'UART Or Receiver' in case else ('open applicability','classic STM32_UART bench; compare shared RX and timing behavior with F072 STM32F7_USART layout')
     if name=='arm-cortex-m-signals': return 'partial' if 'Clocked' in case else 'open','SysTick gating port exists; CPUWAIT, DWT model availability and full observations need per-case audit'
-    if name=='arm-cortex-m-bus-fault': return 'open applicability','Cortex-M55 fixture; classify observable Armv6-M HardFault/lockup separately from architectural BusFault and security/floating point state'
+    if name == 'arm-cortex-m-bus-fault':
+        ports = {
+            'Should Enter Lockup On Invalid Reset State': 'renode_invalid_reset_state_enters_lockup_after_two_steps',
+            'Should Escalate Disabled BusFault To HardFault': 'renode_precise_load_hardfault_then_lockup_nmi_and_reset, first fault',
+            'Should Enter Lockup When BusFault Cannot Escalate From HardFault': 'renode_precise_load_hardfault_then_lockup_nmi_and_reset, repeated LDR; ITSTATE not applicable',
+            'NMI Should Preempt Instruction-Time Lockup': 'renode_precise_load_hardfault_then_lockup_nmi_and_reset, NMI and stacked LOCKUP PC',
+            'Should Enter Lockup On NMI Vector BusFault': 'renode_nmi_and_hardfault_faulting_vectors_lock_up, exception 2',
+            'Should Enter Lockup On HardFault Vector BusFault': 'renode_nmi_and_hardfault_faulting_vectors_lock_up, exception 3',
+            'Should Enter Lockup On RETPSR Integrity Failure': 'renode_invalid_nmi_return_into_hardfault_locks_up',
+            'Should Enter Lockup On Reset Vector BusFault': 'renode_fault_on_initial_msp_or_reset_pc_locks_up, fault offset 4',
+            'Should Enter Lockup On Initial MSP BusFault': 'renode_fault_on_initial_msp_or_reset_pc_locks_up, fault offset 0',
+        }
+        if case in ports:
+            return 'partial', ports[case] + '; Armv6-M has no CFSR/HFSR/BFAR or Armv8-M exception-return token'
+        return 'open applicability', 'Cortex-M55 fixture; classify Armv6-M behavior separately from architectural BusFault and security/floating point state'
     if name=='per-core-registration': return 'open applicability','uses per-CPU registration; check exact topology/CPU requirement, including STM32F072 HEX'
     if name=='uart-tester': return 'open','Robot terminal API and exact matching/error semantics require audit; named RESC UART waits cover a subset'
     if name=='stm32f4-erase': return 'partial','F072 page/bank behavior port exists; STM32F4 sector geometry and registers differ'

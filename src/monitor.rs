@@ -712,7 +712,7 @@ mod tests {
         run(&mut machine, script, &boot.runtime, 0, &mut io::sink()).unwrap();
         assert_eq!(machine.bus.read::<4>(ICSR).unwrap(), 1 << 31);
         assert!(machine.bus.pend_nvic_exception("other", 2).is_err());
-        assert!(machine.bus.pend_nvic_exception("nvic", 3).is_err());
+        assert!(machine.bus.pend_nvic_exception("nvic", 4).is_err());
     }
 
     #[test]

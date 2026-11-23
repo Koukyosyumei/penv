@@ -78,6 +78,8 @@ struct Region {
 
 #[derive(Default)]
 pub struct Bus {
+    #[cfg(test)]
+    pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
     regions: Vec<Region>,
     reservations: [Option<u32>; crate::machine::MAX_HARTS],
     uart_tx: Option<u32>,
@@ -355,6 +357,10 @@ impl Bus {
         let pending = match u8::try_from(exception) {
             Ok(irq @ 16..=47) => {
                 self.nvic.as_mut().unwrap().set_line(irq - 16, true, 0);
+                return Ok(());
+            }
+            Ok(crate::nvic::HARDFAULT) => {
+                self.nvic.as_mut().unwrap().set_hardfault_pending(true);
                 return Ok(());
             }
             Ok(NMI) => 1 << 31,
@@ -1299,6 +1305,14 @@ impl Bus {
     }
 
     pub fn read_ram<const N: usize>(&self, address: u32) -> Result<u32, BusError> {
+        #[cfg(test)]
+        if self
+            .faulting_accesses
+            .as_ref()
+            .is_some_and(|range| range.contains(&address))
+        {
+            return Err(BusError::Unmapped(address, N));
+        }
         if address as usize & (N - 1) != 0 {
             return Err(BusError::Misaligned(address, N));
         }

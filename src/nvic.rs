@@ -1,4 +1,5 @@
 pub const BASE: u32 = 0xe000_e000;
+pub const HARDFAULT: u8 = 3;
 pub const VTOR: u32 = BASE + 0xd08;
 const AIRCR: u32 = BASE + 0xd0c;
 const SCR: u32 = BASE + 0xd10;
@@ -16,6 +17,7 @@ pub struct Nvic {
     enabled: u32,
     sleep_control: u32,
     reset_requested: bool,
+    hardfault_pending: bool,
     pending: u32,
     priority: [u8; 32],
     system_priority: [u8; 8],
@@ -30,6 +32,7 @@ impl Nvic {
             enabled: 0,
             sleep_control: 0,
             reset_requested: false,
+            hardfault_pending: false,
             pending: 0,
             priority: [0; 32],
             system_priority: [0; 8],
@@ -88,8 +91,12 @@ impl Nvic {
         self.sleep_control & (1 << 4) != 0
     }
 
+    pub fn set_hardfault_pending(&mut self, pending: bool) {
+        self.hardfault_pending = pending;
+    }
+
     pub fn pending_exceptions(&self) -> u64 {
-        u64::from(self.pending) << 16
+        (u64::from(self.pending) << 16) | (u64::from(self.hardfault_pending) << HARDFAULT)
     }
 
     pub fn priority(&self, exception: u8) -> u8 {

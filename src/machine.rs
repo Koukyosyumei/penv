@@ -4,7 +4,7 @@ use crate::{
     bus::{Bus, BusError, RAM_BASE},
     csr::{Csr, EXTERNAL},
     sv32::TranslationCache,
-    thumb::Thumb,
+    thumb::{Thumb, ThumbStep},
 };
 
 pub const MAX_HARTS: usize = 8;
@@ -233,7 +233,7 @@ impl Machine {
     pub fn validate_entry(&mut self) -> Result<(), String> {
         for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
             if hart.thumb.is_some() {
-                hart.reset_cortex_m(&mut self.bus)?;
+                hart.reset_cortex_m(&mut self.bus);
                 continue;
             }
             hart.fetch(&mut self.bus)
@@ -281,6 +281,10 @@ impl Machine {
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
         self.run_until(limit, output, |_, _| false)
+    }
+
+    pub fn cortex_m_locked_up(&self) -> bool {
+        self.primary.thumb.as_ref().is_some_and(Thumb::locked_up)
     }
 
     pub fn elapsed_steps(&self) -> u64 {
@@ -345,18 +349,17 @@ impl Machine {
 }
 
 impl Hart {
-    fn reset_cortex_m(&mut self, bus: &mut Bus) -> Result<(), String> {
+    fn reset_cortex_m(&mut self, bus: &mut Bus) {
         let thumb = self.thumb.as_mut().unwrap();
-        let (sp, pc) = thumb.reset(bus)?;
+        let (sp, pc, lr) = thumb.reset(bus);
         let vectors = thumb.vector_base();
-        *thumb = Thumb::new(Some(vectors));
         if let Some(nvic) = bus.nvic.as_mut() {
             nvic.set_vector_base(vectors);
         }
         self.registers.fill(0);
         self.registers[13] = sp;
+        self.registers[14] = lr;
         self.pc = pc;
-        Ok(())
     }
 
     pub fn configure_cortex_m(&mut self, vectors: Option<u32>) {
@@ -478,7 +481,7 @@ impl Hart {
         output: &mut impl Write,
     ) -> Result<Step, String> {
         if self.thumb.is_some() && bus.reset_cortex_m_if_requested() {
-            self.reset_cortex_m(bus)?;
+            self.reset_cortex_m(bus);
         }
         if let Some(thumb) = self.thumb.as_mut() {
             bus.advance_stm32_dma(output)
@@ -494,12 +497,10 @@ impl Hart {
             }
             return thumb
                 .step(&mut self.pc, &mut self.registers, bus, output)
-                .map(|retired| {
-                    if retired {
-                        Step::Retired
-                    } else {
-                        Step::Stop(Stop::Ebreak)
-                    }
+                .map(|retired| match retired {
+                    ThumbStep::Retired => Step::Retired,
+                    ThumbStep::Breakpoint => Step::Stop(Stop::Ebreak),
+                    ThumbStep::Exception => Step::Trap,
                 })
                 .map_err(|error| format!("pc={:#010x}: {error}", self.pc));
         }

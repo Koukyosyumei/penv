@@ -1,8 +1,8 @@
 use std::io::Write;
 
 use crate::{
-    bus::Bus,
-    nvic::Nvic,
+    bus::{Bus, BusError},
+    nvic::{HARDFAULT, Nvic},
     systick::{NMI, PENDSV, SYSTICK, SysTick},
 };
 
@@ -26,10 +26,41 @@ pub struct Thumb {
     interrupts_masked: bool,
     sleep: Sleep,
     event: bool,
+    invalid_thumb_state: bool,
+    locked_up: bool,
     pending: u64,
     thread_uses_psp: bool,
     msp: u32,
     psp: u32,
+}
+
+const LOCKUP_PC: u32 = 0xefff_fffe;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ThumbStep {
+    Retired,
+    Breakpoint,
+    Exception,
+}
+
+enum InstructionError {
+    GuestFault,
+    Host(String),
+}
+
+impl From<String> for InstructionError {
+    fn from(error: String) -> Self {
+        Self::Host(error)
+    }
+}
+
+impl From<BusError> for InstructionError {
+    fn from(error: BusError) -> Self {
+        match error {
+            BusError::Unmapped(..) | BusError::Misaligned(..) => Self::GuestFault,
+            other => Self::Host(other.to_string()),
+        }
+    }
 }
 
 impl Thumb {
@@ -48,25 +79,19 @@ impl Thumb {
         self.vectors.get_or_insert(base);
     }
 
-    pub fn reset(&self, bus: &Bus) -> Result<(u32, u32), String> {
-        let sp = bus
-            .read_ram::<4>(self.vector_base())
-            .map_err(|error| error.to_string())?;
-        let vector = self
-            .vector_base()
+    pub fn reset(&mut self, bus: &Bus) -> (u32, u32, u32) {
+        *self = Self::new(Some(self.vector_base()));
+        let vectors = self.vector_base();
+        let target = vectors
             .checked_add(4)
-            .ok_or("reset vector address overflow")?;
-        let target = bus
-            .read_ram::<4>(vector)
-            .map_err(|error| error.to_string())?;
-        if target & 1 == 0 {
-            return Err(format!(
-                "Cortex-M reset vector {target:#010x} must select Thumb state"
-            ));
+            .and_then(|address| bus.read_ram::<4>(address).ok());
+        if let (Some(target), Ok(sp)) = (target, bus.read_ram::<4>(vectors)) {
+            self.invalid_thumb_state = target & 1 == 0;
+            return (sp & !3, target & !1, 0);
         }
-        bus.read_ram::<2>(target & !1)
-            .map_err(|error| error.to_string())?;
-        Ok((sp & !3, target & !1))
+        self.locked_up = true;
+        self.active_exceptions = 1 << HARDFAULT;
+        (0, LOCKUP_PC, u32::MAX)
     }
 
     fn nz(&mut self, value: u32) {
@@ -229,35 +254,49 @@ impl Thumb {
         true
     }
 
+    fn lockup(&mut self) -> u32 {
+        self.locked_up = true;
+        self.sleep = Sleep::Running;
+        LOCKUP_PC
+    }
+
+    fn can_take_hardfault(&self) -> bool {
+        !self.interrupts_masked && self.active_exceptions & ((1 << NMI) | (1 << HARDFAULT)) == 0
+    }
+
+    fn hardfault(&mut self, pc: u32, r: &mut [u32; 32], bus: &mut Bus) -> u32 {
+        if self.can_take_hardfault() {
+            self.exception_entry(HARDFAULT, pc, r, bus)
+        } else {
+            self.lockup()
+        }
+    }
+
     fn exception_entry(
         &mut self,
-        exception: u8,
+        mut exception: u8,
         return_pc: u32,
         r: &mut [u32; 32],
         bus: &mut Bus,
-    ) -> Result<u32, String> {
-        let vector = bus
-            .nvic
-            .as_ref()
-            .and_then(|nvic| nvic.vector_base())
-            .unwrap_or_else(|| self.vector_base())
-            .checked_add(u32::from(exception) * 4)
-            .ok_or("exception vector address overflow")?;
-        let handler = bus
-            .read_ram::<4>(vector)
-            .map_err(|error| error.to_string())?;
-        if handler & 1 == 0 {
-            return Err(format!(
-                "exception {exception} vector {handler:#010x} does not select Thumb state"
-            ));
-        }
+    ) -> u32 {
         let sp = r[13];
         let stack = (sp & !7).wrapping_sub(32);
-        let xpsr = self.apsr() | (1 << 24) | ((sp & 4) << 7) | u32::from(self.active_exception);
+        let xpsr = self.apsr()
+            | (u32::from(!self.invalid_thumb_state) << 24)
+            | ((sp & 4) << 7)
+            | u32::from(self.active_exception);
         let frame = [r[0], r[1], r[2], r[3], r[12], r[14], return_pc, xpsr];
-        let memory = bus.memory(stack, 32).map_err(|error| error.to_string())?;
-        for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
-            *word = value.to_le_bytes();
+        if let Ok(memory) = bus.memory(stack, 32) {
+            for (word, value) in memory.as_chunks_mut::<4>().0.iter_mut().zip(frame) {
+                *word = value.to_le_bytes();
+            }
+        } else if exception == HARDFAULT && self.invalid_thumb_state && self.active_exception == 0 {
+            // Keep the invalid reset state observable at the HardFault entry
+            // boundary even when the initial MSP has no writable stack.
+        } else if matches!(exception, NMI | HARDFAULT) || !self.can_take_hardfault() {
+            return self.lockup();
+        } else {
+            exception = HARDFAULT;
         }
         if self.uses_psp() {
             self.psp = stack;
@@ -271,20 +310,46 @@ impl Thumb {
                 0xffff_fff1
             };
         }
+        let vector_base = bus
+            .nvic
+            .as_ref()
+            .and_then(Nvic::vector_base)
+            .unwrap_or_else(|| self.vector_base());
+        let read_vector = |exception: u8| {
+            vector_base
+                .checked_add(u32::from(exception) * 4)
+                .and_then(|vector| bus.read_ram::<4>(vector).ok())
+        };
+        let mut handler = read_vector(exception);
+        if handler.is_none() && !matches!(exception, NMI | HARDFAULT) && self.can_take_hardfault() {
+            exception = HARDFAULT;
+            handler = read_vector(exception);
+        }
         self.active_exceptions |= 1 << exception;
         self.active_exception = exception;
-        Ok(handler & !1)
+        self.sleep = Sleep::Running;
+        match handler {
+            Some(handler) => {
+                self.locked_up = false;
+                self.invalid_thumb_state = handler & 1 == 0;
+                handler & !1
+            }
+            None => self.lockup(),
+        }
     }
 
-    fn branch(&mut self, target: u32, r: &mut [u32; 32], bus: &Bus) -> Result<u32, String> {
+    fn branch(
+        &mut self,
+        target: u32,
+        r: &mut [u32; 32],
+        bus: &Bus,
+    ) -> Result<u32, InstructionError> {
         if self.active_exception != 0 && matches!(target, 0xffff_fff1 | 0xffff_fff9 | 0xffff_fffd) {
             let use_psp = target == 0xffff_fffd;
             let stack = if use_psp { self.psp } else { r[13] };
             let mut frame = [0; 8];
             for (index, word) in frame.iter_mut().enumerate() {
-                *word = bus
-                    .read_ram::<4>(stack.wrapping_add(index as u32 * 4))
-                    .map_err(|error| error.to_string())?;
+                *word = bus.read_ram::<4>(stack.wrapping_add(index as u32 * 4))?;
             }
             let [r0, r1, r2, r3, r12, lr, pc, xpsr] = frame;
             let previous = xpsr & 0x1ff;
@@ -295,7 +360,12 @@ impl Thumb {
                 previous != 0 && previous < 64 && remaining & (1 << previous) != 0
             };
             if xpsr & (1 << 24) == 0 || !valid_mode || pc & 1 != 0 {
-                return Err("invalid Cortex-M exception return frame".into());
+                if self.active_exception == NMI && remaining & (1 << HARDFAULT) != 0 {
+                    r[13] = stack.wrapping_add(32);
+                    self.active_exception = HARDFAULT;
+                    self.active_exceptions = remaining;
+                }
+                return Err(InstructionError::GuestFault);
             }
             r[..4].copy_from_slice(&[r0, r1, r2, r3]);
             r[12] = r12;
@@ -313,13 +383,10 @@ impl Thumb {
             self.set_apsr(xpsr);
             self.active_exception = previous as u8;
             self.active_exceptions = remaining;
+            self.invalid_thumb_state = false;
             return Ok(pc);
         }
-        if target & 1 == 0 {
-            return Err(format!(
-                "branch target {target:#010x} does not select Thumb state"
-            ));
-        }
+        self.invalid_thumb_state = target & 1 == 0;
         Ok(target & !1)
     }
 
@@ -354,14 +421,20 @@ impl Thumb {
         }
         self.pending = pending;
         if pending & (1 << NMI) != 0 && self.active_exceptions & (1 << NMI) == 0 {
-            *pc = self.exception_entry(NMI, *pc, r, bus)?;
+            *pc = self.exception_entry(NMI, *pc, r, bus);
             bus.systick.as_mut().unwrap().acknowledge(NMI);
             self.pending &= !(1 << NMI);
             self.sleep = Sleep::Running;
             return Ok(true);
         }
-        if self.active_exceptions & (1 << NMI) != 0 {
+        if self.locked_up || self.active_exceptions & (1 << NMI) != 0 {
             return Ok(false);
+        }
+        if pending & (1 << HARDFAULT) != 0 && self.can_take_hardfault() {
+            *pc = self.exception_entry(HARDFAULT, *pc, r, bus);
+            bus.nvic.as_mut().unwrap().set_hardfault_pending(false);
+            self.pending &= !(1 << HARDFAULT);
+            return Ok(true);
         }
         if self.interrupts_masked && self.sleep != Sleep::Interrupt {
             return Ok(false);
@@ -370,7 +443,11 @@ impl Thumb {
         let current_priority = if self.active_exception == 0 {
             256
         } else {
-            u16::from(priority(self.active_exception))
+            if self.active_exception == HARDFAULT {
+                0
+            } else {
+                u16::from(priority(self.active_exception))
+            }
         };
         let mut selected = bus
             .nvic
@@ -399,7 +476,7 @@ impl Thumb {
             if self.interrupts_masked {
                 return Ok(false);
             }
-            *pc = self.exception_entry(exception, *pc, r, bus)?;
+            *pc = self.exception_entry(exception, *pc, r, bus);
             if matches!(exception, PENDSV | SYSTICK) {
                 bus.systick.as_mut().unwrap().acknowledge(exception);
             } else {
@@ -411,14 +488,44 @@ impl Thumb {
         Ok(false)
     }
 
-    pub fn step(
+    pub fn locked_up(&self) -> bool {
+        self.locked_up
+    }
+
+    pub(crate) fn step(
         &mut self,
         pc: &mut u32,
         r: &mut [u32; 32],
         bus: &mut Bus,
         output: &mut impl Write,
-    ) -> Result<bool, String> {
-        let inst = bus.read_ram::<2>(*pc).map_err(|error| error.to_string())?;
+    ) -> Result<ThumbStep, String> {
+        if self.locked_up {
+            return Ok(ThumbStep::Exception);
+        }
+        let result = if self.invalid_thumb_state {
+            Err(InstructionError::GuestFault)
+        } else {
+            self.instruction(pc, r, bus, output)
+        };
+        match result {
+            Ok(true) => Ok(ThumbStep::Retired),
+            Ok(false) => Ok(ThumbStep::Breakpoint),
+            Err(InstructionError::Host(error)) => Err(error),
+            Err(InstructionError::GuestFault) => {
+                *pc = self.hardfault(*pc, r, bus);
+                Ok(ThumbStep::Exception)
+            }
+        }
+    }
+
+    fn instruction(
+        &mut self,
+        pc: &mut u32,
+        r: &mut [u32; 32],
+        bus: &mut Bus,
+        output: &mut impl Write,
+    ) -> Result<bool, InstructionError> {
+        let inst = bus.read_ram::<2>(*pc)?;
         let unsupported = || format!("unsupported Thumb instruction {inst:#06x}");
         let mut next = pc.wrapping_add(2);
         let architectural_pc = pc.wrapping_add(4);
@@ -502,11 +609,7 @@ impl Thumb {
                 let rm = ((inst >> 3) & 15) as usize;
                 let target = if rm == 15 { architectural_pc } else { r[rm] };
                 if inst & 0x80 != 0 {
-                    if target & 1 == 0 {
-                        return Err(format!(
-                            "branch target {target:#010x} does not select Thumb state"
-                        ));
-                    }
+                    self.invalid_thumb_state = target & 1 == 0;
                     r[14] = next | 1;
                     next = target & !1;
                 } else {
@@ -515,8 +618,7 @@ impl Thumb {
             }
             0x4800..=0x4fff => {
                 let address = (architectural_pc & !3).wrapping_add((inst & 0xff) << 2);
-                r[((inst >> 8) & 7) as usize] =
-                    bus.read::<4>(address).map_err(|error| error.to_string())?;
+                r[((inst >> 8) & 7) as usize] = bus.read::<4>(address)?;
             }
             0x5000..=0x5fff => {
                 let offset = ((inst >> 6) & 7) as usize;
@@ -524,15 +626,13 @@ impl Thumb {
                 let operation = (inst >> 9) & 7;
                 if operation < 3 {
                     let width = [4, 2, 1][operation as usize];
-                    bus.write(address, width, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.write(address, width, r[rd], output)?;
                 } else {
                     let value = match operation {
                         3 | 6 => bus.read::<1>(address),
                         5 | 7 => bus.read::<2>(address),
                         _ => bus.read::<4>(address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                    }?;
                     r[rd] = match operation {
                         3 => (value as i8 as i32) as u32,
                         7 => (value as i16 as i32) as u32,
@@ -548,25 +648,22 @@ impl Thumb {
                 };
                 let address = r[rn].wrapping_add(((inst >> 6) & 31) * width);
                 if inst & 0x800 == 0 {
-                    bus.write(address, width as usize, r[rd], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.write(address, width as usize, r[rd], output)?;
                 } else {
                     r[rd] = match width {
                         1 => bus.read::<1>(address),
                         2 => bus.read::<2>(address),
                         _ => bus.read::<4>(address),
-                    }
-                    .map_err(|error| error.to_string())?;
+                    }?;
                 }
             }
             0x9000..=0x9fff => {
                 let register = ((inst >> 8) & 7) as usize;
                 let address = r[13].wrapping_add((inst & 0xff) << 2);
                 if inst & 0x800 == 0 {
-                    bus.write(address, 4, r[register], output)
-                        .map_err(|error| error.to_string())?;
+                    bus.write(address, 4, r[register], output)?;
                 } else {
-                    r[register] = bus.read::<4>(address).map_err(|error| error.to_string())?;
+                    r[register] = bus.read::<4>(address)?;
                 }
             }
             0xa000..=0xafff => {
@@ -594,7 +691,7 @@ impl Thumb {
                 let bytes = mask.count_ones() * 4;
                 let sp = r[13];
                 if sp & 3 != 0 {
-                    return Err(format!("unaligned stack pointer {sp:#010x}"));
+                    return Err(InstructionError::GuestFault);
                 }
                 if pop {
                     let mut restored = *r;
@@ -603,9 +700,7 @@ impl Thumb {
                     while mask != 0 {
                         let register = mask.trailing_zeros() as usize;
                         mask &= mask - 1;
-                        let value = bus
-                            .read_ram::<4>(address)
-                            .map_err(|error| error.to_string())?;
+                        let value = bus.read_ram::<4>(address)?;
                         if register == 15 {
                             target = Some(value);
                         } else {
@@ -620,9 +715,7 @@ impl Thumb {
                     *r = restored;
                 } else {
                     let new_sp = sp.wrapping_sub(bytes);
-                    let stack = bus
-                        .memory(new_sp, bytes as usize)
-                        .map_err(|error| error.to_string())?;
+                    let stack = bus.memory(new_sp, bytes as usize)?;
                     for word in stack.as_chunks_mut::<4>().0 {
                         let register = mask.trailing_zeros() as usize;
                         mask &= mask - 1;
@@ -647,7 +740,7 @@ impl Thumb {
                     0 => value.swap_bytes(),
                     1 => ((value & 0xff00_ff00) >> 8) | ((value & 0x00ff_00ff) << 8),
                     3 => ((value as u16).swap_bytes() as i16 as i32) as u32,
-                    _ => return Err(unsupported()),
+                    _ => return Err(unsupported().into()),
                 };
             }
             0xbe00..=0xbeff => return Ok(false),
@@ -666,28 +759,23 @@ impl Thumb {
                 let load = inst & 0x800 != 0;
                 let count = registers.count_ones();
                 if address & 3 != 0 {
-                    return Err(format!(
-                        "unaligned multiple-register transfer at {address:#010x}"
-                    ));
+                    return Err(InstructionError::GuestFault);
                 }
                 let selected = (0..8).filter(|register| registers & (1 << register) != 0);
                 if load {
                     let mut values = *r;
                     for (index, register) in selected.enumerate() {
-                        values[register] = bus
-                            .read_ram::<4>(address.wrapping_add(index as u32 * 4))
-                            .map_err(|error| error.to_string())?;
+                        values[register] =
+                            bus.read_ram::<4>(address.wrapping_add(index as u32 * 4))?;
                     }
                     *r = values;
                 } else {
                     if registers & (1 << base_register) != 0
                         && registers.trailing_zeros() as usize != base_register
                     {
-                        return Err(unsupported());
+                        return Err(unsupported().into());
                     }
-                    let memory = bus
-                        .memory(address, count as usize * 4)
-                        .map_err(|error| error.to_string())?;
+                    let memory = bus.memory(address, count as usize * 4)?;
                     for (word, register) in memory.as_chunks_mut::<4>().0.iter_mut().zip(selected) {
                         *word = r[register].to_le_bytes();
                     }
@@ -702,15 +790,15 @@ impl Thumb {
                 }
             }
             0xdf00..=0xdfff if self.active_exception == 0 && !self.interrupts_masked => {
-                next = self.exception_entry(11, next, r, bus)?;
+                next = self.exception_entry(11, next, r, bus);
             }
-            0xdf00..=0xdfff => return Err("Cortex-M SVC escalation is unsupported".into()),
+            0xde00..=0xdfff => return Err(InstructionError::GuestFault),
             0xe000..=0xe7ff => {
                 let offset = (((inst << 21) as i32) >> 20) as u32;
                 next = architectural_pc.wrapping_add(offset);
             }
             0xf000..=0xf7ff => {
-                let low = bus.read_ram::<2>(next).map_err(|error| error.to_string())?;
+                let low = bus.read_ram::<2>(next)?;
                 if low & 0xd000 == 0xd000 {
                     let sign = (inst >> 10) & 1;
                     let i1 = 1 ^ (((low >> 13) & 1) ^ sign);
@@ -732,7 +820,7 @@ impl Thumb {
                         (0xf3ef, 0x8000..=0x8fff) => {
                             let register = ((low >> 8) & 15) as usize;
                             if matches!(register, 13 | 15) {
-                                return Err(unsupported());
+                                return Err(unsupported().into());
                             }
                             r[register] = self.system_read(sysm, r).ok_or_else(unsupported)?;
                         }
@@ -741,15 +829,15 @@ impl Thumb {
                             if matches!(register, 13 | 15)
                                 || !self.system_write(sysm, r[register], r)
                             {
-                                return Err(unsupported());
+                                return Err(unsupported().into());
                             }
                         }
-                        _ => return Err(unsupported()),
+                        _ => return Err(unsupported().into()),
                     }
                     next = architectural_pc;
                 }
             }
-            _ => return Err(unsupported()),
+            _ => return Err(unsupported().into()),
         }
         *pc = next;
         Ok(true)
@@ -759,6 +847,202 @@ impl Thumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fault_fixture() -> (Bus, Thumb, [u32; 32]) {
+        let mut bus = Bus::default();
+        bus.map_ram(0, 0x1000).unwrap();
+        bus.map_nvic(0xc0, None).unwrap();
+        bus.set_nvic_name("nvic".into());
+        bus.map_systick().unwrap();
+        bus.map_ram(0x100000, 0x1000).unwrap();
+        bus.faulting_accesses = Some(0x100000..=0x100fff);
+        let mut registers = [0; 32];
+        registers[13] = 0x1000;
+        (bus, Thumb::new(Some(0)), registers)
+    }
+
+    #[test]
+    fn renode_invalid_reset_state_enters_lockup_after_two_steps() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let (sp, mut pc, lr) = thumb.reset(&bus);
+        registers[13] = sp;
+        registers[14] = lr;
+        let mut output = std::io::sink();
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!(
+            (pc, thumb.active_exception, thumb.locked_up()),
+            (0, HARDFAULT, false)
+        );
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!((pc, thumb.locked_up()), (LOCKUP_PC, true));
+    }
+
+    #[test]
+    fn renode_precise_load_hardfault_then_lockup_nmi_and_reset() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        for (address, opcode) in [(0x200, 0x6802), (0x202, 0x2122), (0x340, 0x6802)] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        bus.write(4, 4, 0x201, &mut output).unwrap();
+        bus.write(8, 4, 0x381, &mut output).unwrap();
+        bus.write(12, 4, 0x341, &mut output).unwrap();
+        bus.write(0, 4, 0x1000, &mut output).unwrap();
+        registers[0] = 0x100000;
+        registers[1] = 0x11;
+        registers[2] = 0xa5a5a5a5;
+        let mut pc = 0x200;
+
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!((pc, thumb.active_exception), (0x340, HARDFAULT));
+        assert_eq!((registers[1], registers[2]), (0x11, 0xa5a5a5a5));
+        assert_eq!(registers[13], 0xfe0);
+        assert_eq!(bus.read::<4>(0xff8).unwrap(), 0x200);
+
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert!(thumb.locked_up());
+        for _ in 0..10 {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Exception)
+            );
+        }
+        assert_eq!(pc, LOCKUP_PC);
+        bus.pend_nvic_exception("nvic", 2).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        assert_eq!(
+            (pc, thumb.active_exception, thumb.locked_up()),
+            (0x380, NMI, false)
+        );
+        assert_eq!(bus.read::<4>(0xfd8).unwrap(), LOCKUP_PC);
+        assert_eq!(thumb.reset(&bus), (0x1000, 0x200, 0));
+        assert!(!thumb.locked_up());
+    }
+
+    #[test]
+    fn renode_nmi_and_hardfault_faulting_vectors_lock_up() {
+        for exception in [NMI, HARDFAULT] {
+            let (mut bus, mut thumb, mut registers) = fault_fixture();
+            let mut output = std::io::sink();
+            let mut pc = 0x200;
+            bus.write(pc, 2, 0xe7fe, &mut output).unwrap();
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Retired)
+            );
+            bus.nvic.as_mut().unwrap().set_vector_base(0x100000);
+            bus.pend_nvic_exception("nvic", u32::from(exception))
+                .unwrap();
+            assert!(
+                thumb
+                    .service_interrupts(&mut pc, &mut registers, &mut bus)
+                    .unwrap()
+            );
+            assert_eq!(
+                (pc, thumb.active_exception, thumb.locked_up()),
+                (LOCKUP_PC, exception, true)
+            );
+            assert_eq!((registers[13], registers[14]), (0xfe0, 0xfffffff9));
+        }
+    }
+
+    #[test]
+    fn renode_invalid_nmi_return_into_hardfault_locks_up() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        bus.write(8, 4, 0x381, &mut output).unwrap();
+        bus.write(12, 4, 0x341, &mut output).unwrap();
+        bus.write(0x200, 2, 0x6802, &mut output).unwrap();
+        for (address, opcode) in [(0x380, 0x2000), (0x382, 0x9007), (0x384, 0x4770)] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        registers[0] = 0x100000;
+        let mut pc = 0x200;
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        assert_eq!(pc, 0x340);
+        bus.pend_nvic_exception("nvic", 2).unwrap();
+        assert!(
+            thumb
+                .service_interrupts(&mut pc, &mut registers, &mut bus)
+                .unwrap()
+        );
+        for expected in [ThumbStep::Retired, ThumbStep::Retired, ThumbStep::Exception] {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(expected)
+            );
+        }
+        assert_eq!(
+            (pc, registers[13], thumb.active_exception),
+            (LOCKUP_PC, 0xfe0, HARDFAULT)
+        );
+        assert!(thumb.locked_up());
+    }
+
+    #[test]
+    fn hardfault_can_return_to_the_repaired_stacked_pc() {
+        let (mut bus, mut thumb, mut registers) = fault_fixture();
+        let mut output = std::io::sink();
+        for (address, opcode) in [
+            (0x200, 0x6802), // ldr r2, [r0]
+            (0x202, 0x2122), // movs r1, #0x22
+            (0x340, 0x9106), // str r1, [sp, #24]
+            (0x342, 0x4770), // bx lr
+        ] {
+            bus.write(address, 2, opcode, &mut output).unwrap();
+        }
+        bus.write(12, 4, 0x341, &mut output).unwrap();
+        registers[0] = 0x100000;
+        registers[1] = 0x202;
+        let mut pc = 0x200;
+        assert_eq!(
+            thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+            Ok(ThumbStep::Exception)
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                thumb.step(&mut pc, &mut registers, &mut bus, &mut output),
+                Ok(ThumbStep::Retired)
+            );
+        }
+        assert_eq!(
+            (pc, registers[1], registers[13], thumb.active_exception),
+            (0x204, 0x22, 0x1000, 0)
+        );
+    }
+
+    #[test]
+    fn renode_fault_on_initial_msp_or_reset_pc_locks_up() {
+        for fault_offset in [0, 4] {
+            let (mut bus, _, _) = fault_fixture();
+            let mut thumb = Thumb::new(Some(0x100000));
+            let address = 0x100000 + fault_offset;
+            bus.faulting_accesses = Some(address..=address);
+            assert_eq!(thumb.reset(&bus), (0, LOCKUP_PC, u32::MAX));
+            assert!(thumb.locked_up());
+            assert_eq!(thumb.active_exception, 0);
+            assert_eq!(thumb.active_exceptions, 1 << HARDFAULT);
+        }
+    }
 
     // Instructions from the ELF in tlib/arm/thumb2-data-processing-instr.robot.
     #[test]
@@ -784,6 +1068,7 @@ mod tests {
                 thumb
                     .step(&mut pc, &mut registers, &mut bus, &mut output)
                     .unwrap()
+                    == ThumbStep::Retired
             );
             assert_eq!((pc, registers[14]), (next, link));
         }
@@ -797,6 +1082,7 @@ mod tests {
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
                 .unwrap()
+                == ThumbStep::Retired
         );
         assert_eq!(pc, 0x1a22);
         assert_eq!(registers[0] & 0xe000_0000, 0x8000_0000);
@@ -907,9 +1193,7 @@ mod tests {
             registers[0] = EXC_RETURN;
             registers[13] = 0x800;
             if handler_mode {
-                pc = thumb
-                    .exception_entry(16, pc, &mut registers, &mut bus)
-                    .unwrap();
+                pc = thumb.exception_entry(16, pc, &mut registers, &mut bus);
                 assert_eq!(registers[14], EXC_RETURN);
             }
             let sp = registers[13];
@@ -1120,13 +1404,15 @@ mod tests {
         let mut pc = 0x60;
         let mut output = std::io::sink();
         for _ in 0..3 {
-            assert!(thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap());
+            assert!(
+                thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap() == ThumbStep::Retired
+            );
         }
         assert_eq!((pc, r[13], r[14]), (0x80, 0x2000_0200, 0xffff_fffd));
         assert_eq!(thumb.system_read(9, &r), Some(0x2000_0060));
         assert_eq!(bus.read_ram::<4>(0x2000_0078).unwrap(), 0x6a);
         assert_eq!(bus.read_ram::<4>(0x2000_01e0).unwrap(), 0);
-        assert!(thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap());
+        assert!(thumb.step(&mut pc, &mut r, &mut bus, &mut output).unwrap() == ThumbStep::Retired);
         assert_eq!((pc, r[13]), (0x6a, 0x2000_0084));
         assert_eq!(thumb.system_read(8, &r), Some(0x2000_0200));
         assert_eq!(thumb.system_read(20, &r), Some(2));
@@ -1154,6 +1440,7 @@ mod tests {
                 thumb
                     .step(&mut pc, &mut r, &mut bus, &mut std::io::sink())
                     .unwrap()
+                    == ThumbStep::Retired
             );
         }
         assert_eq!(&r[..8], &[0x48, 1, 42, 0x48, 1, 42, 1, 0x80]);
@@ -1184,6 +1471,7 @@ mod tests {
                 thumb
                     .step(&mut pc, &mut registers, &mut bus, &mut std::io::sink())
                     .unwrap()
+                    == ThumbStep::Retired
             );
         }
         assert_eq!(registers[8], 0xffff_ff81);
@@ -1296,6 +1584,7 @@ mod tests {
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
                 .unwrap()
+                == ThumbStep::Retired
         );
         assert_eq!(pc, 0x80);
         assert_eq!(registers[13], 0x2000_00e0);
@@ -1306,12 +1595,14 @@ mod tests {
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
                 .unwrap()
+                == ThumbStep::Retired
         );
         assert!(thumb.zero);
         assert!(
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
                 .unwrap()
+                == ThumbStep::Retired
         );
         assert_eq!(pc, 0x62);
         assert_eq!(registers[0], 42);
@@ -1387,6 +1678,7 @@ mod wait_tests {
             thumb
                 .step(&mut pc, &mut registers, &mut bus, &mut output)
                 .unwrap()
+                == ThumbStep::Retired
         );
         assert_eq!(pc, 2);
         assert!(thumb.sleeping());

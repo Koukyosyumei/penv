@@ -590,7 +590,7 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     fs::write(&firmware, &image).unwrap();
     let invoke = || {
         Command::new(env!("CARGO_BIN_EXE_penv"))
-            .args(["run", "--raw", "--platform"])
+            .args(["run", "--max-steps", "1000", "--raw", "--platform"])
             .arg(&board)
             .arg(&firmware)
             .output()
@@ -686,8 +686,8 @@ uart: UART.LiteX_UART @ sysbus 0x40000000
     assert_eq!(subroutine.stdout, b"A");
     assert!(arm_elf.status.success(), "{arm_elf:?}");
     assert_eq!(arm_elf.stdout, b"E");
-    assert!(!invalid.status.success());
-    assert!(String::from_utf8_lossy(&invalid.stderr).contains("must select Thumb state"));
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("Cortex-M lockup at pc=0xeffffffe"));
 }
 
 #[test]

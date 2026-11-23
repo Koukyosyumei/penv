@@ -449,6 +449,9 @@ fn run() -> Result<ExitCode, String> {
             machine.primary.pc
         );
     }
+    if machine.cortex_m_locked_up() {
+        eprintln!("penv: Cortex-M lockup at pc={:#010x}", machine.primary.pc);
+    }
     if stop == Stop::Limit {
         eprintln!(
             "penv: instruction limit reached at pc={:#010x}",
