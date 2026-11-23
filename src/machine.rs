@@ -1605,4 +1605,74 @@ mod tests {
         assert_eq!(result.unwrap().0, Stop::Limit);
         assert_eq!(value, 0xffff, "upstream assertion line {value}");
     }
+
+    fn f407_mpu_program(code: &[u8]) -> Machine {
+        let root = std::env::var_os("PENV_F407_TIMED_RENODE_ROOT").expect("set Renode root");
+        let root = std::path::Path::new(&root);
+        let mut machine = crate::platform::load(
+            &root.join("platforms/boards/stm32f4_discovery-kit.repl"),
+            Some(root),
+        )
+        .unwrap();
+        machine.bus.write_bytes(0x0800_0000, code).unwrap();
+        machine.set_named_entry("cpu", 0x0800_0000).unwrap();
+        machine.validate_entry().unwrap();
+        machine.primary.registers[13] = 0x2000_0400;
+        machine
+    }
+
+    fn f407_mpu_region(machine: &mut Machine, index: u32, base: u32, rasr: u32) {
+        let mut out = std::io::sink();
+        machine.bus.write(0xe000_ed98, 4, index, &mut out).unwrap();
+        machine
+            .bus
+            .write(0xe000_ed9c, 4, base | 0x10 | index, &mut out)
+            .unwrap();
+        machine.bus.write(0xe000_eda0, 4, rasr, &mut out).unwrap();
+    }
+
+    fn f407_mpu_background(privdefena: bool) -> u32 {
+        // ldr r0, =0x20001000; ldr r1, [r0]; literal pool.
+        let mut machine = f407_mpu_program(&[0x00, 0x48, 0x01, 0x68, 0x00, 0x10, 0x00, 0x20]);
+        f407_mpu_region(&mut machine, 0, 0x0800_0000, 0x0302_001f);
+        f407_mpu_region(&mut machine, 1, 0x2000_0000, 0x1302_0015);
+        let mut out = std::io::sink();
+        machine
+            .bus
+            .write(0xe000_ed94, 4, 1 | (u32::from(privdefena) << 2), &mut out)
+            .unwrap();
+        machine.run(2, &mut out).unwrap();
+        machine.bus.read::<4>(0xe000_ed28).unwrap() & 0xff
+    }
+
+    #[test]
+    #[ignore = "requires fixed Renode Discovery REPL"]
+    fn renode_f407_mpu_privileged_background_enabled() {
+        assert_eq!(f407_mpu_background(true), 0);
+    }
+
+    #[test]
+    #[ignore = "requires fixed Renode Discovery REPL"]
+    fn renode_f407_mpu_privileged_background_disabled() {
+        assert_eq!(f407_mpu_background(false), 0x82);
+    }
+
+    #[test]
+    #[ignore = "requires fixed Renode Discovery REPL"]
+    fn renode_f407_mpu_small_region_overrides_page() {
+        // Two load pairs for 0x20001000 and 0x20001020, then literal pool.
+        let mut machine = f407_mpu_program(&[
+            1, 0x48, 1, 0x68, 1, 0x48, 1, 0x68, 0, 0x10, 0, 0x20, 0x20, 0x10, 0, 0x20,
+        ]);
+        f407_mpu_region(&mut machine, 0, 0, 0x0300_003f);
+        f407_mpu_region(&mut machine, 1, 0x2000_1020, 0x0000_0009);
+        let mut out = std::io::sink();
+        machine.bus.write(0xe000_ed94, 4, 1, &mut out).unwrap();
+        machine.run(2, &mut out).unwrap();
+        assert_eq!(machine.bus.read::<4>(0xe000_ed28).unwrap() & 0xff, 0);
+        machine.run(2, &mut out).unwrap();
+        let mmfsr = machine.bus.read::<4>(0xe000_ed28).unwrap() & 0xff;
+        let mmfar = machine.bus.read::<4>(0xe000_ed34);
+        assert_eq!((mmfsr, mmfar.ok()), (0x82, Some(0x2000_1020)));
+    }
 }

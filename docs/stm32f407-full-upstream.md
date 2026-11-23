@@ -1761,3 +1761,25 @@ PENV_MPU_DIAGNOSTIC_STEPS=1000000 tests/stm32f407-mpu-zephyr.sh "$work" > "$work
 
 別件の ArrayMemory は共有担当が起動前スナップショットまで実装しましたが、
 元の Neonkey ELF の UART 完了行は同担当の検証でも未到達です。台帳に反映しました。
+
+### Discovery の MPU 領域と背景マップ
+
+固定 `mpu.robot:107–118` の3件を、未変更 Discovery REPL、元の MPU 領域、
+PC、SP、ロード命令とステップ数で検証します。
+
+```sh
+work=target/stm32f407-mpu-regions
+mkdir -p "$work"
+PENV_F407_TIMED_RENODE_ROOT=../renode cargo test renode_f407_mpu_ -- --ignored --nocapture > "$work/cases.log" 2>&1
+```
+
+`PRIVDEFENA=1` は期待どおり `MMFSR=0` でした。`PRIVDEFENA=0` と
+小領域の優先ケースは、期待する `MMFSR=0x82` が得られませんでした。
+小領域ケースでは `MMFAR=0x20001020` も読めません。
+背景マップの有効ケースを合格とし、保護違反の2件を未達としました。
+同じ MPU 共有依頼に再現を追加しました。
+
+別経路の `mpu.robot:85` は、配布 ELF を参照して元の
+`cpu TranslateAddress 0xE000E000 Write` を含めた代表 RESC
+`$work/busyloop.resc` で、モニターコマンド解決時に停止します。
+元のユーザーモードとログ条件は未検証です。
