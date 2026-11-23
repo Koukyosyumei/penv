@@ -59,6 +59,7 @@ Options:
   --map-ram BASE:SIZE Add a RAM region in bytes (decimal or 0x-prefixed)
   --load-binary [CPU@]BASE:PATH  Load a flat companion image into RAM (repeatable)
   --move-ram CPU@OLD:NEW  Move an exclusive CPU RAM window before execution
+  --write-memory [CPU@]BASE:WIDTH:VALUE  Write a little-endian RAM value during setup
   --read-memory-now [CPU@]BASE:WIDTH  Read RAM in setup argument order
   --read-memory [CPU@]BASE:WIDTH  Report a RAM value after execution (repeatable)
   --dtb BASE:PATH    Load an RV64 boot DTB and pass its address in a1
@@ -91,7 +92,34 @@ type RamRead = (Option<String>, u64, usize);
 enum SetupMemory {
     Load(PathBuf, u64, Option<String>),
     Read(RamRead),
+    Write(RamRead, u64),
     Move(String, u64, u64),
+}
+
+fn ram_width(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|width| matches!(width, 1 | 2 | 4 | 8))
+        .ok_or_else(|| "memory access width must be 1, 2, 4 or 8 bytes".into())
+}
+
+fn write_ram(
+    machine: &mut Machine,
+    (cpu, address, width): &RamRead,
+    value: u64,
+) -> Result<(), String> {
+    let hart = cpu
+        .as_deref()
+        .map(|cpu| machine.rv64_hart_by_name(cpu))
+        .transpose()?;
+    let data = match hart {
+        Some(hart) => machine.bus.cpu_memory64(hart, *address, *width),
+        None => machine.bus.memory64(*address, *width),
+    }
+    .ok_or_else(|| format!("unmapped RAM write at {address:#018x} ({width} bytes)"))?;
+    data.copy_from_slice(&value.to_le_bytes()[..*width]);
+    Ok(())
 }
 
 fn report_ram(machine: &Machine, (cpu, address, width): &RamRead) -> Result<(), String> {
@@ -293,7 +321,7 @@ fn run() -> Result<ExitCode, String> {
             }
             Some(
                 option @ ("--load-binary" | "--read-memory" | "--read-memory-now" | "--move-ram"
-                | "--dtb"),
+                | "--write-memory" | "--dtb"),
             ) => {
                 let error = || match option {
                     "--load-binary" => "--load-binary requires [CPU@]BASE:PATH",
@@ -301,6 +329,7 @@ fn run() -> Result<ExitCode, String> {
                         "memory read requires [CPU@]BASE:WIDTH"
                     }
                     "--move-ram" => "--move-ram requires CPU@OLD:NEW",
+                    "--write-memory" => "--write-memory requires [CPU@]BASE:WIDTH:VALUE",
                     _ => "--dtb requires BASE:PATH",
                 };
                 let value = args
@@ -334,12 +363,16 @@ fn run() -> Result<ExitCode, String> {
                         address,
                         parse_address64(path)?,
                     ));
+                } else if option == "--write-memory" {
+                    let (width, value) = path.split_once(':').ok_or_else(error)?;
+                    let width = ram_width(width)?;
+                    let value = parse_address64(value)?;
+                    if value > u64::MAX >> (64 - width * 8) {
+                        return Err("--write-memory value exceeds the requested width".into());
+                    }
+                    setup_memory.push(SetupMemory::Write((cpu, address, width), value));
                 } else {
-                    let width = path
-                        .parse::<usize>()
-                        .ok()
-                        .filter(|width| matches!(width, 1 | 2 | 4 | 8))
-                        .ok_or("--read-memory width must be 1, 2, 4 or 8 bytes")?;
+                    let width = ram_width(path)?;
                     if option == "--read-memory-now" {
                         setup_memory.push(SetupMemory::Read((cpu, address, width)));
                     } else {
@@ -572,6 +605,7 @@ fn run() -> Result<ExitCode, String> {
                         .map_err(|e| format!("{}: {e}", path.display()))?;
                 }
                 SetupMemory::Read(read) => report_ram(&machine, read)?,
+                SetupMemory::Write(write, value) => write_ram(&mut machine, write, *value)?,
                 SetupMemory::Move(cpu, old, new) => {
                     let hart = machine.rv64_hart_by_name(cpu)?;
                     machine.bus.move_cpu_ram_alias(hart, *old, *new)?;
