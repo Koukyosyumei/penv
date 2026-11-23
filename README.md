@@ -137,7 +137,7 @@ target/release/penv run --platform ../renode/platforms/cpus/nrf52840.repl \
   --max-steps 130000000 "$assets/watchdog.elf"
 ```
 
-`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・I²S・PDM・RADIO・RNG・ECB・EGU 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
+`Watchdog sample application` に続いて 5 回給餌し、`Waiting for reset...` の後に起動バナーと `Watchdog sample application` が再表示されます。デバッグ停止中の Watchdog と POWER のリセット理由レジスターは未実装です。GPIOTE はモデル内の GPIO レベルを使用し、外部ピン入力の接続は未実装です。AAR/CCM の固定 PPI チャネル、UARTE・TWI・SPI READY・TIMER COMPARE・RTC・I²S・PDM・RADIO・RNG・ECB・EGU 以外をイベント源とする PPI、UART の SHORTS・フロー制御・転送タイミング、MPU の非特権モードとフォルト例外配送も未実装です。サポートする MPU 設定でアクセス違反が起きると実行を診断付きで停止します。
 
 TWI0/TWI1 は 7 ビットアドレスのレガシー TWI マスターモードです。REPL の NVIC IRQ 3/4 に接続し、アドレス NACK、受信・送信・停止・一時停止イベントと割り込み、繰り返し START、受信時の BB_STOP/BB_SUSPEND に対応します。`Memory.GenericI2cEeprom @ twi1 0x50` のように EEPROM を接続できます。TWIM EasyDMA、スレーブモード、ピン波形とバス速度の再現は未実装です。
 
@@ -157,7 +157,7 @@ tests/nrf52840-spi.sh target/release/penv ../renode
 
 このスクリプトは、上流の SPI2 配線にループバックを追加した一時 REPL でベアメタル ARM ELF を起動します。2 バイトを連続送信し、NVIC 第 2 バンクの IRQ 35 を経て両バイトを順番に読み出し、UART に `SPI OK` を出力します。Shell のリセット回帰でも SPI2 を含めます。
 
-TIMER0–4 は上流 REPL の比較チャネル数（4 または 6）を取り込みます。タイマーモードは 16 MHz を PRESCALER で分周し、1 ステップあたり 10 ns で進みます。COUNT によるカウンターモード、ビット幅、CAPTURE、COMPARE イベント、対応する NVIC IRQ、COMPARE_CLEAR/STOP ショートカットとプログラマブル PPI に対応します。低消費電力カウンターモードは通常のカウンターモードと同じ動作です。固定 PPI チャネルとクロックの電源状態によるタイマーの停止は未実装です。
+TIMER0–4 は上流 REPL の比較チャネル数（4 または 6）を取り込みます。タイマーモードは 16 MHz を PRESCALER で分周し、1 ステップあたり 10 ns で進みます。COUNT によるカウンターモード、ビット幅、CAPTURE、COMPARE イベント、対応する NVIC IRQ、COMPARE_CLEAR/STOP ショートカットとプログラマブル PPI に対応します。低消費電力カウンターモードは通常のカウンターモードと同じ動作です。クロックの電源状態によるタイマーの停止は未実装です。
 
 ```sh
 # clang と ld.lld が必要
@@ -205,7 +205,16 @@ tests/nrf52840-radio.sh target/release/penv ../renode
 
 検証 ELF は IRQ 1 で送信と受信の完了を確認し、送信側の元データを書き換えた後も受信データが一致すること、書き込みがバッファ境界を越えないこと、空の受信では END が発生しないことを確認して `RADIO OK` を出力します。RF 波形、パケットの送信時間、物理 CRC、アドレスフィルタリング、共有無線媒体と複数ノードは未実装です。
 
-上流の Bluetooth central ELF（`nrf52840--zephyr-bluetooth_central_hr.elf-s_3380332-316e27f81dcda3c2b0e7f2c3516001e7b27ad051`）を、未変更の上流 REPL で試すと、以前停止した RNG アクセス（PC `0x0001aa2e`、レジスター `0x4000d504`）を通過して Zephyr の起動バナーを表示します。Thumb-2 のテーブル分岐（TBB/TBH）を追加した後は、`radio_setup` の PC `0x00019192` が書き込む未実装の `0x40000e00` で停止します。上流テストに記載の peripheral ELF は取得先が HTTP 404 を返し、Bluetooth 接続の検証には未到達です。
+上流 Bluetooth central ELF は未変更の上流 REPL で `Bluetooth initialized` と `Scanning successfully started` を表示します。Zephyr の `hal_radio_ram_prio_setup()` が使う AMLI RAMPRI（`0x40000e00–0x40000e34`）は読み書きを保持します。RAM アクセスは逐次実行されるため、バス競合による遅延はモデル化しません。`radio_reset()` の errata レジスターと、PHY、パケット、アドレス、CRC 設定の読み書き、RSSI とビットカウンターのイベントを追加しました。RTC の EVTEN で有効にしたイベントと、RADIO・TIMER・RTC 間の固定 PPI チャネル（20–22、26–31）も利用できます。Cortex-M4 側では CCR.UNALIGN_TRP に従う通常の RAM アクセスと、初期化に必要な Thumb-2 命令を追加しました。[Zephyr nRF52840 RADIO HAL](https://github.com/zephyrproject-rtos/zephyr/blob/30b4c29aaf5d/subsys/bluetooth/controller/ll_sw/nordic/hal/nrf5/radio/radio_nrf52840.h)
+
+```sh
+central=nrf52840--zephyr-bluetooth_central_hr.elf-s_3380332-316e27f81dcda3c2b0e7f2c3516001e7b27ad051
+curl -fL "https://dl.antmicro.com/projects/renode/$central" -o "$assets/central.elf"
+printf '%s  %s\n' 316e27f81dcda3c2b0e7f2c3516001e7b27ad051 "$assets/central.elf" | sha1sum -c -
+tests/nrf52840-ble-central.sh target/release/penv ../renode "$assets/central.elf"
+```
+
+この回帰は上流 Bluetooth ケースの central 初期化とスキャン開始を判定します。その後、最初のスキャン処理は PC `0x000199fe` の AAR.ENABLE（`0x4000f500`）へのアクセスで停止します。AAR/CCM、共有無線媒体、複数ノード接続は未実装です。
 
 RNG は START/STOP、VALUE、VALRDY イベント、NVIC IRQ 13、プログラマブル PPI、VALRDY_STOP ショートカットに対応します。VALUE と VALRDY は STOP 後も保持され、イベントはゲストがクリアします。固定シードの疑似乱数を、シミュレーション上の 64 µs 間隔（DERCEN を設定すると 128 µs）で生成します。DERCEN は生成間隔に反映し、物理エントロピーや統計的偏りの補正はモデル化していません。この出力は暗号用途に使用できません。
 

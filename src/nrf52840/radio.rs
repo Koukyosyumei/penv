@@ -5,13 +5,29 @@ const ADDRESS: u32 = 1 << 1;
 const PAYLOAD: u32 = 1 << 2;
 const END: u32 = 1 << 3;
 const DISABLED: u32 = 1 << 4;
+const DEVICE_MATCH: u32 = 1 << 5;
+const DEVICE_MISS: u32 = 1 << 6;
+const RSSI_END: u32 = 1 << 7;
+const BIT_MATCH: u32 = 1 << 10;
 const CRC_OK: u32 = 1 << 12;
 const TX_READY: u32 = 1 << 21;
 const RX_READY: u32 = 1 << 22;
 const PHY_END: u32 = 1 << 27;
-const EVENTS: u32 =
-    READY | ADDRESS | PAYLOAD | END | DISABLED | CRC_OK | TX_READY | RX_READY | PHY_END;
-const SHORTS: u32 = (1 << 0) | (1 << 1) | (1 << 18) | (1 << 19) | (1 << 20);
+const EVENTS: u32 = READY
+    | ADDRESS
+    | PAYLOAD
+    | END
+    | DISABLED
+    | DEVICE_MATCH
+    | DEVICE_MISS
+    | RSSI_END
+    | BIT_MATCH
+    | CRC_OK
+    | TX_READY
+    | RX_READY
+    | PHY_END;
+const SHORTS: u32 =
+    (1 << 0) | (1 << 1) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 18) | (1 << 19) | (1 << 20);
 
 #[derive(Clone, Copy)]
 enum State {
@@ -37,6 +53,12 @@ pub(super) struct Radio {
     pointer: u32,
     config: [u32; 4],
     tx_power: u32,
+    errata: u32,
+    mode_config: u32,
+    link_config: [u32; 11],
+    device_addresses: [u32; 17],
+    bit_compare: u32,
+    bit_counter: bool,
     crc_ok: bool,
     packet: Option<Packet>,
 }
@@ -54,6 +76,12 @@ impl Radio {
             pointer: 0,
             config: [0; 4],
             tx_power: 0,
+            errata: 0,
+            mode_config: 0x200,
+            link_config: [0; 11],
+            device_addresses: [0; 17],
+            bit_compare: 0,
+            bit_counter: false,
             crc_ok: false,
             packet: None,
         }
@@ -73,7 +101,7 @@ impl Radio {
     }
 
     pub(super) fn task(offset: u32) -> bool {
-        matches!(offset, 0 | 4 | 8 | 12 | 16)
+        matches!(offset, 0 | 4 | 8 | 12 | 16 | 0x14 | 0x18 | 0x1c | 0x20)
     }
 
     fn raise(&mut self, mask: u32) {
@@ -86,8 +114,17 @@ impl Radio {
         self.raise(DISABLED);
     }
 
-    fn finish_packet(&mut self) {
+    fn finish_packet(&mut self, bytes: usize) {
         self.raise(ADDRESS | PAYLOAD | END | PHY_END);
+        if self.shorts & (1 << 4) != 0 {
+            self.raise(RSSI_END);
+        }
+        if (self.bit_counter || self.shorts & (1 << 6) != 0)
+            && self.bit_compare as usize <= bytes * 8
+        {
+            self.raise(BIT_MATCH);
+        }
+        self.bit_counter = false;
         if self.shorts & ((1 << 1) | (1 << 20)) != 0 {
             self.disable();
         }
@@ -137,7 +174,7 @@ impl Radio {
                         bytes: bytes.to_vec(),
                     });
                 }
-                self.finish_packet();
+                self.finish_packet(bytes.len());
             }
             State::RxIdle => {
                 self.crc_ok = false;
@@ -149,10 +186,11 @@ impl Radio {
                         bus.memory(address, packet.bytes.len())?
                             .copy_from_slice(&packet.bytes);
                     }
+                    let bytes = packet.bytes.len();
                     self.packet = None;
                     self.crc_ok = true;
                     self.raise(CRC_OK);
-                    self.finish_packet();
+                    self.finish_packet(bytes);
                 } else {
                     self.state = State::Rx;
                 }
@@ -172,7 +210,15 @@ impl Radio {
             0x508 => self.config[0],
             0x50c => self.tx_power,
             0x510..=0x518 => self.config[((offset - 0x510) / 4) as usize + 1],
+            0x548 => 10,
             0x550 => self.state as u32,
+            0x51c..=0x53c => self.link_config[((offset - 0x51c) / 4) as usize],
+            0x544 => self.link_config[9],
+            0x554 => self.link_config[10],
+            0x560 => self.bit_compare,
+            0x600..=0x640 => self.device_addresses[((offset - 0x600) / 4) as usize],
+            0x650 => self.mode_config,
+            0x774 => self.errata,
             0xffc => self.powered.into(),
             _ => (self.events & Self::event(offset)? != 0).into(),
         })
@@ -206,6 +252,8 @@ impl Radio {
                 }
             }
             16 if trigger => self.disable(),
+            0x14 if trigger => self.raise(RSSI_END),
+            0x1c | 0x20 if trigger => self.bit_counter = offset == 0x1c,
             offset if Self::task(offset) => {}
             0x200 if value & !SHORTS == 0 => self.shorts = value,
             0x304 => self.interrupts |= value & EVENTS,
@@ -213,9 +261,37 @@ impl Radio {
             0x504 => self.pointer = value,
             0x508 => self.config[0] = value & 0x17f,
             0x50c => self.tx_power = value & 255,
+            // Zephyr applies the nRF52840 RADIO anomalies 102, 106 and 107 workaround.
+            0x774 => self.errata = value,
+            0x600..=0x640 => {
+                self.device_addresses[((offset - 0x600) / 4) as usize] = if offset < 0x620 {
+                    value
+                } else {
+                    value & 0xffff
+                };
+            }
+            0x650 => self.mode_config = value & 0x301,
+            0x51c..=0x53c => {
+                const MASKS: [u32; 9] = [
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    7,
+                    0xff,
+                    0x303,
+                    0x00ff_ffff,
+                    0x00ff_ffff,
+                ];
+                let index = ((offset - 0x51c) / 4) as usize;
+                self.link_config[index] = value & MASKS[index];
+            }
+            0x544 => self.link_config[9] = value & 0xff,
+            0x554 => self.link_config[10] = value & 127,
+            0x560 => self.bit_compare = value,
             0x510 => self.config[1] = value & 15,
-            0x514 if value & !0x001f_010f == 0 => self.config[2] = value,
-            0x518 if value & !0x0007_ffff == 0 => self.config[3] = value,
+            0x514 if value & !0x67df_010f == 0 => self.config[2] = value,
+            0x518 if value & !0x0307_ffff == 0 => self.config[3] = value,
             0xffc => {
                 if value & 1 == 0 {
                     self.reset();

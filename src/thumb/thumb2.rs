@@ -223,6 +223,9 @@ impl Thumb {
                 } else {
                     r[rn].wrapping_add(offset)
                 };
+                if address & 3 != 0 {
+                    return Err(format!("unaligned double-word transfer at {address:#010x}"));
+                }
                 let second = address.wrapping_add(4);
                 if high & 0x10 != 0 {
                     let first = bus.thumb_read::<4>(address)?;
@@ -271,18 +274,23 @@ impl Thumb {
                     self.set_apsr(flags);
                 }
             }
-            0xeb00..=0xeb1e | 0xeba0..=0xebbe
+            0xeb00..=0xeb1e | 0xeba0..=0xebbe | 0xebc0..=0xebde
                 if rt < 8 && rm < 15 && (rd < 15 || high & 0x10 != 0) =>
             {
                 let shift = ((low >> 10) & 0x1c) | ((low >> 6) & 3);
                 let operand = self.shift_immediate(r[rm], (low >> 4) & 3, shift).0;
                 let subtract = high & 0x80 != 0;
-                let result = if high & 0x10 != 0 {
-                    self.arithmetic(r[rn], operand, subtract)
-                } else if subtract {
-                    r[rn].wrapping_sub(operand)
+                let (lhs, operand) = if high & 0x00e0 == 0x00c0 {
+                    (operand, r[rn])
                 } else {
-                    r[rn].wrapping_add(operand)
+                    (r[rn], operand)
+                };
+                let result = if high & 0x10 != 0 {
+                    self.arithmetic(lhs, operand, subtract)
+                } else if subtract {
+                    lhs.wrapping_sub(operand)
+                } else {
+                    lhs.wrapping_add(operand)
                 };
                 if rd < 15 {
                     r[rd] = result;
@@ -342,6 +350,24 @@ impl Thumb {
                 } else {
                     addend.wrapping_sub(product)
                 };
+            }
+            0xfb10..=0xfb1e
+                if low & 0xc0 == 0
+                    && rn != 13
+                    && rt != 13
+                    && !matches!(rd, 13 | 15)
+                    && !matches!(rm, 13 | 15) =>
+            {
+                let a = (r[rn] >> if low & 0x20 == 0 { 0 } else { 16 }) as i16;
+                let b = (r[rm] >> if low & 0x10 == 0 { 0 } else { 16 }) as i16;
+                let product = i32::from(a) * i32::from(b);
+                if rt == 15 {
+                    r[rd] = product as u32;
+                } else {
+                    let (sum, overflow) = product.overflowing_add(r[rt] as i32);
+                    r[rd] = sum as u32;
+                    self.saturation |= overflow;
+                }
             }
             0xfb80..=0xfb8e | 0xfba0..=0xfbae | 0xfbc0..=0xfbce | 0xfbe0..=0xfbee
                 if rn != 13
@@ -423,12 +449,12 @@ impl Thumb {
                 let address = r[rn].wrapping_add(r[rm] << ((low >> 4) & 3));
                 *next = self.branch(bus.thumb_read::<4>(address)?, r, bus)?;
             }
-            0xf800..=0xf85e
-                if matches!(high & 0xffb0, 0xf800 | 0xf810)
+            0xf800..=0xf85e | 0xf910..=0xf91e | 0xf930..=0xf93e
+                if high & 15 != 15
                     && rt < 15
                     && (low & 0x0fc0 == 0 || (low & 0x800 != 0 && low & 0x500 != 0)) =>
             {
-                let width = if high & 0x40 == 0 { 1 } else { 4 };
+                let width = 1 << ((high >> 5) & 3);
                 let writeback = low & 0x100 != 0;
                 if writeback && rn == rt {
                     return Err(unsupported());
@@ -455,12 +481,16 @@ impl Thumb {
                 if high & 0x10 == 0 {
                     bus.thumb_write(address, width, r[rt], output)?;
                 } else {
-                    r[rt] = if width == 1 {
-                        bus.thumb_read::<1>(address)
-                    } else {
-                        bus.thumb_read::<4>(address)
-                    }
-                    .map_err(|error| error.to_string())?;
+                    let data = match width {
+                        1 => bus.thumb_read::<1>(address),
+                        2 => bus.thumb_read::<2>(address),
+                        _ => bus.thumb_read::<4>(address),
+                    }?;
+                    r[rt] = match (high & 0x100 != 0, width) {
+                        (true, 1) => (data as i8 as i32) as u32,
+                        (true, 2) => (data as i16 as i32) as u32,
+                        _ => data,
+                    };
                 }
                 if writeback {
                     r[rn] = indexed;
@@ -475,6 +505,22 @@ impl Thumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unaligned_thumb_data_is_limited_to_ram_and_respects_ccr() {
+        let mut bus = Bus::default();
+        let ram = 0x2000_0000;
+        bus.map_ram(ram, 8).unwrap();
+        bus.map_nvic(0xe0, None, true).unwrap();
+        let mut output = Vec::new();
+        bus.thumb_write(ram + 1, 4, 0x1234_abcd, &mut output)
+            .unwrap();
+        assert_eq!(bus.thumb_read::<2>(ram + 1).unwrap(), 0xabcd);
+        assert!(bus.thumb_read::<4>(ram + 5).is_err());
+        assert!(bus.thumb_write(0xe000_ed15, 2, 1, &mut output).is_err());
+        bus.thumb_write(0xe000_ed14, 4, 0x208, &mut output).unwrap();
+        assert!(bus.thumb_read::<2>(ram + 1).is_err());
+    }
 
     #[test]
     fn table_branches_use_unaligned_architectural_pc_and_scaled_index() {

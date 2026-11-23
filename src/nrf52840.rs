@@ -74,6 +74,7 @@ struct Clock {
     interrupts: u32,
     lf_source: u32,
     dcdc: u32,
+    ram_priority: [u32; 14],
 }
 
 struct Uarte {
@@ -288,6 +289,7 @@ impl Peripheral {
                 Device::Twi(_) => Twi::event(address - self.base).is_some(),
                 Device::Spi(_) => address - self.base == 0x108,
                 Device::Timer(timer) => timer.event(address - self.base),
+                Device::Rtc(rtc) => rtc.event_bit(address - self.base).is_some(),
                 Device::I2s(_) => I2s::event(address - self.base).is_some(),
                 Device::Pdm(_) => Pdm::event(address - self.base).is_some(),
                 Device::Radio(_) => Radio::event(address - self.base).is_some(),
@@ -321,6 +323,7 @@ impl Peripheral {
             Device::Twi(twi) => std::mem::take(&mut twi.raised),
             Device::Spi(spi) => std::mem::take(&mut spi.raised),
             Device::Timer(timer) => std::mem::take(&mut timer.raised),
+            Device::Rtc(rtc) => std::mem::take(&mut rtc.raised),
             Device::I2s(i2s) => std::mem::take(&mut i2s.raised),
             Device::Pdm(pdm) => std::mem::take(&mut pdm.raised),
             Device::Radio(radio) => std::mem::take(&mut radio.raised),
@@ -587,6 +590,7 @@ impl Clock {
             0x418 => ((self.running & 2) << 15) | (self.lf_source & 3),
             0x518 => self.lf_source,
             0x578 => self.dcdc,
+            0xe00..=0xe34 => self.ram_priority[((offset - 0xe00) / 4) as usize],
             _ => return None,
         })
     }
@@ -611,6 +615,8 @@ impl Clock {
             0x308 => self.interrupts &= !value,
             0x518 => self.lf_source = value & 0x30003,
             0x578 => self.dcdc = value & 1,
+            // AMLI RAMPRI shares the POWER/CLOCK page. Bus accesses are serialized.
+            0xe00..=0xe34 => self.ram_priority[((offset - 0xe00) / 4) as usize] = value,
             _ => return false,
         }
         true
@@ -762,6 +768,7 @@ struct Rtc {
     interrupts: u32,
     compare: [u32; 4],
     event_enabled: u32,
+    raised: u32,
 }
 
 impl Default for Rtc {
@@ -776,6 +783,7 @@ impl Default for Rtc {
             interrupts: 0,
             compare: [Self::MASK; 4],
             event_enabled: 0,
+            raised: 0,
         }
     }
 }
@@ -792,12 +800,14 @@ impl Rtc {
         if self.phase >= period {
             self.phase -= period;
             self.counter = (self.counter + 1) & Self::MASK;
-            self.events |= 1 | (u32::from(self.counter == 0) << 1);
+            let mut reached = 1 | (u32::from(self.counter == 0) << 1);
             for (index, compare) in self.compare[..self.channels].iter().enumerate() {
                 if self.counter == *compare {
-                    self.events |= 1 << (16 + index);
+                    reached |= 1 << (16 + index);
                 }
             }
+            self.events |= reached;
+            self.raised |= reached & self.event_enabled;
         }
     }
 
@@ -942,6 +952,43 @@ mod tests {
         bus.sample_nvic(0, false);
         assert_eq!(bus.read::<4>(gpiote + 0x17c).unwrap(), 1);
         assert_eq!(bus.nvic.as_ref().unwrap().next_irq(0), Some((6, 0)));
+    }
+
+    #[test]
+    fn rtc_event_starts_timer_and_fixed_ppi_channel_starts_radio_rx() {
+        let mut bus = Bus::default();
+        let rtc = 0x4000_b000;
+        let timer = 0x4000_8000;
+        let ppi = 0x4001_f000;
+        let radio = 0x4000_1000;
+        let mut output = Vec::new();
+        bus.map_nvic(0xe0, None, true).unwrap();
+        bus.map_nrf_peripheral(Peripheral::rtc(rtc, 11, "rtc0".into(), 3))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::timer(timer, 8, "timer0".into(), 4))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::ppi(ppi, "ppi".into()))
+            .unwrap();
+        bus.map_nrf_peripheral(Peripheral::radio(radio, 1, "radio".into(), false))
+            .unwrap();
+        for (address, value) in [
+            (rtc + 0x540, 1),
+            (rtc + 0x344, 1 << 16),
+            (ppi + 0x510, rtc + 0x140),
+            (ppi + 0x514, timer),
+            (ppi + 0x504, 1 | (1 << 21)),
+            (timer + 0x510, 0),
+            (timer + 0x540, 1),
+            (rtc, 1),
+        ] {
+            bus.write(address, 4, value, &mut output).unwrap();
+        }
+        assert!(bus.write(ppi + 0x504, 4, 1 << 23, &mut output).is_err());
+        for _ in 0..3100 {
+            bus.advance_nrf_ppi(&mut output).unwrap();
+            bus.sample_nvic(0, false);
+        }
+        assert_eq!(bus.read::<4>(radio + 0x158).unwrap(), 1);
     }
 
     #[test]

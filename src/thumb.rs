@@ -27,6 +27,7 @@ pub struct Thumb {
     zero: bool,
     carry: bool,
     overflow: bool,
+    saturation: bool,
     active_exception: u8,
     active_exceptions: u128,
     interrupts_masked: bool,
@@ -162,7 +163,7 @@ impl Thumb {
         (u32::from(self.negative) << 31)
             | (u32::from(self.zero) << 30)
             | (u32::from(self.carry) << 29)
-            | (u32::from(self.overflow) << 28)
+            | ((u32::from(self.overflow) << 28) | (u32::from(self.saturation) << 27))
     }
 
     fn set_apsr(&mut self, value: u32) {
@@ -170,6 +171,7 @@ impl Thumb {
         self.zero = value & (1 << 30) != 0;
         self.carry = value & (1 << 29) != 0;
         self.overflow = value & (1 << 28) != 0;
+        self.saturation = self.thumb2 && value & (1 << 27) != 0;
     }
 
     fn uses_psp(&self) -> bool {

@@ -1200,6 +1200,14 @@ impl Bus {
 
     pub fn thumb_read<const N: usize>(&mut self, address: u32) -> Result<u32, String> {
         self.check_thumb_access(address, N, false, false)?;
+        if address as usize & (N - 1) != 0
+            && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
+            && let Ok(slice) = self.memory_slice(address, N)
+        {
+            let mut value = [0; 4];
+            value[..N].copy_from_slice(slice);
+            return Ok(u32::from_le_bytes(value));
+        }
         self.read::<N>(address).map_err(|error| error.to_string())
     }
 
@@ -1211,6 +1219,13 @@ impl Bus {
         uart: &mut impl Write,
     ) -> Result<(), String> {
         self.check_thumb_access(address, width, true, false)?;
+        if address as usize & (width - 1) != 0
+            && self.nvic.as_ref().is_some_and(Nvic::allows_unaligned_data)
+            && let Ok(bytes) = self.memory(address, width)
+        {
+            bytes.copy_from_slice(&value.to_le_bytes()[..width]);
+            return Ok(());
+        }
         self.write(address, width, value, uart)
             .map_err(|error| error.to_string())
     }

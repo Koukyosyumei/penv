@@ -40,6 +40,7 @@ pub struct Nvic {
     system_priority: [u8; 12],
     fault_enables: u32,
     div_zero_trap: bool,
+    unalign_trap: bool,
     mpu: Mpu,
     priority_mask: u8,
     pub uart_irq: Option<u8>,
@@ -58,6 +59,7 @@ impl Nvic {
             system_priority: [0; 12],
             fault_enables: 0,
             div_zero_trap: false,
+            unalign_trap: false,
             mpu: Mpu::default(),
             priority_mask,
             uart_irq,
@@ -163,6 +165,10 @@ impl Nvic {
         self.pending &= !(1 << line);
     }
 
+    pub fn allows_unaligned_data(&self) -> bool {
+        self.cortex_m4 && !self.unalign_trap
+    }
+
     pub fn div_zero_trap(&self) -> bool {
         self.div_zero_trap
     }
@@ -182,7 +188,11 @@ impl Nvic {
             (AIRCR, 4) => 0xfa05_0000,
             (CPACR, 4) if self.cortex_m4 => 0,
             (MPU_TYPE..=MPU_RASR, 4) if self.cortex_m4 => return self.mpu.read(address - MPU_TYPE),
-            (CCR, 4) if self.cortex_m4 => (1 << 9) | (u32::from(self.div_zero_trap) << 4),
+            (CCR, 4) if self.cortex_m4 => {
+                (1 << 9)
+                    | (u32::from(self.div_zero_trap) << 4)
+                    | (u32::from(self.unalign_trap) << 3)
+            }
             (SHCSR, 4) if self.cortex_m4 => self.fault_enables,
             (CFSR | HFSR, 4) if self.cortex_m4 => 0,
             (SCR, 4) => self.sleep_control,
@@ -229,8 +239,9 @@ impl Nvic {
                 return self.mpu.write(address - MPU_TYPE, value);
             }
             (CPACR, 4) if self.cortex_m4 && value & 0x00f0_0000 == 0 => {}
-            (CCR, 4) if self.cortex_m4 && value & !0x10 == 1 << 9 => {
-                self.div_zero_trap = value & 0x10 != 0
+            (CCR, 4) if self.cortex_m4 && value & !0x18 == 1 << 9 => {
+                self.div_zero_trap = value & 0x10 != 0;
+                self.unalign_trap = value & 8 != 0
             }
             (SHCSR, 4) if self.cortex_m4 && value & !0x70000 == 0 => self.fault_enables = value,
             (CFSR | HFSR, 4) if self.cortex_m4 => {}
