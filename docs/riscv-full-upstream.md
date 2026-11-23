@@ -1654,3 +1654,18 @@ python3 scripts/validate-rv32-priv-transitions.py target/release/penv ../renode 
 ```
 
 同じ release バイナリで、V だけを外した構成の PMP 3/3 件と特権遷移 3/3 件が通過しました。PMP あり・なしの構成を入れ替えると、許可・拒否の検証はともに完了コード 1 になりました。固定構成では対象 3 件が V の未対応で CPU 作成時に停止しました。Rust テストは 88/88 件、台帳の上流等価合格は累計 174 件です。生成した ELF とソース、構成、ケース別 JSONL は `~/.local/state/penv-dispatch/evidence/riscv/backlog-8dba350-mxUbbU/` に保存しました。
+
+### 固定 RV32 メモリー比較の生アドレスケース
+
+固定 `memory-assertions.robot` の静的な生アドレス 9 件を実 ELF に移植し、元のアドレス、値、幅、符号と大小比較をゲスト命令で確認しました。V だけを外した構成で 9/9 件が通過し、固定構成では V の未対応で 9 件とも CPU 作成時に停止しました。Byte の期待値を 0x42 から 0x43 に変えた負例では完了コード 1 でした。Rust テストは 88/88 件が通過しました。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repro/raw"
+evidence="$HOME/.local/state/penv-dispatch/evidence/riscv/backlog-6d37343-LD68IE"
+target/release/penv run --script "$evidence/monitor.resc"
+```
+
+Robot 本来のモニター経路は、V を外しても `sysbus WriteByte 0x01 0x42` が未対応です。共有モニターの変更を ARM 担当への依頼 `riscv-memory-assert-6d37343.md` に記録しました。ゲスト ELF の 9 件は部分移植のままで、シンボルと監視付き比較も残っています。上流等価合格は累計 174 件です。生成ソース、ELF、ケース別 JSONL、再現 RESC は上記の証拠ディレクトリに保存しました。

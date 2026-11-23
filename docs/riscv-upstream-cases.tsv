@@ -1645,66 +1645,66 @@ Renode	tests/unit-tests/memory-access.robot	54	Should Report Illegal Address For
 Renode	tests/unit-tests/memory-access.robot	63	Should Report Illegal Address For Store		review-variants	pending	-
 Renode	tests/unit-tests/memory-access.robot	74	Should Throw Monitor Exception	${PLAT_RISCV32} | ${illegal_address_32}	review-variants	pending	-
 Renode	tests/unit-tests/memory-access.robot	75	Should Throw Monitor Exception	${PLAT_RISCV64} | ${illegal_address_64}	review-variants	pending	-
-Renode	tests/unit-tests/memory-assertions.robot	93	Should Read Byte At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	106	Should Read Word At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	119	Should Read Double Word At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	93	Should Read Byte At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
+Renode	tests/unit-tests/memory-assertions.robot	106	Should Read Word At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
+Renode	tests/unit-tests/memory-assertions.robot	119	Should Read Double Word At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
 Renode	tests/unit-tests/memory-assertions.robot	132	Should Read Quad Word At Raw Address		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	145	Should Read Signed Byte At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	157	Should Read Signed Word At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	170	Should Read Signed Double Word At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	145	Should Read Signed Byte At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
+Renode	tests/unit-tests/memory-assertions.robot	157	Should Read Signed Word At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
+Renode	tests/unit-tests/memory-assertions.robot	170	Should Read Signed Double Word At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
 Renode	tests/unit-tests/memory-assertions.robot	183	Should Read Signed Quad Word At Raw Address		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	196	Should Read Signed Byte Of Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	209	Should Read Signed Word Of Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	223	Should Read Signed Double Word Of Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	196	Should Read Signed Byte Of Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	209	Should Read Signed Word Of Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	223	Should Read Signed Double Word Of Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	237	Should Read Signed Quad Word Of Symbol		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	251	Should Read Byte Zero At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	256	Should Read Word Zero At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	261	Should Read Double Word Zero At Raw Address		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	251	Should Read Byte Zero At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
+Renode	tests/unit-tests/memory-assertions.robot	256	Should Read Word Zero At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
+Renode	tests/unit-tests/memory-assertions.robot	261	Should Read Double Word Zero At Raw Address		target	partial	fixed RV32 fixture requires V and shared monitor memory assertions; original static values and comparisons passed as guest ELFs with V omitted
 Renode	tests/unit-tests/memory-assertions.robot	266	Should Read Quad Word Zero At Raw Address		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	271	Should Read Byte Of Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	286	Should Read Word Of Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	300	Should Read Double Word Of Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	271	Should Read Byte Of Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	286	Should Read Word Of Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	300	Should Read Double Word Of Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	315	Should Read Quad Word Of Symbol		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	330	Should Read Byte Of All Symbols		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	346	Should Read Word Of All Symbols		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	362	Should Read Double Word Of All Symbols		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	330	Should Read Byte Of All Symbols		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	346	Should Read Word Of All Symbols		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	362	Should Read Double Word Of All Symbols		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	379	Should Read Quad Word Of All Symbols		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	396	Should Read Byte Of Any Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	412	Should Read Word Of Any Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	428	Should Read Double Word Of Any Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	396	Should Read Byte Of Any Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	412	Should Read Word Of Any Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	428	Should Read Double Word Of Any Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	445	Should Read Quad Word Of Any Symbol		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	462	Should Read Byte Of Symbol With Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	470	Should Read Word Of Symbol With Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	478	Should Read Double Word Of Symbol With Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	462	Should Read Byte Of Symbol With Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	470	Should Read Word Of Symbol With Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	478	Should Read Double Word Of Symbol With Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	486	Should Read Quad Word Of Symbol With Offset		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	494	Should Read Byte Of Symbol With Negative Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	502	Should Read Word Of Symbol With Negative Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	510	Should Read Double Word Of Symbol With Negative Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	518	Should Read Quad Word Of Symbol With Negative Offset		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	526	Should Read Byte At Raw Address After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	532	Should Read Word At Raw Address After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	538	Should Read Double Word At Raw Address After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	494	Should Read Byte Of Symbol With Negative Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	502	Should Read Word Of Symbol With Negative Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	510	Should Read Double Word Of Symbol With Negative Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	518	Should Read Quad Word Of Symbol With Negative Offset		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	526	Should Read Byte At Raw Address After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	532	Should Read Word At Raw Address After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	538	Should Read Double Word At Raw Address After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	544	Should Read Quad Word At Raw Address After		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	550	Should Read Byte Of Symbol After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	557	Should Read Word Of Symbol After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	564	Should Read Double Word Of Symbol After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	550	Should Read Byte Of Symbol After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	557	Should Read Word Of Symbol After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	564	Should Read Double Word Of Symbol After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	571	Should Read Quad Word Of Symbol After		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	578	Should Read Byte Of All Symbols After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	586	Should Read Word Of All Symbols After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	594	Should Read Double Word Of All Symbols After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	578	Should Read Byte Of All Symbols After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	586	Should Read Word Of All Symbols After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	594	Should Read Double Word Of All Symbols After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	602	Should Read Quad Word Of All Symbols After		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	610	Should Read Byte Of Any Symbol After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	618	Should Read Word Of Any Symbol After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	626	Should Read Double Word Of Any Symbol After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	610	Should Read Byte Of Any Symbol After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	618	Should Read Word Of Any Symbol After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	626	Should Read Double Word Of Any Symbol After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-assertions.robot	634	Should Read Quad Word Of Any Symbol After		outside	outside	case passes bitness=64 to its CPU fixture
-Renode	tests/unit-tests/memory-assertions.robot	642	Should Read Double Word Of All Symbols Independently After		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	651	Should Not Confuse Symbol Name With Address On Store		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	659	Should Fail On Negative Value In Comparison Without Specifying Signed As True		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	665	Should Fail On Negative Value In Comparison When Signed Is Explicitly False		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	671	Should Fail On Store To Nonexistent Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	676	Should Fail On Ambiguous Store To Symbol With Multiple Entries Without Index		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	690	Should Fail On Compare Of Nonexistent Symbol		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
-Renode	tests/unit-tests/memory-assertions.robot	695	Should Fail On Ambiguous Compare Of Symbol With Multiple Entries Without Index		target	pending	case passes bitness=32 to its CPU fixture; equivalence pending
+Renode	tests/unit-tests/memory-assertions.robot	642	Should Read Double Word Of All Symbols Independently After		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	651	Should Not Confuse Symbol Name With Address On Store		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	659	Should Fail On Negative Value In Comparison Without Specifying Signed As True		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	665	Should Fail On Negative Value In Comparison When Signed Is Explicitly False		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	671	Should Fail On Store To Nonexistent Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	676	Should Fail On Ambiguous Store To Symbol With Multiple Entries Without Index		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	690	Should Fail On Compare Of Nonexistent Symbol		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
+Renode	tests/unit-tests/memory-assertions.robot	695	Should Fail On Ambiguous Compare Of Symbol With Multiple Entries Without Index		target	pending	fixed RV32 fixture requires V and shared monitor memory assertions; monitor work requested from ARM
 Renode	tests/unit-tests/memory-invalidation.robot	24	Should Invalidate On Write		review-variants	pending	-
 Renode	tests/unit-tests/memory-invalidation.robot	55	Should Invalidate on Cross Page Word Write		review-variants	pending	-
 Renode	tests/unit-tests/memory-invalidation.robot	101	Should Invalidate on Cross Page DoubleWord Write		review-variants	pending	-
