@@ -29,7 +29,7 @@ pub struct Machine {
     elapsed_steps: u64,
     inputs: VecDeque<(u64, Input)>,
     queued_frame_waits: VecDeque<(u64, Box<ReferenceFrame>)>,
-    uart_phy_events: Vec<(Rc<Cell<bool>>, String, u16)>,
+    uart_device_events: Vec<(Rc<Cell<bool>>, Input)>,
     frame_wait_trigger: Option<Rc<Cell<bool>>>,
     frame_wait_budget: Option<u64>,
     frame_wait_deadline: Option<u64>,
@@ -222,7 +222,7 @@ impl Machine {
             elapsed_steps: 0,
             inputs: VecDeque::new(),
             queued_frame_waits: VecDeque::new(),
-            uart_phy_events: Vec::new(),
+            uart_device_events: Vec::new(),
             frame_wait_trigger: None,
             frame_wait_budget: None,
             frame_wait_deadline: None,
@@ -377,7 +377,32 @@ impl Machine {
         value: u16,
     ) -> Result<(), String> {
         self.bus.litex_phy_mut(&name)?;
-        self.uart_phy_events.push((trigger, name, value));
+        self.uart_device_events
+            .push((trigger, Input::PhyVendorSpecific1 { name, value }));
+        Ok(())
+    }
+
+    pub fn set_panel_after_uart(
+        &mut self,
+        trigger: Rc<Cell<bool>>,
+        name: String,
+        action: &str,
+    ) -> Result<(), String> {
+        let event = match action {
+            "on" | "off" => {
+                self.bus.litex_led_state(&name)?;
+                Input::LedAssertion {
+                    name,
+                    expected: action == "on",
+                }
+            }
+            "Toggle" if self.bus.has_litex_button(&name) => {
+                Input::Button(name, ButtonAction::Toggle)
+            }
+            "Toggle" => return Err(format!("unknown LiteX button {name:?}")),
+            _ => return Err("LiteX panel action must be Toggle, on, or off".into()),
+        };
+        self.uart_device_events.push((trigger, event));
         Ok(())
     }
 
@@ -443,8 +468,14 @@ impl Machine {
     }
 
     pub fn verify_required_events_completed(&self) -> Result<(), String> {
-        if !self.uart_phy_events.is_empty() {
-            return Err("execution ended before the LiteX PHY UART trigger".into());
+        if !self.uart_device_events.is_empty() {
+            let name = match &self.uart_device_events[0].1 {
+                Input::PhyVendorSpecific1 { .. } => "PHY",
+                _ => "panel",
+            };
+            return Err(format!(
+                "execution ended before the LiteX {name} UART trigger"
+            ));
         }
         if self.frame_wait_trigger.is_some() {
             return Err("execution ended before the framebuffer UART trigger".into());
@@ -476,9 +507,13 @@ impl Machine {
         let mut retired = 0;
         for _ in 0..limit {
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
-            while let Some(index) = self.uart_phy_events.iter().position(|event| event.0.get()) {
-                let (_, name, value) = self.uart_phy_events.remove(index);
-                self.bus.litex_phy_mut(&name)?.set_vendor_specific1(value);
+            while let Some(index) = self
+                .uart_device_events
+                .iter()
+                .position(|event| event.0.get())
+            {
+                let (_, event) = self.uart_device_events.remove(index);
+                self.schedule_input(self.elapsed_steps, event);
             }
             if self
                 .frame_wait_trigger

@@ -67,6 +67,7 @@ Options:
   --litex-timer-alias BASE  Map the existing LiteX timer at an additional address
   --platform PATH    Load RAM, CPU and CLINT from a Renode REPL file
   --platform-root DIR  Root for working-directory-relative REPL includes
+  --litex-panel-after-uart N:NAME:ACTION:TEXT  Toggle a button or assert an LED on UART match N
   --litex-phy-after-uart NAME:VALUE:TEXT  Set PHY VendorSpecific1 after matching UART text
   --litex-phy-event STEP:NAME:VALUE  Set PHY VendorSpecific1 at a step (repeatable)
   --litex-temperature-event STEP:NAME:CELSIUS  Set an SI70xx temperature (repeatable)
@@ -145,6 +146,7 @@ fn run() -> Result<ExitCode, String> {
     let mut temperature_events = Vec::new();
     let mut phy_events = Vec::new();
     let mut uart_phy_events = Vec::new();
+    let mut uart_panel_events = Vec::new();
     let mut led_assertions = Vec::new();
     let mut button_events = Vec::new();
     let mut uart_events = Vec::new();
@@ -183,6 +185,34 @@ fn run() -> Result<ExitCode, String> {
                 if target.replace(path).is_some() {
                     return Err(format!("{option} may only be specified once"));
                 }
+            }
+            Some("--litex-panel-after-uart") => {
+                const FORMAT: &str = "--litex-panel-after-uart requires N:NAME:ACTION:TEXT";
+                let argument = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .ok_or(FORMAT)?;
+                let mut fields = argument.splitn(4, ':');
+                let count = fields
+                    .next()
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .ok_or(FORMAT)?;
+                let name = fields
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .ok_or(FORMAT)?;
+                let action = fields.next().ok_or(FORMAT)?;
+                let text = fields
+                    .next()
+                    .filter(|text| !text.is_empty())
+                    .ok_or(FORMAT)?;
+                uart_panel_events.push((
+                    count,
+                    name.to_string(),
+                    action.to_string(),
+                    text.as_bytes().to_vec(),
+                ));
             }
             Some("--litex-phy-after-uart") => {
                 const FORMAT: &str = "--litex-phy-after-uart requires NAME:VALUE:TEXT";
@@ -695,6 +725,12 @@ fn run() -> Result<ExitCode, String> {
         machine.set_phy_after_uart(Rc::clone(&trigger.fired), name, value)?;
         uart_triggers.push(trigger);
     }
+    for (count, name, action, text) in uart_panel_events {
+        let mut trigger = UartTrigger::new(text);
+        trigger.remaining = count;
+        machine.set_panel_after_uart(Rc::clone(&trigger.fired), name, &action)?;
+        uart_triggers.push(trigger);
+    }
     if let Some((budget, text)) = frame_wait_trigger {
         if frame_waits.is_empty() || frame_waits.iter().any(|(step, _, _)| *step != 0) {
             return Err("--frame-waits-after-uart requires frame waits with step 0".into());
@@ -854,6 +890,7 @@ fn run() -> Result<ExitCode, String> {
 }
 
 struct UartTrigger {
+    remaining: usize,
     text: Vec<u8>,
     suffix: Vec<u8>,
     fired: Rc<Cell<bool>>,
@@ -862,6 +899,7 @@ struct UartTrigger {
 impl UartTrigger {
     fn new(text: Vec<u8>) -> Self {
         Self {
+            remaining: 1,
             text,
             suffix: Vec::new(),
             fired: Rc::new(Cell::new(false)),
@@ -880,13 +918,14 @@ impl<W: Write> Write for UartOutput<W> {
         let written = self.writer.write(bytes)?;
         self.triggers.retain_mut(|trigger| {
             trigger.suffix.extend_from_slice(&bytes[..written]);
-            if trigger
-                .suffix
-                .windows(trigger.text.len())
-                .any(|part| part == trigger.text)
-            {
-                trigger.fired.set(true);
-                return false;
+            for part in trigger.suffix.windows(trigger.text.len()) {
+                if part == trigger.text {
+                    trigger.remaining -= 1;
+                    if trigger.remaining == 0 {
+                        trigger.fired.set(true);
+                        return false;
+                    }
+                }
             }
             let discard = trigger.suffix.len().saturating_sub(trigger.text.len() - 1);
             trigger.suffix.drain(..discard);

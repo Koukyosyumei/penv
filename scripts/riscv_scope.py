@@ -53,6 +53,10 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
         return "target", "ported", "fixed firmware and live UART; sequential reference PNG waits with separate five-virtual-second deadlines"
     if filename == "Arty_LiteX_VexRiscv.robot" and case in {"Should Boot", "Should Read Ethernet PHY Status"}:
         return "target", "ported", "fixed Arty ELF and REPL; boot prompt and live UART-triggered PHY status transition checked"
+    if filename == "Arty_LiteX_VexRiscv.robot" and case in {
+        "Should Control LEDs", "Should Read Switches", "Should Read Buttons",
+    }:
+        return "target", "ported", "fixed Arty ELF and booted-image session; prompt-triggered GPIO actions, LED states and ordered UART responses checked"
     if filename in LITEX:
         return "target", "partial", LITEX[filename] + "; firmware regression, Robot equivalence pending"
     if filename == "riscv-extensions.robot" and parameter in {"RV32I_Smepmp", "RV32I_Sscofpmf"}:

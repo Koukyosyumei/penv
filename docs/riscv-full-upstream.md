@@ -1446,3 +1446,22 @@ python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
 ```
 
 上流 SHA-1 と一致する ELF で Arty の 2/2 ケースが通過しました。存在しない UART 文字列を指定した場合は、トリガー未到達として終了コード 1 を返しました。同じバイナリで Nexys Video の全面・領域待機 2/2 件と最終 PPM のハッシュを確認しました。Rust テストは 88/88 件、上流等価合格は累計 167 件です。Arty の LED・スイッチ・ボタンの等価検証は残っています。ケース別 UART と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-0cae6ea-rWZ62x/` に保存しました。
+
+### Arty の LED・スイッチ・ボタン
+
+固定 `Arty_LiteX_VexRiscv.robot` の残り 3 ケースを、起動済みの同じセッションで移植しました。`--litex-panel-after-uart N:NAME:ACTION:TEXT` は UART の N 回目の一致後、次のゲスト命令の前にボタン・スイッチを切り替えるか、LED の状態を照合します。検証では `H2U` のプロンプトを起点に操作し、すべてのコマンドをプロンプト待ちで送ります。ホスト側は各スイッチ・ボタン応答を UART の独立した行として確認します。
+
+```bash
+work=/tmp/penv-full-riscv
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 -B scripts/validate-litex-arty-uart.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro/arty"
+python3 -B scripts/validate-nexys-video.py target/release/penv ../renode \
+  "$work/regression/assets" "$repro/nexys"
+```
+
+LED は初期状態と 5 コマンド後の 4 本ずつを照合しました。スイッチの全ビットと、ボタンを解除した後も残るラッチおよびクリア後の状態を確認しました。初期 LED の期待を反転した試行は終了コード 1 と状態差を返しました。
+
+上流 SHA-1 と一致する公開 ELF で新規 3 ケースと既存の起動・PHY が通過しました。同じバイナリで Nexys Video の全面・領域待機も通過しました。Rust テストは 88/88 件、上流等価合格は累計 170 件です。残る LiteX Linux I/O や最大 ISA の確認は未達です。UART、終了状態、照合結果は `~/.local/state/penv-dispatch/evidence/riscv/backlog-fdacacf-aRvIsv/` に保存しました。

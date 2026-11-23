@@ -554,9 +554,9 @@ Renode	tests/platforms/Leon3.robot	18	Should Boot Zephyr		review-shared	pending	
 Renode	tests/platforms/Leon3.robot	29	Should Print Version		review-shared	pending	-
 Renode	tests/platforms/Leon3.robot	37	Should Handle WRASR		review-shared	pending	-
 Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	12	Should Boot		target	ported	fixed Arty ELF and REPL; boot prompt and live UART-triggered PHY status transition checked
-Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	23	Should Control LEDs		target	partial	arty_litex_vexriscv.resc; VexRiscv, LiteX UART, GPIO and PHY; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	71	Should Read Switches		target	partial	arty_litex_vexriscv.resc; VexRiscv, LiteX UART, GPIO and PHY; firmware regression, Robot equivalence pending
-Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	100	Should Read Buttons		target	partial	arty_litex_vexriscv.resc; VexRiscv, LiteX UART, GPIO and PHY; firmware regression, Robot equivalence pending
+Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	23	Should Control LEDs		target	ported	fixed Arty ELF and booted-image session; prompt-triggered GPIO actions, LED states and ordered UART responses checked
+Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	71	Should Read Switches		target	ported	fixed Arty ELF and booted-image session; prompt-triggered GPIO actions, LED states and ordered UART responses checked
+Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	100	Should Read Buttons		target	ported	fixed Arty ELF and booted-image session; prompt-triggered GPIO actions, LED states and ordered UART responses checked
 Renode	tests/platforms/LiteX/Arty_LiteX_VexRiscv.robot	133	Should Read Ethernet PHY Status		target	ported	fixed Arty ELF and REPL; boot prompt and live UART-triggered PHY status transition checked
 Renode	tests/platforms/LiteX/LiteX_Ibex.robot	5	Should Boot		outside	outside	litex_ibex.resc -> litex_ibex.repl:10 requires CPU.IbexRiscV32
 Renode	tests/platforms/LiteX/LiteX_Ibex.robot	22	Should Display Help		outside	outside	boot-finished fixture from Should Boot requires CPU.IbexRiscV32
