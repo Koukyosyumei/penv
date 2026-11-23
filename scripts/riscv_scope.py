@@ -193,7 +193,11 @@ def robot_review(filename, case, source, parameter, scope, status, basis):
                 if re.fullmatch(r"Should Read (?:Byte|Word|Double Word) (?:At Raw Address|Of Symbol|Of All Symbols|Of Any Symbol) After", case):
                     return "target", "partial", basis + "; original store loop and post-sweep comparisons passed as a guest ELF with V omitted; watchpoint timing unverified"
                 if case == "Should Read Double Word Of All Symbols Independently After":
-                    return "target", status, basis + "; independent watchpoints must observe matches across different sweeps; monitor work requested from ARM"
+                    return "target", "partial", basis + "; original changing store loop and latched per-symbol matches passed as a guest ELF with V omitted"
+                if case == "Should Not Confuse Symbol Name With Address On Store":
+                    return "target", "partial", basis + "; explicit address and numeric symbol stores passed as a guest ELF with V omitted"
+                if case == "Should Read Quad Word Of Symbol With Negative Offset":
+                    return "target", "partial", basis + "; eight-byte offset and full value checked with paired RV32 word accesses and V omitted"
                 return "target", status, basis + "; monitor work requested from ARM"
             if filename == "riscv-bkb.robot":
                 return "target", "ported", "fixed rv32gc_zbkb fixture; original single-step operands, results and no-trap assertions checked"

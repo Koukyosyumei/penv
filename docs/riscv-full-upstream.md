@@ -1714,3 +1714,20 @@ python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repr
 同じ release バイナリで、V を外した診断構成は新規 12 件と既存 27 件の計 39/39 件が通過しました。生アドレスの Byte 比較を 0xF0 から 0xF1 に変えた負例は完了コード 1 でした。固定構成は 39 件とも V の未対応で CPU 作成時に停止しました。`cargo test --locked` は 88/88 件が通過しました。ケース別 JSONL・ログ・終了状態・ELF は `~/.local/state/penv-dispatch/evidence/riscv/backlog-78df21e-Qtjt5n/` に保存しました。
 
 上流のウォッチポイント、3 秒のタイムアウト、複数の巡回にまたがる個別一致は未検証です。ARM 担当への既存依頼 `riscv-memory-assert-6d37343.md` が共有モニター側の残件を追跡しています。今回の 12 件は部分移植で、上流等価合格は累計 174 件です。
+
+### 固定 RV32 メモリー比較の残りの値・アドレス検証
+
+固定 `memory-assertions.robot` から3件を同じ ELF バッチに追加しました。
+
+- 個別一致ケースでは上流の `asm_doubleword_ind` を使い、各巡回の末尾で3アドレスの値を確認し、一度一致したアドレスを記憶します。各アドレスは一巡に一度書き込まれます。負例として巡回ごとに一致履歴を消すと、全件一致に至らず命令上限に達しました。
+- 数値名のシンボルを使うケースでは、生アドレス `0x1234` とシンボル `0x1234` が指す `0x1235` に別々の値を書き、両方を読み戻しました。
+- QuadWord の負オフセットは8バイトでスケールし、値の上下32ビットを RV32 のワードアクセスで検証しました。
+
+```bash
+repro=$(mktemp -d)
+cargo test --locked
+cargo build --locked --release
+python3 scripts/validate-rv32-raw-memory.py target/release/penv ../renode "$repro/memory"
+```
+
+診断構成は42/42件、Rust は88/88件が通過しました。固定構成は42件とも V 未対応で CPU 作成時に停止しました。ウォッチポイントと仮想時間のタイムアウト、モニターの名前解決と QuadWord アクセス、6件のモニターエラー応答は ARM 担当の既存依頼 `riscv-memory-assert-6d37343.md` で追跡しています。追加3件は部分移植で、上流等価合格は累計174件です。ケース別 JSONL・ELF・負例と終了状態は `~/.local/state/penv-dispatch/evidence/riscv/backlog-0b6b9c7-guu3Cw/` に保存しました。
