@@ -49,3 +49,36 @@ RESC
     esac
     printf '%s: expected CPU state observed\n' "$scenario"
 done
+
+# Robot 221-267 and 291-337. Keep CPU-control command order in the RESC.
+for state in running halted paused halted-paused; do
+    for kind in cpu machine; do
+        name=$state-reset-$kind
+        cat >"$out/$name.resc" <<'RESC'
+mach create
+machine LoadPlatformDescription @board.repl
+sysbus LoadELF @control.elf
+cpu AddLogHook 0x104 "PC moved"
+machine SetResetLog "Machine resetting"
+RESC
+        case "$state" in
+            paused|halted-paused) echo 'cpu Pause' >>"$out/$name.resc" ;;
+        esac
+        case "$state" in
+            halted|halted-paused) echo 'cpu IsHalted true' >>"$out/$name.resc" ;;
+        esac
+        echo "$kind Reset" >>"$out/$name.resc"
+        status=0
+        "$penv" run --script "$out/$name.resc" --max-steps 8 >"$out/$name.log" 2>"$out/$name.stderr" || status=$?
+        if [ "$kind" = machine ]; then
+            [ "$status" -eq 2 ]
+            printf '%s\n' 'Machine resetting' 'PC moved' >"$out/reset.expected"
+            cmp "$out/reset.expected" "$out/$name.log"
+        else
+            [ "$status" -eq 0 ]
+            [ ! -s "$out/$name.log" ]
+            grep -Fxq 'penv: machine paused at pc=0x00000100' "$out/$name.stderr"
+        fi
+        printf '%s: expected reset state observed\n' "$name"
+    done
+done

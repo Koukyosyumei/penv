@@ -22,8 +22,7 @@ pub struct Boot {
     pub ram_access_logs: Vec<String>,
     pub ram_io_pages: Vec<(u32, bool)>,
     pub cpu_hooks: Vec<(u32, crate::bus::CpuHook)>,
-    pub cpu_paused: Option<bool>,
-    pub cpu_halted: Option<bool>,
+    pub cpu_control: Vec<CpuControl>,
     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     pub opcode_counters: Vec<(String, String)>,
     pub opcode_counting: Option<bool>,
@@ -32,6 +31,13 @@ pub struct Boot {
     pub semihosting_arguments: Option<String>,
     pub semihosting_directory: Option<PathBuf>,
     pub semihosting_temporary_directory: Option<String>,
+}
+
+pub enum CpuControl {
+    Pause(bool),
+    Halt(bool),
+    Reset(crate::machine::CpuResetKind),
+    ResetLog(String),
 }
 
 pub enum UartIrq {
@@ -220,15 +226,34 @@ fn execute(
                 .push((pc, crate::bus::CpuHook::Log(message.into())));
         }
         ["cpu" | "sysbus.cpu", command @ ("Pause" | "Resume")] if boot.platform.is_some() => {
-            boot.cpu_paused = Some(*command == "Pause");
+            boot.cpu_control
+                .push(CpuControl::Pause(*command == "Pause"));
         }
         ["cpu" | "sysbus.cpu", "IsHalted", value] if boot.platform.is_some() => {
-            boot.cpu_halted = Some(
+            boot.cpu_control.push(CpuControl::Halt(
                 value
                     .to_ascii_lowercase()
                     .parse()
                     .map_err(|_| "expected true or false")?,
-            );
+            ));
+        }
+        ["cpu" | "sysbus.cpu", "Reset"] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::Reset(crate::machine::CpuResetKind::Cpu));
+        }
+        ["mach" | "machine", "Reset"] if boot.platform.is_some() => {
+            boot.cpu_control
+                .push(CpuControl::Reset(crate::machine::CpuResetKind::Machine));
+        }
+        ["mach" | "machine", "SetResetLog", ..] if boot.platform.is_some() => {
+            let (_, value) = text.split_once("SetResetLog").unwrap();
+            let message = value
+                .trim()
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .filter(|value| !value.contains('"'))
+                .ok_or("expected a quoted reset log message")?;
+            boot.cpu_control.push(CpuControl::ResetLog(message.into()));
         }
         ["cpu" | "sysbus.cpu", "AddPauseHook", pc] if boot.platform.is_some() => {
             let pc = crate::parse_address(resolve(pc)?)? & !1;

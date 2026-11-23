@@ -19,6 +19,7 @@ pub struct Machine {
     elapsed_steps: u64,
     cpu_paused: bool,
     cpu_halted: bool,
+    pub reset_log: Option<String>,
     uart_step_prefix: bool,
     uart_line_start: bool,
     reset_steps: VecDeque<u64>,
@@ -45,6 +46,12 @@ pub enum Stop {
     Ebreak,
     Paused,
     Limit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CpuResetKind {
+    Cpu,
+    Machine,
 }
 
 enum Step {
@@ -164,6 +171,7 @@ impl Machine {
             elapsed_steps: 0,
             cpu_paused: false,
             cpu_halted: false,
+            reset_log: None,
             uart_step_prefix: false,
             uart_line_start: true,
             reset_steps: VecDeque::new(),
@@ -347,6 +355,28 @@ impl Machine {
 
     pub fn set_cpu_halted(&mut self, halted: bool) {
         self.cpu_halted = halted;
+    }
+
+    pub fn reset_cpu_control(
+        &mut self,
+        kind: CpuResetKind,
+        output: &mut impl Write,
+    ) -> Result<(), String> {
+        if !self.is_cortex_m() {
+            return Err("CPU reset control requires a Cortex-M CPU".into());
+        }
+        if kind == CpuResetKind::Machine {
+            self.bus.reset_cortex_m_if_requested(true);
+        }
+        self.primary.reset_cortex_m(&mut self.bus)?;
+        self.cpu_halted = false;
+        self.cpu_paused = kind == CpuResetKind::Cpu;
+        if kind == CpuResetKind::Machine
+            && let Some(message) = self.reset_log.as_deref()
+        {
+            writeln!(output, "{message}").map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     pub fn run(&mut self, limit: u64, output: &mut impl Write) -> Result<(Stop, u64), String> {
@@ -1010,6 +1040,71 @@ mod tests {
         check_cpu_flow(&mut machine, false, true);
         machine.resume_cpu();
         check_cpu_flow(&mut machine, false, true);
+    }
+
+    fn check_cpu_control_reset(paused: bool, halted: bool, kind: CpuResetKind) {
+        let mut machine = started_cortex_m();
+        if paused {
+            machine.pause_cpu();
+        }
+        machine.set_cpu_halted(halted);
+        machine.reset_log = Some("Machine resetting".into());
+        let mut output = Vec::new();
+        machine.reset_cpu_control(kind, &mut output).unwrap();
+        assert_eq!(machine.primary.pc, 0x100);
+        assert!(!machine.cpu_halted);
+        match kind {
+            CpuResetKind::Machine => {
+                assert!(!machine.cpu_paused);
+                assert_eq!(machine.run(3, &mut output).unwrap(), (Stop::Limit, 3));
+                assert_eq!(output, b"Machine resetting\nPC moved\n");
+                check_cpu_flow(&mut machine, false, false);
+            }
+            CpuResetKind::Cpu => {
+                assert!(output.is_empty());
+                check_cpu_flow(&mut machine, true, false);
+            }
+        }
+    }
+
+    #[test]
+    fn upstream_cpu_reset_running_cpu() {
+        check_cpu_control_reset(false, false, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_running_machine() {
+        check_cpu_control_reset(false, false, CpuResetKind::Machine);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_cpu() {
+        check_cpu_control_reset(false, true, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_machine() {
+        check_cpu_control_reset(false, true, CpuResetKind::Machine);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_paused_cpu() {
+        check_cpu_control_reset(true, false, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_paused_machine() {
+        check_cpu_control_reset(true, false, CpuResetKind::Machine);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_paused_cpu() {
+        check_cpu_control_reset(true, true, CpuResetKind::Cpu);
+    }
+
+    #[test]
+    fn upstream_cpu_reset_halted_paused_machine() {
+        check_cpu_control_reset(true, true, CpuResetKind::Machine);
     }
 
     fn check_pause_halt(pause_first: bool, resume_first: bool) {
