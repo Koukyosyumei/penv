@@ -1373,3 +1373,19 @@ STM32F072b Console Echo の4件合格。残り2,193件は未実行
 Rust モニターテスト24件が合格。未変更の Robot は保存・復元、HEX、
 STM32F072b Console Echo の4件合格。残り2,193件は未実行
 （`target/monitor-restored-time-robot/results.json`）。
+
+### 復元した変数を使う UART 待機
+
+`81896a8` は、保存境界以降の UART テスター作成、既定の期限設定、
+各 UART 待機の引数を実行時の Rust セッションで解決する。
+TrivialUart で期限の変数を 2 ms から 6 ms に上書きして `Load` し、
+復元後の変数を使ったアイドル判定が仮想時刻 2 ms で完了することを
+固定 Renode、通常 CLI、Robot RPC で確認した。固定 Renode と Robot RPC には、
+復元後の変数から取得した値を UART キーワードの引数として渡した。
+通常 CLI では、明示的な期限とテスターの既定期限を使った不在確認が
+いずれも 2 ms で完了した（`target/monitor-restored-uart-proof/`）。
+
+Rust モニターテスト24件と UART テスト36件が合格。
+未変更の Robot は全256バイトの UART ケース、STM32F072b Console Echo、
+保存・復元の4件が合格し、残り2,193件は未実行
+（`target/monitor-restored-uart-robot/results.json`）。
