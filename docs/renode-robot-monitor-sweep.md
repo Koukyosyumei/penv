@@ -469,3 +469,18 @@ sysbus 設定を通過し、次の未対応コマンド `cpu MaximumBlockSize 1`
 停止した。`target/monitor-sysbus-order-fault/results.json` に記録した。
 同じビルドでの HEX ケースは合格した
 （`target/monitor-sysbus-order-hex/results.json`）。
+
+複数行の引用引数は RESC ファイルと Robot のコマンドフレームで共通の
+Rust パーサーを通る。RISC-V の `AssembleBlock` は起動中と起動後の両方で
+既存の LLVM アセンブラーを呼び出す。`cpu PC` でアドレスを取得する形式も
+含め、固定 Renode と同じ 8 バイトが RAM に書かれた
+（`target/monitor-assemble-proof/`、`target/monitor-assembly-address-proof/`）。
+固定 Renode ローカルビルドの `platform-lib/linux-x64/` には、同ビルドの
+`lib/resources/llvm/libllvm-disas.so` を参照するリンクを設定して比較した。
+
+未変更の `Should Clear MTVAL On EBREAK And ECALL` は、固定 Renode と
+penv の両方で合格した。`target/monitor-csr-write-proof/native-robot.xml`
+と `target/monitor-csr-rv/results.json` が個別の結果であり、
+`target/monitor-pc-assert-proof/` に PC 比較の成功・失敗の記録がある。
+同じ penv ビルドの未変更 `Should Load HEX` も合格した
+（`target/monitor-csr-hex/results.json`）。
