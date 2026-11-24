@@ -2324,6 +2324,21 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
+    if let Ok(["machine", "LoadPlatformDescription", value]) = command_words(command.trim()).as_deref() {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && state.machine
+            && !state.boot.has_platform()
+            && !state.boot.started
+            && state.boot.runtime.is_empty()
+            && let Ok(path) = platform_path(value, &source, root, &state.variables)
+            && !path.to_string_lossy().contains("://")
+            && let Err(error) = path.metadata()
+            && error.kind() == io::ErrorKind::NotFound
+        {
+            return Ok(StartupInput::Reply("REJECTED", format!("Could not find file '{}'.", path.display())));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     if let Ok([verb @ ("Load" | "Save"), value]) = command_words(command.trim()).as_deref() {
         let mut pending = script_state()?;
         if load_text(&source, source.clone(), root, &mut pending, &body).is_ok()
@@ -2374,7 +2389,6 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     // A queued runtime operation may change that state, so use the live monitor then.
     if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _] | ["printenv"]))
         || load_text(&source, source.clone(), root, &mut state, &body).is_err()
-        || state.machine
         || state.boot.has_platform()
         || state.boot.started
         || !state.boot.runtime.iter().all(|command| matches!(command.action,
@@ -4385,14 +4399,7 @@ fn execute(
             *machine = true;
         }
         ["machine", "LoadPlatformDescription", value] if *machine && boot.platform.is_none() => {
-            boot.platform = Some(if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
-                path
-            } else {
-                let file = resolve(value)?
-                    .strip_prefix('@')
-                    .ok_or("expected @platform-path")?;
-                local_path(&path_value(unquote(file)), script, root)
-            });
+            boot.platform = Some(platform_path(value, script, root, variables)?);
         }
         ["machine", "SdCardFromFile", args @ ..] if boot.has_platform() => {
             boot.sd_cards
@@ -5110,6 +5117,16 @@ impl Asset {
     }
 }
 
+fn platform_path(
+    value: &str, script: &Path, root: &Path, variables: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
+        return Ok(path);
+    }
+    let file = resolve(variables, value)?.strip_prefix('@').ok_or("expected @platform-path")?;
+    Ok(local_path(&path_value(unquote(file)), script, root))
+}
+
 fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
     let local = script.parent().unwrap_or(Path::new(".")).join(value);
     if local.is_file() {
@@ -5233,6 +5250,17 @@ greet "hello world"
         assert_eq!(inspect(machine, "mach set 0").0, "DEFER");
         assert_eq!(inspect(machine, "mach set 9").0, "REJECTED");
         assert_eq!(inspect(machine, "logLevel 4").0, "REJECTED");
+        assert_eq!(
+            inspect(&format!("{machine}set marker ready\n"), "echo $marker"),
+            ("OK", "ready".into()),
+        );
+        let missing_repl = format!("/tmp/penv-missing-platform-{}.repl", std::process::id());
+        let startup = format!("{machine}$board=@{missing_repl}\n");
+        assert_eq!(
+            inspect(&startup, "machine LoadPlatformDescription $board"),
+            ("REJECTED", format!("Could not find file '{missing_repl}'.")),
+        );
+        assert_eq!(inspect("", "machine LoadPlatformDescription @missing.repl").0, "DEFER");
         let missing = format!("@/tmp/penv-missing-snapshot-{}.save", std::process::id());
         assert_eq!(inspect(machine, &format!("Load {missing}")).0, "REJECTED");
         let no_directory = format!("@/tmp/penv-missing-snapshot-directory-{}/state.save", std::process::id());

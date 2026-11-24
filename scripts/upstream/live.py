@@ -400,6 +400,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         or re.fullmatch(r"[\w.]+\s+(?:PC|MSTATUS|MEPC|MCAUSE|MTVAL|ExecutionMode)", command)):
                     return self.operation(command, assertion=True)
                 if (re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command)
+                        or re.match(r"machine\s+LoadPlatformDescription(?:\s|$)", command)
                         or re.fullmatch(r'logLevel\s+(?:\S+|"[^"]*")', command)):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
