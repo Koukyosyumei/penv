@@ -429,3 +429,84 @@ or this // '''"#,
         )
     );
 }
+
+#[test]
+fn should_process_valid_enum() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>
+    mockEnum: MockEnum.ValidValue
+"#, Path::new(".")).unwrap();
+    let values = platform.enum_values("sysbus.mockPeripheral").unwrap();
+    assert_eq!(values.0, 1);
+}
+
+#[test]
+fn should_process_valid_shorthand_enum() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>
+    mockEnum: .ValidValue
+"#, Path::new(".")).unwrap();
+    let values = platform.enum_values("sysbus.mockPeripheral").unwrap();
+    assert_eq!(values.0, 1);
+}
+
+#[test]
+fn should_fail_on_invalid_enum() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute
+    mockEnum: MockEnum.InvalidValue
+"#,
+        "NoCtor",
+    );
+}
+
+#[test]
+fn should_process_valid_int_as_enum() {
+    let platform = creation::create_objects(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>
+    mockEnum: 1
+"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let values = platform.enum_values("sysbus.peripheral").unwrap();
+    assert_eq!(values.0, 1);
+}
+
+#[test]
+fn should_fail_on_invalid_int_to_enum_cast() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute
+    mockEnum: 2
+"#,
+        "NoCtor",
+    );
+}
+
+#[test]
+fn should_fail_on_invalid_int_to_enum_with_attribute_cast() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>
+    mockEnumWithAttribute: MockEnumWithAttribute.InvalidValue
+"#,
+        "NoCtor",
+    );
+}
+
+#[test]
+fn should_process_cast_of_any_int_to_enum_with_attribute() {
+    let platform = creation::create_objects(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute @ sysbus <0, 1>
+    mockEnumWithAttribute: 2
+"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let values = platform.enum_values("sysbus.peripheral").unwrap();
+    assert_eq!(values.1, 2);
+}

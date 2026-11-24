@@ -6,12 +6,16 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 enum Model {
     Cpu,
     EmptyPeripheral,
+    EnumPeripheral,
     External,
 }
 
 impl Model {
     fn parse(name: &str) -> Option<Self> {
         match name {
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute" => {
+                Some(Self::EnumPeripheral)
+            }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -44,9 +48,58 @@ struct CreatedObject {
     model: Model,
     cpu: Option<Cpu>,
     ranges: Vec<(u64, u64)>,
+    enum_arguments: EnumArguments,
+}
+
+struct EnumArguments {
+    strict: u8,
+    any_numeric: u8,
+}
+
+impl Default for EnumArguments {
+    fn default() -> Self {
+        Self {
+            strict: 1,
+            any_numeric: 1,
+        }
+    }
+}
+
+impl EnumArguments {
+    fn bind(&mut self, name: &str, value: &str, source: &SourceLine) -> Result<(), String> {
+        let (type_name, argument, allow_any_numeric) = match name {
+            "mockEnum" => ("MockEnum", &mut self.strict, false),
+            "mockEnumWithAttribute" => ("MockEnumWithAttribute", &mut self.any_numeric, true),
+            _ => return Err(format!("{source}: PropertyDoesNotExist: {name}")),
+        };
+        *argument = match symbolic_value(value) {
+            Some(SymbolicValue::Enum(qualifier, "ValidValue"))
+                if qualifier.is_none() || qualifier == Some(type_name) =>
+            {
+                1
+            }
+            _ => number(value)
+                .ok()
+                .and_then(|n| u8::try_from(n).ok())
+                .filter(|&n| allow_any_numeric || n == 1)
+                .ok_or_else(|| {
+                    format!("{source}: NoCtor: {value} is not a valid {type_name} argument")
+                })?,
+        };
+        Ok(())
+    }
 }
 
 impl CreatedPlatform {
+    #[cfg(test)]
+    pub(crate) fn enum_values(&self, qualified_name: &str) -> Option<(u8, u8)> {
+        let object = &self.objects[*self.registered.get(qualified_name)?];
+        (object.model == Model::EnumPeripheral).then_some((
+            object.enum_arguments.strict,
+            object.enum_arguments.any_numeric,
+        ))
+    }
+
     #[cfg(test)]
     pub(crate) fn peripheral_ranges(&self, qualified_name: &str) -> Option<&[(u64, u64)]> {
         let object = &self.objects[*self.registered.get(qualified_name)?];
@@ -96,6 +149,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             model,
             cpu: (model == Model::Cpu).then(Cpu::default),
             ranges: Vec::new(),
+            enum_arguments: EnumArguments::default(),
         });
         targets.push(Some(id));
     }
@@ -146,7 +200,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                             .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
                         let model = match platform.objects[target].model {
                             Model::Cpu => "CPU",
-                            Model::EmptyPeripheral => "peripheral",
+                            Model::EmptyPeripheral | Model::EnumPeripheral => "peripheral",
                             Model::External => "external",
                         };
                         return Err(entry.error(&format!(
@@ -195,6 +249,9 @@ impl CreatedPlatform {
         if depth >= 64 {
             return Err(format!("{source}: inline object nesting limit exceeded"));
         }
+        if self.objects[id].model == Model::EnumPeripheral {
+            return self.objects[id].enum_arguments.bind(name, value, source);
+        }
         let target = if name == "OtherCpu" && self.objects[id].model == Model::Cpu {
             Some(if value.starts_with("new ") {
                 let (object, tail) =
@@ -212,6 +269,7 @@ impl CreatedPlatform {
                     model,
                     cpu: Some(Cpu::default()),
                     ranges: Vec::new(),
+                    enum_arguments: EnumArguments::default(),
                 });
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {
