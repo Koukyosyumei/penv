@@ -1,6 +1,6 @@
 use crate::migrant::object_stream::{
-    FieldKind, Graph, NativeResource, NonSerializableResource, Object, ObjectId, ObjectReader,
-    ObjectWriter, References, Transients, TypeStamp, Value,
+    FieldInitializer, FieldKind, Graph, NativeResource, NonSerializableResource, Object, ObjectId,
+    ObjectReader, ObjectWriter, References, Transients, TypeStamp, Value,
 };
 use std::io::{Cursor, Seek, SeekFrom};
 
@@ -155,6 +155,9 @@ const STAMPS: &[TypeStamp<'static>] = &[
     stamp("List<IInterface>", &[("items", FieldKind::Reference)]),
     stamp("ImplementingInterfaceOne", &[]),
     stamp("ImplementingInterfaceTwo", &[]),
+    stamp("StructWithConstructorAttribute", &[]),
+    stamp("StructWithConstructorAttributeOnNestedStruct", &[]),
+    stamp("WithConstructorAttribute", &[]),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1887,7 +1890,10 @@ stamp_modes!(
 
 const TRANSIENTS: Transients<'static> = Transients {
     classes: &["TransientClass"],
-    fields: &[("ClassWithTransientField", &[(1, Value::Integer(0))])],
+    fields: &[(
+        "ClassWithTransientField",
+        &[(1, FieldInitializer::Default(Value::Integer(0)))],
+    )],
 };
 
 fn omit_transient_class(stamped: bool) {
@@ -2261,4 +2267,75 @@ stamp_modes!(
     list_of_interfaces_plain,
     list_of_interfaces_stamped,
     list_of_interfaces
+);
+
+fn manual_reset_event(signaled: bool) -> Value {
+    Value::NativeResource(NativeResource::ManualResetEvent { signaled })
+}
+
+fn nested_struct(condition: bool) -> Value {
+    Value::Integer(if condition { 5 } else { 0 })
+}
+
+const CONSTRUCTOR_FIELDS: Transients<'static> = Transients {
+    classes: &[],
+    fields: &[
+        (
+            "StructWithConstructorAttribute",
+            &[(
+                0,
+                FieldInitializer::Constructor(|| manual_reset_event(false)),
+            )],
+        ),
+        (
+            "StructWithConstructorAttributeOnNestedStruct",
+            &[(0, FieldInitializer::Constructor(|| nested_struct(true)))],
+        ),
+        (
+            "WithConstructorAttribute",
+            &[(
+                0,
+                FieldInitializer::Constructor(|| manual_reset_event(false)),
+            )],
+        ),
+    ],
+};
+
+fn constructor_for_event_field(stamped: bool, class: &str) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(class, vec![Value::Null]));
+    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&CONSTRUCTOR_FIELDS));
+    assert!(matches!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        Value::NativeResource(NativeResource::ManualResetEvent { .. })
+    ));
+}
+
+fn constructor_for_nested_field(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(
+        "StructWithConstructorAttributeOnNestedStruct",
+        vec![Value::Integer(0)],
+    ));
+    let (reader, copy) = deep_clone_transient(&graph, root, stamped, Some(&CONSTRUCTOR_FIELDS));
+    assert_eq!(
+        fields(reader.graph().get(copy).unwrap())[0],
+        Value::Integer(5)
+    );
+}
+
+stamp_modes!(
+    constructor_in_struct_plain,
+    constructor_in_struct_stamped,
+    |s| constructor_for_event_field(s, "StructWithConstructorAttribute")
+);
+stamp_modes!(
+    constructor_in_class_plain,
+    constructor_in_class_stamped,
+    |s| constructor_for_event_field(s, "WithConstructorAttribute")
+);
+stamp_modes!(
+    constructor_nested_plain,
+    constructor_nested_stamped,
+    constructor_for_nested_field
 );

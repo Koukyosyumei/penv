@@ -100,6 +100,7 @@ pub enum NativeResource {
     Pointer(usize),
     SpinLock,
     ThreadLocal,
+    ManualResetEvent { signaled: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,11 +174,25 @@ fn check_rectangular(dimensions: &[usize], elements: &[Value]) -> io::Result<()>
     Ok(())
 }
 
+pub enum FieldInitializer {
+    Default(Value),
+    Constructor(fn() -> Value),
+}
+
+impl FieldInitializer {
+    fn restore(&self) -> Value {
+        match self {
+            Self::Default(value) => value.clone(),
+            Self::Constructor(constructor) => constructor(),
+        }
+    }
+}
+
 /// Runtime field layout for transient values excluded from an object stream.
 pub struct Transients<'a> {
     pub classes: &'a [&'a str],
-    /// Field defaults indexed in the complete, in-memory record layout.
-    pub fields: &'a [(&'a str, &'a [(usize, Value)])],
+    /// Field initializers indexed in the complete, in-memory record layout.
+    pub fields: &'a [(&'a str, &'a [(usize, FieldInitializer)])],
 }
 
 impl Transients<'_> {
@@ -185,7 +200,7 @@ impl Transients<'_> {
         matches!(graph.get(id), Some(Object::Record { class, .. }) if self.classes.contains(&class.as_str()))
     }
 
-    fn defaults(&self, class: &str) -> &[(usize, Value)] {
+    fn initializers(&self, class: &str) -> &[(usize, FieldInitializer)] {
         self.fields
             .iter()
             .find(|(name, _)| *name == class)
@@ -201,11 +216,11 @@ impl Transients<'_> {
             } => fields,
             _ => return None,
         };
-        let defaults = match object {
-            Object::Record { class, .. } => self.defaults(class),
+        let initializers = match object {
+            Object::Record { class, .. } => self.initializers(class),
             _ => &[],
         };
-        if defaults.is_empty()
+        if initializers.is_empty()
             && !values
                 .iter()
                 .any(|value| matches!(value, Value::Ref(id) if self.contains(graph, *id)))
@@ -215,7 +230,7 @@ impl Transients<'_> {
         let projected = values
             .iter()
             .enumerate()
-            .filter(|(index, _)| !defaults.iter().any(|(omitted, _)| omitted == index))
+            .filter(|(index, _)| !initializers.iter().any(|(omitted, _)| omitted == index))
             .map(|(_, value)| match value {
                 Value::Ref(id) if self.contains(graph, *id) => Value::Null,
                 _ => value.clone(),
@@ -237,11 +252,17 @@ impl Transients<'_> {
 
     fn restore_fields(&self, class: &str, fields: &mut Vec<Value>) -> io::Result<()> {
         let mut previous = None;
-        for (index, value) in self.defaults(class) {
+        for (index, initializer) in self.initializers(class) {
             if *index > fields.len() || previous.is_some_and(|previous| previous >= *index) {
                 return Err(invalid("invalid transient field layout"));
             }
-            fields.insert(*index, value.clone());
+            let value = initializer.restore();
+            if matches!(value, Value::Ref(_)) {
+                return Err(invalid(
+                    "initializer returned an unmanaged object reference",
+                ));
+            }
+            fields.insert(*index, value);
             previous = Some(*index);
         }
         Ok(())
