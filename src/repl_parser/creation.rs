@@ -2,6 +2,24 @@ use super::*;
 
 const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Model {
+    Cpu,
+    EmptyPeripheral,
+    External,
+}
+
+impl Model {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            MOCK_CPU => Some(Self::Cpu),
+            "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
+            "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Cpu {
     pub(crate) placeholder: Option<String>,
@@ -14,27 +32,33 @@ enum TwoState {
     Two,
 }
 
-/// The CPU objects and sysbus registrations created from a platform description.
-pub(crate) struct CpuPlatform {
-    cpus: Vec<Cpu>,
+/// Objects and sysbus registrations created from a platform description.
+pub(crate) struct CreatedPlatform {
+    objects: Vec<CreatedObject>,
     registered: HashMap<String, usize>,
 }
 
-impl CpuPlatform {
+struct CreatedObject {
+    model: Model,
+    cpu: Option<Cpu>,
+    range: Option<(u64, u64)>,
+}
+
+impl CreatedPlatform {
     pub(crate) fn cpu(&self, qualified_name: &str) -> Option<&Cpu> {
         self.registered
             .get(qualified_name)
-            .map(|&id| &self.cpus[id])
+            .and_then(|&id| self.objects[id].cpu.as_ref())
     }
 }
 
-pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, String> {
+pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatform, String> {
     let entries = inline_entries(content, root)?;
     let mut globals = HashMap::new();
     let mut locals = HashMap::new();
     let mut targets = Vec::with_capacity(entries.len());
-    let mut platform = CpuPlatform {
-        cpus: Vec::new(),
+    let mut platform = CreatedPlatform {
+        objects: Vec::new(),
         registered: HashMap::new(),
     };
     for entry in &entries {
@@ -48,10 +72,9 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
             targets.push(None);
             continue;
         }
-        if entry.model != MOCK_CPU {
-            return Err(entry.error(&format!("TypeNotResolved: {}", entry.model)));
-        }
-        let id = platform.cpus.len();
+        let model = Model::parse(&entry.model)
+            .ok_or_else(|| entry.error(&format!("TypeNotResolved: {}", entry.model)))?;
+        let id = platform.objects.len();
         let previous = if entry.local {
             // An include reached through more than one path refers to the same local scope.
             locals.insert((entry.source.as_path(), entry.name.as_str()), id)
@@ -59,9 +82,13 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
             globals.insert(entry.name.as_str(), id)
         };
         if previous.is_some() {
-            return Err(entry.error("VariableAlreadyDeclared"));
+            return Err(entry.error("VariableAlreadyDeclared: repeated type declaration"));
         }
-        platform.cpus.push(Cpu::default());
+        platform.objects.push(CreatedObject {
+            model,
+            cpu: (model == Model::Cpu).then(Cpu::default),
+            range: None,
+        });
         targets.push(Some(id));
     }
     let resolve = |scope: &Path, name: &str| {
@@ -75,9 +102,20 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
         let id = declared
             .or_else(|| resolve(&entry.source, &entry.name))
             .ok_or_else(|| entry.error("MissingReference: no declaration for overlay"))?;
-        let cpu = &mut platform.cpus[id];
-        if entry.registration.is_some() {
-            entry.sysbus()?;
+        if let Some(registration) = &entry.registration {
+            if platform.objects[id].model == Model::External {
+                return Err(entry.error("NoUsableRegisterInterface: external object"));
+            }
+            if registration.starts_with("sysbus <") {
+                let (_, Some(RegistrationValue::Range { base, size })) =
+                    registration_point(registration).map_err(|error| entry.error(error))?
+                else {
+                    return Err(entry.error("expected sysbus range registration"));
+                };
+                platform.objects[id].range = Some((base, size));
+            } else {
+                entry.sysbus()?;
+            }
             let name = format!("sysbus.{}", entry.alias.as_deref().unwrap_or(&entry.name));
             if platform.registered.insert(name, id).is_some() {
                 return Err(entry.error("duplicate sysbus registration"));
@@ -88,6 +126,19 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
                 .split_once(':')
                 .ok_or_else(|| format!("{source}: expected CPU property"))?;
             let value = value.trim();
+            let target = if name.trim() == "OtherCpu" && platform.objects[id].model == Model::Cpu {
+                let target = resolve(&entry.source, value)
+                    .ok_or_else(|| format!("{source}: MissingReference: {value}"))?;
+                if platform.objects[target].model != Model::Cpu {
+                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
+                }
+                Some(target)
+            } else {
+                None
+            };
+            let Some(cpu) = &mut platform.objects[id].cpu else {
+                return Err(format!("{source}: PropertyDoesNotExist: {name}"));
+            };
             match name.trim() {
                 "Placeholder" => {
                     cpu.placeholder = Some(
@@ -95,12 +146,7 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
                             .map_err(|error| format!("{source}: TypeMismatch: {error}"))?,
                     )
                 }
-                "OtherCpu" => {
-                    cpu.other_cpu = Some(
-                        resolve(&entry.source, value)
-                            .ok_or_else(|| format!("{source}: MissingReference: {value}"))?,
-                    )
-                }
+                "OtherCpu" => cpu.other_cpu = target,
                 "Model" => return Err(format!("{source}: PropertyNotWritable: Model")),
                 "EnumValue" => {
                     cpu.enum_value = Some(match symbolic_value(value) {

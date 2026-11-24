@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,965 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,971 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 430 |
+| 移植待ち | 424 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -410,3 +410,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `UsingTests` の残り9件を移植した。REPL を解析し、MockCPU を生成する Rust の経路でファイル内ローカル参照、インクルード間の参照とオーバーライド順を検証した。登録後の `sysbus.cpu` から最終プロパティ値を取得し、9件が合格した。[公式IDとの対応](nunit-evidence/targeted-using-creation.tsv)・[実行ログ](nunit-evidence/targeted-using-creation.log)
 
 `VerificationTests` の8件を移植した。空宣言、不明な型、文字列・列挙値の型不一致、読み取り専用・重複・未知のプロパティ、および未解決参照について、上流と同じ入力と診断分類を検証した。対象実行で8件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-verification.tsv)・[実行ログ](nunit-evidence/targeted-repl-verification.log)
+
+`VerificationTests` に6件を追加した。空の周辺機器の生成とアドレス範囲への登録、宣言前後の登録、重複宣言、外部オブジェクトの登録拒否、CPU参照の型不一致を検証した。[公式IDとの対応](nunit-evidence/targeted-repl-verification-objects.tsv)・[実行ログ](nunit-evidence/targeted-repl-verification-objects.log)

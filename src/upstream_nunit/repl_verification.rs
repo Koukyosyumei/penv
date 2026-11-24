@@ -1,7 +1,7 @@
 use super::*;
 
 fn assert_error(source: &str, expected: &str) {
-    let error = creation::create_cpus(source, Path::new("."))
+    let error = creation::create_objects(source, Path::new("."))
         .err()
         .expect("expected a parsing error");
     assert!(error.contains(&format!("{expected}:")), "{error}");
@@ -84,5 +84,72 @@ fn should_fail_on_missing_reference() {
 device: Antmicro.Renode.UnitTests.Mocks.MockCPU
     OtherCpu: unknown"#,
         "MissingReference",
+    );
+}
+
+#[test]
+fn should_process_one_object() {
+    creation::create_objects(
+        r#"
+mock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"#,
+        Path::new("."),
+    )
+    .unwrap();
+}
+
+#[test]
+fn should_process_late_attach() {
+    creation::create_objects(
+        r#"
+mock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+
+mock: @sysbus <0x0, +0x100>"#,
+        Path::new("."),
+    )
+    .unwrap();
+}
+
+#[test]
+fn should_process_without_type_name_in_first_entry() {
+    creation::create_objects(
+        r#"
+mock: @sysbus <0x0, 0x1000>
+
+mock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"#,
+        Path::new("."),
+    )
+    .unwrap();
+}
+
+#[test]
+fn should_fail_if_type_is_specified_second_time() {
+    assert_error(
+        r#"
+mock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+
+mock: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"#,
+        "VariableAlreadyDeclared",
+    );
+}
+
+#[test]
+fn should_fail_on_registering_not_iperipheral() {
+    assert_error(
+        r#"
+external: Antmicro.Renode.UnitTests.Mocks.MockExternal @ sysbus
+"#,
+        "NoUsableRegisterInterface",
+    );
+}
+
+#[test]
+fn should_check_type_of_areference() {
+    assert_error(
+        r#"
+one: Antmicro.Renode.UnitTests.Mocks.MockCPU
+    OtherCpu: two
+
+two: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral"#,
+        "TypeMismatch",
     );
 }

@@ -160,12 +160,12 @@ fn backslash_should_not_be_path_separator_on_unix() {
 fn create_platform(
     source: &str,
     includes: &[(&str, &str)],
-) -> Result<creation::CpuPlatform, String> {
+) -> Result<creation::CreatedPlatform, String> {
     let files = Files::new();
     for (name, content) in includes {
         fs::write(files.0.join(name), content).unwrap();
     }
-    creation::create_cpus(source, &files.0)
+    creation::create_objects(source, &files.0)
 }
 
 fn assert_override(source: &str, imports: &[(&str, &str)], expected: &str) {
