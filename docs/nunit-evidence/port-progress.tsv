@@ -14,7 +14,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TypeDescriptorComparisonTe
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.VersionToleranceTests	148	0	0	148	0	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests	49	49	0	0	0	-
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests	4	4	0	0	0	-
-src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	60	51	0	9	0	Remaining cases require the native external receiver setup and teardown, indexer reads and writes, and collection Select/ForEach dispatch.
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	60	55	0	5	0	Remaining cases require the native external receiver setup and teardown, indexer reads and writes, and collection Select/ForEach dispatch.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	5	5	0	0	0	-
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.FeaturesTests	2	1	0	1	0	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.TokenizerTests	18	18	0	0	0	-

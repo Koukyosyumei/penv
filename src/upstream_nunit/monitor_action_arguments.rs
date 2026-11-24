@@ -173,18 +173,89 @@ const SIGNATURES: &[&str] = &[
     "MethodWithNullableIntList(List<int?> numbers)",
 ];
 
+#[derive(Default)]
+struct MockExternal {
+    result: Option<String>,
+}
+
+impl MockExternal {
+    fn invoke(&mut self, words: &[&str]) -> Result<String, String> {
+        if words == ["Clear"] {
+            self.result = None;
+            return Ok(String::new());
+        }
+        let (&index, tail) = words.split_first().ok_or("missing external action")?;
+        let indices = array(index)?
+            .into_iter()
+            .map(|item| match item {
+                ListItem::String(value) => Ok(value),
+                _ => Err("expected string index"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if !matches!(indices.len(), 1 | 2) {
+            return Err("expected one or two indices".into());
+        }
+        if let [value] = tail {
+            self.result = Some(format!("[{}]={}", indices.join(", "), quoted_value(value)?));
+            return Ok(String::new());
+        }
+        if !tail.is_empty() {
+            return Err("unexpected indexer arguments".into());
+        }
+        let values = self
+            .result
+            .iter()
+            .chain(&indices)
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        Ok(format!("{}D: {}", indices.len(), values.join(" and ")))
+    }
+}
+
 fn execute(command: &str) -> Result<String, String> {
+    use std::{cell::RefCell, rc::Rc};
     let mut monitor = MonitorBuiltins::default();
     let mut machine = Machine::without_default_ram();
+    let external = Rc::new(RefCell::new(None::<MockExternal>));
+    let setup = Rc::clone(&external);
     AutoLoadCommand {
         name: "emulation",
         description: "MockExtension",
         method_signatures: SIGNATURES,
-        execute: fixture_emulation,
+        execute: Box::new(move |machine, words| {
+            if words == ["AddMockExternal"] {
+                *setup.borrow_mut() = Some(MockExternal::default());
+                Ok(String::new())
+            } else {
+                fixture_emulation(machine, words)
+            }
+        }),
     }
     .register(&mut monitor)
     .unwrap();
-    monitor.execute(&mut machine, command).unwrap()
+    AutoLoadCommand {
+        name: "external",
+        description: "MockExternal",
+        method_signatures: &[],
+        execute: Box::new(move |_, words| {
+            external
+                .borrow_mut()
+                .as_mut()
+                .ok_or("external not registered")?
+                .invoke(words)
+        }),
+    }
+    .register(&mut monitor)
+    .unwrap();
+    monitor
+        .execute_registered_script(&mut machine, "emulation AddMockExternal")
+        .unwrap();
+    let output = monitor.execute_registered_script(&mut machine, command);
+    monitor
+        .execute_registered_script(&mut machine, "external Clear")
+        .unwrap();
+    output
 }
 
 fn check(command: &str, expected: &str) {
@@ -554,4 +625,27 @@ fn single_element_passed_as_list_parameter() {
 #[test]
 fn single_element_passed_as_non_params_array_parameter() {
     check_error("emulation MethodWithArrayThenString 1 \",\"");
+}
+
+#[test]
+fn indexer_one_dget() {
+    check("external[\"a\"]", "1D: a");
+}
+
+#[test]
+fn indexer_one_dset_get() {
+    check("external[\"a\"] \"b\"; external[\"c\"]", "1D: [a]=b and c");
+}
+
+#[test]
+fn indexer_two_dget() {
+    check("external[\"a\", \"b\"]", "2D: a and b");
+}
+
+#[test]
+fn indexer_two_dset_get() {
+    check(
+        "external[\"a\", \"b\"] \"c\"; external[\"d\", \"e\"]",
+        "2D: [a, b]=c and d and e",
+    );
 }

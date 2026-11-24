@@ -102,3 +102,29 @@ pub(crate) fn words(text: &str) -> Result<Vec<&str>, String> {
     }
     Ok(result)
 }
+
+pub(crate) fn commands(text: &str) -> impl Iterator<Item = &str> {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut brackets = 0usize;
+    text.split(move |ch| {
+        if let Some(delimiter) = quote {
+            if !std::mem::take(&mut escaped) {
+                if ch == '\\' {
+                    escaped = true;
+                } else if ch == delimiter {
+                    quote = None;
+                }
+            }
+        } else {
+            match ch {
+                '"' | '\'' => quote = Some(ch),
+                '[' => brackets += 1,
+                ']' => brackets = brackets.saturating_sub(1),
+                ';' => return brackets == 0,
+                _ => {}
+            }
+        }
+        false
+    })
+}

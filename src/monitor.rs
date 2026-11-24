@@ -589,7 +589,7 @@ pub(crate) struct AutoLoadCommand {
     pub(crate) name: &'static str,
     pub(crate) description: &'static str,
     pub(crate) method_signatures: &'static [&'static str],
-    pub(crate) execute: fn(&mut Machine, &[&str]) -> Result<String, String>,
+    pub(crate) execute: Box<dyn FnMut(&mut Machine, &[&str]) -> Result<String, String>>,
 }
 
 impl AutoLoadCommand {
@@ -614,19 +614,40 @@ pub(crate) struct MonitorBuiltins {
 }
 
 impl MonitorBuiltins {
+    pub(crate) fn execute_registered_script(&mut self, machine: &mut Machine, text: &str) -> Result<String, String> {
+        let mut output = String::new();
+        for command in action_arguments::commands(text) {
+            let command = command.trim();
+            if command.is_empty() {
+                continue;
+            }
+            let response = self.execute(machine, command)
+                .ok_or_else(|| format!("unknown monitor command {command}"))??;
+            output.push_str(&response);
+        }
+        Ok(output)
+    }
+
     pub(crate) fn execute(&mut self, machine: &mut Machine, text: &str) -> Option<Result<String, String>> {
         let command = text.split_whitespace().next()?;
-        if let Some(registered) = self.commands.get(command) {
+        let object = command.split_once('[').map_or(command, |(name, _)| name);
+        if let Some(registered) = self.commands.get_mut(object) {
             return Some(
-                action_arguments::words(text)
-                    .and_then(|words| (registered.execute)(machine, &words[1..]))
-                    .map_err(|error| {
-                        if registered.method_signatures.is_empty() {
-                            error
-                        } else {
-                            format!("{error}\nThe following methods are available:\n{}", registered.method_signatures.join("\n"))
-                        }
-                    }),
+                action_arguments::words(text).and_then(|mut words| {
+                    let indexer = words[0].strip_prefix(object).filter(|tail| !tail.is_empty());
+                    if let Some(indexer) = indexer {
+                        words[0] = indexer;
+                        (registered.execute)(machine, &words)
+                    } else {
+                        (registered.execute)(machine, &words[1..])
+                    }
+                }).map_err(|error| {
+                    if registered.method_signatures.is_empty() {
+                        error
+                    } else {
+                        format!("{error}\nThe following methods are available:\n{}", registered.method_signatures.join("\n"))
+                    }
+                }),
             );
         }
         if !matches!(command, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file") {

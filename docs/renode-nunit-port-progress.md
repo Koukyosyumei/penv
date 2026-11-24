@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,155 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,159 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 240 |
+| 移植待ち | 236 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -490,3 +490,5 @@ CLINT の CPU スコープ付き登録を実際のプラットフォームロー
 `ActionArguments` の配列・リスト22件を追加した。角括弧を含む引数を保持し、空配列、末尾カンマ、名前付き配列、`null` を含む整数配列、文字列の可変長引数を、上流と同じコマンドと出力で照合した。同名の2件は NUnit ID で区別した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-arrays.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-arrays.log)
 
 引数の失敗12件を追加した。重複、名前付き引数の後の不正な位置指定、要素型、閉じていない角括弧などを拒否し、モニターの診断に候補メソッド一覧が含まれることを照合した。対象の51件が合格した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-errors.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-errors.log)
+
+外部オブジェクトの1次元・2次元インデクサー4件を追加した。ネイティブの `MockExternal` を `emulation AddMockExternal` で作成し、上流と同じ入力で読み書きし、`external Clear` を実行する。対象の55件が合格した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-indexers.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-indexers.log)

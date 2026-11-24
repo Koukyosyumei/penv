@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.IndexerOneDGet	0-1063	upstream_nunit::monitor_action_arguments::indexer_one_dget	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.IndexerOneDSetGet	0-1064	upstream_nunit::monitor_action_arguments::indexer_one_dset_get	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.IndexerTwoDGet	0-1065	upstream_nunit::monitor_action_arguments::indexer_two_dget	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.IndexerTwoDSetGet	0-1066	upstream_nunit::monitor_action_arguments::indexer_two_dset_get	passed

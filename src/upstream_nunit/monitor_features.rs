@@ -11,7 +11,7 @@ fn auto_load_command() {
         name: "featuresTests.TestCommand",
         description: "is just a test command.",
         method_signatures: &[],
-        execute: |_, _| Ok(String::new()),
+        execute: Box::new(|_, _| Ok(String::new())),
     };
     let description = command.description;
     command.register(&mut monitor).unwrap();
