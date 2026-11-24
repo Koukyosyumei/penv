@@ -487,6 +487,56 @@ impl Machine {
             .translate_read(&mut self.bus, address)
     }
 
+    pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
+        Ok(self.named_hart(name)?.program_counter())
+    }
+
+    pub(crate) fn monitor_named_register(
+        &mut self, name: &str, register: &str, value: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        const ABI: [&str; 32] = [
+            "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2",
+            "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9",
+            "s10", "s11", "t3", "t4", "t5", "t6",
+        ];
+        let hart = self.named_hart(name)?;
+        let register = register.to_ascii_lowercase();
+        if value.is_none() && matches!(register.as_str(), "mepc" | "mcause" | "mtval") {
+            let result = match &hart.rv64 {
+                Some(cpu) => cpu.monitor_register(&register),
+                None if hart.thumb.is_none() => hart.csr.monitor_trap_register(&register).map(u64::from),
+                None => None,
+            };
+            return result.map(Some).ok_or_else(|| format!("unsupported monitor register {register}"));
+        }
+        let index = match register.as_str() {
+            "fp" => Some(8),
+            register => ABI.iter().position(|name| *name == register).or_else(|| {
+                let value = register.strip_prefix('x').unwrap_or(register);
+                crate::parse_address(value).ok().map(|index| index as usize)
+            }),
+        }.filter(|index| *index < 32)
+            .ok_or_else(|| format!("unsupported monitor register {register}"))?;
+        if let Some(cpu) = &mut hart.rv64 {
+            return match value {
+                Some(_) if index == 0 => Err("The 'X0' register is read-only.".into()),
+                Some(value) => { cpu.initialize_gpr(index, value); Ok(None) }
+                None => Ok(cpu.monitor_register(&format!("x{index}"))),
+            };
+        }
+        let value = value.map(u32::try_from).transpose().map_err(|_| "register value exceeds RV32 width")?;
+        hart.monitor_integer_register(index as u32, value).map(|value| value.map(u64::from))
+    }
+
+    pub(crate) fn monitor_step_riscv(&mut self, name: &str, steps: u64, output: &mut impl Write)
+        -> Result<(Stop, u64), String>
+    {
+        let index = std::iter::once(&self.primary).chain(&self.secondary)
+            .position(|hart| hart.name.as_deref() == Some(name) && hart.thumb.is_none())
+            .ok_or_else(|| format!("unknown RISC-V CPU {name:?}"))?;
+        self.run_selected(steps, Some(index), output, |_, _| false)
+    }
+
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &mut hart.rv64 {
@@ -2013,7 +2063,7 @@ impl Hart {
                     .filter(|(address, _)| *address == self.pc)
                 {
                     match hook {
-                        CpuHook::Log(message) if bus.monitor_log_enabled(0) => eprintln!("{message}"),
+                        CpuHook::Log(message) if bus.monitor_log_enabled(1) => eprintln!("{message}"),
                         CpuHook::Log(_) => {}
                         CpuHook::WriteDoubleWord(address, value) => bus
                             .write_scalar(*address, 4, *value, output, true)

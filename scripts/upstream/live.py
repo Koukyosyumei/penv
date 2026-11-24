@@ -194,6 +194,8 @@ class LiveEndpoint(Endpoint):
                 self.log_level = command
                 return ""
             return self.operation(command)
+        if len(tokens) in {2, 3} and tokens[:2] == ["machine", "UserState"]:
+            return self.operation(command)
         if command == "using sysbus":
             self.using_bus = True
             return ""
@@ -243,6 +245,11 @@ class LiveEndpoint(Endpoint):
             return self.format_number(data) if reading else data
         cpu = r"(?:sysbus\.)?cpu[\w]* "
         number = r"(?:0x[\da-fA-F]+|\d+)"
+        if re.fullmatch(cpu + r'(?:GetRegister "?[\w]+"?|SetRegister "?[\w]+"? ' + number
+                        + r'|MEPC|MCAUSE|MTVAL)', command):
+            reading = " SetRegister " not in command
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if reading else value
         if re.fullmatch(cpu + r"(?:PC(?: " + number + r")?|IsHalted(?: (?:true|false|True|False))?|"
                         r"Pause|Resume|IsPaused|Step(?: " + number + r")?|"
                         r"EvaluateConditionCode " + number + r'|GetRegister "?[cx]psr"?)', command):

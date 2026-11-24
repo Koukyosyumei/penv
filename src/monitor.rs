@@ -61,6 +61,7 @@ pub struct RuntimeCommand {
 enum Action {
     RunFor(u64),
     LogLevel(i8),
+    UserState(Option<String>),
     RunRemaining,
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
@@ -82,6 +83,7 @@ enum Action {
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
+    CpuRegister(String, String, Option<u64>),
     AddCpuHook(String, Option<u32>, CpuHook),
     NvicLog(String),
     NvicWrite(String, u32, u32),
@@ -315,6 +317,15 @@ pub fn run(
                         })
                 }
             },
+            Action::CpuStep(cpu, steps) if !machine.is_cortex_m() => {
+                let chunk = (*steps).min(budget);
+                let start = machine.elapsed_steps();
+                machine.monitor_step_riscv(cpu, chunk, &mut output).map(|(stop, count)| {
+                    retired += count;
+                    budget -= machine.elapsed_steps().wrapping_sub(start);
+                    (stop != Stop::Limit || chunk < *steps).then_some(stop)
+                })
+            }
             Action::RunFor(steps) | Action::CpuStep(_, steps) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
@@ -379,6 +390,16 @@ pub fn run(
                     None
                 })
             }
+            Action::UserState(value) => {
+                if let Some(value) = value {
+                    machine.bus.monitor_user_state.clone_from(value);
+                    Ok(None)
+                } else {
+                    writeln!(output.output, "{}", machine.bus.monitor_user_state)
+                        .map(|()| None)
+                        .map_err(|error| error.to_string())
+                }
+            }
             Action::LogLevel(level) => {
                 machine.bus.set_monitor_log_level(*level);
                 Ok(None)
@@ -394,11 +415,18 @@ pub fn run(
                         .map_err(|e| e.to_string())
                 })
                 .map(|()| None),
-            Action::ReadCpuPc(cpu) => machine.cortex_m_monitor_cpu(cpu).and_then(|hart| {
-                writeln!(output.output, "0x{:08x}", hart.pc)
-                    .map_err(|e| e.to_string())
-                    .map(|()| None)
+            Action::ReadCpuPc(cpu) => machine.monitor_named_pc(cpu).and_then(|pc| {
+                writeln!(output.output, "0x{pc:08x}")
+                    .map_err(|error| error.to_string()).map(|()| None)
             }),
+            Action::CpuRegister(cpu, register, value) => {
+                machine.monitor_named_register(cpu, register, *value).and_then(|value| {
+                    if let Some(value) = value {
+                        writeln!(output.output, "0x{value:x}").map_err(|error| error.to_string())?;
+                    }
+                    Ok(None)
+                })
+            }
             // Synchronous script actions run at completed instruction boundaries.
             Action::SynchroniseQuantum => Ok(None),
             Action::CpuWait(cpu, asserted) => {
@@ -1041,35 +1069,31 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
             {
                 return Err(error("expected triple-quoted hook body"));
             }
-            let mut body = Vec::new();
+            let mut raw_body = String::new();
             loop {
-                let (_, command) = cursor.next().ok_or_else(|| error("unterminated hook"))?;
-                let command = command.trim();
-                if command == "\"\"\"" {
+                let (_, command) = cursor.next().ok_or_else(|| error("unterminated variable"))?;
+                if command.trim() == "\"\"\"" {
                     break;
                 }
-                if !command.is_empty() && !command.starts_with('#') {
-                    body.push(command);
-                }
+                raw_body.push_str(command);
+                raw_body.push('\n');
             }
-            let [assign, halt, ..] = body.as_slice() else {
-                return Err(error("unsupported hook body"));
-            };
-            let (variable, hart) = assign
-                .split_once(" = machine['sysbus.")
-                .and_then(|(variable, suffix)| Some((variable, suffix.strip_suffix("']")?)))
-                .ok_or_else(|| error("unsupported hook machine lookup"))?;
-            if variable.is_empty()
-                || hart.is_empty()
-                || *halt != format!("{variable}.IsHalted = True")
-                || !matches!(
-                    body.get(2..),
-                    Some([] | ["print(\"halted management CPU\")"])
-                )
+            let name = name.trim_start_matches('$');
+            let body: Vec<_> = raw_body.lines().map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#')).collect();
+            if let [assign, halt, rest @ ..] = body.as_slice()
+                && let Some((variable, suffix)) = assign.split_once(" = machine['sysbus.")
+                && let Some(hart) = suffix.strip_suffix("']")
+                && !variable.is_empty()
+                && !hart.is_empty()
+                && *halt == format!("{variable}.IsHalted = True")
+                && matches!(rest, [] | ["print(\"halted management CPU\")"])
             {
-                return Err(error("unsupported hook body"));
+                state.boot.hooks.insert(name.into(), hart.into());
+            } else {
+                state.boot.hooks.remove(name);
             }
-            state.boot.hooks.insert(name.to_string(), hart.to_string());
+            state.variables.insert(name.into(), format!("\"{raw_body}\""));
             continue;
         }
         if let Some(declaration) = text.strip_prefix("macro ") {
@@ -1301,12 +1325,11 @@ fn execute(
     if let ["logLevel", value] = words {
         let value = resolve(value)?;
         let level = match unquote(value) {
-            "-1" | "Debug" => -1,
-            "0" | "Info" => 0,
-            "1" | "Warning" => 1,
-            "2" | "Error" => 2,
-            "3" => 3,
-            "Noisy" if value.starts_with('"') => -2,
+            "-1" | "Noisy" => -1,
+            "0" | "Debug" => 0,
+            "1" | "Info" => 1,
+            "2" | "Warning" => 2,
+            "3" | "Error" => 3,
             _ => return Err(format!("unsupported monitor log level {value:?}")),
         };
         if boot.started || !boot.runtime.is_empty() {
@@ -1334,6 +1357,13 @@ fn execute(
             } else {
                 Action::LoadMemory(path)
             })
+        }
+        ["machine", "UserState", value @ ..] if value.len() <= 1 => {
+            let value = value.first().map(|value| {
+                let value = resolve(value)?;
+                Ok::<_, String>(path_value(unquote(value.strip_prefix('@').unwrap_or(value))))
+            }).transpose()?;
+            Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
         ["mach" | "machine", "set", "0"] => Some(Action::SelectMachineZero),
@@ -1764,6 +1794,25 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
+        [target, "SetRegister", register, value] if boot.started || !boot.runtime.is_empty() => {
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(),
+                unquote(resolve(register)?).into(),
+                Some(crate::parse_address64(resolve(value)?)?),
+            ))
+        }
+        [target, "GetRegister", register] if boot.started || !boot.runtime.is_empty() => {
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(),
+                unquote(resolve(register)?).into(),
+                None,
+            ))
+        }
+        [target, register @ ("MEPC" | "MCAUSE" | "MTVAL")] => {
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), None,
+            ))
+        }
         [target, "AddHook", ..] if !text.contains("`sysbus GetSymbolAddress ") => {
             let cpu = resolve(target)?;
             let args = text[target.len()..].trim_start()["AddHook".len()..].trim_start();
@@ -1907,6 +1956,7 @@ fn execute(
                         | Action::CreateHostPty(..)
                         | Action::RtcMode(_)
                         | Action::RtcDateTime
+                        | Action::UserState(_)
                 ))
         {
             return Err("runtime commands require a loaded platform and firmware".into());
