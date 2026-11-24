@@ -91,6 +91,30 @@ class SuiteListener:
         write_case(case, dict(record, provisional=True), directory)
 
 
+class VirtualSleepListener:
+    ROBOT_LISTENER_API_VERSION = 2
+
+    def __init__(self, endpoint):
+        self.endpoint = endpoint
+        self.mirrored = {}
+
+    def start_keyword(self, name, attrs):
+        if name != "BuiltIn.Sleep" or not self.endpoint.started or not self.endpoint.proc:
+            return
+        from robot.libraries.BuiltIn import BuiltIn
+        from robot.utils import timestr_to_secs
+        builtin = BuiltIn()
+        try:
+            seconds = timestr_to_secs(builtin.replace_variables(attrs["args"][0]))
+            seconds = self.endpoint.duration(str(seconds))
+        except (ValueError, TypeError, IndexError):
+            return
+        result = self.endpoint.run_keyword("Execute Command", [f"emulation RunFor {seconds}"])
+        if result["status"] == "PASS":
+            test = builtin.get_variable_value("${TEST NAME}")
+            self.mirrored[test] = self.mirrored.get(test, 0) + 1
+
+
 def run_suite(task, *, options, renode, binary, assets):
     """Pool worker entry point. Each worker uses its own Robot process state."""
     from robot_tests_provider import RobotTestSuite
@@ -138,12 +162,16 @@ def run_suite(task, *, options, renode, binary, assets):
             xml = out / "robot.xml"
             endpoint = LiveEndpoint(renode, binary, out, assets, False)
             listener = SuiteListener(endpoint, active, out, xml)
+            # This suite sleeps while a GPIO button is held. Advance its single
+            # Cortex-M machine during the same keyword before releasing the button.
+            virtual_sleep = VirtualSleepListener(endpoint) if path == "tests/platforms/STM32F072b.robot" else None
+            listeners = [listener, virtual_sleep] if virtual_sleep else [listener]
             with endpoint.server() as server:
                 worker = Thread(target=server.serve_forever, daemon=True)
                 worker.start()
                 try:
                     suite.run(output=str(xml), log=None, report=None, console="none",
-                              listener=listener, loglevel="DEBUG",
+                              listener=listeners, loglevel="DEBUG",
                               skiponfailure=[TestTag.NON_CRITICAL, TestTag.SKIPPED,
                                              TestTag.UNSTABLE],
                               variable=["SKIP_RUNNING_SERVER:True", "SAVE_LOGS:False",
@@ -163,9 +191,11 @@ def run_suite(task, *, options, renode, binary, assets):
                                 and re.search(r"No keyword with name .* found", msg.text or "")), None)
                 if missing:
                     records[name].update(status="unsupported", category="adapter_missing", reason=missing)
-                if records[name]["status"] in {"pass", "fail"} and any(
-                        keyword.get("name") == "Sleep" and keyword.get("library") == "BuiltIn"
-                        for keyword in node.iter("kw")):
+                sleeps = sum(keyword.get("name") == "Sleep" and keyword.get("library") == "BuiltIn"
+                             and keyword.find("status").get("status") != "NOT RUN"
+                             for keyword in node.iter("kw"))
+                mirrored = virtual_sleep.mirrored.get(name, 0) if virtual_sleep else 0
+                if records[name]["status"] in {"pass", "fail"} and sleeps > mirrored:
                     records[name].update(status="unsupported", category="adapter_missing",
                                          reason="requires asynchronous emulation during host Sleep")
                 if node.find("status").get("status") == "FAIL" and records[name]["status"] == "pass":

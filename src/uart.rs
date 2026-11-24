@@ -375,6 +375,7 @@ impl FailingUartPattern {
 #[derive(Default)]
 pub struct UartHistory {
     unread: VecDeque<u8>,
+    pub(crate) activity: u64,
     active: Option<UartLineMatch>,
     failures: Vec<FailingUartPattern>,
     failure: Option<String>,
@@ -463,6 +464,7 @@ impl UartHistory {
     }
 
     pub fn receive(&mut self, byte: u8) {
+        self.activity = self.activity.wrapping_add(1);
         if byte == b'\n' && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
             if self.unread.len() == UART_HISTORY_BYTES {
                 self.unread.pop_front();

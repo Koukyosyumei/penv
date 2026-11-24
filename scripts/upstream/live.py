@@ -25,8 +25,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         "Create Log Tester": "create_log_tester",
         "Wait For Log Entry": "wait_for_log",
         "Write Line To Uart": "write_line",
+        "Write Char On Uart": "write_char",
+        "Test If Uart Is Idle": "uart_idle",
         "Create LED Tester": "create_led",
         "Assert LED State": "assert_led",
+        "Assert And Hold LED State": "hold_led",
         "Execute Script": "execute_script",
         "Download File": "download_file",
         "Allocate Temporary File": "temporary_file",
@@ -328,6 +331,14 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if (re.fullmatch(r"(?:sysbus\.)?[\w.]+ OnGPIO (?:0x[0-9a-fA-F]+|\d+) (?:true|false)", command, re.I)
                 or re.fullmatch(r"showAnalyzer (?:sysbus\.)?[\w.]+(?: LoggingUartAnalyzer)?", command)):
             return self.operation(command)
+        if re.fullmatch(r"(?:sysbus\.)?timer\d+ Frequency|sysbus IsPeripheralEnabled (?:sysbus\.)?timer\d+", command):
+            return self.operation(command, assertion=True).strip()
+        if re.fullmatch(r"sysbus LogPeripheralAccess (?:sysbus\.)?rcc|(?:sysbus\.)?rcc WriteDoubleWord \S+ \S+", command):
+            return self.operation(command)
+        if re.fullmatch(r"emulation RunFor \d+(?:\.\d+)?", command) and self.started:
+            return self.operation(command)
+        if command == "emulation GetTimeSourceInfo":
+            return self.operation(command, assertion=True)
         scalar = r"(?:Read|Write)(?:Byte|Word|DoubleWord|QuadWord)"
         if self.using_bus and re.match(scalar + r" ", command):
             command = "sysbus " + command
@@ -580,6 +591,18 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def uart_absence(self, expected, *args):
         self.wait_for("ShouldNotBeOnUart", expected, *args)
 
+    def write_char(self, char):
+        if not self.started or not self.uart or len(char) != 1 or not char.isascii():
+            raise Unsupported("requires one ASCII character and a running UART tester")
+        self.operation(f"{self.uart} WriteLine {self.literal(char)} None")
+        return {"Line": ""}
+
+    def uart_idle(self, timeout):
+        if not self.uart:
+            raise Unsupported("requires a UART tester")
+        self.started = True
+        self.operation(f"TestMonitorUartIdle {self.duration(timeout)}")
+
     def write_line(self, content, option="waitForEcho=true"):
         if not self.started or not self.uart:
             raise Unsupported("requires a running UART tester")
@@ -600,11 +623,15 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.led = led
         return 0
 
-    def assert_led(self, state, timeout=None):
+    def hold_led(self, state, timeout, hold):
+        self.assert_led(state, timeout, self.duration(hold))
+
+    def assert_led(self, state, timeout=None, hold=None):
         state = state.lower()
         if not self.started or not self.led or state not in {"true", "false"}:
             raise Unsupported("LED state needs a running machine and attached tester")
         if timeout is not None and "=" in timeout:
             timeout = self.option(timeout, "timeout")
         deadline = self.duration(timeout if timeout is not None else self.led_timeout)
-        self.operation(f"waitForLed {self.led} {state} {deadline}", assertion=True)
+        interval = "" if hold is None else f" {hold}"
+        self.operation(f"waitForLed {self.led} {state} {deadline}{interval}", assertion=True)

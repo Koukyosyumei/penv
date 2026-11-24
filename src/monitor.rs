@@ -74,6 +74,8 @@ enum Action {
     GpioWire(String, u8, String, u8),
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
+    TimeSourceInfo,
+    UartIdle(u64),
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
     SaveMemory(PathBuf),
@@ -116,6 +118,9 @@ enum Action {
     NvicPending(String, u32),
     NvicClocked(String, bool),
     Frequency(String, u32),
+    TimerProperty(String, bool),
+    TraceRcc,
+    WriteRcc(u32, u32),
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
@@ -338,6 +343,13 @@ pub fn run(
                     (stop != Stop::Limit || chunk < *steps).then_some(stop)
                 })
             }
+            Action::TimeSourceInfo => {
+                let seconds = machine.elapsed_steps() / u64::from(machine.bus.step_hz());
+                writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}",
+                    seconds / 3600, seconds / 60 % 60, seconds % 60)
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
+            Action::UartIdle(_) => Err("UART idle check requires the live monitor".into()),
             Action::RunFor(steps) | Action::CpuStep(_, steps) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
@@ -542,6 +554,16 @@ pub fn run(
                 .bus
                 .pend_nvic_exception(target, *exception)
                 .map(|()| None),
+            Action::TimerProperty(target, enabled) => machine.bus.timer_properties(target).and_then(|(frequency, gate)| {
+                let value = if *enabled { u32::from(gate) } else { frequency };
+                writeln!(output.output, "{value}").map(|()| None).map_err(|error| error.to_string())
+            }),
+            Action::TraceRcc => machine.bus.trace_rcc().map(|()| None),
+            Action::WriteRcc(offset, value) => machine.bus.rcc_base().and_then(|base| {
+                let address = base.checked_add(*offset).ok_or("RCC address overflow")?;
+                machine.bus.write_scalar(address, 4, *value, output.output, true)
+                    .map(|()| None).map_err(|error| error.to_string())
+            }),
             Action::Frequency(target, frequency) => {
                 machine.bus.set_frequency(target, *frequency).map(|()| None)
             }
@@ -712,6 +734,18 @@ pub fn serve(
         });
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
+            (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
+                let result = machine.bus.uart_activity().and_then(|(id, previous)| {
+                    machine.run_until(*steps, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
+                });
+                match result {
+                    Ok((Stop::Limit, _)) => frame(&mut output, "MATCH", &[]),
+                    Ok((Stop::OutputMatch, _)) => frame(&mut output, "FAIL", b"UART was not idle"),
+                    Ok((stop, _)) => frame(&mut output, "STOP", format!("{stop:?}").as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
+
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
                     let stop = drive_uart_watch(machine, watch, *timeout, &mut bytes);
@@ -1454,6 +1488,17 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        ["emulation", "GetTimeSourceInfo"] if boot.started => Some(Action::TimeSourceInfo),
+        ["TestMonitorUartIdle", timeout] if boot.started => Some(Action::UartIdle(duration_steps(resolve(timeout)?)?)),
+
+        [target, "Frequency"] if boot.started => Some(Action::TimerProperty(
+            target.trim_start_matches("sysbus.").to_owned(), false)),
+        ["sysbus", "IsPeripheralEnabled", target] if boot.started => Some(Action::TimerProperty(
+            target.trim_start_matches("sysbus.").to_owned(), true)),
+        ["sysbus", "LogPeripheralAccess", "rcc" | "sysbus.rcc"] if boot.started => Some(Action::TraceRcc),
+        ["rcc" | "sysbus.rcc", "WriteDoubleWord", offset, value] if boot.started => Some(Action::WriteRcc(
+            crate::parse_address(resolve(offset)?)?, crate::parse_address(resolve(value)?)?)),
+
         ["ConnectMonitorGpio", source, output, target, input] if boot.started => Some(Action::GpioWire(
             (*source).to_owned(), output.parse().map_err(|_| "invalid source GPIO pin")?,
             (*target).to_owned(), input.parse().map_err(|_| "invalid target GPIO pin")?,

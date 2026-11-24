@@ -5030,6 +5030,17 @@ impl Bus {
         Ok(UartWatch::Tester(id))
     }
 
+    pub(crate) fn uart_activity(&mut self) -> Result<(usize, u64), String> {
+        let (id, TesterHistory::Text(history)) = self.uart_tester(None)? else {
+            return Err("unsupported idle check on a binary UART tester".into());
+        };
+        Ok((id, history.activity))
+    }
+
+    pub(crate) fn uart_activity_changed(&self, id: usize, previous: u64) -> bool {
+        matches!(&self.uart_testers[id].1, TesterHistory::Text(history) if history.activity != previous)
+    }
+
     pub fn uart_tester_matched_line(&self, watch: UartWatch) -> Option<String> {
         let UartWatch::Tester(id) = watch else { return None };
         match &self.uart_testers.get(id)?.1 {
@@ -7234,7 +7245,9 @@ impl Bus {
                     };
                     if offset == reset_register && control.timer_in_reset(clock) {
                         if self.trace_rcc {
-                            eprintln!("Resetting {}", clock.alias().unwrap_or(&timer.name));
+                            let message = format!("Resetting {}", clock.alias().unwrap_or(&timer.name));
+                            crate::monitor_log::record(0, &message);
+                            eprintln!("{message}");
                         }
                         timer.reset();
                     }
