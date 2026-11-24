@@ -1060,3 +1060,16 @@ target/renode-venv/bin/python scripts/upstream/run.py --rust-monitor \
 `bb0d243` の未変更 Robot 実行は、モニター保存・復元の2件、
 HEX、STM32F072b Console Echo が合格。残り2,193件は未実行
 （`target/monitor-ordered-save-robot/results.json`）。
+
+`f7547a7` は RESC の保存境界以降にあるエイリアス宣言とマクロ宣言を
+Rust の実行順に組み込む。固定 Renode と通常 CLI で、再定義後の
+`printenv` は `say = log` と `echo 456` のマクロを、復元後は
+`say = echo` と `echo 123` のマクロを表示した
+（`target/monitor-declaration-order-proof/`）。同じ順序を CLI 回帰テストで
+確認した。Rust モニターテスト22件と、未変更の保存・復元・HEX の3件が合格。
+残り2,194件は未実行（`target/monitor-declaration-order-robot/results.json`）。
+
+変数をファイル引数とする `Save $snapshot` と `Load $snapshot` は
+固定 Renode が拒否したため、このバッチで動作を拡張しなかった
+（`target/monitor-dynamic-path-proof/`）。
+復元後の RESC でエイリアスやマクロを呼び出す箇所の動的解決は残っている。

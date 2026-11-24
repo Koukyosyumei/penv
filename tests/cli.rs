@@ -336,21 +336,35 @@ fn renode_resc_collapsed_stack_disables_during_chained_calls() {
 }
 
 #[test]
-fn renode_resc_guestless_snapshot_restores_monitor_variables_in_command_order() {
+fn renode_resc_guestless_snapshot_restores_monitor_state_in_command_order() {
     let directory = std::env::temp_dir().join(format!("penv-monitor-save-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
     let script = directory.join("monitor.resc");
     fs::write(&script, r#"$name="saved value"
+alias say echo
+macro greet "echo 123"
 Save @monitor.save
+alias say log
+macro greet "echo 456"
 set name "changed"
 echo $name
+printenv
 Load @monitor.save
 echo $name
+printenv
 "#).unwrap();
     let output = penv_command().args(["run", "--script"]).arg(script).output().unwrap();
     fs::remove_dir_all(directory).unwrap();
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(output.stdout, b"changed\nsaved value\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let observations: Vec<_> = stdout.lines().filter(|line| {
+        matches!(*line, "changed" | "saved value")
+            || line.starts_with("global.greet ") || line.starts_with("\tglobal.say = ")
+    }).collect();
+    assert_eq!(observations, [
+        "changed", r#"global.greet "echo 456""#, "\tglobal.say = log",
+        "saved value", r#"global.greet "echo 123""#, "\tglobal.say = echo",
+    ]);
 }
 
 #[test]
