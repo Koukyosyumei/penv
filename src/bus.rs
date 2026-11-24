@@ -6124,6 +6124,9 @@ impl Bus {
         address: u32,
         monitor: bool,
     ) -> Result<u32, BusError> {
+        if monitor && let Some(value) = self.rv64_devices.gems.iter().find_map(|gem| gem.read(address, N)) {
+            return Ok(value);
+        }
         match self.read_mapped::<N>(address) {
             Ok(value) => {
                 self.log_memory_access(false, address, N, value);
@@ -6910,6 +6913,9 @@ impl Bus {
         uart: &mut impl Write,
         monitor: bool,
     ) -> Result<(), BusError> {
+        if monitor && self.rv64_devices.gems.iter_mut().any(|gem| gem.write(address, width, value).is_some()) {
+            return Ok(());
+        }
         match self.write_mapped(address, width, value, uart, None) {
             Ok(()) => {
                 self.log_memory_access(true, address, width, value);

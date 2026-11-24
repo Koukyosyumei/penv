@@ -570,7 +570,7 @@ fn map_gem(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
     let id = property(entry, "moduleId").map_or(Ok(2), |value| number(entry, value))?;
     let revision =
         property(entry, "moduleRevision").map_or(Ok(0x118), |value| number(entry, value))?;
-    if windows.is_empty() || id > 0xfff || revision > 0xffff {
+    if windows.is_empty() || id > u64::from(u16::MAX) || revision > u64::from(u16::MAX) {
         return Err(entry.error("invalid Cadence GEM registration or module ID"));
     }
     let gems = &mut machine.bus.rv64_devices.gems;
@@ -579,7 +579,7 @@ fn map_gem(machine: &mut Machine, entry: &Entry) -> Result<(), String> {
     gems.push(Gem::new(
         entry.name.clone(),
         windows,
-        (id << 16 | revision) as u32,
+        ((id & 0xfff) << 16 | revision) as u32,
         index,
     ));
     Ok(())
