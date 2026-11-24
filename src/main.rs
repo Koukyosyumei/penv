@@ -1,6 +1,7 @@
 mod andes_csr;
 mod bitmanip;
 mod bus;
+mod clic;
 mod clint;
 mod collapsed_profile;
 mod compressed;

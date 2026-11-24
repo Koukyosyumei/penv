@@ -2020,6 +2020,10 @@ impl Hart {
         self.translations.clear();
     }
 
+    pub(crate) fn enable_clic(&mut self) {
+        self.csr.enable_clic();
+    }
+
     pub fn configure_interrupt_mode(&mut self, mode: crate::csr::InterruptMode) {
         self.csr.configure_interrupt_mode(mode);
     }
@@ -2243,6 +2247,27 @@ impl Hart {
         }
         let clint = bus.clint.as_mut().map_or(0, |clint| clint.tick(self.slot));
         let mut pending = clint;
+        if let Some(clic) = bus.clic.as_mut() {
+            clic.sample_clint(clint);
+            if self.csr.clic_mode() {
+                pending = 0;
+                if let Some(interrupt) = clic.machine_interrupt()
+                    && let Some((target, indirect)) = self.csr.clic_interrupt(self.pc, interrupt)
+                {
+                    clic.acknowledge();
+                    if indirect {
+                        clic.clear_edge(interrupt.id);
+                    }
+                    self.pc = if indirect {
+                        bus.read_scalar::<4>(target, false)
+                            .map_err(|e| format!("CLIC vector at {target:#x}: {e}"))?
+                    } else {
+                        target
+                    };
+                    return Ok(Step::Trap);
+                }
+            }
+        }
         let mut time = bus
             .clint
             .as_ref()
@@ -2741,10 +2766,12 @@ impl Hart {
                 None
             }
             0x73 if matches!(funct3, 1..=3 | 5..=7) => {
-                let value = self
-                    .csr
-                    .access(insn, a)
-                    .map_err(|error| Fault::InvalidCsr(insn, error))?;
+                let value = if insn >> 20 == 0x345 {
+                    bus.clic.as_mut().and_then(|clic| self.csr.clic_next_interrupt(insn, a, clic))
+                        .ok_or_else(illegal)?
+                } else {
+                    self.csr.access(insn, a).map_err(|error| Fault::InvalidCsr(insn, error))?
+                };
                 if insn >> 20 == crate::andes_csr::MMISC_CTL
                     && (funct3 & 3 == 1 || (insn >> 15) & 31 != 0)
                     && let Some(andes) = self.csr.andes.as_ref()

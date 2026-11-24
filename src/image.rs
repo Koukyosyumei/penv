@@ -297,22 +297,26 @@ pub fn load(
             });
         }
 
-        let destination = machine
-            .bus
-            .memory(address, load_size as usize)
-            .map_err(|error| error.to_string())?;
-        let (initialized, zeroed) = destination.split_at_mut(file_size as usize);
-        read_at(&mut file, offset, initialized)?;
-        // RAM starts zeroed. Only clear BSS bytes that an earlier segment wrote.
         let start = u64::from(address);
         let zero_start = start + u64::from(file_size);
         let zero_end = start + u64::from(load_size);
-        if zero_start < zero_end {
+        if zero_end > 1 << 32 {
+            return Err(format!("ELF segment {index} exceeds the address space"));
+        }
+        for span in machine.bus.image_ram_spans(start, zero_end)? {
+            let destination = machine.bus.memory64(span.start, (span.end - span.start) as usize)
+                .expect("validated RAM span");
+            let initialized_end = span.end.min(zero_start);
+            if span.start < initialized_end {
+                read_at(&mut file, offset + span.start - start,
+                    &mut destination[..(initialized_end - span.start) as usize])?;
+            }
+            // RAM begins zeroed. Clear BSS bytes that an earlier segment initialized.
             for range in &initialized_ranges {
-                let begin = range.start.max(zero_start);
-                let end = range.end.min(zero_end);
+                let begin = range.start.max(zero_start).max(span.start);
+                let end = range.end.min(span.end);
                 if begin < end {
-                    zeroed[(begin - zero_start) as usize..(end - zero_start) as usize].fill(0);
+                    destination[(begin - span.start) as usize..(end - span.start) as usize].fill(0);
                 }
             }
         }

@@ -506,6 +506,7 @@ pub struct Bus {
     nvic_name: Option<String>,
     external_nvic_levels: u32,
     pub clint: Option<Clint>,
+    pub(crate) clic: Option<crate::clic::Clic>,
     gpio: Option<(u32, Gpio)>,
     pub timer: Option<(u32, Timer)>,
 }
@@ -2906,6 +2907,10 @@ impl Bus {
                 let other = u64::from(plic.base);
                 start < other + Plic::SIZE && other < end
             })
+            || self.clic.as_ref().is_some_and(|clic| {
+                let other = u64::from(clic.base);
+                start < other + u64::from(crate::clic::Clic::SIZE) && other < end
+            })
             || self.clint.as_ref().is_some_and(|clint| {
                 let other = u64::from(clint.base);
                 start < other + Clint::SIZE && other < end
@@ -2977,6 +2982,16 @@ impl Bus {
             ));
         }
         self.clint = Some(Clint::new(base, targets, frequency));
+        Ok(())
+    }
+
+    pub(crate) fn map_clic(&mut self, base: u32) -> Result<(), String> {
+        let start = u64::from(base);
+        let end = start + u64::from(crate::clic::Clic::SIZE);
+        if end > 1 << 32 || self.clic.is_some() || self.overlaps(start, end) {
+            return Err("invalid or overlapping CLIC mapping".into());
+        }
+        self.clic = Some(crate::clic::Clic::new(base));
         Ok(())
     }
 
@@ -5182,6 +5197,31 @@ impl Bus {
         true
     }
 
+    pub(crate) fn image_ram_spans(
+        &self, mut position: u64, end: u64,
+    ) -> Result<Vec<std::ops::Range<u64>>, String> {
+        let mut spans = Vec::new();
+        while position < end {
+            let mut low = 1;
+            let mut high = (end - position) as usize;
+            if self.ram_location(position, low, None).is_none() {
+                return Err(format!("unmapped RAM access at {position:#010x}"));
+            }
+            while low < high {
+                let mid = low + (high - low).div_ceil(2);
+                if self.ram_location(position, mid, None).is_some() {
+                    low = mid;
+                } else {
+                    high = mid - 1;
+                }
+            }
+            let next = position + low as u64;
+            spans.push(position..next);
+            position = next;
+        }
+        Ok(spans)
+    }
+
     pub fn memory64(&mut self, address: u64, width: usize) -> Option<&mut [u8]> {
         self.ram_write64(address, width, None)
     }
@@ -5897,6 +5937,12 @@ impl Bus {
             && uart.contains(address)
         {
             return Ok(uart.read(address));
+        }
+        if matches!(N, 1 | 4)
+            && let Some(clic) = self.clic.as_ref()
+            && let Some(offset) = clic.offset(address, N)
+        {
+            return Ok(clic.read(offset, N));
         }
         if N == 4
             && let Some(clint) = self.clint.as_ref()
@@ -6706,6 +6752,13 @@ impl Bus {
             && device.contains(address)
         {
             return device.write(address, value, uart).map_err(BusError::Output);
+        }
+        if matches!(width, 1 | 4)
+            && let Some(clic) = self.clic.as_mut()
+            && let Some(offset) = clic.offset(address, width)
+        {
+            clic.write(offset, width, value);
+            return Ok(());
         }
         if width == 4
             && let Some(clint) = self.clint.as_mut()

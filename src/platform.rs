@@ -558,6 +558,7 @@ fn load_platform(
     let mut cpus = Vec::new();
     let mut external_pmps = HashMap::new();
     let mut clint = None;
+    let mut clic = None;
     let mut nvic = None;
     let mut exti = None;
     let mut combiners = Vec::new();
@@ -824,7 +825,7 @@ fn load_platform(
                 }
             }
             "UART.STM32F7_USART" | "UART.STM32_UART" => stm32_uarts.push(entry),
-            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" => {
+            "UART.Murax_UART" | "UART.NS16550" | "UART.LiteX_UART" | "UART.TrivialUart" => {
                 if uart.replace(entry).is_some() {
                     return Err(entry.error("only one UART is currently supported"));
                 }
@@ -838,6 +839,11 @@ fn load_platform(
             "IRQControllers.NVIC" => {
                 if nvic.replace(entry).is_some() {
                     return Err(entry.error("only one NVIC is supported"));
+                }
+            }
+            "IRQControllers.CoreLocalInterruptController" => {
+                if clic.replace(entry).is_some() {
+                    return Err(entry.error("only one CLIC is supported"));
                 }
             }
             "IRQControllers.CoreLevelInterruptor" => {
@@ -2072,6 +2078,8 @@ fn load_platform(
                 }
                 ("hartId", value) => id = number(value).map_err(|e| entry.error(&e))? as usize,
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_10") => {}
+                ("privilegedArchitecture", "PrivilegedArchitecture.PrivUnratified")
+                | ("timeProvider", "empty") if clic.is_some() => {}
                 ("privilegedArchitecture", "PrivilegedArchitecture.Priv1_11")
                 | ("timeProvider", "empty")
                     if ibex => {}
@@ -2318,6 +2326,29 @@ fn load_platform(
         // and discards an unmapped data write.
         machine.bus.use_renode_unmapped_data();
     }
+    if let Some(entry) = clic {
+        if configs.len() != 1 || keys(entry, &["cpu"])? != [("cpu", cpu.name.as_str())] {
+            return Err(entry.error("CLIC requires one named RV32 CPU"));
+        }
+        let registrations = entry
+            .registration_list()
+            .ok_or_else(|| entry.error("missing CLIC registrations"))?;
+        let range = |register: &str| {
+            let (name, range) = register.split_once(char::is_whitespace)?;
+            let (base, size) = range.trim().strip_prefix('<')?.strip_suffix('>')?.split_once(',')?;
+            Some((name.to_owned(), number(base.trim()).ok()?,
+                  number(size.trim().strip_prefix('+')?).ok()?))
+        };
+        let regions: Vec<_> = registrations.iter().filter_map(|reg| range(reg)).collect();
+        let base = regions.iter().find_map(|(name, base, size)| {
+            (name == "sysbus" && *size == crate::clic::Clic::SIZE).then_some(*base)
+        }).ok_or_else(|| entry.error("unsupported CLIC system bus range"))?;
+        if registrations.len() != 2 || !regions.contains(&(cpu.name.clone(), 0x1000, 0x4a1)) {
+            return Err(entry.error("unsupported CLIC indirect CSR range"));
+        }
+        machine.bus.map_clic(base).map_err(|e| entry.error(&e))?;
+        machine.primary.enable_clic();
+    }
     if let Some(entry) = clint {
         let mut target_count = None;
         let mut frequency = None;
@@ -2364,7 +2395,7 @@ fn load_platform(
                 "[{},{}]->{}@[{software},{timer}]",
                 2 * slot,
                 2 * slot + 1,
-                target.name
+                clic.unwrap_or(target).name
             );
             if !wires.contains(&expected) {
                 return Err(entry.error(&format!("expected CLINT connection {expected}")));
@@ -2495,7 +2526,10 @@ fn load_platform(
         map_litex_i2s(entry, &configs, &mut machine.bus)?;
     }
     if let Some(entry) = uart {
-        if entry.model == "UART.Murax_UART" {
+        if entry.model == "UART.TrivialUart" {
+            keys(entry, &[])?;
+            machine.bus.map_trivial_uart(entry.address()?).map_err(|e| entry.error(&e))?;
+        } else if entry.model == "UART.Murax_UART" {
             let connected = direct_irq(entry, &cpu.name, 11)?;
             machine
                 .bus
