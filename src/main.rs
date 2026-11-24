@@ -1409,7 +1409,9 @@ fn run() -> Result<ExitCode, String> {
         let root = platform_root
             .as_deref()
             .unwrap_or(std::path::Path::new("."));
-        if let Ok(content) = fs::read_to_string(script)
+        let from_stdin = script == std::path::Path::new("-");
+        if !from_stdin
+            && let Ok(content) = fs::read_to_string(script)
             && content
                 .lines()
                 .any(|line| line.trim_start().starts_with("machine PyDevFromString"))
@@ -1422,7 +1424,6 @@ fn run() -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
         }
-        let from_stdin = script == std::path::Path::new("-");
         let parsed = if from_stdin {
             if !monitor_stdio {
                 return Err("--script - requires --monitor-stdio".into());

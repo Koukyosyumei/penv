@@ -371,3 +371,26 @@ LSM330、LIS2DS12、LSM303 への加速度設定を UNSUPPORTED に分類した�
 確認した。ケースごとの差分は
 `target/common-adxl-classification/classification-delta.json` にある。
 表の値は全件計測時の固定バイナリーの結果を示す。
+
+## Rust モニターへの移行
+
+`scripts/upstream/run.py --rust-monitor` は起動前の `Execute Command` を
+そのまま UTF-8 でまとめ、通常 CLI の `penv run --monitor-stdio --script -`
+に送る。起動時は `PENV-STARTUP <バイト数>\n` と本文、起動後は
+`PENV-COMMAND <バイト数>\n` と1コマンドの本文を送る。
+`run --script PATH` も同じ Rust ローダーを使う。
+Robot の証跡ディレクトリの `boot.resc` には送信した起動コマンドが残る。
+Rust が使用する公開アセットを要求した場合は、Python が取得して同じ
+起動コマンドを再送する。
+
+```sh
+target/renode-venv/bin/python scripts/upstream/run.py --rust-monitor \
+  --suite tests/unit-tests/hex.robot --out target/monitor-hex
+target/renode-venv/bin/python scripts/upstream/run.py --rust-monitor \
+  --suite tests/platforms/STM32F072b.robot --out target/monitor-f072
+```
+
+この経路では、起動前コマンドの結果は最初の起動要求で確定する。
+起動後の変数は Rust セッションに保持される。複数マシン、
+対話中のプラットフォーム再読込、汎用スナップショット、
+非同期の時間進行はこの移行の対象として残っている。

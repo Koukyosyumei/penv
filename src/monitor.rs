@@ -33,7 +33,7 @@ pub struct Boot {
     pub mtvec: Option<u32>,
     pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
-    inline_repl: Vec<String>,
+    inline_repl: Vec<(PathBuf, String)>,
     pub generated_repl: Option<GeneratedRepl>,
     pub session: Session,
     pub serial_analyzer: Option<String>,
@@ -64,7 +64,6 @@ pub struct Boot {
 pub struct Session {
     variables: HashMap<String, String>,
     machine: Option<String>,
-    using_sysbus: bool,
 }
 
 pub struct GeneratedRepl(PathBuf);
@@ -97,8 +96,20 @@ impl Boot {
             let base = fs::canonicalize(base).map_err(|e| format!("{}: {e}", base.display()))?;
             writeln!(file, "using {:?}", base.to_string_lossy()).map_err(|e| e.to_string())?;
         }
-        for source in &self.inline_repl {
-            writeln!(file, "{source}").map_err(|e| e.to_string())?;
+        for (origin, source) in &self.inline_repl {
+            for line in source.lines() {
+                let relative = line.trim_start().strip_prefix("using ")
+                    .and_then(|value| value.trim().strip_prefix('"')?.strip_suffix('"'));
+                if let Some(relative) = relative {
+                    let include = origin.join(relative);
+                    if include.is_file() {
+                        writeln!(file, "using {:?}", include.to_string_lossy())
+                            .map_err(|e| e.to_string())?;
+                        continue;
+                    }
+                }
+                writeln!(file, "{line}").map_err(|e| e.to_string())?;
+            }
         }
         self.platform = Some(path);
         self.generated_repl = Some(guard);
@@ -815,7 +826,6 @@ pub fn serve(
             ..Boot::default()
         };
         boot.session.machine.clone_from(&session.machine);
-        boot.session.using_sysbus = session.using_sysbus;
         let mut existing_machine = true;
         let parsed = command_words(text).and_then(|words| {
             if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
@@ -823,9 +833,6 @@ pub fn serve(
             }
             execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, Path::new("."), 1)
         });
-        if parsed.is_ok() {
-            session.using_sysbus = boot.session.using_sysbus;
-        }
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => frame(&mut output, "OK", &[]),
@@ -1322,7 +1329,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     .ok_or_else(|| error("expected quoted inline REPL"))?;
                 inner.replace("\\\"", "\"")
             };
-            state.boot.inline_repl.push(source);
+            state.boot.inline_repl.push((origin.to_owned(), source));
             continue;
         }
         if let Some(name) = text
@@ -1418,7 +1425,13 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     .strip_prefix("$ORIGIN/")
                     .or_else(|| value.strip_prefix("$global.ORIGIN/"))
                 {
-                    path.parent().unwrap_or(Path::new(".")).join(path_value(relative))
+                    origin.join(path_value(relative))
+                } else if let Some(relative) = value
+                    .strip_prefix("$CWD/")
+                    .or_else(|| value.strip_prefix("$global.CWD/"))
+                {
+                    let cwd = resolve(&state.variables, "$global.CWD").map_err(|e| error(&e))?;
+                    Path::new(unquote(cwd.trim_start_matches('@'))).join(path_value(relative))
                 } else {
                     let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
                     let file = unquote(value.strip_prefix('@').unwrap_or(value));
@@ -1605,20 +1618,8 @@ fn execute(
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
-    if words.is_empty() {
+    if matches!(words, [] | ["using", "sysbus"]) {
         return Ok(());
-    }
-    if words == ["using", "sysbus"] {
-        boot.session.using_sysbus = true;
-        return Ok(());
-    }
-    if boot.session.using_sysbus && matches!(words.first(),
-        Some(&("ReadByte" | "ReadWord" | "ReadDoubleWord" | "ReadQuadWord" |
-            "WriteByte" | "WriteWord" | "WriteDoubleWord" | "WriteQuadWord" |
-            "LoadELF" | "LoadHEX" | "LoadBinary"))
-    ) {
-        let qualified: Vec<_> = std::iter::once("sysbus").chain(words.iter().copied()).collect();
-        return execute(text, &qualified, variables, machine, boot, script, root, line);
     }
     let resolve = |value| resolve(variables, value);
     if let ["machine", "UserState", value] = words
@@ -3101,6 +3102,25 @@ fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_stream_preserves_bytes_for_the_live_session() {
+        let startup = concat!(
+            "set global.board @boards/test.repl\n",
+            "mach create \"example board\"\n",
+            "mach set \"example board\"\n",
+            "machine LoadPlatformDescription $board\n",
+        );
+        let runtime = "PENV-COMMAND 5\npause";
+        let input = format!("PENV-STARTUP {}\n{startup}{runtime}", startup.len());
+        let mut stream = io::Cursor::new(input.into_bytes());
+        let boot = load_session_stream(&mut stream, Path::new(".")).unwrap();
+        assert_eq!(boot.session.machine.as_deref(), Some("example board"));
+        assert_eq!(resolve(&boot.session.variables, "$board").unwrap(), "@boards/test.repl");
+        let mut remaining = String::new();
+        stream.read_to_string(&mut remaining).unwrap();
+        assert_eq!(remaining, runtime);
+    }
 
     #[test]
     fn monitor_tokens_keep_quoted_include_paths_together() {
