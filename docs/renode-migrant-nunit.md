@@ -42,5 +42,11 @@ C# の出力から得た整数バイト列と128・1024・4096バイトのフレ
 追加の Rust テストで照合した。
 [公式 ID 別の比較](nunit-evidence/migrant-comparison.tsv) · [公式生ログ](nunit-evidence/migrant-official.log) · [C# のバイト列と境界](nunit-evidence/migrant-wire.log)
 
-残りは11 fixture・2,144ケース。オブジェクトストリーム、サロゲート、フック、
+TypeDescriptorComparisonTests の11件を追加した。型階層上のフィールド移動、
+隠蔽フィールドの挿入、transient フィールド、アセンブリ版とモジュール GUID の許容条件を
+固定 C# で確認し、Rust では同じ形を明示的な型記述子で組み立てた。
+固定 C# と Rust の対象実行で11件とも合格した。
+[公式 ID 別の比較](nunit-evidence/migrant-descriptor-comparison.tsv) · [公式ログ](nunit-evidence/migrant-descriptor-official.log)
+
+残りは10 fixture・2,133ケース。オブジェクトストリーム、サロゲート、フック、
 グラフと型変更の等価性は引き続き移植待ち。

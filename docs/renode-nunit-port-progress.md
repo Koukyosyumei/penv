@@ -5,25 +5,28 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 591 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 643 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,805 |
+| 移植待ち | 2,753 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 64 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 59 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
-今回追加した対応は169件。内訳は GPIODetaching の7件、Migrant の103件、
-ReadExtensions の30件、WriteExtensions の26件、DataStorage の2件、LBA Storage の1件。
-GPIODetaching の7件は既存の GPIO ルート管理を使い、上流と同じ接続トポロジーと
-接続解除後の観測を再現した。汎用の C# SystemBus オブジェクト登録機構は使わない。
+今回の追加は52件。Migrant の TypeDescriptorComparisonTests が11件、
+SystemBus の幅変換が1件、レジスタバイトのアクセス追跡が11件、
+アクセス条件の DNF 変換と状態マスクが15件、MultiTree と MultiValueDictionary が各7件。
+各 fixture を対象にした Rust 実行で、新規対応52件すべてが合格した。
+Migrant 型記述子の11件は固定 C# 側でも合格した。
+[公式 ID 別の Migrant 比較](nunit-evidence/migrant-descriptor-comparison.tsv)
+[今回の Rust 実行結果](nunit-evidence/targeted-52-rust.tsv)
 
-方針変更前に開始した対応済みケースの一括実行は、変更の指示を受けた時点で
-実行済みだった。変更後の確認は ReadExtensions 30件、WriteExtensions 26件、
-DataStorage 2件、Storage 1件の各 fixture に限定し、全件合格した。この進捗表では、
-旧一括結果を新しい対応件数の合否として集計しない。全対象の実装と公式 ID 対応が
-揃ってから一括実行する。
+SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
+パラメーター付き登録、null CPU の登録に対応する API が必要。
+Migrant の未移植分には、オブジェクト参照を保持するストリーム、組み込みサロゲート、
+シリアライズ時のフック、型変更を伴うオブジェクトの復元が含まれる。
+全対象の移植と公式 ID 対応が揃ってから一括実行する。
 
 ```sh
 python3 scripts/upstream/nunit_port_progress.py \

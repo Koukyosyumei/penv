@@ -1,0 +1,12 @@
+official_id	nunit_id	official_outcome	rust_test	rust_outcome
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldDetectFieldInsertionSimple	0-3211	Passed	upstream_nunit::migrant_descriptor::should_detect_field_insertion_simple	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldDetectFieldRemovalSimple	0-3214	Passed	upstream_nunit::migrant_descriptor::should_detect_field_removal_simple	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldDetectFieldTypeChange	0-3219	Passed	upstream_nunit::migrant_descriptor::should_detect_field_type_change	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldDetectInsertionOfOverridingField	0-3213	Passed	upstream_nunit::migrant_descriptor::should_detect_insertion_of_overriding_field	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldDetectRemovalOfOverridingField	0-3216	Passed	upstream_nunit::migrant_descriptor::should_detect_removal_of_overriding_field	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldFindNoDifferences	0-3210	Passed	upstream_nunit::migrant_descriptor::should_find_no_differences	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldHandleAssemblyVersionChange	0-3220	Passed	upstream_nunit::migrant_descriptor::should_handle_assembly_version_change	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldHandleFieldMoveDownSimple	0-3217	Passed	upstream_nunit::migrant_descriptor::should_handle_field_move_down_simple	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldHandleFieldMoveUpSimple	0-3218	Passed	upstream_nunit::migrant_descriptor::should_handle_field_move_up_simple	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldNotDetectInsertionOfTransientField	0-3212	Passed	upstream_nunit::migrant_descriptor::should_not_detect_insertion_of_transient_field	pass
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.TypeDescriptorComparisonTests.ShouldNotDetectRemovalOfTransientField	0-3215	Passed	upstream_nunit::migrant_descriptor::should_not_detect_removal_of_transient_field	pass
