@@ -343,6 +343,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if method == "FeedIlluminanceSamplesFromRESD":
                 file = self.monitor_input.path(argument)
                 return self.operation(f"{sensor} {method} {at_path(file)}")
+        if re.fullmatch(r"(?:sysbus\.)?cpu PerformanceInMips [0-9]+", command):
+            return self.operation(command)
         if re.fullmatch(r"(?:sysbus\.)?[\w.]+ (?:VendorSpecific1|Acceleration[XYZ]) \S+", command):
             return self.operation(command)
         if re.fullmatch(r"(?:sysbus\.)?[\w.]+\.led\d+ State", command):

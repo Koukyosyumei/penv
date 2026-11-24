@@ -2642,6 +2642,9 @@ impl Bus {
         for device in &mut self.nrf_peripherals {
             device.take_raised_events(&mut events);
         }
+        if events.is_empty() {
+            return Ok(());
+        }
         let Some(ppi) = self.nrf_peripherals.iter().find(|device| device.is_ppi()) else {
             return Ok(());
         };

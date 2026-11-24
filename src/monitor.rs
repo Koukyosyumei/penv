@@ -93,6 +93,7 @@ enum Action {
     RtcDateTime,
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
+    NrfCpuMips(u32),
     CpuCondition(String, u32),
     CpuXpsr(String),
     CpuWait(String, bool),
@@ -360,6 +361,7 @@ pub fn run(
                 writeln!(output.output, "{}", if state { "True" } else { "False" })
                     .map(|()| None).map_err(|error| error.to_string())
             }),
+            Action::NrfCpuMips(mips) => machine.bus.set_nrf_cpu_mips(*mips).map(|()| None),
             Action::TimeSourceInfo => {
                 let seconds = machine.elapsed_steps() / machine.bus.monitor_step_hz();
                 writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}",
@@ -752,9 +754,7 @@ pub fn serve(
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
-                let cycles = u128::from(*steps) * u128::from(machine.bus.monitor_step_hz())
-                    / u128::from(CORTEX_M_STEP_HZ);
-                let result = u64::try_from(cycles).map_err(|_| "UART idle duration exceeds virtual time".to_owned())
+                let result = uart_timeout_steps(&machine.bus, *steps)
                     .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
                         machine.run_until(cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
                     }));
@@ -769,7 +769,8 @@ pub fn serve(
 
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
-                    let stop = drive_uart_watch(machine, watch, *timeout, &mut bytes);
+                    let stop = uart_timeout_steps(&machine.bus, *timeout)
+                        .and_then(|cycles| drive_uart_watch(machine, watch, cycles, &mut bytes));
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
@@ -814,6 +815,13 @@ pub fn serve(
         };
         reply.map_err(|error| error.to_string())?;
     }
+}
+
+fn uart_timeout_steps(bus: &crate::bus::Bus, duration: u64) -> Result<u64, String> {
+    let rate = bus.monitor_step_hz();
+    let cycles = (u128::from(duration) * u128::from(rate))
+        .div_ceil(u128::from(CORTEX_M_STEP_HZ));
+    u64::try_from(cycles).map_err(|_| "UART duration exceeds virtual time".to_owned())
 }
 
 fn read_bus_bytes(
@@ -1528,6 +1536,10 @@ fn execute(
             Some(Action::LiteXLedState((*target).to_owned()))
         }
 
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started => {
+            let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
+            Some(Action::NrfCpuMips(mips))
+        }
         ["emulation", "GetTimeSourceInfo"] if boot.started => Some(Action::TimeSourceInfo),
         ["TestMonitorUartIdle", timeout] if boot.started => Some(Action::UartIdle(duration_steps(resolve(timeout)?)?)),
 
