@@ -1259,3 +1259,21 @@ Rust モニターテスト22件と CLI のスナップショット回帰テス�
 最終ビルドの未変更 Robot は同じ4件が合格、残り2,193件は未実行
 （`target/monitor-user-state-snapshot-robot/results.json`）。
 検証は単一マシンと対応済みスナップショット形式の範囲。
+
+### 数値表示形式と単一ステップ設定の復元
+
+`72c9c75` は Rust のモニタースナップショットに数値表示形式を保存する。
+十進と併記は v8、既定の十六進は従来の形式を使い、読み込みは v1–v8
+に対応する。固定 Renode、通常 CLI、Robot RPC で共通のコマンド列を実行し、
+十進で保存してから十六進に変更すると `0x00000000`、復元後は `0` に
+戻ることを確認した（`target/monitor-number-mode-proof/`）。
+
+続けて `emulation SingleStepBlocking` を両方向で比較した。
+保存時と読み込み直前をそれぞれ True / False と False / True にし、
+どちらの組み合わせでも固定 Renode と penv の通常 CLI は読み込み後に
+True を返した。この動作は既存の Rust 実装と一致した
+（`target/monitor-single-step-snapshot-reference/`）。
+
+Rust モニターテスト22件と CLI のスナップショット回帰テストが合格。
+未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-number-mode-robot/results.json`）。
