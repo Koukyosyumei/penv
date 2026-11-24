@@ -64,6 +64,7 @@ mod migrant;
 mod migrant_descriptor;
 mod migrant_stamping;
 mod migrant_surrogate;
+mod migrant_builtin;
 mod multi_tree;
 mod multi_value_dictionary;
 mod migrant_object_stream;

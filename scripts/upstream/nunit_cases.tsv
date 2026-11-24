@@ -962,3 +962,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSpeciallySerializable	upstream_nunit::migrant_object_stream::specially_serializable_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSpeciallySerializableInArrayAndPreserveIdentity	upstream_nunit::migrant_object_stream::special_in_array_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeStructWithSpeciallySerializable	upstream_nunit::migrant_object_stream::special_in_struct_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,False).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,True).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_stamped	new
