@@ -15,6 +15,7 @@ mod simple_cache;
 mod serializable_mapped_segment;
 mod pseudorandom;
 mod sht21;
+mod bma180;
 mod weak_multi_table;
 mod option_validation;
 mod option_parser;

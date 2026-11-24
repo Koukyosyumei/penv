@@ -9,6 +9,7 @@ pub mod symbol_lookup;
 pub mod simple_cache;
 pub mod pseudorandom;
 pub mod sht21;
+pub mod bma180;
 pub mod weak_multi_table;
 pub mod option_validation;
 mod andes_csr;

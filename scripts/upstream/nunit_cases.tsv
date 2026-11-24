@@ -925,3 +925,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeClassWithGuid	upstream_nunit::migrant_object_stream::class_with_guid_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxWithGuid	upstream_nunit::migrant_object_stream::box_with_guid_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeClassWithGuid	upstream_nunit::migrant_object_stream::class_with_guid_stamped	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMA180Test.InitTest	upstream_nunit::bma180::init_test	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMA180Test.ReadDataTest	upstream_nunit::bma180::read_data_test	new
