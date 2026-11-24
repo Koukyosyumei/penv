@@ -376,7 +376,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         return value
                     return self.operation(command, assertion=True)
-                if (re.fullmatch(r"emulation\s+(?:GetTimeSourceInfo|IsStarted)", command)
+                if (re.fullmatch(r"(?:(?:emulation|machine)\s+GetTimeSourceInfo|emulation\s+IsStarted)", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)):
                     return self.operation(command, assertion=True)
                 if re.match(r"(?:include|i|ExecuteScript|log|Save|Load)(?:\s|$)", command):

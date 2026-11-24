@@ -548,7 +548,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
-                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::EmulationIsStarted | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -1969,8 +1969,8 @@ fn is_console_action(action: &Action) -> bool {
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
-        | Action::TimeSourceInfo | Action::EmulationIsStarted | Action::RunFor(_) | Action::RunUntil(_)
-        | Action::RunToSyncPoint | Action::SetQuantum(_) | Action::SetEmulationPaused(_) | Action::SelectMachineZero
+        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::RunToSyncPoint | Action::SetEmulationPaused(_) | Action::SelectMachineZero
         | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform)
 }
 
@@ -2596,7 +2596,7 @@ fn execute(
         boot.trace_memory.push((name.trim_start_matches("sysbus.").to_owned(), enabled));
         return Ok(());
     }
-    if let ["emulation", "SetGlobalQuantum" | "SetQuantum", value] = words
+    if let ["emulation", "SetGlobalQuantum" | "SetQuantum", value] | ["machine", "SetQuantum", value] = words
         && !boot.started && boot.runtime.is_empty()
     {
         let quantum = duration_steps(resolve(value)?).map_err(|error| format!("invalid emulation quantum: {error}"))?;
@@ -2700,7 +2700,7 @@ fn execute(
             }
             Some(Action::LastLog(count))
         }
-        ["emulation", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
+        ["emulation" | "machine", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
         ["emulation", "IsStarted"] => Some(Action::EmulationIsStarted),
         ["TestMonitorUartIdle", timeout, args @ ..] => {
             let mut tester = None;
@@ -3426,7 +3426,7 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        ["emulation", "SetGlobalQuantum" | "SetQuantum", duration] => {
+        ["emulation", "SetGlobalQuantum" | "SetQuantum", duration] | ["machine", "SetQuantum", duration] => {
             let quantum = duration_steps(resolve(duration)?).map_err(|error| format!("invalid emulation quantum: {error}"))?;
             if quantum == 0 {
                 return Err("emulation quantum must be positive".into());
@@ -3532,7 +3532,7 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
-                        | Action::TimeSourceInfo | Action::EmulationIsStarted
+                        | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)
                         | Action::ClearMemory
