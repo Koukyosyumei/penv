@@ -16,7 +16,7 @@ lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.Parser
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	60	60	0	0	0	-
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	5	5	0	0	0	-
-src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.FeaturesTests	2	1	0	1	0	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.FeaturesTests	2	1	0	1	0	The compiler and CLR metadata scan are available; the remaining case needs Monitor include and extension dispatch in one session.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.TokenizerTests	18	18	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	6	6	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.AccessConditionParserTests	15	15	0	0	0	-
@@ -54,7 +54,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeIntervalTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.WriteExtensionsTest	26	26	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.AdHocCompilerTests	2	0	0	2	0	There is no in-process compilation and loading of arbitrary C# source into the emulator.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.AdHocCompilerTests	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests	10	10	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.CRCTests	15	15	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.MiscTests	1	1	0	0	0	-

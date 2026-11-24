@@ -1,4 +1,5 @@
 pub(crate) mod action_arguments;
+pub(crate) mod managed_extensions;
 use crate::csr::TrapVector;
 
 use std::{

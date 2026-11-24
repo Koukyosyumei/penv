@@ -1,0 +1,5 @@
+$ PENV_DOTNET=<pinned-build-dotnet> cargo test --locked --bin penv upstream_nunit::adhoc_compiler
+running 2 tests
+test upstream_nunit::adhoc_compiler::should_not_throw_on_empty_file ... ok
+test upstream_nunit::adhoc_compiler::should_compile_cs_file ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3891 filtered out; finished in 4.41s

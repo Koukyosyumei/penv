@@ -1,3 +1,2 @@
 fixture	missing_api
-Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
-Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
+Antmicro.Renode.MonitorTests.FeaturesTests	The compiler and CLR metadata scan are available; the remaining case needs Monitor include and extension dispatch in one session.
