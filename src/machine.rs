@@ -584,7 +584,7 @@ impl Machine {
                 .map_err(|_| "trap vector exceeds RV32 width")?;
             return hart.monitor_trap_vector(vector, value).map(|value| value.map(u64::from));
         }
-        if value.is_none() && matches!(register.as_str(), "mepc" | "mcause" | "mtval") {
+        if value.is_none() && matches!(register.as_str(), "mstatus" | "mepc" | "mcause" | "mtval") {
             let result = match &hart.rv64 {
                 Some(cpu) => cpu.monitor_register(&register),
                 None if hart.thumb.is_none() => hart.csr.monitor_trap_register(&register).map(u64::from),
@@ -2778,6 +2778,8 @@ impl Hart {
                 let value = if self.csr.clic_mode() && matches!(insn >> 20, 0x145 | 0x345) {
                     bus.clic.as_mut().and_then(|clic| self.csr.clic_next_interrupt(insn, a, clic))
                         .ok_or_else(illegal)?
+                } else if matches!(insn >> 20, 0x351..=0x356) && let Some(clic) = bus.clic.as_mut() {
+                    self.csr.clic_indirect_access(insn, a, clic).ok_or_else(illegal)?
                 } else {
                     self.csr.access(insn, a).map_err(|error| Fault::InvalidCsr(insn, error))?
                 };

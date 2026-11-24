@@ -11,6 +11,7 @@ pub(crate) struct Interrupt {
 
 pub(crate) struct Clic {
     pub base: u32,
+    pub name: String,
     configuration: u8,
     clint_lines: u32,
     inputs: Box<[[u8; 4]]>,
@@ -22,10 +23,11 @@ pub(crate) struct Clic {
 impl Clic {
     pub const SIZE: u32 = 0x10000;
 
-    pub fn new(base: u32) -> Self {
+    pub fn new(base: u32, name: &str, machine_levels: u8) -> Self {
         Self {
             base,
-            configuration: 0x51,
+            name: name.to_owned(),
+            configuration: 0x41 | (machine_levels << 1),
             clint_lines: 0,
             inputs: vec![[0, 0, 0xc0, 0]; 4096].into_boxed_slice(),
             pending: BTreeSet::new(),
@@ -91,6 +93,52 @@ impl Clic {
                 self.set_line(id, pending & (1 << id) != 0);
             }
         }
+    }
+
+    pub fn read_indirect(&self, select: u32, register: u32) -> u32 {
+        match (select.checked_sub(0x1000), register) {
+            (Some(index @ 0..=0x3ff), 0 | 1) => {
+                let offset = 0x1000 + index * 4 + 2 + register;
+                (0..4).fold(0, |value, i| {
+                    value | (self.read(offset + 4 * i, 1) << (8 * i))
+                })
+            }
+            (Some(index @ 0x400..=0x47f), 0 | 1) => {
+                let first = ((index - 0x400) * 32) as usize;
+                (0..32).fold(0, |value, i| {
+                    value | (u32::from(self.inputs[first + i][register as usize] & 1) << i)
+                })
+            }
+            _ => 0,
+        }
+    }
+
+    pub fn write_indirect(&mut self, select: u32, register: u32, value: u32) {
+        match (select.checked_sub(0x1000), register) {
+            (Some(index @ 0..=0x3ff), 0 | 1) => {
+                let offset = 0x1000 + index * 4 + 2 + register;
+                for (i, stride) in [0, 4, 8, 16].into_iter().enumerate() {
+                    self.write(offset + stride, 1, (value >> (8 * i)) & 0xff);
+                }
+            }
+            (Some(index @ 0x400..=0x47f), 0 | 1) => {
+                let first = (index - 0x400) * 32;
+                for i in 0..32 {
+                    self.inputs[(first + i) as usize][register as usize] = ((value >> i) & 1) as u8;
+                    self.update_pending(first + i);
+                }
+                self.select();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn gpio(&mut self, id: u32, asserted: bool) -> Result<(), String> {
+        if id >= self.inputs.len() as u32 {
+            return Err(format!("CLIC input {id} is out of range"));
+        }
+        self.set_line(id, asserted);
+        Ok(())
     }
 
     fn set_line(&mut self, id: u32, asserted: bool) {

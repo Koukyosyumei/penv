@@ -170,6 +170,7 @@ pub struct Csr {
     vector: Option<u32>,
     interrupt_mode: Option<InterruptMode>,
     clic: Option<[ClicState; 2]>,
+    clic_iselect: u32,
     scratch: u32,
     exception_pc: u32,
     cause: u32,
@@ -214,6 +215,7 @@ impl Default for Csr {
             vector: None,
             interrupt_mode: None,
             clic: None,
+            clic_iselect: 0,
             scratch: 0,
             exception_pc: 0,
             cause: 0,
@@ -469,6 +471,28 @@ impl Csr {
         Some(state.table.wrapping_add(interrupt.id * 4))
     }
 
+    pub(crate) fn clic_indirect_access(
+        &self, instruction: u32, register_value: u32, controller: &mut crate::clic::Clic,
+    ) -> Option<u32> {
+        if self.privilege != Privilege::Machine {
+            return None;
+        }
+        let register = (instruction >> 20) - 0x351;
+        let operation = (instruction >> 12) & 7;
+        let source = (instruction >> 15) & 31;
+        let operand = if operation & 4 != 0 { source } else { register_value };
+        let previous = controller.read_indirect(self.clic_iselect, register);
+        let value = match operation & 3 {
+            1 => operand,
+            2 | 3 if source == 0 => return Some(previous),
+            2 => previous | operand,
+            3 => previous & !operand,
+            _ => return None,
+        };
+        controller.write_indirect(self.clic_iselect, register, value);
+        Some(previous)
+    }
+
     pub fn access(&mut self, instruction: u32, register_value: u32) -> Result<u32, String> {
         let address = instruction >> 20;
         let operation = (instruction >> 12) & 7;
@@ -543,6 +567,7 @@ impl Csr {
     pub(crate) fn monitor_trap_register(&self, name: &str) -> Option<u32> {
         self.read(match name {
             "mepc" => 0x341,
+            "mstatus" => 0x300,
             "mcause" => 0x342,
             "mtval" => 0x343,
             _ => return None,
@@ -595,6 +620,7 @@ impl Csr {
             }
             0x304 if self.clic_mode() => 0,
             0x344 if self.clic_mode() => 0,
+            0x350 if self.clic.is_some() => self.clic_iselect,
             0x307 => self.clic.as_ref()?[0].table,
             0x347 => u32::from(self.clic.as_ref()?[0].threshold),
             0xfb1 => (u32::from(self.clic.as_ref()?[0].level) << 24)
@@ -742,6 +768,7 @@ impl Csr {
                     | (value & self.extension_status_mask());
             }
             0x304 | 0x344 if self.clic_mode() => {},
+            0x350 if self.clic.is_some() => self.clic_iselect = value,
             0x307 if let Some(clic) = self.clic.as_mut() => clic[0].table = value & !63,
             0x347 if let Some(clic) = self.clic.as_mut() => clic[0].threshold = value as u8,
             0x304 => {
@@ -801,9 +828,11 @@ impl Csr {
             0x342 => {
                 self.cause = value;
                 if self.clic_mode() {
-                    let privilege = self.decode_privilege((value >> 28) & 3);
-                    self.status = (self.status & !(MPP | MPIE))
-                        | ((privilege as u32) << 11) | ((value >> 20) & MPIE);
+                    let mpp = (value >> 28) & 3;
+                    let allowed = mpp == 3 || (mpp == 0 && self.user_supported)
+                        || (mpp == 1 && self.supervisor.is_some());
+                    let mpp = if allowed { mpp << 11 } else { self.status & MPP };
+                    self.status = (self.status & !(MPP | MPIE)) | mpp | ((value >> 20) & MPIE);
                 }
             }
             0x343 => self.trap_value = value,

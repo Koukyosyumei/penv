@@ -22,7 +22,7 @@ fn nocp_fixture() -> (Bus, Thumb, [u32; 32], u32) {
     let mut bus = Bus::default();
     bus.map_ram(0, 0x40000).unwrap();
     bus.map_nvic(0xc0, None, true).unwrap();
-    bus.map_trivial_uart(0x100000).unwrap();
+    bus.map_trivial_uart(0x100000, "uart").unwrap();
     bus.memory(0x10000, VECTORS.len())
         .unwrap()
         .copy_from_slice(VECTORS);

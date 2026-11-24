@@ -69,6 +69,8 @@ enum Action {
     UserState(Option<String>),
     Echo(String),
     Illuminance(String, f64),
+    ClicGpio(String, u32, bool),
+    LogTrivialUart(String),
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
@@ -118,7 +120,7 @@ enum Action {
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, bool),
     DefaultUartTester(Option<usize>),
-    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, u64),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, u64, bool),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
@@ -417,6 +419,11 @@ pub fn run(
                     None
                 })
             }
+            Action::ClicGpio(name, id, asserted) => machine.bus.clic.as_mut()
+                .filter(|clic| clic.name == *name)
+                .ok_or_else(|| format!("unsupported CLIC target {name:?}"))
+                .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None),
+            Action::LogTrivialUart(target) => machine.bus.log_trivial_uart(target).map(|()| None),
             Action::Illuminance(sensor, value) => machine.bus.set_illuminance(sensor, *value).map(|()| None),
             Action::IlluminanceFeed(sensor, path) => machine.bus.feed_illuminance(sensor, path).map(|()| None),
             Action::Echo(message) => writeln!(output.output, "{message}")
@@ -575,14 +582,14 @@ pub fn run(
                     })
                 })
             }
-            Action::WaitForTester(id, pattern, regex, mode, timeout) => {
+            Action::WaitForTester(id, pattern, regex, mode, timeout, absent) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
                     run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
                 }).and_then(|(stop, count)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
-                    if stop == Stop::OutputMatch {
+                    if stop == if *absent { Stop::Limit } else { Stop::OutputMatch } {
                         Ok(None)
                     } else {
                         Err(format!("Terminal tester failed! Line containing {pattern:?} was not received ({stop:?})"))
@@ -702,7 +709,7 @@ pub fn serve(
         });
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
-            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
                     let stop = drive_uart_watch(machine, watch, *timeout, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
@@ -712,6 +719,8 @@ pub fn serve(
                         return Ok(("FAIL", format!("Terminal tester failing entry: {line}")));
                     }
                     match (stop?, matched) {
+                        ((Stop::OutputMatch, _), Some(line)) if *absent => Ok(("FAIL", format!("Unexpected UART entry: {line}"))),
+                        ((Stop::Limit, _), _) if *absent => Ok(("MATCH", String::new())),
                         ((Stop::OutputMatch, _), Some(line)) => Ok(("MATCH", line)),
                         ((Stop::Limit, _), _) => Ok(("FAIL", format!("UART line containing {expected:?} was not received (Limit)"))),
                         ((stop, _), _) => Ok(("STOP", format!("{stop:?}"))),
@@ -1442,6 +1451,14 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        [target, "OnGPIO", id, asserted] if boot.started => Some(Action::ClicGpio(
+            resolve(target)?.trim_start_matches("sysbus.").to_owned(),
+            crate::parse_address(resolve(id)?)?, parse_tester_bool(resolve(asserted)?)?,
+        )),
+        ["showAnalyzer", target, "LoggingUartAnalyzer"] if boot.started => {
+            Some(Action::LogTrivialUart(resolve(target)?.to_owned()))
+        }
+
         [sensor, "Illuminance", value] if boot.started && sensor.starts_with("sysbus.") => {
             let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid illuminance")?;
             Some(Action::Illuminance((*sensor).to_owned(), value))
@@ -1639,7 +1656,7 @@ fn execute(
                 options.timeout,
             ))
         }
-        [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt"), ..] => {
+        [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt" | "ShouldNotBeOnUart"), ..] => {
             let (pattern, arguments) = quoted_argument(
                 text[command.len()..].trim_start(),
             )
@@ -1655,6 +1672,7 @@ fn execute(
                     .transpose().map_err(|e| format!("invalid UART text regex: {e}"))?,
                 if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
+                *command == "ShouldNotBeOnUart",
             ))
         }
         [
@@ -1935,7 +1953,7 @@ fn execute(
                 resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), value,
             ))
         }
-        [target, register @ ("MEPC" | "MCAUSE" | "MTVAL")] => {
+        [target, register @ ("MSTATUS" | "MEPC" | "MCAUSE" | "MTVAL")] => {
             Some(Action::CpuRegister(
                 resolve(target)?.trim_start_matches("sysbus.").into(), (*register).into(), None,
             ))

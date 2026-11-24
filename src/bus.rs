@@ -404,7 +404,8 @@ pub struct Bus {
     nrf_cpu_hz: Option<u64>,
     nrf_clock_remainder: u64,
     uart_tx: Option<u32>,
-    trivial_uart: Option<u32>,
+    trivial_uart: Option<(u32, String)>,
+    trivial_uart_log: Option<Vec<u8>>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
@@ -425,7 +426,7 @@ pub struct Bus {
     stm32_uart_history: Vec<Option<UartHistory>>,
     stm32_uart_input: usize,
     step_hz: Option<u32>,
-    uart_testers: Vec<(usize, TesterHistory)>,
+    uart_testers: Vec<(Option<usize>, TesterHistory)>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -2689,8 +2690,8 @@ impl Bus {
             || self
                 .uart_tx
                 .is_some_and(|address| (start..end).contains(&u64::from(address)))
-            || self.trivial_uart.is_some_and(|base| {
-                let base = u64::from(base);
+            || self.trivial_uart.as_ref().is_some_and(|(base, _)| {
+                let base = u64::from(*base);
                 start < base + 4 && base < end
             })
             || self.uart.as_ref().is_some_and(|uart| {
@@ -2985,22 +2986,22 @@ impl Bus {
         Ok(())
     }
 
-    pub(crate) fn map_clic(&mut self, base: u32) -> Result<(), String> {
+    pub(crate) fn map_clic(&mut self, base: u32, name: &str, machine_levels: u8) -> Result<(), String> {
         let start = u64::from(base);
         let end = start + u64::from(crate::clic::Clic::SIZE);
         if end > 1 << 32 || self.clic.is_some() || self.overlaps(start, end) {
             return Err("invalid or overlapping CLIC mapping".into());
         }
-        self.clic = Some(crate::clic::Clic::new(base));
+        self.clic = Some(crate::clic::Clic::new(base, name, machine_levels));
         Ok(())
     }
 
-    pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
+    pub fn map_trivial_uart(&mut self, base: u32, name: &str) -> Result<(), String> {
         let start = u64::from(base);
         if self.trivial_uart.is_some() || base & 3 != 0 || self.overlaps(start, start + 4) {
             return Err("invalid, duplicate, or overlapping TrivialUart".into());
         }
-        self.trivial_uart = Some(base);
+        self.trivial_uart = Some((base, name.to_owned()));
         Ok(())
     }
 
@@ -4863,10 +4864,26 @@ impl Bus {
         }
     }
 
+    fn is_trivial_uart(&self, target: &str) -> bool {
+        let target = target.strip_prefix("sysbus.").unwrap_or(target);
+        self.trivial_uart.as_ref().is_some_and(|(_, name)| name == target)
+    }
+
+    pub(crate) fn log_trivial_uart(&mut self, target: &str) -> Result<(), String> {
+        if !self.is_trivial_uart(target) {
+            return Err(format!("unsupported LoggingUartAnalyzer target {target:?}"));
+        }
+        self.trivial_uart_log.get_or_insert_with(Vec::new);
+        Ok(())
+    }
+
     pub fn create_uart_tester(&mut self, target: &str, binary: bool) -> Result<usize, String> {
-        let port = self
-            .stm32_usart_index(target)
-            .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))?;
+        let port = if self.is_trivial_uart(target) {
+            None
+        } else {
+            Some(self.stm32_usart_index(target)
+                .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))?)
+        };
         if let Some(id) = self
             .uart_testers
             .iter()
@@ -6662,8 +6679,30 @@ impl Bus {
         if let Some(result) = self.write_faulting_peripheral(address, width, value) {
             return result;
         }
-        if self.trivial_uart == Some(address) && matches!(width, 1 | 2 | 4) {
-            return uart.write_all(&[value as u8]).map_err(BusError::Output);
+        if self.trivial_uart.as_ref().is_some_and(|(base, _)| *base == address)
+            && matches!(width, 1 | 2 | 4)
+        {
+            let byte = value as u8;
+            uart.write_all(&[byte]).map_err(BusError::Output)?;
+            for (port, history) in &mut self.uart_testers {
+                if port.is_none() {
+                    history.receive(byte);
+                }
+            }
+            if let Some(line) = &mut self.trivial_uart_log {
+                if byte == b'\n' {
+                    let name = &self.trivial_uart.as_ref().unwrap().1;
+                    let message = format!("{name}: {}", String::from_utf8_lossy(line).trim_end_matches('\r'));
+                    crate::monitor_log::record(1, &message);
+                    if self.monitor_log_enabled(1) {
+                        eprintln!("{message}");
+                    }
+                    self.trivial_uart_log.as_mut().unwrap().clear();
+                } else if line.len() < crate::uart::UART_HISTORY_BYTES {
+                    line.push(byte);
+                }
+            }
+            return Ok(());
         }
         #[cfg(test)]
         if self
@@ -6876,7 +6915,7 @@ impl Bus {
                         history.receive(byte);
                     }
                     for (port, history) in &mut self.uart_testers {
-                        if *port == index {
+                        if *port == Some(index) {
                             history.receive(byte);
                         }
                     }

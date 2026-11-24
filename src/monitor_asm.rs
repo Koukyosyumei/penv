@@ -1,5 +1,11 @@
 //! RISC-V monitor assembly using the same LLVM assembler as the CLI.
 use crate::machine::Machine;
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 pub(crate) fn handle(machine: &mut Machine, command: &str) -> Option<Result<(), String>> {
     let command = command.strip_prefix("AssembleMonitorBlock ")?;
@@ -26,17 +32,26 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect();
     if instructions.is_empty()
-        || instructions
-            .iter()
-            .any(|line| line.starts_with('.') || line.contains([';', ':']))
+        || instructions.iter().any(|line| {
+            if let Some((label, instruction)) = line.split_once(':') {
+                label.is_empty()
+                    || !label
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+                    || instruction.trim_start().starts_with('.')
+                    || instruction.contains([';', ':'])
+            } else {
+                line.starts_with('.') || line.contains(';')
+            }
+        })
     {
-        return Err(
-            "monitor assembly supports instruction blocks without directives or labels".into(),
-        );
+        return Err("monitor assembly requires instructions and optional local labels".into());
     }
     let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
     if *requested_triple != "default" && *requested_triple != triple {
-        return Err(format!("assembler triple {requested_triple} is unavailable for {triple}"));
+        return Err(format!(
+            "assembler triple {requested_triple} is unavailable for {triple}"
+        ));
     }
     let instructions = instructions.join(
         "
@@ -50,8 +65,26 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
+    let output_text = String::from_utf8_lossy(&output.stdout);
+    let image = match inline_encoding(&output_text)? {
+        Some(image) if !output_text.contains("fixup ") => image,
+        _ => link_instructions(triple, &features, address, &instructions)?,
+    };
+    if image.is_empty() {
+        return Err("llvm-mc emitted no instructions".into());
+    }
+    let target = match hart {
+        Some(hart) => machine.bus.cpu_memory64(hart, address, image.len()),
+        None => machine.bus.memory64(address, image.len()),
+    }
+    .ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
+    target.copy_from_slice(&image);
+    Ok(())
+}
+
+fn inline_encoding(text: &str) -> Result<Option<Vec<u8>>, String> {
     let mut image = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in text.lines() {
         let Some((_, encoding)) = line.split_once("# encoding: [") else {
             continue;
         };
@@ -65,21 +98,67 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
                     .strip_prefix("0x")
                     .and_then(|hex| u8::from_str_radix(hex, 16).ok())
             })
-            .collect::<Option<Vec<_>>>()
-            .ok_or("unsupported unresolved assembly relocation")?;
+            .collect::<Option<Vec<_>>>();
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
         if !matches!(bytes.len(), 2 | 4) {
             return Err("unsupported non-standard instruction length".into());
         }
         image.extend(bytes);
     }
-    if image.is_empty() {
-        return Err("llvm-mc emitted no instructions".into());
+    Ok(Some(image))
+}
+
+fn link_instructions(
+    triple: &str,
+    features: &str,
+    address: u64,
+    source: &str,
+) -> Result<Vec<u8>, String> {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
-    let target = match hart {
-        Some(hart) => machine.bus.cpu_memory64(hart, address, image.len()),
-        None => machine.bus.memory64(address, image.len()),
+
+    let dir = std::env::temp_dir().join(format!(
+        "penv-monitor-asm-{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&dir).map_err(|e| format!("assembly scratch directory: {e}"))?;
+    let dir = Scratch(dir);
+    let object = crate::llvm_mc_for(triple, features, "--filetype=obj", source)?;
+    if !object.status.success() || !object.stderr.is_empty() {
+        return Err(format!(
+            "llvm-mc {triple}: {}",
+            String::from_utf8_lossy(&object.stderr).trim()
+        ));
     }
-    .ok_or_else(|| format!("unmapped instruction memory at {cpu}@{address:#x}"))?;
-    target.copy_from_slice(&image);
-    Ok(())
+    let input = dir.0.join("instructions.o");
+    let output = dir.0.join("instructions.bin");
+    fs::write(&input, object.stdout).map_err(|e| e.to_string())?;
+    let linked = Command::new("ld.lld")
+        .args([
+            "--oformat=binary",
+            "--no-relax",
+            "--entry=0",
+            "-Ttext",
+            &format!("{address:#x}"),
+            "-o",
+        ])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .map_err(|e| format!("could not start ld.lld: {e}"))?;
+    if !linked.status.success() || !linked.stderr.is_empty() {
+        return Err(format!(
+            "ld.lld {triple}: {}",
+            String::from_utf8_lossy(&linked.stderr).trim()
+        ));
+    }
+    fs::read(output).map_err(|e| e.to_string())
 }

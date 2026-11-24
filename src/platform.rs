@@ -443,11 +443,25 @@ fn brace_depth(value: &str) -> i32 {
         .sum()
 }
 
-fn apply_litex_irq_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
+fn apply_repl_overrides(entries: &mut Vec<Entry>) -> Result<(), String> {
     let mut declarations = HashMap::<String, usize>::new();
     let mut merged: Vec<Entry> = Vec::with_capacity(entries.len());
     for entry in std::mem::take(entries) {
         if entry.model.is_empty()
+            && entry.registration.is_none()
+            && entry.name != "sysbus"
+            && !entry.body.is_empty()
+            && entry.body.iter().all(|(_, text)| property_key(text).is_some())
+            && let Some(&index) = declarations.get(&entry.name)
+            && !merged[index].model.is_empty()
+        {
+            let properties: HashSet<_> = entry.body.iter()
+                .filter_map(|(_, text)| property_key(text)).collect();
+            merged[index].body.retain(|(_, text)| {
+                property_key(text).is_none_or(|key| !properties.contains(key))
+            });
+            merged[index].body.extend(entry.body);
+        } else if entry.model.is_empty()
             && entry.name != "sysbus"
             && entry.registration.is_none()
             && let Some(&index) = declarations.get(&entry.name)
@@ -538,7 +552,7 @@ fn load_platform(
             )
         })?;
     }
-    apply_litex_irq_overrides(&mut entries)?;
+    apply_repl_overrides(&mut entries)?;
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {
         return crate::rv64_platform::load(
             entries,
@@ -2327,7 +2341,8 @@ fn load_platform(
         machine.bus.use_renode_unmapped_data();
     }
     if let Some(entry) = clic {
-        if configs.len() != 1 || keys(entry, &["cpu"])? != [("cpu", cpu.name.as_str())] {
+        let properties = keys(entry, &["cpu", "machineLevelBits"])?;
+        if configs.len() != 1 || !properties.contains(&("cpu", cpu.name.as_str())) {
             return Err(entry.error("CLIC requires one named RV32 CPU"));
         }
         let registrations = entry
@@ -2346,7 +2361,14 @@ fn load_platform(
         if registrations.len() != 2 || !regions.contains(&(cpu.name.clone(), 0x1000, 0x4a1)) {
             return Err(entry.error("unsupported CLIC indirect CSR range"));
         }
-        machine.bus.map_clic(base).map_err(|e| entry.error(&e))?;
+        let machine_levels = properties.iter()
+            .find_map(|(key, value)| (*key == "machineLevelBits").then_some(*value))
+            .map(number).transpose().map_err(|e| entry.error(&e))?.unwrap_or(8);
+        if machine_levels > 8 {
+            return Err(entry.error("CLIC machineLevelBits must be between 0 and 8"));
+        }
+        machine.bus.map_clic(base, &entry.name, machine_levels as u8)
+            .map_err(|e| entry.error(&e))?;
         machine.primary.enable_clic();
     }
     if let Some(entry) = clint {
@@ -2528,7 +2550,7 @@ fn load_platform(
     if let Some(entry) = uart {
         if entry.model == "UART.TrivialUart" {
             keys(entry, &[])?;
-            machine.bus.map_trivial_uart(entry.address()?).map_err(|e| entry.error(&e))?;
+            machine.bus.map_trivial_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
         } else if entry.model == "UART.Murax_UART" {
             let connected = direct_irq(entry, &cpu.name, 11)?;
             machine

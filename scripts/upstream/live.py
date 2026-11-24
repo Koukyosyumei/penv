@@ -21,6 +21,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     pending_state = None
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
+        "Should Not Be On Uart": "uart_absence",
         "Create Log Tester": "create_log_tester",
         "Wait For Log Entry": "wait_for_log",
         "Write Line To Uart": "write_line",
@@ -313,6 +314,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if method == "FeedIlluminanceSamplesFromRESD":
                 file = self.monitor_input.path(argument)
                 return self.operation(f"{sensor} {method} {at_path(file)}")
+        if (re.fullmatch(r"(?:sysbus\.)?[\w.]+ OnGPIO (?:0x[0-9a-fA-F]+|\d+) (?:true|false)", command, re.I)
+                or re.fullmatch(r"showAnalyzer (?:sysbus\.)?[\w.]+ LoggingUartAnalyzer", command)):
+            return self.operation(command)
         scalar = r"(?:Read|Write)(?:Byte|Word|DoubleWord|QuadWord)"
         if self.using_bus and re.match(scalar + r" ", command):
             command = "sysbus " + command
@@ -355,7 +359,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if re.fullmatch(cpu + r'ExecutionMode(?: (?:SingleStep|Continuous))?', command):
             return self.operation(command, assertion=command.endswith(" ExecutionMode"))
         if re.fullmatch(cpu + r'(?:GetRegister "?[\w]+"?|SetRegister "?[\w]+"? ' + number
-                        + r'|MEPC|MCAUSE|MTVAL)', command):
+                        + r'|MSTATUS|MEPC|MCAUSE|MTVAL)', command):
             reading = " SetRegister " not in command
             value = self.operation(command, assertion=reading)
             return self.format_number(value) if reading else value
@@ -555,6 +559,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def prompt(self, expected, *args):
         return self.wait_for("WaitForTesterPrompt", expected, *args)
+
+    def uart_absence(self, expected, *args):
+        self.wait_for("ShouldNotBeOnUart", expected, *args)
 
     def write_line(self, content, option="waitForEcho=true"):
         if not self.started or not self.uart:
