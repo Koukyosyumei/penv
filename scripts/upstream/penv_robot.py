@@ -29,6 +29,23 @@ class AssertionFailed(RuntimeError):
     pass
 
 
+# Renode removes ANSI sequences from text before returning it through XML-RPC.
+ANSI_ESCAPE = re.compile(r"(?:\x1b[@-_]|[\x80-\x9f])[0-?]*[ -/]*[@-~]")
+INVALID_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def robot_result(value):
+    if isinstance(value, str):
+        value = ANSI_ESCAPE.sub("", value)
+        if INVALID_XML.search(value):
+            raise Unsupported("Robot XML-RPC cannot return text containing XML-invalid characters")
+    elif isinstance(value, dict):
+        value = {key: robot_result(entry) for key, entry in value.items()}
+    elif isinstance(value, (list, tuple)):
+        value = [robot_result(entry) for entry in value]
+    return value
+
+
 class Endpoint:
     keywords = {
         "Set Default Uart Timeout": "set_timeout",
@@ -64,7 +81,7 @@ class Endpoint:
         try:
             if kwargs:
                 raise Unsupported("named arguments")
-            result = getattr(self, self.keywords[name])(*args)
+            result = robot_result(getattr(self, self.keywords[name])(*args))
         except PenvUnsupported as exc:
             call.update(status="unsupported", category="penv_unimplemented", message=str(exc))
         except (Unsupported, TypeError) as exc:
@@ -81,7 +98,8 @@ class Endpoint:
         else:
             call.update(status="ok")
             return {"status": "PASS", "return": "" if result is None else result}
-        return {"status": "FAIL", "error": call["message"]}
+        error = INVALID_XML.sub("", ANSI_ESCAPE.sub("", call["message"]))
+        return {"status": "FAIL", "error": error}
 
     def set_timeout(self, timeout):
         self.timeout = str(timeout)
