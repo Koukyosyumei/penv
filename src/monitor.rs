@@ -2118,6 +2118,11 @@ fn assign_variable(
     let scope = machine.map(|name| name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
     let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
     if !conditional || variable_binding(variables, name).is_none() {
+        let origin = resolve(variables, "$global.ORIGIN").unwrap_or(".");
+        let origin = Path::new(unquote(origin.trim_start_matches('@')));
+        let anchored = anchored_path(value, origin, variables)?
+            .map(|path| format!("@{}", path.display()));
+        let value = anchored.as_deref().unwrap_or(value);
         if name.starts_with("global.") {
             variables.insert(name.to_owned(), value.to_owned());
         } else if let Some(scope) = scope {
@@ -4012,9 +4017,13 @@ mod tests {
         fs::create_dir(&child).unwrap();
         let board = child.join("board.repl");
         fs::write(&board, "uart0: UART.TrivialUart @ sysbus 0x1000\n").unwrap();
-        fs::write(child.join("child.resc"), "machine LoadPlatformDescription $ORIGIN/board.repl\n").unwrap();
+        fs::write(child.join("child.resc"), "set board $ORIGIN/board.repl\n").unwrap();
         let script = dir.0.join("boot.resc");
-        fs::write(&script, "mach create\ninclude $ORIGIN/nested/child.resc\n").unwrap();
+        fs::write(&script, concat!(
+            "mach create\n",
+            "include $ORIGIN/nested/child.resc\n",
+            "machine LoadPlatformDescription $board\n",
+        )).unwrap();
 
         let boot = load_for_session(&script, &dir.0).unwrap();
         assert_eq!(boot.platform, Some(board.canonicalize().unwrap()));
