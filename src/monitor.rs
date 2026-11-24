@@ -611,7 +611,19 @@ fn run_commands(
                     monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
                     .map(|()| None).map_err(|error| error.to_string())
             }
-            Action::UartIdle(..) => Err("UART idle check requires the live monitor".into()),
+            Action::UartIdle(timeout, tester) => {
+                let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
+                let start = machine.elapsed_steps();
+                let limit = cycles.min(budget);
+                let (stop, count) = wait_for_uart_idle(machine, *tester, limit, &mut output)?;
+                retired += count;
+                budget -= machine.elapsed_steps().wrapping_sub(start);
+                match stop {
+                    Stop::Limit if limit == cycles => Ok(None),
+                    Stop::OutputMatch => Err("UART was not idle".into()),
+                    _ => Err(format!("UART idle interval ended before completion ({stop:?})")),
+                }
+            }
             Action::SetQuantum(duration) => {
                 machine.monitor_quantum = *duration;
                 Ok(None)
@@ -1083,9 +1095,7 @@ pub fn serve(
             }
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps, tester), .. }]) => {
                 let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
-                    .and_then(|cycles| machine.bus.uart_activity(*tester).and_then(|(id, previous)| {
-                        run_until_deadline(machine, cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
-                    }));
+                    .and_then(|cycles| wait_for_uart_idle(machine, *tester, cycles, &mut bytes));
 
                 match result {
                     Ok((Stop::Limit, _)) => frame(&mut output, "MATCH", &[]),
@@ -1273,6 +1283,16 @@ pub(crate) fn run_until_deadline<W: Write>(
         return Ok((Stop::Paused, retired));
     }
     Ok((stop, retired))
+}
+
+fn wait_for_uart_idle(
+    machine: &mut Machine,
+    tester: Option<usize>,
+    cycles: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    let (id, previous) = machine.bus.uart_activity(tester)?;
+    run_until_deadline(machine, cycles, output, |bus, _| bus.uart_activity_changed(id, previous))
 }
 
 fn drive_uart_watch(
@@ -2775,10 +2795,10 @@ fn execute(
     // the machine with the tester already attached.
     if words == ["start"]
         && !boot.started
-        && matches!(
-            boot.runtime.as_slice(),
-            [RuntimeCommand { action: Action::CreateUartTester(..), .. }]
-        )
+        && !boot.runtime.is_empty()
+        && boot.runtime.iter().all(|command| {
+            matches!(command.action, Action::CreateUartTester(..) | Action::DefaultUartTester(_))
+        })
     {
         boot.started = true;
         return Ok(());
