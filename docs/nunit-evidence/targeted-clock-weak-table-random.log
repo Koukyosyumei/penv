@@ -1,0 +1,16 @@
+running 3 tests
+test upstream_nunit::weak_multi_table::should_handle_remove_of_unexisting_item ... ok
+test upstream_nunit::weak_multi_table::should_handle_many_left_values_for_right ... ok
+test upstream_nunit::weak_multi_table::should_handle_many_right_values_for_left ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1373 filtered out; finished in 0.00s
+running 4 tests
+test upstream_nunit::clock_source::should_tick_with_one_handler ... ok
+test upstream_nunit::clock_source::should_have_handlers_in_sync ... ok
+test upstream_nunit::clock_source::should_tick_with_two_handlers ... ok
+test upstream_nunit::clock_source::should_observe_shorter_period_clock_after_add ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1376 filtered out; finished in 0.00s
+running 3 tests
+test upstream_nunit::pseudorandom::should_handle_serialization ... ok
+test upstream_nunit::pseudorandom::should_generate_numbers_deterministically ... ok
+test upstream_nunit::pseudorandom::should_generate_numbers_deterministically_multithreaded ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1380 filtered out; finished in 0.00s

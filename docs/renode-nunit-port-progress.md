@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 875 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 885 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,521 |
+| 移植待ち | 2,511 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 52 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 49 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -61,11 +61,17 @@ Migrant の nullable と連続ストリーム10件、リストとボックス化
 全4件と ParserTests 11件。対象を絞った Rust 実行で新規35件すべてが合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-collections-options.tsv) · [対象実行ログ](nunit-evidence/targeted-collections-options.log)
 
-今回の追加は48件。OptionsParser の ParserTests の残り38件と、
+前回の追加は48件。OptionsParser の ParserTests の残り38件と、
 Migrant のバイト配列・空コレクション10件を移植した。対象を絞った Rust 実行で
 新規48件すべてが合格した。OptionsParser の対象実行は既移植分を含む53件が合格した。
 Rust のオプション定義には明示的なスキーマを使う。
 [公式 ID 別の結果](nunit-evidence/targeted-parser-empty-arrays.tsv) · [対象実行ログ](nunit-evidence/targeted-parser-empty-arrays.log)
+
+今回の追加は10件。TimeTests の4件、WeakMultiTableTest の実行対象3件、
+PseudorandomNumberGeneratorTests の3件を移植した。対象を絞った Rust 実行で全件合格した。
+仮想時計はコールバックの時点で観測できるカウンターを計算する。乱数のスナップショットは
+インスタンスごとのシードとスレッド別の状態を Rust の形式で保存する。
+[公式 ID 別の結果](nunit-evidence/targeted-clock-weak-table-random.tsv) · [対象実行ログ](nunit-evidence/targeted-clock-weak-table-random.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。

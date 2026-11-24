@@ -24,7 +24,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.CircularBufferTests	15	15	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.MultiTreeTests	7	7	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.MultiValueDictionaryTests	7	7	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.WeakMultiTableTest	5	0	0	3	2	There is no weak-key/value multi-table with the fixture's object collection and enumeration semantics.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.WeakMultiTableTest	5	3	0	0	2	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ComparingTimerTests	5	4	0	1	0	STM32 CCR permits values beyond ARR. There is no generic ComparingTimer setter that rejects a compare value above its limit.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.DataStorageTests	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.DmaEngineTests	144	144	0	0	0	-
@@ -37,7 +37,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	10	0	0	10	0	There is no generic single-peripheral container with NullRegistrationPoint, registration-point enumeration and typed registration failures.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests	18	0	0	18	0	There is no metadata-driven Packet encoder/decoder for fields with bit widths, offsets, nesting and endian annotations.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests	3	0	0	3	0	There is no named generic peripheral grouping API with membership and unregister behavior for arbitrary mock peripherals.
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	3	0	0	3	0	There is no emulation-wide seeded generator with deterministic per-thread sequences and persisted state.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	4	0	0	4	0	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests	20	20	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ReadExtensionsTest	30	30	0	0	0	-
@@ -52,7 +52,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	5	4	0	1	0	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests	27	22	0	4	1	The remaining runnable cases need the generic object-registration pause/resume lifecycle, multiple native access callbacks within one region, parametrized registration or null CPU registration APIs.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeIntervalTests	3	3	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeTests	4	0	0	4	0	There is no BaseClockSource API with independently registered mutable ClockEntry callbacks and observation at each deadline.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.WriteExtensionsTest	26	26	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.AdHocCompilerTests	2	0	0	2	0	There is no in-process compilation and loading of arbitrary C# source into the emulator.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests	10	10	0	0	0	-
