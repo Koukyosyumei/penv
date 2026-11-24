@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,104 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,121 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 291 |
+| 移植待ち | 274 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -484,3 +484,5 @@ IRQ の切断と再接続4件を移植した。単一出力、数値範囲、複
 CLINT の CPU スコープ付き登録を実際のプラットフォームローダーで扱い、CLINT へのタイムプロバイダー参照と CPU への IRQ 配線を持つ上流入力が読み込めることを検証した。同 fixture の残りは、同じアドレスに CPU 別の NVIC を登録する2コアのケース1件。[公式IDとの対応](nunit-evidence/targeted-repl-signal-cycle.tsv)・[実行ログ](nunit-evidence/targeted-repl-signal-cycle.log)
 
 モニターのコマンド登録と `help` の統合を追加し、登録したコマンドの説明が表示される `AutoLoadCommandTest` を移植した。Rust 側では型を直接登録する。[公式IDとの対応](nunit-evidence/targeted-monitor-features.tsv)・[実行ログ](nunit-evidence/targeted-monitor-features.log)
+
+`ActionArguments` の17件を移植した。上流のコマンド文字列と出力包含アサーションを維持し、名前・位置・省略可能引数と可変長整数引数を検証した。実行環境には C# 拡張の代わりに対応する Rust コールバックを登録する。このバッチは emulation メソッドに絞り、上流セットアップで用意する external オブジェクトとその後処理は今後の indexer バッチに残る。[公式IDとの対応](nunit-evidence/targeted-monitor-action-integers.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-integers.log)

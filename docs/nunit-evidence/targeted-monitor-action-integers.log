@@ -1,0 +1,20 @@
+$ cargo test --locked --bin penv upstream_nunit::monitor_action_arguments
+running 17 tests
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_all_by_name ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_all ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_all_by_name_and_empty_array ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_first_by_name ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_none ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_middle_by_name ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_all_by_name_reverse_order ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_last_by_name ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_all_by_name_and_array ... ok
+test upstream_nunit::monitor_action_arguments::optional_parameters_provide_first_by_name_rest_by_pos ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_after_optional_string_test ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_after_optional_string_empty_test ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_after_string_passed_by_name ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_empty_after_string_passed_by_name ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_after_string_test ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_empty_test ... ok
+test upstream_nunit::monitor_action_arguments::params_int_array_test ... ok
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 3602 filtered out; finished in 0.00s
