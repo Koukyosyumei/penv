@@ -2254,6 +2254,7 @@ impl Hart {
                 if let Some(interrupt) = clic.machine_interrupt()
                     && let Some((target, indirect)) = self.csr.clic_interrupt(self.pc, interrupt)
                 {
+                    self.waiting_for_interrupt = false;
                     clic.acknowledge();
                     if indirect {
                         clic.clear_edge(interrupt.id);
@@ -2759,6 +2760,10 @@ impl Hart {
             }
             0x73 if insn == 0x3020_0073 => {
                 next = self.csr.return_from_trap().ok_or_else(illegal)?;
+                if self.csr.clic_return_uses_vector_entry() {
+                    next = bus.read_scalar::<4>(next, false)
+                        .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(next)))? & !1;
+                }
                 None
             }
             0x73 if insn == 0x1020_0073 => {

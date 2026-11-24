@@ -392,6 +392,10 @@ impl Csr {
         self.clic = Some(ClicState::default());
     }
 
+    pub(crate) fn clic_return_uses_vector_entry(&self) -> bool {
+        self.clic_mode() && self.cause & 0x4000_0000 != 0
+    }
+
     pub(crate) fn clic_mode(&self) -> bool {
         self.clic.is_some() && self.vector.is_some_and(|vector| vector & 3 == 3)
     }
