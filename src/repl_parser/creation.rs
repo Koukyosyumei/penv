@@ -129,6 +129,7 @@ struct CreatedObject {
     enum_arguments: EnumArguments,
     scalar: Option<ScalarValue>,
     empty_peripheral_counter: u32,
+    empty_peripheral_value: Option<String>,
     collections: Collections,
 }
 
@@ -383,6 +384,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             enum_arguments: EnumArguments::default(),
             scalar: None,
             empty_peripheral_counter: 1,
+            empty_peripheral_value: None,
             collections: Collections::default(),
         });
         targets.push(Some(id));
@@ -473,8 +475,19 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
     for (entry, object) in entries
         .iter()
         .filter(|entry| !entry.model.is_empty())
-        .zip(&platform.objects)
+        .zip(&mut platform.objects)
     {
+        if let Some(value) = &object.empty_peripheral_value {
+            if value.parse::<i32>().is_ok() {
+                // An integer fits both the int overload with optional enabled and the double overload.
+                return Err(entry.error("AmbiguousCtor: multiple public constructors accept value"));
+            }
+            if value.parse::<f64>().is_ok_and(f64::is_finite) {
+                object.empty_peripheral_counter = 2;
+            } else {
+                return Err(entry.error("NoCtor: invalid value argument"));
+            }
+        }
         if matches!(object.model, Model::ScalarPeripheral(_)) && object.scalar.is_none() {
             return Err(entry.error("NoCtor: missing required scalar constructor argument"));
         }
@@ -513,16 +526,19 @@ impl CreatedPlatform {
         if self.objects[id].model == Model::EnumPeripheral {
             return self.objects[id].enum_arguments.bind(name, value, source);
         }
-        if self.objects[id].model == Model::EmptyPeripheral && name == "value" {
-            self.objects[id].empty_peripheral_counter = if value == "none" {
-                1
-            } else if value.parse::<i32>().is_ok() {
-                3
-            } else if value.parse::<f64>().is_ok_and(f64::is_finite) {
-                2
-            } else {
-                return Err(format!("{source}: NoCtor: invalid value argument"));
-            };
+        if self.objects[id].model == Model::EmptyPeripheral {
+            if value.starts_with("new ") {
+                let (object, _) =
+                    object_prefix(value).map_err(|error| format!("{source}: {error}"))?;
+                Model::parse(object.model)
+                    .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
+            }
+            if name != "value" {
+                return Err(format!(
+                    "{source}: NoCtor: unknown constructor argument {name}"
+                ));
+            }
+            self.objects[id].empty_peripheral_value = (value != "none").then(|| value.to_owned());
             return Ok(());
         }
         if let Model::ScalarPeripheral(kind) = self.objects[id].model {
@@ -559,6 +575,7 @@ impl CreatedPlatform {
                     enum_arguments: EnumArguments::default(),
                     scalar: None,
                     empty_peripheral_counter: 1,
+                    empty_peripheral_value: None,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();

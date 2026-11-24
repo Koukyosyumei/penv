@@ -969,3 +969,33 @@ p: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor @ sysb
         "NoCtor",
     );
 }
+
+#[test]
+fn should_validate_object_value_in_ctor_parameter() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    ctorParam: new NoSuchType"#,
+        "TypeNotResolved",
+    );
+}
+
+#[test]
+fn should_fail_on_no_available_ctor_in_entry() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    ctorParam: 3"#,
+        "NoCtor",
+    );
+}
+
+#[test]
+fn should_fail_on_ambiguous_ctor_in_entry() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    value: 3"#,
+        "AmbiguousCtor",
+    );
+}
