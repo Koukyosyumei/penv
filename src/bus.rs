@@ -1,3 +1,7 @@
+#[path = "bus_children.rs"]
+mod children;
+pub use children::NULL_REGISTRATION_POINT;
+
 use std::{
     alloc::{Layout, alloc_zeroed},
     cell::RefCell,
@@ -369,6 +373,7 @@ pub struct Bus {
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     constant_mmio: Vec<ConstantMmio>,
     translated_peripherals: Vec<crate::bus_translation::Registration>,
+    translated_children: Vec<(crate::bus_translation::PeripheralHandle, crate::bus_translation::PeripheralHandle)>,
     translated_peripheral_groups: std::collections::BTreeMap<String, Vec<crate::bus_translation::PeripheralHandle>>,
     translations_enabled: bool,
     pub ethernet: Vec<Controller>,
@@ -1089,7 +1094,10 @@ impl Bus {
             }
             let device = &mut self.translated_peripherals[index];
             device.ports.retain(|port| port.base != address);
-            self.translated_peripherals.retain(|device| !device.ports.is_empty());
+            if device.ports.is_empty() {
+                let device = self.translated_peripherals.remove(index);
+                self.remove_translated_children(&device.handle);
+            }
             return Ok(());
         }
         if let Some(index) = self
@@ -1314,7 +1322,7 @@ impl Bus {
         width: crate::dma_engine::Width,
         peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
     ) -> Result<(), String> {
-        if self.is_translated_peripheral_registered(handle) {
+        if self.is_peripheral_registered(handle) {
             return Err("translated peripheral already registered".into());
         }
         if ports.is_empty() {
@@ -1376,6 +1384,7 @@ impl Bus {
         let index = self.translated_peripherals.iter()
             .position(|device| device.handle == *handle).ok_or(RegistrationError::NotRegistered)?;
         self.translated_peripherals.remove(index);
+        self.remove_translated_children(handle);
         Ok(())
     }
 
@@ -1383,6 +1392,9 @@ impl Bus {
         use crate::bus_translation::RegistrationError;
         let handles = self.translated_peripheral_groups.remove(name).ok_or(RegistrationError::GroupNotFound)?;
         self.translated_peripherals.retain(|device| !handles.contains(&device.handle));
+        for handle in &handles {
+            self.remove_translated_children(handle);
+        }
         Ok(())
     }
 

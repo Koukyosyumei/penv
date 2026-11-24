@@ -21,6 +21,7 @@ mod option_validation;
 mod option_parser;
 mod system_bus;
 mod peripherals_group;
+mod null_registration;
 mod time_interval;
 mod clock_source;
 mod comparing_timer;

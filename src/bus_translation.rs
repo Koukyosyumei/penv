@@ -21,6 +21,8 @@ pub enum RegistrationError {
     NotRegistered,
     AlreadyGrouped,
     GroupNotFound,
+    ContainerOccupied,
+    AlreadyRegistered,
 }
 
 pub trait NativePeripheral {
