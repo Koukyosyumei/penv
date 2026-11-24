@@ -151,6 +151,7 @@ pub struct Machine {
     frame_wait_deadline: Option<u64>,
     intermediate_frame_matches: Vec<u64>,
     time_source: TimeSource<1>,
+    managed_clock: crate::clock_source::ClockSource<'static>,
     pub rtc_clock: RtcClock,
     recorder: Option<Recorder>,
     replay: VecDeque<(u64, ExternalEvent)>,
@@ -419,6 +420,7 @@ impl Machine {
             frame_wait_deadline: None,
             intermediate_frame_matches: Vec::new(),
             time_source: TimeSource::default(),
+            managed_clock: crate::clock_source::ClockSource::default(),
             rtc_clock: RtcClock::default(),
             recorder: None,
             replay: VecDeque::new(),
@@ -485,6 +487,21 @@ impl Machine {
             .as_ref()
             .expect("validated RV64 CPU")
             .translate_read(&mut self.bus, address)
+    }
+
+    pub fn obtain_managed_thread(
+        &mut self,
+        action: impl FnMut() + 'static,
+        frequency: std::num::NonZeroU64,
+    ) -> crate::clock_source::ManagedThread {
+        self.managed_clock.managed_thread(frequency, action)
+    }
+
+    pub fn run_to_nearest_sync_point(
+        &mut self,
+        quantum: std::time::Duration,
+    ) -> Result<(), crate::clock_source::ClockOverflow> {
+        self.managed_clock.advance(quantum)
     }
 
     pub fn set_peripheral_local_name(

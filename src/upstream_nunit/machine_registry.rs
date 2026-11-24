@@ -81,3 +81,34 @@ fn should_throw_on_null_or_empty_peripheral_name() {
         .set_peripheral_local_name(&peripheral, None)
         .is_err());
 }
+
+#[test]
+fn should_handle_managed_threads() {
+    use std::{cell::Cell, num::NonZeroU64, rc::Rc, time::Duration};
+
+    let counter = Rc::new(Cell::new(0));
+    let mut machine = Machine::without_default_ram();
+    let action = {
+        let counter = counter.clone();
+        move || counter.set(counter.get() + 1)
+    };
+    let managed = machine.obtain_managed_thread(action, NonZeroU64::MIN);
+    let quantum = Duration::from_millis(1000);
+
+    for _ in 0..3 {
+        machine.run_to_nearest_sync_point(quantum).unwrap();
+    }
+    assert_eq!(counter.get(), 0);
+
+    managed.start();
+    for expected in 1..=3 {
+        machine.run_to_nearest_sync_point(quantum).unwrap();
+        assert_eq!(counter.get(), expected);
+    }
+
+    managed.stop();
+    for _ in 0..3 {
+        machine.run_to_nearest_sync_point(quantum).unwrap();
+    }
+    assert_eq!(counter.get(), 3);
+}

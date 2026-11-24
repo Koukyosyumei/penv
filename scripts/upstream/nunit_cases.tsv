@@ -1120,3 +1120,4 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MachineTests.ShouldFindPeripheralByPath	upstream_nunit::machine_registry::should_find_peripheral_by_path	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MachineTests.ShouldFindPeripheralByPathWhenThereAreTwo	upstream_nunit::machine_registry::should_find_peripheral_by_path_when_there_are_two	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MachineTests.ShouldThrowOnNullOrEmptyPeripheralName	upstream_nunit::machine_registry::should_throw_on_null_or_empty_peripheral_name	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MachineTests.ShouldHandleManagedThreads	upstream_nunit::machine_registry::should_handle_managed_threads	new
