@@ -540,3 +540,19 @@ UART の送信先、送信後のエコー待機と既定のエコーポリシー
 `target/monitor-uart-delimiter-proof/` では CR を行末に指定し、同じ nRF
 ファームウェアの2行を固定 Renode と同じ内容で取得した。2行目の
 先頭の LF も一致した。
+
+UART の `matchNextLine` と `defaultMatchNextLine` は Rust が処理する。
+`target/monitor-first-line-proof/` では nRF の実出力で、先頭行の不一致が
+失敗し、後続の呼び出しで両方の行を受信できた。固定 Renode と penv は
+次行照合で成功した正規表現の空のキャプチャ配列も一致した。
+`target/monitor-next-line-default-proof/` では既定値を明示的に上書きした
+呼び出しが両方で合格した。
+
+`target/monitor-unfinished-uart-proof/` では nRF シェルの未完了プロンプトで
+不在確認を行った。完成行だけを対象にすると合格し、未完了行を含めると
+固定 Renode と penv の両方で失敗した。
+
+未変更の STM32F072b コンソールエコーと nRF ウォッチドッグは合格した。
+`Should Finish Instructions Before Pausing` は penv では
+`CPU.ARMv7R` のロードで未対応となった
+（`target/monitor-next-line-precise/results.json`）。
