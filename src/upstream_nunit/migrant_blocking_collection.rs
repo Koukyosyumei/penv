@@ -2,27 +2,45 @@ use std::fmt::Debug;
 
 use crate::migrant::{
     blocking_collection::{self, BlockingCollection},
+    generated_record::{generated_record, Codec},
     graph_serializer::GraphSerializer,
     object_stream::{FieldKind, Graph, Object, TypeStamp, Value},
 };
 
-fn round_trip<T: Eq + Ord + Debug>(
-    element_type: &str,
-    items: Vec<T>,
+const INTS: &str = "System.Collections.Concurrent.BlockingCollection<System.Int32>";
+const OBJECTS: &str = "System.Collections.Concurrent.BlockingCollection<System.Object>";
+const STRINGS: &str = "System.Collections.Concurrent.BlockingCollection<System.String>";
+
+const CODECS: &[Codec] = &[
+    generated_record!(INTS; items: reference),
+    generated_record!(OBJECTS; items: reference),
+    generated_record!(STRINGS; items: reference),
+    generated_record!("System.Int32"; value: integer),
+];
+
+#[derive(Clone, Copy, Default)]
+struct Settings {
     stamped: bool,
     xml: bool,
+    writer: bool,
+    reader: bool,
+}
+
+fn round_trip<T: Eq + Ord + Debug>(
+    class: &str,
+    items: Vec<T>,
+    settings: Settings,
     encode: impl Fn(&mut Graph, &T) -> Value,
     decode: impl Fn(&Graph, &Value) -> T,
 ) {
-    let class = format!("System.Collections.Concurrent.BlockingCollection<{element_type}>");
     let mut graph = Graph::default();
     let collection = BlockingCollection::default();
     for item in &items {
         collection.add(encode(&mut graph, item));
     }
-    let root = collection.store(&mut graph, &class);
+    let root = collection.store(&mut graph, class);
     let stamps = [
-        blocking_collection::type_stamp(&class),
+        blocking_collection::type_stamp(class),
         TypeStamp {
             class: "System.Int32",
             module: "mscorlib",
@@ -31,10 +49,14 @@ fn round_trip<T: Eq + Ord + Debug>(
         },
     ];
     let (copy_graph, id) = GraphSerializer::default()
-        .with_xml_serializable(xml)
-        .clone_graph(&graph, root, stamped.then_some(&stamps))
+        .with_xml_serializable(settings.xml)
+        .with_generated_methods(
+            settings.writer.then_some(CODECS),
+            settings.reader.then_some(CODECS),
+        )
+        .clone_graph(&graph, root, settings.stamped.then_some(&stamps))
         .unwrap();
-    let copy = BlockingCollection::restore(&copy_graph, id, &class).unwrap();
+    let copy = BlockingCollection::restore(&copy_graph, id, class).unwrap();
     let mut expected: Vec<_> = collection
         .snapshot()
         .iter()
@@ -50,12 +72,11 @@ fn round_trip<T: Eq + Ord + Debug>(
     assert_eq!(expected, actual);
 }
 
-fn primitives(stamped: bool, xml: bool) {
+fn primitives(settings: Settings) {
     round_trip(
-        "System.Int32",
+        INTS,
         vec![1, 2, 3],
-        stamped,
-        xml,
+        settings,
         |_, &value| Value::Integer(value),
         |_, value| {
             let Value::Integer(value) = value else {
@@ -66,12 +87,11 @@ fn primitives(stamped: bool, xml: bool) {
     );
 }
 
-fn nullable(stamped: bool, xml: bool) {
+fn nullable(settings: Settings) {
     round_trip(
-        "System.Object",
+        OBJECTS,
         vec![Some(1), None, Some(3)],
-        stamped,
-        xml,
+        settings,
         |graph, &value| {
             value.map_or(Value::Null, |value| {
                 Value::Ref(graph.insert(Object::Record {
@@ -97,12 +117,11 @@ fn nullable(stamped: bool, xml: bool) {
     );
 }
 
-fn strings(stamped: bool, xml: bool) {
+fn strings(settings: Settings) {
     round_trip(
-        "System.String",
+        STRINGS,
         vec!["One".to_owned(), "Two".to_owned(), "Three".to_owned()],
-        stamped,
-        xml,
+        settings,
         |graph, value| Value::Ref(graph.insert(Object::String(value.clone()))),
         |graph, value| {
             let Value::Ref(id) = value else {
@@ -118,50 +137,142 @@ fn strings(stamped: bool, xml: bool) {
 
 #[test]
 fn primitives_plain() {
-    primitives(false, false);
+    primitives(Settings {
+        stamped: false,
+        xml: false,
+        ..Settings::default()
+    });
 }
 #[test]
 fn nullable_plain() {
-    nullable(false, false);
+    nullable(Settings {
+        stamped: false,
+        xml: false,
+        ..Settings::default()
+    });
 }
 #[test]
 fn strings_plain() {
-    strings(false, false);
+    strings(Settings {
+        stamped: false,
+        xml: false,
+        ..Settings::default()
+    });
 }
 #[test]
 fn primitives_stamped() {
-    primitives(true, false);
+    primitives(Settings {
+        stamped: true,
+        xml: false,
+        ..Settings::default()
+    });
 }
 #[test]
 fn nullable_stamped() {
-    nullable(true, false);
+    nullable(Settings {
+        stamped: true,
+        xml: false,
+        ..Settings::default()
+    });
 }
 #[test]
 fn strings_stamped() {
-    strings(true, false);
+    strings(Settings {
+        stamped: true,
+        xml: false,
+        ..Settings::default()
+    });
 }
 
 #[test]
 fn primitives_xml_plain() {
-    primitives(false, true);
+    primitives(Settings {
+        stamped: false,
+        xml: true,
+        ..Settings::default()
+    });
 }
 #[test]
 fn nullable_xml_plain() {
-    nullable(false, true);
+    nullable(Settings {
+        stamped: false,
+        xml: true,
+        ..Settings::default()
+    });
 }
 #[test]
 fn strings_xml_plain() {
-    strings(false, true);
+    strings(Settings {
+        stamped: false,
+        xml: true,
+        ..Settings::default()
+    });
 }
 #[test]
 fn primitives_xml_stamped() {
-    primitives(true, true);
+    primitives(Settings {
+        stamped: true,
+        xml: true,
+        ..Settings::default()
+    });
 }
 #[test]
 fn nullable_xml_stamped() {
-    nullable(true, true);
+    nullable(Settings {
+        stamped: true,
+        xml: true,
+        ..Settings::default()
+    });
 }
 #[test]
 fn strings_xml_stamped() {
-    strings(true, true);
+    strings(Settings {
+        stamped: true,
+        xml: true,
+        ..Settings::default()
+    });
 }
+
+macro_rules! cases {
+    ($w:literal, $r:literal, $xml:literal, $stamp:literal; $p:ident, $n:ident, $s:ident) => {
+        #[test]
+        fn $p() {
+            primitives(Settings {
+                writer: $w,
+                reader: $r,
+                xml: $xml,
+                stamped: $stamp,
+            });
+        }
+        #[test]
+        fn $n() {
+            nullable(Settings {
+                writer: $w,
+                reader: $r,
+                xml: $xml,
+                stamped: $stamp,
+            });
+        }
+        #[test]
+        fn $s() {
+            strings(Settings {
+                writer: $w,
+                reader: $r,
+                xml: $xml,
+                stamped: $stamp,
+            });
+        }
+    };
+}
+cases!(false,true,false,false; primitives_generated_reader_plain, nullable_generated_reader_plain, strings_generated_reader_plain);
+cases!(false,true,false,true; primitives_generated_reader_stamped, nullable_generated_reader_stamped, strings_generated_reader_stamped);
+cases!(false,true,true,false; primitives_generated_reader_xml_plain, nullable_generated_reader_xml_plain, strings_generated_reader_xml_plain);
+cases!(false,true,true,true; primitives_generated_reader_xml_stamped, nullable_generated_reader_xml_stamped, strings_generated_reader_xml_stamped);
+cases!(true,false,false,false; primitives_generated_writer_plain, nullable_generated_writer_plain, strings_generated_writer_plain);
+cases!(true,false,false,true; primitives_generated_writer_stamped, nullable_generated_writer_stamped, strings_generated_writer_stamped);
+cases!(true,false,true,false; primitives_generated_writer_xml_plain, nullable_generated_writer_xml_plain, strings_generated_writer_xml_plain);
+cases!(true,false,true,true; primitives_generated_writer_xml_stamped, nullable_generated_writer_xml_stamped, strings_generated_writer_xml_stamped);
+cases!(true,true,false,false; primitives_generated_both_plain, nullable_generated_both_plain, strings_generated_both_plain);
+cases!(true,true,false,true; primitives_generated_both_stamped, nullable_generated_both_stamped, strings_generated_both_stamped);
+cases!(true,true,true,false; primitives_generated_both_xml_plain, nullable_generated_both_xml_plain, strings_generated_both_xml_plain);
+cases!(true,true,true,true; primitives_generated_both_xml_stamped, nullable_generated_both_xml_stamped, strings_generated_both_xml_stamped);

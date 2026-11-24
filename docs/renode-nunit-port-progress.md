@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,292 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,328 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,104 |
+| 移植待ち | 2,068 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 21 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 20 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -279,7 +279,7 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 ## Migrant BlockingCollection の XML 有効設定
 
-XML 有効・型スタンプ有無の6件を追加した。反射シリアライザーで XML サロゲートの許可を設定し、既存の XML 型ラウンドトリップでも同じ設定を使った。null ケースの整数はオブジェクト参照として格納する。反射経路は12件すべて合格し、生成経路の36件が残る。
+XML 有効・型スタンプ有無の6件を追加した。反射シリアライザーで XML サロゲートの許可を設定し、既存の XML 型ラウンドトリップでも同じ設定を使った。null ケースの整数はオブジェクト参照として格納する。反射経路は12件すべて合格した。生成経路の36件は後続のバッチで移植した。
 
 - [公式 ID](nunit-evidence/targeted-migrant-blocking-xml.tsv)と[実行ログ](nunit-evidence/targeted-migrant-blocking-xml.log)
 
@@ -294,3 +294,9 @@ Rust マクロで型ごとの専用フィールドコーデックを生成し、
 正規表現と XML サロゲートに専用コーデックを追加した。読み出しのみ・書き込みのみ・両方の生成経路を、型スタンプの有無それぞれで実行し、公式16件すべてが合格した。
 
 - [追加12件の公式 ID](nunit-evidence/targeted-migrant-builtin-generated.tsv)と[実行ログ](nunit-evidence/targeted-migrant-builtin-generated.log)
+
+## Migrant BlockingCollection の生成経路
+
+コレクションのレコードと boxed Int32 に専用コーデックを使い、配列と文字列のストリーム処理は共通経路を再利用した。生成読み書き、XML サポート、型スタンプの16設定で、整数、null を含むオブジェクト、文字列の多重集合を検証した。公式48件すべてが対象実行で合格した。
+
+- [追加36件の公式 ID](nunit-evidence/targeted-migrant-blocking-generated.tsv)と[48件の実行ログ](nunit-evidence/targeted-migrant-blocking-generated.log)
