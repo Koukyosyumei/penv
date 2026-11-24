@@ -1018,3 +1018,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,Fal
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeImmediateHooksInCorrectOrder	upstream_nunit::migrant_hooks::immediate_order_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeLateHooksInCorrectOrder	upstream_nunit::migrant_hooks::late_order_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldProperlyExecuteHooksOnVirtualMethod	upstream_nunit::migrant_hooks::virtual_dispatch_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,False).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::custom_xml_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,True).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::custom_xml_stamped	new
