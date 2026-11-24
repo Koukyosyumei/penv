@@ -441,6 +441,8 @@ enum Action {
     DescribeSnapshotPlatform,
     DescribeEnvironment,
     MonitorAssignment(String, PathBuf),
+    MonitorAlias(String, String),
+    MonitorMacro(String, Macro),
     MonitorEcho(String, PathBuf),
     SaveMemory(PathBuf, bool),
     ClearMemory,
@@ -631,7 +633,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -702,6 +704,14 @@ fn run_commands<'a>(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
+            Action::MonitorAlias(name, command) => {
+                session.aliases.insert(name.clone(), command.clone());
+                Ok(None)
+            }
+            Action::MonitorMacro(name, body) => {
+                session.macros.insert(name.clone(), body.clone());
+                Ok(None)
+            }
             Action::MonitorAssignment(text, origin) => command_words(text).and_then(|words| {
                 assign_variable(text, &words, session.machine.as_deref(), &mut session.variables, Some(origin))
             }).map(|_| None),
@@ -1984,7 +1994,7 @@ fn unquote(text: &str) -> &str {
         .unwrap_or(text)
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Macro {
     script: PathBuf,
     commands: Vec<(usize, String)>,
@@ -2165,7 +2175,7 @@ fn is_console_action(action: &Action) -> bool {
 
 fn is_monitor_snapshot_action(action: &Action) -> bool {
     matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
-        | Action::MonitorAssignment(..) | Action::MonitorEcho(..))
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..))
 }
 
 fn is_empty_machine_action(action: &Action) -> bool {
@@ -2300,6 +2310,12 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
     load_text(path, canonical, root, state, &content)
 }
 
+fn follows_snapshot(boot: &Boot) -> bool {
+    boot.runtime.iter().any(|command| matches!(
+        command.action, Action::SaveMemory(..) | Action::LoadMemory(_)
+    ))
+}
+
 fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptState, content: &str) -> Result<(), String> {
     if state.visiting.len() >= 64 || !state.visiting.insert(canonical.clone()) {
         return Err(format!(
@@ -2398,47 +2414,37 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         }
         if let Some(declaration) = text.strip_prefix("macro ") {
             let declaration = declaration.trim();
-            if let Some((name, body)) = declaration.split_once(char::is_whitespace) {
+            let (name, commands) = if let Some((name, body)) = declaration.split_once(char::is_whitespace) {
                 let body = monitor_string(body.trim()).ok_or_else(|| error("expected quoted macro body"))?;
-                state.macros.insert(
-                    name.into(),
-                    Macro {
-                        script: path.into(),
-                        commands: vec![(line, body)],
-                    },
-                );
-                continue;
-            }
-            let name = declaration;
-            if cursor
-                .next()
-                .is_none_or(|(_, line)| line.trim() != "\"\"\"")
-            {
-                return Err(error("expected triple-quoted macro body"));
-            }
-            let mut body = Vec::new();
-            loop {
-                let (index, command) = cursor.next().ok_or_else(|| error("unterminated macro"))?;
-                if command.trim() == "\"\"\"" {
-                    break;
+                (name, vec![(line, body)])
+            } else {
+                if cursor.next().is_none_or(|(_, line)| line.trim() != "\"\"\"") {
+                    return Err(error("expected triple-quoted macro body"));
                 }
-                body.push((index, command.trim().to_string()));
+                let mut commands = Vec::new();
+                loop {
+                    let (index, command) = cursor.next().ok_or_else(|| error("unterminated macro"))?;
+                    if command.trim() == "\"\"\"" {
+                        break;
+                    }
+                    commands.push((index, command.trim().to_owned()));
+                }
+                (declaration, commands)
+            };
+            let body = Macro { script: path.into(), commands };
+            if follows_snapshot(&state.boot) {
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(), action: Action::MonitorMacro(name.into(), body),
+                });
+            } else {
+                state.macros.insert(name.into(), body);
             }
-            state.macros.insert(
-                name.into(),
-                Macro {
-                    script: path.into(),
-                    commands: body,
-                },
-            );
             continue;
         }
         let words = command_words(text).map_err(|e| error(&e))?;
         let assignment = text.starts_with('$') || matches!(words.as_slice(), ["set", _, _]);
-        let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"]))
-            && state.boot.runtime.iter().any(|command| matches!(
-                command.action, Action::SaveMemory(..) | Action::LoadMemory(_)
-            ));
+        let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"] | ["alias", _, _]))
+            && follows_snapshot(&state.boot);
         if follows_snapshot && assignment {
             state.boot.runtime.push(RuntimeCommand {
                 line: line + 1, source: path.to_owned(),
@@ -2512,7 +2518,13 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                 let scope = state.boot.session.machine.as_deref().map(normalized_monitor_scope);
                 let key = if name.contains('.') { (*name).to_owned() }
                     else { format!("{}.{name}", scope.as_deref().unwrap_or("global")) };
-                state.aliases.insert(key, command);
+                if follows_snapshot {
+                    state.boot.runtime.push(RuntimeCommand {
+                        line: line + 1, source: path.to_owned(), action: Action::MonitorAlias(key, command),
+                    });
+                } else {
+                    state.aliases.insert(key, command);
+                }
             }
             ["alias", ..] => return Err(error("invalid monitor alias parameters")),
             ["runMacro", name] if name.starts_with('$') => {
