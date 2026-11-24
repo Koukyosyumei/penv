@@ -978,3 +978,15 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldInvokeConstructorForFieldInStructComplex	upstream_nunit::migrant_object_stream::constructor_nested_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeGenericClassWithLatePostDeserializationHook	upstream_nunit::migrant_object_stream::generic_late_hook_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeGenericClassWithLatePostDeserializationHook	upstream_nunit::migrant_object_stream::generic_late_hook_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldHaveDeserializedReferencedObjectsWhenHookIsInvoked	upstream_nunit::migrant_hooks::referenced_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokeChainOfHooksInCorrectOrder	upstream_nunit::migrant_hooks::chain_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokeDerivedPostDeserialization	upstream_nunit::migrant_hooks::derived_post_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokeHooksOnDerivedClassesInCorrectOrder	upstream_nunit::migrant_hooks::inheritance_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokePostDeserialization	upstream_nunit::migrant_hooks::post_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokePostHookAfterBothObjectsInCyclicReferenceAreDeserialized	upstream_nunit::migrant_hooks::cyclic_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldHaveDeserializedReferencedObjectsWhenHookIsInvoked	upstream_nunit::migrant_hooks::referenced_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeChainOfHooksInCorrectOrder	upstream_nunit::migrant_hooks::chain_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeDerivedPostDeserialization	upstream_nunit::migrant_hooks::derived_post_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeHooksOnDerivedClassesInCorrectOrder	upstream_nunit::migrant_hooks::inheritance_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokePostDeserialization	upstream_nunit::migrant_hooks::post_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokePostHookAfterBothObjectsInCyclicReferenceAreDeserialized	upstream_nunit::migrant_hooks::cyclic_stamped	new

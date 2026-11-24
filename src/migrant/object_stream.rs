@@ -23,6 +23,7 @@ pub enum FieldKind {
     NativeResource = 7,
     Decimal = 8,
     NullableDecimal = 9,
+    Boolean = 10,
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +55,7 @@ impl TypeStamp<'_> {
                         | (FieldKind::BigInteger, Value::BigInteger(_))
                         | (FieldKind::NativeResource, Value::NativeResource(_))
                         | (FieldKind::Decimal, Value::Decimal(_))
+                        | (FieldKind::Boolean, Value::Boolean(_))
                         | (FieldKind::NullableDecimal, Value::Null | Value::Decimal(_))
                         | (FieldKind::Reference, Value::Null | Value::Ref(_))
                 )
@@ -142,6 +144,7 @@ pub enum Value {
     BigInteger(Vec<u8>),
     NativeResource(NativeResource),
     Decimal(Decimal),
+    Boolean(bool),
     Ref(ObjectId),
 }
 
@@ -647,6 +650,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     data.guid(*value)?;
                 }
                 Value::NativeResource(resource) => return Err(unsupported(*resource, Vec::new())),
+                Value::Boolean(value) => data.bytes(&[7, u8::from(*value)])?,
                 Value::Decimal(value) => {
                     data.bytes(&[6])?;
                     data.decimal(*value)?;
@@ -676,11 +680,65 @@ pub struct LateRecordHook<'a> {
     pub apply: fn(&mut [Value]) -> io::Result<()>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ReadHookPhase {
+    Immediate,
+    Late,
+}
+
+pub struct ReadHook<'a> {
+    pub class: &'a str,
+    pub phase: ReadHookPhase,
+    pub apply: fn(&mut RestoredFrame<'_>, ObjectId) -> io::Result<()>,
+}
+
+pub struct RestoredFrame<'a> {
+    previous: &'a Graph,
+    objects: &'a mut [Object],
+}
+
+impl RestoredFrame<'_> {
+    pub fn get(&self, id: ObjectId) -> Option<&Object> {
+        match id.0.checked_sub(self.previous.objects.len()) {
+            Some(index) => self.objects.get(index),
+            None => self.previous.get(id),
+        }
+    }
+
+    pub fn fields_mut(&mut self, id: ObjectId) -> Option<&mut [Value]> {
+        let index = id.0.checked_sub(self.previous.objects.len())?;
+        match self.objects.get_mut(index)? {
+            Object::Record { fields, .. } => Some(fields),
+            _ => None,
+        }
+    }
+
+    fn run(&mut self, hooks: &[ReadHook<'_>]) -> io::Result<()> {
+        for phase in [ReadHookPhase::Immediate, ReadHookPhase::Late] {
+            for index in (0..self.objects.len()).rev() {
+                let Object::Record { class, .. } = &self.objects[index] else {
+                    continue;
+                };
+                let class = class.clone();
+                let id = ObjectId(self.previous.objects.len() + index);
+                for hook in hooks
+                    .iter()
+                    .filter(|hook| hook.phase == phase && hook.class == class)
+                {
+                    (hook.apply)(self, id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct ObjectReader<'a, 's, R: Read> {
     data: Reader<R>,
     graph: Graph,
     weak_history: Vec<Weak<Object>>,
     late_hooks: &'a [LateRecordHook<'a>],
+    read_hooks: &'a [ReadHook<'a>],
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
     transients: Option<&'a Transients<'a>>,
@@ -694,11 +752,17 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             graph: Graph::default(),
             weak_history: Vec::new(),
             late_hooks: &[],
+            read_hooks: &[],
             references,
             stamps: None,
             transients: None,
             surrogates: None,
         }
+    }
+
+    pub fn with_read_hooks(mut self, hooks: &'a [ReadHook<'a>]) -> Self {
+        self.read_hooks = hooks;
+        self
     }
 
     pub fn with_late_hooks(mut self, hooks: &'a [LateRecordHook<'a>]) -> Self {
@@ -901,8 +965,15 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                 }
             }
         }
-        if !self.late_hooks.is_empty() {
-            for object in &mut objects {
+        if !self.read_hooks.is_empty() {
+            RestoredFrame {
+                previous: &self.graph,
+                objects: &mut objects,
+            }
+            .run(self.read_hooks)?;
+        }
+        if !self.late_hooks.is_empty() || !self.read_hooks.is_empty() {
+            for object in objects.iter_mut().rev() {
                 if let Object::Record { class, fields } = object {
                     for hook in self.late_hooks.iter().filter(|hook| hook.class == class) {
                         (hook.apply)(fields)?;
@@ -962,6 +1033,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     Value::BigInteger(bytes)
                 }
                 6 => Value::Decimal(self.data.decimal()?),
+                7 => match self.data.byte()? {
+                    0 => Value::Boolean(false),
+                    1 => Value::Boolean(true),
+                    _ => return Err(invalid("invalid boolean value")),
+                },
                 _ => return Err(invalid("unknown value kind")),
             });
         }
