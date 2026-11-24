@@ -6,7 +6,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	7	0	21	0	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	102	102	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	128	0	1376	0	Stamped and unstamped reflection modes restore record, array and ordered list graphs. Remaining settings and cases need generated reader/writer paths, collection-as-user-object layouts, dictionary and other CLR codecs, surrogate and hook dispatch, and delegate/state restoration.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	144	0	1360	0	Stamped and unstamped reflection modes restore record, array and ordered list graphs. Remaining settings and cases need generated reader/writer paths, collection-as-user-object layouts, dictionary and other CLR codecs, surrogate and hook dispatch, and delegate/state restoration.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	4	0	12	0	All four reflection-mode stamp configurations are ported. The remaining 12 cases require the generated writer and/or reader paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests	176	34	0	142	0	Reflection substitutions cover exact, inherited, interface and open-generic matching. Remaining cases need generic converter generation/cache behavior, boxed-value surrogate allocation, read-side callback ordering, registration locks, or generated reader/writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	0	0	36	0	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
@@ -25,7 +25,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.MultiTreeTests	7	7	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.MultiValueDictionaryTests	7	7	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.WeakMultiTableTest	5	3	0	0	2	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ComparingTimerTests	5	4	0	1	0	STM32 CCR permits values beyond ARR. There is no generic ComparingTimer setter that rejects a compare value above its limit.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ComparingTimerTests	5	5	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.DataStorageTests	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.DmaEngineTests	144	144	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.GPIODetachingTests	10	10	0	0	0	-

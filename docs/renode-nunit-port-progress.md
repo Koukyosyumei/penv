@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 927 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 944 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,469 |
+| 移植待ち | 2,452 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 46 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 45 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -83,10 +83,15 @@ SHT21の実行対象2件を移植した。対象を絞った Rust 実行で全�
 SHT21 はコマンドパケットをモデルに直接渡し、固定シードで測定値を再現できるようにした。
 [公式 ID 別の結果](nunit-evidence/targeted-guid-collections-sht21.tsv) · [対象実行ログ](nunit-evidence/targeted-guid-collections-sht21.log)
 
-今回の追加は4件。BMA180 の初期化と測定2件、多倍長整数の型スタンプ有無2件を
+前回の追加は4件。BMA180 の初期化と測定2件、多倍長整数の型スタンプ有無2件を
 移植した。対象を絞った Rust 実行で全件合格した。BMA180 はコマンドをモデルに
 直接渡し、固定シードで測定値を再現する。
 [公式 ID 別の結果](nunit-evidence/targeted-bma180-big-integer.tsv) · [対象実行ログ](nunit-evidence/targeted-bma180-big-integer.log)
+
+今回の追加は17件。Migrant の一時オブジェクト・フィールドとネイティブ資源の16件、
+ComparingTimerTests の比較値上限1件。対象を絞った Rust 実行で全件合格した。
+比較値上限は汎用タイマーの型付きエラーで検証し、既移植の4件も対象実行で合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-transients-native-compare.tsv) · [対象実行ログ](nunit-evidence/targeted-transients-native-compare.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。
