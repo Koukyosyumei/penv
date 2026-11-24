@@ -306,6 +306,17 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 self.commands.append(f"sysbus {tokens[1]} {source}")
                 self.image = True
                 return ""
+            if (tokens[:2] == ["sysbus", "LoadBinary"] and len(tokens) == 4
+                    and (self.platform or self.inline)):
+                value = tokens[2].lstrip("@")
+                if PUBLIC_ASSET.fullmatch(value):
+                    self.fetch(value)
+                    source = "@" + value
+                else:
+                    source = at_path(self.monitor_input.path(tokens[2]))
+                self.commands.append(f"sysbus LoadBinary {source} {tokens[3]}")
+                self.image = True
+                return ""
             if self.image and re.fullmatch(r"sysbus\.cpu VectorTableOffset 0x[0-9a-fA-F]+", command):
                 self.commands.append(command)
                 return ""
@@ -328,6 +339,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if method == "FeedIlluminanceSamplesFromRESD":
                 file = self.monitor_input.path(argument)
                 return self.operation(f"{sensor} {method} {at_path(file)}")
+        if re.fullmatch(r"(?:sysbus\.)?[\w.]+ (?:VendorSpecific1|Acceleration[XYZ]) \S+", command):
+            return self.operation(command)
+        if re.fullmatch(r"(?:sysbus\.)?[\w.]+\.led\d+ State", command):
+            return self.operation(command, assertion=True)
         if (re.fullmatch(r"(?:sysbus\.)?[\w.]+ OnGPIO (?:0x[0-9a-fA-F]+|\d+) (?:true|false)", command, re.I)
                 or re.fullmatch(r"showAnalyzer (?:sysbus\.)?[\w.]+(?: LoggingUartAnalyzer)?", command)):
             return self.operation(command)
@@ -516,7 +531,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.calls[-1]["monitor"] = measurement
         with (self.out / "monitor.jsonl").open("a") as log:
             print(json.dumps(measurement), file=log)
-        if status == "UNSUPPORTED" and "could not start llvm-mc" in value:
+        if status == "UNSUPPORTED" and any(
+                f"could not start {tool}" in value for tool in ("llvm-mc", "ld.lld")):
             raise OSError(value)
         if status == "UNSUPPORTED" or status == "ERROR" and re.search(
                 r"UART peripheral not found|unknown STM32 UART|unknown LED|not a Cortex-M CPU|"

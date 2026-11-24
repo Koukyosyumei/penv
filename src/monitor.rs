@@ -75,6 +75,9 @@ enum Action {
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     TimeSourceInfo,
+    PhyRegister(String, u16),
+    AdxlAxis(String, usize, i16),
+    LiteXLedState(String),
     UartIdle(u64),
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
@@ -343,6 +346,20 @@ pub fn run(
                     (stop != Stop::Limit || chunk < *steps).then_some(stop)
                 })
             }
+            Action::PhyRegister(target, value) => machine.bus.litex_phy_mut(target).map(|phy| {
+                phy.set_vendor_specific1(*value);
+                None
+            }),
+            Action::AdxlAxis(target, axis, value) => machine.bus.nrf_adxl_input(target)
+                .ok_or_else(|| format!("unsupported ADXL372 target {target:?}"))
+                .map(|acceleration| {
+                    acceleration[*axis] = *value;
+                    None
+                }),
+            Action::LiteXLedState(target) => machine.bus.litex_led_state(target).and_then(|state| {
+                writeln!(output.output, "{}", if state { "True" } else { "False" })
+                    .map(|()| None).map_err(|error| error.to_string())
+            }),
             Action::TimeSourceInfo => {
                 let seconds = machine.elapsed_steps() / machine.bus.monitor_step_hz();
                 writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}",
@@ -1492,6 +1509,22 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        [target, "VendorSpecific1", value] if boot.started => Some(Action::PhyRegister(
+            (*target).to_owned(), u16::try_from(crate::parse_address(resolve(value)?)?)
+                .map_err(|_| "PHY register exceeds 16 bits")?)),
+        [target, axis @ ("AccelerationX" | "AccelerationY" | "AccelerationZ"), value] if boot.started => {
+            let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid acceleration")?;
+            if !(-200.0..=200.0).contains(&value) {
+                return Err("acceleration must be within ±200 g".into());
+            }
+            let axis = match *axis { "AccelerationX" => 0, "AccelerationY" => 1, _ => 2 };
+            let target = target.rsplit('.').next().unwrap_or(target).to_owned();
+            Some(Action::AdxlAxis(target, axis, (value * 10.0).round() as i16))
+        }
+        [target, "State"] if boot.started && target.rsplit('.').next().is_some_and(|part| part.starts_with("led")) => {
+            Some(Action::LiteXLedState((*target).to_owned()))
+        }
+
         ["emulation", "GetTimeSourceInfo"] if boot.started => Some(Action::TimeSourceInfo),
         ["TestMonitorUartIdle", timeout] if boot.started => Some(Action::UartIdle(duration_steps(resolve(timeout)?)?)),
 
