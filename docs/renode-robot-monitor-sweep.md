@@ -556,3 +556,19 @@ UART の `matchNextLine` と `defaultMatchNextLine` は Rust が処理する。
 `Should Finish Instructions Before Pausing` は penv では
 `CPU.ARMv7R` のロードで未対応となった
 （`target/monitor-next-line-precise/results.json`）。
+
+バイナリ UART の待機は通常 RESC と Robot が同じ Rust の履歴・照合処理を
+使う。`target/monitor-binary-uart-proof/` の両実行では、nRF の出力から
+CR/LF をまたぐバイト列と正規表現キャプチャを同じバイト値で得た。
+`target/monitor-binary-empty-group-proof/` では未一致グループも固定
+Renode と同じ空のバイト列として RPC から返った。
+
+CPU を持たない `UART.TrivialUart` の REPL を実行できるようにした。
+固定 Renode と penv の両方で上流の全256バイトのリテラル・正規表現
+ケースを実行した。固定 Renode の結果は
+`target/monitor-cpuless-uart-proof/native-robot.xml` と
+`target/monitor-cpuless-uart-native-bytes/native-robot.xml`、
+penv の結果は `target/monitor-cpuless-uart-regex/results.json` と
+`target/monitor-cpuless-uart-bytes/results.json` にある。
+通常の RESC の実行は `target/monitor-cpuless-uart-proof/all-bytes.resc`
+と `file.log` に記録した。
