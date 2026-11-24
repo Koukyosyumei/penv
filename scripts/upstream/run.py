@@ -19,23 +19,14 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
+from nunit_mapping import case_parameters, load_mapping
 from penv_robot import Endpoint
 
 
 PIN = "c38ac3babcd38a7144b9498e3ca4c2226b76aa37"
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROBOT = ["tests/unit-tests/hex.robot", "tests/platforms/STM32F072b.robot"]
-PROJECT = "tests/unit-tests/RenodeTests/RenodeTests.csproj"
-NUNIT_PREFIX = "Antmicro.Renode.UnitTests.PlatformDescription.ParserPrimitivesTest."
-MAPPING = {
-    f'{NUNIT_PREFIX}ShouldParseHexadecimalLong("{value}")':
-        (f"hexadecimal_unsigned_long_{suffix}", {"number": value})
-    for value, suffix in [("0x1000", "1000"), ("0x12AB", "12ab"), ("0x0ff", "0ff")]
-}
-MAPPING.update({
-    f"{NUNIT_PREFIX}ShouldParseQuotedString": ("quoted_string", {}),
-    f"{NUNIT_PREFIX}ShouldParseQuotedStringWithASemicolon": ("quoted_string_with_semicolon", {}),
-})
+MAPPING = load_mapping()
 
 
 def git(root, *args):
@@ -233,12 +224,11 @@ def discover_nunit(root, dotnet, projects, host, output):
             case_id = node.attrib["fullname"]
             method = node.attrib["methodname"]
             display_name = node.attrib["name"]
-            parameters = display_name.removeprefix(method)
             engine_id = node.attrib["id"]
             # NUnit permits identical custom names (even for different arguments).
             # Retain the engine ID for those occurrences in this pinned discovery.
             unique_id = case_id if ids[case_id] == 1 else f"{case_id} [NUnit {engine_id}]"
-            mapped = MAPPING.get(case_id) if project == PROJECT else None
+            mapped = MAPPING.get((project, case_id))
             excluded = not categories.isdisjoint(host["exclude"])
             runstate = node.attrib["runstate"]
             if excluded:
@@ -250,10 +240,9 @@ def discover_nunit(root, dotnet, projects, host, output):
             run["selected_count"] += not excluded
             run["runnable_count"] += (not excluded and runstate == "Runnable")
             rows.append(dict(id=f"{project}::{unique_id}", project=project, name=case_id,
-                             nunit_id=engine_id, parameters=mapped[1] if mapped else
-                             ({"display": parameters} if parameters else {}),
+                             nunit_id=engine_id, parameters=case_parameters(method, display_name),
                              categories=sorted(categories), runstate=runstate,
-                             rust_test=f"upstream_nunit::{mapped[0]}" if mapped else None,
+                             rust_test=mapped["rust_test"] if mapped else None,
                              evidence=str(xml), status=status))
     return rows, runs
 
@@ -408,7 +397,7 @@ def main():
                or any(row.get("status") == "diagnostic" and row["outcome"] != "fail"
                       for row in results)
                or bool(nunit_root and any(run["status"] != "discovered" for run in nunit_runs))
-               or bool(nunit_root and {row["name"] for row in nunit
+               or bool(nunit_root and {(row["project"], row["name"]) for row in nunit
                                        if row["rust_test"]} != set(MAPPING)))
 
 
