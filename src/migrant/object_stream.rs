@@ -93,8 +93,29 @@ pub enum Value {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
     String(String),
-    Record { class: String, fields: Vec<Value> },
+    Record {
+        class: String,
+        fields: Vec<Value>,
+    },
     Array(Vec<Value>),
+    Rectangular {
+        dimensions: Vec<usize>,
+        elements: Vec<Value>,
+    },
+}
+
+fn check_rectangular(dimensions: &[usize], elements: &[Value]) -> io::Result<()> {
+    let count = dimensions
+        .iter()
+        .try_fold(1usize, |size, &axis| size.checked_mul(axis));
+    if !(2..=32).contains(&dimensions.len())
+        || dimensions.iter().any(|&axis| axis > MAX_ITEMS)
+        || count != Some(elements.len())
+        || elements.len() > MAX_ITEMS
+    {
+        return Err(invalid("invalid rectangular array shape"));
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -305,6 +326,13 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     fields.as_slice()
                 }
                 Object::Array(fields) => fields.as_slice(),
+                Object::Rectangular {
+                    dimensions,
+                    elements,
+                } => {
+                    check_rectangular(dimensions, elements)?;
+                    elements
+                }
             };
             if values.len() > MAX_ITEMS {
                 return Err(invalid("object field limit exceeded"));
@@ -353,6 +381,17 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 Object::Array(values) => {
                     self.data.bytes(&[2])?;
                     Self::write_values(&mut self.data, &self.ids, values)?;
+                }
+                Object::Rectangular {
+                    dimensions,
+                    elements,
+                } => {
+                    self.data.bytes(&[3])?;
+                    self.data.unsigned(dimensions.len() as u64)?;
+                    for &size in dimensions {
+                        self.data.unsigned(size as u64)?;
+                    }
+                    Self::write_values(&mut self.data, &self.ids, elements)?;
                 }
             }
         }
@@ -446,7 +485,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         .and_then(Option::as_ref)
                         .ok_or_else(|| invalid("weak stream reference has expired"))?;
                     match object.as_ref() {
-                        Object::Record { fields, .. } | Object::Array(fields) => {
+                        Object::Record { fields, .. }
+                        | Object::Array(fields)
+                        | Object::Rectangular {
+                            elements: fields, ..
+                        } => {
                             pending.extend(fields.iter().filter_map(|value| match value {
                                 Value::Ref(id) => Some(*id),
                                 _ => None,
@@ -547,6 +590,21 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     Object::Record { class, fields }
                 }
                 2 => Object::Array(self.read_values(base, limit)?),
+                3 => {
+                    let rank = self.count()?;
+                    if !(2..=32).contains(&rank) {
+                        return Err(invalid("invalid rectangular array rank"));
+                    }
+                    let dimensions = (0..rank)
+                        .map(|_| self.count())
+                        .collect::<io::Result<Vec<_>>>()?;
+                    let elements = self.read_values(base, limit)?;
+                    check_rectangular(&dimensions, &elements)?;
+                    Object::Rectangular {
+                        dimensions,
+                        elements,
+                    }
+                }
                 _ => return Err(invalid("unknown object kind")),
             });
         }
@@ -557,6 +615,13 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     let fields = match &replacement {
                         Object::String(_) => &[][..],
                         Object::Record { fields, .. } | Object::Array(fields) => fields,
+                        Object::Rectangular {
+                            dimensions,
+                            elements,
+                        } => {
+                            check_rectangular(dimensions, elements)?;
+                            elements
+                        }
                     };
                     if fields.iter().any(
                         |field| matches!(field, Value::Ref(id) if !(base..end).contains(&id.0)),

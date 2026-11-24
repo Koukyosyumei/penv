@@ -609,3 +609,77 @@ fn weak_writer_keeps_separate_slots_for_independent_graphs() {
     assert_eq!(one.get(one.id()), Some(&Object::String("first".into())));
     assert_eq!(two.get(two.id()), Some(&Object::String("second".into())));
 }
+
+fn rectangular_primitives(stamped: bool) {
+    let mut graph = Graph::default();
+    let array = Object::Rectangular {
+        dimensions: vec![3, 2],
+        elements: [1, 2, 3, 4, 5, 6].map(Value::Integer).to_vec(),
+    };
+    let root = graph.insert(array.clone());
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(reader.graph().get(copy), Some(&array));
+}
+
+fn rectangular_strings(stamped: bool) {
+    let mut graph = Graph::default();
+    let values = ["One", "Two", "Three", "Four"];
+    let dimensions = vec![2, 2];
+    let elements = values.map(|text| Value::Ref(graph.insert(string(text))));
+    let root = graph.insert(Object::Rectangular {
+        dimensions: dimensions.clone(),
+        elements: elements.to_vec(),
+    });
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let Some(Object::Rectangular {
+        dimensions: restored,
+        elements,
+    }) = reader.graph().get(copy)
+    else {
+        panic!("expected rectangular array");
+    };
+    assert_eq!(*restored, dimensions);
+    assert_eq!(elements.len(), values.len());
+    for (element, text) in elements.iter().zip(values) {
+        assert_eq!(reader.graph().get(reference(element)), Some(&string(text)));
+    }
+}
+
+fn four_dimensional_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let mut values = [[[[0; 4]; 3]; 2]; 2];
+    values[0][0][0][0] = 1;
+    values[1][0][1][0] = 2;
+    values[0][1][0][1] = 3;
+    values[0][1][2][2] = 4;
+    values[1][0][2][3] = 5;
+    let array = Object::Rectangular {
+        dimensions: vec![2, 2, 3, 4],
+        elements: values
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flatten()
+            .map(Value::Integer)
+            .collect(),
+    };
+    let root = graph.insert(array.clone());
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(reader.graph().get(copy), Some(&array));
+}
+
+array_modes!(
+    rectangular_primitives_plain,
+    rectangular_primitives_stamped,
+    rectangular_primitives
+);
+array_modes!(
+    rectangular_strings_plain,
+    rectangular_strings_stamped,
+    rectangular_strings
+);
+array_modes!(
+    four_dimensional_array_plain,
+    four_dimensional_array_stamped,
+    four_dimensional_array
+);
