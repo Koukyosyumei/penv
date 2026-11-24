@@ -1100,3 +1100,25 @@ Rust のモニターテストは22件合格した。
 0.125 ms と 0.5 ms の観測で指定時刻への停止は確認できなかったため、
 秒単位の精度を追加する試作差分は取り下げた
 （`target/monitor-subms-log-proof/`）。
+
+### ログ待機の期限と捕捉の開始・消去
+
+`e46cfe7` は Robot から秒値を受け取り、固定 Renode の
+`LogTester.WaitForEntry` と同じ単精度の秒から整数ミリ秒への変換を Rust
+で行う。固定 Renode と penv に同じ STM32F072b のコマンド列を送り、
+1.9 ms の不在判定後に仮想時刻 1 ms、`IsStarted = False` を確認した
+（`target/monitor-log-rounding-proof/{renode,penv}.jsonl`）。
+1 ms 未満の正の期限で Renode が開始する場合の挙動は残っている。
+
+`a0ad88f` はログテスターの作成と履歴消去を Rust のコマンド列に置く。
+固定 Renode と penv に同じ RPC を送り、作成前のログと消去したログが
+見つからず、作成後のログは見つかった。通常 CLI でも同じ Rust
+コマンドによる消去順序を確認した（`target/monitor-log-lifecycle-proof/`）。
+
+未変更 Robot はログ読み出し・書き込みの2件、モニター保存・復元の2件、
+HEX、STM32F072b UART の計6件合格。他の2,191件は未実行
+（`target/monitor-log-lifecycle-robot/results.json`）。
+Rust モニター22件とログ8件が合格。広い `monitor` フィルターでは
+33件合格、2件失敗で、失敗は従来からの BusFault ステップ時のフック出力差
+（`target/monitor-log-lifecycle-all-monitor.log`、
+`target/monitor-snapshot-proof/baseline-step.log`）。
