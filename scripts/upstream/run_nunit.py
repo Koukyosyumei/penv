@@ -60,6 +60,15 @@ def host_exclusions():
     return {"excluded", f"exclude_{system}", f"exclude_host_{arch}"}
 
 
+def ignored_by_using_fixture_on_host(case):
+    # UsingTests calls Assert.Ignore at runtime for other operating systems.
+    if case["classname"] != "Antmicro.Renode.UnitTests.PlatformDescription.UsingTests":
+        return False
+    method = case["methodname"]
+    windows = platform.system() == "Windows"
+    return (method.endswith("Windows") and not windows) or (method.endswith("Unix") and windows)
+
+
 def fixture_notes():
     with Path(__file__).with_name("nunit_gaps.tsv").open(newline="") as source:
         rows = list(csv.DictReader(source, delimiter="\t"))
@@ -104,6 +113,8 @@ def discover(project, mapping, clone, dotnet, output):
         row = mapping.get(unique_name)
         runstate = case["runstate"]
         if not exclusions.isdisjoint(categories):
+            status = "excluded"
+        elif ignored_by_using_fixture_on_host(case):
             status = "excluded"
         elif runstate != "Runnable":
             status = {"Ignored": "ignored", "Skipped": "skipped",
