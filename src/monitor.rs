@@ -1642,11 +1642,20 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
     );
     let mut cursor = content.lines().enumerate();
     while let Some((line, raw)) = cursor.next() {
-        let text = raw.trim();
+        let mut text = std::borrow::Cow::Borrowed(raw.trim());
         let error = |message: &str| format!("{}:{}: {message}", path.display(), line + 1);
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
             continue;
         }
+        // A Robot frame can contain a quoted argument spanning physical lines.
+        // Read it as one command when the same text is supplied in a RESC file.
+        while command_words(&text).as_ref().is_err_and(|error| error == UNTERMINATED_ARGUMENT) {
+            let (_, next) = cursor.next().ok_or_else(|| error(UNTERMINATED_ARGUMENT))?;
+            let command = text.to_mut();
+            command.push('\n');
+            command.push_str(next);
+        }
+        let text = text.as_ref();
         if let Some(value) = text.strip_prefix("machine LoadPlatformDescriptionFromString ") {
             if !state.machine {
                 return Err(error("inline REPL requires a machine"));
@@ -3431,6 +3440,8 @@ fn path_value(value: &str) -> String {
     value.replace(r"\ ", " ")
 }
 
+const UNTERMINATED_ARGUMENT: &str = "unterminated quoted argument";
+
 fn command_words(text: &str) -> Result<Vec<&str>, String> {
     let mut words = Vec::new();
     let mut start = None;
@@ -3468,7 +3479,7 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         }
     }
     if quote.is_some() {
-        return Err("unterminated quoted argument".into());
+        return Err(UNTERMINATED_ARGUMENT.into());
     }
     if let Some(start) = start {
         words.push(&text[start..]);
