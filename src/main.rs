@@ -1,6 +1,7 @@
 pub mod access_condition;
 pub mod access_translation;
 pub mod address_range;
+pub mod symbol;
 mod andes_csr;
 mod bit_field;
 mod bitmanip;
