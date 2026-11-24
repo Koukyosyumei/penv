@@ -57,6 +57,27 @@ impl Symbol {
         })
     }
 
+    pub fn with_thumb_metadata(
+        start: u64,
+        end: u64,
+        name: impl Into<String>,
+        kind: SymbolType,
+        binding: SymbolBinding,
+    ) -> Result<Self, RangeError> {
+        if end < start {
+            return Err(RangeError::InvalidEnd);
+        }
+        Self::with_metadata(start & !1, end, name, kind, binding)
+    }
+
+    pub(crate) fn with_bounds(&self, start: u64, end: u64) -> Self {
+        Self {
+            range: AddressRange::by(start, (end - start).max(1)).unwrap(),
+            end,
+            ..self.clone()
+        }
+    }
+
     pub fn start(&self) -> u64 {
         self.range.start
     }

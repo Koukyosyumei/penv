@@ -11,6 +11,7 @@ mod storage;
 mod symbol;
 mod symbol_deduplication;
 mod symbol_lookup;
+mod elf_merge;
 mod simple_cache;
 mod serializable_mapped_segment;
 mod pseudorandom;

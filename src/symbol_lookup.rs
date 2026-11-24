@@ -1,7 +1,7 @@
 use crate::address_range::{AddressRange, MinimalRanges};
 use crate::symbol::{Symbol, SymbolBinding, SymbolType};
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 type SymbolKey = (String, u64, u64, SymbolType, SymbolBinding);
@@ -27,15 +27,21 @@ impl SymbolLookup {
             .collect();
 
         let mut coverage = MinimalRanges::default();
+        let mut split_points = BTreeSet::new();
         for symbol in &incoming {
             if symbol.start() < symbol.end() {
                 // Exclusive symbol ends leave u64::MAX uncovered.
                 coverage
                     .add(AddressRange::to(symbol.start(), symbol.end() - 1).unwrap())
                     .unwrap();
+            } else {
+                split_points.insert(symbol.start());
             }
         }
         let mut merged = Vec::with_capacity(self.symbols.len() + incoming.len());
+        // When clipping collapses nested symbols to the same extent, keep
+        // the symbol with the more specific original start first.
+        self.symbols.sort_by_key(|symbol| Reverse(symbol.start()));
         for symbol in self.symbols.drain(..) {
             if symbol.start() == symbol.end() {
                 if !coverage
@@ -56,26 +62,33 @@ impl SymbolLookup {
                     .collect();
             }
             for range in uncovered {
-                let remaining = if range == original {
-                    Arc::clone(&symbol)
-                } else {
-                    Self::intern(
-                        &mut interned,
-                        Symbol::with_metadata(
-                            range.start,
-                            range.end + 1,
-                            &symbol.name,
-                            symbol.kind,
-                            symbol.binding,
-                        )
-                        .unwrap(),
-                    )
-                };
-                merged.push(remaining);
+                let mut start = range.start;
+                for &point in split_points.range((
+                    std::ops::Bound::Excluded(start),
+                    std::ops::Bound::Included(range.end),
+                )) {
+                    merged.push(Self::fragment(&mut interned, &symbol, start, point));
+                    start = point;
+                }
+                merged.push(Self::fragment(&mut interned, &symbol, start, range.end + 1));
             }
         }
         merged.extend(incoming);
+        merged.sort_by_key(|symbol| symbol.start());
         self.symbols = merged;
+    }
+
+    fn fragment(
+        interned: &mut InternedSymbols,
+        symbol: &Arc<Symbol>,
+        start: u64,
+        end: u64,
+    ) -> Arc<Symbol> {
+        if start == symbol.start() && end == symbol.end() {
+            Arc::clone(symbol)
+        } else {
+            Self::intern(interned, symbol.with_bounds(start, end))
+        }
     }
 
     fn intern(interned: &mut InternedSymbols, symbol: Symbol) -> Arc<Symbol> {
