@@ -780,3 +780,17 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNonNullNullable	upstream_nunit::migrant_object_stream::non_null_nullable_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNullNullable	upstream_nunit::migrant_object_stream::null_nullable_stamped	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MemoryTests.ShouldReturnOnePointerWhenSegmentIsTouchedConcurrently	upstream_nunit::memory::should_return_one_pointer_when_segment_is_touched_concurrently	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldPreserveIdentityOnLists	upstream_nunit::migrant_object_stream::list_self_identity_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldPreserveIdentityWithBoxedPrimitives	upstream_nunit::migrant_object_stream::boxed_identity_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeBoxedPrimitve	upstream_nunit::migrant_object_stream::boxed_primitive_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeListOfLists	upstream_nunit::migrant_object_stream::list_of_lists_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeListOfPrimitives	upstream_nunit::migrant_object_stream::primitive_list_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeListWithNull	upstream_nunit::migrant_object_stream::list_with_null_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeLongListOfPrimitives	upstream_nunit::migrant_object_stream::long_primitive_list_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldPreserveIdentityOnLists	upstream_nunit::migrant_object_stream::list_self_identity_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldPreserveIdentityWithBoxedPrimitives	upstream_nunit::migrant_object_stream::boxed_identity_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxedPrimitve	upstream_nunit::migrant_object_stream::boxed_primitive_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeListOfLists	upstream_nunit::migrant_object_stream::list_of_lists_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeListOfPrimitives	upstream_nunit::migrant_object_stream::primitive_list_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeListWithNull	upstream_nunit::migrant_object_stream::list_with_null_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeLongListOfPrimitives	upstream_nunit::migrant_object_stream::long_primitive_list_stamped	new

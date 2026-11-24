@@ -17,6 +17,10 @@ const fn stamp(
 
 const STAMPS: &[TypeStamp<'static>] = &[
     stamp("System.Object", &[]),
+    stamp("List<int>", &[("items", FieldKind::Reference)]),
+    stamp("List<List<int>>", &[("items", FieldKind::Reference)]),
+    stamp("List<Box>", &[("items", FieldKind::Reference)]),
+    stamp("List<object>", &[("items", FieldKind::Reference)]),
     stamp("System.Int32", &[("m_value", FieldKind::Integer)]),
     stamp(
         "GenericBox<int?>",
@@ -526,14 +530,14 @@ fn mixed_array(stamped: bool) {
 }
 
 macro_rules! stamp_modes {
-    ($plain:ident, $stamped:ident, $check:ident) => {
+    ($plain:ident, $stamped:ident, $check:expr) => {
         #[test]
         fn $plain() {
-            $check(false);
+            ($check)(false);
         }
         #[test]
         fn $stamped() {
-            $check(true);
+            ($check)(true);
         }
     };
 }
@@ -866,3 +870,131 @@ stamp_modes!(
     two_serializations_stamped,
     two_serializations
 );
+
+fn list(graph: &mut Graph, class: &str, items: Vec<Value>) -> ObjectId {
+    let backing = graph.insert(Object::Array(items));
+    graph.insert(record(class, vec![Value::Ref(backing)]))
+}
+
+fn list_values<'a>(graph: &'a Graph, id: ObjectId, class: &str) -> &'a [Value] {
+    let Some(Object::Record {
+        class: actual,
+        fields,
+    }) = graph.get(id)
+    else {
+        panic!("expected list record");
+    };
+    assert_eq!(actual, class);
+    array_values(graph, reference(&fields[0]))
+}
+
+fn primitive_list(stamped: bool, range: std::ops::Range<i64>) {
+    let mut graph = Graph::default();
+    let elements: Vec<_> = range.map(Value::Integer).collect();
+    let root = list(&mut graph, "List<int>", elements.clone());
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    assert_eq!(list_values(reader.graph(), root, "List<int>"), elements);
+}
+
+fn list_of_lists(stamped: bool) {
+    let mut graph = Graph::default();
+    let inputs = [[1, 2, 3], [97, 98, 99]].map(|values| values.map(Value::Integer));
+    let roots = inputs
+        .clone()
+        .map(|values| Value::Ref(list(&mut graph, "List<int>", values.to_vec())));
+    let root = list(&mut graph, "List<List<int>>", roots.to_vec());
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let restored = list_values(reader.graph(), copy, "List<List<int>>");
+    for index in 0..2 {
+        assert_eq!(
+            list_values(reader.graph(), reference(&restored[index]), "List<int>"),
+            inputs[index]
+        );
+    }
+}
+
+fn list_self_identity(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = list(&mut graph, "List<Box>", vec![]);
+    let first = graph.insert(record("Box", vec![Value::Ref(root)]));
+    let second = graph.insert(record("Box", vec![Value::Ref(root)]));
+    let backing = reference(&fields(graph.get(root).unwrap())[0]);
+    *graph.get_mut(backing).unwrap() = Object::Array(vec![Value::Ref(first), Value::Ref(second)]);
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let items = list_values(graph, copy, "List<Box>");
+    let first = reference(&fields(graph.get(reference(&items[0])).unwrap())[0]);
+    let second = reference(&fields(graph.get(reference(&items[1])).unwrap())[0]);
+    assert_eq!(copy, first);
+    assert_eq!(first, second);
+}
+
+fn boxed_primitive(stamped: bool) {
+    let mut graph = Graph::default();
+    let three = boxed_integer(&mut graph, 3);
+    let root = graph.insert(record("Box", vec![three]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let element = reference(&fields(reader.graph().get(copy).unwrap())[0]);
+    assert_eq!(
+        reader.graph().get(element),
+        Some(&record("System.Int32", vec![Value::Integer(3)]))
+    );
+}
+
+fn boxed_identity(stamped: bool) {
+    let mut graph = Graph::default();
+    let primitive = boxed_integer(&mut graph, 1234);
+    let first = graph.insert(record("Box", vec![primitive.clone()]));
+    let second = graph.insert(record("Box", vec![primitive]));
+    let root = list(
+        &mut graph,
+        "List<Box>",
+        vec![Value::Ref(first), Value::Ref(second)],
+    );
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let items = list_values(graph, copy, "List<Box>");
+    let element =
+        |index: usize| reference(&fields(graph.get(reference(&items[index])).unwrap())[0]);
+    assert_eq!(element(0), element(1));
+}
+
+fn list_with_null(stamped: bool) {
+    let mut graph = Graph::default();
+    let one = graph.insert(string("One"));
+    let two = graph.insert(string("Two"));
+    let root = list(
+        &mut graph,
+        "List<object>",
+        vec![Value::Ref(one), Value::Null, Value::Ref(two)],
+    );
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let actual = list_values(graph, copy, "List<object>");
+    assert_eq!(actual.len(), 3);
+    assert_eq!(graph.get(reference(&actual[0])), Some(&string("One")));
+    assert_eq!(actual[1], Value::Null);
+    assert_eq!(graph.get(reference(&actual[2])), Some(&string("Two")));
+}
+
+stamp_modes!(primitive_list_plain, primitive_list_stamped, |stamped| {
+    primitive_list(stamped, 1..4)
+});
+stamp_modes!(
+    long_primitive_list_plain,
+    long_primitive_list_stamped,
+    |stamped| primitive_list(stamped, 0..100_000)
+);
+stamp_modes!(list_of_lists_plain, list_of_lists_stamped, list_of_lists);
+stamp_modes!(
+    list_self_identity_plain,
+    list_self_identity_stamped,
+    list_self_identity
+);
+stamp_modes!(
+    boxed_primitive_plain,
+    boxed_primitive_stamped,
+    boxed_primitive
+);
+stamp_modes!(boxed_identity_plain, boxed_identity_stamped, boxed_identity);
+stamp_modes!(list_with_null_plain, list_with_null_stamped, list_with_null);
