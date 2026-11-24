@@ -1,4 +1,3 @@
 fixture	missing_api
 Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
-Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The remaining case requires two Cortex-M cores with distinct CPU-scoped NVIC registrations at the same address; the production Cortex-M loader supports a single core and NVIC.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.

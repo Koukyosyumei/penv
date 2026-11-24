@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,391 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,392 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 4 |
+| 移植待ち | 3 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 3 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 2 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -564,3 +564,8 @@ Python 周辺機器を持つ Machine のケースを追加した。周辺機器�
 SystemBus の登録範囲 `0x100..0x110` を保存し、初期化済みスコープとともに新しい Machine へ復元した。
 対象 fixture は公式4件と回帰1件が合格、0件失敗。
 [追加ケースの公式 ID 別結果](nunit-evidence/targeted-python-machine.tsv) · [対象実行ログ](nunit-evidence/targeted-python-machine.log)
+
+MergeAndCreationTests のCPU別NVIC登録を移植した。同じアドレスをCPUスロットごとに
+独立して登録する構築経路をプラットフォーム検証に追加した。CPUの実行は上流のこのケースの対象外。
+対象実行は関連する循環検出2件が合格、0件失敗。
+[追加ケースの公式 ID 別結果](nunit-evidence/targeted-scoped-nvic.tsv) · [対象実行ログ](nunit-evidence/targeted-scoped-nvic.log)

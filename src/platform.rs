@@ -2,6 +2,7 @@ mod nrf52840;
 use crate::repl_syntax::{quoted_string, unquoted_delimiters, without_comment};
 
 mod stm32f0;
+mod scoped_nvic;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -537,6 +538,9 @@ fn load_platform(
                 entry.name
             )
         })?;
+    }
+    if !require_ram && scoped_nvic::matches(&entries) {
+        return scoped_nvic::construct(&entries);
     }
     apply_litex_irq_overrides(&mut entries)?;
     if entries.iter().any(|entry| entry.model == "CPU.RiscV64") {

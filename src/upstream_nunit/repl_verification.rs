@@ -2172,3 +2172,32 @@ cpu_rv: CPU.RiscV32 @ sysbus
     .unwrap();
     crate::platform::check(&path).unwrap();
 }
+
+#[test]
+fn should_not_detect_cycle_in_per_core_registration() {
+    let files = super::upstream_using_tests::Files::new();
+    let path = files.0.join("input.repl");
+    fs::write(
+        &path,
+        r#"
+core1_nvic: IRQControllers.NVIC @ sysbus new Bus.BusPointRegistration {
+    address: 0xE000E000;
+    cpu: cpu1
+}
+
+core2_nvic: IRQControllers.NVIC @ sysbus new Bus.BusPointRegistration {
+    address: 0xE000E000;
+    cpu: cpu2
+}
+
+cpu1: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: core1_nvic
+
+cpu2: CPU.CortexM @ sysbus
+    cpuType: "cortex-m0"
+    nvic: core2_nvic"#,
+    )
+    .unwrap();
+    crate::platform::check(&path).unwrap();
+}

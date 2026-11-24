@@ -521,6 +521,7 @@ pub struct Bus {
     pub systick: Option<SysTick>,
     pub dwt: Option<Dwt>,
     pub nvic: Option<Nvic>,
+    scoped_nvics: BTreeMap<(usize, u32), Nvic>,
     nvic_name: Option<String>,
     external_nvic_levels: u32,
     pub clint: Option<Clint>,
@@ -3267,6 +3268,26 @@ impl Bus {
         }
         self.ns16550 = Some(uart);
         Ok(())
+    }
+
+    pub(crate) fn register_scoped_nvic(
+        &mut self,
+        cpu_slot: usize,
+        address: u32,
+        controller: Nvic,
+    ) -> Result<(), String> {
+        if self.registered_cpu_architecture(cpu_slot).is_none() {
+            return Err("unknown CPU slot for NVIC registration".into());
+        }
+        match self.scoped_nvics.entry((cpu_slot, address)) {
+            std::collections::btree_map::Entry::Vacant(point) => {
+                point.insert(controller);
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                Err("duplicate NVIC registration for CPU and address".into())
+            }
+        }
     }
 
     pub fn map_nrf_nvic(

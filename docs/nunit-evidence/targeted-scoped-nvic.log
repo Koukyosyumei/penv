@@ -1,0 +1,5 @@
+$ cargo test --locked --bin penv repl_parser::upstream_verification_tests::should_not_detect_cycle
+running 2 tests
+test repl_parser::upstream_verification_tests::should_not_detect_cycle_in_per_core_registration ... ok
+test repl_parser::upstream_verification_tests::should_not_detect_cycle_in_signal_connection ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3889 filtered out; finished in 0.00s
