@@ -980,15 +980,36 @@ impl Machine {
         output.write_all(&data).map_err(|error| error.to_string())
     }
 
+    pub(crate) fn read_cpu_less_snapshot_platform(input: &mut impl Read) -> Result<(u32, String), String> {
+        fn read_bytes<const N: usize>(input: &mut impl Read) -> Result<[u8; N], String> {
+            let mut bytes = [0; N];
+            input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+            Ok(bytes)
+        }
+        Self::cpu_less_snapshot_has_timeout(input)?;
+        let address = u32::from_le_bytes(read_bytes(input)?);
+        let length = u64::from_le_bytes(read_bytes(input)?);
+        // Bound the allocation before reading an untrusted snapshot.
+        let length = usize::try_from(length).ok().filter(|length| *length <= 4096)
+            .ok_or("snapshot UART name exceeds size limit")?;
+        let mut name = vec![0; length];
+        input.read_exact(&mut name).map_err(|e| e.to_string())?;
+        Ok((address, String::from_utf8(name).map_err(|e| e.to_string())?))
+    }
+
+    fn cpu_less_snapshot_has_timeout(input: &mut impl Read) -> Result<bool, String> {
+        let mut header = [0; 9];
+        input.read_exact(&mut header).map_err(|e| e.to_string())?;
+        match &header {
+            b"PENVIOST\x01" => Ok(false),
+            b"PENVIOST\x02" => Ok(true),
+            _ => Err("unknown CPU-less snapshot format".into()),
+        }
+    }
+
     fn read_cpu_less_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
         let prefix = self.cpu_less_snapshot_prefix()?;
-        let mut header = [0; 9];
-        input.read_exact(&mut header).map_err(|error| error.to_string())?;
-        let has_uart_timeout = match &header {
-            b"PENVIOST\x01" => false,
-            b"PENVIOST\x02" => true,
-            _ => return Err("unknown CPU-less snapshot format".into()),
-        };
+        let has_uart_timeout = Self::cpu_less_snapshot_has_timeout(input)?;
         let mut data = vec![0; prefix.len() + if has_uart_timeout { 25 } else { 17 }];
         input.read_exact(&mut data).map_err(|error| error.to_string())?;
         if !data.starts_with(&prefix) || input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {

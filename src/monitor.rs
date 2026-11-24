@@ -116,6 +116,88 @@ fn write_snapshot(
     result.map_err(|error| format!("{}: {error}", path.display()))
 }
 
+struct SnapshotMetadata {
+    selected: String,
+    quantum: Option<u64>,
+    cpu_mips: Option<u32>,
+    variables: HashMap<String, String>,
+}
+
+fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
+    let header = input.fill_buf().map_err(|e| e.to_string())?;
+    let version = if header.starts_with(SESSION_SNAPSHOT) {
+        3
+    } else if header.starts_with(SESSION_SNAPSHOT_V2) {
+        2
+    } else if header.starts_with(SESSION_SNAPSHOT_V1) {
+        1
+    } else {
+        return Ok(None);
+    };
+    input.consume(SESSION_SNAPSHOT.len());
+    let quantum = if version >= 2 {
+        let mut bytes = [0; 8];
+        input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+        let quantum = u64::from_le_bytes(bytes);
+        if quantum == 0 {
+            return Err("invalid snapshot synchronization quantum".into());
+        }
+        Some(quantum)
+    } else {
+        None
+    };
+    let cpu_mips = if version >= 3 {
+        let mut bytes = [0; 4];
+        input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+        let mips = u32::from_le_bytes(bytes);
+        Some(mips)
+    } else {
+        None
+    };
+    fn read_size(input: &mut impl Read) -> Result<usize, String> {
+        let mut length = [0; 4];
+        input.read_exact(&mut length).map_err(|e| e.to_string())?;
+        Ok(u32::from_le_bytes(length) as usize)
+    }
+    fn read_string(data: &mut &[u8]) -> Result<String, String> {
+        let length = read_size(data)?;
+        let (text, remaining) = data.split_at_checked(length).ok_or("truncated monitor variable snapshot")?;
+        *data = remaining;
+        String::from_utf8(text.to_owned()).map_err(|e| e.to_string())
+    }
+    let size = read_size(input)?;
+    if size > MAX_MONITOR_PAYLOAD {
+        return Err("monitor variable snapshot exceeds size limit".into());
+    }
+    let mut data = vec![0; size];
+    input.read_exact(&mut data).map_err(|e| e.to_string())?;
+    let mut data = data.as_slice();
+    let selected = read_string(&mut data)?;
+    let mut variables = HashMap::new();
+    while !data.is_empty() {
+        let key = read_string(&mut data)?;
+        let value = read_string(&mut data)?;
+        if matches!(key.as_str(), "global.CWD" | "global.ORIGIN") || variables.insert(key, value).is_some() {
+            return Err("invalid monitor variable snapshot".into());
+        }
+    }
+    Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables }))
+}
+
+fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, String), String> {
+    let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?);
+    let selected = match read_snapshot_metadata(&mut input)? {
+        Some(metadata) if metadata.cpu_mips == Some(0) => {
+            (!metadata.selected.is_empty()).then_some(metadata.selected)
+        }
+        None => None,
+        Some(_) => return Err("unsupported snapshot platform bootstrap outside CPU-less TrivialUart".into()),
+    };
+    let (address, uart) = Machine::read_cpu_less_snapshot_platform(&mut input)?;
+    let repl = trivial_uart_snapshot_repl(address, &uart)?;
+    Ok((selected, repl))
+}
+
 impl Session {
     fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
         let mut data = Vec::new();
@@ -150,70 +232,20 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            let header = input.fill_buf().map_err(|e| e.to_string())?;
-            let version = if header.starts_with(SESSION_SNAPSHOT) {
-                3
-            } else if header.starts_with(SESSION_SNAPSHOT_V2) {
-                2
-            } else if header.starts_with(SESSION_SNAPSHOT_V1) {
-                1
-            } else {
+            let Some(SnapshotMetadata { selected, quantum, cpu_mips, mut variables }) =
+                read_snapshot_metadata(&mut input)?
+            else {
                 return machine.read_boot_snapshot(&mut input);
             };
-            input.consume(SESSION_SNAPSHOT.len());
-            let quantum = if version >= 2 {
-                let mut bytes = [0; 8];
-                input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
-                let quantum = u64::from_le_bytes(bytes);
-                if quantum == 0 {
-                    return Err("invalid snapshot synchronization quantum".into());
-                }
-                Some(quantum)
-            } else {
-                None
-            };
-            let cpu_mips = if version >= 3 {
-                let mut bytes = [0; 4];
-                input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
-                let mips = u32::from_le_bytes(bytes);
-                match mips {
-                    0 if machine.cpu_less => None,
-                    mips if machine.is_cortex_m() && mips != 0 && mips.checked_mul(1_000_000).is_some() => Some(mips),
-                    _ => return Err("invalid snapshot CPU speed".into()),
-                }
-            } else {
-                None
-            };
-            fn read_size(input: &mut impl Read) -> Result<usize, String> {
-                let mut length = [0; 4];
-                input.read_exact(&mut length).map_err(|e| e.to_string())?;
-                Ok(u32::from_le_bytes(length) as usize)
-            }
-            fn read_string(data: &mut &[u8]) -> Result<String, String> {
-                let length = read_size(data)?;
-                let (text, remaining) = data.split_at_checked(length).ok_or("truncated monitor variable snapshot")?;
-                *data = remaining;
-                String::from_utf8(text.to_owned()).map_err(|e| e.to_string())
-            }
-            let size = read_size(&mut input)?;
-            if size > MAX_MONITOR_PAYLOAD {
-                return Err("monitor variable snapshot exceeds size limit".into());
-            }
-            let mut data = vec![0; size];
-            input.read_exact(&mut data).map_err(|e| e.to_string())?;
-            let mut data = data.as_slice();
-            let selected = read_string(&mut data)?;
             if selected != self.machine.as_deref().unwrap_or_default() {
                 return Err("snapshot uses a different monitor machine".into());
             }
-            let mut variables = HashMap::new();
-            while !data.is_empty() {
-                let key = read_string(&mut data)?;
-                let value = read_string(&mut data)?;
-                if matches!(key.as_str(), "global.CWD" | "global.ORIGIN") || variables.insert(key, value).is_some() {
-                    return Err("invalid monitor variable snapshot".into());
-                }
-            }
+            let cpu_mips = match cpu_mips {
+                None => None,
+                Some(0) if machine.cpu_less => None,
+                Some(mips) if machine.is_cortex_m() && mips != 0 && mips.checked_mul(1_000_000).is_some() => Some(mips),
+                _ => return Err("invalid snapshot CPU speed".into()),
+            };
             for key in ["global.CWD", "global.ORIGIN"] {
                 if let Some(value) = self.variables.get(key) {
                     variables.insert(key.into(), value.clone());
@@ -1307,14 +1339,18 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
     let (address, uart) = machine.bus.snapshot_trivial_uart()
         .map_err(|error| format!("unsupported snapshot platform: {error}"))?;
     let name = session.machine.as_deref().unwrap_or("machine-0");
-    if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\'))
-        || uart.is_empty() || !uart.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')) {
         return Err("unsupported snapshot platform name for monitor bootstrap".into());
     }
-    Ok(format!(
-        "mach create \"{name}\"\nmachine LoadPlatformDescriptionFromString \"{uart}: UART.TrivialUart @ sysbus {address:#x}\"\n"
-    ))
+    let repl = trivial_uart_snapshot_repl(address, &uart)?;
+    Ok(format!("mach create \"{name}\"\nmachine LoadPlatformDescriptionFromString \"{repl}\"\n"))
+}
+
+fn trivial_uart_snapshot_repl(address: u32, uart: &str) -> Result<String, String> {
+    if uart.is_empty() || !uart.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err("unsupported snapshot platform name for monitor bootstrap".into());
+    }
+    Ok(format!("{uart}: UART.TrivialUart @ sysbus {address:#x}"))
 }
 
 fn monitor_timestamp(ns: u128) -> String {
@@ -1937,6 +1973,22 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
             continue;
         }
         match words.as_slice() {
+            ["RestoreMonitorSnapshot", value] => {
+                if state.machine || state.boot.has_platform() || state.boot.started || !state.boot.runtime.is_empty() {
+                    return Err(error("snapshot bootstrap requires a fresh monitor"));
+                }
+                let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
+                let snapshot = origin.join(path_value(unquote(value.strip_prefix('@')
+                    .ok_or_else(|| error("expected @snapshot-path"))?)));
+                let (selected, repl) = restore_snapshot_platform(&snapshot)
+                    .map_err(|e| error(&format!("{}: {e}", snapshot.display())))?;
+                state.machine = true;
+                state.boot.session.machine = selected;
+                state.boot.inline_repl.push((origin.to_owned(), repl));
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(), action: Action::LoadMemory(snapshot),
+                });
+            }
             ["include" | "i", value] => {
                 let included = include_path(value, path, origin, root, &state.variables)
                     .map_err(|e| error(&e))?;

@@ -90,7 +90,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "=" in kind:
             kind = self.option(kind, "type")
         if self.rust_monitor and not self.replaying and kind == "Serialization":
-            platform = self.operation("DescribeMonitorSnapshotPlatform")
+            self.operation("DescribeMonitorSnapshotPlatform")
             with tempfile.NamedTemporaryFile(dir=self.out, prefix="state-", suffix=".save", delete=False) as file:
                 snapshot = Path(file.name)
             try:
@@ -98,7 +98,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             except Exception:
                 snapshot.unlink(missing_ok=True)
                 raise
-            self.pending_state = state, (platform, snapshot)
+            self.pending_state = state, snapshot
             return
         if self.replaying or kind != "Reexecution":
             raise Unsupported(f"Provides {kind} requires a snapshot-capable adapter")
@@ -123,9 +123,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if state not in self.states:
             raise Unsupported(f"required state {state!r} unavailable")
         recipe = self.states[state]
-        if isinstance(recipe, tuple):
-            platform, snapshot = recipe
-            self.commands.extend((platform, f"Load {at_path(snapshot)}"))
+        if isinstance(recipe, Path):
+            self.commands.append(f"RestoreMonitorSnapshot {at_path(recipe)}")
             self.ensure_running()
             return
         self.replaying = True
