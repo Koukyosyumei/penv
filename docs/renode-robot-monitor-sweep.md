@@ -909,3 +909,38 @@ Renode 側は CPU を省略した。双方から読み戻した DTB の `bootarg
 Rust モニターテスト 21 件が合格した。
 この変更後の HEX と STM32F072b Console Echo も合格した
 （`target/monitor-fdt-high-3e4c108-*/results.json`）。
+
+`7f8b5d5` は `emulation SingleStepBlocking` を共通 Rust モニターで
+読み書きする。通常の自動進行は、ブロックするシングルステップのコアが
+ある間停止する。明示的なステップは指定コアを進め、ブロックを解除した
+場合は他コアが進んだ。2 コアの PC と仮想時間を Rust テストで確認した。
+同期境界での他コアの最初の進行など、固定 Renode の非同期スケジューリング
+全体はこの実装の対象外。
+
+固定 Renode と同じコマンド列で、既定値、`False` 設定後、空マシンの
+保存・復帰後が `True, False, True` と一致した。通常 CLI と
+起動フレームの出力は `target/monitor-step-block-proof/` にある。
+元の複数 CPU ケースは `SingleStepBlocking` を通過し、当初は
+FU540 の Cadence GEM の読み込みで停止した。
+
+`2582bdf` は、Cadence GEM の 16 ビット構成値を受け付け、
+既存モデルでレジスターの 12 ビット幅に合わせる。通常 CLI と Robot が
+共有する sysbus モニターは既存の GEM レジスター処理を呼ぶ。
+同じ GEM 設定の `moduleId=0x1007`、`moduleRevision=0x0109` に対して、
+固定 Renode と penv はレジスターの読み出しで `0x00070109` を返した。
+固定 Renode の比較用ビルドには RV64 トランスレーターがないため、
+レジスターの比較では Renode 側の CPU を省略した。
+FU540 の元の起動スクリプトを使った penv の確認では
+`READY` と CPU の実際の状態を取得した
+（`target/monitor-step-block-proof/fu540-{debug,queries}.log`）。
+
+`8aa85da` は逐次スケジューラーで `SetGlobalSerialExecution true` を
+受理し、並列実行の要求は未対応とする。固定 Renode と同じ空マシンの
+コマンド列で、実行後の仮想時刻 1 ms と同期量が一致した。
+未変更の複数 CPU ケースは起動と設定を通過し、ゲストから
+`smp: Brought up 1 node, 4 CPUs` が期限内に届かず `FAIL` となった。
+時刻アサーションには未到達。FU540 の RAM から読み戻した DTB には
+`earlyconsole mem=256M@0x80000000` が入っていた。
+HEX と STM32F072b Console Echo は合格し、Rust モニターテスト 21 件、
+シングルステップ制御 1 件、GEM 1 件も合格した
+（`target/monitor-step-{gem-2582bdf,serial-8aa85da}-*/results.json`）。
