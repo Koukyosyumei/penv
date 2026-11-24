@@ -696,3 +696,46 @@ MiV の `Should Print Last Logs` は `UART.MiV_CoreUART` の未対応で
 起動前に停止した（`target/monitor-lastlog-a378f33-miv/results.json`）。
 未変更の `Should Overflow Buffer` は `b9600b7` で合格した
 （`target/monitor-lastlog-b9600b7-overflow/results.json`）。
+
+`8976c4a` では、プラットフォームを指定しない通常の `penv run --script`
+で、Robot の起動前照会と共通の Rust 評価処理を使う。未変更の
+`Should Call Conditional Set`、`Should Overflow Buffer`、`Should Load HEX`
+は合格した（`target/monitor-consoleonly-8976c4a-*/results.json`）。
+`target/monitor-consoleonly-proof/console.resc` を両 CLI で実行し、条件付き
+代入の出力、INFO と WARNING の履歴、末尾の出力順を比較した。
+
+`a54f076` は空白をエスケープした `$ORIGIN` パスを `include`、`echo`、
+`Save`、`Load` と `RestoreMonitorSnapshot` で扱う。
+比較対象は `target/monitor-consoleonly-proof/escaped.resc` と
+`{native-save,penv-save}/snapshot.resc`。両 CLI で同じ子 RESC が実行され、
+保存・復帰後の仮想時刻 10 ms と同期量 2 ms が一致した。
+固定バイナリの STM32F072b Console Echo も合格した
+（`target/monitor-anchor-a54f076-uart/results.json`）。
+
+`e403ea0` と `5c04013` は、`mach create` だけで作成したマシンを
+CPU と RAM のない共通 Rust マシンとして起動する。未マップのモニター
+アクセスは実際のバス処理で WARNING を記録する。
+`target/monitor-consoleonly-proof/{renode,penv}-empty.normalized` で、
+同じ RESC の読み出し値、読み書きの警告、仮想時刻と同期量を比較した。
+機種付き RISC-V の既存アクセス経路は維持している。空マシンの
+ライブフレームでは、仮想時間を進めずにログ待機が両方の警告を検出した
+（`target/monitor-consoleonly-proof/empty-frames.jsonl`）。
+Rust の `unhandled_access` テストは 5 件合格、6 件失敗。
+変更前 `a54f076` の独立ビルドでも同じ 6 件が失敗した
+（`target/monitor-empty-bus-{tests,baseline}.log`）。
+未変更の `Should Log Unhandled Read From Monitor` と
+`Should Log Unhandled Write From Monitor` は `5c04013` で合格した
+（`target/monitor-empty-5c04013-{Read,Write}/results.json`）。
+それ以前の `e403ea0` のライブ経路では未マップをゼロとして処理する
+既存の短絡経路が警告を飛ばしたため、両ケースのログ待ちは失敗した。
+
+`4b77168` は空マシンの保存・復帰を既存の Rust スナップショット経路に追加した。
+通常 CLI の同じ `Save` / `Load` コマンド列と、別プロセスへの
+Robot RPC `Provides` / `Requires` で固定 Renode と比較した。
+両方とも復帰時刻 10 ms と同期量 2 ms が一致した。
+`target/monitor-consoleonly-proof/{native-save,penv-save}/empty-output.log`
+と `target/monitor-empty-snapshot-proof/{renode,penv}.jsonl` に証跡がある。
+空マシン用の保存を UART 付きマシンへ読み込む要求は拒否した。
+空マシンの保存は変更した未マップポリシーと保留中のイベントを拒否する。
+この変更後も未変更の HEX と未マップ読み出しのログ待機は合格した
+（`target/monitor-empty-snapshot-4b77168-{hex,read}/results.json`）。
