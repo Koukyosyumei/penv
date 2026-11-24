@@ -772,7 +772,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if binary_result is not None:
             return binary_result
         if uart_captures:
-            result = {"Line": value, "Groups": groups}
+            result = {"Line": value, "Groups": groups, "IsFailingString": False}
             if timestamp_ms is not None:
                 result["Timestamp"] = timestamp_ms
             return result
@@ -813,7 +813,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 self.commands.append(command)
             else:
                 self.operation(command)
-        super().set_timeout(timeout)
+        else:
+            super().set_timeout(timeout)
 
     def terminal(self, uart, *args):
         if not (self.image or self.rust_monitor) or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
@@ -825,8 +826,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         pause = self.uart_bool_option(options, "defaultPauseEmulation")
         if not self.rust_monitor:
             pause = ""
-        timeout = self.duration(options.get("timeout", self.timeout))
-        deadline = f" timeout={timeout}" if self.rust_monitor and "timeout" in options else ""
+        legacy_timeout = None
+        if not self.rust_monitor:
+            legacy_timeout = self.duration(options.get("timeout", self.timeout))
+        deadline = ""
+        if self.rust_monitor and "timeout" in options:
+            deadline = f" timeout={self.duration(options['timeout'])}"
         echo = ""
         if "defaultWaitForEcho" in options:
             enabled = self.log_bool(options["defaultWaitForEcho"])
@@ -842,7 +847,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "binaryMode" in options:
             binary = f" binaryMode={str(self.log_bool(options['binaryMode'])).lower()}"
         result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}{binary}{pause}").strip())
-        self.uart_testers.setdefault(result, (uart, timeout))
+        if legacy_timeout is not None:
+            self.uart_testers.setdefault(result, (uart, legacy_timeout))
         return result
 
     @staticmethod
@@ -881,7 +887,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if tester_id is not None and not self.rust_monitor:
             self.select_uart(tester_id)
         self.operation(f"SetDefaultTester {tester_id if tester_id is not None else 'null'}")
-        self.default_tester = tester_id
+        if not self.rust_monitor:
+            self.default_tester = tester_id
 
     def register_failing_uart(self, pattern, *args):
         self.change_failing_uart("RegisterFailingUartString", pattern, args)
