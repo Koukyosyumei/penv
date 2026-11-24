@@ -2567,7 +2567,9 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         }
         let words = command_words(text).map_err(|e| error(&e))?;
         // A restore can change both machine selection and variable bindings.
-        if (matches!(words.as_slice(), ["mach" | "machine", "set", _])
+        if (matches!(words.as_slice(),
+                ["mach" | "machine", "set", _]
+                | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
             || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
             && has_snapshot_boundary(&state.boot)
         {
