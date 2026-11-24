@@ -6045,7 +6045,7 @@ impl Bus {
         }
         if let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
             peripheral
-                .offset(address, 1)
+                .offset(address, N)
                 .map(|offset| peripheral.read(offset, N))
         }) {
             return Ok(value);
