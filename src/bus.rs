@@ -3103,7 +3103,9 @@ impl Bus {
     ) -> Result<(), String> {
         self.map_nvic(mask, uart)?;
         if cortex_m4 {
-            self.nvic.as_mut().unwrap().enable_nrf_mpu();
+            let nvic = self.nvic.as_mut().unwrap();
+            nvic.enable_nrf_mpu();
+            nvic.enable_fpu();
         }
         Ok(())
     }
