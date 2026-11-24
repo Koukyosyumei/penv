@@ -954,8 +954,16 @@ fn run_commands<'a>(
                 }
             }
             Action::SetEmulationPaused(paused) => {
-                machine.set_monitor_active(!*paused);
-                Ok(None)
+                let message = if *paused {
+                    machine.set_monitor_active(false);
+                    "Pausing emulation..."
+                } else if machine.monitor_is_active() {
+                    "Emulation is already started. Ignoring command"
+                } else {
+                    machine.set_monitor_active(true);
+                    "Starting emulation..."
+                };
+                writeln!(output.reply(), "{message}").map(|()| None).map_err(|error| error.to_string())
             }
             Action::UartIdle(timeout, tester, pause) => {
                 let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
