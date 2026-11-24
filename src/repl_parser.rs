@@ -428,14 +428,9 @@ fn parse(
         ));
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
-    let result = parse_text(
-        &content,
-        path,
-        canonical.parent().unwrap(),
-        root,
-        visiting,
-        entries,
-    );
+    let result = parse_text(&content, path, entries, |filename, entries| {
+        load_using(filename, canonical.parent().unwrap(), root, visiting, entries)
+    });
     visiting.remove(&canonical);
     result
 }
@@ -756,13 +751,27 @@ fn declaration_alias(declaration: &str) -> Result<(&str, Option<String>), &'stat
     Ok((declaration, None))
 }
 
-fn parse_text(
-    content: &str,
-    path: &Path,
+fn load_using(
+    filename: &str,
     include_dir: &Path,
     root: &Path,
     visiting: &mut HashSet<PathBuf>,
     entries: &mut Vec<Entry>,
+) -> Result<(), String> {
+    let include = resolve_using(filename, include_dir, root).map_err(|error| error.to_string())?;
+    match parse(&include, root, visiting, entries) {
+        Err(_) if matches!(include.try_exists(), Ok(false)) => {
+            Err(format!("Using '{filename}' does not exist"))
+        }
+        result => result,
+    }
+}
+
+fn parse_text(
+    content: &str,
+    path: &Path,
+    entries: &mut Vec<Entry>,
+    mut include: impl FnMut(&str, &mut Vec<Entry>) -> Result<(), String>,
 ) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
@@ -889,20 +898,12 @@ fn parse_text(
             entry.body.append(&mut init);
             definitions.push(entry);
         }
-        if let Some(include) = text.strip_prefix("using ") {
-            let filename = using_path(include).map_err(error)?;
-            let include_path = resolve_using(&filename, include_dir, root)
-                .map_err(|detail| error(&detail.to_string()))?;
+        if let Some(argument) = text.strip_prefix("using ") {
+            let filename = using_path(argument).map_err(error)?;
             if !seen_usings.insert(filename.clone()) {
                 return Err(error("Duplicate using entry."));
             }
-            match parse(&include_path, root, visiting, entries) {
-                Err(_) if matches!(include_path.try_exists(), Ok(false)) => {
-                    return Err(error(&format!("Using '{filename}' does not exist")));
-                }
-                Err(detail) => return Err(error(&detail)),
-                Ok(()) => {}
-            }
+            include(&filename, entries).map_err(|detail| error(&detail))?;
             continue;
         }
         let (name, declaration) = text
@@ -1102,14 +1103,9 @@ pub(crate) fn parse_inline(
 ) -> Result<Vec<crate::network_repl::Entry>, String> {
     let source = Path::new("<inline REPL>");
     let mut entries = Vec::new();
-    parse_text(
-        content,
-        source,
-        root,
-        root,
-        &mut HashSet::new(),
-        &mut entries,
-    )?;
+    parse_text(content, source, &mut entries, |filename, entries| {
+        load_using(filename, root, root, &mut HashSet::new(), entries)
+    })?;
     convert(entries)
 }
 
@@ -1144,3 +1140,7 @@ fn convert(entries: Vec<Entry>) -> Result<Vec<crate::network_repl::Entry>, Strin
 pub(crate) fn sized_sysbus_address(registration: &str, size: u32) -> Result<u32, String> {
     sized_address(registration_point(registration)?, size)
 }
+
+#[cfg(test)]
+#[path = "upstream_nunit/repl_parser.rs"]
+mod upstream_parser_tests;
