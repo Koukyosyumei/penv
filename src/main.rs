@@ -12,6 +12,7 @@ mod dwt;
 mod ethernet;
 mod ethernet_switch;
 mod event_trace;
+mod hex_string;
 mod float;
 mod ft5336;
 mod host_pty;

@@ -1,3 +1,4 @@
+mod misc;
 mod parser_primitives;
 
 use crate::{parse_address64, repl_syntax};
