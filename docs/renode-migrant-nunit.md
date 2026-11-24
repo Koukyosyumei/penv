@@ -67,5 +67,14 @@ ObjectReaderWriterTests の1件と OpenStreamSerializationTests の反射・強�
 ルート単位参照の5件も型スタンプを有効にして移植した。
 [公式 ID 別の結果](nunit-evidence/targeted-stamps-symbol-dedup.tsv) · [固定 C# の StampingTests ログ](nunit-evidence/stamping-official.log)
 
-残りは9 fixture・2,105ケース。弱参照保持、生成読み書き、コレクション・CLR 型の
-コーデック、サロゲート、フック、バージョン許容を伴う型変更の復元が必要。
+SurrogateTests は反射読み書き・型スタンプの有無2設定で6メソッド計12件を
+移植した。書き手は元のオブジェクト ID に対して変換を一度適用し、読み手は
+復元先の ID を維持して置換する。書き込み側の同一性、読み書き双方の型の
+置換、同じ登録での反復、読み込み側で作る自己参照を検証した。
+既存のグラフ API を使い、プリミティブ、文字列、異種混在の一次元配列も
+型スタンプの有無2設定で計6件を移植した。
+[公式 ID 別の結果](nunit-evidence/targeted-surrogates-arrays-symbols.tsv) · [固定 C# の SurrogateTests ログ](nunit-evidence/surrogates-official.log)
+
+残りは9 fixture・2,087ケース。弱参照保持、生成読み書き、コレクションと CLR 型の
+コーデック、継承・インターフェース・ジェネリックに基づくサロゲート選択、
+フック、バージョン許容を伴う型変更の復元が必要。
