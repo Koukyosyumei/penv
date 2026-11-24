@@ -243,7 +243,7 @@ fn port(
         use crate::platform::{ListItem, list_value};
 
         let index = |item, count| match item {
-            ListItem::Number(number) => irq_index(number, count),
+            ListItem::Number(number) => irq_index(&number, count),
             _ => Err("expected numeric GPIO inverted AF pin or function".into()),
         };
         let groups = list_value(inverted)?;

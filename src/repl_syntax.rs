@@ -70,6 +70,25 @@ pub(crate) fn quoted_string(value: &str) -> Option<String> {
     None
 }
 
+pub(crate) fn number_prefix(input: &str) -> Option<(std::borrow::Cow<'_, str>, &str)> {
+    static NUMBER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let matched = NUMBER
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"^(?:-\s*)?(?:0x[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*|[0-9]+(?:_[0-9]+)*(?:\.[0-9]+)?)",
+            )
+            .expect("valid REPL number pattern")
+        })
+        .find(input)?;
+    let (number, tail) = input.split_at(matched.end());
+    let number = if number.contains(|c: char| c == '_' || c.is_whitespace()) {
+        number.replace(|c: char| c == '_' || c.is_whitespace(), "").into()
+    } else {
+        number.into()
+    };
+    Some((number, tail))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
