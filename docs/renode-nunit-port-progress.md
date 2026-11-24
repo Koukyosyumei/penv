@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,375 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,380 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 20 |
+| 移植待ち | 15 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 6 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 5 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -529,3 +529,8 @@ CAST_CANCTRL の受信6件を追加した。受信フレームの形式、フィ
 割り込みのラッチ、オーバーフローの両モードとソフトウェアリセットを確認した。
 この fixture の対象実行は13件合格、0件失敗。
 [追加6件の公式 ID 別結果](nunit-evidence/targeted-cast-can-receive.tsv) · [13件の実行ログ](nunit-evidence/targeted-cast-can-receive.log)
+
+OpenTitan KeyManager の5件を移植した。KMAC-256 で上流の状態遷移時の鍵を導出する。
+ROMイメージを読み込まないセットアップは、上流ROMコントローラーの初期ダイジェストを注入して再現した。
+対象実行は5件合格、0件失敗。
+[公式 ID 別の結果](nunit-evidence/targeted-opentitan-key-manager.tsv) · [対象実行ログ](nunit-evidence/targeted-opentitan-key-manager.log)

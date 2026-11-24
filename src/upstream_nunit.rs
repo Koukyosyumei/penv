@@ -106,3 +106,4 @@ mod sd_emmc;
 mod opentitan_spi_device;
 
 mod cast_canctrl;
+mod opentitan_key_manager;

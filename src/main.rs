@@ -22,6 +22,7 @@ pub mod register_fields;
 pub mod svd;
 pub mod opentitan_aes;
 pub mod opentitan_i2c;
+pub mod opentitan_key_manager;
 pub mod opentitan_spi_device;
 pub mod cast_canctrl;
 pub mod pac1934;
