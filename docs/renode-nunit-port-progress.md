@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,497 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,569 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 915 |
+| 移植待ち | 827 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -377,3 +377,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 同じ8構成で、列挙値、nullable、ボックス化された値、GUID、BigInteger、多次元配列、配列自身への参照を含む28メソッドを追加した。対象実行で224件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-values-arrays.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-values-arrays.log)
 
 ユーザーオブジェクト設定のリストに、ボックス化した整数 `1234` の参照を共有するケースと、2種類の実装を交互に100要素格納するケースを追加した。新規16件を含むリストグループ64件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-list-identity.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-list-identity.log)
+
+同じ8構成で、null・transient・ネイティブリソースの書き込み拒否と、同一セッションでの再シリアライズを検証する9メソッドを移植した。対象実行で72件すべてが合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-boundaries.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-boundaries.log)

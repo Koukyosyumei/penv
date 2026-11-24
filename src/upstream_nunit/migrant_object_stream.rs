@@ -3116,3 +3116,32 @@ mod serial_user_values_arrays {
     user_configurations!(empty_2d, |m| empty_rectangular(m, &[0, 0]));
     user_configurations!(empty_3d, |m| empty_rectangular(m, &[2, 0, 2]));
 }
+
+mod serial_user_boundaries {
+    use super::*;
+    user_configurations!(null_root, |m| reject_unserializable_root(m, false));
+    user_configurations!(transient_root, |m| reject_unserializable_root(m, true));
+    user_configurations!(intptr, |m| reject_resource(
+        m,
+        "ClassWithIntPtr",
+        NativeResource::IntPtr(0x666)
+    ));
+    user_configurations!(pointer, |m| reject_resource(
+        m,
+        "ClassWithPointer",
+        NativeResource::Pointer(0)
+    ));
+    user_configurations!(spinlock, |m| reject_resource(
+        m,
+        "ClassWithSpinLock",
+        NativeResource::SpinLock
+    ));
+    user_configurations!(thread_local, |m| reject_resource(
+        m,
+        "ClassWithThreadLocal",
+        NativeResource::ThreadLocal
+    ));
+    user_configurations!(pointer_path, native_resource_path);
+    user_configurations!(two_serializations, two_serializations);
+    user_configurations!(different_serializations, two_different_serializations);
+}
