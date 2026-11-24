@@ -4,6 +4,7 @@ use crate::address_range::{AddressRange, RangeError};
 pub struct Symbol {
     pub name: String,
     range: AddressRange,
+    end: u64,
 }
 
 impl Symbol {
@@ -14,7 +15,20 @@ impl Symbol {
         Ok(Self {
             name: name.into(),
             range,
+            end,
         })
+    }
+
+    pub fn start(&self) -> u64 {
+        self.range.start
+    }
+
+    pub fn end(&self) -> u64 {
+        self.end
+    }
+
+    pub fn contains_address(&self, address: u64) -> bool {
+        self.range.contains(address)
     }
 
     pub fn overlaps(&self, other: &Self) -> bool {
