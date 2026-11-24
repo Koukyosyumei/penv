@@ -448,6 +448,7 @@ fn inheritance_order(method: Method) {
     let mut graph = Graph::default();
     let root = record(&mut graph, class, vec![Value::Boolean(false); 3]);
     const LAYOUT: Transients<'static> = Transients {
+        base_classes: &[],
         classes: &[],
         fields: &[(
             "DerivedFromClassB",

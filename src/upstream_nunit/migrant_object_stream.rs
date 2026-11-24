@@ -2099,6 +2099,7 @@ stamp_modes!(
 );
 
 const TRANSIENTS: Transients<'static> = Transients {
+    base_classes: &[],
     classes: &["TransientClass"],
     fields: &[(
         "ClassWithTransientField",
@@ -2498,6 +2499,7 @@ fn nested_struct(condition: bool) -> Value {
 }
 
 const CONSTRUCTOR_FIELDS: Transients<'static> = Transients {
+    base_classes: &[],
     classes: &[],
     fields: &[
         (
@@ -2569,6 +2571,7 @@ stamp_modes!(
 fn generic_late_hook(methods: impl Into<GraphMethods>) {
     const CLASS: &str = "GenericClassWithLatePostDeserializationHook";
     const TRANSIENTS: Transients<'static> = Transients {
+        base_classes: &[],
         classes: &[],
         fields: &[(CLASS, &[(0, FieldInitializer::Default(Value::Integer(0)))])],
     };
@@ -3166,4 +3169,46 @@ mod serial_user_lifecycle {
     user_configurations!(stream_shift, detect_stream_shift);
     user_configurations!(nested_generic_array, nested_generic_array);
     user_configurations!(issue_60, issue_60);
+}
+
+fn omit_transient_derived(methods: GraphMethods) {
+    const LAYOUT: Transients<'static> = Transients {
+        classes: &["TransientClass"],
+        base_classes: &[("TransientDerived", "TransientClass")],
+        fields: &[],
+    };
+    let mut graph = Graph::default();
+    let derived = graph.insert(record(
+        "TransientDerived",
+        vec![
+            Value::NativeResource(NativeResource::IntPtr(0)),
+            Value::Integer(0),
+        ],
+    ));
+    let zero = boxed_integer(&mut graph, 0);
+    let root = graph.insert(Object::Array(vec![zero, Value::Ref(derived)]));
+    let (reader, copy) = methods.clone_with_hooks(&graph, root, Some(&LAYOUT), &[]);
+    let graph = reader.graph();
+    let [zero, omitted] = array_values(graph, copy) else {
+        panic!("expected both input elements");
+    };
+    assert_eq!(integer_value(graph, zero), 0);
+    assert_eq!(*omitted, Value::Null);
+}
+
+mod serial_transient_derived {
+    use super::*;
+
+    #[test]
+    fn reflection_reflection_plain() {
+        omit_transient_derived(false.into());
+    }
+
+    #[test]
+    fn reflection_reflection_stamped() {
+        omit_transient_derived(true.into());
+    }
+
+    configurations!(ordinary, omit_transient_derived);
+    user_configurations!(as_user_object, omit_transient_derived);
 }

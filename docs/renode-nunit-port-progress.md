@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,729 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,745 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 667 |
+| 移植待ち | 651 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -387,3 +387,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 同じ8構成で、プリミティブと混在要素の `ArrayList` および `ReadOnlyCollection<object>` を移植した。配列の容量と論理要素数を区別し、読み取り専用ラッパーは元のリストへの参照を保持する。対象グループ112件が合格し、うち24件が新規対応。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-array-list.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-array-list.log)
 
 整数およびカスタムオブジェクトの `HashSet` を、バケット、衝突チェーン、スロット、比較器を持つ内部表現で移植した。カスタムオブジェクトのハッシュには Rust 側で割り当てた値を用いる。対象グループ128件が合格し、うち16件が新規対応。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-hash-set.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-hash-set.log)
+
+`TransientDerivedShouldAlsoBeTransient` の全16構成を移植した。基底型情報を使って配列の派生インスタンスを除外し、復元結果がボックス化された整数 `0` と `null` になることを検証した。対象実行で16件すべてが合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-transient-derived.tsv)・[実行ログ](nunit-evidence/targeted-migrant-transient-derived.log)

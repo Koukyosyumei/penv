@@ -195,13 +195,32 @@ impl FieldInitializer {
 /// Runtime field layout for transient values excluded from an object stream.
 pub struct Transients<'a> {
     pub classes: &'a [&'a str],
+    /// Direct base type for each derived record in the runtime layout.
+    pub base_classes: &'a [(&'a str, &'a str)],
     /// Field initializers indexed in the complete, in-memory record layout.
     pub fields: &'a [(&'a str, &'a [(usize, FieldInitializer)])],
 }
 
 impl Transients<'_> {
     fn contains(&self, graph: &Graph, id: ObjectId) -> bool {
-        matches!(graph.get(id), Some(Object::Record { class, .. }) if self.classes.contains(&class.as_str()))
+        let Some(Object::Record { class, .. }) = graph.get(id) else {
+            return false;
+        };
+        let mut current = class.as_str();
+        for _ in 0..=self.base_classes.len() {
+            if self.classes.contains(&current) {
+                return true;
+            }
+            let Some((_, base)) = self
+                .base_classes
+                .iter()
+                .find(|(derived, _)| *derived == current)
+            else {
+                break;
+            };
+            current = base;
+        }
+        false
     }
 
     fn initializers(&self, class: &str) -> &[(usize, FieldInitializer)] {
