@@ -7,6 +7,7 @@ mod read_extensions;
 mod range;
 mod system_bus;
 mod time_interval;
+mod write_extensions;
 
 use crate::{parse_address64, repl_syntax};
 

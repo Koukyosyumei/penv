@@ -61,7 +61,6 @@ Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	There is no generi
 Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	There is no Symbol object exposing Renode symbol precedence, range and metadata comparison.
 Antmicro.Renode.UnitTests.SystemBusTests	The remaining runnable cases need the generic object-registration suspend-and-resume lifecycle, connection-region dispatch, translated access matrix or null CPU registration APIs.
 Antmicro.Renode.UnitTests.TimeTests	There is no BaseClockSource API with independently registered mutable ClockEntry callbacks and observation at each deadline.
-Antmicro.Renode.UnitTests.WriteExtensionsTest	There is no generic read/modify/write width-translation adapter for byte, word, double-word and quad-word peripheral traits, including their endian and unaligned behaviors.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
 Antmicro.Renode.Utilities.SimpleCacheTests	There is no general memoization API keyed by generator identity and ordered, potentially null object arguments.
 Antmicro.Renode.Utilities.TypeExtensionsCacheTests	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.

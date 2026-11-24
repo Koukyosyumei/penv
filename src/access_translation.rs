@@ -59,3 +59,51 @@ pub fn read_using(
     }
     result
 }
+
+pub trait NativeWrite {
+    fn read_for_write(&mut self, address: u64) -> u64;
+    fn write_native(&mut self, address: u64, value: u64);
+}
+
+pub fn write_using(
+    address: u64,
+    value: u64,
+    requested: Width,
+    native: Width,
+    endian: Endian,
+    peripheral: &mut impl NativeWrite,
+) {
+    let unit = native as u64;
+    let length = requested as u64;
+    if length < unit {
+        let offset = address % unit;
+        let address = address - offset;
+        let (lane, value) = match endian {
+            Endian::Little => (offset, value),
+            Endian::Big => ((unit - length).wrapping_sub(offset), swap(value, requested)),
+        };
+        let shift = lane.wrapping_mul(8) % (unit * 8);
+        let bits = mask(requested) << shift;
+        let old_value = peripheral.read_for_write(address);
+        peripheral.write_native(
+            address,
+            ((old_value & !bits) | ((value << shift) & bits)) & mask(native),
+        );
+        return;
+    }
+    if length == unit {
+        peripheral.write_native(address, value & mask(native));
+        return;
+    }
+
+    let bytes = match endian {
+        Endian::Little => value & mask(requested),
+        Endian::Big => swap(value, requested),
+    };
+    for offset in (0..length).step_by(unit as usize) {
+        peripheral.write_native(
+            address.wrapping_add(offset),
+            (bytes >> (offset * 8)) & mask(native),
+        );
+    }
+}
