@@ -1,6 +1,7 @@
 pub mod access_condition;
 pub mod clock_source;
 pub mod mapped_memory;
+pub mod serializable_mapped_segment;
 pub mod access_translation;
 pub mod address_range;
 pub mod symbol;

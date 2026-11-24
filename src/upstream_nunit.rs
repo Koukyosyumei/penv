@@ -12,6 +12,7 @@ mod symbol;
 mod symbol_deduplication;
 mod symbol_lookup;
 mod simple_cache;
+mod serializable_mapped_segment;
 mod pseudorandom;
 mod weak_multi_table;
 mod option_validation;
