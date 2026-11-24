@@ -134,6 +134,15 @@ const STAMPS: &[TypeStamp<'static>] = &[
             ("Field3", FieldKind::NullableDecimal),
         ],
     ),
+    stamp(
+        "SpeciallySerializable",
+        &[("payload", FieldKind::Reference)],
+    ),
+    stamp("BadlySerializable", &[("payload", FieldKind::Reference)]),
+    stamp(
+        "StructGenericBox<SpeciallySerializable>",
+        &[("Element", FieldKind::Reference)],
+    ),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -2031,3 +2040,159 @@ stamp_modes!(
     native_resource_path
 );
 stamp_modes!(issue_60_plain, issue_60_stamped, issue_60);
+
+fn custom_record(graph: &mut Graph, class: &str, payload: Vec<u8>) -> ObjectId {
+    let payload = graph.insert(Object::Bytes(payload));
+    graph.insert(record(class, vec![Value::Ref(payload)]))
+}
+
+fn custom_bytes<'a>(graph: &'a Graph, root: ObjectId, expected_class: &str) -> &'a [u8] {
+    let Some(Object::Record { class, fields }) = graph.get(root) else {
+        panic!("expected custom record");
+    };
+    assert_eq!(class, expected_class);
+    let Some(Object::Bytes(bytes)) = graph.get(reference(&fields[0])) else {
+        panic!("expected custom payload");
+    };
+    bytes
+}
+
+struct SpeciallySerializable(Vec<usize>);
+
+impl SpeciallySerializable {
+    fn fill(random: &mut super::migrant::Random, length: usize) -> Self {
+        Self((0..length).map(|_| random.next(256) as usize).collect())
+    }
+
+    fn data(&self) -> Vec<u8> {
+        self.0.iter().map(|&word| word as u8).collect()
+    }
+
+    fn store(&self, graph: &mut Graph) -> ObjectId {
+        let payload = crate::migrant::custom_payload::save(|writer| {
+            writer.signed(self.0.len() as i64)?;
+            for &word in &self.0 {
+                writer.bytes(&[word as u8])?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        custom_record(graph, "SpeciallySerializable", payload)
+    }
+
+    fn restore(graph: &Graph, root: ObjectId) -> Self {
+        let payload = custom_bytes(graph, root, "SpeciallySerializable");
+        crate::migrant::custom_payload::load(payload, |reader| {
+            let length = usize::try_from(reader.signed()?).map_err(std::io::Error::other)?;
+            if length > payload.len() {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            let words = (0..length)
+                .map(|_| reader.byte().map(usize::from))
+                .collect::<std::io::Result<_>>()?;
+            Ok(Self(words))
+        })
+        .unwrap()
+    }
+}
+
+fn specially_serializable(stamped: bool) {
+    let original =
+        SpeciallySerializable::fill(&mut super::migrant::Random(0x7ebc_5aaa_33a6_a9f2), 100);
+    let mut graph = Graph::default();
+    let root = original.store(&mut graph);
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(
+        original.data(),
+        SpeciallySerializable::restore(reader.graph(), copy).data()
+    );
+}
+
+fn special_in_array(stamped: bool) {
+    let mut random = super::migrant::Random(0xe4b7_395e_148f_a5c2);
+    let first = SpeciallySerializable::fill(&mut random, 100);
+    let last = SpeciallySerializable::fill(&mut random, 100);
+    let mut graph = Graph::default();
+    let first_id = first.store(&mut graph);
+    let text = graph.insert(string("Some string"));
+    let boxed = graph.insert(record("Box", vec![Value::Ref(first_id)]));
+    let last_id = last.store(&mut graph);
+    let root = graph.insert(Object::Array(
+        [first_id, text, boxed, last_id].map(Value::Ref).to_vec(),
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let items = array_values(graph, copy);
+    let first_id = reference(&items[0]);
+    let boxed = graph.get(reference(&items[2])).unwrap();
+    let last_id = reference(&items[3]);
+    assert_eq!(first_id, reference(&fields(boxed)[0]));
+    assert_ne!(first_id, last_id);
+    assert_eq!(
+        first.data(),
+        SpeciallySerializable::restore(graph, first_id).data()
+    );
+    assert_eq!(
+        last.data(),
+        SpeciallySerializable::restore(graph, last_id).data()
+    );
+}
+
+fn special_in_struct(stamped: bool) {
+    let original =
+        SpeciallySerializable::fill(&mut super::migrant::Random(0xab60_45e8_39c1_87ef), 100);
+    let mut graph = Graph::default();
+    let special = original.store(&mut graph);
+    let root = graph.insert(record(
+        "StructGenericBox<SpeciallySerializable>",
+        vec![Value::Ref(special)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let special = reference(&fields(graph.get(copy).unwrap())[0]);
+    assert_eq!(
+        original.data(),
+        SpeciallySerializable::restore(graph, special).data()
+    );
+}
+
+fn detect_stream_shift(stamped: bool) {
+    let mut graph = Graph::default();
+    let payload = crate::migrant::custom_payload::save(|writer| {
+        for i in 0..3 {
+            writer.signed(666 + i)?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let root = custom_record(&mut graph, "BadlySerializable", payload);
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let payload = custom_bytes(reader.graph(), copy, "BadlySerializable");
+    let result = crate::migrant::custom_payload::load(payload, |reader| {
+        reader.signed()?;
+        reader.signed()?;
+        Ok(())
+    });
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+}
+
+stamp_modes!(
+    specially_serializable_plain,
+    specially_serializable_stamped,
+    specially_serializable
+);
+stamp_modes!(
+    special_in_array_plain,
+    special_in_array_stamped,
+    special_in_array
+);
+stamp_modes!(
+    special_in_struct_plain,
+    special_in_struct_stamped,
+    special_in_struct
+);
+stamp_modes!(
+    detect_stream_shift_plain,
+    detect_stream_shift_stamped,
+    detect_stream_shift
+);
