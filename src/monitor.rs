@@ -320,6 +320,7 @@ enum Action {
     UartIdle(u64, Option<usize>),
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
+    DescribeSnapshotPlatform,
     SaveMemory(PathBuf),
     ClearMemory,
     LoadMemory(PathBuf),
@@ -498,7 +499,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint
-                    | Action::TimeSourceInfo | Action::SaveMemory(_) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(_) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -556,6 +557,9 @@ fn run_commands(
                 .cortex_m_cpu(cpu)
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
+                .map(|()| None),
+            Action::DescribeSnapshotPlatform => describe_snapshot_platform(machine, session)
+                .and_then(|script| output.output.write_all(script.as_bytes()).map_err(|error| error.to_string()))
                 .map(|()| None),
             Action::SaveMemory(path) => {
                 if save_session {
@@ -1280,7 +1284,8 @@ pub fn serve(
                     Err(error) if error.starts_with("<monitor>:1: Terminal tester failed!") => {
                         frame(&mut output, "FAIL", error.as_bytes())
                     }
-                    Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ") => {
+                    Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ")
+                        || error.starts_with("<monitor>:1: unsupported snapshot platform") => {
                         frame(&mut output, "UNSUPPORTED", error.as_bytes())
                     }
                     Err(error) => {
@@ -1293,6 +1298,23 @@ pub fn serve(
         };
         reply.map_err(|error| error.to_string())?;
     }
+}
+
+fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<String, String> {
+    if !machine.cpu_less {
+        return Err("unsupported snapshot platform bootstrap outside CPU-less TrivialUart".into());
+    }
+    let (address, uart) = machine.bus.snapshot_trivial_uart()
+        .map_err(|error| format!("unsupported snapshot platform: {error}"))?;
+    let name = session.machine.as_deref().unwrap_or("machine-0");
+    if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\'))
+        || uart.is_empty() || !uart.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err("unsupported snapshot platform name for monitor bootstrap".into());
+    }
+    Ok(format!(
+        "mach create \"{name}\"\nmachine LoadPlatformDescriptionFromString \"{uart}: UART.TrivialUart @ sysbus {address:#x}\"\n"
+    ))
 }
 
 fn monitor_timestamp(ns: u128) -> String {
@@ -2228,6 +2250,7 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        ["DescribeMonitorSnapshotPlatform"] => Some(Action::DescribeSnapshotPlatform),
         ["pause"] => Some(Action::SetEmulationPaused(true)),
         ["start"] if boot.started || !boot.runtime.is_empty() => {
             boot.started = true;
@@ -3098,6 +3121,7 @@ fn execute(
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
                         | Action::TimeSourceInfo
+                        | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(_)
                         | Action::ClearMemory
                         | Action::LoadMemory(_)

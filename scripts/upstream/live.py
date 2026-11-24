@@ -89,6 +89,17 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             state = self.option(state, "state")
         if "=" in kind:
             kind = self.option(kind, "type")
+        if self.rust_monitor and not self.replaying and kind == "Serialization":
+            platform = self.operation("DescribeMonitorSnapshotPlatform")
+            with tempfile.NamedTemporaryFile(dir=self.out, prefix="state-", suffix=".save", delete=False) as file:
+                snapshot = Path(file.name)
+            try:
+                self.operation(f"Save {at_path(snapshot)}")
+            except Exception:
+                snapshot.unlink(missing_ok=True)
+                raise
+            self.pending_state = state, (platform, snapshot)
+            return
         if self.replaying or kind != "Reexecution":
             raise Unsupported(f"Provides {kind} requires a snapshot-capable adapter")
         replay = {
@@ -106,13 +117,20 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def requires(self, state):
         if "=" in state:
             state = self.option(state, "state")
-        if self.commands or self.proc or self.script:
+        if self.proc or self.script or any(
+                not (self.rust_monitor and cmd.startswith("SetDefaultUartTimeout ")) for cmd in self.commands):
             raise Unsupported("Requires must precede machine operations")
         if state not in self.states:
             raise Unsupported(f"required state {state!r} unavailable")
+        recipe = self.states[state]
+        if isinstance(recipe, tuple):
+            platform, snapshot = recipe
+            self.commands.extend((platform, f"Load {at_path(snapshot)}"))
+            self.ensure_running()
+            return
         self.replaying = True
         try:
-            for keyword, args in self.states[state]:
+            for keyword, args in recipe:
                 getattr(self, self.keywords[keyword])(*args)
         finally:
             self.replaying = False
