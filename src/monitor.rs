@@ -344,7 +344,7 @@ pub fn run(
                 })
             }
             Action::TimeSourceInfo => {
-                let seconds = machine.elapsed_steps() / u64::from(machine.bus.step_hz());
+                let seconds = machine.elapsed_steps() / machine.bus.monitor_step_hz();
                 writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}",
                     seconds / 3600, seconds / 60 % 60, seconds % 60)
                     .map(|()| None).map_err(|error| error.to_string())
@@ -735,9 +735,13 @@ pub fn serve(
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
-                let result = machine.bus.uart_activity().and_then(|(id, previous)| {
-                    machine.run_until(*steps, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
-                });
+                let cycles = u128::from(*steps) * u128::from(machine.bus.monitor_step_hz())
+                    / u128::from(CORTEX_M_STEP_HZ);
+                let result = u64::try_from(cycles).map_err(|_| "UART idle duration exceeds virtual time".to_owned())
+                    .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
+                        machine.run_until(cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
+                    }));
+
                 match result {
                     Ok((Stop::Limit, _)) => frame(&mut output, "MATCH", &[]),
                     Ok((Stop::OutputMatch, _)) => frame(&mut output, "FAIL", b"UART was not idle"),

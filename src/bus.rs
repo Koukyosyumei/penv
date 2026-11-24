@@ -1327,6 +1327,14 @@ impl Bus {
             .unwrap_or(crate::machine::VIRTUAL_STEPS_PER_SECOND)
     }
 
+    pub(crate) fn monitor_step_hz(&self) -> u64 {
+        if self.nrf_peripherals.is_empty() {
+            u64::from(self.step_hz())
+        } else {
+            self.nrf_cpu_hz.unwrap_or(CORTEX_M_STEP_HZ)
+        }
+    }
+
     pub fn tick_systick(&mut self) {
         if let Some(timer) = &mut self.systick {
             let before = timer.pending_exceptions();
