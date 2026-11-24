@@ -339,11 +339,16 @@ fn renode_resc_collapsed_stack_disables_during_chained_calls() {
 fn renode_resc_guestless_snapshot_restores_monitor_state_in_command_order() {
     let directory = std::env::temp_dir().join(format!("penv-monitor-save-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("saved.resc"), "echo \"saved include\"\n").unwrap();
+    fs::write(directory.join("changed.resc"), "echo \"changed include\"\n").unwrap();
     let script = directory.join("monitor.resc");
     fs::write(&script, r#"$name="saved value"
 alias say echo
 macro greet "echo 123"
+$script=@saved.resc
 Save @monitor.save
+$script=@changed.resc
+include $script
 alias say log
 macro greet "echo 456"
 set name "changed"
@@ -351,6 +356,7 @@ echo $name
 printenv
 runMacro $greet
 Load @monitor.save
+include $script
 echo $name
 printenv
 runMacro $greet
@@ -361,12 +367,12 @@ say "restored alias"
     assert!(output.status.success(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let observations: Vec<_> = stdout.lines().filter(|line| {
-        matches!(*line, "changed" | "saved value" | "456" | "123" | "restored alias")
+        matches!(*line, "changed" | "saved value" | "456" | "123" | "restored alias" | "changed include" | "saved include")
             || line.starts_with("global.greet ") || line.starts_with("\tglobal.say = ")
     }).collect();
     assert_eq!(observations, [
-        "changed", r#"global.greet "echo 456""#, "\tglobal.say = log", "456",
-        "saved value", r#"global.greet "echo 123""#, "\tglobal.say = echo", "123", "restored alias",
+        "changed include", "changed", r#"global.greet "echo 456""#, "\tglobal.say = log", "456",
+        "saved include", "saved value", r#"global.greet "echo 123""#, "\tglobal.say = echo", "123", "restored alias",
     ]);
 }
 

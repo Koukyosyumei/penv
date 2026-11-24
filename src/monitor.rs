@@ -444,7 +444,7 @@ enum Action {
     MonitorAlias(String, String),
     MonitorMacro(String, Macro),
     InvokeMonitorMacro(String, PathBuf),
-    InvokeMonitorAlias(String, PathBuf, PathBuf),
+    InvokeMonitorScript(String, PathBuf, PathBuf),
     MonitorEcho(String, PathBuf),
     SaveMemory(PathBuf, bool),
     ClearMemory,
@@ -635,7 +635,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorAlias(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -717,7 +717,7 @@ fn run_commands<'a>(
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok((stop != Stop::ScriptComplete).then_some(stop))
             })(),
-            Action::InvokeMonitorAlias(text, canonical, root) => (|| {
+            Action::InvokeMonitorScript(text, canonical, root) => (|| {
                 let mut state = ScriptState {
                     boot: live_command_boot(&command.source, session),
                     machine: true,
@@ -2228,7 +2228,7 @@ fn is_console_action(action: &Action) -> bool {
 
 fn is_monitor_snapshot_action(action: &Action) -> bool {
     matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
-        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorAlias(..))
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..))
 }
 
 fn is_empty_machine_action(action: &Action) -> bool {
@@ -2538,6 +2538,14 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     line: line + 1, source: path.to_owned(), action: Action::LoadMemory(snapshot),
                 });
             }
+            ["include" | "i" | "ExecuteScript", value]
+                if (value.starts_with('$') || value.starts_with("@$")) && has_snapshot_boundary(&state.boot) =>
+            {
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+                });
+            }
             [verb @ ("include" | "i" | "ExecuteScript"), value] => {
                 let included = include_path(verb, value, path, origin, root, &state.variables)
                     .map_err(|e| error(&e))?;
@@ -2616,7 +2624,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     if has_snapshot_boundary(&state.boot) {
                         state.boot.runtime.push(RuntimeCommand {
                             line: line + 1, source: path.to_owned(),
-                            action: Action::InvokeMonitorAlias(text.to_owned(), canonical.clone(), root.to_owned()),
+                            action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
                         });
                         continue;
                     }
