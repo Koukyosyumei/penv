@@ -1,0 +1,21 @@
+$ cargo test --locked --bin penv upstream_nunit::monitor_tokenizer
+running 18 tests
+test upstream_nunit::monitor_tokenizer::execution_test ... ok
+test upstream_nunit::monitor_tokenizer::multiline_test ... ok
+test upstream_nunit::monitor_tokenizer::simple_path_test ... ok
+test upstream_nunit::monitor_tokenizer::null_test ... ok
+test upstream_nunit::monitor_tokenizer::escaped_path_test ... ok
+test upstream_nunit::monitor_tokenizer::boolean_test ... ok
+test upstream_nunit::monitor_tokenizer::index_test ... ok
+test upstream_nunit::monitor_tokenizer::literal_test ... ok
+test upstream_nunit::monitor_tokenizer::relative_range_test ... ok
+test upstream_nunit::monitor_tokenizer::unbalanced_string_test ... ok
+test upstream_nunit::monitor_tokenizer::range_test ... ok
+test upstream_nunit::monitor_tokenizer::float_test ... ok
+test upstream_nunit::monitor_tokenizer::integer_test ... ok
+test upstream_nunit::monitor_tokenizer::variable_test ... ok
+test upstream_nunit::monitor_tokenizer::string_test ... ok
+test upstream_nunit::monitor_tokenizer::comment_test ... ok
+test upstream_nunit::monitor_tokenizer::hexadecimal_test ... ok
+test upstream_nunit::monitor_tokenizer::time_interval_test ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1594 filtered out; finished in 0.02s

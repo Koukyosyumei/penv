@@ -23,6 +23,7 @@ mod cadence_uart;
 mod bmc050;
 mod register_enum;
 mod packet_layout;
+mod monitor_tokenizer;
 mod migrant_blocking_collection;
 mod weak_multi_table;
 mod option_validation;

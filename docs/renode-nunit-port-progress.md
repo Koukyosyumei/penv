@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,096 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,114 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,300 |
+| 移植待ち | 2,282 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 33 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 32 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -206,3 +206,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 - [エンコード等の公式 ID](nunit-evidence/targeted-packet-encode.tsv)と[実行ログ](nunit-evidence/targeted-packet-encode.log)
 - [条件付きフィールド等の公式 ID](nunit-evidence/targeted-packet-conditions.tsv)と[18件の実行ログ](nunit-evidence/targeted-packet-conditions.log)
+
+## Monitor TokenizerTests
+
+公式18件の入力、型、値、未消費文字数を検証した。専用の型付きトークナイザーで再現し、既存のモニターコマンドの引数解析は従来どおりの経路で動作する。
+
+- [公式 ID](nunit-evidence/targeted-monitor_tokenizer.tsv)と[実行ログ](nunit-evidence/targeted-monitor_tokenizer.log)
