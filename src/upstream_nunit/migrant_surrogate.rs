@@ -1,3 +1,4 @@
+use crate::migrant::generated_record::{generated_record, Codec};
 use crate::migrant::object_stream::{
     FieldKind, Graph, Object, ObjectId, ObjectReader, ObjectWriter, References, TypeStamp, Value,
 };
@@ -40,6 +41,37 @@ const STAMPS: &[TypeStamp<'static>] = &[
     stamp("List<object>", &[("items", FieldKind::Reference)]),
 ];
 
+const CODECS: &[Codec] = &[
+    generated_record!("ClassWithGenericSurrogates"; field_a: reference, field_b: reference, field_c: reference),
+    generated_record!("SurrogatingClass<int>";),
+    generated_record!("SurrogatingClass<float>";),
+    generated_record!("System.Object";),
+    generated_record!("System.Int32"; value: integer),
+    generated_record!("IntSurrogate"; value: integer),
+    generated_record!("SurrogateMockA"; value: integer),
+    generated_record!("SurrogateMockB";),
+    generated_record!("SurrogateMockD";),
+    generated_record!("SurrogateMockE";),
+    generated_record!("List<object>"; items: reference),
+];
+
+#[derive(Clone, Copy, Default)]
+struct Method {
+    stamped: bool,
+    write: bool,
+    read: bool,
+}
+
+impl Method {
+    const fn new(stamped: bool, write: bool, read: bool) -> Self {
+        Self {
+            stamped,
+            write,
+            read,
+        }
+    }
+}
+
 fn record(class: &str, fields: Vec<Value>) -> Object {
     Object::Record {
         class: class.into(),
@@ -54,7 +86,7 @@ fn a(number: i64) -> Object {
 fn round_trip(
     graph: &Graph,
     root: ObjectId,
-    stamped: bool,
+    method: Method,
     encode: &mut Surrogates<'_>,
     restore: &mut Surrogates<'_>,
     check: impl FnOnce(&Graph, ObjectId),
@@ -62,14 +94,20 @@ fn round_trip(
     let mut stream = Cursor::new(Vec::new());
     let mut writer =
         ObjectWriter::new(&mut stream, graph, References::Preserve, true).with_surrogates(encode);
-    if stamped {
+    if method.write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    if method.stamped {
         writer = writer.with_type_stamps(STAMPS);
     }
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
     stream.rewind().unwrap();
     let mut reader = ObjectReader::new(stream, References::Preserve, true).with_surrogates(restore);
-    if stamped {
+    if method.read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    if method.stamped {
         reader = reader.with_type_stamps(STAMPS);
     }
     let root = reader.read_object().unwrap();
@@ -77,7 +115,7 @@ fn round_trip(
     reader.finish().unwrap();
 }
 
-fn place_object_for_surrogate(stamped: bool) {
+fn place_object_for_surrogate(method: Method) {
     let mut graph = Graph::default();
     let root = graph.insert(record("SurrogateMockB", vec![]));
     let mut restore = Surrogates::default();
@@ -87,14 +125,14 @@ fn place_object_for_surrogate(stamped: bool) {
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut Surrogates::default(),
         &mut restore,
         |copy, id| assert_eq!(copy.get(id), Some(&a(999))),
     );
 }
 
-fn place_surrogate_for_object(stamped: bool) {
+fn place_surrogate_for_object(method: Method) {
     let mut graph = Graph::default();
     let root = graph.insert(record("SurrogateMockB", vec![]));
     let mut encode = Surrogates::default();
@@ -102,7 +140,7 @@ fn place_surrogate_for_object(stamped: bool) {
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut encode,
         &mut Surrogates::default(),
         |copy, id| assert_eq!(copy.get(id), Some(&a(1))),
@@ -116,7 +154,7 @@ fn ref_id(value: &Value) -> ObjectId {
     *id
 }
 
-fn place_surrogate_for_object_preserving_identity(stamped: bool) {
+fn place_surrogate_for_object_preserving_identity(method: Method) {
     let mut graph = Graph::default();
     let b = graph.insert(record("SurrogateMockB", vec![]));
     let second = graph.insert(record("SurrogateMockB", vec![]));
@@ -138,7 +176,7 @@ fn place_surrogate_for_object_preserving_identity(stamped: bool) {
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut encode,
         &mut Surrogates::default(),
         |copy, id| {
@@ -157,7 +195,7 @@ fn place_surrogate_for_object_preserving_identity(stamped: bool) {
     );
 }
 
-fn do_surrogate_object_swap(stamped: bool, times: usize) {
+fn do_surrogate_object_swap(method: Method, times: usize) {
     let mut graph = Graph::default();
     let root = graph.insert(record("SurrogateMockB", vec![]));
     let mut encode = Surrogates::default();
@@ -172,7 +210,7 @@ fn do_surrogate_object_swap(stamped: bool, times: usize) {
         round_trip(
             &graph,
             root,
-            stamped,
+            method,
             &mut encode,
             &mut restore,
             |copy, id| assert_eq!(copy.get(id), Some(&record("SurrogateMockC", vec![]))),
@@ -180,7 +218,7 @@ fn do_surrogate_object_swap(stamped: bool, times: usize) {
     }
 }
 
-fn deserialize_surrogate_pointing_to_itself(stamped: bool) {
+fn deserialize_surrogate_pointing_to_itself(method: Method) {
     let mut graph = Graph::default();
     let root = graph.insert(record("System.Object", vec![]));
     let mut restore = Surrogates::default();
@@ -192,7 +230,7 @@ fn deserialize_surrogate_pointing_to_itself(stamped: bool) {
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut Surrogates::default(),
         &mut restore,
         |copy, id| {
@@ -207,9 +245,36 @@ fn deserialize_surrogate_pointing_to_itself(stamped: bool) {
 macro_rules! modes {
     ($plain:ident, $stamped:ident, $check:ident $(, $argument:expr)*) => {
         #[test]
-        fn $plain() { $check(false $(, $argument)*); }
+        fn $plain() { $check(Method::default() $(, $argument)*); }
         #[test]
-        fn $stamped() { $check(true $(, $argument)*); }
+        fn $stamped() { $check(Method::new(true, false, false) $(, $argument)*); }
+        mod $plain {
+            use super::*;
+            #[test]
+            fn reader_plain() {
+                $check(Method::new(false, false, true) $(, $argument)*);
+            }
+            #[test]
+            fn reader_stamped() {
+                $check(Method::new(true, false, true) $(, $argument)*);
+            }
+            #[test]
+            fn writer_plain() {
+                $check(Method::new(false, true, false) $(, $argument)*);
+            }
+            #[test]
+            fn writer_stamped() {
+                $check(Method::new(true, true, false) $(, $argument)*);
+            }
+            #[test]
+            fn both_plain() {
+                $check(Method::new(false, true, true) $(, $argument)*);
+            }
+            #[test]
+            fn both_stamped() {
+                $check(Method::new(true, true, true) $(, $argument)*);
+            }
+        }
     };
 }
 
@@ -262,7 +327,7 @@ fn describe_types(rules: &mut Surrogates<'_>) {
 }
 
 fn empty_case(
-    stamped: bool,
+    method: Method,
     class: &str,
     encode: &mut Surrogates<'_>,
     restore: &mut Surrogates<'_>,
@@ -270,12 +335,12 @@ fn empty_case(
 ) {
     let mut graph = Graph::default();
     let root = graph.insert(record(class, vec![]));
-    round_trip(&graph, root, stamped, encode, restore, |copy, id| {
+    round_trip(&graph, root, method, encode, restore, |copy, id| {
         assert_eq!(copy.get(id), Some(&expected));
     });
 }
 
-fn match_parent(stamped: bool, source: &str, target: &str, on_read: bool) {
+fn match_parent(method: Method, source: &str, target: &str, on_read: bool) {
     let mut encode = Surrogates::default();
     let mut restore = Surrogates::default();
     let rules = if on_read { &mut restore } else { &mut encode };
@@ -284,7 +349,7 @@ fn match_parent(stamped: bool, source: &str, target: &str, on_read: bool) {
         .register(target, |_, _| Ok(record("SurrogateMockB", vec![])))
         .unwrap();
     empty_case(
-        stamped,
+        method,
         source,
         &mut encode,
         &mut restore,
@@ -292,7 +357,7 @@ fn match_parent(stamped: bool, source: &str, target: &str, on_read: bool) {
     );
 }
 
-fn prefer_specific(stamped: bool) {
+fn prefer_specific(method: Method) {
     let mut encode = Surrogates::default();
     describe_types(&mut encode);
     encode.register(C, |_, _| Ok(a(1))).unwrap();
@@ -300,7 +365,7 @@ fn prefer_specific(stamped: bool) {
         .register(D, |_, _| Ok(record("SurrogateMockB", vec![])))
         .unwrap();
     empty_case(
-        stamped,
+        method,
         D,
         &mut encode,
         &mut Surrogates::default(),
@@ -308,7 +373,7 @@ fn prefer_specific(stamped: bool) {
     );
 }
 
-fn prefer_first_interface(stamped: bool) {
+fn prefer_first_interface(method: Method) {
     let mut encode = Surrogates::default();
     describe_types(&mut encode);
     encode
@@ -318,7 +383,7 @@ fn prefer_first_interface(stamped: bool) {
         .register(IE, |_, _| Ok(Object::String("e".into())))
         .unwrap();
     empty_case(
-        stamped,
+        method,
         H,
         &mut encode,
         &mut Surrogates::default(),
@@ -327,7 +392,7 @@ fn prefer_first_interface(stamped: bool) {
 }
 
 fn generic_case(
-    stamped: bool,
+    method: Method,
     class: &str,
     value: &str,
     configure: impl for<'g> FnOnce(&'g Graph, &mut Surrogates<'g>),
@@ -342,7 +407,7 @@ fn generic_case(
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut encode,
         &mut Surrogates::default(),
         |copy, id| {
@@ -356,9 +421,9 @@ fn generic_case(
     );
 }
 
-fn extract_generic_field(stamped: bool) {
+fn extract_generic_field(method: Method) {
     generic_case(
-        stamped,
+        method,
         F_STRING,
         "test",
         |graph, encode| {
@@ -376,9 +441,9 @@ fn extract_generic_field(stamped: bool) {
     );
 }
 
-fn prefer_closed_generic(stamped: bool) {
+fn prefer_closed_generic(method: Method) {
     generic_case(
-        stamped,
+        method,
         F_STRING,
         "test",
         |_, encode| {
@@ -393,9 +458,9 @@ fn prefer_closed_generic(stamped: bool) {
     );
 }
 
-fn match_generic_base(stamped: bool, also_register_derived: bool) {
+fn match_generic_base(method: Method, also_register_derived: bool) {
     generic_case(
-        stamped,
+        method,
         I_STRING,
         "something",
         |_, encode| {
@@ -421,7 +486,7 @@ fn match_generic_base(stamped: bool, also_register_derived: bool) {
     );
 }
 
-fn disable_specific(stamped: bool) {
+fn disable_specific(method: Method) {
     let mut encode = Surrogates::default();
     describe_types(&mut encode);
     encode
@@ -429,7 +494,7 @@ fn disable_specific(stamped: bool) {
         .unwrap();
     encode.disable(D).unwrap();
     empty_case(
-        stamped,
+        method,
         D,
         &mut encode,
         &mut Surrogates::default(),
@@ -491,13 +556,16 @@ modes!(
 );
 modes!(disable_plain, disable_stamped, disable_specific);
 
-fn should_reject_registration_after_write(stamped: bool) {
+fn should_reject_registration_after_write(method: Method) {
     let mut graph = Graph::default();
     let root = graph.insert(record("System.Object", vec![]));
     let mut rules = Surrogates::default();
     let mut writer = ObjectWriter::new(std::io::sink(), &graph, References::Preserve, true)
         .with_surrogates(&mut rules);
-    if stamped {
+    if method.write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    if method.stamped {
         writer = writer.with_type_stamps(STAMPS);
     }
     writer.write_object(root).unwrap();
@@ -508,14 +576,14 @@ fn should_reject_registration_after_write(stamped: bool) {
     );
 }
 
-fn should_reject_registration_after_read(stamped: bool) {
+fn should_reject_registration_after_read(method: Method) {
     let mut graph = Graph::default();
     let root = graph.insert(record("System.Object", vec![]));
     let mut rules = Surrogates::default();
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut Surrogates::default(),
         &mut rules,
         |_, _| {},
@@ -537,7 +605,7 @@ modes!(
     should_reject_registration_after_read
 );
 
-fn boxed_value_surrogate(stamped: bool) {
+fn boxed_value_surrogate(method: Method) {
     fn integer_field(source: &Object) -> i64 {
         let Object::Record { fields, .. } = source else {
             panic!("expected surrogate record");
@@ -571,7 +639,7 @@ fn boxed_value_surrogate(stamped: bool) {
     round_trip(
         &graph,
         original,
-        stamped,
+        method,
         &mut encode,
         &mut restore,
         |graph, copy| {
@@ -589,7 +657,7 @@ modes!(
     boxed_value_surrogate
 );
 
-fn generic_registration_count(stamped: bool) {
+fn generic_registration_count(method: Method) {
     const DEFINITION: &str = "ClassToBeSurrogated<>";
     let mut graph = Graph::default();
     let elements = [
@@ -611,7 +679,7 @@ fn generic_registration_count(stamped: bool) {
     round_trip(
         &graph,
         root,
-        stamped,
+        method,
         &mut encode,
         &mut Surrogates::default(),
         |copy, id| {
@@ -630,7 +698,10 @@ fn generic_registration_count(stamped: bool) {
             }
         },
     );
-    assert_eq!(encode.registration_count() - before, 0);
+    assert_eq!(
+        encode.registration_count() - before,
+        if method.write { 2 } else { 0 }
+    );
 }
 
 modes!(
@@ -639,7 +710,7 @@ modes!(
     generic_registration_count
 );
 
-fn place_object_for_surrogate_preserving_identity(stamped: bool) {
+fn place_object_for_surrogate_preserving_identity(method: Method) {
     let mut graph = Graph::default();
     let b = graph.insert(record("SurrogateMockB", vec![]));
     let nested_items = graph.insert(Object::Array(vec![Value::Ref(b)]));
@@ -666,7 +737,10 @@ fn place_object_for_surrogate_preserving_identity(stamped: bool) {
     let mut bytes = Vec::new();
     let mut writer = ObjectWriter::new(&mut bytes, &graph, References::Preserve, true)
         .with_restore_prototypes(&mut probe);
-    if stamped {
+    if method.write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    if method.stamped {
         writer = writer.with_type_stamps(STAMPS);
     }
     writer.write_object(root).unwrap();
@@ -674,7 +748,10 @@ fn place_object_for_surrogate_preserving_identity(stamped: bool) {
 
     let mut reader = ObjectReader::new(Cursor::new(bytes), References::Preserve, true)
         .with_surrogates(&mut restore);
-    if stamped {
+    if method.read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    if method.stamped {
         reader = reader.with_type_stamps(STAMPS);
     }
     let id = reader.read_object().unwrap();

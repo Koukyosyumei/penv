@@ -540,7 +540,13 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             let replacement = self
                 .surrogates
                 .as_mut()
-                .map(|surrogates| surrogates.convert(id, original))
+                .map(|surrogates| {
+                    if self.generated.is_some() {
+                        surrogates.convert_generated(id, original)
+                    } else {
+                        surrogates.convert(id, original)
+                    }
+                })
                 .transpose()?
                 .flatten();
             let projected = self.transients.and_then(|transients| {

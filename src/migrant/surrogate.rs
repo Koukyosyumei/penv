@@ -7,6 +7,7 @@ type Converter<'a> = Box<dyn FnMut(ObjectId, &Object) -> io::Result<Object> + 'a
 
 struct Registration<'a> {
     class: String,
+    generic: bool,
     converter: Option<Converter<'a>>,
 }
 
@@ -18,6 +19,7 @@ pub struct Surrogates<'a> {
     parents: HashMap<String, Vec<String>>,
     registrations: Vec<Registration<'a>>,
     closed: bool,
+    generated_generic: HashMap<String, usize>,
 }
 
 impl<'a> Surrogates<'a> {
@@ -25,6 +27,7 @@ impl<'a> Surrogates<'a> {
     /// or the generic definition of a closed type.
     pub fn describe(&mut self, class: &str, parents: &[&str]) -> Result<(), RegistrationClosed> {
         self.check_open()?;
+        self.generated_generic.clear();
         self.parents.insert(
             class.into(),
             parents.iter().map(|parent| (*parent).into()).collect(),
@@ -37,7 +40,7 @@ impl<'a> Surrogates<'a> {
         class: impl Into<String>,
         converter: impl FnMut(ObjectId, &Object) -> io::Result<Object> + 'a,
     ) -> Result<(), RegistrationClosed> {
-        self.set(class.into(), Some(Box::new(converter)))
+        self.set(class.into(), Some(Box::new(converter)), false)
     }
 
     /// Convert a closed generic record using the same type arguments on a new definition.
@@ -46,37 +49,41 @@ impl<'a> Surrogates<'a> {
         source_definition: &str,
         target_definition: &str,
         mut construct: impl FnMut(ObjectId, &Object) -> io::Result<Vec<super::object_stream::Value>>
-        + 'a,
+            + 'a,
     ) -> Result<(), RegistrationClosed> {
         let target = target_definition.to_owned();
-        self.register(source_definition, move |id, object| {
-            let Object::Record { class, .. } = object else {
-                unreachable!()
-            };
-            let arguments = class
-                .split_once('<')
-                .and_then(|(_, arguments)| arguments.strip_suffix('>'))
-                .filter(|arguments| !arguments.is_empty())
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "expected a closed generic record",
-                    )
-                })?;
-            Ok(Object::Record {
-                class: format!("{target}<{arguments}>"),
-                fields: construct(id, object)?,
-            })
-        })
+        self.set(
+            source_definition.into(),
+            Some(Box::new(move |id, object| {
+                let Object::Record { class, .. } = object else {
+                    unreachable!()
+                };
+                let arguments = class
+                    .split_once('<')
+                    .and_then(|(_, arguments)| arguments.strip_suffix('>'))
+                    .filter(|arguments| !arguments.is_empty())
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "expected a closed generic record",
+                        )
+                    })?;
+                Ok(Object::Record {
+                    class: format!("{target}<{arguments}>"),
+                    fields: construct(id, object)?,
+                })
+            })),
+            true,
+        )
     }
 
     pub fn registration_count(&self) -> usize {
-        self.registrations.len()
+        self.registrations.len() + self.generated_generic.len()
     }
 
     /// Stop fallback to a more general registration when this type matches.
     pub fn disable(&mut self, class: impl Into<String>) -> Result<(), RegistrationClosed> {
-        self.set(class.into(), None)
+        self.set(class.into(), None, false)
     }
 
     pub(super) fn close_registration(&mut self) {
@@ -95,16 +102,23 @@ impl<'a> Surrogates<'a> {
         &mut self,
         class: String,
         converter: Option<Converter<'a>>,
+        generic: bool,
     ) -> Result<(), RegistrationClosed> {
         self.check_open()?;
+        self.generated_generic.clear();
         if let Some(existing) = self
             .registrations
             .iter_mut()
             .find(|item| item.class == class)
         {
             existing.converter = converter;
+            existing.generic = generic;
         } else {
-            self.registrations.push(Registration { class, converter });
+            self.registrations.push(Registration {
+                class,
+                converter,
+                generic,
+            });
         }
         Ok(())
     }
@@ -147,6 +161,33 @@ impl<'a> Surrogates<'a> {
     pub(super) fn has_conversion(&self, class: &str) -> bool {
         self.find(class)
             .is_some_and(|index| self.registrations[index].converter.is_some())
+    }
+
+    pub(super) fn convert_generated(
+        &mut self,
+        id: ObjectId,
+        object: &Object,
+    ) -> io::Result<Option<Object>> {
+        let Object::Record { class, .. } = object else {
+            return Ok(None);
+        };
+        let Some(index) = self
+            .generated_generic
+            .get(class)
+            .copied()
+            .or_else(|| self.find(class))
+        else {
+            return Ok(None);
+        };
+        let value = self.registrations[index]
+            .converter
+            .as_mut()
+            .map(|convert| convert(id, object))
+            .transpose()?;
+        if value.is_some() && self.registrations[index].generic {
+            self.generated_generic.entry(class.clone()).or_insert(index);
+        }
+        Ok(value)
     }
 
     pub(super) fn convert(&mut self, id: ObjectId, object: &Object) -> io::Result<Option<Object>> {

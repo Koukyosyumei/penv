@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,469 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,601 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,927 |
+| 移植待ち | 1,795 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 18 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -312,3 +312,9 @@ Rust マクロで型ごとの専用フィールドコーデックを生成し、
 型別コーデックでレコードを読み書きし、フックの実行順序と例外時の後処理には既存のフック処理を使った。生成する側の組み合わせと型スタンプの有無を維持して120件を追加し、公式160件すべてが対象実行で合格した。
 
 - [追加120件の公式 ID](nunit-evidence/targeted-migrant-hooks-generated.tsv)と[160件の実行ログ](nunit-evidence/targeted-migrant-hooks-generated.log)
+
+## Migrant SurrogateTests の生成経路
+
+型別の読み書きコーデックを選び、既存のサロゲート処理で型階層・共有参照・自己参照を検証した。生成書き込みでは閉じたジェネリック型ごとに変換規則をキャッシュし、int と float の2エントリが追加される公式アサーションを維持した。追加132件を含む公式176件が対象実行で合格した。
+
+- [公式 ID](nunit-evidence/targeted-migrant-surrogate-generated.tsv)と[176件の実行ログ](nunit-evidence/targeted-migrant-surrogate-generated.log)

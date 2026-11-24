@@ -1,6 +1,5 @@
 fixture	missing_api
 Antmicro.Migrant.Tests.SerializationTests	Stamped and unstamped reflection modes restore record, array and ordered list graphs. Remaining settings and cases need generated reader/writer paths, collection-as-user-object layouts, dictionary and other CLR codecs, surrogate and hook dispatch, and delegate/state restoration.
-Antmicro.Migrant.Tests.SurrogateTests	Reflection substitutions cover exact, inherited, interface and open-generic matching. Reflection cases also cover read-side callback ordering with shared references. Remaining cases need generated reader/writer paths, including generated converter caching.
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
 Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	The monitor has no reflection-driven action binder for optional, named, array and variadic arguments on the fixture's test emulation object.
