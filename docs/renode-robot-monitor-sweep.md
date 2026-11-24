@@ -884,3 +884,28 @@ Rust モニター 21 件と UART 関連 34 件は合格した。
 `Should Step Over Time Quantum With Multiple CPUs Active` は起動時の
 ブート引数付き `sysbus LoadFdt` が未対応で時刻アサーションに到達しなかった
 （`target/monitor-interval-c253a34-*/results.json`）。
+
+`8203f4a` は、Rust 側の `sysbus LoadFdt` で v17 DTB の
+`/chosen/bootargs` を更新し、更新したバイト列をゲスト RAM へ配置する。
+既定では既存文字列にそのまま追記し、`false` 指定では置換する。
+`chosen` が存在しない場合は作成する。disabledNodes と CPU context の
+追加引数は対象外。入力ファイルは変更しない。
+
+固定 Renode と同じコマンド列の RAM 読み出しから DTB を再構成し、
+追記、置換、`chosen` 作成の値と既存の `model` が一致した。
+通常 CLI と Robot 用起動フレームの読み出しも一致した
+（`target/monitor-fdt-proof/`）。切り詰めた DTB は拒否した。
+
+未変更の複数 CPU 時刻ケースは、FDT コマンドの構文解析を通過し、
+`emulation SingleStepBlocking True` が未対応のため起動前に停止した。
+HEX と STM32F072b Console Echo は合格した
+（`target/monitor-fdt-8203f4a-*/results.json`）。
+
+`3e4c108` は起動時に配置するバイナリのアドレスを 64 ビットで保持する。
+固定 Renode の比較用ビルドには RV64 トランスレーターがなかったため、
+両実行で同じ RAM アドレス `0x100000000` と FDT コマンドを使い、
+Renode 側は CPU を省略した。双方から読み戻した DTB の `bootargs` と
+`model` が一致した（`target/monitor-fdt-proof/{high,native-high}.resc`）。
+Rust モニターテスト 21 件が合格した。
+この変更後の HEX と STM32F072b Console Echo も合格した
+（`target/monitor-fdt-high-3e4c108-*/results.json`）。
