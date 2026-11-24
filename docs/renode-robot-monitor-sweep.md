@@ -1389,3 +1389,24 @@ Rust モニターテスト24件と UART テスト36件が合格。
 未変更の Robot は全256バイトの UART ケース、STM32F072b Console Echo、
 保存・復元の4件が合格し、残り2,193件は未実行
 （`target/monitor-restored-uart-robot/results.json`）。
+
+### 復元した変数を使うログ待機とメッセージ
+
+`3da35dc` は保存境界以降のログ待機を実行時に解決し、
+`WaitForMonitorLog` と `AssertAbsentMonitorLog` の期限に変数を使える
+ようにする。固定 Renode、通常 CLI、Robot RPC で、不在判定が変数の
+上書き後は 6 ms、復元後は 2 ms で完了することを確認した。
+固定 Renode と Robot RPC には読み出した変数値を期限引数として渡した
+（`target/monitor-restored-log-proof/`）。
+
+`afab9d5` は `log`、`logLevel`、`lastLog` も保存境界以降に
+順に評価する。同じコマンド列を実行し、上書き後には
+`[WARNING] Script: changed marker`、復元後には
+`[INFO] Script: original marker` が出ることを固定 Renode、
+通常 CLI、Robot RPC で確認した。比較はスクリプトのログ行の本文と重要度
+（`target/monitor-restored-log-message-proof/`）。
+
+Rust モニターテスト24件とログテスト8件が合格。
+未変更の Robot はバス読み出し・書き込みのログ、保存・復元、
+STM32F072b Console Echo の5件合格、残り2,192件は未実行
+（`target/monitor-restored-log-robot/results.json`）。
