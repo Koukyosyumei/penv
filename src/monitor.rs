@@ -2566,6 +2566,18 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
             continue;
         }
         let words = command_words(text).map_err(|e| error(&e))?;
+        // A restore can change both machine selection and variable bindings.
+        if matches!(words.as_slice(), ["mach" | "machine", "set", _])
+            || words.first().is_some_and(|word| *word == "sysbus" || word.starts_with("sysbus."))
+        {
+            if has_snapshot_boundary(&state.boot) {
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+                });
+                continue;
+            }
+        }
         let assignment = text.starts_with('$') || matches!(words.as_slice(), ["set", _, _]);
         let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"] | ["alias", _, _]))
             && has_snapshot_boundary(&state.boot);
