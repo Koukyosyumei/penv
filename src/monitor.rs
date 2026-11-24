@@ -350,6 +350,7 @@ enum Action {
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
+    CpuSymbolPc(String, String),
     MachineReset(Vec<ResetHook>),
     ReadScalar(u64, ScalarWidth),
     WriteScalar(u64, ScalarWidth, u32),
@@ -855,6 +856,7 @@ fn run_commands(
             Action::CpuWait(cpu, asserted) => {
                 machine.set_cortex_m_cpu_wait(cpu, *asserted).map(|()| None)
             }
+            Action::CpuSymbolPc(cpu, symbol) => machine.set_monitor_symbol_pc(cpu, symbol).map(|()| None),
             Action::CpuPc(cpu, pc) => machine.set_named_entry(cpu, *pc).map(|()| None),
             Action::CpuReset(cpu) => machine.reset_named_cortex_m(cpu).map(|()| None),
             Action::MachineReset(hooks) => machine.reset_cortex_m_machine().and_then(|()| {
@@ -2197,7 +2199,7 @@ fn execute(
             cpu.trim_start_matches("sysbus.").to_owned(),
         )),
         ["cpu" | "sysbus.cpu", "PerformanceInMips"] if boot.started => Some(Action::ReadCpuMips(boot.session.number_mode)),
-        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started => {
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started || !boot.runtime.is_empty() => {
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
             Some(Action::CpuMips(mips))
         }
@@ -2570,6 +2572,16 @@ fn execute(
                 state,
                 timeout,
                 hold,
+            ))
+        }
+        [target, "PC", address] if address.starts_with('`') && address.ends_with('`') => {
+            let expression = &address[1..address.len() - 1];
+            let words = command_words(expression)?;
+            let ["sysbus", "GetSymbolAddress", symbol] = words.as_slice() else {
+                return Err("unsupported program counter expression".into());
+            };
+            Some(Action::CpuSymbolPc(
+                resolve(target)?.trim_start_matches("sysbus.").into(), unquote(resolve(symbol)?).into(),
             ))
         }
         [target, "PC", address] if boot.started || !boot.runtime.is_empty() => {

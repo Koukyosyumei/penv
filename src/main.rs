@@ -2167,6 +2167,7 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     let mut machine = boot_machine()?;
+    machine.monitor_firmware.clone_from(&path);
     if let Some(quantum) = monitor_quantum {
         machine.monitor_quantum = quantum;
     }

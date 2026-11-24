@@ -138,6 +138,7 @@ pub struct Machine {
     monitor_clock_ns: u128,
     monitor_clock_step: u64,
     boot_memory_cleared: bool,
+    pub(crate) monitor_firmware: Option<std::path::PathBuf>,
     pub(crate) monitor_quantum: u64,
     cpu_paused: bool,
     cpu_halted: bool,
@@ -417,6 +418,7 @@ impl Machine {
             monitor_clock_ns: 0,
             monitor_clock_step: 0,
             boot_memory_cleared: false,
+            monitor_firmware: None,
             monitor_quantum: 10_000, // 100 microseconds in 10 ns monitor units.
             cpu_paused: false,
             cpu_halted: false,
@@ -725,6 +727,18 @@ impl Machine {
         }
         hart.monitor_single_step = true;
         self.run_selected(steps, Some(index), output, |_, _| false)
+    }
+
+    pub(crate) fn set_monitor_symbol_pc(&mut self, cpu: &str, symbol: &str) -> Result<(), String> {
+        let path = self.monitor_firmware.as_deref().ok_or("no firmware ELF for symbol lookup")?;
+        let address = crate::cpu_python_hook::symbol(path, symbol)?;
+        if let Some(rv64) = &mut self.named_hart(cpu)?.rv64 {
+            rv64.set_program_counter(address);
+            Ok(())
+        } else {
+            let address = u32::try_from(address).map_err(|_| "symbol address exceeds CPU width")?;
+            self.set_named_entry(cpu, address)
+        }
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
