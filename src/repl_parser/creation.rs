@@ -24,10 +24,12 @@ impl Model {
 pub(crate) struct Cpu {
     pub(crate) placeholder: Option<String>,
     other_cpu: Option<usize>,
-    enum_value: Option<TwoState>,
+    pub(crate) enum_value: TwoState,
 }
 
-enum TwoState {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum TwoState {
+    #[default]
     One,
     Two,
 }
@@ -245,9 +247,9 @@ impl CreatedPlatform {
             "OtherCpu" => cpu.other_cpu = target,
             "Model" => return Err(format!("{source}: PropertyNotWritable: Model")),
             "EnumValue" => {
-                cpu.enum_value = Some(match symbolic_value(value) {
+                cpu.enum_value = match symbolic_value(value) {
                     Some(
-                        SymbolicValue::Reference("One")
+                        SymbolicValue::Reference("One" | "none")
                         | SymbolicValue::Enum(Some("TwoStateEnum"), "One"),
                     ) => TwoState::One,
                     Some(
@@ -255,7 +257,7 @@ impl CreatedPlatform {
                         | SymbolicValue::Enum(Some("TwoStateEnum"), "Two"),
                     ) => TwoState::Two,
                     _ => return Err(format!("{source}: TypeMismatch: expected TwoStateEnum")),
-                });
+                };
             }
             name => return Err(format!("{source}: PropertyDoesNotExist: {name}")),
         }

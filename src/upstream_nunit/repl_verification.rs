@@ -257,3 +257,65 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @{
     assert_eq!(ranges[1], (0x200, 0x20));
     assert_eq!(ranges.len(), 2);
 }
+
+#[test]
+fn should_handle_alias() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus as "otherName""#,
+        Path::new("."),
+    )
+    .unwrap();
+    assert!(platform.cpu("sysbus.otherName").is_some());
+    assert!(platform.cpu("sysbus.cpu").is_none());
+}
+
+#[test]
+fn should_update_property() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: "one"
+    EnumValue: TwoStateEnum.Two
+
+cpu:
+    Placeholder: "two""#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(cpu.placeholder.as_deref(), Some("two"));
+    assert_eq!(cpu.enum_value, creation::TwoState::Two);
+}
+
+#[test]
+fn should_handle_escaped_ouote_in_string() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: "one with \"escaped\" quote\"""#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("one with \"escaped\" quote\"")
+    );
+}
+
+#[test]
+fn should_handle_none_in_property() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    EnumValue: TwoStateEnum.Two
+
+cpu:
+    EnumValue: none"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(cpu.enum_value, creation::TwoState::One);
+}

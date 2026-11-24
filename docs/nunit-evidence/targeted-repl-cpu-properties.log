@@ -1,0 +1,30 @@
+$ cargo test --locked --bin penv repl_parser::upstream_verification_tests
+running 27 tests
+test repl_parser::upstream_verification_tests::should_fail_on_non_existing_property ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_string_mismatch ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_numeric_enum_mismatch ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_double_attribute ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_incorrect_property_type_in_nested_inline_object ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_registering_not_iperipheral ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_incorrect_inline_object_type ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_non_existing_inline_type ... ok
+test repl_parser::upstream_verification_tests::should_handle_alias ... ok
+test repl_parser::upstream_verification_tests::should_handle_none_in_property ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_missing_reference_in_registration_point ... ok
+test repl_parser::upstream_verification_tests::should_check_type_of_areference ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_empty_entry ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_not_existing_type ... ok
+test repl_parser::upstream_verification_tests::should_fail_if_type_is_specified_second_time ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_wrong_object_registration_point_type ... ok
+test repl_parser::upstream_verification_tests::should_handle_escaped_ouote_in_string ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_missing_reference ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_non_writable_property ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_non_construable_registration_point ... ok
+test repl_parser::upstream_verification_tests::should_process_late_attach ... ok
+test repl_parser::upstream_verification_tests::should_register_peripheral_with_many_registration_points ... ok
+test repl_parser::upstream_verification_tests::should_update_property ... ok
+test repl_parser::upstream_verification_tests::should_set_property_of_inline_object ... ok
+test repl_parser::upstream_verification_tests::should_fail_on_wrong_reference_registration_point_type ... ok
+test repl_parser::upstream_verification_tests::should_process_without_type_name_in_first_entry ... ok
+test repl_parser::upstream_verification_tests::should_process_one_object ... ok
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 3455 filtered out; finished in 0.02s

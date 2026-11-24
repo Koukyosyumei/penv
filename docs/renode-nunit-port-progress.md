@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,980 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,984 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 415 |
+| 移植待ち | 411 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -418,3 +418,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 REPL のインラインオブジェクト生成を追加し、不明な型、参照型の不一致、入れ子のプロパティ型不一致、孫オブジェクトのプロパティ設定の4件を移植した。対象の21件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-inline.tsv)・[実行ログ](nunit-evidence/targeted-repl-inline.log)
 
 インラインオブジェクトを登録点として指定した際の型不一致と、別名で登録した周辺機器から複数のアドレス範囲を宣言順に取得するケースを移植した。対象の23件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-list.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-list.log)
+
+`MergeAndCreationTests` の4件を移植した。CPU の登録別名、プロパティの上書き、エスケープされた二重引用符、`none` による列挙値の既定値への復帰を検証し、対象の27件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-cpu-properties.tsv)・[実行ログ](nunit-evidence/targeted-repl-cpu-properties.log)
