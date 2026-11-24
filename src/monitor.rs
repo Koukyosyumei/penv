@@ -2332,9 +2332,9 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         if load_text(&source, source.clone(), root, &mut pending, &body).is_ok()
             && pending.boot.runtime.is_empty()
             && let Ok(path) = snapshot_path(value, source.parent().unwrap_or(Path::new(".")), &pending.variables)
-            && fs::metadata(&path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+            && let Some(error) = inspect_snapshot_input(&path)
         {
-            return Ok(StartupInput::Reply("REJECTED", missing_snapshot(&path)));
+            return Ok(StartupInput::Reply("REJECTED", error));
         }
     }
     if let Ok(words) = command_words(command.trim())
@@ -2896,6 +2896,28 @@ const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expec
 
 fn invalid_command_parameters(error: &str) -> bool {
     matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | SNAPSHOT_PARAMETERS)
+}
+
+fn inspect_snapshot_input(path: &Path) -> Option<String> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(missing_snapshot(path)),
+        _ => return None,
+    };
+    // Header inspection never constructs or modifies an emulation.
+    let file = fs::File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file() || metadata.len() != opened.len() {
+        return None;
+    }
+    let mut input = io::BufReader::new(file);
+    read_snapshot_metadata(&mut input)
+        .and_then(|_| Machine::validate_boot_snapshot_header(&mut input))
+        .err()
+        .map(|reason| format!(
+            "This snapshot is incompatible or the emulation's state is corrupted: {}: {reason}",
+            path.display(),
+        ))
 }
 
 fn missing_snapshot(path: &Path) -> String {
@@ -5280,6 +5302,10 @@ emulation GetTimeSourceInfo
             ..Session::default()
         };
         session.save(&source, &snapshot).unwrap();
+        assert_eq!(inspect_snapshot_input(&snapshot), None);
+        let invalid = dir.0.join("invalid.save");
+        fs::write(&invalid, b"invalid snapshot").unwrap();
+        assert!(inspect_snapshot_input(&invalid).unwrap().contains("unknown snapshot format"));
 
         let mut boot = load(&script, &dir.0).unwrap();
         assert_eq!(boot.session.machine.as_deref(), Some("clock board"));

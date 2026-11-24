@@ -1010,11 +1010,33 @@ impl Machine {
     fn cpu_less_snapshot_version(input: &mut impl Read) -> Result<u8, String> {
         let mut header = [0; 9];
         input.read_exact(&mut header).map_err(|e| e.to_string())?;
-        match &header {
+        Self::cpu_less_snapshot_format(&header)
+    }
+
+    fn cpu_less_snapshot_format(header: &[u8; 9]) -> Result<u8, String> {
+        match header {
             b"PENVIOST\x01" => Ok(1),
             b"PENVIOST\x02" => Ok(2),
             b"PENVIOST\x03" => Ok(3),
             _ => Err("unknown CPU-less snapshot format".into()),
+        }
+    }
+
+    fn cortex_snapshot_has_registers(header: &[u8; 9]) -> std::io::Result<bool> {
+        match header {
+            b"PENVBOOT\x01" => Ok(false),
+            b"PENVBOOT\x02" => Ok(true),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown snapshot format")),
+        }
+    }
+
+    pub(crate) fn validate_boot_snapshot_header(input: &mut impl Read) -> Result<(), String> {
+        let mut header = [0; 9];
+        input.read_exact(&mut header).map_err(|error| error.to_string())?;
+        if Self::cpu_less_snapshot_format(&header).is_ok() || Self::cortex_snapshot_has_registers(&header).is_ok() {
+            Ok(())
+        } else {
+            Err("unknown snapshot format".into())
         }
     }
 
@@ -1115,13 +1137,7 @@ impl Machine {
             }
             let mut header = [0; 9];
             input.read_exact(&mut header)?;
-            let has_registers = match &header {
-                b"PENVBOOT\x01" => false,
-                b"PENVBOOT\x02" => true,
-                _ => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData, "unknown snapshot format",
-                )),
-            };
+            let has_registers = Self::cortex_snapshot_has_registers(&header)?;
             let address = read_word(input)?;
             if address & 0x7f != 0 {
                 return Err(std::io::Error::new(
