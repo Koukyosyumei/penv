@@ -588,6 +588,7 @@ pub fn run(
 pub(crate) struct AutoLoadCommand {
     pub(crate) name: &'static str,
     pub(crate) description: &'static str,
+    pub(crate) method_signatures: &'static [&'static str],
     pub(crate) execute: fn(&mut Machine, &[&str]) -> Result<String, String>,
 }
 
@@ -616,7 +617,17 @@ impl MonitorBuiltins {
     pub(crate) fn execute(&mut self, machine: &mut Machine, text: &str) -> Option<Result<String, String>> {
         let command = text.split_whitespace().next()?;
         if let Some(registered) = self.commands.get(command) {
-            return Some(action_arguments::words(text).and_then(|words| (registered.execute)(machine, &words[1..])));
+            return Some(
+                action_arguments::words(text)
+                    .and_then(|words| (registered.execute)(machine, &words[1..]))
+                    .map_err(|error| {
+                        if registered.method_signatures.is_empty() {
+                            error
+                        } else {
+                            format!("{error}\nThe following methods are available:\n{}", registered.method_signatures.join("\n"))
+                        }
+                    }),
+            );
         }
         if !matches!(command, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
             return None;

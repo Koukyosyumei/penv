@@ -10,6 +10,7 @@ fn auto_load_command() {
     let command = AutoLoadCommand {
         name: "featuresTests.TestCommand",
         description: "is just a test command.",
+        method_signatures: &[],
         execute: |_, _| Ok(String::new()),
     };
     let description = command.description;

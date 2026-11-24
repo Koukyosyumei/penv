@@ -16,6 +16,7 @@ pub(crate) fn bind<'a>(
 ) -> Result<Arguments<'a>, String> {
     let mut bound = vec![None; parameters.len()];
     let mut rest = Vec::new();
+    let mut named_out_of_order = false;
     for &word in words {
         if let Some((name, value)) = word.split_once('=')
             && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -24,10 +25,16 @@ pub(crate) fn bind<'a>(
                 .iter()
                 .position(|parameter| parameter.name == name)
                 .ok_or_else(|| format!("unknown named parameter {name}"))?;
+            if bound.iter().position(Option::is_none) != Some(index) {
+                named_out_of_order = true;
+            }
             if bound[index].replace(value).is_some() {
                 return Err(format!("duplicate parameter {name}"));
             }
         } else if let Some(slot) = bound.iter_mut().find(|slot| slot.is_none()) {
+            if named_out_of_order {
+                return Err("positional argument after an out-of-order named parameter".into());
+            }
             *slot = Some(word);
         } else if variadic {
             rest.push(word);

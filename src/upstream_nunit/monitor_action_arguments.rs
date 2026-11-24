@@ -159,17 +159,36 @@ fn fixture_emulation(_: &mut Machine, words: &[&str]) -> Result<String, String> 
     }
 }
 
-fn check(command: &str, expected: &str) {
+const SIGNATURES: &[&str] = &[
+    "MethodThatTakesParamsIntArray(params int[] args)",
+    "MethodThatTakesParamsIntArrayAfterString(string arg, params int[] args)",
+    "MethodThatTakesParamsIntArrayAfterOptionalString(string arg = default, params int[] args)",
+    "MethodWithOptionalParameters(int a = 1, int b = 2, int c = 3)",
+    "MethodWithOptionalParametersAndParamArray(int a = 1, int b = 2, int c = 3, params int[] args)",
+    "MethodWithArrayThenString(int[] numbers, string separator)",
+    "MethodWithStringThenIntArrayThenAnotherString(string s1, int[] numbers, string s2)",
+    "MethodWithListOfStrings(List<string> words)",
+    "MethodWithParamsStringArray(params string[] args)",
+    "MethodWithNullableIntArray(int?[] numbers)",
+    "MethodWithNullableIntList(List<int?> numbers)",
+];
+
+fn execute(command: &str) -> Result<String, String> {
     let mut monitor = MonitorBuiltins::default();
     let mut machine = Machine::without_default_ram();
     AutoLoadCommand {
         name: "emulation",
         description: "MockExtension",
+        method_signatures: SIGNATURES,
         execute: fixture_emulation,
     }
     .register(&mut monitor)
     .unwrap();
-    let output = monitor.execute(&mut machine, command).unwrap().unwrap();
+    monitor.execute(&mut machine, command).unwrap()
+}
+
+fn check(command: &str, expected: &str) {
+    let output = execute(command).unwrap();
     assert!(
         output.contains(expected),
         "{output:?} did not contain {expected:?}"
@@ -465,4 +484,74 @@ fn nullable_int_list_containing_nulls_named() {
         "emulation MethodWithNullableIntList numbers=[1, null, 3]",
         "numbers: [1, null, 3]",
     );
+}
+
+fn check_error(command: &str) {
+    let output = execute(command).expect_err("expected failed command");
+    assert!(
+        output.contains("The following methods are available"),
+        "{output}"
+    );
+}
+
+#[test]
+fn optional_parameters_fail_on_duplicate_name() {
+    check_error("emulation MethodWithOptionalParameters c=5 c=3");
+}
+
+#[test]
+fn optional_parameters_fail_on_duplicate_positional_and_named() {
+    check_error("emulation MethodWithOptionalParameters 1 a=4");
+}
+
+#[test]
+fn optional_parameters_fail_on_positional_after_named() {
+    check_error("emulation MethodWithOptionalParameters b=1 4");
+}
+
+#[test]
+fn positional_after_named_with_mismatched_position() {
+    check_error(
+        "emulation MethodWithStringThenIntArrayThenAnotherString s2=\"a\" [1, 2, 3] s1=\"b\"",
+    );
+}
+
+#[test]
+fn type_mismatch_in_params_array() {
+    check_error("emulation MethodThatTakesParamsIntArray 1 \"2\" 3");
+}
+
+#[test]
+fn type_mismatch_in_array() {
+    check_error("emulation MethodWithArrayThenString [1, \"2\", 3] \",\"");
+}
+
+#[test]
+fn unclosed_bracket() {
+    check_error("emulation MethodWithArrayThenString [1, 2, 3 \",\"");
+}
+
+#[test]
+fn unclosed_bracket_with_trailing_comma() {
+    check_error("emulation MethodThatTakesParamsIntArray [1,");
+}
+
+#[test]
+fn empty_element() {
+    check_error("emulation MethodWithArrayThenString [1, , 3] \",\"");
+}
+
+#[test]
+fn two_trailing_commas() {
+    check_error("emulation MethodWithArrayThenString [1, 2, 3, ,] \",\"");
+}
+
+#[test]
+fn single_element_passed_as_list_parameter() {
+    check_error("emulation MethodWithListOfStrings \"a\"");
+}
+
+#[test]
+fn single_element_passed_as_non_params_array_parameter() {
+    check_error("emulation MethodWithArrayThenString 1 \",\"");
 }
