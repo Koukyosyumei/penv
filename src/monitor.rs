@@ -52,6 +52,7 @@ pub struct Boot {
     pub riscv_wfi_as_nop: Vec<(String, bool)>,
     pub monitor_user_state: Option<String>,
     pub monitor_output: Vec<String>,
+    pub console_only: bool,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -1807,21 +1808,36 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     if let Err(error) = load_text(&source, source.clone(), root, &mut state, &command) {
         return Ok(StartupInput::Reply("ERROR", error));
     }
+    let mut output = Vec::new();
+    run_console_script(&state.boot, &mut output)?;
+    if matches!(command_words(command.trim()).as_deref(), Ok(["echo", _])) {
+        output.pop(); // The inspection protocol returns the echo value without a trailing newline.
+    }
+    Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?))
+}
+
+fn is_console_action(action: &Action) -> bool {
+    matches!(action, Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
+}
+
+pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
     crate::monitor_log::enable_history();
-    if let Some(level) = state.boot.monitor_log_level {
+    if let Some(level) = boot.monitor_log_level {
         crate::monitor_log::set_level(level);
     }
-    let mut output = state.boot.monitor_output.join("\n").into_bytes();
-    for command in &state.boot.runtime {
+    for message in &boot.monitor_output {
+        writeln!(output, "{message}").map_err(|error| error.to_string())?;
+    }
+    for command in &boot.runtime {
         match &command.action {
             Action::ScriptLog(level, message) => crate::monitor_log::record(*level, message),
             Action::LogLevel(level) => crate::monitor_log::set_level(*level),
-            Action::LastLog(count) => write_last_log(*count, &mut output)?,
-            Action::Echo(message) => output.extend_from_slice(message.as_bytes()),
-            _ => return Ok(StartupInput::Reply("DEFER", String::new())),
+            Action::LastLog(count) => write_last_log(*count, output)?,
+            Action::Echo(message) => writeln!(output, "{message}").map_err(|error| error.to_string())?,
+            _ => return Err("command requires a booted monitor".into()),
         }
     }
-    Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?))
+    Ok(())
 }
 
 fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, String> {
@@ -1850,6 +1866,13 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
     }
     let mut boot = state.boot;
     boot.session.variables = state.variables;
+    if !session && !state.machine && !boot.has_platform() && !boot.started
+        && (!boot.monitor_output.is_empty() || !boot.runtime.is_empty())
+        && boot.runtime.iter().all(|command| is_console_action(&command.action))
+    {
+        boot.console_only = true;
+        return Ok(boot);
+    }
     boot.materialize_platform()?;
     if let [
         RuntimeCommand {

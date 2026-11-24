@@ -1512,6 +1512,13 @@ fn run() -> Result<ExitCode, String> {
                 common
             }
         };
+        if boot.console_only {
+            if path.is_some() {
+                return Err("console-only scripts do not accept a firmware override".into());
+            }
+            monitor::run_console_script(&boot, &mut io::stdout().lock())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         sd_setup_only = boot.is_sd_setup_only() && boot.image.is_none() && boot.binaries.is_empty();
         if let Some(server) = boot.network.into_tftp()? {
             let file = server.file.input_path(root, asset_dir.as_deref())?;
