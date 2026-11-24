@@ -437,6 +437,7 @@ pub struct Bus {
     stm32_uart_input: usize,
     step_hz: Option<u32>,
     uart_testers: Vec<(TesterPort, TesterHistory)>,
+    uart_tester_timeouts: BTreeMap<usize, u64>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -5066,18 +5067,28 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn set_uart_tester_timeout(&mut self, id: usize, timeout: u64) {
+        self.uart_tester_timeouts.entry(id).or_insert(timeout);
+    }
+
+    pub(crate) fn uart_tester_timeout(&self, id: Option<usize>) -> Result<u64, String> {
+        let id = self.uart_tester_id(id)?;
+        Ok(self.uart_tester_timeouts.get(&id).copied().unwrap_or(8 * CORTEX_M_STEP_HZ))
+    }
+
+    fn uart_tester_id(&self, id: Option<usize>) -> Result<usize, String> {
+        match id.or(self.default_uart_tester) {
+            Some(id) if id < self.uart_testers.len() => Ok(id),
+            Some(id) => Err(format!("Tester for given ID={id} was not found.")),
+            None if self.uart_testers.len() == 1 => Ok(0),
+            None if self.uart_testers.is_empty() => Err("There are no testers available.".into()),
+            None => Err("There is more than one tester available - please specify ID of the desired tester.".into()),
+        }
+    }
+
     fn uart_tester(&mut self, id: Option<usize>) -> Result<(usize, &mut TesterHistory), String> {
-        let id = match id.or(self.default_uart_tester) {
-            Some(id) => id,
-            None if self.uart_testers.len() == 1 => 0,
-            None if self.uart_testers.is_empty() => return Err("There are no testers available.".into()),
-            None => return Err("There is more than one tester available - please specify ID of the desired tester.".into()),
-        };
-        let (_, history) = self
-            .uart_testers
-            .get_mut(id)
-            .ok_or_else(|| format!("Tester for given ID={id} was not found."))?;
-        Ok((id, history))
+        let id = self.uart_tester_id(id)?;
+        Ok((id, &mut self.uart_testers[id].1))
     }
 
     #[cfg(test)]

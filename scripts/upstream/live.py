@@ -723,7 +723,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
         timeout = self.duration(options.get("timeout", self.timeout))
-        result = int(self.operation(f"CreateTerminalTester {uart}").strip())
+        deadline = f" timeout={timeout}" if self.rust_monitor else ""
+        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result
 
@@ -784,8 +785,14 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if verb == "WaitForTesterPrompt":
             positional = ("testerId", "timeout", "treatAsRegex")
         options = self.log_options(args, set(positional), positional)
-        tester_id, (_, timeout) = self.select_uart(options.get("testerId"))
-        deadline = self.duration(options.get("timeout", timeout))
+        if self.rust_monitor:
+            tester_id = self.parse_tester_id(options.get("testerId"))
+            timeout = options.get("timeout")
+        else:
+            tester_id, (_, timeout) = self.select_uart(options.get("testerId"))
+            timeout = options.get("timeout", timeout)
+        selector = f" testerId={tester_id}" if tester_id is not None else ""
+        deadline = f" timeout={self.duration(timeout)}" if timeout is not None else ""
         regex = self.log_bool(options.get("treatAsRegex", "false"))
         self.started = True
         if self.log_bool(options.get("includeUnfinishedLine", "false")):
@@ -793,7 +800,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 raise Unsupported("unfinished UART line absence is unsupported")
             verb = "WaitForTesterPrompt"
         captures = regex and verb != "ShouldNotBeOnUart"
-        command = f"{verb} {self.uart_text(expected)} testerId={tester_id} timeout={deadline} treatAsRegex={str(regex).lower()}"
+        command = f"{verb} {self.uart_text(expected)}{selector}{deadline} treatAsRegex={str(regex).lower()}"
         if captures:
             command += " captureGroups=true"
         return self.operation(command, uart_captures=True)

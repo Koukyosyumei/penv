@@ -369,10 +369,10 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool),
+    CreateUartTester(String, bool, Option<u64>),
     DefaultUartTester(Option<usize>),
-    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, u64, bool, bool),
-    WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool),
+    WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
 }
@@ -942,10 +942,13 @@ fn run_commands(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary) => machine
+            Action::CreateUartTester(target, binary, timeout) => machine
                 .bus
                 .create_uart_tester(target, *binary)
-                .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
+                .and_then(|id| {
+                    machine.bus.set_uart_tester_timeout(id, timeout.unwrap_or(8 * CORTEX_M_STEP_HZ));
+                    writeln!(output.output, "{id}").map_err(|e| e.to_string())
+                })
                 .map(|()| None),
             Action::DefaultUartTester(id) => {
                 machine.bus.set_default_uart_tester(*id).map(|()| None)
@@ -955,10 +958,10 @@ fn run_commands(
                 .set_uart_failure(*id, pattern.clone(), *register)
                 .map(|()| None),
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
+                let cycles = uart_wait_cycles(machine, *id, *timeout)?.min(budget);
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
-                        .and_then(|cycles| drive_uart_watch(machine, watch, cycles.min(budget), &mut output));
+                    let result = drive_uart_watch(machine, watch, cycles, &mut output);
                     let matched = machine.bus.take_uart_byte_match(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
                     result.and_then(|(stop, count)| {
@@ -977,15 +980,21 @@ fn run_commands(
                 })
             }
             Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _) => {
+                let cycles = uart_wait_cycles(machine, *id, *timeout)?;
+                let limit = cycles.min(budget);
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
-                    duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
-                        .and_then(|cycles| run_uart_watch(machine, watch, cycles.min(budget), &mut output))
+                    run_uart_watch(machine, watch, limit, &mut output)
                 }).and_then(|(stop, count)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
-                    if stop == if *absent { Stop::Limit } else { Stop::OutputMatch } {
+                    if (*absent && stop == Stop::Limit && limit == cycles)
+                        || (!*absent && stop == Stop::OutputMatch) {
                         Ok(None)
+                    } else if *absent && stop != Stop::OutputMatch {
+                        Err(format!("UART absence interval ended before completion ({stop:?})"))
+                    } else if *absent {
+                        Err(format!("Unexpected UART entry matching {pattern:?}"))
                     } else {
                         Err(format!("Terminal tester failed! Line containing {pattern:?} was not received ({stop:?})"))
                     }
@@ -1163,9 +1172,9 @@ pub fn serve(
             }
 
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups), .. }]) => {
-                let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
-                    let stop = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
-                        .and_then(|cycles| drive_uart_watch(machine, watch, cycles, &mut bytes));
+                let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
+                    let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode)?;
+                    let stop = drive_uart_watch(machine, watch, cycles, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
@@ -1344,6 +1353,14 @@ pub(crate) fn run_until_deadline<W: Write>(
         return Ok((Stop::Paused, retired));
     }
     Ok((stop, retired))
+}
+
+fn uart_wait_cycles(machine: &Machine, id: Option<usize>, timeout: Option<u64>) -> Result<u64, String> {
+    let timeout = match timeout {
+        Some(timeout) => timeout,
+        None => machine.bus.uart_tester_timeout(id)?,
+    };
+    duration_cycles(timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
 }
 
 fn wait_for_uart_idle(
@@ -2365,8 +2382,12 @@ fn execute(
         }
         ["CreateTerminalTester", target, options @ ..] => {
             let mut binary = None;
+            let mut timeout = None;
             for option in options {
                 match option.split_once('=') {
+                    Some(("timeout", value)) if timeout.is_none() => {
+                        timeout = Some(duration_steps(resolve(value)?)?);
+                    }
                     Some(("binaryMode", value)) if binary.is_none() => {
                         binary = Some(parse_tester_bool(resolve(value)?)?);
                     }
@@ -2381,6 +2402,7 @@ fn execute(
             Some(Action::CreateUartTester(
                 resolve(target)?.to_owned(),
                 binary.unwrap_or(false),
+                timeout,
             ))
         }
         ["SetDefaultTester", id] => {
@@ -3376,7 +3398,7 @@ enum TesterOptionsKind {
 
 struct TesterWaitOptions {
     id: Option<usize>,
-    timeout: u64,
+    timeout: Option<u64>,
     match_start: bool,
     regex: bool,
     capture_groups: bool,
@@ -3422,7 +3444,7 @@ fn tester_wait_options<'a>(
     }
     Ok(TesterWaitOptions {
         id,
-        timeout: timeout.unwrap_or(8 * CORTEX_M_STEP_HZ),
+        timeout,
         match_start: match_start.unwrap_or(false),
         regex: regex.unwrap_or(false),
         capture_groups: capture_groups.unwrap_or(false),
