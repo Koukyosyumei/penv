@@ -1548,3 +1548,28 @@ penv の RPC の両方で `saved` に復元できた
 （`target/monitor-symlink-load-proof/`）。
 未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-directory-load-robot/results.json`）。
+
+### REPL のパス解決と起動前の拒否
+
+固定 Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` と penv に
+同じ RPC コマンド列を送った。欠落 REPL を指定すると両方が失敗を返し、
+その後の `set`、`echo`、有効な REPL の読み込みは成功した（`e290190`）。
+ディレクトリの指定も両方で拒否され、続く引用符付きの STM32F072b REPL
+の読み込みは成功した（`6e4f52d`）。どちらのコマンド列でも
+`emulation IsStarted` は `False` を返した。
+コマンド列と各応答は `target/monitor-missing-repl-proof/` と
+`target/monitor-quoted-repl-proof/` の `commands.resc`、`renode.jsonl`、
+`penv.jsonl` に保存した。
+
+通常 CLI の `run --script` で引用符付き REPL を読み込み、アドレス
+`0x20000000` の読み出し結果 `0x00000000` を確認した。
+Rust モニターテストは26件合格。未変更の代表 Robot は保存・復元、HEX、
+STM32F072b Console Echo の4件合格、2,193件未実行。
+実行コマンド、上流ID、バイナリ SHA-256 は
+`target/monitor-quoted-repl-robot/results.json` に記録した。
+
+続けて未変更の `tests/unit-tests/monitor-tests.robot` を実行した。
+対象23件のうち5件合格、2件未対応、1件は依存状態がなくスキップ、
+15件は penv の実測まで到達しなかった。条件付き代入とログバッファは合格。
+MiV UART の未対応と `SetAndRevertAfter` 系が依存するプロパティ値取得などの
+停止点は `target/monitor-quoted-repl-monitor-suite/results.json` に記録した。
