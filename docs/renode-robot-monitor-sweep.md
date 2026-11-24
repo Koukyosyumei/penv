@@ -1337,3 +1337,24 @@ Robot RPC で、ネストした起動時マクロによる変数変更を確認�
 未変更 Robot は保存・復元、HEX、STM32F072b Console Echo の4件が合格。
 残り2,193件は未実行（`target/monitor-macro-unified-robot/results.json`）。
 CLI のスナップショット回帰テストも合格した。
+
+### セミコロン区切りのモニターコマンド
+
+`93cf4fb` と `808778f` は、マクロ本体、RESC、ライブモニターの
+コマンドを引用符外のセミコロンで分割する。同じコマンド列を固定 Renode、
+通常 CLI、Robot RPC に送り、`alpha;beta` が1つの文字列として
+出力され、続く変数更新の結果 `done` も得られることを確認した
+（`target/monitor-{macro-semicolon,command-chain}-proof/`）。
+同じ行に `Save`、変数の上書き、`Load` を置いた比較でも、上書き後と
+復元後の値は `after`、`before` の順で一致した
+（`target/monitor-chain-snapshot-proof/`）。
+
+`324c751` は、マシンを必要としないコマンド列の応答を起動照会から
+返す。固定 Renode と penv の RPC の出力順が一致し、前の呼び出しの
+出力を再送せず、新しい変数値を次の呼び出しで参照できた
+（`target/monitor-preboot-chain-proof/`）。
+マシンを必要とする起動前のコマンド列は通常の起動列に残る。
+
+Rust モニターテスト23件が合格。未変更の Robot は保存・復元、HEX、
+STM32F072b Console Echo の4件合格。残り2,193件は未実行
+（`target/monitor-preboot-chain-robot/results.json`）。
