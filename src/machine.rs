@@ -2251,7 +2251,7 @@ impl Hart {
             clic.sample_clint(clint);
             if self.csr.clic_mode() {
                 pending = 0;
-                if let Some(interrupt) = clic.machine_interrupt()
+                if let Some(interrupt) = clic.interrupt()
                     && let Some((target, indirect)) = self.csr.clic_interrupt(self.pc, interrupt)
                 {
                     self.waiting_for_interrupt = false;
@@ -2760,7 +2760,7 @@ impl Hart {
             }
             0x73 if insn == 0x3020_0073 => {
                 next = self.csr.return_from_trap().ok_or_else(illegal)?;
-                if self.csr.clic_return_uses_vector_entry() {
+                if self.csr.clic_return_uses_vector_entry(false) {
                     next = bus.read_scalar::<4>(next, false)
                         .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(next)))? & !1;
                 }
@@ -2768,10 +2768,14 @@ impl Hart {
             }
             0x73 if insn == 0x1020_0073 => {
                 next = self.csr.return_from_supervisor_trap().ok_or_else(illegal)?;
+                if self.csr.clic_return_uses_vector_entry(true) {
+                    next = bus.read_scalar::<4>(next, false)
+                        .map_err(|error| Fault::Bus(Access::Load, error.at_virtual(next)))? & !1;
+                }
                 None
             }
             0x73 if matches!(funct3, 1..=3 | 5..=7) => {
-                let value = if insn >> 20 == 0x345 {
+                let value = if self.csr.clic_mode() && matches!(insn >> 20, 0x145 | 0x345) {
                     bus.clic.as_mut().and_then(|clic| self.csr.clic_next_interrupt(insn, a, clic))
                         .ok_or_else(illegal)?
                 } else {

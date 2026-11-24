@@ -6,6 +6,7 @@ pub(crate) struct Interrupt {
     pub id: u32,
     pub level: u8,
     pub vectored: bool,
+    pub supervisor: bool,
 }
 
 pub(crate) struct Clic {
@@ -151,10 +152,11 @@ impl Clic {
         }
     }
 
-    pub fn machine_interrupt(&self) -> Option<Interrupt> {
+    pub fn interrupt(&self) -> Option<Interrupt> {
         let id = self.best?;
         let (mode, level, _) = self.rank(id);
-        (mode == 3).then_some(Interrupt {
+        matches!(mode, 1 | 3).then_some(Interrupt {
+            supervisor: mode == 1,
             id,
             level,
             vectored: self.inputs[id as usize][2] & 1 != 0,
