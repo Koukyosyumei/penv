@@ -52,3 +52,54 @@ Robot 専用の `--all` は指定を省略できる。
 `target/robot-resume-audit.json` に保存した。上流 Renode の
 STM32F4 ログケースは `target/reference-flash-warning/robot_output.xml`。
 モニター・ログの Rust チェックは合計14件合格。
+
+## CLIC の Python フックと署名検証
+
+固定上流の `AddHook` と同様に、指定した CPU の PC が ELF シンボルの
+アドレスに達すると Python を同期実行する。各フックは独立した永続スコープを
+持つ。今回接続した API は `cpu.Bus.GetSymbolAddress`、`cpu.Bus.ReadByte`、
+`cpu.Log`、`machine.UserState`。実行環境は CPython で、IronPython の .NET
+相互運用 API は対象外。アクセスログは標準 REPL が登録した32ビットアドレスの
+メモリへのスカラーアクセスを対象にする。RV32 は既定で WFI が即時復帰する
+従来動作を保ち、明示的な `WfiAsNop false` で割り込み待ちを有効にする。
+
+再現には Python 3、`llvm-mc`、`ld.lld` が必要。下の診断は固定上流の
+`end_hookscript` をそのまま抽出し、合成 RV32 ELF を走らせる。一致では元の
+ログ述語が `MATCH`、署名不一致と割り込み待ちでは `FAIL` を返す。
+診断は上流 Robot の件数に加算しない。
+
+```sh
+scripts/upstream/check-clic-hook.sh \
+  target/robot-xmlrpc/penv ../renode target/clic-hook-final
+```
+
+同じ304スイートを最大10並列で各段階に投入した。各 `results.json` に
+バイナリの SHA-256、呼び出し、ケースID、パラメーター、実測、分類と証跡がある。
+`target/robot-clic-hook-audit.json` は CLIC とインライン REPL の停止理由を
+ケースIDとパラメーターで照合した結果。
+
+| penv コミット | 証跡のディレクトリ | PASS | FAIL | UNSUPPORTED | SKIP | NOT_RUN | CLIC の停止点 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `973e5fe` | `target/robot-python-hook` | 42 | 15 | 1,882 | 133 | 125 | `LogPeripheralAccess` |
+| `4deaa3e` | `target/robot-python-trace` | 42 | 15 | 1,871 | 133 | 136 | `WfiAsNop` |
+| `280f115` | `target/robot-wfi` | 42 | 15 | 1,871 | 133 | 136 | CLIC コントローラー |
+| `45160e6` | `target/robot-xmlrpc` | 42 | 14 | 1,872 | 133 | 136 | CLIC コントローラー |
+
+CLIC arch 144件は全IDで両モニターコマンドを越えた。現行の停止理由は
+元の REPL に必要な `IRQControllers.CoreLocalInterruptController` の未実装。
+別の CLIC 8件も同じプラットフォームに依存する。上流 CLIC の署名アサーションは
+起動前に止まっているため未評価。
+
+引用符の修正では以前 `invalid inline platform quoting` だった24件が
+全件そこを越えた。次の理由は penv 本体未対応12件、アダプター未対応12件。
+
+UART の ANSI 色コードが XML-RPC を壊していた
+`VEML7700.robot::Should Work From Zephyr Shell` は、上流と同じエスケープ除去を
+通して Robot に応答できた。生の UART 応答は測定証跡に保持している。
+ケースは次のセンサー操作 `sysbus.i2c1.als Illuminance 500` で
+`adapter_missing` になった。
+
+`cargo test --locked --bin penv -- --test-threads=4` の比較ログは
+`target/robot-wfi-rust-tests.log` と `target/robot-rust-baseline-full.log`。
+変更前の `ed298c1` と今回の Rust テストは両方547件合格、58件失敗で、
+失敗したテスト名も一致した。
