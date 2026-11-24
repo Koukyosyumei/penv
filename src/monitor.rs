@@ -530,7 +530,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
-                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint
+                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_)
                     | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
@@ -2124,9 +2124,10 @@ fn assign_variable(
 
 fn variable_binding<'a>(variables: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
     variables.get(name).or_else(|| {
-        name.strip_prefix("global.")
-            .and_then(|short| variables.get(short))
-            .or_else(|| variables.get(&format!("global.{name}")))
+        if name.starts_with("global.") {
+            return None;
+        }
+        variables.get(&format!("global.{name}"))
     })
 }
 
@@ -2242,11 +2243,14 @@ fn execute(
         boot.monitor_user_state = Some(path_value(unquote(value.strip_prefix('@').unwrap_or(value))));
         return Ok(());
     }
-    if let ["echo", value] = words
-        && (value.starts_with('$') || boot.runtime.is_empty())
-    {
-        let message = unquote(resolve(value)?).trim_start_matches('@').to_owned();
-        if boot.started {
+    if let ["echo", value] = words {
+        let value = resolve(value)?;
+        let message = if let Some(path) = value.strip_prefix('@') {
+            path_value(path)
+        } else {
+            unquote(value).to_owned()
+        };
+        if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand { line, source: script.to_owned(), action: Action::Echo(message) });
         } else {
             boot.monitor_output.push(message);
@@ -3994,6 +3998,19 @@ mod tests {
             command_words(r"i @scripts/a\ file.resc").unwrap(),
             ["i", r"@scripts/a\ file.resc"],
         );
+    }
+
+    #[test]
+    fn explicit_global_lookup_does_not_fall_back_to_machine_variables() {
+        let mut variables = HashMap::new();
+        assign_variable("set value 41", &["set", "value", "41"], None, &mut variables).unwrap();
+        assign_variable("set value 42", &["set", "value", "42"], Some("demo"), &mut variables).unwrap();
+        assign_variable("set local 43", &["set", "local", "43"], Some("demo"), &mut variables).unwrap();
+
+        assert_eq!(resolve(&variables, "$value"), Ok("42"));
+        assert_eq!(resolve(&variables, "$demo.value"), Ok("42"));
+        assert_eq!(resolve(&variables, "$global.value"), Ok("41"));
+        assert!(resolve(&variables, "$global.local").is_err());
     }
 
     #[test]
