@@ -1282,3 +1282,15 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests(True,True,Tr
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests(True,True,True,False).ShouldDetectStreamInconsistentConfiguration	upstream_nunit::migrant_stamping::generated_generated_stamped_to_unstamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests(True,True,False,True).ShouldDetectStreamInconsistentConfiguration	upstream_nunit::migrant_stamping::generated_generated_unstamped_to_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests(True,True,False,False).ShouldDetectStreamInconsistentConfiguration	upstream_nunit::migrant_stamping::generated_generated_unstamped_to_unstamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,True,False).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_generated_reader_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,True,False).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::xml_generated_reader_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,True,True).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_generated_reader_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,True,True).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::xml_generated_reader_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,False,False).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_generated_writer_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,False,False).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::xml_generated_writer_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,False,True).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_generated_writer_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,False,True).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::xml_generated_writer_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,True,False).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_generated_both_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,True,False).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::xml_generated_both_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,True,True).ShouldSerializeRegex	upstream_nunit::migrant_builtin::regex_generated_both_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(True,True,True).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::xml_generated_both_stamped	new

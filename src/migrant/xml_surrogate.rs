@@ -3,6 +3,9 @@ use std::io;
 
 pub(super) const CLASS: &str = "Antmicro.Migrant.BultinSurrogates.SurrogateForIXmlSerializable";
 
+pub const GENERATED_CODEC: super::generated_record::Codec =
+    super::generated_record::generated_record!(CLASS; type_name: reference, xml_bytes: reference);
+
 pub const TYPE_STAMP: TypeStamp<'static> = TypeStamp {
     class: CLASS,
     module: "Migrant",

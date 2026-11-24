@@ -1,47 +1,42 @@
-use crate::migrant::{
-    object_stream::{Graph, ObjectReader, ObjectWriter, References},
-    regex_object,
-};
-use std::io::{Cursor, Seek};
+use std::io;
 
-fn regex_round_trip(stamped: bool) {
+use crate::migrant::{
+    generated_record::Codec,
+    graph_serializer::GraphSerializer,
+    object_stream::Graph,
+    regex_object,
+    xml_surrogate::{self, XmlSerializable},
+};
+
+fn serializer(writer: bool, reader: bool, codecs: &'static [Codec]) -> GraphSerializer<'static> {
+    GraphSerializer::default()
+        .with_xml_serializable(true)
+        .with_generated_methods(writer.then_some(codecs), reader.then_some(codecs))
+}
+
+fn regex_round_trip(stamped: bool, writer: bool, reader: bool) {
     let regex = regex::Regex::new("[0-9]").unwrap();
     let mut graph = Graph::default();
     let root = regex_object::store(&mut graph, &regex);
-    let mut stream = Cursor::new(Vec::new());
     const STAMPS: &[crate::migrant::object_stream::TypeStamp<'static>] =
         &[regex_object::TYPE_STAMP];
-
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
-    if stamped {
-        writer = writer.with_type_stamps(STAMPS);
-    }
-    writer.write_object(root).unwrap();
-    writer.finish().unwrap();
-    stream.rewind().unwrap();
-
-    let mut reader = ObjectReader::new(stream, References::Preserve, true);
-    if stamped {
-        reader = reader.with_type_stamps(STAMPS);
-    }
-    let root = reader.read_object().unwrap();
-    let copy = regex_object::restore(reader.graph(), root).unwrap();
+    const CODECS: &[Codec] = &[regex_object::GENERATED_CODEC];
+    let (graph, root) = serializer(writer, reader, CODECS)
+        .clone_graph(&graph, root, stamped.then_some(STAMPS))
+        .unwrap();
+    let copy = regex_object::restore(&graph, root).unwrap();
     assert_eq!(regex.as_str(), copy.as_str());
-    reader.finish().unwrap();
 }
 
 #[test]
 fn regex_plain() {
-    regex_round_trip(false);
+    regex_round_trip(false, false, false);
 }
 
 #[test]
 fn regex_stamped() {
-    regex_round_trip(true);
+    regex_round_trip(true, false, false);
 }
-
-use crate::migrant::{reflection_serializer::ReflectionSerializer, xml_surrogate::XmlSerializable};
-use std::io;
 
 #[derive(Debug, PartialEq, Eq)]
 struct CustomXml {
@@ -83,13 +78,13 @@ impl XmlSerializable for CustomXml {
     }
 }
 
-fn custom_xml(stamped: bool) {
+fn custom_xml(stamped: bool, writer: bool, reader: bool) {
     let data = CustomXml {
         text: "Xavier".into(),
         fake_pointer: 666,
     };
-    let copy = ReflectionSerializer::default()
-        .with_xml_serializable(true)
+    const CODECS: &[Codec] = &[xml_surrogate::GENERATED_CODEC];
+    let copy = serializer(writer, reader, CODECS)
         .clone_xml(&data, stamped)
         .unwrap();
     assert_eq!(copy, data);
@@ -97,10 +92,30 @@ fn custom_xml(stamped: bool) {
 
 #[test]
 fn custom_xml_plain() {
-    custom_xml(false);
+    custom_xml(false, false, false);
 }
 
 #[test]
 fn custom_xml_stamped() {
-    custom_xml(true);
+    custom_xml(true, false, false);
 }
+
+macro_rules! modes {
+    ($w:literal, $r:literal, $s:literal; $regex:ident, $xml:ident) => {
+        #[test]
+        fn $regex() {
+            regex_round_trip($s, $w, $r);
+        }
+
+        #[test]
+        fn $xml() {
+            custom_xml($s, $w, $r);
+        }
+    };
+}
+modes!(false, true, false; regex_generated_reader_plain, xml_generated_reader_plain);
+modes!(false, true, true; regex_generated_reader_stamped, xml_generated_reader_stamped);
+modes!(true, false, false; regex_generated_writer_plain, xml_generated_writer_plain);
+modes!(true, false, true; regex_generated_writer_stamped, xml_generated_writer_stamped);
+modes!(true, true, false; regex_generated_both_plain, xml_generated_both_plain);
+modes!(true, true, true; regex_generated_both_stamped, xml_generated_both_stamped);

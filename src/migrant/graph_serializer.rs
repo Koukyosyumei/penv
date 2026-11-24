@@ -1,18 +1,31 @@
 use std::io::{self, Cursor};
 
 use super::{
+    generated_record::Codec,
     object_stream::{Graph, ObjectId, ObjectReader, ObjectWriter, References, TypeStamp},
     xml_surrogate::{self, XmlSerializable},
 };
 
 #[derive(Default)]
-pub struct ReflectionSerializer {
+pub struct GraphSerializer<'a> {
     support_xml_serializable: bool,
+    writer_codecs: Option<&'a [Codec]>,
+    reader_codecs: Option<&'a [Codec]>,
 }
 
-impl ReflectionSerializer {
+impl<'a> GraphSerializer<'a> {
     pub fn with_xml_serializable(mut self, enabled: bool) -> Self {
         self.support_xml_serializable = enabled;
+        self
+    }
+
+    pub fn with_generated_methods(
+        mut self,
+        writer_codecs: Option<&'a [Codec]>,
+        reader_codecs: Option<&'a [Codec]>,
+    ) -> Self {
+        self.writer_codecs = writer_codecs;
+        self.reader_codecs = reader_codecs;
         self
     }
 
@@ -28,6 +41,9 @@ impl ReflectionSerializer {
         if let Some(stamps) = stamps {
             writer = writer.with_type_stamps(stamps);
         }
+        if let Some(codecs) = self.writer_codecs {
+            writer = writer.with_generated_records(codecs);
+        }
         writer.write_object(root)?;
         writer.finish()?;
 
@@ -35,6 +51,9 @@ impl ReflectionSerializer {
             .allow_xml_surrogates(self.support_xml_serializable);
         if let Some(stamps) = stamps {
             reader = reader.with_type_stamps(stamps);
+        }
+        if let Some(codecs) = self.reader_codecs {
+            reader = reader.with_generated_records(codecs);
         }
         let root = reader.read_object()?;
         Ok((reader.finish_into_graph()?, root))

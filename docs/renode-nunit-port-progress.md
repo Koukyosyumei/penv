@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,280 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,292 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,116 |
+| 移植待ち | 2,104 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 22 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 21 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -288,3 +288,9 @@ XML 有効・型スタンプ有無の6件を追加した。反射シリアライ
 Rust マクロで型ごとの専用フィールドコーデックを生成し、読み出しと書き込みで独立に選択できるようにした。時刻のミリ秒値と自己参照を持つオブジェクトを使い、スタンプ設定が一致する4通りと不一致の組み合わせを含む公式16件すべてを確認した。コーデックは Rust のグラフ形式を使う。
 
 - [追加12件の公式 ID](nunit-evidence/targeted-migrant-stamping-generated.tsv)と[実行ログ](nunit-evidence/targeted-migrant-stamping-generated.log)
+
+## Migrant BuiltinSurrogatesTests の生成経路
+
+正規表現と XML サロゲートに専用コーデックを追加した。読み出しのみ・書き込みのみ・両方の生成経路を、型スタンプの有無それぞれで実行し、公式16件すべてが合格した。
+
+- [追加12件の公式 ID](nunit-evidence/targeted-migrant-builtin-generated.tsv)と[実行ログ](nunit-evidence/targeted-migrant-builtin-generated.log)

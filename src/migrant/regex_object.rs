@@ -5,6 +5,9 @@ use std::io;
 
 const CLASS: &str = "System.Text.RegularExpressions.Regex";
 
+pub const GENERATED_CODEC: super::generated_record::Codec =
+    super::generated_record::generated_record!(CLASS; pattern: reference);
+
 pub const TYPE_STAMP: TypeStamp<'static> = TypeStamp {
     class: CLASS,
     module: "System.Text.RegularExpressions",

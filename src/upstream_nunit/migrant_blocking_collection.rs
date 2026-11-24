@@ -2,8 +2,8 @@ use std::fmt::Debug;
 
 use crate::migrant::{
     blocking_collection::{self, BlockingCollection},
+    graph_serializer::GraphSerializer,
     object_stream::{FieldKind, Graph, Object, TypeStamp, Value},
-    reflection_serializer::ReflectionSerializer,
 };
 
 fn round_trip<T: Eq + Ord + Debug>(
@@ -30,7 +30,7 @@ fn round_trip<T: Eq + Ord + Debug>(
             fields: &[("m_value", FieldKind::Integer)],
         },
     ];
-    let (copy_graph, id) = ReflectionSerializer::default()
+    let (copy_graph, id) = GraphSerializer::default()
         .with_xml_serializable(xml)
         .clone_graph(&graph, root, stamped.then_some(&stamps))
         .unwrap();
