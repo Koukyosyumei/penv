@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,070 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,076 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,326 |
+| 移植待ち | 2,320 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 34 fixture の
@@ -184,3 +184,9 @@ DualI2CAddressBMC050Test は同じ BMC050 を 0x18 と 0x10 に登録し、再 S
 公式の6入力を使い、レジスタ名・幅・値、条件付き行の有無、インデックス付きグループ、コメントと空行を確認した。パーサーは fixture が使う C enum の構文を扱う。
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-register_enum.tsv)と[実行ログ](nunit-evidence/targeted-register_enum.log)
+
+## Migrant BlockingCollection
+
+読み書きとも反射経路で、XML サポートを無効にした6件を移植した。型スタンプ有無それぞれで整数、null を含むオブジェクト列、文字列の多重集合の一致を確認した。コレクションを項目列として復元し、同期機構は受信側で初期化する。残り42件の内訳は反射経路で XML 有効の6件と、生成経路が必要な36件。
+
+- [公式 ID ごとの結果](nunit-evidence/targeted-migrant-blocking-collection.tsv)と[実行ログ](nunit-evidence/targeted-migrant-blocking-collection.log)

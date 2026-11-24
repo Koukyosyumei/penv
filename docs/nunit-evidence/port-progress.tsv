@@ -1,5 +1,5 @@
 project	fixture	discovered	ported	ported_excluded	pending	inactive	remaining_api
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	48	0	0	48	0	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	48	6	0	42	0	Six reflection cases with XML support disabled are ported. Six reflection cases with XML support enabled need serializer-level IXmlSerializable configuration. The other 36 cases need the generated writer and/or reader paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	4	0	12	0	Both reflection cases are ported for each stamp mode. The remaining 12 cases require generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	40	0	120	0	All 40 reflection read/write cases are ported across both stamp modes. The other 120 cases require generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0	-
