@@ -1,8 +1,8 @@
 use crate::migrant::{
     generated_record::{Codec, generated_record},
     object_stream::{
-        FieldKind, Graph, Object, ObjectReader, ObjectWriter, References, TypeStamp, Value,
-        VersionPolicy, VersionToleranceError,
+        FieldKind, Graph, Object, ObjectReader, ObjectWriter, References, TypeHierarchy, TypeStamp,
+        Value, VersionPolicy, VersionToleranceError,
     },
 };
 
@@ -26,6 +26,7 @@ fn round_trip(
     generated_read: bool,
     codecs: &[Codec],
     policy: VersionPolicy,
+    hierarchy: Option<(&[&str], &[&str])>,
 ) -> std::io::Result<Vec<Value>> {
     let mut graph = Graph::default();
     let root = graph.insert(Object::Record {
@@ -37,6 +38,13 @@ fn round_trip(
     let target = [target];
     let mut writer =
         ObjectWriter::new(&mut stream, &graph, References::PerRoot, true).with_type_stamps(&source);
+    let source_hierarchy = [TypeHierarchy {
+        class: source[0].class,
+        bases: hierarchy.map_or(&[], |(bases, _)| bases),
+    }];
+    if hierarchy.is_some() {
+        writer = writer.with_type_hierarchies(&source, &source_hierarchy);
+    }
     if generated_write {
         writer = writer.with_generated_records(codecs);
     }
@@ -45,6 +53,13 @@ fn round_trip(
     let mut reader = ObjectReader::new(stream.as_slice(), References::PerRoot, true)
         .with_type_stamps(&target)
         .with_version_policy(policy);
+    let target_hierarchy = [TypeHierarchy {
+        class: target[0].class,
+        bases: hierarchy.map_or(&[], |(_, bases)| bases),
+    }];
+    if hierarchy.is_some() {
+        reader = reader.with_type_hierarchies(&target, &target_hierarchy);
+    }
     if generated_read {
         reader = reader.with_generated_records(codecs);
     }
@@ -93,6 +108,7 @@ fn guid(write: bool, read: bool, level: Level) {
             allow_module_revision_change: allowed,
             ..VersionPolicy::default()
         },
+        None,
     );
     assert_tolerance(result, allowed);
 }
@@ -213,8 +229,9 @@ fn field_change(write: bool, read: bool, level: Level, add: bool) {
         allow_module_revision_change: true,
         allow_field_addition: matches!(level, Level::Add),
         allow_field_removal: matches!(level, Level::Remove),
+        ..VersionPolicy::default()
     };
-    let result = round_trip(source, target, values, write, read, codecs, policy);
+    let result = round_trip(source, target, values, write, read, codecs, policy, None);
     let expected = if add {
         policy.allow_field_addition
     } else {
@@ -404,5 +421,305 @@ mod field_removal {
     #[test]
     fn write_true_read_true_guid() {
         removal(true, true, Level::Guid);
+    }
+}
+
+const EMPTY_CODECS: &[Codec] = &[generated_record!("A";)];
+
+fn hierarchy_change(
+    write: bool,
+    read: bool,
+    level: Level,
+    source_bases: &[&str],
+    target_bases: &[&str],
+) {
+    let source = TypeStamp {
+        class: "A",
+        module: "Dynamic",
+        revision: 1,
+        fields: &[],
+    };
+    let target = TypeStamp {
+        revision: 2,
+        ..source
+    };
+    let policy = VersionPolicy {
+        allow_module_revision_change: true,
+        allow_inheritance_chain_change: matches!(level, Level::Inheritance),
+        allow_field_addition: matches!(level, Level::Add),
+        allow_field_removal: matches!(level, Level::Remove),
+    };
+    let result = round_trip(
+        source,
+        target,
+        vec![],
+        write,
+        read,
+        EMPTY_CODECS,
+        policy,
+        Some((source_bases, target_bases)),
+    );
+    assert_tolerance(result, policy.allow_inheritance_chain_change);
+}
+
+fn base_insertion(write: bool, read: bool, level: Level) {
+    hierarchy_change(write, read, level, &[], &["BaseA"]);
+}
+fn base_removal(write: bool, read: bool, level: Level) {
+    hierarchy_change(write, read, level, &["BaseA"], &[]);
+}
+fn base_renaming(write: bool, read: bool, level: Level) {
+    hierarchy_change(write, read, level, &["BaseA"], &["NewBaseA"]);
+}
+
+mod base_insertion {
+    use super::*;
+    #[test]
+    fn write_false_read_false_exact() {
+        base_insertion(false, false, Level::Exact);
+    }
+    #[test]
+    fn write_false_read_false_inheritance() {
+        base_insertion(false, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_false_add() {
+        base_insertion(false, false, Level::Add);
+    }
+    #[test]
+    fn write_false_read_false_remove() {
+        base_insertion(false, false, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_false_guid() {
+        base_insertion(false, false, Level::Guid);
+    }
+    #[test]
+    fn write_false_read_true_exact() {
+        base_insertion(false, true, Level::Exact);
+    }
+    #[test]
+    fn write_false_read_true_inheritance() {
+        base_insertion(false, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_true_add() {
+        base_insertion(false, true, Level::Add);
+    }
+    #[test]
+    fn write_false_read_true_remove() {
+        base_insertion(false, true, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_true_guid() {
+        base_insertion(false, true, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_false_exact() {
+        base_insertion(true, false, Level::Exact);
+    }
+    #[test]
+    fn write_true_read_false_inheritance() {
+        base_insertion(true, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_false_add() {
+        base_insertion(true, false, Level::Add);
+    }
+    #[test]
+    fn write_true_read_false_remove() {
+        base_insertion(true, false, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_false_guid() {
+        base_insertion(true, false, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_true_exact() {
+        base_insertion(true, true, Level::Exact);
+    }
+    #[test]
+    fn write_true_read_true_inheritance() {
+        base_insertion(true, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_true_add() {
+        base_insertion(true, true, Level::Add);
+    }
+    #[test]
+    fn write_true_read_true_remove() {
+        base_insertion(true, true, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_true_guid() {
+        base_insertion(true, true, Level::Guid);
+    }
+}
+
+mod base_removal {
+    use super::*;
+    #[test]
+    fn write_false_read_false_exact() {
+        base_removal(false, false, Level::Exact);
+    }
+    #[test]
+    fn write_false_read_false_inheritance() {
+        base_removal(false, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_false_add() {
+        base_removal(false, false, Level::Add);
+    }
+    #[test]
+    fn write_false_read_false_remove() {
+        base_removal(false, false, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_false_guid() {
+        base_removal(false, false, Level::Guid);
+    }
+    #[test]
+    fn write_false_read_true_exact() {
+        base_removal(false, true, Level::Exact);
+    }
+    #[test]
+    fn write_false_read_true_inheritance() {
+        base_removal(false, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_true_add() {
+        base_removal(false, true, Level::Add);
+    }
+    #[test]
+    fn write_false_read_true_remove() {
+        base_removal(false, true, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_true_guid() {
+        base_removal(false, true, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_false_exact() {
+        base_removal(true, false, Level::Exact);
+    }
+    #[test]
+    fn write_true_read_false_inheritance() {
+        base_removal(true, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_false_add() {
+        base_removal(true, false, Level::Add);
+    }
+    #[test]
+    fn write_true_read_false_remove() {
+        base_removal(true, false, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_false_guid() {
+        base_removal(true, false, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_true_exact() {
+        base_removal(true, true, Level::Exact);
+    }
+    #[test]
+    fn write_true_read_true_inheritance() {
+        base_removal(true, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_true_add() {
+        base_removal(true, true, Level::Add);
+    }
+    #[test]
+    fn write_true_read_true_remove() {
+        base_removal(true, true, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_true_guid() {
+        base_removal(true, true, Level::Guid);
+    }
+}
+
+mod base_renaming {
+    use super::*;
+    #[test]
+    fn write_false_read_false_exact() {
+        base_renaming(false, false, Level::Exact);
+    }
+    #[test]
+    fn write_false_read_false_inheritance() {
+        base_renaming(false, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_false_add() {
+        base_renaming(false, false, Level::Add);
+    }
+    #[test]
+    fn write_false_read_false_remove() {
+        base_renaming(false, false, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_false_guid() {
+        base_renaming(false, false, Level::Guid);
+    }
+    #[test]
+    fn write_false_read_true_exact() {
+        base_renaming(false, true, Level::Exact);
+    }
+    #[test]
+    fn write_false_read_true_inheritance() {
+        base_renaming(false, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_true_add() {
+        base_renaming(false, true, Level::Add);
+    }
+    #[test]
+    fn write_false_read_true_remove() {
+        base_renaming(false, true, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_true_guid() {
+        base_renaming(false, true, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_false_exact() {
+        base_renaming(true, false, Level::Exact);
+    }
+    #[test]
+    fn write_true_read_false_inheritance() {
+        base_renaming(true, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_false_add() {
+        base_renaming(true, false, Level::Add);
+    }
+    #[test]
+    fn write_true_read_false_remove() {
+        base_renaming(true, false, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_false_guid() {
+        base_renaming(true, false, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_true_exact() {
+        base_renaming(true, true, Level::Exact);
+    }
+    #[test]
+    fn write_true_read_true_inheritance() {
+        base_renaming(true, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_true_add() {
+        base_renaming(true, true, Level::Add);
+    }
+    #[test]
+    fn write_true_read_true_remove() {
+        base_renaming(true, true, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_true_guid() {
+        base_renaming(true, true, Level::Guid);
     }
 }

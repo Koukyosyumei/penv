@@ -11,6 +11,7 @@ use std::sync::{Arc, Weak};
 const MAX_ITEMS: usize = 1_000_000;
 const ROOT: u8 = 1;
 const STAMPED_ROOT: u8 = 2;
+const HIERARCHY_STAMPED_ROOT: u8 = 3;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -35,6 +36,49 @@ pub struct TypeStamp<'a> {
     pub fields: &'a [(&'a str, FieldKind)],
 }
 
+/// The declared base types, ordered from the immediate base to the root.
+pub struct TypeHierarchy<'a> {
+    pub class: &'a str,
+    pub bases: &'a [&'a str],
+}
+
+fn bases_for<'a>(hierarchies: &'a [TypeHierarchy<'a>], class: &str) -> &'a [&'a str] {
+    hierarchies
+        .iter()
+        .find(|entry| entry.class == class)
+        .map_or(&[], |entry| entry.bases)
+}
+
+fn write_bases(data: &mut Writer<impl Write>, bases: &[&str]) -> io::Result<()> {
+    data.unsigned(bases.len() as u64)?;
+    for base in bases {
+        data.string(base)?;
+    }
+    Ok(())
+}
+
+fn verify_bases(
+    data: &mut Reader<impl Read>,
+    bases: &[&str],
+    policy: VersionPolicy,
+) -> io::Result<()> {
+    let count = data.unsigned()?;
+    if count > MAX_ITEMS as u64 {
+        return Err(invalid("too many base types in object type stamp"));
+    }
+    let mut changed = count != bases.len() as u64;
+    for index in 0..count as usize {
+        let name = data.string()?;
+        changed |= bases.get(index).copied() != Some(name.as_str());
+    }
+    if changed && !policy.allow_inheritance_chain_change {
+        return Err(version_mismatch(
+            "object inheritance chain differs from local schema",
+        ));
+    }
+    Ok(())
+}
+
 fn stamp_for<'a>(stamps: &'a [TypeStamp<'a>], class: &str) -> io::Result<TypeStamp<'a>> {
     stamps
         .iter()
@@ -48,6 +92,7 @@ pub struct VersionPolicy {
     pub allow_module_revision_change: bool,
     pub allow_field_addition: bool,
     pub allow_field_removal: bool,
+    pub allow_inheritance_chain_change: bool,
 }
 
 #[derive(Debug)]
@@ -486,6 +531,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     frame_base: usize,
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    hierarchies: Option<&'a [TypeHierarchy<'a>]>,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
     generated: Option<&'a [Codec]>,
@@ -521,6 +567,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             frame_base: 0,
             replacements: HashMap::new(),
             stamps: None,
+            hierarchies: None,
             allow_xml_surrogates: true,
             user_object_collections: None,
             generated: None,
@@ -602,6 +649,16 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
         self.stamps = Some(stamps);
+        self
+    }
+
+    pub fn with_type_hierarchies(
+        mut self,
+        stamps: &'a [TypeStamp<'a>],
+        hierarchies: &'a [TypeHierarchy<'a>],
+    ) -> Self {
+        self.stamps = Some(stamps);
+        self.hierarchies = Some(hierarchies);
         self
     }
 
@@ -800,7 +857,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     }
 
     fn write_frame(&mut self, graph: &Graph, root: usize) -> io::Result<()> {
-        self.data.bytes(&[if self.stamps.is_some() {
+        self.data.bytes(&[if self.hierarchies.is_some() {
+            HIERARCHY_STAMPED_ROOT
+        } else if self.stamps.is_some() {
             STAMPED_ROOT
         } else {
             ROOT
@@ -831,6 +890,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                         self.data.bytes(&[1])?;
                     }
                     self.data.string(class)?;
+                    if let Some(hierarchies) = self.hierarchies {
+                        write_bases(&mut self.data, bases_for(hierarchies, class))?;
+                    }
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.write(&mut self.data)?;
                     }
@@ -1023,6 +1085,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     read_hooks: &'a [ReadHook<'a>],
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    hierarchies: Option<&'a [TypeHierarchy<'a>]>,
     version_policy: VersionPolicy,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
@@ -1042,6 +1105,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             read_hooks: &[],
             references,
             stamps: None,
+            hierarchies: None,
             version_policy: VersionPolicy::default(),
             allow_xml_surrogates: true,
             user_object_collections: None,
@@ -1094,6 +1158,16 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
 
     pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
         self.stamps = Some(stamps);
+        self
+    }
+
+    pub fn with_type_hierarchies(
+        mut self,
+        stamps: &'a [TypeStamp<'a>],
+        hierarchies: &'a [TypeHierarchy<'a>],
+    ) -> Self {
+        self.stamps = Some(stamps);
+        self.hierarchies = Some(hierarchies);
         self
     }
 
@@ -1189,8 +1263,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
     fn next_impl(&mut self) -> io::Result<Option<ObjectId>> {
         match self.data.byte() {
             Ok(ROOT) if self.stamps.is_none() => {}
-            Ok(STAMPED_ROOT) if self.stamps.is_some() => {}
-            Ok(ROOT | STAMPED_ROOT) => {
+            Ok(STAMPED_ROOT) if self.stamps.is_some() && self.hierarchies.is_none() => {}
+            Ok(HIERARCHY_STAMPED_ROOT) if self.hierarchies.is_some() => {}
+            Ok(ROOT | STAMPED_ROOT | HIERARCHY_STAMPED_ROOT) => {
                 return Err(invalid("inconsistent object stream stamp configuration"));
             }
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -1225,6 +1300,13 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     let class = self.data.string()?;
                     if !self.allow_xml_surrogates && class == super::xml_surrogate::CLASS {
                         return Err(super::xml_surrogate::disabled());
+                    }
+                    if let Some(hierarchies) = self.hierarchies {
+                        verify_bases(
+                            &mut self.data,
+                            bases_for(hierarchies, &class),
+                            self.version_policy,
+                        )?;
                     }
                     let stamp = self
                         .stamps
