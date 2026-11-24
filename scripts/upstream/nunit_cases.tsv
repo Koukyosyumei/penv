@@ -1080,3 +1080,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializ
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithStrings	upstream_nunit::migrant_blocking_collection::strings_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldPlaceObjectForSurrogatePreservingIdentity	upstream_nunit::migrant_surrogate::place_read_identity_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldPlaceObjectForSurrogatePreservingIdentity	upstream_nunit::migrant_surrogate::place_read_identity_stamped	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestLengthCalculation	upstream_nunit::packet_layout::test_length_calculation	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestDecode	upstream_nunit::packet_layout::test_decode	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestNestedDecode	upstream_nunit::packet_layout::test_nested_decode	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestDecodeEdianness	upstream_nunit::packet_layout::test_decode_edianness	new

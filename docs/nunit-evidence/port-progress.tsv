@@ -35,7 +35,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MemoryTests	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MultiCPUTests	5	0	0	5	0	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	10	10	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests	18	0	0	18	0	There is no metadata-driven Packet encoder/decoder for fields with bit widths, offsets, nesting and endian annotations.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests	18	4	0	14	0	Four cases cover static layout length and decoding with scalar bit widths, offsets, nesting and byte order. The remaining cases need encoding, decode start offsets, array element-width validation, padding and alignment, conditional fields, and read-only property bindings.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	4	0	0	4	0	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.

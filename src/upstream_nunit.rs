@@ -22,6 +22,7 @@ mod cadence_ttc;
 mod cadence_uart;
 mod bmc050;
 mod register_enum;
+mod packet_layout;
 mod migrant_blocking_collection;
 mod weak_multi_table;
 mod option_validation;

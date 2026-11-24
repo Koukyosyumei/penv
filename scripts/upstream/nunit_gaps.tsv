@@ -22,7 +22,7 @@ Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device fl
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
 Antmicro.Renode.UnitTests.MachineTests	There is no generic IMachine registry and lifecycle for the fixture's managed mock peripheral graph.
 Antmicro.Renode.UnitTests.MultiCPUTests	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
-Antmicro.Renode.UnitTests.PacketTests	There is no metadata-driven Packet encoder/decoder for fields with bit widths, offsets, nesting and endian annotations.
+Antmicro.Renode.UnitTests.PacketTests	Four cases cover static layout length and decoding with scalar bit widths, offsets, nesting and byte order. The remaining cases need encoding, decode start offsets, array element-width validation, padding and alignment, conditional fields, and read-only property bindings.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The active REPL loader lacks a generic CreationDriver for the fixture's mock CPU/peripheral factories, reflection-based property binding and lifecycle assertions.
 Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	The remaining runnable cases require the CreationDriver's mock CPU object creation, scoped cross-include CPU reference resolution and post-load sysbus.cpu lookup.
 Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	The REPL loaders lack the fixture's generic reflection-based creation and verification pipeline, including typed constructor, registration and property diagnostics on managed mock types.

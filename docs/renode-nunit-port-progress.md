@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,078 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,082 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,318 |
+| 移植待ち | 2,314 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 34 fixture の
@@ -190,3 +190,12 @@ DualI2CAddressBMC050Test は同じ BMC050 を 0x18 と 0x10 に登録し、再 S
 読み書きとも反射経路で、XML サポートを無効にした6件を移植した。型スタンプ有無それぞれで整数、null を含むオブジェクト列、文字列の多重集合の一致を確認した。コレクションを項目列として復元し、同期機構は受信側で初期化する。残り42件の内訳は反射経路で XML 有効の6件と、生成経路が必要な36件。
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-migrant-blocking-collection.tsv)と[実行ログ](nunit-evidence/targeted-migrant-blocking-collection.log)
+
+## Migrant のサロゲート復元順と PacketTests
+
+SurrogateTests の2ケースは、型スタンプ有無の両方で、同一参照を共有する入れ子リストと復元結果のカウンター値 3・2 を検証した。Rust 独自のオブジェクトストリームでは、復元型の情報を追加レコード種別で保持する。
+
+PacketTests の4ケースは、固定上流のレイアウト長、ビットフィールド、入れ子、バイト順を検証した。Rust 側では C# の属性に対応する静的レイアウトを明示する。
+
+- [サロゲートの公式 ID](nunit-evidence/targeted-migrant-surrogate-order.tsv)と[実行ログ](nunit-evidence/targeted-migrant-surrogate-order.log)
+- [Packet の公式 ID](nunit-evidence/targeted-packet-layout.tsv)と[実行ログ](nunit-evidence/targeted-packet-layout.log)
