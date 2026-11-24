@@ -2691,7 +2691,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 | ["numbersMode", _]
                 | ["SetDefaultUartTimeout" | "CreateTerminalTester" | "TestMonitorUartIdle"
                     | "WaitForLineOnUart" | "WaitForTesterPrompt" | "WaitForNextLineOnUart"
-                    | "WaitForBytesOnUart" | "ShouldNotBeOnUart", ..]
+                    | "WaitForBytesOnUart" | "ShouldNotBeOnUart" | "WriteTesterUart", ..]
                 | ["WaitForMonitorLog" | "AssertAbsentMonitorLog" | "log" | "logLevel" | "lastLog", ..]
                 | ["emulation", "SetGlobalQuantum" | "SetQuantum" | "RunFor" | "RunUntil", _]
                 | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
@@ -3737,7 +3737,14 @@ fn execute(
             ))
         }
         ["WriteTesterUart", ..] => {
-            let (value, options) = uart_text_argument(text["WriteTesterUart".len()..].trim_start())?;
+            let argument = text["WriteTesterUart".len()..].trim_start();
+            let (value, options) = if argument.starts_with('$') {
+                let (variable, options) = argument.split_once(char::is_whitespace).unwrap_or((argument, ""));
+                let value = monitor_string(resolve(variable)?).ok_or("expected a UART string variable")?;
+                (value, options)
+            } else {
+                uart_text_argument(argument)?
+            };
             let args: Vec<_> = options.split_whitespace().collect();
             let [ending, echo, selector @ ..] = args.as_slice() else {
                 return Err("expected UART ending and echo option".into());
