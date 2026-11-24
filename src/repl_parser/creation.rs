@@ -345,17 +345,17 @@ impl CreatedPlatform {
 }
 
 pub(crate) trait InitHandler {
-    fn validate(&mut self, name: &str, command: &str) -> Result<(), String>;
-    fn execute(&mut self, name: &str, commands: &[&str]);
+    fn validate(&mut self, name: Option<&str>, command: &str) -> Result<(), String>;
+    fn execute(&mut self, name: Option<&str>, commands: &[&str]);
 }
 
 struct NoopInit;
 
 impl InitHandler for NoopInit {
-    fn validate(&mut self, _: &str, _: &str) -> Result<(), String> {
+    fn validate(&mut self, _: Option<&str>, _: &str) -> Result<(), String> {
         Ok(())
     }
-    fn execute(&mut self, _: &str, _: &[&str]) {}
+    fn execute(&mut self, _: Option<&str>, _: &[&str]) {}
 }
 
 pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatform, String> {
@@ -447,7 +447,8 @@ pub(crate) fn create_with_init(
         collections: Collections::default(),
     });
     globals.insert("sysbus", sysbus);
-    let mut init = Vec::<(usize, &str, Vec<&str>)>::new();
+    let mut init = Vec::new();
+    let mut preinit = Vec::new();
     let resolve = |scope: &Path, name: &str| {
         locals
             .get(&(scope, name))
@@ -590,25 +591,12 @@ pub(crate) fn create_with_init(
                 pending.insert(id, (entry.alias.as_deref().unwrap_or(&entry.name), parents));
             }
         }
-        let commands = entry
-            .body
-            .iter()
-            .position(|(_, text)| matches!(text.as_str(), "init:" | "init add:"));
-        if let Some(index) = commands {
-            let append = entry.body[index].1 == "init add:";
-            let additions = entry.body[index + 1..]
-                .iter()
-                .map(|(_, text)| text.as_str());
-            if let Some((_, _, existing)) = init.iter_mut().find(|(target, _, _)| *target == id) {
-                if !append {
-                    existing.clear();
-                }
-                existing.extend(additions);
-            } else {
-                init.push((id, &entry.name, additions.collect()));
-            }
-        }
-        for (source, property) in &entry.body[..commands.unwrap_or(entry.body.len())] {
+        let mut sections = entry.body.iter().peekable();
+        while sections
+            .peek()
+            .is_some_and(|(_, text)| init_header(text).is_none())
+        {
+            let (source, property) = sections.next().unwrap();
             let (name, value) = property
                 .split_once(':')
                 .ok_or_else(|| format!("{source}: expected CPU property"))?;
@@ -622,7 +610,21 @@ pub(crate) fn create_with_init(
                 0,
             )?;
         }
+        while let Some((_, marker)) = sections.next() {
+            let (early, append) = init_header(marker).unwrap();
+            let mut additions = Vec::new();
+            while sections
+                .peek()
+                .is_some_and(|(_, text)| init_header(text).is_none())
+            {
+                additions.push(sections.next().unwrap().1.as_str());
+            }
+            let plan = if early { &mut preinit } else { &mut init };
+            merge_script(plan, id, &entry.name, append, additions);
+        }
     }
+    preinit.sort_by_key(|(id, _, _)| *id != sysbus);
+    run_scripts(handler, preinit, true)?;
     for (entry, object) in entries
         .iter()
         .filter(|entry| !entry.model.is_empty())
@@ -699,17 +701,50 @@ pub(crate) fn create_with_init(
         }
     }
     platform.check_constructor_cycles()?;
-    for (_, name, commands) in &init {
+    run_scripts(handler, init, false)?;
+    Ok(platform)
+}
+
+type ScriptPlan<'a> = Vec<(usize, &'a str, Vec<&'a str>)>;
+
+fn merge_script<'a>(
+    plan: &mut ScriptPlan<'a>,
+    id: usize,
+    name: &'a str,
+    append: bool,
+    commands: Vec<&'a str>,
+) {
+    if let Some((_, _, existing)) = plan.iter_mut().find(|(target, _, _)| *target == id) {
+        if !append {
+            existing.clear();
+        }
+        existing.extend(commands);
+    } else {
+        plan.push((id, name, commands));
+    }
+}
+
+fn run_scripts(
+    handler: &mut impl InitHandler,
+    plan: ScriptPlan<'_>,
+    preinit: bool,
+) -> Result<(), String> {
+    let diagnostic = if preinit {
+        "PreinitSectionValidationError"
+    } else {
+        "InitSectionValidationError"
+    };
+    for (_, name, commands) in &plan {
         for command in commands {
             handler
-                .validate(name, command)
-                .map_err(|error| format!("InitSectionValidationError: {name}: {error}"))?;
+                .validate((!preinit).then_some(*name), command)
+                .map_err(|error| format!("{diagnostic}: {name}: {error}"))?;
         }
     }
-    for (_, name, commands) in init {
-        handler.execute(name, &commands);
+    for (_, name, commands) in plan {
+        handler.execute((!preinit).then_some(name), &commands);
     }
-    Ok(platform)
+    Ok(())
 }
 
 impl CreatedObject {

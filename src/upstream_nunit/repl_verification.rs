@@ -1276,11 +1276,11 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
 #[derive(Default)]
 struct RecordingInit {
     reject: bool,
-    executed: Vec<(String, Vec<String>)>,
+    executed: Vec<(Option<String>, Vec<String>)>,
 }
 
 impl creation::InitHandler for RecordingInit {
-    fn validate(&mut self, _: &str, _: &str) -> Result<(), String> {
+    fn validate(&mut self, _: Option<&str>, _: &str) -> Result<(), String> {
         if self.reject {
             Err("Invalid init section".into())
         } else {
@@ -1288,9 +1288,9 @@ impl creation::InitHandler for RecordingInit {
         }
     }
 
-    fn execute(&mut self, name: &str, commands: &[&str]) {
+    fn execute(&mut self, name: Option<&str>, commands: &[&str]) {
         self.executed.push((
-            name.into(),
+            name.map(str::to_owned),
             commands.iter().map(|&command| command.into()).collect(),
         ));
     }
@@ -1302,7 +1302,7 @@ fn assert_init(source: &str, object: &str, commands: &[&str]) {
     assert_eq!(
         handler.executed,
         [(
-            object.into(),
+            Some(object.into()),
             commands.iter().map(|&command| command.into()).collect()
         )]
     );
@@ -1378,4 +1378,184 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
         Path::new("."),
     )
     .unwrap();
+}
+
+#[test]
+fn should_fail_with_more_than_one_init_attribute() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.MockCPU
+    init:
+        DoSomething
+    init add:
+        DoSomethingElse"#,
+        "MoreThanOneInitAttribute",
+    );
+}
+
+#[test]
+fn should_update_sysbus_preinit() {
+    let source = r#"
+sysbus:
+    preinit:
+        echo 'a'"#;
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(source, Path::new("."), &mut handler).unwrap();
+    assert_eq!(
+        handler.executed,
+        [(None, ["echo 'a'"].map(str::to_owned).to_vec()),]
+    );
+}
+
+#[test]
+fn should_replace_preinit() {
+    let source = r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>
+    preinit:
+        echo 'test 1'
+
+peri:
+    preinit:
+        echo 'test 2'
+        echo 'test 3'"#;
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(source, Path::new("."), &mut handler).unwrap();
+    assert_eq!(
+        handler.executed,
+        [(
+            None,
+            ["echo 'test 2'", "echo 'test 3'"]
+                .map(str::to_owned)
+                .to_vec()
+        ),]
+    );
+}
+
+#[test]
+fn should_add_preinit() {
+    let source = r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    preinit:
+        echo 'test 1'
+
+peri:
+    preinit add:
+        echo 'test 2'
+        echo 'test 3'"#;
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(source, Path::new("."), &mut handler).unwrap();
+    assert_eq!(
+        handler.executed,
+        [(
+            None,
+            ["echo 'test 1'", "echo 'test 2'", "echo 'test 3'"]
+                .map(str::to_owned)
+                .to_vec()
+        ),]
+    );
+}
+
+#[test]
+fn should_respect_preinit_order() {
+    let source = r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    preinit:
+        echo '3 peri preinit'
+
+sysbus:
+    preinit:
+        echo '1 sysbus preinit'
+
+peri2: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    preinit:
+        echo '5 peri2 preinit'
+
+peri:
+    preinit add:
+        echo '4 peri preinit add'
+
+sysbus:
+    preinit add:
+        echo '2 sysbus preinit add'"#;
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(source, Path::new("."), &mut handler).unwrap();
+    assert_eq!(
+        handler.executed,
+        [
+            (
+                None,
+                ["echo '1 sysbus preinit'", "echo '2 sysbus preinit add'"]
+                    .map(str::to_owned)
+                    .to_vec()
+            ),
+            (
+                None,
+                ["echo '3 peri preinit'", "echo '4 peri preinit add'"]
+                    .map(str::to_owned)
+                    .to_vec()
+            ),
+            (None, ["echo '5 peri2 preinit'"].map(str::to_owned).to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn should_fail_on_not_validated_preinit() {
+    let source = r#"
+using "A"
+
+peri:
+    preinit:
+        echo 'c'"#;
+    let files = super::upstream_using_tests::Files::new();
+    fs::write(
+        files.0.join("A"),
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    preinit:
+        echo 'a'
+        echo 'b'"#,
+    )
+    .unwrap();
+    let mut handler = RecordingInit {
+        reject: true,
+        ..Default::default()
+    };
+    let error = creation::create_with_init(source, &files.0, &mut handler)
+        .err()
+        .unwrap();
+    assert!(
+        error.starts_with("PreinitSectionValidationError:"),
+        "{error}"
+    );
+    assert!(handler.executed.is_empty());
+}
+
+#[test]
+fn should_fail_on_not_validated_init() {
+    let source = r#"
+using "A"
+
+peri:
+    init:
+        Increment"#;
+    let files = super::upstream_using_tests::Files::new();
+    fs::write(
+        files.0.join("A"),
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    init:
+        Increment
+        Increment"#,
+    )
+    .unwrap();
+    let mut handler = RecordingInit {
+        reject: true,
+        ..Default::default()
+    };
+    let error = creation::create_with_init(source, &files.0, &mut handler)
+        .err()
+        .unwrap();
+    assert!(error.starts_with("InitSectionValidationError:"), "{error}");
+    assert!(handler.executed.is_empty());
 }

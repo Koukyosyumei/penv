@@ -496,7 +496,7 @@ pub(crate) fn validate_entry_properties<'a, S>(
 ) -> Result<(), String> {
     let mut properties = HashSet::new();
     for (source, text) in body {
-        if matches!(text.as_str(), "init:" | "init add:") {
+        if crate::repl_parser::init_header(text).is_some() {
             break;
         }
         if let Some(key) = property_key(text)

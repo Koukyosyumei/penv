@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,065 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,072 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 330 |
+| 移植待ち | 323 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -456,3 +456,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 通常の宣言とインライン生成でのコンストラクタ例外、およびプロパティ設定例外の3件を移植した。登録処理を含む最終の対象実行で103件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-lifecycle-errors.tsv)・[実行ログ](nunit-evidence/targeted-repl-lifecycle-errors.log)
 
 初期化スクリプトと既存 `sysbus` の参照に関する5件を移植した。初期化ハンドラーへ渡る置換・追記後のコマンド列と、`sysbus` をコンストラクタの依存先として解決できることを照合した。[公式IDとの対応](nunit-evidence/targeted-repl-init.tsv)・[実行ログ](nunit-evidence/targeted-repl-init.log)
+
+`preinit` の置換・追記・実行順、`preinit` と `init` の検証失敗、および重複する `init` ブロックの計7件を移植した。呼び出し引数と順序は上流と同様に記録用ハンドラーで照合した。最終の対象実行では115件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-preinit.tsv)・[実行ログ](nunit-evidence/targeted-repl-preinit.log)

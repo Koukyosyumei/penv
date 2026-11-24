@@ -899,6 +899,16 @@ fn load_using(
     }
 }
 
+pub(crate) fn init_header(text: &str) -> Option<(bool, bool)> {
+    match text {
+        "init:" => Some((false, false)),
+        "init add:" => Some((false, true)),
+        "preinit:" => Some((true, false)),
+        "preinit add:" => Some((true, true)),
+        _ => None,
+    }
+}
+
 fn parse_text(
     content: &str,
     path: &Path,
@@ -907,7 +917,7 @@ fn parse_text(
 ) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
-    let mut init = Vec::new();
+    let mut init = Properties::new();
     let mut init_indent = None;
     let mut definitions = Vec::new();
     let mut seen_usings = HashSet::new();
@@ -1001,12 +1011,12 @@ fn parse_text(
             continue;
         }
         init_indent = None;
-        if matches!(text, "init:" | "init add:") && indent != 0 {
+        if indent != 0 && let Some((preinit, _)) = init_header(text) {
             if current.is_none() {
                 return Err(error("init section has no declaration"));
             }
-            if !init.is_empty() {
-                return Err(error("more than one init section in a declaration"));
+            if init.iter().any(|(_, marker)| init_header(marker).is_some_and(|(phase, _)| phase == preinit)) {
+                return Err(error(if preinit { "MoreThanOnePreinitAttribute: duplicate section" } else { "MoreThanOneInitAttribute: duplicate section" }));
             }
             init_indent = Some(indent);
             init.push((source, text.into()));

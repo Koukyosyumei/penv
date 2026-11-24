@@ -1,10 +1,10 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct Files(PathBuf);
+pub(super) struct Files(pub(super) PathBuf);
 
 impl Files {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
             "penv-nunit-using-{}-{}",
