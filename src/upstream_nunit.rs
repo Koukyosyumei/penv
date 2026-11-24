@@ -9,6 +9,7 @@ mod range;
 mod storage;
 mod system_bus;
 mod time_interval;
+mod tracked_register_bytes;
 mod write_extensions;
 
 use crate::{parse_address64, repl_syntax};

@@ -30,7 +30,6 @@ Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device fl
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
 Antmicro.Renode.PeripheralsTests.SHT21Test	SHT21 I2C command/measurement model is absent.
 Antmicro.Renode.UnitTests.AccessConditionParserTests	There is no access-condition lexer, DNF expansion or named CPU state-bit evaluation for conditional bus registrations.
-Antmicro.Renode.UnitTests.ByteArrayWithAccessTrackingTests	There is no per-byte read/write tracking API with the fixture's conflict and initialization observations.
 Antmicro.Renode.UnitTests.Cadence_TTCTests	Cadence Triple Timer Counter peripheral model is absent.
 Antmicro.Renode.UnitTests.Cadence_UARTTests	Cadence UART register, FIFO and IRQ model is absent.
 Antmicro.Renode.UnitTests.Collections.MultiTreeTests	There is no multi-parent tree collection with add/remove and ancestor or child traversal.
@@ -56,7 +55,7 @@ Antmicro.Renode.UnitTests.SymbolLookupTests.DeduplicationTests	There is no Symbo
 Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
 Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	There is no generic SymbolLookup range index implementing the fixture's aliases, precedence and address/name queries.
 Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	There is no Symbol object exposing Renode symbol precedence, range and metadata comparison.
-Antmicro.Renode.UnitTests.SystemBusTests	The remaining runnable cases need the generic object-registration suspend-and-resume lifecycle, connection-region dispatch, translated access matrix or null CPU registration APIs.
+Antmicro.Renode.UnitTests.SystemBusTests	The remaining runnable cases need the generic object-registration pause/resume lifecycle, multiple native access callbacks within one region, parametrized registration or null CPU registration APIs.
 Antmicro.Renode.UnitTests.TimeTests	There is no BaseClockSource API with independently registered mutable ClockEntry callbacks and observation at each deadline.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
 Antmicro.Renode.Utilities.SimpleCacheTests	There is no general memoization API keyed by generator identity and ordered, potentially null object arguments.

@@ -368,6 +368,8 @@ pub struct Bus {
     pub rv64_devices: crate::rv64_devices::Devices,
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     constant_mmio: Vec<ConstantMmio>,
+    translated_peripherals: Vec<crate::bus_translation::Registration>,
+    translations_enabled: bool,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
     reservations: [Option<(u32, usize)>; crate::machine::MAX_HARTS],
@@ -1078,6 +1080,13 @@ impl Bus {
     }
 
     pub(crate) fn unregister_from_address(&mut self, address: u32) -> Result<(), String> {
+        if let Some(device) = self.translated_peripherals.iter_mut().find(|device| {
+            device.ports.iter().any(|port| port.base == address)
+        }) {
+            device.ports.retain(|port| port.base != address);
+            self.translated_peripherals.retain(|device| !device.ports.is_empty());
+            return Ok(());
+        }
         if let Some(index) = self
             .constant_mmio
             .iter()
@@ -1280,6 +1289,44 @@ impl Bus {
         Self::initialize_timer_clocks(&mut self.h7_timers, &mut control);
         self.h7_network_control = Some(control);
         Ok(())
+    }
+
+    pub fn map_translated_peripheral(
+        &mut self,
+        ports: Vec<crate::bus_translation::Port>,
+        width: crate::dma_engine::Width,
+        peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
+    ) -> Result<(), String> {
+        if ports.is_empty() {
+            return Err("translated peripheral requires at least one port".into());
+        }
+        for (index, port) in ports.iter().enumerate() {
+            let base = u64::from(port.base);
+            let end = base + u64::from(port.length);
+            if port.length == 0 || end > 1 << 32 || self.overlaps(base, end)
+                || ports[..index].iter().any(|other| overlaps_range(base, end, other.base, other.length))
+            {
+                return Err("invalid or overlapping translated peripheral port".into());
+            }
+        }
+        self.translated_peripherals.push(crate::bus_translation::Registration::new(ports, width, peripheral));
+        Ok(())
+    }
+
+    pub fn enable_all_translations(&mut self, enabled: bool) {
+        self.translations_enabled = enabled;
+    }
+
+    fn read_translated(&mut self, address: u32, width: crate::dma_engine::Width) -> Option<u64> {
+        self.translated_peripherals.iter_mut().find_map(|device| {
+            device.read(address, width, self.translations_enabled)
+        })
+    }
+
+    fn write_translated(&mut self, address: u32, width: crate::dma_engine::Width, value: u64) -> Option<()> {
+        self.translated_peripherals.iter_mut().find_map(|device| {
+            device.write(address, width, value, self.translations_enabled)
+        })
     }
 
     pub fn map_constant_mmio(&mut self, peripheral: ConstantMmio) -> Result<(), String> {
@@ -2657,6 +2704,11 @@ impl Bus {
     }
 
     fn peripheral_overlaps(&self, start: u64, end: u64) -> bool {
+        if self.translated_peripherals.iter().flat_map(|device| &device.ports)
+            .any(|port| overlaps_range(start, end, port.base, port.length))
+        {
+            return true;
+        }
         if self
             .bitbands
             .iter()
@@ -5758,6 +5810,12 @@ impl Bus {
     }
 
     fn read_mapped<const N: usize>(&mut self, address: u32) -> Result<u32, BusError> {
+        if N < 8
+            && let Some(width) = crate::bus_translation::width(N)
+            && let Some(value) = self.read_translated(address, width)
+        {
+            return Ok(value as u32);
+        }
         if N == 4
             && let Some(error) = self
                 .command_error_peripherals
@@ -6551,6 +6609,11 @@ impl Bus {
         uart: &mut impl Write,
         writer: Option<usize>,
     ) -> Result<(), BusError> {
+        if let Some(width) = crate::bus_translation::width(width)
+            && self.write_translated(address, width, value.into()).is_some()
+        {
+            return Ok(());
+        }
         if let Some(device) = self
             .pydevs
             .iter_mut()
@@ -7443,6 +7506,11 @@ impl crate::dma_engine::DmaBus for Bus {
 
     fn read_unit(&mut self, address: u64, width: crate::dma_engine::Width) -> Result<u64, BusError> {
         use crate::dma_engine::Width::*;
+        if width == QuadWord && let Ok(address) = u32::try_from(address)
+            && let Some(value) = self.read_translated(address, width)
+        {
+            return Ok(value);
+        }
         let count = width as usize;
         if address > u32::MAX.into() || width == QuadWord {
             let mut unit = [0; 8];
@@ -7463,6 +7531,11 @@ impl crate::dma_engine::DmaBus for Bus {
     fn write_unit(
         &mut self, address: u64, width: crate::dma_engine::Width, value: u64, mut output: &mut dyn Write,
     ) -> Result<(), BusError> {
+        if width == crate::dma_engine::Width::QuadWord && let Ok(address) = u32::try_from(address)
+            && self.write_translated(address, width, value).is_some()
+        {
+            return Ok(());
+        }
         let count = width as usize;
         if address > u32::MAX.into() || count == 8 {
             let memory = self.memory64(address, count)
