@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,239 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,257 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,157 |
+| 移植待ち | 2,139 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 25 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 24 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -264,3 +264,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 - [基本コマンドの公式 ID](nunit-evidence/targeted-python-monitor-builtins.tsv)と[実行ログ](nunit-evidence/targeted-python-monitor-builtins.log)
 - [メモリ出力の公式 ID](nunit-evidence/targeted-python-monitor-dump.tsv)と[5件の実行ログ](nunit-evidence/targeted-python-monitor-dump.log)
+
+## OpenTitan I²C
+
+公式18件のホスト転送、ターゲット側の取得・送信 FIFO、ウォーターマーク、オーバーフロー、モード切り替えを移植した。固定上流と同じアドレスに既存の BMP180 と PAC1934 を登録した。PAC1934 は識別レジスタを実装し、計測チャネルは未実装。I²C コントローラーは同期的に転送し、タイミング制御とアラート線は未実装。
+
+- [公式 ID](nunit-evidence/targeted-opentitan_i2c.tsv)と[実行ログ](nunit-evidence/targeted-opentitan_i2c.log)

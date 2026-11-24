@@ -1,0 +1,21 @@
+$ cargo test --locked --bin penv upstream_nunit::opentitan_i2c
+running 18 tests
+test upstream_nunit::opentitan_i2c::should_not_accept_commands_when_in_target_mode ... ok
+test upstream_nunit::opentitan_i2c::should_not_queue_transmission_when_in_host_mode ... ok
+test upstream_nunit::opentitan_i2c::should_be_able_to_reset_fmt_fifo ... ok
+test upstream_nunit::opentitan_i2c::should_be_able_to_do_two_consecutive_transmissions ... ok
+test upstream_nunit::opentitan_i2c::should_be_able_to_reset_rx_fifo ... ok
+test upstream_nunit::opentitan_i2c::should_correctly_show_status_of_the_tx_fifo ... ok
+test upstream_nunit::opentitan_i2c::should_not_allow_enabling_both_modes_at_the_same_time ... ok
+test upstream_nunit::opentitan_i2c::should_not_start_transactions_until_host_is_enabled ... ok
+test upstream_nunit::opentitan_i2c::should_set_exception_on_fmt_watermark ... ok
+test upstream_nunit::opentitan_i2c::should_correctly_show_status_of_the_acq_fifo ... ok
+test upstream_nunit::opentitan_i2c::should_perform_simple_transaction ... ok
+test upstream_nunit::opentitan_i2c::should_queue_transmit_bytes_when_in_target_mode ... ok
+test upstream_nunit::opentitan_i2c::should_set_exception_on_overflow ... ok
+test upstream_nunit::opentitan_i2c::should_set_exception_on_rx_watermark ... ok
+test upstream_nunit::opentitan_i2c::target_should_interpret_transmission_complete_as_stop ... ok
+test upstream_nunit::opentitan_i2c::target_should_not_return_more_than_queued ... ok
+test upstream_nunit::opentitan_i2c::target_should_properly_handle_read ... ok
+test upstream_nunit::opentitan_i2c::target_should_correctly_assign_rwflag ... ok
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1737 filtered out; finished in 0.00s
