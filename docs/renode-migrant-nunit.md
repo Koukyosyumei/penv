@@ -91,6 +91,11 @@ OpenStreamSerializationTests の `UseWeakReference` の2件を、反射読み書
 3つの読み込み結果を保持して比較する。残る21件には生成読み書きが必要。
 [公式 ID 別の結果](nunit-evidence/targeted-weak-stream-symbol.tsv) · [固定 C# の OpenStreamSerializationTests ログ](nunit-evidence/open-stream-official.log)
 
-残りは9 fixture・2,063ケース。生成読み書き、コレクションと CLR 型の
+SerializationTests の反射読み書き・型スタンプ有無の2設定に14件を追加した。
+多次元配列は次元長と行優先の要素順を記録し、復元前に形状を検証する。
+型付きフィールドと文字列タプルでは、参照先の型と値を復元した。
+[公式 ID 別の結果](nunit-evidence/targeted-cache-rectangular-records.tsv)
+
+残りは9 fixture・2,049ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。

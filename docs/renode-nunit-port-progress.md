@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 743 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 767 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,653 |
+| 移植待ち | 2,629 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 56 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 55 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -42,10 +42,15 @@ StampingTests が4件、OpenStreamSerializationTests が5件、ObjectReaderWrite
 SymbolLookupTests が6件。対象を絞った Rust 実行で新規28件すべてが合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-hierarchy-symbol-lookup.tsv) · [対象実行ログ](nunit-evidence/targeted-hierarchy-symbol-lookup.log)
 
-今回の追加は5件。Migrant の OpenStreamSerializationTests の弱参照設定2件と、
+前回の追加は5件。Migrant の OpenStreamSerializationTests の弱参照設定2件と、
 SymbolLookupTests の残り3件を移植した。SymbolLookupTests の Rust 対象実行は
 公式 ID 対応済み23件すべてが合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-weak-stream-symbol.tsv) · [対象実行ログ](nunit-evidence/targeted-weak-stream-symbol.log)
+
+今回の追加は24件。SimpleCacheTests 全10件と、Migrant の多次元配列6件、
+型付きフィールドと文字列タプル8件を移植した。対象を絞った Rust 実行で
+新規24件すべてが合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-cache-rectangular-records.tsv) · [対象実行ログ](nunit-evidence/targeted-cache-rectangular-records.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。

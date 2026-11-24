@@ -6,7 +6,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	7	0	21	0	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	102	102	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	24	0	1480	0	Initial stamped and unstamped reflection cases restore record and array graphs. Remaining settings and cases need generated reader/writer paths, collection and CLR type codecs, surrogate and hook dispatch, and delegate/state restoration.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	38	0	1466	0	Initial stamped and unstamped reflection cases restore record and array graphs. Remaining settings and cases need generated reader/writer paths, collection and CLR type codecs, surrogate and hook dispatch, and delegate/state restoration.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	4	0	12	0	All four reflection-mode stamp configurations are ported. The remaining 12 cases require the generated writer and/or reader paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests	176	34	0	142	0	Reflection substitutions cover exact, inherited, interface and open-generic matching. Remaining cases need generic converter generation/cache behavior, boxed-value surrogate allocation, read-side callback ordering, registration locks, or generated reader/writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	0	0	36	0	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
@@ -58,7 +58,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests	10	10	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.CRCTests	15	15	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.MiscTests	1	1	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.SimpleCacheTests	10	0	0	10	0	There is no general memoization API keyed by generator identity and ordered, potentially null object arguments.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.SimpleCacheTests	10	10	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.TypeExtensionsCacheTests	11	0	0	11	0	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeHandleTests	29	29	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests	17	11	0	3	3	Remaining runnable cases need wall-clock pacing controls, a disposable master/slave grant registration, or recording/replay of arbitrary external peripheral method calls.
