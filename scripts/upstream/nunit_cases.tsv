@@ -199,6 +199,8 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests.SubtractLeft	upstream_nunit::range::subtract_left	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests.SubtractNoIntersection	upstream_nunit::range::subtract_no_intersection	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests.SubtractRight	upstream_nunit::range::subtract_right	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterManyRegistrations	upstream_nunit::system_bus::find_after_many_registrations	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterRegistration	upstream_nunit::system_bus::find_after_registration	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindBytePattern	bus::memory_segment_cases::upstream_find_byte_pattern	existing
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldHandlePartialWriteToMemorySegmentAtTheBeginning	bus::memory_segment_cases::upstream_partial_write_at_beginning	existing
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldHandlePartialWriteToMemorySegmentAtTheEnd	bus::memory_segment_cases::upstream_partial_write_at_end	existing

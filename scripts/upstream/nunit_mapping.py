@@ -27,6 +27,12 @@ def case_parameters(method, display_name):
         if len(flags) == 2 and set(flags) <= {"True", "False"}:
             first, second = flags
             return {"isFirstMemory": first == "True", "isSecondMemory": second == "True"}
+    if method == "ShouldTransferDataFromSourceToDestination":
+        args = parameters.removeprefix("(").removesuffix(")").split(",")
+        if len(args) == 4:
+            source, destination, read_width, write_width = args
+            return {"sourcePlaceType": source, "destinationPlaceType": destination,
+                    "sourceAccessWidth": int(read_width), "destinationAccessWidth": int(write_width)}
     return {"display": parameters} if parameters else {}
 
 
