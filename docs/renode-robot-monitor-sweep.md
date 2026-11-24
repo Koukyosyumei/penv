@@ -448,3 +448,24 @@ Renode と一致した（`target/monitor-paused-run-proof/`）。
 （`target/monitor-rv-arty/results.json`）。STM32F4 の FAULTMASK ケースは、
 UART アイドル待機中にホスト上限に達して未実行となった
 （`target/monitor-idle-stm/results.json`）。
+
+RESC のログ待機はライブセッションと同じ Rust のログテスターを使う。
+`target/monitor-log-resc-proof/` では固定 Renode と同じ過去時刻の警告を
+両方の入口で取得し、ステップ予算で打ち切った不在確認は失敗した。
+`target/monitor-log-pause-proof/` ではログ待機の停止オプションで双方が
+仮想時間 1 ms に達した。`target/monitor-log-output-proof/` には待機中の
+nRF の UART 出力が残る。
+
+`target/monitor-snapshot-atomic-proof/` では起動前 RAM の読み戻しが
+固定 Renode と一致し、penv が実行後の上書き保存を拒否した際にも
+既存ファイルの SHA-256 が一致した。
+`target/monitor-sysbus-before-repl-proof/` ではプラットフォーム定義前の
+sysbus ポリシーが読み込み後も有効であり、未マップ読み出しが失敗した。
+`target/monitor-rv-rate-proof/` では RISC-V の CPU 速度切り替えを含む
+同じコマンド列を使い、固定 Renode と penv が仮想時間 3 ms を報告した。
+
+未変更の RISC-V バス障害ケースは、プラットフォーム読み込み前の
+sysbus 設定を通過し、次の未対応コマンド `cpu MaximumBlockSize 1` で
+停止した。`target/monitor-sysbus-order-fault/results.json` に記録した。
+同じビルドでの HEX ケースは合格した
+（`target/monitor-sysbus-order-hex/results.json`）。
