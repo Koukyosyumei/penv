@@ -658,7 +658,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if status == "MATCHBYTES":
             content, *fields = value.split("\t")
             binary_result = {"Content": bytes.fromhex(content),
-                             "Groups": [None if field == "-" else bytes.fromhex(field) for field in fields],
+                             "Groups": [bytes.fromhex(field) for field in fields],
                              "Timestamp": 0.0}
             status = "MATCH"
         elif status == "MATCHCAPTURES":

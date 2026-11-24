@@ -1324,12 +1324,8 @@ fn uart_byte_payload(matched: crate::uart::BinaryUartMatch) -> String {
         if index != 0 {
             payload.push('\t');
         }
-        if let Some(field) = field {
-            for byte in field {
-                write!(payload, "{byte:02x}").expect("writing to String");
-            }
-        } else {
-            payload.push('-');
+        for byte in field.unwrap_or_default() {
+            write!(payload, "{byte:02x}").expect("writing to String");
         }
     }
     payload
