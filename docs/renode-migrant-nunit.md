@@ -30,3 +30,17 @@ python3 scripts/upstream/audit_migrant_nunit.py \
   /home/ec2-user/Dev/penv-renode-ci/target/renode-discovery/lib/Migrant \
   /tmp/migrant-parameters.tsv
 ```
+
+## 完了した独立マイルストーン
+
+PrimitiveReaderWriterTests の全102件と IdGeneratorTests の1件を移植した。
+バッファ有無、件数、長文字列の指定を元の組のまま残した。
+上流のランダム入力と同じ値生成範囲と条件を、再現できる Rust 側の固定シードで実施した。
+上流の `ShouldSerializeTimeSpan` は DateTime を書き込み、DateTime として読む。
+Rust 版も同じ観測を維持する。固定 C# と Rust の結果は103件の ID すべてで合格した。
+C# の出力から得た整数バイト列と128・1024・4096バイトのフレーム境界も、
+追加の Rust テストで照合した。
+[公式 ID 別の比較](nunit-evidence/migrant-comparison.tsv) · [公式生ログ](nunit-evidence/migrant-official.log) · [C# のバイト列と境界](nunit-evidence/migrant-wire.log)
+
+残りは11 fixture・2,144ケース。オブジェクトストリーム、サロゲート、フック、
+グラフと型変更の等価性は引き続き移植待ち。

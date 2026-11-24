@@ -1,5 +1,7 @@
 # 固定 Renode の NUnit Rust 移植
 
+現在の対応件数と未移植 API は [移植進捗](renode-nunit-port-progress.md) に記録する。以下は DMA バッチ終了時の実測。
+
 上流は `/home/ec2-user/Dev/renode` の
 `c38ac3babcd38a7144b9498e3ca4c2226b76aa37`。NUnit 対象は、このリビジョンの
 `tests/tests.yaml` にある6プロジェクトで、公式 VSTest アダプターの Release
