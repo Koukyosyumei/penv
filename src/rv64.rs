@@ -41,6 +41,7 @@ pub struct Rv64 {
     translations: TranslationCache,
     pub allow_unaligned: bool,
     waiting: bool,
+    wfi_as_nop: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -233,6 +234,7 @@ impl Rv64 {
             translations: TranslationCache::default(),
             allow_unaligned: false,
             waiting: false,
+            wfi_as_nop: false,
         }
     }
 
@@ -517,6 +519,13 @@ impl Rv64 {
         Some(old)
     }
 
+    pub(crate) fn set_wfi_as_nop(&mut self, enabled: bool) {
+        self.wfi_as_nop = enabled;
+        if enabled {
+            self.waiting = false;
+        }
+    }
+
     fn execute(
         &mut self,
         instruction: u32,
@@ -718,7 +727,7 @@ impl Rv64 {
                     0x0010_0073 => return Err(Fault::new(3, self.pc)),
                     0x3020_0073 => next = self.privilege.mret(epc_mask).ok_or(illegal)?,
                     0x1020_0073 => next = self.privilege.sret(epc_mask).ok_or(illegal)?,
-                    0x1050_0073 if self.privilege.allows_wfi() => self.waiting = true,
+                    0x1050_0073 if self.privilege.allows_wfi() => self.waiting = !self.wfi_as_nop,
                     _ if instruction & 0xfe00_7fff == 0x1200_0073
                         && self.privilege.allows_sfence() =>
                     {

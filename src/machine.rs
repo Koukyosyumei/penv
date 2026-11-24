@@ -203,6 +203,8 @@ pub struct Hart {
     zalrsc: bool,
     bitmanip: BitManip,
     cpu_wait_asserted: bool,
+    wfi_as_nop: bool,
+    waiting_for_interrupt: bool,
     pub monitor_paused: bool,
     pub monitor_halted: bool,
     monitor_single_step: bool,
@@ -386,6 +388,8 @@ impl Machine {
                 zalrsc: false,
                 bitmanip: BitManip::default(),
                 cpu_wait_asserted: false,
+                wfi_as_nop: true,
+                waiting_for_interrupt: false,
                 monitor_paused: false,
                 monitor_halted: false,
                 monitor_single_step: false,
@@ -520,6 +524,21 @@ impl Machine {
             .position(|hart| hart.name.as_deref() == Some(name))
             .ok_or_else(|| format!("unknown hook CPU {name:?}"))?;
         self.python_hooks.push((index, pc, crate::cpu_python_hook::Hook::new(source, file)?));
+        Ok(())
+    }
+
+    pub(crate) fn set_riscv_wfi_as_nop(&mut self, name: &str, enabled: bool) -> Result<(), String> {
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.set_wfi_as_nop(enabled);
+        } else if hart.thumb.is_none() {
+            hart.wfi_as_nop = enabled;
+            if enabled {
+                hart.waiting_for_interrupt = false;
+            }
+        } else {
+            return Err(format!("WfiAsNop requires a RISC-V CPU, got {name:?}"));
+        }
         Ok(())
     }
 
@@ -1599,6 +1618,9 @@ impl Machine {
                 continue;
             }
             for (cpu, address, hook) in &mut self.python_hooks {
+                if hart.waiting_for_interrupt {
+                    break;
+                }
                 if *cpu == index && *address == hart.program_counter() {
                     hook.execute(&mut self.bus, *address)?;
                 }
@@ -2268,7 +2290,14 @@ impl Hart {
             && let Some(target) = self.csr.interrupt(self.pc, pending)
         {
             self.pc = target;
+            self.waiting_for_interrupt = false;
             return Ok(Step::Trap);
+        }
+        if self.waiting_for_interrupt {
+            if !self.csr.wfi_wakeup_pending(pending) {
+                return Ok(Step::Trap);
+            }
+            self.waiting_for_interrupt = false;
         }
         match self.step(bus, output, symbols) {
             Ok(Step::Retired) => {
@@ -2699,7 +2728,10 @@ impl Hart {
                 self.translations.clear();
                 None
             }
-            0x73 if insn == 0x1050_0073 && !self.csr.in_user_mode() => None, // WFI may resume immediately.
+            0x73 if insn == 0x1050_0073 && !self.csr.in_user_mode() => {
+                self.waiting_for_interrupt = !self.wfi_as_nop;
+                None
+            }
             0x73 if insn == 0x3020_0073 => {
                 next = self.csr.return_from_trap().ok_or_else(illegal)?;
                 None

@@ -42,6 +42,7 @@ pub struct Boot {
     pub log_function_names: bool,
     pub monitor_log_level: Option<i8>,
     pub trace_memory: Vec<(String, bool)>,
+    pub riscv_wfi_as_nop: Vec<(String, bool)>,
     pub monitor_user_state: Option<String>,
     pub monitor_output: Vec<String>,
     pub cpu_registers: Vec<CpuRegisterCommand>,
@@ -1411,6 +1412,17 @@ fn execute(
         } else {
             boot.monitor_log_level = Some(level);
         }
+        return Ok(());
+    }
+    if let [cpu, "WfiAsNop", value] = words
+        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+    {
+        let enabled = match unquote(resolve(value)?) {
+            "true" => true,
+            "false" => false,
+            _ => return Err("expected true or false for WfiAsNop".into()),
+        };
+        boot.riscv_wfi_as_nop.push((cpu.trim_start_matches("sysbus.").to_owned(), enabled));
         return Ok(());
     }
     if let ["sysbus", "LogPeripheralAccess", name, options @ ..] = words
