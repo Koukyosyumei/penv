@@ -1358,3 +1358,18 @@ CLI のスナップショット回帰テストも合格した。
 Rust モニターテスト23件が合格。未変更の Robot は保存・復元、HEX、
 STM32F072b Console Echo の4件合格。残り2,193件は未実行
 （`target/monitor-preboot-chain-robot/results.json`）。
+
+### 復元した変数による仮想時間の制御
+
+`8712a74` は、RESC の保存境界以降にある仮想時間コマンド
+`SetGlobalQuantum` / `SetQuantum`、`RunFor`、`RunUntil` の引数を
+実行時に解決する。固定 Renode、通常 CLI、Robot RPC で、
+保存後に上書きした変数を使うと仮想時刻と同期量が 3 ms、復元後の変数を
+使うと 1 ms になることを確認した。相対時間の `RunFor` と絶対時刻の
+`RunUntil` の両方で一致した。比較対象は仮想時刻と同期量
+（`target/monitor-restored-time-proof/`、
+`target/monitor-restored-run-until-proof/`）。
+
+Rust モニターテスト24件が合格。未変更の Robot は保存・復元、HEX、
+STM32F072b Console Echo の4件合格。残り2,193件は未実行
+（`target/monitor-restored-time-robot/results.json`）。

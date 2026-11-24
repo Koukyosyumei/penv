@@ -5093,6 +5093,38 @@ greet "hello world"
     }
 
     #[test]
+    fn virtual_time_commands_use_restored_arguments() {
+        let path = std::env::temp_dir().join(format!("penv-restored-time-{}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        let directory = GeneratedRepl(path);
+        let script = directory.0.join("clock.resc");
+        for verb in ["RunFor", "RunUntil"] {
+            let content = format!(r#"mach create
+set interval "0.001"
+Save @clock.save
+set interval "0.003"
+emulation SetGlobalQuantum $interval
+emulation {verb} $interval
+emulation GetTimeSourceInfo
+Load @clock.save
+emulation SetGlobalQuantum $interval
+emulation {verb} $interval
+emulation GetTimeSourceInfo
+"#);
+            let mut boot = load_script(&script, &directory.0, false, Some(&content)).unwrap();
+            let mut machine = Machine::without_default_ram();
+            machine.cpu_less = true;
+            machine.empty_monitor = boot.empty_machine;
+            let mut output = Vec::new();
+            run(&mut machine, &mut boot.session, &boot.runtime, u64::MAX, &mut output).unwrap();
+            assert_eq!(output, concat!(
+                "Elapsed Virtual Time: 00:00:00.003000000\nQuantum: 00:00:00.003000000\n",
+                "Elapsed Virtual Time: 00:00:00.001000000\nQuantum: 00:00:00.001000000\n",
+            ).as_bytes());
+        }
+    }
+
+    #[test]
     fn restorable_snapshot_reconstructs_named_uart_platform() {
         let directory = std::env::temp_dir().join(format!("penv-restorable-snapshot-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
