@@ -6,6 +6,14 @@ pub enum Kind {
     Integer,
     NullableInteger,
     Text,
+    Enum(&'static [&'static str]),
+    IntegerList {
+        delimiter: char,
+        max_elements: Option<usize>,
+    },
+    TextList {
+        delimiter: char,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,14 +21,56 @@ pub enum Value {
     Bool(bool),
     Integer(i32),
     Text(String),
+    Enum(String),
+    Integers(Vec<i32>),
+    Texts(Vec<String>),
 }
 
-impl Value {
-    fn kind(&self) -> Kind {
+impl Kind {
+    fn accepts(self, value: &Value) -> bool {
+        matches!(
+            (self, value),
+            (Self::Bool, Value::Bool(_))
+                | (Self::Integer | Self::NullableInteger, Value::Integer(_))
+                | (Self::Text, Value::Text(_))
+                | (Self::Enum(_), Value::Enum(_))
+                | (Self::IntegerList { .. }, Value::Integers(_))
+                | (Self::TextList { .. }, Value::Texts(_))
+        )
+    }
+
+    fn parse(self, argument: &str) -> Option<Value> {
         match self {
-            Self::Bool(_) => Kind::Bool,
-            Self::Integer(_) => Kind::Integer,
-            Self::Text(_) => Kind::Text,
+            Self::Bool => argument.parse().ok().map(Value::Bool),
+            Self::Integer | Self::NullableInteger => argument.parse().ok().map(Value::Integer),
+            Self::Text => Some(Value::Text(argument.into())),
+            Self::Enum(names) => names
+                .contains(&argument)
+                .then(|| Value::Enum(argument.into())),
+            Self::IntegerList {
+                delimiter,
+                max_elements,
+            } => argument
+                .splitn(max_elements.unwrap_or(usize::MAX), delimiter)
+                .map(str::parse)
+                .collect::<Result<_, _>>()
+                .ok()
+                .map(Value::Integers),
+            Self::TextList { delimiter } => Some(Value::Texts(
+                argument.split(delimiter).map(str::to_owned).collect(),
+            )),
+        }
+    }
+
+    fn type_name(self) -> &'static str {
+        match self {
+            Self::Bool => "Boolean",
+            Self::Integer => "Int32",
+            Self::NullableInteger => "Nullable<Int32>",
+            Self::Text => "String",
+            Self::Enum(_) => "Enum",
+            Self::IntegerList { .. } => "Int32[]",
+            Self::TextList { .. } => "String[]",
         }
     }
 }
@@ -53,6 +103,7 @@ pub struct OptionsParser {
     pub throw_validation_exception: bool,
     pub allow_unexpected_arguments: bool,
     parsed: Vec<ParsedOption>,
+    positionals: Vec<Value>,
     unexpected: Vec<String>,
     unparsed_tokens: Vec<String>,
 }
@@ -60,6 +111,10 @@ pub struct OptionsParser {
 impl OptionsParser {
     pub fn parsed_options(&self) -> &[ParsedOption] {
         &self.parsed
+    }
+
+    pub fn positional_values(&self) -> &[Value] {
+        &self.positionals
     }
 
     pub fn unexpected_arguments(&self) -> &[String] {
@@ -89,14 +144,24 @@ impl OptionsParser {
         values: &mut Values,
         validate: impl FnOnce(&Values) -> Result<(), String>,
     ) -> Result<bool, ParseError> {
+        self.parse_with_positionals(schema, &[], args, values, validate)
+    }
+
+    pub fn parse_with_positionals(
+        &mut self,
+        schema: &[OptionSpec<'_>],
+        positionals: &[OptionSpec<'_>],
+        args: &[&str],
+        values: &mut Values,
+        validate: impl FnOnce(&Values) -> Result<(), String>,
+    ) -> Result<bool, ParseError> {
         self.parsed.clear();
+        self.positionals.clear();
         self.unexpected.clear();
         self.unparsed_tokens.clear();
         for option in schema {
             if let Some(default) = &option.default {
-                if default.kind() != option.kind
-                    && !(option.kind == Kind::NullableInteger && default.kind() == Kind::Integer)
-                {
+                if !option.kind.accepts(default) {
                     return Err(ParseError::Configuration(format!(
                         "Default value for option '{}' is of unexpected type.",
                         option.long
@@ -106,7 +171,7 @@ impl OptionsParser {
             }
         }
         match self
-            .bind(schema, args, values)
+            .bind(schema, positionals, args, values)
             .and_then(|()| validate(values))
             .and_then(|()| {
                 if self.allow_unexpected_arguments || self.unexpected.is_empty() {
@@ -127,6 +192,7 @@ impl OptionsParser {
     fn bind(
         &mut self,
         schema: &[OptionSpec<'_>],
+        positionals: &[OptionSpec<'_>],
         args: &[&str],
         values: &mut Values,
     ) -> Result<(), String> {
@@ -137,8 +203,20 @@ impl OptionsParser {
             if !escaped && arg == "--" {
                 escaped = true;
             } else if escaped || !arg.starts_with('-') || arg == "-" {
-                self.unexpected.push(arg.into());
-                self.unparsed_tokens.push(arg.into());
+                if let Some(positional) = positionals.get(self.positionals.len()) {
+                    let value = positional.kind.parse(arg).ok_or_else(|| {
+                        format!(
+                            "Invalid value '{}': expected {}",
+                            positional.long,
+                            positional.kind.type_name()
+                        )
+                    })?;
+                    values.insert(positional.long.into(), value.clone());
+                    self.positionals.push(value);
+                } else {
+                    self.unexpected.push(arg.into());
+                    self.unparsed_tokens.push(arg.into());
+                }
             } else if let Some(long) = arg.strip_prefix("--") {
                 let (name, inline) = long
                     .split_once('=')
@@ -174,6 +252,13 @@ impl OptionsParser {
                 }
             }
         }
+        if let Some(missing) = positionals
+            .iter()
+            .skip(self.positionals.len())
+            .find(|value| value.required)
+        {
+            return Err(format!("Required value '{}' is missing.", missing.long));
+        }
         if let Some(missing) = schema
             .iter()
             .find(|option| option.required && !specified.contains(option.long))
@@ -190,10 +275,19 @@ impl OptionsParser {
         specified: &mut HashSet<&'a str>,
         values: &mut Values,
     ) -> Result<(), String> {
-        if !specified.insert(option.long) {
-            return Err(format!("Option '{}' occurs more than once", option.long));
+        if specified.insert(option.long) {
+            values.insert(option.long.into(), value.clone());
+        } else {
+            match (values.get_mut(option.long), &value) {
+                (Some(Value::Integers(previous)), Value::Integers(next)) => {
+                    previous.extend(next.iter().copied())
+                }
+                (Some(Value::Texts(previous)), Value::Texts(next)) => {
+                    previous.extend(next.iter().cloned())
+                }
+                _ => return Err(format!("Option '{}' occurs more than once", option.long)),
+            }
         }
-        values.insert(option.long.into(), value.clone());
         self.parsed.push(ParsedOption {
             long: option.long.into(),
             short: option.short,
@@ -212,35 +306,29 @@ impl OptionSpec<'_> {
         if self.kind == Kind::Bool {
             return Ok(Value::Bool(true));
         }
-        let argument = inline.or_else(|| {
-            if args.peek().is_some_and(|arg| {
-                !arg.starts_with('-')
-                    || (matches!(self.kind, Kind::Integer | Kind::NullableInteger)
-                        && arg.parse::<i32>().is_ok())
-            }) {
-                args.next()
-            } else {
-                None
+        if let Some(value) = inline.and_then(|arg| self.kind.parse(arg)) {
+            return Ok(value);
+        }
+        if inline.is_none() {
+            if let Some(value) = args
+                .peek()
+                .filter(|arg| {
+                    !arg.starts_with('-')
+                        || matches!(self.kind, Kind::Integer | Kind::NullableInteger)
+                })
+                .and_then(|arg| self.kind.parse(arg))
+            {
+                args.next();
+                return Ok(value);
             }
-        });
-        let value = match (self.kind, argument) {
-            (Kind::Integer | Kind::NullableInteger, Some(argument)) => {
-                argument.parse().ok().map(Value::Integer)
+            if let Some(default) = &self.default {
+                return Ok(default.clone());
             }
-            (Kind::Text, Some(argument)) => Some(Value::Text(argument.into())),
-            _ => None,
-        };
-        value.ok_or_else(|| {
-            let expected = match self.kind {
-                Kind::Bool => "Boolean",
-                Kind::Integer => "Int32",
-                Kind::NullableInteger => "Nullable<Int32>",
-                Kind::Text => "String",
-            };
-            format!(
-                "Option '{}' requires parameter of type '{expected}'",
-                self.long
-            )
-        })
+        }
+        Err(format!(
+            "Option '{}' requires parameter of type '{}'",
+            self.long,
+            self.kind.type_name()
+        ))
     }
 }

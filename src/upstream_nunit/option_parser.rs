@@ -408,3 +408,189 @@ unparsed!(
     8888,
     "no-xwt"
 );
+
+fn parse_positionals(
+    schema: &[OptionSpec<'_>],
+    positionals: &[OptionSpec<'_>],
+    args: &[&str],
+) -> (OptionsParser, Values, bool) {
+    let mut parser = OptionsParser::default();
+    let mut values = Values::new();
+    let success = parser
+        .parse_with_positionals(schema, positionals, args, &mut values, |_| Ok(()))
+        .unwrap();
+    (parser, values, success)
+}
+
+#[test]
+fn should_accept_expected_values() {
+    let args = ["-a", "-b", "value-1", "-c", "value-2", "-d", "value-3"];
+    let flags = ["a", "b", "c", "d"].map(|name| spec(name, name.chars().next(), Kind::Bool));
+    let (parser, _, _) = parse_positionals(
+        &flags,
+        &[
+            spec("val1", None, Kind::Text),
+            spec("val2", None, Kind::Text),
+        ],
+        &args,
+    );
+    let ordered_flags: Vec<_> = parser
+        .parsed_options()
+        .iter()
+        .map(|option| option.short.unwrap())
+        .collect();
+    assert_eq!(ordered_flags, ['a', 'b', 'c', 'd']);
+    assert_eq!(
+        parser.positional_values(),
+        [Value::Text("value-1".into()), Value::Text("value-2".into())]
+    );
+    assert_eq!(parser.recreate_unparsed_arguments(), "value-3");
+}
+
+#[test]
+fn should_parse_positional_values() {
+    let (parser, values, _) = parse_positionals(
+        &[],
+        &[spec("value", None, Kind::Text)],
+        &["value", "value-2"],
+    );
+    assert_eq!(parser.positional_values().len(), 1);
+    assert_eq!(parser.unexpected_arguments(), ["value-2"]);
+    assert_eq!(values["value"], Value::Text("value".into()));
+}
+
+#[test]
+fn shoul_not_parse_on_missing_required_positional_values() {
+    let mut positional = spec("value", None, Kind::Text);
+    positional.required = true;
+    let (_, _, parsed) = parse_positionals(&[], &[positional], &[]);
+    assert!(!parsed);
+}
+
+const TEST_ENUM: Kind = Kind::Enum(&["X", "Y", "Z"]);
+
+#[test]
+fn should_parse_enum() {
+    let (_, values) = parse(spec("value", Some('v'), TEST_ENUM), &["-v", "Y"]);
+    assert_eq!(values["value"], Value::Enum("Y".into()));
+}
+
+#[test]
+fn should_parse_enum_positional_argument() {
+    let (_, values, _) = parse_positionals(&[], &[spec("value", None, TEST_ENUM)], &["Y"]);
+    assert_eq!(values["value"], Value::Enum("Y".into()));
+}
+
+const INT_LIST: Kind = Kind::IntegerList {
+    delimiter: ':',
+    max_elements: Some(3),
+};
+
+#[test]
+fn should_parse_option_with_multiple_values() {
+    let (parser, values) = parse(spec("values", Some('v'), INT_LIST), &["-v", "1:2:3"]);
+    assert_eq!(values["values"], Value::Integers(vec![1, 2, 3]));
+    assert!(parser.positional_values().is_empty());
+    assert!(parser.unexpected_arguments().is_empty());
+}
+
+#[test]
+fn should_parse_option_with_multiple_values_with_default_delimiter_value() {
+    let (parser, values) = parse(
+        spec("values", Some('m'), Kind::TextList { delimiter: ';' }),
+        &["-m", "this;is;a;test"],
+    );
+    assert_eq!(
+        values["values"],
+        Value::Texts(["this", "is", "a", "test"].map(str::to_owned).to_vec())
+    );
+    assert!(parser.positional_values().is_empty());
+    assert!(parser.unexpected_arguments().is_empty());
+}
+
+#[test]
+fn should_handle_multiple_occurences_of_argument() {
+    let (_, values) = parse(spec("values", Some('v'), INT_LIST), &["-v", "5", "-v", "6"]);
+    assert_eq!(values["values"], Value::Integers(vec![5, 6]));
+}
+
+#[test]
+fn should_handle_int_option_with_default_value_followed_by_string() {
+    let mut option = spec("value", None, Kind::Integer);
+    option.default = Some(Value::Integer(-1));
+    let mut parser = OptionsParser::default();
+    parser.allow_unexpected_arguments = true;
+    let mut values = Values::new();
+    parser
+        .parse(&[option], &["--value", "test"], &mut values, |_| Ok(()))
+        .unwrap();
+    assert_eq!(values["value"], Value::Integer(-1));
+    assert_eq!(parser.unexpected_arguments(), ["test"]);
+    assert_eq!(parser.recreate_unparsed_arguments(), "test");
+}
+
+fn check_unparsed_with_positionals(args: &[&str], option: OptionSpec<'_>) {
+    let expected = ParsedOption {
+        long: option.long.into(),
+        short: option.short,
+        value: Value::Integer(8888),
+    };
+    let positionals = ["value", "arg2", "arg3", "arg4"].map(|name| spec(name, None, Kind::Text));
+    let (parser, values, _) = parse_positionals(&[option], &positionals, args);
+    assert_eq!(values["value"], Value::Text("positional argument".into()));
+    assert_eq!(parser.parsed_options(), &[expected]);
+    assert_eq!(parser.unexpected_arguments(), ["wrong-arg"]);
+    assert_eq!(parser.recreate_unparsed_arguments(), "--wrong-arg");
+}
+
+macro_rules! with_positional {
+    ($test:ident, $args:expr, $long:literal, $short:expr) => {
+        #[test]
+        fn $test() {
+            check_unparsed_with_positionals(&$args, spec($long, $short, Kind::Integer));
+        }
+    };
+}
+
+with_positional!(
+    should_recreate_unparsed_argument1,
+    ["positional argument", "--wrong-arg", "-p8888"],
+    "p",
+    Some('p')
+);
+with_positional!(
+    should_recreate_unparsed_argument2,
+    ["positional argument", "--wrong-arg", "-p", "8888"],
+    "p",
+    Some('p')
+);
+with_positional!(
+    should_recreate_unparsed_argument3,
+    ["positional argument", "-p8888", "--wrong-arg"],
+    "p",
+    Some('p')
+);
+with_positional!(
+    should_recreate_unparsed_argument4,
+    ["positional argument", "--wrong-arg", "--port", "8888"],
+    "port",
+    None
+);
+with_positional!(
+    should_recreate_unparsed_argument5,
+    ["positional argument", "--wrong-arg", "--port=8888"],
+    "port",
+    None
+);
+with_positional!(
+    should_recreate_unparsed_argument6,
+    ["positional argument", "--port", "8888", "--wrong-arg"],
+    "port",
+    None
+);
+with_positional!(
+    should_recreate_unparsed_argument7,
+    ["positional argument", "--port=8888", "--wrong-arg"],
+    "port",
+    None
+);
