@@ -31,8 +31,6 @@ Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card
 Antmicro.Renode.PeripheralsTests.SHT21Test	SHT21 I2C command/measurement model is absent.
 Antmicro.Renode.UnitTests.Cadence_TTCTests	Cadence Triple Timer Counter peripheral model is absent.
 Antmicro.Renode.UnitTests.Cadence_UARTTests	Cadence UART register, FIFO and IRQ model is absent.
-Antmicro.Renode.UnitTests.Collections.MultiTreeTests	There is no multi-parent tree collection with add/remove and ancestor or child traversal.
-Antmicro.Renode.UnitTests.Collections.MultiValueDictionaryTests	There is no corresponding multi-value dictionary API with key and individual-value removal.
 Antmicro.Renode.UnitTests.Collections.WeakMultiTableTest	There is no weak-key/value multi-table with the fixture's object collection and enumeration semantics.
 Antmicro.Renode.UnitTests.ComparingTimerTests	STM32 CCR permits values beyond ARR. There is no generic ComparingTimer setter that rejects a compare value above its limit.
 Antmicro.Renode.UnitTests.MachineTests	There is no generic IMachine registry and lifecycle for the fixture's managed mock peripheral graph.

@@ -45,6 +45,8 @@ mod lsm6dso;
 mod machine;
 mod memory_setup;
 pub mod migrant;
+pub mod multi_tree;
+pub mod multi_value_dictionary;
 mod mii_phy;
 mod monitor;
 mod murax;
