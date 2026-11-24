@@ -1492,3 +1492,23 @@ Rust モニターテスト26件、引用符付き相対パスを使う CLI 回�
 Rust モニターテスト26件と CLI 回帰テスト2件が合格。
 未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-anchor-runtime-robot/results.json`）。
+
+### 無効な Load の起動前検証
+
+`e946746` は、保留中の実行がなければ、存在しないスナップショットを
+Rust が起動前に拒否する。`a994a64` は同じ経路でセッションのメタデータと
+マシンのヘッダーを確認する。読み込み時のペイロード検証は従来どおり
+実際のロードが担当する。
+
+固定 Renode と penv の Robot RPC で、存在しないファイルと不明なヘッダーの
+両方を拒否し、後続の `echo` は `ready`、`IsStarted` は `False` を
+返した。通常 CLI は壊れたファイルを終了コード 1 で拒否した。
+保留中の `Save` が作るファイルを `Load` する正常例も、
+固定 Renode と penv の RPC で `saved` に復元できた
+（`target/monitor-{missing-load,invalid-load,pending-save-load}-proof/`）。
+
+Rust モニターテスト26件と作業ディレクトリを切り替える
+CLI スナップショット回帰テストが合格。
+最終ビルドの未変更 Robot は保存・復元、HEX、STM32F072b Console Echo の
+4件合格、残り2,193件は未実行
+（`target/monitor-invalid-load-robot/results.json`）。
