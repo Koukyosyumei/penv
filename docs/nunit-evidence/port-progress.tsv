@@ -50,7 +50,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	19	0	0	19	0	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	23	23	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	5	4	0	1	0	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests	27	24	0	2	1	The remaining two runnable cases need generic object-registration pause/resume lifecycle callbacks and validation of non-clustered CPU registration without a registration point.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests	27	26	0	0	1	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeIntervalTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.WriteExtensionsTest	26	26	0	0	0	-
@@ -61,7 +61,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.SimpleCacheTests	10	10	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.TypeExtensionsCacheTests	11	0	0	11	0	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeHandleTests	29	29	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests	17	11	0	3	3	Remaining runnable cases need wall-clock pacing controls, a disposable master/slave grant registration, or recording/replay of arbitrary external peripheral method calls.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests	17	13	0	1	3	The remaining runnable case needs recording and replay of arbitrary external peripheral method calls against machine virtual time.
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMA180Test	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMC050Test	2	0	0	2	0	BMC050 accelerometer/magnetometer register model is absent.
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	13	0	0	13	0	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.

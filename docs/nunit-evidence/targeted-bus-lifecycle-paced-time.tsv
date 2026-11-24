@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SystemBusTests.ShouldFailToRegisterNonClusteredCpuOnNull	0-1547	upstream_nunit::system_bus::should_fail_to_register_non_clustered_cpu_on_null	pass
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SystemBusTests.ShouldPauseAndResumeOnlyOnce	0-1533	upstream_nunit::system_bus::should_pause_and_resume_only_once	pass
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::UnitTests.TimeSourceTests.ShouldNotSleepOnAdvanceImmediately	0-1032	upstream_nunit::time_source::should_not_sleep_on_advance_immediately	pass
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::UnitTests.TimeSourceTests.ShouldNotTickDisconnectedSlaveTimeSource	0-1039	upstream_nunit::time_source::should_not_tick_disconnected_slave_time_source	pass
