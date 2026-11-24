@@ -126,6 +126,7 @@ impl PcTrace {
 
 pub struct Machine {
     pub(crate) cpu_less: bool,
+    pub(crate) empty_monitor: bool,
     pub bus: Bus,
     pub primary: Hart,
     pub function_symbols: Option<BTreeMap<u32, String>>,
@@ -420,6 +421,7 @@ impl Machine {
             monitor_clock_ns: 0,
             monitor_clock_step: 0,
             cpu_less: false,
+            empty_monitor: false,
             boot_memory_cleared: false,
             monitor_firmware: None,
             monitor_quantum: DEFAULT_MONITOR_QUANTUM,
@@ -963,6 +965,12 @@ impl Machine {
         if self.recorder.is_some() || !self.replay.is_empty() || !self.inputs.is_empty() {
             return Err("CPU-less snapshots require an idle event queue".into());
         }
+        if self.empty_monitor {
+            if self.bus.unhandled_access.is_some() {
+                return Err("empty monitor snapshots require the default unmapped access policy".into());
+            }
+            return Ok(Vec::new());
+        }
         let (base, name) = self.bus.snapshot_trivial_uart()?;
         let mut data = base.to_le_bytes().to_vec();
         data.extend_from_slice(&(name.len() as u64).to_le_bytes());
@@ -971,7 +979,7 @@ impl Machine {
     }
 
     fn write_cpu_less_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
-        let mut data = b"PENVIOST\x02".to_vec();
+        let mut data = if self.empty_monitor { b"PENVIOST\x03" } else { b"PENVIOST\x02" }.to_vec();
         data.extend_from_slice(&self.cpu_less_snapshot_prefix()?);
         data.extend_from_slice(&self.elapsed_steps().to_le_bytes());
         data.extend_from_slice(&self.monitor_quantum.to_le_bytes());
@@ -980,13 +988,15 @@ impl Machine {
         output.write_all(&data).map_err(|error| error.to_string())
     }
 
-    pub(crate) fn read_cpu_less_snapshot_platform(input: &mut impl Read) -> Result<(u32, String), String> {
+    pub(crate) fn read_cpu_less_snapshot_platform(input: &mut impl Read) -> Result<Option<(u32, String)>, String> {
         fn read_bytes<const N: usize>(input: &mut impl Read) -> Result<[u8; N], String> {
             let mut bytes = [0; N];
             input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
             Ok(bytes)
         }
-        Self::cpu_less_snapshot_has_timeout(input)?;
+        if Self::cpu_less_snapshot_version(input)? == 3 {
+            return Ok(None);
+        }
         let address = u32::from_le_bytes(read_bytes(input)?);
         let length = u64::from_le_bytes(read_bytes(input)?);
         // Bound the allocation before reading an untrusted snapshot.
@@ -994,22 +1004,27 @@ impl Machine {
             .ok_or("snapshot UART name exceeds size limit")?;
         let mut name = vec![0; length];
         input.read_exact(&mut name).map_err(|e| e.to_string())?;
-        Ok((address, String::from_utf8(name).map_err(|e| e.to_string())?))
+        Ok(Some((address, String::from_utf8(name).map_err(|e| e.to_string())?)))
     }
 
-    fn cpu_less_snapshot_has_timeout(input: &mut impl Read) -> Result<bool, String> {
+    fn cpu_less_snapshot_version(input: &mut impl Read) -> Result<u8, String> {
         let mut header = [0; 9];
         input.read_exact(&mut header).map_err(|e| e.to_string())?;
         match &header {
-            b"PENVIOST\x01" => Ok(false),
-            b"PENVIOST\x02" => Ok(true),
+            b"PENVIOST\x01" => Ok(1),
+            b"PENVIOST\x02" => Ok(2),
+            b"PENVIOST\x03" => Ok(3),
             _ => Err("unknown CPU-less snapshot format".into()),
         }
     }
 
     fn read_cpu_less_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
         let prefix = self.cpu_less_snapshot_prefix()?;
-        let has_uart_timeout = Self::cpu_less_snapshot_has_timeout(input)?;
+        let version = Self::cpu_less_snapshot_version(input)?;
+        if (version == 3) != self.empty_monitor {
+            return Err("CPU-less snapshot does not match the platform or format".into());
+        }
+        let has_uart_timeout = version >= 2;
         let mut data = vec![0; prefix.len() + if has_uart_timeout { 25 } else { 17 }];
         input.read_exact(&mut data).map_err(|error| error.to_string())?;
         if !data.starts_with(&prefix) || input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {

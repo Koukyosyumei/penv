@@ -186,17 +186,18 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
     Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables }))
 }
 
-fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, String), String> {
+fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
     let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?);
     let selected = match read_snapshot_metadata(&mut input)? {
         Some(metadata) if metadata.cpu_mips == Some(0) => {
             (!metadata.selected.is_empty()).then_some(metadata.selected)
         }
         None => None,
-        Some(_) => return Err("unsupported snapshot platform bootstrap outside CPU-less TrivialUart".into()),
+        Some(_) => return Err("unsupported snapshot platform bootstrap outside empty or TrivialUart CPU-less machines".into()),
     };
-    let (address, uart) = Machine::read_cpu_less_snapshot_platform(&mut input)?;
-    let repl = trivial_uart_snapshot_repl(address, &uart)?;
+    let repl = Machine::read_cpu_less_snapshot_platform(&mut input)?
+        .map(|(address, uart)| trivial_uart_snapshot_repl(address, &uart))
+        .transpose()?;
     Ok((selected, repl))
 }
 
@@ -1360,16 +1361,23 @@ fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<St
     if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')) {
         return Err("unsupported snapshot platform name for monitor bootstrap".into());
     }
-    Ok(format!("mach create \"{name}\"\nmachine LoadPlatformDescriptionFromString \"{repl}\"\n"))
+    let mut script = format!("mach create \"{name}\"\n");
+    if let Some(repl) = repl {
+        script.push_str(&format!("machine LoadPlatformDescriptionFromString \"{repl}\"\n"));
+    }
+    Ok(script)
 }
 
-fn snapshot_platform(machine: &Machine) -> Result<String, String> {
+fn snapshot_platform(machine: &Machine) -> Result<Option<String>, String> {
     if !machine.cpu_less {
-        return Err("unsupported snapshot platform bootstrap outside CPU-less TrivialUart".into());
+        return Err("unsupported snapshot platform bootstrap outside empty or TrivialUart CPU-less machines".into());
+    }
+    if machine.empty_monitor {
+        return Ok(None);
     }
     let (address, uart) = machine.bus.snapshot_trivial_uart()
         .map_err(|error| format!("unsupported snapshot platform: {error}"))?;
-    trivial_uart_snapshot_repl(address, uart)
+    trivial_uart_snapshot_repl(address, uart).map(Some)
 }
 
 fn trivial_uart_snapshot_repl(address: u32, uart: &str) -> Result<String, String> {
@@ -1825,7 +1833,8 @@ fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
         | Action::TimeSourceInfo | Action::RunFor(_) | Action::RunUntil(_)
-        | Action::RunToSyncPoint | Action::SetQuantum(_) | Action::SetEmulationPaused(_) | Action::SelectMachineZero)
+        | Action::RunToSyncPoint | Action::SetQuantum(_) | Action::SetEmulationPaused(_) | Action::SelectMachineZero
+        | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform)
 }
 
 pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
@@ -2092,7 +2101,9 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     .map_err(|e| error(&format!("{}: {e}", snapshot.display())))?;
                 state.machine = true;
                 state.boot.session.machine = selected;
-                state.boot.inline_repl.push((origin.to_owned(), repl));
+                if let Some(repl) = repl {
+                    state.boot.inline_repl.push((origin.to_owned(), repl));
+                }
                 state.boot.runtime.push(RuntimeCommand {
                     line: line + 1, source: path.to_owned(), action: Action::LoadMemory(snapshot),
                 });

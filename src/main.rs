@@ -1664,6 +1664,7 @@ fn run() -> Result<ExitCode, String> {
                 }
                 let mut machine = Machine::without_default_ram();
                 machine.cpu_less = true;
+                machine.empty_monitor = true;
                 machine
             }
             None => {
