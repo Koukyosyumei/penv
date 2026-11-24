@@ -353,7 +353,7 @@ enum Action {
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
     DescribeSnapshotPlatform,
-    SaveMemory(PathBuf),
+    SaveMemory(PathBuf, bool),
     ClearMemory,
     LoadMemory(PathBuf),
     SelectMachineZero,
@@ -531,7 +531,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint
-                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(_) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -593,8 +593,10 @@ fn run_commands(
             Action::DescribeSnapshotPlatform => describe_snapshot_platform(machine, session)
                 .and_then(|script| output.output.write_all(script.as_bytes()).map_err(|error| error.to_string()))
                 .map(|()| None),
-            Action::SaveMemory(path) => {
-                if save_session {
+            Action::SaveMemory(path, restorable) => {
+                if *restorable {
+                    snapshot_platform(machine).and_then(|_| session.save(machine, path))
+                } else if save_session {
                     session.save(machine, path)
                 } else {
                     write_snapshot(path, |file| machine.write_boot_snapshot(file))
@@ -1213,7 +1215,7 @@ pub fn serve(
                     return Err("post-run script actions are unavailable in a live include".into());
                 }
                 if state.boot.runtime.iter().any(|command| matches!(command.action,
-                    Action::SaveMemory(_) | Action::LoadMemory(_)))
+                    Action::SaveMemory(..) | Action::LoadMemory(_)))
                 {
                     return Err("use live Save and Load as separate monitor commands".into());
                 }
@@ -1333,17 +1335,21 @@ pub fn serve(
 }
 
 fn describe_snapshot_platform(machine: &Machine, session: &Session) -> Result<String, String> {
+    let repl = snapshot_platform(machine)?;
+    let name = session.machine.as_deref().unwrap_or("machine-0");
+    if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')) {
+        return Err("unsupported snapshot platform name for monitor bootstrap".into());
+    }
+    Ok(format!("mach create \"{name}\"\nmachine LoadPlatformDescriptionFromString \"{repl}\"\n"))
+}
+
+fn snapshot_platform(machine: &Machine) -> Result<String, String> {
     if !machine.cpu_less {
         return Err("unsupported snapshot platform bootstrap outside CPU-less TrivialUart".into());
     }
     let (address, uart) = machine.bus.snapshot_trivial_uart()
         .map_err(|error| format!("unsupported snapshot platform: {error}"))?;
-    let name = session.machine.as_deref().unwrap_or("machine-0");
-    if name.chars().any(|c| c.is_control() || matches!(c, '"' | '\\')) {
-        return Err("unsupported snapshot platform name for monitor bootstrap".into());
-    }
-    let repl = trivial_uart_snapshot_repl(address, &uart)?;
-    Ok(format!("mach create \"{name}\"\nmachine LoadPlatformDescriptionFromString \"{repl}\"\n"))
+    trivial_uart_snapshot_repl(address, uart)
 }
 
 fn trivial_uart_snapshot_repl(address: u32, uart: &str) -> Result<String, String> {
@@ -2410,7 +2416,7 @@ fn execute(
             Some(Action::IlluminanceFeed((*sensor).to_owned(), PathBuf::from(path_value(path))))
         }
 
-        [verb @ ("Save" | "Load"), path] => {
+        [verb @ ("Save" | "SaveRestorableMonitorSnapshot" | "Load"), path] => {
             let path = resolve(path)?
                 .strip_prefix('@')
                 .ok_or("expected @snapshot-path")?;
@@ -2418,10 +2424,10 @@ fn execute(
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
                 .join(path_value(unquote(path)));
-            Some(if *verb == "Save" {
-                Action::SaveMemory(path)
-            } else {
+            Some(if *verb == "Load" {
                 Action::LoadMemory(path)
+            } else {
+                Action::SaveMemory(path, *verb == "SaveRestorableMonitorSnapshot")
             })
         }
         ["machine", "UserState", value @ ..] if value.len() <= 1 => {
@@ -3174,7 +3180,7 @@ fn execute(
                         | Action::RunToSyncPoint
                         | Action::TimeSourceInfo
                         | Action::DescribeSnapshotPlatform
-                        | Action::SaveMemory(_)
+                        | Action::SaveMemory(..)
                         | Action::ClearMemory
                         | Action::LoadMemory(_)
                         | Action::UnhandledAccess(_)

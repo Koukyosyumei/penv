@@ -90,11 +90,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "=" in kind:
             kind = self.option(kind, "type")
         if self.rust_monitor and not self.replaying and kind == "Serialization":
-            self.operation("DescribeMonitorSnapshotPlatform")
             with tempfile.NamedTemporaryFile(dir=self.out, prefix="state-", suffix=".save", delete=False) as file:
                 snapshot = Path(file.name)
             try:
-                self.operation(f"Save {at_path(snapshot)}")
+                self.operation(f"SaveRestorableMonitorSnapshot {at_path(snapshot)}")
             except Exception:
                 snapshot.unlink(missing_ok=True)
                 raise
