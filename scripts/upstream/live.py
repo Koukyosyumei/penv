@@ -380,7 +380,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
                         or re.fullmatch(r"[\w.]+\s+(?:PC|MSTATUS|MEPC|MCAUSE|MTVAL|ExecutionMode)", command)):
                     return self.operation(command, assertion=True)
-                if re.match(r"(?:include|i|ExecuteScript|log|Save|Load)(?:\s|$)", command):
+                if re.match(r"(?:include|i|ExecuteScript|log|Save|Load|runMacro)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
                         self.commands.append(command)

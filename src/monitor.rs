@@ -2015,6 +2015,22 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
+    if matches!(command_words(command.trim()).as_deref(), Ok(["runMacro", _])) {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.machine && state.boot.runtime.is_empty()
+        {
+            state.boot.monitor_output.clear();
+            if let Err(error) = load_text(&source, source.clone(), root, &mut state, &command) {
+                return Ok(StartupInput::Reply("ERROR", error));
+            }
+            if !state.machine && !state.boot.has_platform() && state.boot.runtime.is_empty() {
+                let mut output = Vec::new();
+                run_console_script(&state.boot, &mut output)?;
+                return Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?));
+            }
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     // Inspect only read-only commands that resolve in startup state.
     // A queued runtime operation may change that state, so use the live monitor then.
     if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _]))
@@ -4445,6 +4461,10 @@ mod tests {
         assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
         assert_eq!(inspect("", "set var 1234").0, "DEFER");
         assert_eq!(inspect("", "echo $var").0, "ERROR");
+        let macro_setup = "macro greet \"echo $label\"\nset label ready\n";
+        assert_eq!(inspect(macro_setup, "runMacro $greet"), ("OK", "ready\n".into()));
+        assert_eq!(inspect(macro_setup, "runMacro $missing").0, "ERROR");
+        assert_eq!(inspect("mach create\n", "runMacro $greet").0, "DEFER");
         let (status, value) = inspect("log \"hello world\"\n", "lastLog 1");
         assert_eq!(status, "OK");
         assert!(value.ends_with("[INFO] Script: hello world\n"));
