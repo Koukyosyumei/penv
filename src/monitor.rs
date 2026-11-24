@@ -439,6 +439,7 @@ enum Action {
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
     DescribeSnapshotPlatform,
+    DescribeEnvironment,
     SaveMemory(PathBuf, bool),
     ClearMemory,
     LoadMemory(PathBuf),
@@ -627,7 +628,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
-                    | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -699,6 +700,9 @@ fn run_commands<'a>(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
+            Action::DescribeEnvironment => writeln!(
+                output.reply(), "{}", describe_environment(&session.variables, &session.macros, &session.aliases),
+            ).map(|()| None).map_err(|error| error.to_string()),
             Action::DescribeSnapshotPlatform => describe_snapshot_platform(machine, session)
                 .and_then(|script| output.output.write_all(script.as_bytes()).map_err(|error| error.to_string()))
                 .map(|()| None),
@@ -1990,35 +1994,37 @@ struct ScriptState {
     machine: bool,
 }
 
-impl ScriptState {
-    fn describe_environment(&self) -> String {
-        use std::fmt::Write;
-        let mut output = String::from("Variables:\n");
-        let mut variables: Vec<_> = self.variables.iter().collect();
-        variables.sort_unstable_by_key(|(name, _)| *name);
-        for (name, token) in variables {
-            if !name.contains('.') || name == "global.ORIGIN" {
-                continue;
-            }
-            let (kind, value) = describe_monitor_token(token);
-            let _ = writeln!(output, "\t{kind} {name} = {value} ({token})");
+fn describe_environment(
+    variables: &HashMap<String, String>,
+    macros: &HashMap<String, Macro>,
+    aliases: &HashMap<String, String>,
+) -> String {
+    use std::fmt::Write;
+    let mut output = String::from("Variables:\n");
+    let mut variables: Vec<_> = variables.iter().collect();
+    variables.sort_unstable_by_key(|(name, _)| *name);
+    for (name, token) in variables {
+        if !name.contains('.') || name == "global.ORIGIN" {
+            continue;
         }
-        output.push_str("Macros:\n");
-        let mut macros: Vec<_> = self.macros.iter().collect();
-        macros.sort_unstable_by_key(|(name, _)| *name);
-        for (name, body) in macros {
-            let body = body.commands.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n\t");
-            let prefix = if name.contains('.') { "" } else { "global." };
-            let _ = writeln!(output, "{prefix}{name} \"{body}\"");
-        }
-        output.push_str("Aliases:");
-        let mut aliases: Vec<_> = self.aliases.iter().collect();
-        aliases.sort_unstable_by_key(|(name, _)| *name);
-        for (name, command) in aliases {
-            let _ = write!(output, "\n\t{name} = {command}");
-        }
-        output
+        let (kind, value) = describe_monitor_token(token);
+        let _ = writeln!(output, "\t{kind} {name} = {value} ({token})");
     }
+    output.push_str("Macros:\n");
+    let mut macros: Vec<_> = macros.iter().collect();
+    macros.sort_unstable_by_key(|(name, _)| *name);
+    for (name, body) in macros {
+        let body = body.commands.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n\t");
+        let prefix = if name.contains('.') { "" } else { "global." };
+        let _ = writeln!(output, "{prefix}{name} \"{body}\"");
+    }
+    output.push_str("Aliases:");
+    let mut aliases: Vec<_> = aliases.iter().collect();
+    aliases.sort_unstable_by_key(|(name, _)| *name);
+    for (name, command) in aliases {
+        let _ = write!(output, "\n\t{name} = {command}");
+    }
+    output
 }
 
 fn describe_monitor_token(token: &str) -> (&'static str, String) {
@@ -2156,7 +2162,7 @@ fn is_empty_machine_action(action: &Action) -> bool {
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
         | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_) | Action::SelectMachineZero
-        | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform)
+        | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment)
 }
 
 pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
@@ -2450,13 +2456,19 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                 }
             }
             ["printenv"] => {
-                let message = state.describe_environment();
-                if state.boot.started || !state.boot.runtime.is_empty() {
+                if state.boot.runtime.iter().any(|command| matches!(command.action, Action::LoadMemory(_))) {
                     state.boot.runtime.push(RuntimeCommand {
-                        line: line + 1, source: path.to_owned(), action: Action::Echo(message),
+                        line: line + 1, source: path.to_owned(), action: Action::DescribeEnvironment,
                     });
                 } else {
-                    state.boot.monitor_output.push(message);
+                    let message = describe_environment(&state.variables, &state.macros, &state.aliases);
+                    if state.boot.started || !state.boot.runtime.is_empty() {
+                        state.boot.runtime.push(RuntimeCommand {
+                            line: line + 1, source: path.to_owned(), action: Action::Echo(message),
+                        });
+                    } else {
+                        state.boot.monitor_output.push(message);
+                    }
                 }
             }
             ["alias", name, command] => {

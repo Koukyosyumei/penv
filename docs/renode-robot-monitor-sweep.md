@@ -999,3 +999,38 @@ SHA、バイナリハッシュ、実行コマンド、個別判定は
 `changed` を得た。比較は末尾の改行を除いて行った
 （`target/monitor-startup-macro-proof/{renode,penv}.jsonl`）。
 モニター関連の Rust テストは21件合格した。
+
+### エイリアスと環境の復元
+
+`2a82794` で Rust モニターにエイリアス定義、引数付き展開、
+スコープ照会、再帰検出を追加した。エイリアスを含むスナップショットは
+v5 を書き、v1–v4 の読み込みも維持する。固定 Renode と同じ RPC
+コマンド列で、マシンを作らずに `alias say echo` と変数を保存し、
+エイリアスを上書きしてから復元すると `say $name` が
+`saved value` を返した。通常 CLI の RESC でも同じ出力を確認した
+（`target/monitor-alias-proof/`）。
+
+`a42b0f7` と `7351e36` は `printenv` を Rust に実装し、
+実際に成功した保存とライブ照会を Robot の観測として記録する。
+固定 Renode との `printenv` 比較では作業ディレクトリ、行の順序、
+空行を除き、変数・マクロ・エイリアスの内容が一致した
+（`target/monitor-printenv-proof/{renode,penv}.jsonl`）。
+URL の表示には差があり、固定 Renode は取得済みのローカルパスを表示し、
+penv は保持している URI を表示する。
+
+固定上流の未変更 `Should Serialize Monitor State` と
+`Should Deserialize Monitor State` は同じスイート実行で両方合格
+（`target/monitor-env-results/results.json`）。他の2,195件は未実行。
+代表ケースの HEX と STM32F072b Console Echo も個別に合格
+（`target/monitor-alias-hex/results.json` と
+`target/monitor-env-uart/results.json`）。Rust モニターテストは22件合格。
+
+再現コマンド
+
+```sh
+target/renode-venv/bin/python scripts/upstream/run.py --rust-monitor \
+  --suite tests/unit-tests/monitor-tests.robot \
+  --case 'Should Serialize Monitor State' \
+  --case 'Should Deserialize Monitor State' \
+  --out target/monitor-env-repro
+```
