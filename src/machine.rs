@@ -2063,8 +2063,12 @@ impl Hart {
                     .filter(|(address, _)| *address == self.pc)
                 {
                     match hook {
-                        CpuHook::Log(message) if bus.monitor_log_enabled(1) => eprintln!("{message}"),
-                        CpuHook::Log(_) => {}
+                        CpuHook::Log(message) => {
+                            crate::monitor_log::record(1, message);
+                            if bus.monitor_log_enabled(1) {
+                                eprintln!("{message}");
+                            }
+                        }
                         CpuHook::WriteDoubleWord(address, value) => bus
                             .write_scalar(*address, 4, *value, output, true)
                             .map_err(|error| format!("CPU hook at {:#010x}: {error}", self.pc))?,

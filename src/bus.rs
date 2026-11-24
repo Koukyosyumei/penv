@@ -3093,6 +3093,7 @@ impl Bus {
 
     pub fn set_monitor_log_level(&mut self, level: i8) {
         self.monitor_log_level = Some(level);
+        crate::monitor_log::set_level(level);
     }
 
     pub fn monitor_log_enabled(&self, severity: i8) -> bool {
@@ -5604,10 +5605,12 @@ impl Bus {
         for hook in hooks {
             match hook {
                 CpuHook::Write32(address, value) => self.write(address, 4, value, output)?,
-                CpuHook::Log(message) if self.monitor_log_enabled(1) => {
-                    writeln!(output, "{message}").map_err(BusError::Output)?;
+                CpuHook::Log(message) => {
+                    crate::monitor_log::record(1, &message);
+                    if self.monitor_log_enabled(1) {
+                        writeln!(output, "{message}").map_err(BusError::Output)?;
+                    }
                 }
-                CpuHook::Log(_) => {}
                 CpuHook::Pause => {
                     writeln!(output, "Machine paused").map_err(BusError::Output)?;
                     return Ok(true);

@@ -41,6 +41,8 @@ pub struct Boot {
     pub use_virtual_elf_addresses: bool,
     pub log_function_names: bool,
     pub monitor_log_level: Option<i8>,
+    pub monitor_user_state: Option<String>,
+    pub monitor_output: Vec<String>,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -62,6 +64,7 @@ enum Action {
     RunFor(u64),
     LogLevel(i8),
     UserState(Option<String>),
+    Echo(String),
     RunRemaining,
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
@@ -390,6 +393,8 @@ pub fn run(
                     None
                 })
             }
+            Action::Echo(message) => writeln!(output.output, "{message}")
+                .map(|()| None).map_err(|error| error.to_string()),
             Action::UserState(value) => {
                 if let Some(value) = value {
                     machine.bus.monitor_user_state.clone_from(value);
@@ -624,6 +629,7 @@ pub fn serve(
     machine: &mut Machine,
     mut input: impl BufRead,
     mut output: impl Write,
+    startup_output: &str,
 ) -> Result<(), String> {
     fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
         writeln!(output, "{status} {}", bytes.len())?;
@@ -633,13 +639,23 @@ pub fn serve(
 
     let path = Path::new("<monitor>");
     let mut line = String::new();
-    frame(&mut output, "READY", &[]).map_err(|error| error.to_string())?;
+    frame(&mut output, "READY", startup_output.as_bytes()).map_err(|error| error.to_string())?;
     loop {
         line.clear();
         if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
             return Ok(());
         }
         let text = line.trim();
+        if let Some(result) = crate::monitor_log::handle(machine, text) {
+            match result {
+                Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
+                Err(error) if error.starts_with("unsupported") => {
+                    frame(&mut output, "UNSUPPORTED", error.as_bytes())
+                }
+                Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+            }.map_err(|error| error.to_string())?;
+            continue;
+        }
         let mut boot = Boot {
             platform: Some(path.into()),
             image: Some(Asset::new("", path)),
@@ -1322,6 +1338,24 @@ fn execute(
         return Ok(());
     }
     let resolve = |value| resolve(variables, value);
+    if let ["machine", "UserState", value] = words
+        && !boot.started && boot.runtime.is_empty()
+    {
+        let value = resolve(value)?;
+        boot.monitor_user_state = Some(path_value(unquote(value.strip_prefix('@').unwrap_or(value))));
+        return Ok(());
+    }
+    if let ["echo", value] = words
+        && (value.starts_with('$') || boot.started && boot.runtime.is_empty())
+    {
+        let message = unquote(resolve(value)?).trim_start_matches('@').to_owned();
+        if boot.started {
+            boot.runtime.push(RuntimeCommand { line, source: script.to_owned(), action: Action::Echo(message) });
+        } else {
+            boot.monitor_output.push(message);
+        }
+        return Ok(());
+    }
     if let ["logLevel", value] = words {
         let value = resolve(value)?;
         let level = match unquote(value) {

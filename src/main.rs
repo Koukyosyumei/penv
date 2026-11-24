@@ -36,6 +36,7 @@ mod machine;
 mod memory_setup;
 mod mii_phy;
 mod monitor;
+mod monitor_log;
 mod murax;
 mod network_monitor;
 mod network_platform;
@@ -600,6 +601,7 @@ fn run() -> Result<ExitCode, String> {
     let mut script = None;
     let mut asset_dir = None;
     let mut monitor_stdio = false;
+    let mut monitor_log_capacity = None;
     let mut platform_root = None;
     let mut stm32f0_console = false;
     let mut adc_inputs = Vec::new();
@@ -687,6 +689,11 @@ fn run() -> Result<ExitCode, String> {
             Some("--stats") => stats = true,
             Some("--stop-when-halted") => stop_when_halted = true,
             Some("--monitor-stdio") => monitor_stdio = true,
+            Some("--monitor-log-capacity") => {
+                let capacity = args.next().ok_or("--monitor-log-capacity requires a count")?;
+                monitor_log_capacity = Some(capacity.to_str().ok_or("invalid log capacity")?
+                    .parse::<usize>().map_err(|_| "invalid log capacity")?);
+            }
             Some("--uart-stdin") => uart_stdin = true,
             Some("--uart-stdin-reset") => uart_stdin_reset = true,
             Some("--ethernet-loopback") => {
@@ -1368,6 +1375,14 @@ fn run() -> Result<ExitCode, String> {
     let mut cpu_registers = Vec::new();
     let mut log_function_names = false;
     let mut monitor_log_level = None;
+    let mut monitor_user_state = None;
+    let mut monitor_output = Vec::new();
+    if let Some(capacity) = monitor_log_capacity {
+        if !monitor_stdio {
+            return Err("--monitor-log-capacity requires --monitor-stdio".into());
+        }
+        monitor_log::attach(capacity)?;
+    }
     if monitor_stdio && (uart_stdin || (platform_path.is_none() && script.is_none())) {
         return Err("--monitor-stdio requires a platform or script and exclusive stdin".into());
     }
@@ -1478,6 +1493,8 @@ fn run() -> Result<ExitCode, String> {
         cpu_registers = boot.cpu_registers;
         log_function_names = boot.log_function_names;
         monitor_log_level = boot.monitor_log_level;
+        monitor_user_state = boot.monitor_user_state;
+        monitor_output = boot.monitor_output;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         hex = boot.hex;
@@ -1595,6 +1612,9 @@ fn run() -> Result<ExitCode, String> {
         };
         if let Some(level) = monitor_log_level {
             machine.bus.set_monitor_log_level(level);
+        }
+        if let Some(value) = &monitor_user_state {
+            machine.bus.monitor_user_state.clone_from(value);
         }
         machine.report_uart_steps(uart_steps);
         if let Some(path) = &camera_image {
@@ -1812,7 +1832,8 @@ fn run() -> Result<ExitCode, String> {
             image::load_binary(&mut machine, file, *address)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        machine.bus.renode_unmapped_data = renode_unmapped_data;
+        machine.bus.renode_unmapped_data = renode_unmapped_data
+            || (monitor_stdio && !machine.is_cortex_m());
         for action in &setup_actions {
             match action {
                 SetupAction::Assemble(cpu, address, instruction) => {
@@ -2131,7 +2152,11 @@ fn run() -> Result<ExitCode, String> {
                 return Err(format!("monitor script stopped before completion: {stop:?}"));
             }
         }
-        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock())?;
+        let mut output = monitor_output.join("\r\n");
+        if !output.is_empty() {
+            output.push_str("\r\n");
+        }
+        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output)?;
         return Ok(ExitCode::SUCCESS);
     }
     if max_steps == Some(0) && !static_memory_script {
