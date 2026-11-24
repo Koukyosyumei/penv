@@ -4437,15 +4437,11 @@ fn execute(
                 ["true" | "True"] => true,
                 _ => return Err("expected a boolean LoadELF address option".into()),
             };
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
         }
         ["sysbus", "LoadHEX", value] if boot.has_platform() && boot.image.is_none() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
             boot.hex = true;
         }
@@ -4458,7 +4454,7 @@ fn execute(
         ["sysbus", "LoadFdt", value, address, args, append @ ..]
             if boot.has_platform() && append.len() <= 1 =>
         {
-            let file = resolve(value)?.strip_prefix('@').ok_or("expected @firmware-path")?;
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             let mut asset = Asset::new(file, script);
             let args = monitor_string(resolve(args)?).ok_or("expected quoted FDT boot arguments")?;
             let append = append.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?.unwrap_or(true);
@@ -4466,9 +4462,7 @@ fn execute(
             boot.binaries.push((asset, crate::parse_address64(resolve(address)?)?));
         }
         ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.has_platform() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @firmware-path")?;
+            let file = monitor_path_token(resolve(value)?).ok_or("expected @firmware-path")?;
             boot.binaries.push((
                 Asset::new(file, script),
                 crate::parse_address64(resolve(address)?)?,
