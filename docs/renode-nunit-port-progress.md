@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,101 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,102 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 294 |
+| 移植待ち | 293 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -478,3 +478,5 @@ IRQ の切断と再接続4件を移植した。単一出力、数値範囲、複
 `MachineTestPeripheral` の2件を移植した。暗黙のプラットフォーム依存と、明示的に設定できる整数引数 `machine` を区別し、`mach` の手動指定は上流と同じ診断で拒否した。[公式IDとの対応](nunit-evidence/targeted-repl-machine.tsv)・[実行ログ](nunit-evidence/targeted-repl-machine.log)
 
 三重引用符の残り3件を移植した。行末または単独行のエスケープ済み区切りの文字列値と、途中で閉じ忘れた場合の `At 12:9:` を照合した。最終の対象実行で144件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-line-escapes.tsv)・[実行ログ](nunit-evidence/targeted-repl-line-escapes.log)
+
+辞書の重複キー1件を移植した。回復可能エラーと型付きの原因を分け、上流と同じ原因メッセージの先頭を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-dict-duplicate.tsv)・[実行ログ](nunit-evidence/targeted-repl-dict-duplicate.log)

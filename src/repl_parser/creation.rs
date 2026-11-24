@@ -276,18 +276,65 @@ fn signed_integer(item: ListItem<'_>) -> Option<i32> {
     value.parse().ok()
 }
 
+#[derive(Debug)]
+pub(crate) struct DuplicateDictionaryKey;
+
+impl std::fmt::Display for DuplicateDictionaryKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("An item with the same key has already been added.")
+    }
+}
+
+impl std::error::Error for DuplicateDictionaryKey {}
+
+#[derive(Debug)]
+pub(crate) enum CreationError {
+    Diagnostic(String),
+    Recoverable(DuplicateDictionaryKey),
+}
+
+impl std::fmt::Display for CreationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Diagnostic(message) => f.write_str(message),
+            Self::Recoverable(cause) => write!(f, "RecoverableException: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for CreationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Recoverable(cause) => Some(cause),
+            Self::Diagnostic(_) => None,
+        }
+    }
+}
+
+impl From<String> for CreationError {
+    fn from(message: String) -> Self {
+        Self::Diagnostic(message)
+    }
+}
+
+impl From<&str> for CreationError {
+    fn from(message: &str) -> Self {
+        Self::Diagnostic(message.into())
+    }
+}
+
 fn bind_dictionary<K: Ord, V>(
     value: &str,
     key: impl Fn(&str) -> Result<K, String>,
     item: impl Fn(&str) -> Result<V, String>,
-) -> Result<Option<std::collections::BTreeMap<K, V>>, String> {
+) -> Result<Option<std::collections::BTreeMap<K, V>>, CreationError> {
     if value == "empty" {
         return Ok(None);
     }
     let mut items = std::collections::BTreeMap::new();
     for (k, v) in dictionary_value(value)? {
         if items.insert(key(k)?, item(v)?).is_some() {
-            return Err("An item with the same key has already been added.".into());
+            return Err(CreationError::Recoverable(DuplicateDictionaryKey));
         }
     }
     Ok(Some(items))
@@ -299,7 +346,7 @@ impl Collections {
         name: &str,
         value: &str,
         resolve_cpu: impl Fn(&str) -> Result<usize, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CreationError> {
         let integer = |value: &str| {
             value
                 .parse()
@@ -339,7 +386,7 @@ impl Collections {
                     _ => None,
                 })?
             }
-            _ => return Err(format!("PropertyDoesNotExist: {name}")),
+            _ => return Err(format!("PropertyDoesNotExist: {name}").into()),
         }
         Ok(())
     }
@@ -479,9 +526,18 @@ pub(crate) fn create_with_init(
 pub(crate) fn create_on_platform(
     content: &str,
     root: &Path,
-    mut platform: CreatedPlatform,
+    platform: CreatedPlatform,
     handler: &mut impl InitHandler,
 ) -> Result<CreatedPlatform, String> {
+    create_on_platform_detailed(content, root, platform, handler).map_err(|error| error.to_string())
+}
+
+pub(crate) fn create_on_platform_detailed(
+    content: &str,
+    root: &Path,
+    mut platform: CreatedPlatform,
+    handler: &mut impl InitHandler,
+) -> Result<CreatedPlatform, CreationError> {
     let entries = inline_entries(content, root)?;
     let first_new_object = platform.objects.len();
     let existing_names: Vec<_> = platform
@@ -504,9 +560,15 @@ pub(crate) fn create_on_platform(
         })?;
         if entry.alias.is_some() {
             match entry.registration.as_deref() {
-                None => return Err(entry.error("AliasWithoutRegistration: missing registration")),
+                None => {
+                    return Err(entry
+                        .error("AliasWithoutRegistration: missing registration")
+                        .into());
+                }
                 Some("none") => {
-                    return Err(entry.error("AliasWithNoneRegistration: registration cancelled"));
+                    return Err(entry
+                        .error("AliasWithNoneRegistration: registration cancelled")
+                        .into());
                 }
                 _ => {}
             }
@@ -518,14 +580,20 @@ pub(crate) fn create_on_platform(
                 .iter()
                 .any(|(_, property)| property_key(property).is_some())
         {
-            return Err(entry.error("CtorAttributesInNonCreatingEntry: sysbus already exists"));
+            return Err(entry
+                .error("CtorAttributesInNonCreatingEntry: sysbus already exists")
+                .into());
         }
         if entry.model == "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithProtectedConstructor" {
-            return Err(entry.error("NoCtor: model has no public constructor"));
+            return Err(entry
+                .error("NoCtor: model has no public constructor")
+                .into());
         }
         if entry.model.is_empty() {
             if entry.registration.is_none() && entry.body.is_empty() {
-                return Err(entry.error("EmptyEntry: no type, registration, or properties"));
+                return Err(entry
+                    .error("EmptyEntry: no type, registration, or properties")
+                    .into());
             }
             targets.push(None);
             continue;
@@ -540,7 +608,9 @@ pub(crate) fn create_on_platform(
             globals.insert(entry.name.as_str(), id)
         };
         if previous.is_some() {
-            return Err(entry.error("VariableAlreadyDeclared: repeated type declaration"));
+            return Err(entry
+                .error("VariableAlreadyDeclared: repeated type declaration")
+                .into());
         }
         platform.objects.push(CreatedObject::new(model));
         targets.push(Some(id));
@@ -568,7 +638,9 @@ pub(crate) fn create_on_platform(
             .ok_or_else(|| entry.error("MissingReference: no declaration for overlay"))?;
         if let Some(registration) = &entry.registration {
             if platform.objects[id].model == Model::External {
-                return Err(entry.error("NoUsableRegisterInterface: external object"));
+                return Err(entry
+                    .error("NoUsableRegisterInterface: external object")
+                    .into());
             }
             if registration == "none" {
                 pending.remove(&id);
@@ -589,9 +661,11 @@ pub(crate) fn create_on_platform(
                             .ok_or_else(|| entry.error(&format!("MissingReference: {parent}")))?;
                         match platform.objects[target].model {
                             Model::NonPeripheralRegister => {
-                                return Err(entry.error(
-                                    "CastException: registration parent must be a peripheral",
-                                ));
+                                return Err(entry
+                                    .error(
+                                        "CastException: registration parent must be a peripheral",
+                                    )
+                                    .into());
                             }
                             Model::AmbiguousRegister
                                 if platform.objects[id].model == Model::EmptyPeripheral =>
@@ -621,13 +695,14 @@ pub(crate) fn create_on_platform(
                                         "NoUsableRegisterInterface: unsupported registration point"
                                     }
                                 };
-                                return Err(entry.error(diagnosis));
+                                return Err(entry.error(diagnosis).into());
                             }
                             _ => {}
                         }
                         if platform.objects[target].model != Model::Register || point.is_some() {
                             return Err(entry
-                                .error("NoUsableRegisterInterface: unsupported parent or point"));
+                                .error("NoUsableRegisterInterface: unsupported parent or point")
+                                .into());
                         }
                         parents.push(Some(target));
                         continue;
@@ -638,7 +713,7 @@ pub(crate) fn create_on_platform(
                             if platform.objects[id].model == Model::Cpu {
                                 return Err(entry.error(
                                     "NoCtorForRegistrationPoint: CPU does not accept a bus range",
-                                ));
+                                ).into());
                             }
                             platform.objects[id].ranges.push((base, size));
                         }
@@ -654,9 +729,11 @@ pub(crate) fn create_on_platform(
                                 == "Antmicro.Renode.Peripherals.Bus.BusRangeRegistration"
                             {
                                 let [("range", value)] = object.fields.as_slice() else {
-                                    return Err(entry.error(
-                                        "NoCtorForRegistrationPoint: expected range argument",
-                                    ));
+                                    return Err(entry
+                                        .error(
+                                            "NoCtorForRegistrationPoint: expected range argument",
+                                        )
+                                        .into());
                                 };
                                 platform.objects[id]
                                     .ranges
@@ -667,7 +744,8 @@ pub(crate) fn create_on_platform(
                                 entry.error(&format!("TypeNotResolved: {}", object.model))
                             })?;
                             return Err(entry
-                                .error("TypeMismatch: inline object is not a registration point"));
+                                .error("TypeMismatch: inline object is not a registration point")
+                                .into());
                         }
                         Some(RegistrationValue::Other(value)) => {
                             let target = resolve(&entry.source, value).ok_or_else(|| {
@@ -693,12 +771,16 @@ pub(crate) fn create_on_platform(
                                 | Model::NumberedGpio
                                 | Model::IrqReceiver => "IRQ peripheral",
                             };
-                            return Err(entry.error(&format!(
-                                "TypeMismatch: {model} is not a registration point"
-                            )));
+                            return Err(entry
+                                .error(&format!(
+                                    "TypeMismatch: {model} is not a registration point"
+                                ))
+                                .into());
                         }
                         Some(RegistrationValue::String(_)) => {
-                            return Err(entry.error("NoCtorForRegistrationPoint: string value"));
+                            return Err(entry
+                                .error("NoCtorForRegistrationPoint: string value")
+                                .into());
                         }
                         None => {}
                     }
@@ -1166,15 +1248,16 @@ impl CreatedPlatform {
         source: &SourceLine,
         resolve: impl Fn(&str) -> Option<usize> + Copy,
         depth: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), CreationError> {
         if depth >= 64 {
-            return Err(format!("{source}: inline object nesting limit exceeded"));
+            return Err(format!("{source}: inline object nesting limit exceeded").into());
         }
         if self.objects[id].model == Model::MachinePeripheral {
             if name != "machine" {
                 return Err(format!(
                     "{source}: NoCtor: {name} is not a user-supplied constructor parameter"
-                ));
+                )
+                .into());
             }
             let value = if value == "empty" {
                 0
@@ -1201,9 +1284,9 @@ impl CreatedPlatform {
                 return Ok(());
             }
             if name != "other" {
-                return Err(format!(
-                    "{source}: NoCtor: unknown constructor argument {name}"
-                ));
+                return Err(
+                    format!("{source}: NoCtor: unknown constructor argument {name}").into(),
+                );
             }
             let target = if value == "empty" || value == "none" {
                 None
@@ -1211,7 +1294,7 @@ impl CreatedPlatform {
                 let (object, tail) =
                     object_prefix(value).map_err(|error| format!("{source}: {error}"))?;
                 if !tail.trim().is_empty() {
-                    return Err(format!("{source}: unexpected text after inline object"));
+                    return Err(format!("{source}: unexpected text after inline object").into());
                 }
                 let model = Model::parse(object.model)
                     .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
@@ -1220,9 +1303,9 @@ impl CreatedPlatform {
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {
                     if !seen.insert(key) {
-                        return Err(format!(
-                            "{source}: PropertyOrCtorNameUsedMoreThanOnce: {key}"
-                        ));
+                        return Err(
+                            format!("{source}: PropertyOrCtorNameUsedMoreThanOnce: {key}").into(),
+                        );
                     }
                     self.set_property(target, key, value, source, resolve, depth + 1)?;
                 }
@@ -1234,9 +1317,7 @@ impl CreatedPlatform {
                 Some(resolve(value).ok_or_else(|| format!("{source}: MissingReference: {value}"))?)
             };
             if target.is_some_and(|target| self.objects[target].model == Model::External) {
-                return Err(format!(
-                    "{source}: TypeMismatch: other requires a peripheral"
-                ));
+                return Err(format!("{source}: TypeMismatch: other requires a peripheral").into());
             }
             self.objects[id].dependency = target;
             return Ok(());
@@ -1252,21 +1333,27 @@ impl CreatedPlatform {
                     }
                     Ok(target)
                 })
-                .map_err(|error| format!("{source}: {error}"))?;
+                .map_err(|error| match error {
+                    CreationError::Diagnostic(message) => {
+                        CreationError::Diagnostic(format!("{source}: {message}"))
+                    }
+                    error => error,
+                })?;
             self.objects[id].collections = collections;
             return Ok(());
         }
         if self.objects[id].model == Model::EnumPeripheral {
-            return self.objects[id].enum_arguments.bind(name, value, source);
+            return self.objects[id]
+                .enum_arguments
+                .bind(name, value, source)
+                .map_err(Into::into);
         }
         if self.objects[id].model == Model::EmptyPeripheral {
             if name == "ThrowingProperty" {
                 value
                     .parse::<i32>()
                     .map_err(|_| format!("{source}: TypeMismatch: expected integer property"))?;
-                return Err(format!(
-                    "{source}: PropertySettingException: Fake exception"
-                ));
+                return Err(format!("{source}: PropertySettingException: Fake exception").into());
             }
             if value.starts_with("new ") {
                 let (object, _) =
@@ -1275,9 +1362,9 @@ impl CreatedPlatform {
                     .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
             }
             if name != "value" {
-                return Err(format!(
-                    "{source}: NoCtor: unknown constructor argument {name}"
-                ));
+                return Err(
+                    format!("{source}: NoCtor: unknown constructor argument {name}").into(),
+                );
             }
             self.objects[id].empty_peripheral_value = (value != "none").then(|| value.to_owned());
             return Ok(());
@@ -1301,21 +1388,21 @@ impl CreatedPlatform {
                 let (object, tail) =
                     object_prefix(value).map_err(|error| format!("{source}: {error}"))?;
                 if !tail.trim().is_empty() {
-                    return Err(format!("{source}: unexpected text after inline object"));
+                    return Err(format!("{source}: unexpected text after inline object").into());
                 }
                 let model = Model::parse(object.model)
                     .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
                 if model != Model::Cpu {
-                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
+                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU").into());
                 }
                 let target = self.objects.len();
                 self.objects.push(CreatedObject::new(model));
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {
                     if !seen.insert(key) {
-                        return Err(format!(
-                            "{source}: PropertyOrCtorNameUsedMoreThanOnce: {key}"
-                        ));
+                        return Err(
+                            format!("{source}: PropertyOrCtorNameUsedMoreThanOnce: {key}").into(),
+                        );
                     }
                     self.set_property(target, key, value, source, resolve, depth + 1)?;
                 }
@@ -1324,7 +1411,7 @@ impl CreatedPlatform {
                 let target =
                     resolve(value).ok_or_else(|| format!("{source}: MissingReference: {value}"))?;
                 if self.objects[target].model != Model::Cpu {
-                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU"));
+                    return Err(format!("{source}: TypeMismatch: OtherCpu requires a CPU").into());
                 }
                 target
             })
@@ -1332,7 +1419,7 @@ impl CreatedPlatform {
             None
         };
         let Some(cpu) = &mut self.objects[id].cpu else {
-            return Err(format!("{source}: PropertyDoesNotExist: {name}"));
+            return Err(format!("{source}: PropertyDoesNotExist: {name}").into());
         };
         match name {
             "Placeholder" => {
@@ -1344,7 +1431,7 @@ impl CreatedPlatform {
                 )
             }
             "OtherCpu" => cpu.other_cpu = target,
-            "Model" => return Err(format!("{source}: PropertyNotWritable: Model")),
+            "Model" => return Err(format!("{source}: PropertyNotWritable: Model").into()),
             "EnumValue" => {
                 cpu.enum_value = match symbolic_value(value) {
                     Some(
@@ -1355,10 +1442,12 @@ impl CreatedPlatform {
                         SymbolicValue::Reference("Two")
                         | SymbolicValue::Enum(Some("TwoStateEnum"), "Two"),
                     ) => TwoState::Two,
-                    _ => return Err(format!("{source}: TypeMismatch: expected TwoStateEnum")),
+                    _ => {
+                        return Err(format!("{source}: TypeMismatch: expected TwoStateEnum").into());
+                    }
                 };
             }
-            name => return Err(format!("{source}: PropertyDoesNotExist: {name}")),
+            name => return Err(format!("{source}: PropertyDoesNotExist: {name}").into()),
         }
         Ok(())
     }

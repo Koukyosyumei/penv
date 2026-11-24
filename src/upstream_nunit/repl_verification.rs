@@ -2124,3 +2124,30 @@ string"#,
     assert!(error.starts_with("SyntaxError:"));
     assert_eq!(error.lines().nth(1), Some("At 12:9:"));
 }
+
+#[test]
+fn should_fail_on_duplicate_dict_keys() {
+    let error = creation::create_on_platform_detailed(
+        r#"
+cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockCpuIntDict: {cpu1: 1; cpu2: 2; cpu1: 3}
+
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    "#,
+        Path::new("."),
+        creation::CreatedPlatform::default(),
+        &mut RecordingInit::default(),
+    )
+    .err()
+    .expect("expected duplicate dictionary key");
+    assert!(matches!(error, creation::CreationError::Recoverable(_)));
+    let cause = std::error::Error::source(&error).unwrap();
+    assert!(cause.is::<creation::DuplicateDictionaryKey>());
+    assert!(
+        cause
+            .to_string()
+            .starts_with("An item with the same key has already been added.")
+    );
+}
