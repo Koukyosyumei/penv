@@ -135,6 +135,8 @@ pub struct Machine {
     halted: u8,
     pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
+    monitor_clock_ns: u128,
+    monitor_clock_step: u64,
     cpu_paused: bool,
     cpu_halted: bool,
     cpu_clock_stopped: bool,
@@ -410,6 +412,8 @@ impl Machine {
             halted: 0,
             stop_when_halted: false,
             elapsed_steps: 0,
+            monitor_clock_ns: 0,
+            monitor_clock_step: 0,
             cpu_paused: false,
             cpu_halted: false,
             cpu_clock_stopped: false,
@@ -1397,6 +1401,20 @@ impl Machine {
 
     pub fn elapsed_steps(&self) -> u64 {
         self.time_source.elapsed()
+    }
+
+    pub(crate) fn monitor_elapsed_ns(&self) -> u128 {
+        let steps = self.elapsed_steps().wrapping_sub(self.monitor_clock_step);
+        self.monitor_clock_ns + (u128::from(steps) * 1_000_000_000)
+            / u128::from(self.bus.monitor_step_hz())
+    }
+
+    pub(crate) fn set_monitor_cpu_rate(&mut self, mips: u32) -> Result<(), String> {
+        let now = self.monitor_elapsed_ns();
+        self.bus.set_nrf_cpu_mips(mips)?;
+        self.monitor_clock_ns = now;
+        self.monitor_clock_step = self.elapsed_steps();
+        Ok(())
     }
 
     pub fn run_until<W: Write>(

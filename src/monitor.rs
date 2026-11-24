@@ -535,11 +535,12 @@ fn run_commands(
             }),
             Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
-            Action::NrfCpuMips(mips) => machine.bus.set_nrf_cpu_mips(*mips).map(|()| None),
+            Action::NrfCpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
             Action::TimeSourceInfo => {
-                let seconds = machine.elapsed_steps() / machine.bus.monitor_step_hz();
-                writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}",
-                    seconds / 3600, seconds / 60 % 60, seconds % 60)
+                let ns = machine.monitor_elapsed_ns();
+                let seconds = ns / 1_000_000_000;
+                writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}.{:09}",
+                    seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
                     .map(|()| None).map_err(|error| error.to_string())
             }
             Action::UartIdle(_) => Err("UART idle check requires the live monitor".into()),
@@ -786,7 +787,7 @@ fn run_commands(
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
+                    let result = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles.min(budget), &mut output));
                     let matched = machine.bus.take_uart_byte_match(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
@@ -808,7 +809,7 @@ fn run_commands(
             Action::WaitForTester(id, pattern, regex, mode, timeout, absent) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
-                    duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
+                    duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                         .and_then(|cycles| run_uart_watch(machine, watch, cycles.min(budget), &mut output))
                 }).and_then(|(stop, count)| {
                     retired += count;
@@ -822,12 +823,15 @@ fn run_commands(
             }
             Action::WaitForUart(target, pattern, end, timeout) => {
                 let start = machine.elapsed_steps();
+                let limit = timeout.map(|duration| duration_cycles(
+                    duration, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                )).transpose()?.unwrap_or(budget).min(budget);
                 wait_for_uart(
                     machine,
                     target.as_deref(),
                     pattern,
                     *end,
-                    timeout.map_or(budget, |timeout| timeout.min(budget)),
+                    limit,
                     &mut output,
                 )
                 .and_then(|(stop, count)| {
@@ -998,7 +1002,7 @@ pub fn serve(
 
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
-                    let stop = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
+                    let stop = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles, &mut bytes));
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
