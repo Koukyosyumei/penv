@@ -2073,9 +2073,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                 if state.machine || state.boot.has_platform() || state.boot.started || !state.boot.runtime.is_empty() {
                     return Err(error("snapshot bootstrap requires a fresh monitor"));
                 }
-                let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
-                let snapshot = origin.join(path_value(unquote(value.strip_prefix('@')
-                    .ok_or_else(|| error("expected @snapshot-path"))?)));
+                let snapshot = snapshot_path(value, origin, &state.variables).map_err(|e| error(&e))?;
                 let (selected, repl) = restore_snapshot_platform(&snapshot)
                     .map_err(|e| error(&format!("{}: {e}", snapshot.display())))?;
                 state.machine = true;
@@ -2167,23 +2165,40 @@ fn include_path(
     Ok(if candidate.is_file() { candidate } else { local_path(&file, path, root) })
 }
 
+fn monitor_origin(variables: &HashMap<String, String>) -> &Path {
+    let origin = resolve(variables, "$global.ORIGIN").unwrap_or(".");
+    Path::new(unquote(origin.trim_start_matches('@')))
+}
+
+fn snapshot_path(
+    value: &str, script_dir: &Path, variables: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
+        return Ok(path);
+    }
+    let path = resolve(variables, value)?.strip_prefix('@').ok_or("expected @snapshot-path")?;
+    Ok(script_dir.join(path_value(unquote(path))))
+}
+
+fn path_anchor(value: &str) -> Option<(&str, &str)> {
+    let token = value.strip_prefix('$')?;
+    let (anchor, relative) = token.strip_prefix("global.").unwrap_or(token).split_once('/')?;
+    matches!(anchor, "ORIGIN" | "CWD").then_some((anchor, relative))
+}
+
 fn anchored_path(
     value: &str, origin: &Path, variables: &HashMap<String, String>,
 ) -> Result<Option<PathBuf>, String> {
-    if let Some(relative) = value
-        .strip_prefix("$ORIGIN/")
-        .or_else(|| value.strip_prefix("$global.ORIGIN/"))
-    {
-        return Ok(Some(origin.join(path_value(relative))));
-    }
-    if let Some(relative) = value
-        .strip_prefix("$CWD/")
-        .or_else(|| value.strip_prefix("$global.CWD/"))
-    {
+    let Some((anchor, relative)) = path_anchor(value) else {
+        return Ok(None);
+    };
+    let base = if anchor == "ORIGIN" {
+        origin
+    } else {
         let cwd = resolve(variables, "$global.CWD")?;
-        return Ok(Some(Path::new(unquote(cwd.trim_start_matches('@'))).join(path_value(relative))));
-    }
-    Ok(None)
+        Path::new(unquote(cwd.trim_start_matches('@')))
+    };
+    Ok(Some(base.join(path_value(relative))))
 }
 
 fn assign_variable(
@@ -2208,9 +2223,7 @@ fn assign_variable(
     let scope = machine.map(|name| name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
     let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
     if !conditional || variable_binding(variables, name).is_none() {
-        let origin = resolve(variables, "$global.ORIGIN").unwrap_or(".");
-        let origin = Path::new(unquote(origin.trim_start_matches('@')));
-        let anchored = anchored_path(value, origin, variables)?
+        let anchored = anchored_path(value, monitor_origin(variables), variables)?
             .map(|path| format!("@{}", path.display()));
         let value = anchored.as_deref().unwrap_or(value);
         if name.starts_with("global.") {
@@ -2348,11 +2361,15 @@ fn execute(
         return Ok(());
     }
     if let ["echo", value] = words {
-        let value = resolve(value)?;
-        let message = if let Some(path) = value.strip_prefix('@') {
-            path_value(path)
+        let message = if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
+            path.display().to_string()
         } else {
-            unquote(value).to_owned()
+            let value = resolve(value)?;
+            if let Some(path) = value.strip_prefix('@') {
+                path_value(path)
+            } else {
+                unquote(value).to_owned()
+            }
         };
         if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand { line, source: script.to_owned(), action: Action::Echo(message) });
@@ -2537,13 +2554,8 @@ fn execute(
         }
 
         [verb @ ("Save" | "SaveRestorableMonitorSnapshot" | "Load"), path] => {
-            let path = resolve(path)?
-                .strip_prefix('@')
-                .ok_or("expected @snapshot-path")?;
-            let path = script
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(path_value(unquote(path)));
+            let directory = script.parent().unwrap_or_else(|| Path::new("."));
+            let path = snapshot_path(path, directory, variables)?;
             Some(if *verb == "Load" {
                 Action::LoadMemory(path)
             } else {
@@ -3361,9 +3373,7 @@ fn execute(
             *machine = true;
         }
         ["machine", "LoadPlatformDescription", value] if *machine && boot.platform.is_none() => {
-            let origin = resolve("$global.ORIGIN").unwrap_or(".");
-            let origin = Path::new(unquote(origin.trim_start_matches('@')));
-            boot.platform = Some(if let Some(path) = anchored_path(value, origin, variables)? {
+            boot.platform = Some(if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
                 path
             } else {
                 let file = resolve(value)?
@@ -3956,7 +3966,10 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         }
         if character == '\\'
             && (quote.is_some()
-                || start.is_some_and(|start| text[start..].starts_with('@'))
+                || start.is_some_and(|start| {
+                    let token = &text[start..index];
+                    token.starts_with('@') || path_anchor(token).is_some()
+                })
                     && text[index + 1..].starts_with(' '))
         {
             escaped = true;
@@ -4115,7 +4128,7 @@ mod tests {
         let dir = GeneratedRepl(directory);
         let snapshot = dir.0.join("clock state.save");
         let script = dir.0.join("restore.resc");
-        fs::write(&script, "RestoreMonitorSnapshot @\"clock state.save\"\n").unwrap();
+        fs::write(&script, "RestoreMonitorSnapshot $ORIGIN/clock\\ state.save\n").unwrap();
 
         let mut source = Machine::without_default_ram();
         source.cpu_less = true;
