@@ -326,7 +326,8 @@ impl UartLineMatch {
         }
         if byte == self.end {
             self.matched = (!self.first_only || !self.completed_line)
-                && (self.contains || self.regex_matches_line());
+                && (self.contains || self.regex_matches_line()
+                    || (self.pattern.is_empty() && self.regex.is_none()));
             self.completed_line = true;
             self.matched_completed_line = self.matched;
             self.tail.clear();

@@ -495,7 +495,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
-                    | Action::DefaultUartTester(_) | Action::WaitForBytes(..)
+                    | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
             )
         })
 }
@@ -991,9 +991,12 @@ fn run_commands(
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode, *first_only).and_then(|watch| {
                     run_uart_watch(machine, watch, limit, &mut output)
-                }).and_then(|(stop, count)| {
+                }).and_then(|(stop, count, line)| {
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
+                    if pattern.is_empty() && let Some(line) = line {
+                        writeln!(output.output, "{line}").map_err(|error| error.to_string())?;
+                    }
                     if (*absent && stop == Stop::Limit && limit == cycles)
                         || (!*absent && stop == Stop::OutputMatch) {
                         Ok(None)
@@ -1061,7 +1064,7 @@ fn run_commands(
                     let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
                     let start = machine.elapsed_steps();
                     let limit = cycles.min(budget);
-                    let (stop, count) = run_uart_watch(machine, watch, limit, &mut output)
+                    let (stop, count, _) = run_uart_watch(machine, watch, limit, &mut output)
                         .map_err(|error| format!("{}:{}: {error}", command.source.display(), command.line))?;
                     retired += count;
                     budget -= machine.elapsed_steps().wrapping_sub(start);
@@ -1472,14 +1475,14 @@ fn run_uart_watch(
     watch: UartWatch,
     budget: u64,
     output: &mut impl Write,
-) -> Result<(Stop, u64), String> {
-    let result = drive_uart_watch(machine, watch, budget, output).and_then(|result| {
+) -> Result<(Stop, u64, Option<String>), String> {
+    let result = drive_uart_watch(machine, watch, budget, output).and_then(|(stop, count)| {
         if let Some(line) = machine.bus.uart_watch_failure(watch) {
             return Err(format!(
                 "Terminal tester failed! Test failing entry has been found on UART:\n{line}"
             ));
         }
-        Ok(result)
+        Ok((stop, count, machine.bus.uart_tester_matched_line(watch)))
     });
     machine.bus.finish_stm32_uart_watch(watch);
     result
@@ -1495,7 +1498,7 @@ fn wait_for_uart(
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
         let watch = machine.bus.watch_stm32_uart(target, pattern, end)?;
-        run_uart_watch(machine, watch, budget, output)
+        run_uart_watch(machine, watch, budget, output).map(|(stop, count, _)| (stop, count))
     } else {
         let history = output
             .history
@@ -2547,6 +2550,17 @@ fn execute(
                 options.timeout,
             ))
         }
+        ["WaitForNextLineOnUart", ..] => {
+            let args = text["WaitForNextLineOnUart".len()..].trim_start();
+            let options = tester_wait_options(args, resolve, TesterOptionsKind::Line)?;
+            if options.regex || options.capture_groups || options.unfinished || options.first_only.is_some() {
+                return Err("next UART line accepts only testerId and timeout".into());
+            }
+            Some(Action::WaitForTester(
+                options.id, String::new(), None, UartWaitMode::Lf,
+                options.timeout, false, false, Some(true),
+            ))
+        }
         [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt" | "ShouldNotBeOnUart"), ..] => {
             let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start())?;
             if pattern.is_empty() {
@@ -3072,6 +3086,7 @@ fn execute(
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
                         | Action::WaitForBytes(..)
+                        | Action::WaitForTester(..)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)

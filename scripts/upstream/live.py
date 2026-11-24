@@ -22,6 +22,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     rust_monitor = False
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
+        "Wait For Next Line On Uart": "wait_for_next_uart_line",
         "Wait For Bytes On Uart": "wait_for_uart_bytes",
         "PC Should Be Equal": "assert_program_counter",
         "Register Should Be Equal": "assert_cpu_register",
@@ -852,6 +853,19 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "matchNextLine" in options:
             command += f" matchNextLine={str(self.log_bool(options['matchNextLine'])).lower()}"
         return self.operation(command, uart_captures=True)
+
+    def wait_for_next_uart_line(self, *args):
+        if not self.rust_monitor:
+            raise Unsupported("next UART line requires the Rust monitor")
+        positional = ("timeout", "testerId", "pauseEmulation")
+        options = self.log_options(args, set(positional), positional)
+        if "pauseEmulation" in options:
+            self.log_bool(options["pauseEmulation"])
+        tester = self.parse_tester_id(options.get("testerId"))
+        selector = f" testerId={tester}" if tester is not None else ""
+        deadline = f" timeout={self.duration(options['timeout'])}" if "timeout" in options else ""
+        self.started = True
+        return self.operation(f"WaitForNextLineOnUart{selector}{deadline}", uart_captures=True)
 
     def wait_for_uart_bytes(self, pattern, *args):
         if not self.rust_monitor:

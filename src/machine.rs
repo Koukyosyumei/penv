@@ -772,6 +772,9 @@ impl Machine {
     }
 
     fn named_hart(&mut self, name: &str) -> Result<&mut Hart, String> {
+        if self.cpu_less {
+            return Err("the platform has no CPU".into());
+        }
         std::iter::once(&mut self.primary)
             .chain(&mut self.secondary)
             .find(|hart| hart.name.as_deref() == Some(name))
