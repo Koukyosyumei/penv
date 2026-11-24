@@ -1898,3 +1898,77 @@ sender:
     assert_eq!(outputs.len(), 1);
     assert_eq!((outputs[0].pin, outputs[0].receiver), (0, receiver));
 }
+
+#[test]
+fn should_merge_multi_interrupts() {
+    let platform = super::upstream_using_tests::create_platform(
+        r#"
+using "A"
+
+sender:
+    [Irq, 3-4] -> receiver2@[0-2]
+    6 -> receiver@16
+    [7-8] -> receiver@[17-18]
+"#,
+        &[(
+            "A",
+            r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral @ sysbus <0, 1>
+    gpios: 64
+    [0-2, 3-5, Irq, OtherIrq] -> receiver@[0-7] | receiver@[8-15]
+    6 -> receiver2@7
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus<1, 2>
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus<2, 3>"#,
+        )],
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let receiver1 = platform.object_id("sysbus.receiver").unwrap();
+    let receiver2 = platform.object_id("sysbus.receiver2").unwrap();
+    let outputs = |name| platform.irq_endpoints(sender, name);
+    assert_eq!(outputs("Irq")[0].pin, 6);
+    assert_eq!(outputs("Irq")[0].receiver, receiver1);
+    assert_eq!(outputs("Irq")[1].pin, 14);
+    assert_eq!(outputs("Irq")[1].receiver, receiver1);
+    assert_eq!(outputs("Irq")[2].pin, 0);
+    assert_eq!(outputs("Irq")[2].receiver, receiver2);
+    assert_eq!(outputs("OtherIrq").len(), 2);
+    assert_eq!(outputs("OtherIrq")[0].pin, 7);
+    assert_eq!(outputs("OtherIrq")[0].receiver, receiver1);
+    assert_eq!(outputs("OtherIrq")[1].pin, 15);
+    assert_eq!(outputs("OtherIrq")[1].receiver, receiver1);
+    assert_eq!(outputs("0")[0].pin, 0);
+    assert_eq!(outputs("0")[0].receiver, receiver1);
+    assert_eq!(outputs("1")[0].pin, 1);
+    assert_eq!(outputs("1")[0].receiver, receiver1);
+    assert_eq!(outputs("2")[0].pin, 2);
+    assert_eq!(outputs("2")[0].receiver, receiver1);
+    assert_eq!(outputs("3").len(), 3);
+    assert_eq!(outputs("3")[0].pin, 3);
+    assert_eq!(outputs("3")[0].receiver, receiver1);
+    assert_eq!(outputs("3")[1].pin, 11);
+    assert_eq!(outputs("3")[1].receiver, receiver1);
+    assert_eq!(outputs("3")[2].pin, 1);
+    assert_eq!(outputs("3")[2].receiver, receiver2);
+    assert_eq!(outputs("4").len(), 3);
+    assert_eq!(outputs("4")[0].pin, 4);
+    assert_eq!(outputs("4")[0].receiver, receiver1);
+    assert_eq!(outputs("4")[1].pin, 12);
+    assert_eq!(outputs("4")[1].receiver, receiver1);
+    assert_eq!(outputs("4")[2].pin, 2);
+    assert_eq!(outputs("4")[2].receiver, receiver2);
+    assert_eq!(outputs("5").len(), 2);
+    assert_eq!(outputs("5")[0].pin, 5);
+    assert_eq!(outputs("5")[0].receiver, receiver1);
+    assert_eq!(outputs("5")[1].pin, 13);
+    assert_eq!(outputs("1")[0].receiver, receiver1);
+    assert_eq!(outputs("6").len(), 2);
+    assert_eq!(outputs("6")[0].pin, 7);
+    assert_eq!(outputs("6")[0].receiver, receiver2);
+    assert_eq!(outputs("6")[1].pin, 16);
+    assert_eq!(outputs("6")[1].receiver, receiver1);
+    assert_eq!(outputs("7")[0].pin, 17);
+    assert_eq!(outputs("7")[0].receiver, receiver1);
+    assert_eq!(outputs("8")[0].pin, 18);
+    assert_eq!(outputs("8")[0].receiver, receiver1);
+}
