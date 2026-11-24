@@ -586,16 +586,9 @@ impl Machine {
                 name => crate::parse_address(name.strip_prefix('r').unwrap_or(name)).ok(),
             }.filter(|index| *index < 16)
                 .ok_or_else(|| format!("unsupported Cortex-M monitor register {register}"))?;
-            let target = if index == 15 { &mut hart.pc } else { &mut hart.registers[index as usize] };
-            if let Some(value) = value {
-                *target = u32::try_from(value).map_err(|_| "register value exceeds Cortex-M width")?;
-                if index == 15 {
-                    hart.pc_written = true;
-                    hart.reset_pc_written |= hart.reset_held;
-                }
-                return Ok(None);
-            }
-            return Ok(Some(u64::from(*target)));
+            let value = value.map(u32::try_from).transpose()
+                .map_err(|_| "register value exceeds Cortex-M width")?;
+            return hart.monitor_integer_register(index, value).map(|value| value.map(u64::from));
         }
         if register == "resetvector" {
             if let Some(cpu) = &mut hart.rv64 {
@@ -2184,7 +2177,21 @@ impl Hart {
         value: Option<u32>,
     ) -> Result<Option<u32>, String> {
         if self.thumb.is_some() {
-            return Err("RISC-V register command requires a RISC-V CPU".into());
+            if index >= 16 {
+                return Err(format!("Wrong Cortex-M register index: {index}"));
+            }
+            let target = if index == 15 { &mut self.pc } else { &mut self.registers[index as usize] };
+            return match value {
+                Some(value) => {
+                    *target = value;
+                    if index == 15 {
+                        self.pc_written = true;
+                        self.reset_pc_written |= self.reset_held;
+                    }
+                    Ok(None)
+                }
+                None => Ok(Some(*target)),
+            };
         }
         let count = if self.csr.embedded_base { 16 } else { 32 };
         let register = self.registers[..count]

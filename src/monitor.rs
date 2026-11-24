@@ -2691,7 +2691,7 @@ fn execute(
             ))
         }
         [target, "SetRegister", register, value]
-            if boot.started || !boot.runtime.is_empty()
+            if boot.started || !boot.runtime.is_empty() || boot.image.is_some() || !boot.binaries.is_empty()
                 || (boot.has_platform() && crate::parse_address(unquote(resolve(register)?)).is_err()) =>
         {
             Some(Action::CpuRegister(
@@ -2701,7 +2701,7 @@ fn execute(
             ))
         }
         [target, "GetRegister", register]
-            if boot.started || !boot.runtime.is_empty()
+            if boot.started || !boot.runtime.is_empty() || boot.image.is_some() || !boot.binaries.is_empty()
                 || (boot.has_platform() && crate::parse_address(unquote(resolve(register)?)).is_err()) =>
         {
             Some(Action::CpuRegister(
