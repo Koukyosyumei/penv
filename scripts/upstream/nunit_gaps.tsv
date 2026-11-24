@@ -8,7 +8,6 @@ Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need Ke
 Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device flash passthrough and FIFO model are absent.
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	Remaining cases need duplicate dictionary-key exception chaining, additional collection binding, IRQ connection creation and initialization beyond the covered handler operations, general mock registration and lifecycle binding, and upstream multiline edge behavior for lone end-of-line escaped delimiters and a missing delimiter between quoted values.
-Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	Remaining three cases require detecting overlapping IRQ source groups within one declaration, including explicit and default references to the same output.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.

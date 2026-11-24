@@ -85,4 +85,4 @@ tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.Platfo
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.ParserTests	66	66	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.PreLexerTests	21	21	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	20	17	3	0	0	-
-tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	46	43	0	3	0	Remaining three cases require detecting overlapping IRQ source groups within one declaration, including explicit and default references to the same output.
+tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	46	46	0	0	0	-

@@ -78,6 +78,16 @@ impl ScalarKind {
 }
 
 impl Model {
+    fn irq_outputs(self) -> &'static [&'static str] {
+        match self {
+            Model::IrqSender => &["Irq"],
+            Model::DualIrqSender => &["Irq", "AnotherIrq"],
+            Model::NumberedGpio => &["Irq", "OtherIrq"],
+            Model::IrqReceiver => &["IRQ"],
+            _ => &[],
+        }
+    }
+
     fn parse(name: &str) -> Option<Self> {
         match name {
             "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute" => {
@@ -636,6 +646,7 @@ pub(crate) fn create_with_init(
                 0,
             )?;
         }
+        check_irq_source_overlap(platform.objects[id].model, &connections)?;
         for (source, property) in connections {
             platform
                 .verify_irq(id, property, |name| resolve(&entry.source, name))
@@ -743,6 +754,45 @@ pub(crate) fn create_with_init(
     Ok(platform)
 }
 
+fn check_irq_source_overlap(
+    model: Model,
+    connections: &[(&SourceLine, &String)],
+) -> Result<(), String> {
+    let mut named = HashSet::new();
+    let mut ranges = Vec::new();
+    for (line, text) in connections {
+        let connection = irq_connection(text).map_err(|error| format!("{line}: {error}"))?;
+        if let Some(sources) = connection.sources {
+            for source in sources {
+                match source {
+                    IrqEnd::Property(name) => {
+                        if !named.insert(name) {
+                            return Err(format!("{line}: IrqSourceUsedMoreThanOnce: {name}"));
+                        }
+                    }
+                    IrqEnd::Number(pin) => ranges.push((pin, pin, *line)),
+                    IrqEnd::Range(a, b) => ranges.push((a.min(b), a.max(b), *line)),
+                }
+            }
+        } else if let [name] = model.irq_outputs()
+            && !named.insert(name)
+        {
+            return Err(format!("{line}: IrqSourceUsedMoreThanOnce: {name}"));
+        }
+    }
+    ranges.sort_unstable_by_key(|&(start, end, _)| (start, end));
+    let mut previous_end = None;
+    for (start, end, line) in ranges {
+        if previous_end.is_some_and(|limit| start <= limit) {
+            return Err(format!(
+                "{line}: IrqSourceUsedMoreThanOnce: overlapping pin groups"
+            ));
+        }
+        previous_end = Some(end);
+    }
+    Ok(())
+}
+
 type ScriptPlan<'a> = Vec<(usize, &'a str, Vec<&'a str>)>;
 
 fn merge_script<'a>(
@@ -841,13 +891,7 @@ impl CreatedPlatform {
     ) -> Result<(), String> {
         let connection = irq_connection(text)?;
         let sender = &self.objects[id];
-        let outputs: &[&str] = match sender.model {
-            Model::IrqSender => &["Irq"],
-            Model::DualIrqSender => &["Irq", "AnotherIrq"],
-            Model::NumberedGpio => &["Irq", "OtherIrq"],
-            Model::IrqReceiver => &["IRQ"],
-            _ => &[],
-        };
+        let outputs = sender.model.irq_outputs();
         for destination in &connection.destinations {
             let target =
                 resolve(destination.name).ok_or("IrqDestinationDoesNotExist: missing receiver")?;

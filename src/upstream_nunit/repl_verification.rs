@@ -1711,3 +1711,40 @@ sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral
         "IrqSourcePinDoesNotExist",
     );
 }
+
+#[test]
+fn should_fail_if_interrupt_used_second_time_in_entry_as_source() {
+    assert_error(
+        r#"
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver
+sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral
+    gpios: 2
+    2 -> receiver@6
+    [0, 1-3, 7] -> receiver@[5-9]"#,
+        "IrqSourceUsedMoreThanOnce",
+    );
+}
+
+#[test]
+fn should_fail_if_default_interrupt_used_second_time_in_entry() {
+    assert_error(
+        r#"
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    -> receiver@0
+    -> receiver @1"#,
+        "IrqSourceUsedMoreThanOnce",
+    );
+}
+
+#[test]
+fn should_fail_if_the_same_irq_used_twice_once_as_default() {
+    assert_error(
+        r#"
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
+    -> receiver@0
+    Irq -> receiver @1"#,
+        "IrqSourceUsedMoreThanOnce",
+    );
+}

@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,082 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,085 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 313 |
+| 移植待ち | 310 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 13 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 12 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -462,3 +462,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 リセットスクリプトの置換と追記の2件を移植した。上流と同じコマンド列をリセット用ハンドラーに登録することを検証した。[公式IDとの対応](nunit-evidence/targeted-repl-reset.tsv)・[実行ログ](nunit-evidence/targeted-repl-reset.log)
 
 IRQ の検証8件を移植した。モック型の出力と受信インターフェースに基づき、接続先、出力名、既定出力、ピン番号、接続数の診断を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-irq.tsv)・[実行ログ](nunit-evidence/targeted-repl-irq.log)
+
+IRQ の数値範囲、重複する既定出力、既定名と明示名が同じ出力を指す場合の3件を移植した。`VerificationTests` は公式46件すべての対応が揃い、最終の対象実行では128件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-irq-overlap.tsv)・[実行ログ](nunit-evidence/targeted-repl-irq-overlap.log)
