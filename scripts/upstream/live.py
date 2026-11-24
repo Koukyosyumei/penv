@@ -808,7 +808,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         positional = ("timeout", "testerId", "treatAsRegex", "includeUnfinishedLine")
         if verb == "WaitForTesterPrompt":
             positional = ("testerId", "timeout", "treatAsRegex")
-        options = self.log_options(args, set(positional), positional)
+        allowed = set(positional)
+        if self.rust_monitor and verb == "WaitForLineOnUart":
+            allowed.add("matchNextLine")
+        options = self.log_options(args, allowed, positional)
         if self.rust_monitor:
             tester_id = self.parse_tester_id(options.get("testerId"))
             timeout = options.get("timeout")
@@ -827,6 +830,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         command = f"{verb} {self.uart_text(expected)}{selector}{deadline} treatAsRegex={str(regex).lower()}"
         if captures:
             command += " captureGroups=true"
+        if "matchNextLine" in options:
+            command += f" matchNextLine={str(self.log_bool(options['matchNextLine'])).lower()}"
         return self.operation(command, uart_captures=True)
 
     def wait(self, expected, *args):

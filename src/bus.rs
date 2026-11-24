@@ -5121,16 +5121,16 @@ impl Bus {
         id: Option<usize>,
         pattern: &str,
     ) -> Result<UartWatch, String> {
-        self.watch_uart_tester_text(id, pattern, None, UartWaitMode::Lf)
+        self.watch_uart_tester_text(id, pattern, None, UartWaitMode::Lf, false)
     }
 
     pub fn watch_uart_tester_text(
-        &mut self, id: Option<usize>, pattern: &str, regex: Option<regex::Regex>, mode: UartWaitMode,
+        &mut self, id: Option<usize>, pattern: &str, regex: Option<regex::Regex>, mode: UartWaitMode, first_only: bool,
     ) -> Result<UartWatch, String> {
         let (id, TesterHistory::Text(history)) = self.uart_tester(id)? else {
             return Err("Attempt to wait for text on a tester configured in binary mode.".into());
         };
-        history.begin_text_wait(pattern, regex, mode);
+        history.begin_text_wait_with_policy(pattern, regex, mode, first_only);
         Ok(UartWatch::Tester(id))
     }
 
@@ -5143,6 +5143,13 @@ impl Bus {
 
     pub(crate) fn uart_activity_changed(&self, id: usize, previous: u64) -> bool {
         matches!(&self.uart_testers[id].history, TesterHistory::Text(history) if history.activity != previous)
+    }
+
+    pub(crate) fn uart_tester_suppresses_captures(&self, watch: UartWatch) -> bool {
+        matches!(watch, UartWatch::Tester(id) if matches!(
+            &self.uart_testers[id].history,
+            TesterHistory::Text(history) if history.suppress_match_captures()
+        ))
     }
 
     pub fn uart_tester_matched_line(&self, watch: UartWatch) -> Option<String> {

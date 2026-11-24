@@ -374,7 +374,7 @@ enum Action {
     CreateUartTester(String, bool, Option<u64>, Option<bool>, bool),
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
-    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, bool),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
@@ -986,11 +986,11 @@ fn run_commands(
                     })
                 })
             }
-            Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _) => {
+            Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _, first_only) => {
                 let cycles = uart_wait_cycles(machine, *id, *timeout)?;
                 let limit = cycles.min(budget);
                 let start = machine.elapsed_steps();
-                machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
+                machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode, *first_only).and_then(|watch| {
                     run_uart_watch(machine, watch, limit, &mut output)
                 }).and_then(|(stop, count)| {
                     retired += count;
@@ -1059,7 +1059,7 @@ fn run_commands(
                 };
                 machine.external_event(ExternalEvent::UartLine(target, text.clone(), ending.to_vec()))?;
                 if let Some(cycles) = cycles {
-                    let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt)?;
+                    let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, false)?;
                     let start = machine.elapsed_steps();
                     let limit = cycles.min(budget);
                     let (stop, count) = run_uart_watch(machine, watch, limit, &mut output)
@@ -1203,12 +1203,17 @@ pub fn serve(
                 }
             }
 
-            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only), .. }]) => {
                 let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
-                    let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode)?;
+                    let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode, *first_only)?;
                     let stop = drive_uart_watch(machine, watch, cycles, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
+                    let captures = if machine.bus.uart_tester_suppresses_captures(watch) {
+                        None
+                    } else {
+                        regex.as_ref()
+                    };
                     machine.bus.finish_stm32_uart_watch(watch);
                     if let Some(line) = failure {
                         return Ok(("FAIL", format!("Terminal tester failed! Test failing entry has been found on UART: {line}")));
@@ -1217,7 +1222,7 @@ pub fn serve(
                         ((Stop::OutputMatch, _), Some(line)) if *absent => Ok(("FAIL", format!("Unexpected UART entry: {line}"))),
                         ((Stop::Limit, _), _) if *absent => Ok(("MATCH", String::new())),
                         ((Stop::OutputMatch, _), Some(line)) if *capture_groups => {
-                            Ok(("MATCHCAPTURES", uart_capture_payload(&line, regex.as_ref())))
+                            Ok(("MATCHCAPTURES", uart_capture_payload(&line, captures)))
                         }
                         ((Stop::OutputMatch, _), Some(line)) => Ok(("MATCH", line)),
                         ((Stop::Limit, _), _) => Ok(("FAIL", format!("Terminal tester failed! UART line containing {expected:?} was not received (Limit)"))),
@@ -2513,6 +2518,7 @@ fn execute(
                 options.timeout,
                 *command == "ShouldNotBeOnUart",
                 options.capture_groups,
+                options.first_only,
             ))
         }
         [
@@ -3492,6 +3498,7 @@ struct TesterWaitOptions {
     match_start: bool,
     regex: bool,
     capture_groups: bool,
+    first_only: bool,
 }
 
 fn tester_wait_options<'a>(
@@ -3504,6 +3511,7 @@ fn tester_wait_options<'a>(
     let mut match_start = None;
     let mut regex = None;
     let mut capture_groups = None;
+    let mut first_only = None;
     for option in options.split_whitespace() {
         match option.split_once('=') {
             Some(("testerId", value)) if id.is_none() => {
@@ -3516,6 +3524,11 @@ fn tester_wait_options<'a>(
                 if kind == TesterOptionsKind::Bytes && match_start.is_none() =>
             {
                 match_start = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("matchNextLine", value))
+                if kind == TesterOptionsKind::Line && first_only.is_none() =>
+            {
+                first_only = Some(parse_tester_bool(resolve(value)?)?);
             }
             Some(("captureGroups", value))
                 if kind == TesterOptionsKind::Line && capture_groups.is_none() =>
@@ -3538,6 +3551,7 @@ fn tester_wait_options<'a>(
         match_start: match_start.unwrap_or(false),
         regex: regex.unwrap_or(false),
         capture_groups: capture_groups.unwrap_or(false),
+        first_only: first_only.unwrap_or(false),
     })
 }
 
