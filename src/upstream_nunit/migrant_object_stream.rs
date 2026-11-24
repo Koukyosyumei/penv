@@ -295,6 +295,18 @@ fn deep_clone_with_hooks(
     transients: Option<&'static Transients<'static>>,
     hooks: &'static [LateRecordHook<'static>],
 ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+    clone_using_methods(graph, root, stamped, transients, hooks, None, None)
+}
+
+fn clone_using_methods(
+    graph: &Graph,
+    root: ObjectId,
+    stamped: bool,
+    transients: Option<&'static Transients<'static>>,
+    hooks: &'static [LateRecordHook<'static>],
+    write_codecs: Option<&'static [Codec]>,
+    read_codecs: Option<&'static [Codec]>,
+) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
     let mut writer = ObjectWriter::new(&mut stream, graph, References::Preserve, true);
     if stamped {
@@ -302,6 +314,9 @@ fn deep_clone_with_hooks(
     }
     if let Some(transients) = transients {
         writer = writer.with_transients(transients);
+    }
+    if let Some(codecs) = write_codecs {
+        writer = writer.with_generated_records(codecs);
     }
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
@@ -313,24 +328,64 @@ fn deep_clone_with_hooks(
     if let Some(transients) = transients {
         reader = reader.with_transients(transients);
     }
+    if let Some(codecs) = read_codecs {
+        reader = reader.with_generated_records(codecs);
+    }
     let root = reader.read_object().unwrap();
     (reader, root)
 }
 
+const GRAPH_CODECS: &[Codec] = &[
+    generated_record!("System.Object";),
+    generated_record!("SimpleClass"; value: integer, string: reference),
+    generated_record!("CyclicRef"; another: reference, value: integer),
+    generated_record!("SimpleContainer"; first: reference, second: reference),
+    generated_record!("ClassWithReadonly"; value: integer),
+    generated_record!("ClassWithReferenceToTheObjectOfTheSameType"; next: reference),
+];
+
+#[derive(Clone, Copy, Default)]
+struct GraphMethods {
+    stamped: bool,
+    write: bool,
+    read: bool,
+}
+
+impl GraphMethods {
+    fn clone(
+        self,
+        graph: &Graph,
+        root: ObjectId,
+    ) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+        clone_using_methods(
+            graph,
+            root,
+            self.stamped,
+            None,
+            &[],
+            self.write.then_some(GRAPH_CODECS),
+            self.read.then_some(GRAPH_CODECS),
+        )
+    }
+}
+
 #[test]
 fn should_serialize_object() {
-    should_serialize_object_with_stamping(false);
+    should_serialize_object_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_object_stamped() {
-    should_serialize_object_with_stamping(true);
+    should_serialize_object_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_object_with_stamping(stamped: bool) {
+fn should_serialize_object_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let object = graph.insert(record("System.Object", vec![]));
-    let (reader, copy) = deep_clone(&graph, object, stamped);
+    let (reader, copy) = methods.clone(&graph, object);
     assert_eq!(
         reader.graph().get(copy),
         Some(&record("System.Object", vec![]))
@@ -339,22 +394,25 @@ fn should_serialize_object_with_stamping(stamped: bool) {
 
 #[test]
 fn should_serialize_simple_class() {
-    should_serialize_simple_class_with_stamping(false);
+    should_serialize_simple_class_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_simple_class_stamped() {
-    should_serialize_simple_class_with_stamping(true);
+    should_serialize_simple_class_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_simple_class_with_stamping(stamped: bool) {
+fn should_serialize_simple_class_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let text = graph.insert(string("Magic"));
     let object = graph.insert(record(
         "SimpleClass",
         vec![Value::Integer(0x69), Value::Ref(text)],
     ));
-    let (reader, copy) = deep_clone(&graph, object, stamped);
+    let (reader, copy) = methods.clone(&graph, object);
     let restored = reader.graph();
     let copy = restored.get(copy).unwrap();
     let (class, original) = (fields(copy), fields(graph.get(object).unwrap()));
@@ -374,20 +432,23 @@ fn cyclic_record(another: Value, val: i64) -> Object {
 
 #[test]
 fn should_serialize_cyclic_reference() {
-    should_serialize_cyclic_reference_with_stamping(false);
+    should_serialize_cyclic_reference_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_cyclic_reference_stamped() {
-    should_serialize_cyclic_reference_with_stamping(true);
+    should_serialize_cyclic_reference_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_cyclic_reference_with_stamping(stamped: bool) {
+fn should_serialize_cyclic_reference_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let one = graph.insert(cyclic_record(Value::Null, 0));
     let another = graph.insert(cyclic_record(Value::Ref(one), 1));
     *graph.get_mut(one).unwrap() = cyclic_record(Value::Ref(another), 0);
-    let (reader, one_copy) = deep_clone(&graph, one, stamped);
+    let (reader, one_copy) = methods.clone(&graph, one);
     let graph = reader.graph();
     let another = reference(&fields(graph.get(one_copy).unwrap())[0]);
     assert_eq!(
@@ -399,19 +460,22 @@ fn should_serialize_cyclic_reference_with_stamping(stamped: bool) {
 
 #[test]
 fn should_serialize_reference_to_self() {
-    should_serialize_reference_to_self_with_stamping(false);
+    should_serialize_reference_to_self_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_reference_to_self_stamped() {
-    should_serialize_reference_to_self_with_stamping(true);
+    should_serialize_reference_to_self_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_reference_to_self_with_stamping(stamped: bool) {
+fn should_serialize_reference_to_self_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let one = graph.insert(cyclic_record(Value::Null, 0));
     *graph.get_mut(one).unwrap() = cyclic_record(Value::Ref(one), 0);
-    let (reader, copy) = deep_clone(&graph, one, stamped);
+    let (reader, copy) = methods.clone(&graph, one);
     assert_eq!(
         copy,
         reference(&fields(reader.graph().get(copy).unwrap())[0])
@@ -442,32 +506,38 @@ fn should_serialize_array_reference_to_self_with_stamping(stamped: bool) {
 
 #[test]
 fn should_serialize_null_reference() {
-    should_serialize_null_reference_with_stamping(false);
+    should_serialize_null_reference_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_null_reference_stamped() {
-    should_serialize_null_reference_with_stamping(true);
+    should_serialize_null_reference_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_null_reference_with_stamping(stamped: bool) {
+fn should_serialize_null_reference_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let object = graph.insert(record("SimpleClass", vec![Value::Integer(0), Value::Null]));
-    let (reader, copy) = deep_clone(&graph, object, stamped);
+    let (reader, copy) = methods.clone(&graph, object);
     assert_eq!(graph.get(object), reader.graph().get(copy));
 }
 
 #[test]
 fn should_preserve_identity() {
-    should_preserve_identity_with_stamping(false);
+    should_preserve_identity_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_preserve_identity_stamped() {
-    should_preserve_identity_with_stamping(true);
+    should_preserve_identity_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_preserve_identity_with_stamping(stamped: bool) {
+fn should_preserve_identity_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let text = graph.insert(string("This is a string"));
     let first = graph.insert(record(
@@ -482,7 +552,7 @@ fn should_preserve_identity_with_stamping(stamped: bool) {
         "SimpleContainer",
         vec![Value::Ref(first), Value::Ref(second)],
     ));
-    let (reader, copy) = deep_clone(&graph, container, stamped);
+    let (reader, copy) = methods.clone(&graph, container);
     let graph = reader.graph();
     let container = fields(graph.get(copy).unwrap());
     let first = fields(graph.get(reference(&container[0])).unwrap());
@@ -492,18 +562,21 @@ fn should_preserve_identity_with_stamping(stamped: bool) {
 
 #[test]
 fn should_serialize_readonly_field() {
-    should_serialize_readonly_field_with_stamping(false);
+    should_serialize_readonly_field_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_readonly_field_stamped() {
-    should_serialize_readonly_field_with_stamping(true);
+    should_serialize_readonly_field_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_readonly_field_with_stamping(stamped: bool) {
+fn should_serialize_readonly_field_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let object = graph.insert(record("ClassWithReadonly", vec![Value::Integer(0xabcd)]));
-    let (reader, copy) = deep_clone(&graph, object, stamped);
+    let (reader, copy) = methods.clone(&graph, object);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::Integer(0xabcd)
@@ -512,15 +585,18 @@ fn should_serialize_readonly_field_with_stamping(stamped: bool) {
 
 #[test]
 fn should_serialize_deep_graph() {
-    should_serialize_deep_graph_with_stamping(false);
+    should_serialize_deep_graph_with_methods(GraphMethods::default());
 }
 
 #[test]
 fn should_serialize_deep_graph_stamped() {
-    should_serialize_deep_graph_with_stamping(true);
+    should_serialize_deep_graph_with_methods(GraphMethods {
+        stamped: true,
+        ..GraphMethods::default()
+    });
 }
 
-fn should_serialize_deep_graph_with_stamping(stamped: bool) {
+fn should_serialize_deep_graph_with_methods(methods: GraphMethods) {
     let mut graph = Graph::default();
     let class = "ClassWithReferenceToTheObjectOfTheSameType";
     let root = graph.insert(record(class, vec![Value::Null]));
@@ -530,7 +606,7 @@ fn should_serialize_deep_graph_with_stamping(stamped: bool) {
         *graph.get_mut(current).unwrap() = record(class, vec![Value::Ref(next)]);
         current = next;
     }
-    let (reader, mut copy) = deep_clone(&graph, root, stamped);
+    let (reader, mut copy) = methods.clone(&graph, root);
     assert!(reader.graph().get(copy).is_some());
     let mut depth = 0;
     loop {
@@ -2542,4 +2618,78 @@ mod open_generated_both {
     fn should_preserve_weak_references() {
         should_preserve_weak_references_with_methods(METHOD);
     }
+}
+
+mod serial_generated_graph {
+    use super::*;
+
+    macro_rules! configurations {
+        ($module:ident, $case:ident) => {
+            mod $module {
+                use super::*;
+                #[test]
+                fn reader_plain() {
+                    $case(GraphMethods {
+                        stamped: false,
+                        write: false,
+                        read: true,
+                    });
+                }
+                #[test]
+                fn reader_stamped() {
+                    $case(GraphMethods {
+                        stamped: true,
+                        write: false,
+                        read: true,
+                    });
+                }
+                #[test]
+                fn writer_plain() {
+                    $case(GraphMethods {
+                        stamped: false,
+                        write: true,
+                        read: false,
+                    });
+                }
+                #[test]
+                fn writer_stamped() {
+                    $case(GraphMethods {
+                        stamped: true,
+                        write: true,
+                        read: false,
+                    });
+                }
+                #[test]
+                fn both_plain() {
+                    $case(GraphMethods {
+                        stamped: false,
+                        write: true,
+                        read: true,
+                    });
+                }
+                #[test]
+                fn both_stamped() {
+                    $case(GraphMethods {
+                        stamped: true,
+                        write: true,
+                        read: true,
+                    });
+                }
+            }
+        };
+    }
+    configurations!(object, should_serialize_object_with_methods);
+    configurations!(simple_class, should_serialize_simple_class_with_methods);
+    configurations!(
+        cyclic_reference,
+        should_serialize_cyclic_reference_with_methods
+    );
+    configurations!(
+        reference_to_self,
+        should_serialize_reference_to_self_with_methods
+    );
+    configurations!(null_reference, should_serialize_null_reference_with_methods);
+    configurations!(preserve_identity, should_preserve_identity_with_methods);
+    configurations!(readonly_field, should_serialize_readonly_field_with_methods);
+    configurations!(deep_graph, should_serialize_deep_graph_with_methods);
 }

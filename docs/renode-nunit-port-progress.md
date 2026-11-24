@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,601 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,649 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,795 |
+| 移植待ち | 1,747 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -318,3 +318,9 @@ Rust マクロで型ごとの専用フィールドコーデックを生成し、
 型別の読み書きコーデックを選び、既存のサロゲート処理で型階層・共有参照・自己参照を検証した。生成書き込みでは閉じたジェネリック型ごとに変換規則をキャッシュし、int と float の2エントリが追加される公式アサーションを維持した。追加132件を含む公式176件が対象実行で合格した。
 
 - [公式 ID](nunit-evidence/targeted-migrant-surrogate-generated.tsv)と[176件の実行ログ](nunit-evidence/targeted-migrant-surrogate-generated.log)
+
+## Migrant SerializationTests のグラフ生成経路
+
+8メソッドについて、コレクションをユーザーオブジェクトとして扱わない設定の生成読み書き3組み合わせと型スタンプ有無を移植した。共有参照、自己参照、循環、null、読み取り専用フィールド、45,000段のグラフを検証し、追加48件が合格した。
+
+- [公式 ID](nunit-evidence/targeted-migrant-serialization-graph.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-graph.log)
