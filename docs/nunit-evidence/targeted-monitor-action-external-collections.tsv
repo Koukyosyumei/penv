@@ -1,0 +1,6 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.NullableIntListEmpty	0-1062	upstream_nunit::monitor_action_arguments::nullable_int_list_empty	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.ForEachAndSelect	0-1067	upstream_nunit::monitor_action_arguments::for_each_and_select	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.SelectWithListOfValueType	0-1068	upstream_nunit::monitor_action_arguments::select_with_list_of_value_type	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.SelectWithParamArray	0-1069	upstream_nunit::monitor_action_arguments::select_with_param_array	passed
+src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj::Antmicro.Renode.MonitorTests.CommandTests.ActionArguments.SelectChainWithProperty	0-1070	upstream_nunit::monitor_action_arguments::select_chain_with_property	passed

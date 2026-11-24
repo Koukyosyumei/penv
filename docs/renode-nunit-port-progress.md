@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,159 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,164 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 236 |
+| 移植待ち | 231 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 12 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 11 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -492,3 +492,5 @@ CLINT の CPU スコープ付き登録を実際のプラットフォームロー
 引数の失敗12件を追加した。重複、名前付き引数の後の不正な位置指定、要素型、閉じていない角括弧などを拒否し、モニターの診断に候補メソッド一覧が含まれることを照合した。対象の51件が合格した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-errors.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-errors.log)
 
 外部オブジェクトの1次元・2次元インデクサー4件を追加した。ネイティブの `MockExternal` を `emulation AddMockExternal` で作成し、上流と同じ入力で読み書きし、`external Clear` を実行する。対象の55件が合格した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-indexers.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-indexers.log)
+
+外部コレクションの `Select`・`ForEach` 4件と空の nullable リスト1件を移植した。上流のコマンドと出力アサーションを維持し、続けて実行するコマンド間の状態、可変長引数、入れ子の結果を検証した。ネイティブの拡張登録で `ActionArguments` の全60件が合格した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-external-collections.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-external-collections.log)

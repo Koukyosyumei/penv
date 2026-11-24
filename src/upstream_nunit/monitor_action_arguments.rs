@@ -173,16 +173,144 @@ const SIGNATURES: &[&str] = &[
     "MethodWithNullableIntList(List<int?> numbers)",
 ];
 
-#[derive(Default)]
+struct Wrapped {
+    value: i32,
+    ok: bool,
+}
+
+enum ExternalValue {
+    Integer(i32),
+    Wrapped(usize),
+    Text(String),
+    List(Vec<Self>),
+    Void,
+}
+
+impl ExternalValue {
+    fn render(&self) -> String {
+        match self {
+            Self::Integer(value) => value.to_string(),
+            Self::Text(value) => value.clone(),
+            Self::Wrapped(_) => "Wrapped".into(),
+            Self::Void => String::new(),
+            Self::List(values) => {
+                let rendered: Vec<_> = values.iter().map(Self::render).collect();
+                if values
+                    .iter()
+                    .any(|value| matches!(value, Self::List(_) | Self::Wrapped(_)))
+                {
+                    format!("[\r\r\n{}\r\r\n]", rendered.join("\r\r\n"))
+                } else {
+                    rendered.join(", ")
+                }
+            }
+        }
+    }
+}
+
 struct MockExternal {
     result: Option<String>,
+    integers: Vec<i32>,
+    wrapped: Vec<Wrapped>,
 }
 
 impl MockExternal {
+    fn new() -> Self {
+        let integers: Vec<_> = (1..=3).collect();
+        let wrapped = integers
+            .iter()
+            .map(|&value| Wrapped { value, ok: false })
+            .collect();
+        Self {
+            result: None,
+            integers,
+            wrapped,
+        }
+    }
+
+    fn collection_action(
+        &mut self,
+        value: ExternalValue,
+        words: &[&str],
+    ) -> Result<ExternalValue, String> {
+        use ExternalValue::{Integer, List, Text, Void, Wrapped as WrappedValue};
+        if words.is_empty() {
+            return Ok(value);
+        }
+        match (value, words) {
+            (List(values), [method @ ("Select" | "ForEach"), rest @ ..]) if !rest.is_empty() => {
+                let selected = values
+                    .into_iter()
+                    .map(|value| self.collection_action(value, rest))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(if *method == "Select" {
+                    List(selected)
+                } else {
+                    Void
+                })
+            }
+            (Integer(value), ["ToString", format]) => {
+                let pattern = quoted_value(format)?;
+                let width = pattern
+                    .strip_prefix('x')
+                    .ok_or("expected hexadecimal format")?
+                    .parse::<usize>()
+                    .map_err(|_| "invalid format width")?;
+                Ok(Text(format!("{value:0width$x}")))
+            }
+            (WrappedValue(index), ["Ok"]) => Ok(Text(
+                if self.wrapped[index].ok {
+                    "True"
+                } else {
+                    "False"
+                }
+                .into(),
+            )),
+            (WrappedValue(index), ["Ok", set]) => {
+                self.wrapped[index].ok = set.parse().map_err(|_| "expected a boolean")?;
+                Ok(Void)
+            }
+            (WrappedValue(index), ["WithExtraValues", values @ ..]) => {
+                let mut values = values
+                    .iter()
+                    .map(|value| integer(value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.insert(0, self.wrapped[index].value);
+                Ok(Text(
+                    values
+                        .iter()
+                        .map(i32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ))
+            }
+            (WrappedValue(index), ["AsList", rest @ ..]) => {
+                self.collection_action(List(vec![WrappedValue(index)]), rest)
+            }
+            _ => Err("unsupported collection action".into()),
+        }
+    }
+
     fn invoke(&mut self, words: &[&str]) -> Result<String, String> {
         if words == ["Clear"] {
             self.result = None;
             return Ok(String::new());
+        }
+        if let [member @ ("Ints" | "WrappedInts"), rest @ ..] = words {
+            let values = if *member == "Ints" {
+                self.integers
+                    .iter()
+                    .copied()
+                    .map(ExternalValue::Integer)
+                    .collect()
+            } else {
+                (0..self.wrapped.len())
+                    .map(ExternalValue::Wrapped)
+                    .collect()
+            };
+            return self
+                .collection_action(ExternalValue::List(values), rest)
+                .map(|value| value.render());
         }
         let (&index, tail) = words.split_first().ok_or("missing external action")?;
         let indices = array(index)?
@@ -225,7 +353,7 @@ fn execute(command: &str) -> Result<String, String> {
         method_signatures: SIGNATURES,
         execute: Box::new(move |machine, words| {
             if words == ["AddMockExternal"] {
-                *setup.borrow_mut() = Some(MockExternal::default());
+                *setup.borrow_mut() = Some(MockExternal::new());
                 Ok(String::new())
             } else {
                 fixture_emulation(machine, words)
@@ -648,4 +776,35 @@ fn indexer_two_dset_get() {
         "external[\"a\", \"b\"] \"c\"; external[\"d\", \"e\"]",
         "2D: [a, b]=c and d and e",
     );
+}
+
+#[test]
+fn nullable_int_list_empty() {
+    let output = execute("emulation MethodWithNullableIntList []").unwrap();
+    assert!(output.contains("numbers: []"), "{output:?}");
+}
+
+#[test]
+fn for_each_and_select() {
+    let output = execute("external WrappedInts Select Ok; external WrappedInts ForEach Ok true; external WrappedInts Select Ok").unwrap();
+    assert!(output.contains("False, False, False"), "{output:?}");
+    assert!(output.contains("True, True, True"), "{output:?}");
+}
+
+#[test]
+fn select_with_list_of_value_type() {
+    let output = execute("external Ints Select ToString \"x4\"").unwrap();
+    assert!(output.contains("0001, 0002, 0003"), "{output:?}");
+}
+
+#[test]
+fn select_with_param_array() {
+    let output = execute("external WrappedInts Select WithExtraValues 0 9").unwrap();
+    assert!(output.contains("1, 0, 9, 2, 0, 9, 3, 0, 9"), "{output:?}");
+}
+
+#[test]
+fn select_chain_with_property() {
+    let output = execute("external WrappedInts Select AsList Select AsList").unwrap();
+    assert!(output.contains("[\r\r\n[\r\r\n["), "{output:?}");
 }
