@@ -212,9 +212,17 @@ pub(crate) fn handle(
                 _ => return Err("expected log wait options: start|no-start|buffered pause|continue".into()),
             };
             let absent = *operation == "AssertAbsentMonitorLog";
-            let ms = steps
-                .parse::<u64>()
-                .map_err(|_| "invalid timeout milliseconds")?;
+            let ms = if let Some(seconds) = steps.strip_suffix('s') {
+                let seconds: f32 = seconds.parse().map_err(|_| "invalid log timeout seconds")?;
+                let milliseconds = seconds * 1000.0;
+                if !seconds.is_finite() || seconds < 0.0 || f64::from(milliseconds) >= u64::MAX as f64 {
+                    return Err("invalid log timeout seconds".into());
+                }
+                // Renode receives a float in seconds and schedules an integer millisecond deadline.
+                milliseconds as u64
+            } else {
+                steps.parse::<u64>().map_err(|_| "invalid timeout milliseconds")?
+            };
             let steps = crate::monitor::duration_cycles(ms, 1000, machine.bus.monitor_step_hz())?;
             let keep = absent
                 || match *keep {
@@ -358,7 +366,7 @@ mod tests {
         machine.bus.write(0x8000_0000, 4, 0x6f, &mut io::sink()).unwrap();
         machine.primary.monitor_paused = true;
         attach(4).unwrap();
-        let command = "AssertAbsentMonitorLog 1 literal keep any 78";
+        let command = "AssertAbsentMonitorLog 0.0019s literal keep any 78";
         for (options, expected) in [("no-start pause", "STOP"), ("start pause", "MATCH")] {
             let result = handle(&mut machine, &format!("{command} {options}"), u64::MAX, &mut io::sink())
                 .unwrap().unwrap();

@@ -244,7 +244,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         pause = self.log_bool(options["pauseEmulation"]) if "pauseEmulation" in options else self.log_pause
         if pause and not self.rust_monitor:
             raise Unsupported("log tester pause-on-match requires the Rust monitor")
-        timeout = int(Decimal(self.duration(options.get("timeout", self.log_timeout))) * 1000)
+        duration = self.duration(options.get("timeout", self.log_timeout))
+        timeout = f"{duration}s" if self.rust_monitor else int(Decimal(duration) * 1000)
         starts = self.log_bool(options.get("startEmulation", "true"))
         if not self.rust_monitor and timeout and not (starts or self.started):
             raise Unsupported("cannot wait for virtual time while emulation is stopped")
@@ -260,7 +261,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             flags = f" {mode}" + (" pause" if pause else " continue")
         result = self.operation(
             f"{command} {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}{flags}")
-        if timeout and starts:
+        if not self.rust_monitor and timeout and starts:
             self.started = True
         return result
 
