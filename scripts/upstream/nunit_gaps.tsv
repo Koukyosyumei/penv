@@ -48,7 +48,7 @@ Antmicro.Renode.UnitTests.SVDParserTests	There is no SVD XML parser implementing
 Antmicro.Renode.UnitTests.SerializableMappedSegmentTests	There is no serializable MappedSegment object with lazy segment access and the corresponding persisted buffer representation.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
-Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	Remaining cases need symbol type/binding precedence, exact interval normalization and fragment precedence for overlapping or stacked batches, and zero-length address guessing.
+Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	The remaining three cases need symbol type and binding metadata, same-interval precedence by that metadata, and zero-length address guessing.
 Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.
 Antmicro.Renode.UnitTests.SystemBusTests	The remaining runnable cases need the generic object-registration pause/resume lifecycle, multiple native access callbacks within one region, parametrized registration or null CPU registration APIs.
 Antmicro.Renode.UnitTests.TimeTests	There is no BaseClockSource API with independently registered mutable ClockEntry callbacks and observation at each deadline.
