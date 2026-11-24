@@ -342,6 +342,21 @@ const GRAPH_CODECS: &[Codec] = &[
     generated_record!("SimpleContainer"; first: reference, second: reference),
     generated_record!("ClassWithReadonly"; value: integer),
     generated_record!("ClassWithReferenceToTheObjectOfTheSameType"; next: reference),
+    generated_record!("SimpleEnum"; value: integer),
+    generated_record!("EnumByte"; value: integer),
+    generated_record!("EnumLong"; value: integer),
+    generated_record!("EnumShort"; value: integer),
+    generated_record!("TestEnumFlags"; value: integer),
+    generated_record!("ClassWithNullableEnum"; value: nullable_integer),
+    generated_record!("KeyValuePair<int,int>"; key: integer, value: integer),
+    generated_record!("Stack"; items: reference),
+    generated_record!("Stack<char>"; items: reference),
+    generated_record!("System.Char"; value: integer),
+    generated_record!("SimpleDerivedClass"; base: integer, derived: integer),
+    generated_record!("SimplerStruct"; first: integer, second: integer),
+    generated_record!("SimpleStruct"; first: integer, text: reference),
+    generated_record!("ComplexStruct"; first: integer, nested: integer, text: reference),
+    generated_record!("GenericBox<SimpleStruct>"; value: integer, text: reference),
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -349,6 +364,15 @@ struct GraphMethods {
     stamped: bool,
     write: bool,
     read: bool,
+}
+
+impl From<bool> for GraphMethods {
+    fn from(stamped: bool) -> Self {
+        Self {
+            stamped,
+            ..Self::default()
+        }
+    }
 }
 
 impl GraphMethods {
@@ -1623,53 +1647,55 @@ stamp_modes!(empty_3d_plain, empty_3d_stamped, |s| empty_rectangular(
     &[2, 0, 2]
 ));
 
-fn enum_values(stamped: bool, class: &str, values: &[i64]) {
+fn enum_values(methods: impl Into<GraphMethods>, class: &str, values: &[i64]) {
+    let methods = methods.into();
     for &value in values {
         let mut graph = Graph::default();
         let original = record(class, vec![Value::Integer(value)]);
         let root = graph.insert(original.clone());
-        let (reader, copy) = deep_clone(&graph, root, stamped);
+        let (reader, copy) = methods.clone(&graph, root);
         assert_eq!(reader.graph().get(copy), Some(&original));
     }
 }
 
-fn multiple_enum_values(stamped: bool) {
+fn multiple_enum_values(methods: impl Into<GraphMethods>) {
+    let methods = methods.into();
     enum_values(
-        stamped,
+        methods,
         "EnumLong",
         &[i64::MAX - 12345, i64::MAX - 12344, -1],
     );
-    enum_values(stamped, "EnumShort", &[6, 7, i64::from(i16::MIN) + 2]);
+    enum_values(methods, "EnumShort", &[6, 7, i64::from(i16::MIN) + 2]);
     enum_values(
-        stamped,
+        methods,
         "TestEnumFlags",
         &[1, 2, 4, 1 | 2, 1 | 2 | 4, 2 | 4],
     );
 }
 
-fn nullable_enum(stamped: bool) {
+fn nullable_enum(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(record("ClassWithNullableEnum", vec![Value::Integer(1)]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::Integer(1)
     );
 }
 
-fn key_value_pair(stamped: bool) {
+fn key_value_pair(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(record(
         "KeyValuePair<int,int>",
         vec![Value::Integer(12), Value::Integer(34)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let restored = fields(reader.graph().get(copy).unwrap());
     assert_eq!(restored[0], Value::Integer(12));
     assert_eq!(restored[1], Value::Integer(34));
 }
 
-fn character_stack(stamped: bool, boxed: bool) {
+fn character_stack(methods: impl Into<GraphMethods>, boxed: bool) {
     let mut graph = Graph::default();
     let class = if boxed { "Stack" } else { "Stack<char>" };
     let input: Vec<_> = "It works!".encode_utf16().collect();
@@ -1687,7 +1713,7 @@ fn character_stack(stamped: bool, boxed: bool) {
         .collect();
     elements.reverse();
     let root = list(&mut graph, class, elements);
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let actual: Vec<_> = list_values(graph, copy, class)
         .iter()
@@ -1730,13 +1756,13 @@ stamp_modes!(generic_stack_plain, generic_stack_stamped, |s| {
     character_stack(s, false)
 });
 
-fn derived_class(stamped: bool) {
+fn derived_class(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(record(
         "SimpleDerivedClass",
         vec![Value::Integer(1), Value::Integer(2)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let Some(Object::Record { class, fields }) = reader.graph().get(copy) else {
         panic!("expected a derived object");
     };
@@ -1745,24 +1771,24 @@ fn derived_class(stamped: bool) {
     assert_eq!(fields[0], Value::Integer(1));
 }
 
-fn simpler_struct(stamped: bool) {
+fn simpler_struct(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let input = record(
         "SimplerStruct",
         vec![Value::Integer(1_234_567), Value::Integer(543)],
     );
     let root = graph.insert(input.clone());
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(reader.graph().get(copy), Some(&input));
 }
 
-fn struct_with_string(stamped: bool, class_name: &str, integers: &[i64]) {
+fn struct_with_string(methods: impl Into<GraphMethods>, class_name: &str, integers: &[i64]) {
     let mut graph = Graph::default();
     let text = graph.insert(string("allman"));
     let mut values: Vec<_> = integers.iter().copied().map(Value::Integer).collect();
     values.push(Value::Ref(text));
     let root = graph.insert(record(class_name, values));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let Some(Object::Record { class, fields }) = reader.graph().get(copy) else {
         panic!("expected typed record");
     };
@@ -2620,64 +2646,64 @@ mod open_generated_both {
     }
 }
 
+macro_rules! configurations {
+    ($module:ident, $case:expr) => {
+        mod $module {
+            use super::*;
+            #[test]
+            fn reader_plain() {
+                ($case)(GraphMethods {
+                    stamped: false,
+                    write: false,
+                    read: true,
+                });
+            }
+            #[test]
+            fn reader_stamped() {
+                ($case)(GraphMethods {
+                    stamped: true,
+                    write: false,
+                    read: true,
+                });
+            }
+            #[test]
+            fn writer_plain() {
+                ($case)(GraphMethods {
+                    stamped: false,
+                    write: true,
+                    read: false,
+                });
+            }
+            #[test]
+            fn writer_stamped() {
+                ($case)(GraphMethods {
+                    stamped: true,
+                    write: true,
+                    read: false,
+                });
+            }
+            #[test]
+            fn both_plain() {
+                ($case)(GraphMethods {
+                    stamped: false,
+                    write: true,
+                    read: true,
+                });
+            }
+            #[test]
+            fn both_stamped() {
+                ($case)(GraphMethods {
+                    stamped: true,
+                    write: true,
+                    read: true,
+                });
+            }
+        }
+    };
+}
 mod serial_generated_graph {
     use super::*;
 
-    macro_rules! configurations {
-        ($module:ident, $case:ident) => {
-            mod $module {
-                use super::*;
-                #[test]
-                fn reader_plain() {
-                    $case(GraphMethods {
-                        stamped: false,
-                        write: false,
-                        read: true,
-                    });
-                }
-                #[test]
-                fn reader_stamped() {
-                    $case(GraphMethods {
-                        stamped: true,
-                        write: false,
-                        read: true,
-                    });
-                }
-                #[test]
-                fn writer_plain() {
-                    $case(GraphMethods {
-                        stamped: false,
-                        write: true,
-                        read: false,
-                    });
-                }
-                #[test]
-                fn writer_stamped() {
-                    $case(GraphMethods {
-                        stamped: true,
-                        write: true,
-                        read: false,
-                    });
-                }
-                #[test]
-                fn both_plain() {
-                    $case(GraphMethods {
-                        stamped: false,
-                        write: true,
-                        read: true,
-                    });
-                }
-                #[test]
-                fn both_stamped() {
-                    $case(GraphMethods {
-                        stamped: true,
-                        write: true,
-                        read: true,
-                    });
-                }
-            }
-        };
-    }
     configurations!(object, should_serialize_object_with_methods);
     configurations!(simple_class, should_serialize_simple_class_with_methods);
     configurations!(
@@ -2692,4 +2718,27 @@ mod serial_generated_graph {
     configurations!(preserve_identity, should_preserve_identity_with_methods);
     configurations!(readonly_field, should_serialize_readonly_field_with_methods);
     configurations!(deep_graph, should_serialize_deep_graph_with_methods);
+}
+
+mod serial_generated_values {
+    use super::*;
+    configurations!(simple_enum, |m| enum_values(m, "SimpleEnum", &[1]));
+    configurations!(byte_enum, |m| enum_values(m, "EnumByte", &[200]));
+    configurations!(enums, multiple_enum_values);
+    configurations!(nullable_enum, nullable_enum);
+    configurations!(key_value_pair, key_value_pair);
+    configurations!(nongeneric_stack, |m| character_stack(m, true));
+    configurations!(generic_stack, |m| character_stack(m, false));
+    configurations!(derived_class, derived_class);
+    configurations!(simpler_struct, simpler_struct);
+    configurations!(simple_struct, |m| struct_with_string(
+        m,
+        "SimpleStruct",
+        &[5]
+    ));
+    configurations!(complex_struct, |m| struct_with_string(
+        m,
+        "ComplexStruct",
+        &[6, 5]
+    ));
 }

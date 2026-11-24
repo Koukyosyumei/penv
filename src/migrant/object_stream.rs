@@ -1225,6 +1225,14 @@ impl RecordOutput for ValidateGeneratedFields {
         }
     }
 
+    fn nullable_integer(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Null) {
+            Ok(())
+        } else {
+            self.integer(value)
+        }
+    }
+
     fn integer(&mut self, value: &Value) -> io::Result<()> {
         if matches!(value, Value::Integer(_)) {
             Ok(())
@@ -1263,6 +1271,14 @@ impl<W: Write> RecordOutput for GeneratedOutput<'_, W> {
             return Err(invalid("expected generated boolean field"));
         };
         self.data.bytes(&[7, u8::from(*value)])
+    }
+
+    fn nullable_integer(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Null) {
+            self.data.bytes(&[0])
+        } else {
+            self.integer(value)
+        }
     }
 
     fn integer(&mut self, value: &Value) -> io::Result<()> {
@@ -1318,6 +1334,14 @@ impl<R: Read> RecordInput for GeneratedInput<'_, R> {
             0 => Ok(Value::Boolean(false)),
             1 => Ok(Value::Boolean(true)),
             _ => Err(invalid("invalid boolean value")),
+        }
+    }
+
+    fn nullable_integer(&mut self) -> io::Result<Value> {
+        match self.data.byte()? {
+            0 => Ok(Value::Null),
+            1 => Ok(Value::Integer(self.data.signed()?)),
+            _ => Err(invalid("expected generated nullable integer field")),
         }
     }
 

@@ -12,6 +12,7 @@ pub struct Codec {
 pub trait RecordOutput {
     fn count(&mut self, count: usize) -> io::Result<()>;
     fn boolean(&mut self, value: &Value) -> io::Result<()>;
+    fn nullable_integer(&mut self, value: &Value) -> io::Result<()>;
     fn integer(&mut self, value: &Value) -> io::Result<()>;
     fn float(&mut self, value: &Value) -> io::Result<()>;
     fn reference(&mut self, value: &Value) -> io::Result<()>;
@@ -20,6 +21,7 @@ pub trait RecordOutput {
 pub trait RecordInput {
     fn expect_count(&mut self, count: usize) -> io::Result<()>;
     fn boolean(&mut self) -> io::Result<Value>;
+    fn nullable_integer(&mut self) -> io::Result<Value>;
     fn integer(&mut self) -> io::Result<Value>;
     fn float(&mut self) -> io::Result<Value>;
     fn reference(&mut self) -> io::Result<Value>;
