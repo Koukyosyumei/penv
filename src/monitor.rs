@@ -270,6 +270,7 @@ enum Action {
     ClicGpio(String, u32, bool),
     LogUart(String),
     GpioWire(String, u8, String, u8),
+    GpioOverlay(Vec<(String, u8, String, u8)>),
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     TimeSourceInfo,
@@ -710,6 +711,9 @@ fn run_commands(
                 .filter(|clic| clic.name == *name)
                 .ok_or_else(|| format!("unsupported CLIC target {name:?}"))
                 .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None),
+            Action::GpioOverlay(links) => machine.bus.connect_stm32_gpios(
+                links.iter().map(|(from, output, to, input)| (from.as_str(), *output, to.as_str(), *input)),
+            ).map(|()| None),
             Action::GpioWire(from, output_pin, to, input_pin) => machine.bus
                 .connect_stm32_gpio(from, *output_pin, to, *input_pin).map(|()| None),
             Action::LogUart(target) => machine.bus.log_uart(target).map(|()| None),
@@ -1581,8 +1585,8 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
             continue;
         }
         if let Some(value) = text.strip_prefix("machine LoadPlatformDescriptionFromString ") {
-            if !state.machine || state.boot.started || state.boot.image.is_some() {
-                return Err(error("inline REPL requires a machine before firmware loads"));
+            if !state.machine {
+                return Err(error("inline REPL requires a machine"));
             }
             let value = value.trim();
             let source = if let Some(first) = value.strip_prefix("\"\"\"") {
@@ -1601,7 +1605,14 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     .ok_or_else(|| error("expected quoted inline REPL"))?;
                 inner.replace("\\\"", "\"")
             };
-            state.boot.inline_repl.push((origin.to_owned(), source));
+            if state.boot.started || !state.boot.runtime.is_empty() {
+                let links = parse_gpio_overlay(&source, root).map_err(|message| error(&message))?;
+                state.boot.runtime.push(RuntimeCommand {
+                    line: line + 1, source: path.to_owned(), action: Action::GpioOverlay(links),
+                });
+            } else {
+                state.boot.inline_repl.push((origin.to_owned(), source));
+            }
             continue;
         }
         if let Some(name) = text
@@ -1876,6 +1887,28 @@ fn parse_reset_hooks(mut commands: &str, hooks: &mut Vec<ResetHook>) -> Result<(
     Ok(())
 }
 
+fn parse_gpio_overlay(source: &str, root: &Path) -> Result<Vec<(String, u8, String, u8)>, String> {
+    let unsupported = || "unsupported live REPL overlay: expected GPIO pin connections on existing devices".to_string();
+    let entries = crate::repl_parser::parse_inline(source, root)?;
+    let mut links = Vec::new();
+    for entry in entries {
+        if !entry.model.is_empty() || entry.registration.is_some() || entry.body.is_empty() {
+            return Err(unsupported());
+        }
+        for (_, wire) in entry.body {
+            let (output, destination) = wire.split_once("->").ok_or_else(unsupported)?;
+            let (target, input) = destination.split_once('@').ok_or_else(unsupported)?;
+            let output = output.trim().parse::<u8>().map_err(|_| unsupported())?;
+            let input = input.trim().parse::<u8>().map_err(|_| unsupported())?;
+            links.push((entry.name.clone(), output, target.trim().into(), input));
+        }
+    }
+    if links.is_empty() {
+        return Err(unsupported());
+    }
+    Ok(links)
+}
+
 fn execute(
     text: &str,
     words: &[&str],
@@ -2002,6 +2035,11 @@ fn execute(
         ["rcc" | "sysbus.rcc", "WriteDoubleWord", offset, value] if boot.started => Some(Action::WriteRcc(
             crate::parse_address(resolve(offset)?)?, crate::parse_address(resolve(value)?)?)),
 
+        ["machine", "LoadPlatformDescriptionFromString", value] if boot.started => {
+            let source = crate::repl_parser::quoted_value(resolve(value)?)
+                .map_err(|_| "expected quoted inline REPL")?;
+            Some(Action::GpioOverlay(parse_gpio_overlay(&source, root)?))
+        }
         ["ConnectMonitorGpio", source, output, target, input] if boot.started => Some(Action::GpioWire(
             (*source).to_owned(), output.parse().map_err(|_| "invalid source GPIO pin")?,
             (*target).to_owned(), input.parse().map_err(|_| "invalid target GPIO pin")?,
@@ -3393,6 +3431,14 @@ fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_repl_overlay_uses_the_repl_parser_for_gpio_connections() {
+        let root = Path::new(".");
+        let links = parse_gpio_overlay("gpioPortA: { 6 -> gpioPortD@12 }", root).unwrap();
+        assert_eq!(links, [("gpioPortA".into(), 6, "gpioPortD".into(), 12)]);
+        assert!(parse_gpio_overlay("gpioPortA: { someProperty: 1 }", root).is_err());
+    }
 
     #[test]
     fn uart_capture_payload_preserves_utf8_and_unmatched_groups() {

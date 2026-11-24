@@ -2114,15 +2114,31 @@ impl Bus {
     }
 
     pub(crate) fn connect_stm32_gpio(&mut self, source: &str, output: u8, target: &str, input: u8) -> Result<(), String> {
+        self.connect_stm32_gpios([(source, output, target, input)])
+    }
+
+    pub(crate) fn connect_stm32_gpios<'a>(
+        &mut self,
+        links: impl IntoIterator<Item = (&'a str, u8, &'a str, u8)>,
+    ) -> Result<(), String> {
         let port = |name: &str| self.named_stm32_gpios.iter()
             .find(|(port, _)| port == name).map(|(_, base)| *base)
             .ok_or_else(|| format!("unsupported STM32 GPIO port {name:?}"));
-        let (source, target) = ((port(source)?, output), (port(target)?, input));
-        if output >= 16 || input >= 16 {
-            return Err("STM32 GPIO pins must be between 0 and 15".into());
+        let mut wires = Vec::new();
+        for (source, output, target, input) in links {
+            if output >= 16 || input >= 16 {
+                return Err("STM32 GPIO pins must be between 0 and 15".into());
+            }
+            wires.push(GpioWire {
+                source: (port(source)?, output),
+                target: (port(target)?, input),
+                level: false,
+            });
         }
-        if !self.gpio_wires.iter().any(|wire| wire.source == source && wire.target == target) {
-            self.gpio_wires.push(GpioWire { source, target, level: false });
+        for wire in wires {
+            if !self.gpio_wires.iter().any(|existing| existing.source == wire.source && existing.target == wire.target) {
+                self.gpio_wires.push(wire);
+            }
         }
         Ok(())
     }
