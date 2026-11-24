@@ -584,3 +584,11 @@ CPU なしの構成の仮想時計は 10 ns 刻みで動作する。通常 RESC�
 250 ms まで進めるコマンド列も一致した
 （`target/monitor-cpuless-long-proof/`）。明示した
 `--max-steps 1` は引き続き実行を打ち切った。
+
+CPU を持たない `TrivialUart` 構成では、実行後の仮想時刻と同期量を
+`Save` で保存し、`Load` で復帰できる。固定 Renode、通常の RESC、
+ライブモニターで、時刻 10 ms と同期量 2 ms の復帰、および復帰後の
+11 ms への進行が一致した（`target/monitor-cpuless-save-proof/`、
+`target/monitor-cpuless-clear-proof/`）。後者は `Clear` を挟む。
+破損データや異なる UART 配置を拒否した場合、時刻は変化しない。
+この形式は未接続の UART と空のイベントキューを対象とする。
