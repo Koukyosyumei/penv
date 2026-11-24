@@ -1,3 +1,4 @@
+   Compiling penv v0.1.0 (/home/ec2-user/Dev/penv-renode-nunit)
 warning: variant `Report` is never constructed
    --> src/bus.rs:177:5
     |
@@ -11,23 +12,23 @@ warning: variant `Report` is never constructed
     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: fields `name`, `offset`, `width`, and `value` are never read
-   --> src/bus.rs:309:5
+   --> src/bus.rs:310:5
     |
-308 | struct RamIoRead {
+309 | struct RamIoRead {
     |        --------- fields in this struct
-309 |     name: String,
+310 |     name: String,
     |     ^^^^
-310 |     offset: usize,
+311 |     offset: usize,
     |     ^^^^^^
-311 |     width: usize,
+312 |     width: usize,
     |     ^^^^^
-312 |     value: u32,
+313 |     value: u32,
     |     ^^^^^
 
 warning: fields `0` and `1` are never read
-   --> src/bus.rs:317:13
+   --> src/bus.rs:318:13
     |
-317 |     Write32(u32, u32),
+318 |     Write32(u32, u32),
     |     ------- ^^^  ^^^
     |     |
     |     fields in this variant
@@ -35,14 +36,14 @@ warning: fields `0` and `1` are never read
     = note: `CpuHook` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
 help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
     |
-317 -     Write32(u32, u32),
-317 +     Write32((), ()),
+318 -     Write32(u32, u32),
+318 +     Write32((), ()),
     |
 
 warning: field `0` is never read
-   --> src/bus.rs:318:9
+   --> src/bus.rs:319:9
     |
-318 |     Log(String),
+319 |     Log(String),
     |     --- ^^^^^^
     |     |
     |     field in this variant
@@ -50,83 +51,80 @@ warning: field `0` is never read
     = note: `CpuHook` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
 help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
     |
-318 -     Log(String),
-318 +     Log(()),
+319 -     Log(String),
+319 +     Log(()),
     |
 
 warning: fields `mock_byte_peripherals`, `thumb_block_pc_log`, `itstate_log_hook`, and `h7_sdmmc_names` are never read
-   --> src/bus.rs:362:5
+   --> src/bus.rs:363:5
     |
-347 | pub struct Bus {
+348 | pub struct Bus {
     |            --- fields in this struct
 ...
-362 |     mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
+363 |     mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
     |     ^^^^^^^^^^^^^^^^^^^^^
 ...
-385 |     pub thumb_block_pc_log: bool,
+386 |     pub thumb_block_pc_log: bool,
     |         ^^^^^^^^^^^^^^^^^^
-386 |     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
+387 |     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     |         ^^^^^^^^^^^^^^^^
 ...
-485 |     h7_sdmmc_names: Vec<String>,
+486 |     h7_sdmmc_names: Vec<String>,
     |     ^^^^^^^^^^^^^^
 
 warning: function `invalidate_reservations` is never used
-   --> src/bus.rs:583:4
+   --> src/bus.rs:584:4
     |
-583 | fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
+584 | fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
     |    ^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: multiple methods are never used
-    --> src/bus.rs:1009:12
+    --> src/bus.rs:1017:12
      |
- 711 | impl Bus {
+ 713 | impl Bus {
      | -------- methods in this implementation
 ...
-1009 |     pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
+1017 |     pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
      |            ^^^^^^^^^^^^^^^^^
 ...
-1635 |     pub(crate) fn tag_with_policy(
+1652 |     pub(crate) fn tag_with_policy(
      |                   ^^^^^^^^^^^^^^^
 ...
-2620 |     pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
+2637 |     pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
      |            ^^^^^^^^^^^^
 ...
-2979 |     pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
+2996 |     pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
      |            ^^^^^^^^^^^^^^^^
 ...
-3654 |     pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
+3674 |     pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-4994 |     pub fn map_command_error_peripheral(
+5014 |     pub fn map_command_error_peripheral(
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-5344 |     pub fn guest_memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
+5364 |     pub fn guest_memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
      |            ^^^^^^^^^^^^
 ...
-5588 |     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
+5608 |     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
      |            ^^^^^^^^^^^^^^^
 ...
-5698 |     pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
+5718 |     pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
      |            ^^^^^^^^^^^^^^^^^^^^^
 ...
-5720 |     pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
+5740 |     pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-6467 |     pub fn write_cortex_m_exception_stack(
+6487 |     pub fn write_cortex_m_exception_stack(
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: associated functions `zeroed` and `doubleword` are never used
+warning: associated function `zeroed` is never used
   --> src/constant_mmio.rs:52:12
    |
 14 | impl ConstantMmio {
-   | ----------------- associated functions in this implementation
+   | ----------------- associated function in this implementation
 ...
 52 |     pub fn zeroed(base: u32, size: u32) -> Self {
    |            ^^^^^^
-...
-62 |     pub fn doubleword(base: u32, size: u32, value: u32) -> Result<Self, String> {
-   |            ^^^^^^^^^^
 
 warning: field `uart_line_start` is never read
    --> src/machine.rs:142:5
@@ -808,10 +806,10 @@ help: use `let _ = ...` to ignore the resulting value
     |         +++++++
 
 warning: `penv` (bin "penv" test) generated 76 warnings (1 duplicate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
      Running unittests src/main.rs (target/debug/build/penv/ef98090358d6baa7/out/penv-ef98090358d6baa7)
 
-running 276 tests
+running 422 tests
 test bus::gpio_connector_tests::upstream_gpio_external_removal_disconnects_source_endpoint ... ok
 test bus::gpio_connector_tests::upstream_gpio_source_machine_disposal_preserves_external_destination ... ok
 test bus::gpio_connector_tests::upstream_gpio_source_unregister_preserves_external_destination ... ok
@@ -1038,6 +1036,150 @@ test upstream_nunit::circular_buffer::should_save_with_wrap ... ok
 test upstream_nunit::circular_buffer::should_save_with_wrap_array ... ok
 test upstream_nunit::circular_buffer::should_save_without_wrap ... ok
 test upstream_nunit::circular_buffer::should_save_without_wrap_array ... ok
+test upstream_nunit::dma_engine::array_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_8 ... ok
 test upstream_nunit::hexadecimal_unsigned_long_0ff ... ok
 test upstream_nunit::hexadecimal_unsigned_long_1000 ... ok
 test upstream_nunit::hexadecimal_unsigned_long_12ab ... ok
@@ -1085,9 +1227,11 @@ test upstream_nunit::range::subtract_itself ... ok
 test upstream_nunit::range::subtract_left ... ok
 test upstream_nunit::range::subtract_no_intersection ... ok
 test upstream_nunit::range::subtract_right ... ok
+test upstream_nunit::system_bus::find_after_many_registrations ... ok
+test upstream_nunit::system_bus::find_after_registration ... ok
 test upstream_nunit::time_interval::should_not_allow_overflow_on_addition ... ok
 test upstream_nunit::time_interval::should_not_allow_overflow_on_substraction ... ok
 test upstream_nunit::time_interval::should_return_correct_result_from_substraction ... ok
 
-test result: ok. 276 passed; 0 failed; 0 ignored; 0 measured; 497 filtered out; finished in 0.08s
+test result: ok. 422 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 0.09s
 

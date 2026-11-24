@@ -5,7 +5,7 @@
     "lib/options-parser": "53a5b82bdbfe724648071400047a6b333c89571a",
     "src/Infrastructure": "09ac7c563095c5410258ecc1b1a6b841a013db85"
   },
-  "penv_sha": "add280a38fcebddc9fa01720ee5b1cc6061298ce",
+  "penv_sha": "af39ee71cfaebb23d4c30f3f8bee9cb9b2ddd2fd",
   "discovery": [
     {
       "project": "src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj",
@@ -123,16 +123,16 @@
     }
   ],
   "summary": {
-    "ported": 279,
-    "newly_ported": 171,
-    "passed": 276,
+    "ported": 425,
+    "newly_ported": 317,
+    "passed": 422,
     "failed": 0,
     "not_run": 0,
     "discovered": 3413,
     "runnable": 3396,
-    "api_missing": 3120,
+    "api_missing": 2974,
     "unmapped": 0,
-    "selected": 276,
+    "selected": 422,
     "mapped_excluded": 3,
     "excluded": 3,
     "ignored": 14,
@@ -378,6 +378,150 @@
       "upstream_nunit::circular_buffer::should_save_with_wrap_array",
       "upstream_nunit::circular_buffer::should_save_without_wrap",
       "upstream_nunit::circular_buffer::should_save_without_wrap_array",
+      "upstream_nunit::dma_engine::array_to_array_1_1",
+      "upstream_nunit::dma_engine::array_to_array_1_2",
+      "upstream_nunit::dma_engine::array_to_array_1_4",
+      "upstream_nunit::dma_engine::array_to_array_1_8",
+      "upstream_nunit::dma_engine::array_to_array_2_1",
+      "upstream_nunit::dma_engine::array_to_array_2_2",
+      "upstream_nunit::dma_engine::array_to_array_2_4",
+      "upstream_nunit::dma_engine::array_to_array_2_8",
+      "upstream_nunit::dma_engine::array_to_array_4_1",
+      "upstream_nunit::dma_engine::array_to_array_4_2",
+      "upstream_nunit::dma_engine::array_to_array_4_4",
+      "upstream_nunit::dma_engine::array_to_array_4_8",
+      "upstream_nunit::dma_engine::array_to_array_8_1",
+      "upstream_nunit::dma_engine::array_to_array_8_2",
+      "upstream_nunit::dma_engine::array_to_array_8_4",
+      "upstream_nunit::dma_engine::array_to_array_8_8",
+      "upstream_nunit::dma_engine::array_to_mapped_1_1",
+      "upstream_nunit::dma_engine::array_to_mapped_1_2",
+      "upstream_nunit::dma_engine::array_to_mapped_1_4",
+      "upstream_nunit::dma_engine::array_to_mapped_1_8",
+      "upstream_nunit::dma_engine::array_to_mapped_2_1",
+      "upstream_nunit::dma_engine::array_to_mapped_2_2",
+      "upstream_nunit::dma_engine::array_to_mapped_2_4",
+      "upstream_nunit::dma_engine::array_to_mapped_2_8",
+      "upstream_nunit::dma_engine::array_to_mapped_4_1",
+      "upstream_nunit::dma_engine::array_to_mapped_4_2",
+      "upstream_nunit::dma_engine::array_to_mapped_4_4",
+      "upstream_nunit::dma_engine::array_to_mapped_4_8",
+      "upstream_nunit::dma_engine::array_to_mapped_8_1",
+      "upstream_nunit::dma_engine::array_to_mapped_8_2",
+      "upstream_nunit::dma_engine::array_to_mapped_8_4",
+      "upstream_nunit::dma_engine::array_to_mapped_8_8",
+      "upstream_nunit::dma_engine::array_to_raw_1_1",
+      "upstream_nunit::dma_engine::array_to_raw_1_2",
+      "upstream_nunit::dma_engine::array_to_raw_1_4",
+      "upstream_nunit::dma_engine::array_to_raw_1_8",
+      "upstream_nunit::dma_engine::array_to_raw_2_1",
+      "upstream_nunit::dma_engine::array_to_raw_2_2",
+      "upstream_nunit::dma_engine::array_to_raw_2_4",
+      "upstream_nunit::dma_engine::array_to_raw_2_8",
+      "upstream_nunit::dma_engine::array_to_raw_4_1",
+      "upstream_nunit::dma_engine::array_to_raw_4_2",
+      "upstream_nunit::dma_engine::array_to_raw_4_4",
+      "upstream_nunit::dma_engine::array_to_raw_4_8",
+      "upstream_nunit::dma_engine::array_to_raw_8_1",
+      "upstream_nunit::dma_engine::array_to_raw_8_2",
+      "upstream_nunit::dma_engine::array_to_raw_8_4",
+      "upstream_nunit::dma_engine::array_to_raw_8_8",
+      "upstream_nunit::dma_engine::mapped_to_array_1_1",
+      "upstream_nunit::dma_engine::mapped_to_array_1_2",
+      "upstream_nunit::dma_engine::mapped_to_array_1_4",
+      "upstream_nunit::dma_engine::mapped_to_array_1_8",
+      "upstream_nunit::dma_engine::mapped_to_array_2_1",
+      "upstream_nunit::dma_engine::mapped_to_array_2_2",
+      "upstream_nunit::dma_engine::mapped_to_array_2_4",
+      "upstream_nunit::dma_engine::mapped_to_array_2_8",
+      "upstream_nunit::dma_engine::mapped_to_array_4_1",
+      "upstream_nunit::dma_engine::mapped_to_array_4_2",
+      "upstream_nunit::dma_engine::mapped_to_array_4_4",
+      "upstream_nunit::dma_engine::mapped_to_array_4_8",
+      "upstream_nunit::dma_engine::mapped_to_array_8_1",
+      "upstream_nunit::dma_engine::mapped_to_array_8_2",
+      "upstream_nunit::dma_engine::mapped_to_array_8_4",
+      "upstream_nunit::dma_engine::mapped_to_array_8_8",
+      "upstream_nunit::dma_engine::mapped_to_mapped_1_1",
+      "upstream_nunit::dma_engine::mapped_to_mapped_1_2",
+      "upstream_nunit::dma_engine::mapped_to_mapped_1_4",
+      "upstream_nunit::dma_engine::mapped_to_mapped_1_8",
+      "upstream_nunit::dma_engine::mapped_to_mapped_2_1",
+      "upstream_nunit::dma_engine::mapped_to_mapped_2_2",
+      "upstream_nunit::dma_engine::mapped_to_mapped_2_4",
+      "upstream_nunit::dma_engine::mapped_to_mapped_2_8",
+      "upstream_nunit::dma_engine::mapped_to_mapped_4_1",
+      "upstream_nunit::dma_engine::mapped_to_mapped_4_2",
+      "upstream_nunit::dma_engine::mapped_to_mapped_4_4",
+      "upstream_nunit::dma_engine::mapped_to_mapped_4_8",
+      "upstream_nunit::dma_engine::mapped_to_mapped_8_1",
+      "upstream_nunit::dma_engine::mapped_to_mapped_8_2",
+      "upstream_nunit::dma_engine::mapped_to_mapped_8_4",
+      "upstream_nunit::dma_engine::mapped_to_mapped_8_8",
+      "upstream_nunit::dma_engine::mapped_to_raw_1_1",
+      "upstream_nunit::dma_engine::mapped_to_raw_1_2",
+      "upstream_nunit::dma_engine::mapped_to_raw_1_4",
+      "upstream_nunit::dma_engine::mapped_to_raw_1_8",
+      "upstream_nunit::dma_engine::mapped_to_raw_2_1",
+      "upstream_nunit::dma_engine::mapped_to_raw_2_2",
+      "upstream_nunit::dma_engine::mapped_to_raw_2_4",
+      "upstream_nunit::dma_engine::mapped_to_raw_2_8",
+      "upstream_nunit::dma_engine::mapped_to_raw_4_1",
+      "upstream_nunit::dma_engine::mapped_to_raw_4_2",
+      "upstream_nunit::dma_engine::mapped_to_raw_4_4",
+      "upstream_nunit::dma_engine::mapped_to_raw_4_8",
+      "upstream_nunit::dma_engine::mapped_to_raw_8_1",
+      "upstream_nunit::dma_engine::mapped_to_raw_8_2",
+      "upstream_nunit::dma_engine::mapped_to_raw_8_4",
+      "upstream_nunit::dma_engine::mapped_to_raw_8_8",
+      "upstream_nunit::dma_engine::raw_to_array_1_1",
+      "upstream_nunit::dma_engine::raw_to_array_1_2",
+      "upstream_nunit::dma_engine::raw_to_array_1_4",
+      "upstream_nunit::dma_engine::raw_to_array_1_8",
+      "upstream_nunit::dma_engine::raw_to_array_2_1",
+      "upstream_nunit::dma_engine::raw_to_array_2_2",
+      "upstream_nunit::dma_engine::raw_to_array_2_4",
+      "upstream_nunit::dma_engine::raw_to_array_2_8",
+      "upstream_nunit::dma_engine::raw_to_array_4_1",
+      "upstream_nunit::dma_engine::raw_to_array_4_2",
+      "upstream_nunit::dma_engine::raw_to_array_4_4",
+      "upstream_nunit::dma_engine::raw_to_array_4_8",
+      "upstream_nunit::dma_engine::raw_to_array_8_1",
+      "upstream_nunit::dma_engine::raw_to_array_8_2",
+      "upstream_nunit::dma_engine::raw_to_array_8_4",
+      "upstream_nunit::dma_engine::raw_to_array_8_8",
+      "upstream_nunit::dma_engine::raw_to_mapped_1_1",
+      "upstream_nunit::dma_engine::raw_to_mapped_1_2",
+      "upstream_nunit::dma_engine::raw_to_mapped_1_4",
+      "upstream_nunit::dma_engine::raw_to_mapped_1_8",
+      "upstream_nunit::dma_engine::raw_to_mapped_2_1",
+      "upstream_nunit::dma_engine::raw_to_mapped_2_2",
+      "upstream_nunit::dma_engine::raw_to_mapped_2_4",
+      "upstream_nunit::dma_engine::raw_to_mapped_2_8",
+      "upstream_nunit::dma_engine::raw_to_mapped_4_1",
+      "upstream_nunit::dma_engine::raw_to_mapped_4_2",
+      "upstream_nunit::dma_engine::raw_to_mapped_4_4",
+      "upstream_nunit::dma_engine::raw_to_mapped_4_8",
+      "upstream_nunit::dma_engine::raw_to_mapped_8_1",
+      "upstream_nunit::dma_engine::raw_to_mapped_8_2",
+      "upstream_nunit::dma_engine::raw_to_mapped_8_4",
+      "upstream_nunit::dma_engine::raw_to_mapped_8_8",
+      "upstream_nunit::dma_engine::raw_to_raw_1_1",
+      "upstream_nunit::dma_engine::raw_to_raw_1_2",
+      "upstream_nunit::dma_engine::raw_to_raw_1_4",
+      "upstream_nunit::dma_engine::raw_to_raw_1_8",
+      "upstream_nunit::dma_engine::raw_to_raw_2_1",
+      "upstream_nunit::dma_engine::raw_to_raw_2_2",
+      "upstream_nunit::dma_engine::raw_to_raw_2_4",
+      "upstream_nunit::dma_engine::raw_to_raw_2_8",
+      "upstream_nunit::dma_engine::raw_to_raw_4_1",
+      "upstream_nunit::dma_engine::raw_to_raw_4_2",
+      "upstream_nunit::dma_engine::raw_to_raw_4_4",
+      "upstream_nunit::dma_engine::raw_to_raw_4_8",
+      "upstream_nunit::dma_engine::raw_to_raw_8_1",
+      "upstream_nunit::dma_engine::raw_to_raw_8_2",
+      "upstream_nunit::dma_engine::raw_to_raw_8_4",
+      "upstream_nunit::dma_engine::raw_to_raw_8_8",
       "upstream_nunit::hexadecimal_unsigned_long_0ff",
       "upstream_nunit::hexadecimal_unsigned_long_1000",
       "upstream_nunit::hexadecimal_unsigned_long_12ab",
@@ -425,13 +569,15 @@
       "upstream_nunit::range::subtract_left",
       "upstream_nunit::range::subtract_no_intersection",
       "upstream_nunit::range::subtract_right",
+      "upstream_nunit::system_bus::find_after_many_registrations",
+      "upstream_nunit::system_bus::find_after_registration",
       "upstream_nunit::time_interval::should_not_allow_overflow_on_addition",
       "upstream_nunit::time_interval::should_not_allow_overflow_on_substraction",
       "upstream_nunit::time_interval::should_return_correct_result_from_substraction"
     ],
     "exit_code": 0,
     "log": "rust.log",
-    "binary_sha256": "cb30a35a4a29594c591480f8c1abf7a2adfcec315a2d68b4f2648bee489951b6"
+    "binary_sha256": "d28e07ed0a2ee201f5b4d4d02f952c4306cd7b67d2589176a455f6a3dc7bce45"
   },
   "cases": [
     {
@@ -680,6 +826,2598 @@
       "rust_test": "stm32h7_timer::comparing_timer_cases::should_not_generate_additional_compare_event",
       "origin": "existing",
       "parameters": {}
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,1)",
+      "nunit_id": "0-1152",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,2)",
+      "nunit_id": "0-1153",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,4)",
+      "nunit_id": "0-1154",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,1,8)",
+      "nunit_id": "0-1155",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,1)",
+      "nunit_id": "0-1156",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,2)",
+      "nunit_id": "0-1157",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,4)",
+      "nunit_id": "0-1158",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,2,8)",
+      "nunit_id": "0-1159",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,1)",
+      "nunit_id": "0-1160",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,2)",
+      "nunit_id": "0-1161",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,4)",
+      "nunit_id": "0-1162",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,4,8)",
+      "nunit_id": "0-1163",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,1)",
+      "nunit_id": "0-1164",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,2)",
+      "nunit_id": "0-1165",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,4)",
+      "nunit_id": "0-1166",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationRawArray,8,8)",
+      "nunit_id": "0-1167",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_raw_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,1)",
+      "nunit_id": "0-1168",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,2)",
+      "nunit_id": "0-1169",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,4)",
+      "nunit_id": "0-1170",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,1,8)",
+      "nunit_id": "0-1171",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,1)",
+      "nunit_id": "0-1172",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,2)",
+      "nunit_id": "0-1173",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,4)",
+      "nunit_id": "0-1174",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,2,8)",
+      "nunit_id": "0-1175",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,1)",
+      "nunit_id": "0-1176",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,2)",
+      "nunit_id": "0-1177",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,4)",
+      "nunit_id": "0-1178",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,4,8)",
+      "nunit_id": "0-1179",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,1)",
+      "nunit_id": "0-1180",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,2)",
+      "nunit_id": "0-1181",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,4)",
+      "nunit_id": "0-1182",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationArrayMemory,8,8)",
+      "nunit_id": "0-1183",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_array_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,1)",
+      "nunit_id": "0-1184",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,2)",
+      "nunit_id": "0-1185",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,4)",
+      "nunit_id": "0-1186",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,1,8)",
+      "nunit_id": "0-1187",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,1)",
+      "nunit_id": "0-1188",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,2)",
+      "nunit_id": "0-1189",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,4)",
+      "nunit_id": "0-1190",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,2,8)",
+      "nunit_id": "0-1191",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,1)",
+      "nunit_id": "0-1192",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,2)",
+      "nunit_id": "0-1193",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,4)",
+      "nunit_id": "0-1194",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,4,8)",
+      "nunit_id": "0-1195",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,1)",
+      "nunit_id": "0-1196",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,2)",
+      "nunit_id": "0-1197",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,4)",
+      "nunit_id": "0-1198",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceRawArray,DestinationMappedMemory,8,8)",
+      "nunit_id": "0-1199",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::raw_to_mapped_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceRawArray",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,1)",
+      "nunit_id": "0-1200",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,2)",
+      "nunit_id": "0-1201",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,4)",
+      "nunit_id": "0-1202",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,1,8)",
+      "nunit_id": "0-1203",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,1)",
+      "nunit_id": "0-1204",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,2)",
+      "nunit_id": "0-1205",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,4)",
+      "nunit_id": "0-1206",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,2,8)",
+      "nunit_id": "0-1207",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,1)",
+      "nunit_id": "0-1208",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,2)",
+      "nunit_id": "0-1209",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,4)",
+      "nunit_id": "0-1210",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,4,8)",
+      "nunit_id": "0-1211",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,1)",
+      "nunit_id": "0-1212",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,2)",
+      "nunit_id": "0-1213",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,4)",
+      "nunit_id": "0-1214",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationRawArray,8,8)",
+      "nunit_id": "0-1215",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_raw_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,1)",
+      "nunit_id": "0-1216",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,2)",
+      "nunit_id": "0-1217",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,4)",
+      "nunit_id": "0-1218",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,1,8)",
+      "nunit_id": "0-1219",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,1)",
+      "nunit_id": "0-1220",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,2)",
+      "nunit_id": "0-1221",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,4)",
+      "nunit_id": "0-1222",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,2,8)",
+      "nunit_id": "0-1223",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,1)",
+      "nunit_id": "0-1224",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,2)",
+      "nunit_id": "0-1225",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,4)",
+      "nunit_id": "0-1226",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,4,8)",
+      "nunit_id": "0-1227",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,1)",
+      "nunit_id": "0-1228",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,2)",
+      "nunit_id": "0-1229",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,4)",
+      "nunit_id": "0-1230",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationArrayMemory,8,8)",
+      "nunit_id": "0-1231",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_array_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,1)",
+      "nunit_id": "0-1232",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,2)",
+      "nunit_id": "0-1233",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,4)",
+      "nunit_id": "0-1234",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,1,8)",
+      "nunit_id": "0-1235",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,1)",
+      "nunit_id": "0-1236",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,2)",
+      "nunit_id": "0-1237",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,4)",
+      "nunit_id": "0-1238",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,2,8)",
+      "nunit_id": "0-1239",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,1)",
+      "nunit_id": "0-1240",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,2)",
+      "nunit_id": "0-1241",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,4)",
+      "nunit_id": "0-1242",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,4,8)",
+      "nunit_id": "0-1243",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,1)",
+      "nunit_id": "0-1244",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,2)",
+      "nunit_id": "0-1245",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,4)",
+      "nunit_id": "0-1246",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceArrayMemory,DestinationMappedMemory,8,8)",
+      "nunit_id": "0-1247",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::array_to_mapped_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceArrayMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,1)",
+      "nunit_id": "0-1248",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,2)",
+      "nunit_id": "0-1249",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,4)",
+      "nunit_id": "0-1250",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,1,8)",
+      "nunit_id": "0-1251",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,1)",
+      "nunit_id": "0-1252",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,2)",
+      "nunit_id": "0-1253",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,4)",
+      "nunit_id": "0-1254",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,2,8)",
+      "nunit_id": "0-1255",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,1)",
+      "nunit_id": "0-1256",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,2)",
+      "nunit_id": "0-1257",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,4)",
+      "nunit_id": "0-1258",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,4,8)",
+      "nunit_id": "0-1259",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,1)",
+      "nunit_id": "0-1260",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,2)",
+      "nunit_id": "0-1261",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,4)",
+      "nunit_id": "0-1262",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationRawArray,8,8)",
+      "nunit_id": "0-1263",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_raw_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationRawArray",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,1)",
+      "nunit_id": "0-1264",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,2)",
+      "nunit_id": "0-1265",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,4)",
+      "nunit_id": "0-1266",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,1,8)",
+      "nunit_id": "0-1267",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,1)",
+      "nunit_id": "0-1268",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,2)",
+      "nunit_id": "0-1269",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,4)",
+      "nunit_id": "0-1270",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,2,8)",
+      "nunit_id": "0-1271",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,1)",
+      "nunit_id": "0-1272",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,2)",
+      "nunit_id": "0-1273",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,4)",
+      "nunit_id": "0-1274",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,4,8)",
+      "nunit_id": "0-1275",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,1)",
+      "nunit_id": "0-1276",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,2)",
+      "nunit_id": "0-1277",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,4)",
+      "nunit_id": "0-1278",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationArrayMemory,8,8)",
+      "nunit_id": "0-1279",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_array_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationArrayMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,1)",
+      "nunit_id": "0-1280",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_1_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,2)",
+      "nunit_id": "0-1281",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_1_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,4)",
+      "nunit_id": "0-1282",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_1_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,1,8)",
+      "nunit_id": "0-1283",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_1_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 1,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,1)",
+      "nunit_id": "0-1284",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_2_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,2)",
+      "nunit_id": "0-1285",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_2_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,4)",
+      "nunit_id": "0-1286",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_2_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,2,8)",
+      "nunit_id": "0-1287",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_2_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 2,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,1)",
+      "nunit_id": "0-1288",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_4_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,2)",
+      "nunit_id": "0-1289",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_4_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,4)",
+      "nunit_id": "0-1290",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_4_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,4,8)",
+      "nunit_id": "0-1291",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_4_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 4,
+        "destinationAccessWidth": 8
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,1)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,1)",
+      "nunit_id": "0-1292",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_8_1",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 1
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,2)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,2)",
+      "nunit_id": "0-1293",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_8_2",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 2
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,4)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,4)",
+      "nunit_id": "0-1294",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_8_4",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 4
+      }
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,8)",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.DmaEngineTests.ShouldTransferDataFromSourceToDestination(SourceMappedMemory,DestinationMappedMemory,8,8)",
+      "nunit_id": "0-1295",
+      "fixture": "Antmicro.Renode.UnitTests.DmaEngineTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::dma_engine::mapped_to_mapped_8_8",
+      "origin": "new",
+      "parameters": {
+        "sourcePlaceType": "SourceMappedMemory",
+        "destinationPlaceType": "DestinationMappedMemory",
+        "sourceAccessWidth": 8,
+        "destinationAccessWidth": 8
+      }
     },
     {
       "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
@@ -1159,6 +3897,32 @@
       "categories": [],
       "status": "pass",
       "rust_test": "upstream_nunit::range::subtract_right",
+      "origin": "new",
+      "parameters": {}
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterManyRegistrations",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterManyRegistrations",
+      "nunit_id": "0-1531",
+      "fixture": "Antmicro.Renode.UnitTests.SystemBusTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::system_bus::find_after_many_registrations",
+      "origin": "new",
+      "parameters": {}
+    },
+    {
+      "project": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj",
+      "official_fullname": "Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterRegistration",
+      "id": "src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.SystemBusTests.ShouldFindAfterRegistration",
+      "nunit_id": "0-1530",
+      "fixture": "Antmicro.Renode.UnitTests.SystemBusTests",
+      "runstate": "Runnable",
+      "categories": [],
+      "status": "pass",
+      "rust_test": "upstream_nunit::system_bus::find_after_registration",
       "origin": "new",
       "parameters": {}
     },
