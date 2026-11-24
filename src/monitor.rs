@@ -776,16 +776,9 @@ fn run_commands<'a>(
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
             Action::InvokeMonitorMacro(name, root) => (|| {
-                let body = session.macros.get(name).ok_or("unknown macro")?;
-                let mut state = deferred_script_state(&body.script, session);
-                let canonical = if body.script.is_absolute() {
-                    body.script.clone()
-                } else {
-                    std::env::current_dir().map_err(|error| error.to_string())?.join(&body.script)
-                };
-                for (index, text) in &body.commands {
-                    load_text_at(&body.script, canonical.clone(), root, &mut state, text, *index)?;
-                }
+                let path = &session.macros.get(name).ok_or("unknown macro")?.script;
+                let mut state = deferred_script_state(path, session);
+                expand_macro(name, &mut state, root)?;
                 validate_deferred_commands(&state.boot, depth, true)?;
                 let start = machine.elapsed_steps();
                 let boot = apply_deferred_state(session, state);
@@ -2496,13 +2489,17 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
     load_text(path, canonical, root, state, &content)
 }
 
-fn expand_macro(
-    body: &Macro, variables: &HashMap<String, String>, machine: &mut bool, boot: &mut Boot, root: &Path,
-) -> Result<(), String> {
-    for (index, command) in &body.commands {
-        command_words(command).and_then(|words| {
-            execute(command, &words, variables, machine, boot, &body.script, root, index + 1)
-        }).map_err(|error| format!("{}:{}: {error}", body.script.display(), index + 1))?;
+fn expand_macro(name: &str, state: &mut ScriptState, root: &Path) -> Result<(), String> {
+    let body = state.macros.get(name).ok_or("unknown macro")?.clone();
+    let canonical = if body.script.is_absolute() {
+        body.script.clone()
+    } else {
+        std::env::current_dir().map_err(|error| error.to_string())?.join(&body.script)
+    };
+    // Retain the script directory without mistaking a macro call for an include of its defining file.
+    let canonical = canonical.with_file_name(format!("<macro:{}>", name.replace(['/', '\\'], "_")));
+    for (index, text) in &body.commands {
+        load_text_at(&body.script, canonical.clone(), root, state, text, *index)?;
     }
     Ok(())
 }
@@ -2765,8 +2762,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                         action: Action::InvokeMonitorMacro(name[1..].into(), root.to_owned()),
                     });
                 } else {
-                    let body = state.macros.get(&name[1..]).ok_or_else(|| error("unknown macro"))?;
-                    expand_macro(body, &state.variables, &mut state.machine, &mut state.boot, root)?;
+                    expand_macro(&name[1..], state, root).map_err(|e| error(&e))?;
                 }
             }
             _ => {
@@ -4987,6 +4983,12 @@ greet "hello world"
         let macro_setup = "macro greet \"echo $label\"\nset label ready\n";
         assert_eq!(inspect(macro_setup, "runMacro $greet"), ("OK", "ready\n".into()));
         assert_eq!(inspect(macro_setup, "runMacro $missing").0, "ERROR");
+        let nested = "macro inner \"set label changed\"\nmacro outer \"runMacro $inner\"\nrunMacro $outer\n";
+        assert_eq!(inspect(nested, "echo $label"), ("OK", "changed".into()));
+        let recursive = "macro repeat \"runMacro $repeat\"\n";
+        let (status, message) = inspect(recursive, "runMacro $repeat");
+        assert_eq!(status, "ERROR");
+        assert!(message.contains("recursive"));
         assert_eq!(inspect("mach create\n", "runMacro $greet").0, "DEFER");
         let (status, value) = inspect("log \"hello world\"\n", "lastLog 1");
         assert_eq!(status, "OK");
