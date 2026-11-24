@@ -112,7 +112,7 @@ class MemoryKeywords:
             for address in addresses:
                 address = (address + offset) & ((1 << 64) - 1)
                 raw = self.operation(f"sysbus Read{width} {address:#x}", assertion=True)
-                yield compare(normalize(integer(raw.strip())), normalize(expected))
+                yield compare(normalize(integer(raw.split(maxsplit=1)[0])), normalize(expected))
 
         check = any if family == "Any Symbol" else all
         if not check(evaluate()):

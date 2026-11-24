@@ -66,6 +66,26 @@ pub struct Boot {
 pub struct Session {
     variables: HashMap<String, String>,
     machine: Option<String>,
+    number_mode: NumberMode,
+}
+
+#[derive(Clone, Copy, Default)]
+enum NumberMode {
+    #[default]
+    Hexadecimal,
+    Decimal,
+    Both,
+}
+
+impl NumberMode {
+    fn print(self, value: u64, width: usize, output: &mut impl Write) -> Result<(), String> {
+        let digits = 2 * width;
+        match self {
+            Self::Hexadecimal => writeln!(output, "0x{value:0digits$X}"),
+            Self::Decimal => writeln!(output, "{value}"),
+            Self::Both => writeln!(output, "0x{value:0digits$X} ({value})"),
+        }.map_err(|error| error.to_string())
+    }
 }
 
 const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
@@ -293,7 +313,7 @@ enum Action {
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
     CpuMips(u32),
-    ReadCpuMips,
+    ReadCpuMips(NumberMode),
     TraceStackAccess(String),
     VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
@@ -342,6 +362,7 @@ struct BusScalar {
     address: u64,
     width: usize,
     value: Option<u64>,
+    number_mode: NumberMode,
 }
 
 impl BusScalar {
@@ -350,6 +371,7 @@ impl BusScalar {
             address,
             width,
             value,
+            number_mode,
         } = *self;
         let address32 = u32::try_from(address)
             .ok()
@@ -367,23 +389,18 @@ impl BusScalar {
             (Some(address), 2) => bus.read_scalar::<2>(address, true),
             (Some(address), 4) => bus.read_scalar::<4>(address, true),
             _ => {
-                return Self::print_value(
+                return number_mode.print(
                     crate::memory_setup::read_ram(bus, address, width)?,
                     width,
                     output,
                 );
             }
         };
-        Self::print_value(
+        number_mode.print(
             u64::from(result.map_err(|error| error.to_string())?),
             width,
             output,
         )
-    }
-
-    fn print_value(value: u64, width: usize, output: &mut impl Write) -> Result<(), String> {
-        let digits = 2 * width;
-        writeln!(output, "0x{value:0digits$x}").map_err(|error| error.to_string())
     }
 }
 
@@ -582,12 +599,11 @@ fn run_commands(
             Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
-            Action::ReadCpuMips => {
+            Action::ReadCpuMips(mode) => {
                 if !machine.is_cortex_m() {
                     return Err("PerformanceInMips requires a Cortex-M CPU".into());
                 }
-                writeln!(output.output, "0x{:08X}", machine.bus.monitor_step_hz() / 1_000_000)
-                    .map(|()| None).map_err(|error| error.to_string())
+                mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
             }
             Action::TimeSourceInfo => {
                 writeln!(output.output, "Elapsed Virtual Time: {}\nQuantum: {}",
@@ -1022,6 +1038,7 @@ pub fn serve(
             ..Boot::default()
         };
         boot.session.machine.clone_from(&session.machine);
+        boot.session.number_mode = session.number_mode;
         let mut existing_machine = true;
         let mut included_variables = None;
         let parsed = command_words(text).and_then(|words| {
@@ -1058,6 +1075,7 @@ pub fn serve(
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => {
+                session.number_mode = boot.session.number_mode;
                 if let Some(variables) = included_variables.take() {
                     session.variables = variables;
                 }
@@ -1112,6 +1130,7 @@ pub fn serve(
             (Ok(()), commands) if included_variables.is_some() || commands.len() == 1 => {
                 match run_commands(machine, commands, u64::MAX, &mut bytes, Some(&mut session)) {
                     Ok((Stop::ScriptComplete, _)) => {
+                        session.number_mode = boot.session.number_mode;
                         if let Some(variables) = included_variables.take() {
                             session.variables = variables;
                         }
@@ -1919,8 +1938,19 @@ fn execute(
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
-    if matches!(words, [] | ["using", "sysbus"]) {
-        return Ok(());
+    match words {
+        [] => return Ok(()),
+        ["using", "sysbus"] => return Ok(()),
+        ["numbersMode", mode] => {
+            boot.session.number_mode = match *mode {
+                "Hexadecimal" => NumberMode::Hexadecimal,
+                "Decimal" => NumberMode::Decimal,
+                "Both" => NumberMode::Both,
+                _ => return Err(format!("unknown numbersMode {mode:?}")),
+            };
+            return Ok(());
+        }
+        _ => {}
     }
     let resolve = |value| resolve(variables, value);
     if let ["machine", "UserState", value] = words
@@ -2019,7 +2049,7 @@ fn execute(
         ["TraceStackAccess", cpu] if boot.started => Some(Action::TraceStackAccess(
             cpu.trim_start_matches("sysbus.").to_owned(),
         )),
-        ["cpu" | "sysbus.cpu", "PerformanceInMips"] if boot.started => Some(Action::ReadCpuMips),
+        ["cpu" | "sysbus.cpu", "PerformanceInMips"] if boot.started => Some(Action::ReadCpuMips(boot.session.number_mode)),
         ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started => {
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
             Some(Action::CpuMips(mips))
@@ -2128,6 +2158,7 @@ fn execute(
                 address,
                 width,
                 value,
+                number_mode: boot.session.number_mode,
             }))
         }
         ["sysbus", "FindBytes", ..] => Some(Action::FindBytes(FindBytes::parse(text, resolve)?)),
