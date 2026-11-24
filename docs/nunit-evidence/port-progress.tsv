@@ -3,11 +3,11 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializ
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	0	0	16	0	The snapshot reader/writer does not have Migrant built-in CLR surrogate mappings.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	0	0	160	0	Migrant object graph serialization hooks and attribute-based callbacks are unavailable.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	0	0	1	0	The Rust object stream restores typed records and references; CLR type/module stamp encoding and restoration remain unavailable.
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	0	0	28	0	The Rust object stream supports strong and per-root reference tables and unbuffered iteration; weak reference retention, stamped type schemas, and generated reader/writer paths remain unavailable.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	5	0	23	0	Reflection mode with strong or per-root references is ported. Remaining cases need weak reference retention and generated reader/writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	102	102	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	9	0	1495	0	Initial unstamped reflection-mode cases restore record and array graphs. Remaining settings and cases need generated reader/writer paths, type stamp verification, collection and CLR type codecs, surrogate and hook dispatch, and delegate/state restoration.
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	0	0	16	0	There is no Migrant serialized type/resource stamping implementation.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	18	0	1486	0	Initial stamped and unstamped reflection cases restore record and array graphs. Remaining settings and cases need generated reader/writer paths, collection and CLR type codecs, surrogate and hook dispatch, and delegate/state restoration.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	4	0	12	0	All four reflection-mode stamp configurations are ported. The remaining 12 cases require the generated writer and/or reader paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests	176	0	0	176	0	There is no registration of custom Migrant serialization/deserialization surrogates.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	0	0	36	0	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TypeDescriptorComparisonTests	11	11	0	0	0	-
@@ -46,7 +46,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializableMappedSegmentTests	2	0	0	2	0	There is no serializable MappedSegment object with lazy segment access and the corresponding persisted buffer representation.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests	7	0	0	7	0	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.StorageTests	1	1	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.DeduplicationTests	3	0	0	3	0	There is no SymbolLookup insertion and deduplication API for in-memory symbol sets.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.DeduplicationTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	19	0	0	19	0	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	23	0	0	23	0	There is no generic SymbolLookup range index implementing the fixture's aliases, precedence and address/name queries.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	5	4	0	1	0	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.

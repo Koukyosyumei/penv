@@ -1,0 +1,42 @@
+running 5 tests
+test upstream_nunit::migrant_stamping::stamped_to_unstamped ... ok
+test upstream_nunit::migrant_stamping::unstamped_to_stamped ... ok
+test upstream_nunit::migrant_stamping::rejects_a_different_field_stamp_before_restoring_the_cycle ... ok
+test upstream_nunit::migrant_stamping::unstamped_to_unstamped ... ok
+test upstream_nunit::migrant_stamping::stamped_to_stamped ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1157 filtered out; finished in 0.00s
+running 24 tests
+test upstream_nunit::migrant_object_stream::should_preserve_identity_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_preserve_identity ... ok
+test upstream_nunit::migrant_object_stream::basic_open_stream_preserve ... ok
+test upstream_nunit::migrant_object_stream::basic_open_stream_do_not_preserve ... ok
+test upstream_nunit::migrant_object_stream::should_handle_two_writes_and_reads ... ok
+test upstream_nunit::migrant_object_stream::should_deserialize_many ... ok
+test upstream_nunit::migrant_object_stream::should_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_array_reference_to_self ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_cyclic_reference ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_array_reference_to_self_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_cyclic_reference_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_null_reference ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_null_reference_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_object ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_object_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_readonly_field ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_readonly_field_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_reference_to_self ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_reference_to_self_stamped ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_simple_class ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_simple_class_stamped ... ok
+test upstream_nunit::migrant_object_stream::shouldnt_preserve_references ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_deep_graph ... ok
+test upstream_nunit::migrant_object_stream::should_serialize_deep_graph_stamped ... ok
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 1147 filtered out; finished in 0.20s
+running 7 tests
+test upstream_nunit::symbol::should_not_overlap ... ok
+test upstream_nunit::symbol::should_contain ... ok
+test upstream_nunit::symbol::should_not_contain ... ok
+test upstream_nunit::symbol::should_overlap ... ok
+test upstream_nunit::symbol_deduplication::should_deduplicate_after_merge ... ok
+test upstream_nunit::symbol_deduplication::should_deduplicate_identical_symbols ... ok
+test upstream_nunit::symbol_deduplication::should_not_deduplicate_different_symbols ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1167 filtered out; finished in 0.00s

@@ -55,11 +55,17 @@ Rust のオブジェクトレコードは既存の Migrant プリミティブで
 オブジェクト群を公開する。二ノード循環、自己参照、配列の自己参照、
 共有文字列、45,000リンクの復元を確認した。
 
-Rust のレコード形式を使った基盤確認6件も合格した。対象は連続した読み書き、
-ルート間の強参照保持と参照テーブルのリセット、非バッファの列挙である。
-CLR 型スタンプのエンコードと復元が必要な ObjectReaderWriterTests と
-OpenStreamSerializationTests の公式 ID は移植待ちとして集計した。
-[公式 ID 別の対象実行結果](nunit-evidence/targeted-object-stream-symbol.tsv)
+型スタンプ対応後は、同じ9ケースを `(False,False,False,True)` にも対応付けた。
+Rust 形式では型名、モジュール、版、フィールド名と種別を記録し、読み手が
+ローカルスキーマと照合してからグラフを公開する。組み込み文字列と配列の種別は
+レコードタグで表す。CLR のバイト列との相互運用は移植範囲に含めていない。
 
-残りは10 fixture・2,124ケース。弱参照保持、型スタンプ検証、生成読み書き、
-コレクション・CLR 型のコーデック、サロゲート、フックが必要。
+StampingTests は反射書き込み・反射読み込みの4組を移植した。スタンプ有無が
+一致する場合は自己参照を復元し、不一致の場合は拒否した。固定 C# でも対応する
+4件が合格した。Rust ではフィールド名の異なるスタンプの拒否も追加で確認した。
+ObjectReaderWriterTests の1件と OpenStreamSerializationTests の反射・強参照または
+ルート単位参照の5件も型スタンプを有効にして移植した。
+[公式 ID 別の結果](nunit-evidence/targeted-stamps-symbol-dedup.tsv) · [固定 C# の StampingTests ログ](nunit-evidence/stamping-official.log)
+
+残りは9 fixture・2,105ケース。弱参照保持、生成読み書き、コレクション・CLR 型の
+コーデック、サロゲート、フック、バージョン許容を伴う型変更の復元が必要。
