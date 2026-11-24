@@ -10,6 +10,7 @@ mod range;
 mod storage;
 mod symbol;
 mod symbol_deduplication;
+mod symbol_lookup;
 mod system_bus;
 mod time_interval;
 mod tracked_register_bytes;
