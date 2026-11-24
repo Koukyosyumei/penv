@@ -770,10 +770,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.operation(f"{uart} WriteLine {self.uart_text(char)} None")
         return {"Line": ""}
 
-    def uart_idle(self, timeout):
-        self.select_uart()
+    def uart_idle(self, timeout, *args):
+        options = self.log_options(args, {"testerId"}, ("testerId",))
+        tester = self.parse_tester_id(options.get("testerId"))
+        selector = f" testerId={tester}" if tester is not None else ""
         self.started = True
-        self.operation(f"TestMonitorUartIdle {self.duration(timeout)}")
+        self.operation(f"TestMonitorUartIdle {self.duration(timeout)}{selector}")
 
     def write_line(self, content="", *args):
         positional = ("testerId", "waitForEcho")

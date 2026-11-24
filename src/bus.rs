@@ -5099,8 +5099,8 @@ impl Bus {
         Ok(UartWatch::Tester(id))
     }
 
-    pub(crate) fn uart_activity(&mut self) -> Result<(usize, u64), String> {
-        let (id, TesterHistory::Text(history)) = self.uart_tester(None)? else {
+    pub(crate) fn uart_activity(&mut self, tester: Option<usize>) -> Result<(usize, u64), String> {
+        let (id, TesterHistory::Text(history)) = self.uart_tester(tester)? else {
             return Err("unsupported idle check on a binary UART tester".into());
         };
         Ok((id, history.activity))

@@ -297,7 +297,7 @@ enum Action {
     PhyRegister(String, u16),
     AdxlAxis(String, usize, i16),
     LiteXLedState(String),
-    UartIdle(u64),
+    UartIdle(u64, Option<usize>),
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
     SaveMemory(PathBuf),
@@ -611,7 +611,7 @@ fn run_commands(
                     monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
                     .map(|()| None).map_err(|error| error.to_string())
             }
-            Action::UartIdle(_) => Err("UART idle check requires the live monitor".into()),
+            Action::UartIdle(..) => Err("UART idle check requires the live monitor".into()),
             Action::SetQuantum(duration) => {
                 machine.monitor_quantum = *duration;
                 Ok(None)
@@ -1081,9 +1081,9 @@ pub fn serve(
                 }
                 frame(&mut output, "OK", &[])
             }
-            (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps, tester), .. }]) => {
                 let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
-                    .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
+                    .and_then(|cycles| machine.bus.uart_activity(*tester).and_then(|(id, previous)| {
                         run_until_deadline(machine, cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
                     }));
 
@@ -2055,7 +2055,13 @@ fn execute(
             Some(Action::CpuMips(mips))
         }
         ["emulation", "GetTimeSourceInfo"] if boot.started => Some(Action::TimeSourceInfo),
-        ["TestMonitorUartIdle", timeout] if boot.started => Some(Action::UartIdle(duration_steps(resolve(timeout)?)?)),
+        ["TestMonitorUartIdle", timeout, options @ ..] if boot.started && options.len() <= 1 => {
+            let tester = options.first().map(|option| {
+                let id = option.strip_prefix("testerId=").ok_or("expected testerId=ID")?;
+                crate::parse_address(resolve(id)?).map(|id| id as usize)
+            }).transpose()?;
+            Some(Action::UartIdle(duration_steps(resolve(timeout)?)?, tester))
+        }
 
         [target, "Frequency"] if boot.started => Some(Action::TimerProperty(
             target.trim_start_matches("sysbus.").to_owned(), false)),
