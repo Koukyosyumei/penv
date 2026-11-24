@@ -791,7 +791,9 @@ fn run_commands<'a>(
                 let mut state = deferred_script_state(&command.source, session);
                 load_text(&command.source, canonical.clone(), root, &mut state, text)?;
                 let start = machine.elapsed_steps();
-                let allow_snapshots = matches!(command_words(text)?.first(), Some(&("include" | "i" | "ExecuteScript")));
+                let mut separators = Vec::new();
+                let words = command_tokens(text, Some(&mut separators))?;
+                let allow_snapshots = !separators.is_empty() || matches!(words.first(), Some(&("include" | "i" | "ExecuteScript")));
                 validate_deferred_commands(&state.boot, depth, allow_snapshots)?;
                 let boot = apply_deferred_state(session, state);
                 let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session, depth)?;
@@ -1514,8 +1516,14 @@ pub fn serve(
         let mut boot = live_command_boot(path, &session);
         let mut existing_machine = true;
         let mut included_state = None;
-        let parsed = command_words(text).and_then(|words| {
-            if matches!(words.as_slice(), ["include" | "i" | "ExecuteScript", _]) {
+        let parsed = (|| {
+            let mut separators = Vec::new();
+            let words = if text.contains(';') {
+                command_tokens(text, Some(&mut separators))?
+            } else {
+                command_words(text)?
+            };
+            if !separators.is_empty() || matches!(words.as_slice(), ["include" | "i" | "ExecuteScript", _]) {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
                 boot.runtime.push(RuntimeCommand {
                     line: 1, source: path.to_owned(),
@@ -1563,7 +1571,7 @@ pub fn serve(
                 return Ok(());
             }
             execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, root, 1)
-        });
+        })();
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => {
@@ -2499,13 +2507,7 @@ fn expand_macro(name: &str, state: &mut ScriptState, root: &Path) -> Result<(), 
     // Retain the script directory without mistaking a macro call for an include of its defining file.
     let canonical = canonical.with_file_name(format!("<macro:{}>", name.replace(['/', '\\'], "_")));
     for (index, text) in &body.commands {
-        let mut separators = Vec::new();
-        command_tokens(text, Some(&mut separators))?;
-        let mut start = 0;
-        for end in separators.into_iter().chain(std::iter::once(text.len())) {
-            load_text_at(&body.script, canonical.clone(), root, state, &text[start..end], *index)?;
-            start = end + 1;
-        }
+        load_text_at(&body.script, canonical.clone(), root, state, text, *index)?;
     }
     Ok(())
 }
@@ -2548,6 +2550,21 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
             command.push_str(next);
         }
         let text = text.as_ref();
+        let mut separators = Vec::new();
+        if text.contains(';') {
+            command_tokens(text, Some(&mut separators)).map_err(|e| error(&e))?;
+        }
+        if !separators.is_empty() {
+            let mut chain_name = canonical.file_name().unwrap_or_default().to_os_string();
+            chain_name.push(".<command-chain>");
+            let chain_source = canonical.with_file_name(chain_name);
+            let mut start = 0;
+            for end in separators.into_iter().chain(std::iter::once(text.len())) {
+                load_text_at(path, chain_source.clone(), root, state, &text[start..end], line)?;
+                start = end + 1;
+            }
+            continue;
+        }
         if let Some(value) = text.strip_prefix("machine LoadPlatformDescriptionFromString ") {
             if !state.machine || state.boot.session.machine_cleared {
                 return Err(error("inline REPL requires a machine"));
@@ -4973,6 +4990,15 @@ greet "hello world"
         let cycle = "alias first second\nalias second first\nfirst";
         let result = load_script(Path::new("aliases.resc"), Path::new("."), false, Some(cycle));
         assert!(result.err().unwrap().contains("recursive"));
+    }
+
+    #[test]
+    fn command_chains_preserve_quoted_separators_and_observe_updates() {
+        let script = r#"set marker "one;two";echo $marker;set marker "end";echo $marker"#;
+        let boot = load_script(Path::new("chain.resc"), Path::new("."), false, Some(script)).unwrap();
+        let mut output = Vec::new();
+        run_console_script(&boot, &mut output).unwrap();
+        assert_eq!(output, b"one;two\nend\n");
     }
 
     #[test]
