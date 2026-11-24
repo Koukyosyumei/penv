@@ -892,8 +892,7 @@ impl Rv64 {
                 }
                 Err(BusError::Unmapped(low, width))
             } else {
-                bus.rv64_devices
-                    .write_for_hart(self.hart_id, low, width, value as u32, output)
+                bus.write_rv64_peripheral(self.hart_id, low, width, value as u32, output)
                     .map_or_else(
                         || bus.write(low, width, value as u32, output),
                         |result| result.map_err(BusError::Output),

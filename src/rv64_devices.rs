@@ -110,14 +110,21 @@ impl Devices {
     }
 
     pub fn has_uart(&self, name: &str) -> bool {
-        self.uarts.iter().any(|uart| uart.name == name)
+        self.uart_index(name).is_some()
+    }
+
+    pub(crate) fn uart_index(&self, name: &str) -> Option<usize> {
+        self.uarts.iter().position(|uart| uart.name == name)
+    }
+
+    pub(crate) fn uart_for_hart(&self, hart: usize, address: u32) -> Option<usize> {
+        self.uarts.iter().position(|uart| {
+            uart.contains(address) && (uart.harts == 0 || uart.harts & (1 << hart) != 0)
+        })
     }
 
     pub fn select_uart(&mut self, name: &str) -> Result<(), String> {
-        self.input_uart = self
-            .uarts
-            .iter()
-            .position(|uart| uart.name == name)
+        self.input_uart = self.uart_index(name)
             .ok_or_else(|| format!("unknown RV64 UART {name:?}"))?;
         Ok(())
     }

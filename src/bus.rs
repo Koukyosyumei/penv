@@ -199,6 +199,7 @@ enum TesterPort {
     Trivial,
     LiteX,
     Nrf(usize),
+    Rv64(usize),
 }
 
 enum TesterHistory {
@@ -3800,6 +3801,25 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn write_rv64_peripheral(
+        &mut self, hart: usize, address: u32, width: usize, value: u32, output: &mut impl Write,
+    ) -> Option<io::Result<()>> {
+        if self.uart_testers.is_empty() && self.uart_logs.is_empty() {
+            return self.rv64_devices.write_for_hart(hart, address, width, value, output);
+        }
+        let Some(index) = self.rv64_devices.uart_for_hart(hart, address) else {
+            return self.rv64_devices.write_for_hart(hart, address, width, value, output);
+        };
+        let mut bytes = Vec::new();
+        let result = self.rv64_devices.write_for_hart(hart, address, width, value, &mut bytes)?;
+        Some(result.and_then(|()| {
+            output.write_all(&bytes)?;
+            let console = self.monitor_log_enabled(1);
+            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::Rv64(index), &bytes, console);
+            Ok(())
+        }))
+    }
+
     pub fn tick_litex_uart(&mut self, step: u64, output: &mut impl Write) -> io::Result<()> {
         if let Some(uart) = self.litex_uart.as_mut() {
             let mut bytes = Vec::new();
@@ -4807,6 +4827,11 @@ impl Bus {
             self.litex_uart.as_mut().unwrap().queue_input(bytes.collect());
             return Ok(());
         }
+        if let TesterPort::Rv64(_) = port {
+            self.rv64_devices.select_uart(name.trim_start_matches("sysbus."))?;
+            self.rv64_devices.queue_input(bytes.collect());
+            return Ok(());
+        }
         if let TesterPort::Nrf(index) = port {
             let mut uart = self.nrf_peripherals.remove(index);
             uart.queue_input(bytes.collect());
@@ -4923,6 +4948,8 @@ impl Bus {
             .position(|device| device.is_uart() && device.name == name)
         {
             Ok(TesterPort::Nrf(index))
+        } else if let Some(index) = self.rv64_devices.uart_index(name) {
+            Ok(TesterPort::Rv64(index))
         } else {
             self.stm32_usart_index(target).map(TesterPort::Stm32)
                 .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))
