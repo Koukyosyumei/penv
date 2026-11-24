@@ -3145,3 +3145,25 @@ mod serial_user_boundaries {
     user_configurations!(two_serializations, two_serializations);
     user_configurations!(different_serializations, two_different_serializations);
 }
+
+mod serial_user_lifecycle {
+    use super::*;
+    user_configurations!(transient_class, omit_transient_class);
+    user_configurations!(transient_field, omit_transient_field);
+    user_configurations!(constructor_field, |m| constructor_for_event_field(
+        m,
+        "WithConstructorAttribute"
+    ));
+    user_configurations!(constructor_struct, |m| constructor_for_event_field(
+        m,
+        "StructWithConstructorAttribute"
+    ));
+    user_configurations!(constructor_nested, constructor_for_nested_field);
+    user_configurations!(late_hook, generic_late_hook);
+    user_configurations!(special, specially_serializable);
+    user_configurations!(special_array_identity, special_in_array);
+    user_configurations!(special_struct, special_in_struct);
+    user_configurations!(stream_shift, detect_stream_shift);
+    user_configurations!(nested_generic_array, nested_generic_array);
+    user_configurations!(issue_60, issue_60);
+}
