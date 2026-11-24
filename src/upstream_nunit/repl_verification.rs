@@ -784,3 +784,75 @@ mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollecti
     assert_eq!(dict[&0], "zero");
     assert_eq!(dict[&1], "one");
 }
+
+#[test]
+fn should_handle_list_of_references() {
+    let platform = creation::create_objects(r#"
+cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockCpuList: [cpu1, cpu2]"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    let expected = [
+        platform.cpu_id("sysbus.cpu1").unwrap(),
+        platform.cpu_id("sysbus.cpu2").unwrap(),
+    ];
+    assert_eq!(value.cpu_list.as_deref(), Some(expected.as_slice()));
+}
+
+#[test]
+fn should_handle_list_of_unordered_references() {
+    let platform = creation::create_objects(r#"
+cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockCpuList: [cpu1, cpu2]
+
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    "#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    let expected = [
+        platform.cpu_id("sysbus.cpu1").unwrap(),
+        platform.cpu_id("sysbus.cpu2").unwrap(),
+    ];
+    assert_eq!(value.cpu_list.as_deref(), Some(expected.as_slice()));
+}
+
+#[test]
+fn should_handle_dict_of_unordered_references() {
+    let platform = creation::create_objects(r#"
+cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntCpuDict: {1: cpu1; 2: cpu2}
+
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    "#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    let cpu1 = platform.cpu_id("sysbus.cpu1").unwrap();
+    let cpu2 = platform.cpu_id("sysbus.cpu2").unwrap();
+    let dict = value.int_cpu.as_ref().unwrap();
+    assert_eq!(dict.len(), 2);
+    assert_eq!(dict[&1], cpu1);
+    assert_eq!(dict[&2], cpu2);
+}
+
+#[test]
+fn should_handle_dict_of_unordered_references_as_keys() {
+    let platform = creation::create_objects(r#"
+cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockCpuIntDict: {cpu1: 1; cpu2: 2}
+
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    "#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    let cpu1 = platform.cpu_id("sysbus.cpu1").unwrap();
+    let cpu2 = platform.cpu_id("sysbus.cpu2").unwrap();
+    let dict = value.cpu_int.as_ref().unwrap();
+    assert_eq!(dict.len(), 2);
+    assert_eq!(dict[&cpu1], 1);
+    assert_eq!(dict[&cpu2], 2);
+}

@@ -157,6 +157,9 @@ pub(crate) struct Collections {
     pub(crate) integers: Option<Vec<i32>>,
     pub(crate) array: Option<Vec<i32>>,
     pub(crate) strings: Option<Vec<String>>,
+    pub(crate) cpu_list: Option<Vec<usize>>,
+    pub(crate) int_cpu: Option<std::collections::BTreeMap<i32, usize>>,
+    pub(crate) cpu_int: Option<std::collections::BTreeMap<usize, i32>>,
     pub(crate) dictionary: Option<std::collections::BTreeMap<i32, String>>,
 }
 
@@ -184,25 +187,59 @@ fn signed_integer(item: ListItem<'_>) -> Option<i32> {
     value.parse().ok()
 }
 
+fn bind_dictionary<K: Ord, V>(
+    value: &str,
+    key: impl Fn(&str) -> Result<K, String>,
+    item: impl Fn(&str) -> Result<V, String>,
+) -> Result<Option<std::collections::BTreeMap<K, V>>, String> {
+    if value == "empty" {
+        return Ok(None);
+    }
+    let mut items = std::collections::BTreeMap::new();
+    for (k, v) in dictionary_value(value)? {
+        if items.insert(key(k)?, item(v)?).is_some() {
+            return Err("An item with the same key has already been added.".into());
+        }
+    }
+    Ok(Some(items))
+}
+
 impl Collections {
-    fn bind(&mut self, name: &str, value: &str) -> Result<(), String> {
+    fn bind(
+        &mut self,
+        name: &str,
+        value: &str,
+        resolve_cpu: impl Fn(&str) -> Result<usize, String>,
+    ) -> Result<(), String> {
+        let integer = |value: &str| {
+            value
+                .parse()
+                .map_err(|_| "TypeMismatch: expected integer".into())
+        };
         match name {
             "mockIntStringDict" => {
-                self.dictionary = if value == "empty" {
+                self.dictionary = bind_dictionary(value, integer, |value| {
+                    quoted_value(value).map_err(|_| "TypeMismatch: expected string value".into())
+                })?
+            }
+            "mockIntCpuDict" => self.int_cpu = bind_dictionary(value, integer, resolve_cpu)?,
+            "mockCpuIntDict" => self.cpu_int = bind_dictionary(value, resolve_cpu, integer)?,
+            "mockCpuList" => {
+                self.cpu_list = if value == "empty" {
                     None
                 } else {
-                    let mut items = std::collections::BTreeMap::new();
-                    for (key, value) in dictionary_value(value)? {
-                        let key = key
-                            .parse()
-                            .map_err(|_| "TypeMismatch: expected integer key")?;
-                        let value = quoted_value(value)
-                            .map_err(|_| "TypeMismatch: expected string value")?;
-                        if items.insert(key, value).is_some() {
-                            return Err("An item with the same key has already been added.".into());
-                        }
-                    }
-                    Some(items)
+                    Some(
+                        list_value(value)
+                            .map_err(str::to_owned)?
+                            .into_iter()
+                            .map(|item| match item {
+                                ListItem::Symbol(SymbolicValue::Reference(name)) => {
+                                    resolve_cpu(name)
+                                }
+                                _ => Err("TypeMismatch: expected CPU reference".into()),
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )
                 };
             }
             "mockIntList" => self.integers = bind_list(value, signed_integer)?,
@@ -220,6 +257,12 @@ impl Collections {
 }
 
 impl CreatedPlatform {
+    #[cfg(test)]
+    pub(crate) fn cpu_id(&self, qualified_name: &str) -> Option<usize> {
+        let id = *self.registered.get(qualified_name)?;
+        (self.objects[id].model == Model::Cpu).then_some(id)
+    }
+
     #[cfg(test)]
     pub(crate) fn collections(&self, qualified_name: &str) -> Option<&Collections> {
         let object = &self.objects[*self.registered.get(qualified_name)?];
@@ -406,10 +449,19 @@ impl CreatedPlatform {
             return Err(format!("{source}: inline object nesting limit exceeded"));
         }
         if self.objects[id].model == Model::CollectionPeripheral {
-            return self.objects[id]
-                .collections
-                .bind(name, value)
-                .map_err(|error| format!("{source}: {error}"));
+            let mut collections = std::mem::take(&mut self.objects[id].collections);
+            collections
+                .bind(name, value, |name| {
+                    let target =
+                        resolve(name).ok_or_else(|| format!("MissingReference: {name}"))?;
+                    if self.objects[target].model != Model::Cpu {
+                        return Err(format!("TypeMismatch: {name} is not a CPU"));
+                    }
+                    Ok(target)
+                })
+                .map_err(|error| format!("{source}: {error}"))?;
+            self.objects[id].collections = collections;
+            return Ok(());
         }
         if self.objects[id].model == Model::EnumPeripheral {
             return self.objects[id].enum_arguments.bind(name, value, source);

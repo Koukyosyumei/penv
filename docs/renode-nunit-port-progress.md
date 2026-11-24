@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,020 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,024 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 375 |
+| 移植待ち | 371 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -434,3 +434,5 @@ REPL のインラインオブジェクト生成を追加し、不明な型、参
 リストと配列のコンストラクタ引数9件を移植した。`empty` と `[]` を区別し、要素順、型不一致、オーバーレイによる置換を検証した。対象の60件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-collection-lists.tsv)・[実行ログ](nunit-evidence/targeted-repl-collection-lists.log)
 
 整数キーと文字列値の辞書を検証する3件を移植した。`{}` と `empty` を区別し、登録後の件数とキーごとの値を照合した。対象の63件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-collection-dicts.tsv)・[実行ログ](nunit-evidence/targeted-repl-collection-dicts.log)
+
+CPU参照を要素、キー、値に含むコレクション4件を移植した。前方参照を解決し、登録済みCPUと同一のオブジェクトIDを参照していることを検証した。対象の67件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-collection-refs.tsv)・[実行ログ](nunit-evidence/targeted-repl-collection-refs.log)
