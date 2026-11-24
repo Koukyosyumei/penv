@@ -999,3 +999,92 @@ device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
         "AmbiguousCtor",
     );
 }
+
+#[test]
+fn should_fail_on_no_available_ctor_in_object_value() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+        other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+            x: 7"#,
+        "NoCtor",
+    );
+}
+
+#[test]
+fn should_fail_on_ambiguous_ctor_in_object_value() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+        other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+            other: new Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+                value: 4"#,
+        "AmbiguousCtor",
+    );
+}
+
+#[test]
+fn should_find_cyclic_dependency() {
+    assert_error(
+        r#"
+peri1: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: new Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+        other: peri2
+
+peri3: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: peri4
+
+peri4: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: peri1
+
+peri2: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: peri3
+"#,
+        "CreationOrderCycle",
+    );
+}
+
+#[test]
+fn should_find_cyclic_reference_to_itself() {
+    assert_error(
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: peri"#,
+        "CreationOrderCycle",
+    );
+}
+
+#[test]
+fn should_fail_on_non_existing_reference_in_ctor_attribute() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: nonExististing"#,
+        "MissingReference",
+    );
+}
+
+#[test]
+fn should_find_cyclic_reference_between_files() {
+    let result = super::upstream_using_tests::create_platform(
+        r#"
+using "A"
+peri2: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: peri1
+
+peri3:
+    other: peri2"#,
+        &[(
+            "A",
+            "
+peri1: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: peri3
+peri3: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+",
+        )],
+    );
+    let error = result.err().expect("expected constructor dependency cycle");
+    assert!(error.starts_with("CreationOrderCycle:"), "{error}");
+}

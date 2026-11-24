@@ -6,6 +6,7 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 enum Model {
     Cpu,
     EmptyPeripheral,
+    DependentPeripheral,
     EnumPeripheral,
     CollectionPeripheral,
     ScalarPeripheral(ScalarKind),
@@ -94,6 +95,9 @@ impl Model {
             "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralUsingReferenceAttribute" => {
                 Some(Self::ScalarPeripheral(ScalarKind::PeripheralReference))
             }
+            "Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency" => {
+                Some(Self::DependentPeripheral)
+            }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -130,6 +134,7 @@ struct CreatedObject {
     scalar: Option<ScalarValue>,
     empty_peripheral_counter: u32,
     empty_peripheral_value: Option<String>,
+    dependency: Option<usize>,
     collections: Collections,
 }
 
@@ -385,6 +390,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             scalar: None,
             empty_peripheral_counter: 1,
             empty_peripheral_value: None,
+            dependency: None,
             collections: Collections::default(),
         });
         targets.push(Some(id));
@@ -437,6 +443,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                         let model = match platform.objects[target].model {
                             Model::Cpu => "CPU",
                             Model::EmptyPeripheral
+                            | Model::DependentPeripheral
                             | Model::EnumPeripheral
                             | Model::ScalarPeripheral(_)
                             | Model::CollectionPeripheral => "peripheral",
@@ -477,25 +484,59 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
         .filter(|entry| !entry.model.is_empty())
         .zip(&mut platform.objects)
     {
-        if let Some(value) = &object.empty_peripheral_value {
-            if value.parse::<i32>().is_ok() {
-                // An integer fits both the int overload with optional enabled and the double overload.
-                return Err(entry.error("AmbiguousCtor: multiple public constructors accept value"));
-            }
-            if value.parse::<f64>().is_ok_and(f64::is_finite) {
-                object.empty_peripheral_counter = 2;
-            } else {
-                return Err(entry.error("NoCtor: invalid value argument"));
-            }
-        }
-        if matches!(object.model, Model::ScalarPeripheral(_)) && object.scalar.is_none() {
-            return Err(entry.error("NoCtor: missing required scalar constructor argument"));
-        }
+        object
+            .finish_constructor()
+            .map_err(|error| entry.error(&error))?;
     }
+    platform.check_constructor_cycles()?;
     Ok(platform)
 }
 
+impl CreatedObject {
+    fn finish_constructor(&mut self) -> Result<(), String> {
+        if let Some(value) = &self.empty_peripheral_value {
+            if value.parse::<i32>().is_ok() {
+                // An integer fits both the int overload with optional enabled and the double overload.
+                return Err("AmbiguousCtor: multiple public constructors accept value".into());
+            }
+            if value.parse::<f64>().is_ok_and(f64::is_finite) {
+                self.empty_peripheral_counter = 2;
+            } else {
+                return Err("NoCtor: invalid value argument".into());
+            }
+        }
+        if matches!(self.model, Model::ScalarPeripheral(_)) && self.scalar.is_none() {
+            return Err("NoCtor: missing required scalar constructor argument".into());
+        }
+        Ok(())
+    }
+}
+
 impl CreatedPlatform {
+    fn check_constructor_cycles(&self) -> Result<(), String> {
+        // Each mock constructor has at most one dependency. Walk each chain once.
+        let mut state = vec![0; self.objects.len()];
+        for start in 0..state.len() {
+            let mut current = Some(start);
+            let mut path = Vec::new();
+            while let Some(id) = current {
+                match state[id] {
+                    1 => return Err("CreationOrderCycle: cyclic constructor dependency".into()),
+                    2 => break,
+                    _ => {
+                        state[id] = 1;
+                        path.push(id);
+                        current = self.objects[id].dependency;
+                    }
+                }
+            }
+            for id in path {
+                state[id] = 2;
+            }
+        }
+        Ok(())
+    }
+
     fn set_property(
         &mut self,
         id: usize,
@@ -507,6 +548,58 @@ impl CreatedPlatform {
     ) -> Result<(), String> {
         if depth >= 64 {
             return Err(format!("{source}: inline object nesting limit exceeded"));
+        }
+        if self.objects[id].model == Model::DependentPeripheral {
+            if name != "other" {
+                return Err(format!(
+                    "{source}: NoCtor: unknown constructor argument {name}"
+                ));
+            }
+            let target = if value == "empty" || value == "none" {
+                None
+            } else if value.starts_with("new ") {
+                let (object, tail) =
+                    object_prefix(value).map_err(|error| format!("{source}: {error}"))?;
+                if !tail.trim().is_empty() {
+                    return Err(format!("{source}: unexpected text after inline object"));
+                }
+                let model = Model::parse(object.model)
+                    .ok_or_else(|| format!("{source}: TypeNotResolved: {}", object.model))?;
+                let target = self.objects.len();
+                self.objects.push(CreatedObject {
+                    model,
+                    cpu: (model == Model::Cpu).then(Cpu::default),
+                    ranges: Vec::new(),
+                    enum_arguments: EnumArguments::default(),
+                    scalar: None,
+                    empty_peripheral_counter: 1,
+                    empty_peripheral_value: None,
+                    dependency: None,
+                    collections: Collections::default(),
+                });
+                let mut seen = HashSet::new();
+                for (key, value) in object.fields {
+                    if !seen.insert(key) {
+                        return Err(format!(
+                            "{source}: PropertyOrCtorNameUsedMoreThanOnce: {key}"
+                        ));
+                    }
+                    self.set_property(target, key, value, source, resolve, depth + 1)?;
+                }
+                self.objects[target]
+                    .finish_constructor()
+                    .map_err(|error| format!("{source}: {error}"))?;
+                Some(target)
+            } else {
+                Some(resolve(value).ok_or_else(|| format!("{source}: MissingReference: {value}"))?)
+            };
+            if target.is_some_and(|target| self.objects[target].model == Model::External) {
+                return Err(format!(
+                    "{source}: TypeMismatch: other requires a peripheral"
+                ));
+            }
+            self.objects[id].dependency = target;
+            return Ok(());
         }
         if self.objects[id].model == Model::CollectionPeripheral {
             let mut collections = std::mem::take(&mut self.objects[id].collections);
@@ -576,6 +669,7 @@ impl CreatedPlatform {
                     scalar: None,
                     empty_peripheral_counter: 1,
                     empty_peripheral_value: None,
+                    dependency: None,
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();

@@ -157,7 +157,7 @@ fn backslash_should_not_be_path_separator_on_unix() {
     );
 }
 
-fn create_platform(
+pub(super) fn create_platform(
     source: &str,
     includes: &[(&str, &str)],
 ) -> Result<creation::CreatedPlatform, String> {

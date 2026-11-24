@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,038 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,044 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 357 |
+| 移植待ち | 351 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -444,3 +444,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 `VerificationTests` の4件を追加した。登録のない別名と登録を取り消した宣言での別名を区別し、既存の `sysbus` に対するコンストラクタ引数と、公開コンストラクタのない型を拒否した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-diagnostics.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-diagnostics.log)
 
 コンストラクタの診断3件を移植した。インライン引数の型解決をコンストラクタ候補の判定より先に行い、オーバーレイを適用した引数から候補なしと候補の競合を区別した。対象の81件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-constructor-candidates.tsv)・[実行ログ](nunit-evidence/targeted-repl-constructor-candidates.log)
+
+コンストラクタ依存の6件を移植した。入れ子の候補なし・候補競合、未解決参照、自己循環と複数オブジェクトの循環、インクルードをまたぐ循環を検証した。対象の87件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-dependencies.tsv)・[実行ログ](nunit-evidence/targeted-repl-dependencies.log)
