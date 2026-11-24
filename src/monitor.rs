@@ -513,9 +513,9 @@ enum Action {
     InvokeMonitorMacro(String, PathBuf),
     InvokeMonitorScript(String, PathBuf, PathBuf),
     MonitorEcho(String, PathBuf),
-    SaveMemory(PathBuf, bool),
+    SaveMemory(SnapshotPath, bool),
     ClearMemory,
-    LoadMemory(PathBuf),
+    LoadMemory(SnapshotPath),
     SetMachineCleared(bool),
     FindBytes(FindBytes),
     BusScalar(BusScalar),
@@ -821,18 +821,17 @@ fn run_commands<'a>(
             Action::DescribeSnapshotPlatform => describe_snapshot_platform(machine, session)
                 .and_then(|script| output.output.write_all(script.as_bytes()).map_err(|error| error.to_string()))
                 .map(|()| None),
-            Action::SaveMemory(path, restorable) => {
+            Action::SaveMemory(path, restorable) => path.resolve(&session.variables).and_then(|path| {
                 if *restorable {
-                    snapshot_platform(machine).and_then(|_| session.save(machine, path))
-                } else {
-                    session.save(machine, path)
+                    snapshot_platform(machine)?;
                 }
-            }.map(|()| None),
+                session.save(machine, &path)
+            }).map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
                 cleared = true;
                 None
             }),
-            Action::LoadMemory(path) => session.load(machine, path).map(|()| {
+            Action::LoadMemory(path) => path.resolve(&session.variables).and_then(|path| session.load(machine, &path)).map(|()| {
                 machine.monitor_single_step_blocking = true;
                 cleared = false;
                 None
@@ -2749,7 +2748,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                     state.boot.inline_repl.push((origin.to_owned(), repl));
                 }
                 state.boot.runtime.push(RuntimeCommand {
-                    line: line + 1, source: path.to_owned(), action: Action::LoadMemory(snapshot),
+                    line: line + 1, source: path.to_owned(), action: Action::LoadMemory(SnapshotPath::Fixed(snapshot)),
                 });
             }
             ["include" | "i" | "ExecuteScript", value]
@@ -2913,6 +2912,25 @@ fn monitor_origin(variables: &HashMap<String, String>) -> &Path {
     Path::new(unquote(origin.trim_start_matches('@')))
 }
 
+enum SnapshotPath {
+    Fixed(PathBuf),
+    WorkingDirectory(PathBuf),
+}
+
+impl SnapshotPath {
+    fn resolve(&self, variables: &HashMap<String, String>) -> Result<PathBuf, String> {
+        match self {
+            Self::Fixed(path) => Ok(path.clone()),
+            Self::WorkingDirectory(relative) => Ok(monitor_working_directory(variables)?.join(relative)),
+        }
+    }
+}
+
+fn monitor_working_directory(variables: &HashMap<String, String>) -> Result<&Path, String> {
+    let cwd = resolve(variables, "$global.CWD")?;
+    Ok(Path::new(unquote(cwd.trim_start_matches('@'))))
+}
+
 fn snapshot_path(
     value: &str, script_dir: &Path, variables: &HashMap<String, String>,
 ) -> Result<PathBuf, String> {
@@ -2941,8 +2959,7 @@ fn anchored_path(
     let base = if anchor == "ORIGIN" {
         origin
     } else {
-        let cwd = resolve(variables, "$global.CWD")?;
-        Path::new(unquote(cwd.trim_start_matches('@')))
+        monitor_working_directory(variables)?
     };
     Ok(Some(base.join(path_value(relative))))
 }
@@ -3449,7 +3466,11 @@ fn execute(
 
         [verb @ ("Save" | "SaveRestorableMonitorSnapshot" | "Load"), path] => {
             let directory = script.parent().unwrap_or_else(|| Path::new("."));
-            let path = snapshot_path(path, directory, variables)?;
+            let path = if let Some(("CWD", relative)) = path_anchor(path) {
+                SnapshotPath::WorkingDirectory(PathBuf::from(path_value(relative)))
+            } else {
+                SnapshotPath::Fixed(snapshot_path(path, directory, variables)?)
+            };
             Some(if *verb == "Load" {
                 Action::LoadMemory(path)
             } else {
