@@ -114,6 +114,12 @@ SerializationTests の反射読み書き・型スタンプ有無の2設定に10�
 2次元・3次元配列の復元も検証した。
 [公式 ID 別の結果](nunit-evidence/targeted-parser-empty-arrays.tsv)
 
-残りは9 fixture・1,995ケース。生成読み書き、コレクションと CLR 型の
+SerializationTests の反射読み書き・型スタンプ有無の2設定へ24件を追加した。
+列挙型の境界値とフラグの組み合わせ、キー値ペア、ボックス化された文字と
+型付き文字のスタック、継承フィールドと入れ子の値型を検証した。
+Rust 側では入れ子の値型をフィールドパス付きの型記述子で表す。
+[公式 ID 別の結果](nunit-evidence/targeted-enums-structs-segments.tsv)
+
+残りは9 fixture・1,971ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
