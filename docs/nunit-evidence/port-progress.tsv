@@ -11,7 +11,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	16	0	0	0	
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests	176	176	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	0	0	36	0	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TypeDescriptorComparisonTests	11	11	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.VersionToleranceTests	148	20	0	128	0	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.VersionToleranceTests	148	60	0	88	0	Module revision changes and direct field addition and removal are supported. Remaining cases require inheritance-chain evolution, fields moving between declaring types, and wire stamp de-duplication.
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests	49	49	0	0	0	-
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	60	60	0	0	0	-

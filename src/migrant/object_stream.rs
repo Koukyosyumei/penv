@@ -46,6 +46,8 @@ fn stamp_for<'a>(stamps: &'a [TypeStamp<'a>], class: &str) -> io::Result<TypeSta
 #[derive(Clone, Copy, Default)]
 pub struct VersionPolicy {
     pub allow_module_revision_change: bool,
+    pub allow_field_addition: bool,
+    pub allow_field_removal: bool,
 }
 
 #[derive(Debug)]
@@ -61,6 +63,53 @@ impl std::error::Error for VersionToleranceError {}
 
 fn version_mismatch(reason: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, VersionToleranceError(reason))
+}
+
+struct FieldProjection {
+    source_field_count: usize,
+    targets: Vec<(Option<usize>, FieldKind)>,
+}
+
+impl FieldProjection {
+    fn apply(self, values: Vec<Value>) -> io::Result<Vec<Value>> {
+        if self.source_field_count != values.len() {
+            return Err(invalid("record length differs from stored field stamp"));
+        }
+        let mut values: Vec<_> = values.into_iter().map(Some).collect();
+        self.targets
+            .into_iter()
+            .map(|(index, kind)| {
+                if let Some(index) = index {
+                    values[index]
+                        .take()
+                        .ok_or_else(|| invalid("duplicate field projection"))
+                } else {
+                    kind.added_default()
+                }
+            })
+            .collect()
+    }
+}
+
+impl FieldKind {
+    fn added_default(self) -> io::Result<Value> {
+        Ok(match self {
+            Self::Integer => Value::Integer(0),
+            Self::Float => Value::Float(0.0),
+            Self::Boolean => Value::Boolean(false),
+            Self::Reference | Self::NullableInteger | Self::NullableDecimal => Value::Null,
+            Self::Guid => Value::Guid(Guid([0; 16])),
+            Self::BigInteger => Value::BigInteger(vec![0]),
+            Self::Decimal => Value::Decimal(Decimal {
+                magnitude: [0; 3],
+                negative: false,
+                scale: 0,
+            }),
+            Self::NativeResource => {
+                return Err(version_mismatch("no default for added native field"));
+            }
+        })
+    }
 }
 
 impl TypeStamp<'_> {
@@ -117,6 +166,56 @@ impl TypeStamp<'_> {
             }
         }
         Ok(())
+    }
+
+    fn read_projection(
+        self,
+        data: &mut Reader<impl Read>,
+        policy: VersionPolicy,
+    ) -> io::Result<FieldProjection> {
+        let module = data.string()?;
+        let revision = data.unsigned()?;
+        if module != self.module
+            || revision != self.revision && !policy.allow_module_revision_change
+        {
+            return Err(version_mismatch(
+                "object type stamp differs from local schema",
+            ));
+        }
+        let count =
+            usize::try_from(data.unsigned()?).map_err(|_| invalid("invalid field stamp count"))?;
+        if count > MAX_ITEMS {
+            return Err(invalid("too many fields in object type stamp"));
+        }
+        let mut incoming = HashMap::new();
+        for index in 0..count {
+            let name = data.string()?;
+            let kind = data.byte()?;
+            if incoming.insert(name, (index, kind)).is_some() {
+                return Err(invalid("duplicate fields in object type stamp"));
+            }
+        }
+        let mut targets = Vec::with_capacity(self.fields.len());
+        for &(name, kind) in self.fields {
+            let index = match incoming.remove(name) {
+                Some((index, stored)) if stored == kind as u8 => Some(index),
+                Some(_) => {
+                    return Err(version_mismatch(
+                        "object field type differs from local schema",
+                    ));
+                }
+                None if policy.allow_field_addition => None,
+                None => return Err(version_mismatch("local schema adds a field")),
+            };
+            targets.push((index, kind));
+        }
+        if !policy.allow_field_removal && !incoming.is_empty() {
+            return Err(version_mismatch("local schema removes a field"));
+        }
+        Ok(FieldProjection {
+            source_field_count: count,
+            targets,
+        })
     }
 }
 
@@ -1131,9 +1230,19 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         .stamps
                         .map(|stamps| stamp_for(stamps, &class))
                         .transpose()?;
-                    if let Some(stamp) = stamp {
-                        stamp.verify(&mut self.data, self.version_policy)?;
-                    }
+                    let projection = match stamp {
+                        Some(stamp)
+                            if self.version_policy.allow_field_addition
+                                || self.version_policy.allow_field_removal =>
+                        {
+                            Some(stamp.read_projection(&mut self.data, self.version_policy)?)
+                        }
+                        Some(stamp) => {
+                            stamp.verify(&mut self.data, self.version_policy)?;
+                            None
+                        }
+                        None => None,
+                    };
                     let mut fields = if let Some(codecs) = self.generated {
                         let codec = find_codec(codecs, &class)?;
                         (codec.read)(&mut GeneratedInput {
@@ -1144,6 +1253,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     } else {
                         self.read_values(base, limit)?
                     };
+                    if let Some(projection) = projection {
+                        fields = projection.apply(fields)?;
+                    }
                     if let Some(as_user_object) = self.user_object_collections {
                         super::user_list::check_layout(&class, &fields, as_user_object)?;
                     }

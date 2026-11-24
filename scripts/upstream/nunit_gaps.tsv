@@ -1,6 +1,6 @@
 fixture	missing_api
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
-Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
+Antmicro.Migrant.Tests.VersionToleranceTests	Module revision changes and direct field addition and removal are supported. Remaining cases require inheritance-chain evolution, fields moving between declaring types, and wire stamp de-duplication.
 Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need KeyManager command, working-state, status and write-one-to-clear error registers. The fixture advances through the creator and owner derivation states, which require the ROM-controller digest and KMAC-256 over the configured keys and seeds.

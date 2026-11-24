@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,184 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,224 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 211 |
+| 移植待ち | 171 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -496,3 +496,5 @@ CLINT の CPU スコープ付き登録を実際のプラットフォームロー
 外部コレクションの `Select`・`ForEach` 4件と空の nullable リスト1件を移植した。上流のコマンドと出力アサーションを維持し、続けて実行するコマンド間の状態、可変長引数、入れ子の結果を検証した。ネイティブの拡張登録で `ActionArguments` の全60件が合格した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-external-collections.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-external-collections.log)
 
 Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタンプのモジュールリビジョンを GUID 差分に対応させ、GUID 変更許可を含意するフラグも含めて、4つの読み書き構成で検証した。[公式IDとの対応](nunit-evidence/targeted-migrant-revision.tsv)・[実行ログ](nunit-evidence/targeted-migrant-revision.log)
+
+直接フィールドの追加・削除40件を移植した。入力スタンプから復元先のフィールド名への対応を求め、追加フィールドは既定値に、削除フィールドは復元結果から除外する。生成読み込みは入力スキーマ用の Rust コーデックで値を読み、復元先へ写像する。最終の対象実行で60件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-field-projection.tsv)・[実行ログ](nunit-evidence/targeted-migrant-field-projection.log)
