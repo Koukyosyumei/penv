@@ -440,6 +440,8 @@ enum Action {
     StopProfile(String),
     DescribeSnapshotPlatform,
     DescribeEnvironment,
+    MonitorAssignment(String, PathBuf),
+    MonitorEcho(String, PathBuf),
     SaveMemory(PathBuf, bool),
     ClearMemory,
     LoadMemory(PathBuf),
@@ -628,7 +630,8 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
-                    | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -699,6 +702,12 @@ fn run_commands<'a>(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
+            Action::MonitorAssignment(text, origin) => command_words(text).and_then(|words| {
+                assign_variable(text, &words, session.machine.as_deref(), &mut session.variables, Some(origin))
+            }).map(|_| None),
+            Action::MonitorEcho(value, origin) => monitor_echo(value, &session.variables, origin).and_then(|message| {
+                writeln!(output.reply(), "{message}").map_err(|error| error.to_string())
+            }).map(|()| None),
             Action::DescribeEnvironment => writeln!(
                 output.reply(), "{}", describe_environment(&session.variables, &session.macros, &session.aliases),
             ).map(|()| None).map_err(|error| error.to_string()),
@@ -1382,7 +1391,7 @@ pub fn serve(
                 included_state = Some((state.variables, state.macros, state.aliases));
                 return Ok(());
             }
-            if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
+            if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables, None)? {
                 return Ok(());
             }
             execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, root, 1)
@@ -2155,15 +2164,16 @@ fn is_console_action(action: &Action) -> bool {
 }
 
 fn is_monitor_snapshot_action(action: &Action) -> bool {
-    matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment)
+    matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..))
 }
 
 fn is_empty_machine_action(action: &Action) -> bool {
-    is_console_action(action) || matches!(action,
+    is_console_action(action) || is_monitor_snapshot_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
         | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
         | Action::RunToSyncPoint | Action::SetEmulationPaused(_) | Action::SelectMachineZero
-        | Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment)
+        | Action::ClearMemory | Action::DescribeSnapshotPlatform)
 }
 
 pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
@@ -2424,7 +2434,21 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
             continue;
         }
         let words = command_words(text).map_err(|e| error(&e))?;
-        if assign_variable(text, &words, state.boot.session.machine.as_deref(), &mut state.variables).map_err(|e| error(&e))? {
+        let assignment = text.starts_with('$') || matches!(words.as_slice(), ["set", _, _]);
+        let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"]))
+            && state.boot.runtime.iter().any(|command| matches!(
+                command.action, Action::SaveMemory(..) | Action::LoadMemory(_)
+            ));
+        if follows_snapshot && assignment {
+            state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::MonitorAssignment(text.to_owned(), origin.to_owned()),
+            });
+            continue;
+        }
+        if assign_variable(text, &words, state.boot.session.machine.as_deref(), &mut state.variables, None)
+            .map_err(|e| error(&e))?
+        {
             continue;
         }
         match words.as_slice() {
@@ -2458,8 +2482,12 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     _ => load_file(&included, root, state).map_err(|e| error(&e))?,
                 }
             }
+            ["echo", value] if follows_snapshot => state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::MonitorEcho((*value).to_owned(), origin.to_owned()),
+            }),
             ["printenv"] => {
-                if state.boot.runtime.iter().any(|command| matches!(command.action, Action::LoadMemory(_))) {
+                if follows_snapshot {
                     state.boot.runtime.push(RuntimeCommand {
                         line: line + 1, source: path.to_owned(), action: Action::DescribeEnvironment,
                     });
@@ -2624,6 +2652,7 @@ fn assign_variable(
     words: &[&str],
     machine: Option<&str>,
     variables: &mut HashMap<String, String>,
+    origin: Option<&Path>,
 ) -> Result<bool, String> {
     let (name, value, conditional) = match words {
         ["set", name, value] => (name.trim_start_matches('$'), *value, false),
@@ -2641,7 +2670,7 @@ fn assign_variable(
     let scope = machine.map(normalized_monitor_scope);
     let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
     if !conditional || variable_binding(variables, name).is_none() {
-        let anchored = anchored_path(value, monitor_origin(variables), variables)?
+        let anchored = anchored_path(value, origin.unwrap_or_else(|| monitor_origin(variables)), variables)?
             .map(|path| format!("@{}", path.display()));
         let value = anchored.as_deref().unwrap_or(value);
         if name.starts_with("global.") {
@@ -2752,6 +2781,17 @@ fn parse_gpio_overlay(source: &str, root: &Path) -> Result<Vec<(String, u8, Stri
     Ok(links)
 }
 
+fn monitor_echo(value: &str, variables: &HashMap<String, String>, origin: &Path) -> Result<String, String> {
+    if let Some(path) = anchored_path(value, origin, variables)? {
+        return Ok(path.display().to_string());
+    }
+    let value = resolve(variables, value)?;
+    if let Some(path) = value.strip_prefix('@') {
+        return Ok(path_value(path));
+    }
+    Ok(monitor_string(value).unwrap_or_else(|| value.to_owned()))
+}
+
 fn execute(
     text: &str,
     words: &[&str],
@@ -2796,16 +2836,7 @@ fn execute(
         return Ok(());
     }
     if let ["echo", value] = words {
-        let message = if let Some(path) = anchored_path(value, monitor_origin(variables), variables)? {
-            path.display().to_string()
-        } else {
-            let value = resolve(value)?;
-            if let Some(path) = value.strip_prefix('@') {
-                path_value(path)
-            } else {
-                monitor_string(value).unwrap_or_else(|| value.to_owned())
-            }
-        };
+        let message = monitor_echo(value, variables, monitor_origin(variables))?;
         if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand { line, source: script.to_owned(), action: Action::Echo(message) });
         } else {
@@ -4740,9 +4771,9 @@ greet "hello world"
     #[test]
     fn explicit_global_lookup_does_not_fall_back_to_machine_variables() {
         let mut variables = HashMap::new();
-        assign_variable("set value 41", &["set", "value", "41"], None, &mut variables).unwrap();
-        assign_variable("set value 42", &["set", "value", "42"], Some("demo"), &mut variables).unwrap();
-        assign_variable("set local 43", &["set", "local", "43"], Some("demo"), &mut variables).unwrap();
+        assign_variable("set value 41", &["set", "value", "41"], None, &mut variables, None).unwrap();
+        assign_variable("set value 42", &["set", "value", "42"], Some("demo"), &mut variables, None).unwrap();
+        assign_variable("set local 43", &["set", "local", "43"], Some("demo"), &mut variables, None).unwrap();
 
         assert_eq!(resolve(&variables, "$value"), Ok("42"));
         assert_eq!(resolve(&variables, "$demo.value"), Ok("42"));

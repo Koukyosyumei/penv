@@ -336,6 +336,24 @@ fn renode_resc_collapsed_stack_disables_during_chained_calls() {
 }
 
 #[test]
+fn renode_resc_guestless_snapshot_restores_monitor_variables_in_command_order() {
+    let directory = std::env::temp_dir().join(format!("penv-monitor-save-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    let script = directory.join("monitor.resc");
+    fs::write(&script, r#"$name="saved value"
+Save @monitor.save
+set name "changed"
+echo $name
+Load @monitor.save
+echo $name
+"#).unwrap();
+    let output = penv_command().args(["run", "--script"]).arg(script).output().unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"changed\nsaved value\n");
+}
+
+#[test]
 fn renode_resc_array_memory_save_clear_load_restores_boot_state() {
     let directory = std::env::temp_dir().join(format!("penv-array-save-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();
