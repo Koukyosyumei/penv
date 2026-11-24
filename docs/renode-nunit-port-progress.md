@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,205 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,225 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,191 |
+| 移植待ち | 2,171 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 28 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 27 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -244,3 +244,10 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 - [アクセスモードの公式 ID](nunit-evidence/targeted-register-modes.tsv)と[実行ログ](nunit-evidence/targeted-register-modes.log)
 - [コールバックの公式 ID](nunit-evidence/targeted-register-callbacks.tsv)と[34件の実行ログ](nunit-evidence/targeted-register-callbacks.log)
+
+## SVDParserTests
+
+ファイルと XML の入力検証18件に続き、レジスタ読み出し、権限、バイト順、未整列アクセス、設定継承と derivedFrom の20件を移植した。公式38件すべてが対象実行で合格した。XML の読み込みには roxmltree を使用し、読み出しは SVD API に直接渡す。バスのフォールバックへの組み込み、書き込みログ、クラスター自体の派生は未実装。
+
+- [入力検証の公式 ID](nunit-evidence/targeted-svd-validation.tsv)と[実行ログ](nunit-evidence/targeted-svd-validation.log)
+- [読み出しと継承の公式 ID](nunit-evidence/targeted-svd-reads.tsv)と[38件の実行ログ](nunit-evidence/targeted-svd-reads.log)

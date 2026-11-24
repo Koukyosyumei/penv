@@ -71,6 +71,56 @@ fn address(node: Node<'_, '_>, key: &str) -> Result<u64, String> {
     optional_number(node, key)?.ok_or_else(|| format!("missing {key}"))
 }
 
+fn named_child<'a, 'input>(
+    scope: Node<'a, 'input>,
+    tag: &str,
+    name: &str,
+) -> Option<Node<'a, 'input>> {
+    scope
+        .children()
+        .find(|node| node.has_tag_name(tag) && text(*node, "name") == Some(name))
+}
+
+fn register_settings(
+    node: Node<'_, '_>,
+    inherited: Settings,
+    visited: &mut Vec<roxmltree::NodeId>,
+) -> Result<Settings, String> {
+    let Some(reference) = node.attribute("derivedFrom") else {
+        return inherited.apply(node);
+    };
+    if !node.has_tag_name("register") {
+        return Err("derived cluster is unsupported".into());
+    }
+    if visited.contains(&node.id()) {
+        return Err(format!("cyclic register derivation: {reference}"));
+    }
+    visited.push(node.id());
+    let mut inherited = inherited;
+    let mut parts: Vec<_> = reference.split('.').collect();
+    let register = parts.pop().ok_or("empty derived register name")?;
+    let missing = || format!("unknown derived register {reference}");
+    let scope = if let [peripheral_name, clusters @ ..] = parts.as_slice() {
+        let device = node.document().root_element();
+        let peripherals = child(device, "peripherals").ok_or_else(missing)?;
+        let peripheral =
+            named_child(peripherals, "peripheral", peripheral_name).ok_or_else(missing)?;
+        inherited = inherited.apply(peripheral)?;
+        let mut scope = child(peripheral, "registers").ok_or_else(missing)?;
+        for cluster_name in clusters {
+            scope = named_child(scope, "cluster", cluster_name).ok_or_else(missing)?;
+            inherited = inherited.apply(scope)?;
+        }
+        scope
+    } else {
+        node.parent().ok_or_else(missing)?
+    };
+    let source = named_child(scope, "register", register).ok_or_else(missing)?;
+    let settings = register_settings(source, inherited, visited)?.apply(node)?;
+    visited.pop();
+    Ok(settings)
+}
+
 impl Svd {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
@@ -131,10 +181,7 @@ impl Svd {
             let address = base
                 .checked_add(address(node, "addressOffset")?)
                 .ok_or("address overflow")?;
-            if node.attribute("derivedFrom").is_some() {
-                return Err("derived registers and clusters are unsupported".into());
-            }
-            let settings = inherited.apply(node)?;
+            let settings = register_settings(node, inherited, &mut Vec::new())?;
             if node.has_tag_name("cluster") {
                 self.scan(node, address, settings, big_endian)?;
             } else {
