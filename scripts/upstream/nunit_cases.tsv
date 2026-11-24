@@ -1084,3 +1084,10 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestDecode	upstream_nunit::packet_layout::test_decode	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestNestedDecode	upstream_nunit::packet_layout::test_nested_decode	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestDecodeEdianness	upstream_nunit::packet_layout::test_decode_edianness	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestDecodeFieldOffsets	upstream_nunit::packet_layout::test_decode_field_offsets	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestEncode	upstream_nunit::packet_layout::test_encode	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestNestedEncode	upstream_nunit::packet_layout::test_nested_encode	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestWidthInElements	upstream_nunit::packet_layout::test_width_in_elements	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestWidthInElementsErrors	upstream_nunit::packet_layout::test_width_in_elements_errors	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestPaddingBefore	upstream_nunit::packet_layout::test_padding_before	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests.TestAlignment	upstream_nunit::packet_layout::test_alignment	new
