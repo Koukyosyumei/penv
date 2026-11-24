@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,937 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,948 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 459 |
+| 移植待ち | 448 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 16 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 15 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -401,3 +401,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 別モジュールの受信側に対する拡張メソッド、`null` 引数を渡すインターフェースメソッド、受信側をキャプチャするラムダを各16構成で移植した。Rust では型スタンプで受信側のモジュールを識別し、登録されたコールバックに復元済みの引数と受信側を渡す。対象実行で48件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-bound-methods.tsv)・[実行ログ](nunit-evidence/targeted-migrant-bound-methods.log)
 
 イベント配列の各要素が共有キャプチャを通じて親を参照するケースと、`List<bool>` を型引数とする閉じたジェネリックメソッドのデリゲートを各16構成で移植した。閉じたメソッドは Rust のグラフ上で型引数を含む登録名と受信側への自己参照で表現する。対象実行で32件が合格し、Migrant `SerializationTests` の公式1,504件すべてに対応が揃った。[公式IDとの対応](nunit-evidence/targeted-migrant-delegate-graphs.tsv)・[実行ログ](nunit-evidence/targeted-migrant-delegate-graphs.log)
+
+`TypeExtensionsCacheTests` の11件を移植した。CLR リフレクションの入力を Rust のメンバー記述子で明示し、キャッシュを初期化して同じ問い合わせを2回実行したときのミス数、列挙型の要素型、公開問い合わせの網羅を検証した。[公式IDとの対応](nunit-evidence/targeted-type-extensions-cache.tsv)・[実行ログ](nunit-evidence/targeted-type-extensions-cache.log)

@@ -14,4 +14,3 @@ Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	The REPL loaders
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
-Antmicro.Renode.Utilities.TypeExtensionsCacheTests	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.

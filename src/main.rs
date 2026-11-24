@@ -164,6 +164,7 @@ mod thumb_llvm;
 pub mod time_handle;
 pub mod time_source;
 mod tmp108;
+pub mod type_extensions;
 pub mod tracked_register_bytes;
 mod uart;
 mod uart_check;
