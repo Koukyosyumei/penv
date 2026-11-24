@@ -607,3 +607,29 @@ CPU なしの `TrivialUart` 構成では、Robot の `Provides Serialization`
 Arty LiteX の `Should Boot` は `H2U` を受信した後、
 実行中のゲスト CPU を含む `Provides Serialization` で未対応となった
 （`target/monitor-provides-arty/results.json`）。
+
+`e470184` と `3054329` では、Robot が提供側と復帰側をそれぞれ
+`SaveRestorableMonitorSnapshot` と `RestoreMonitorSnapshot` に委ねる。
+Rust は保存時に対応する構成を検査し、復帰時にファイルのメタデータと
+UART 配置からマシンを構成する。Python が依存状態に保持するのは保存パス。
+通常 CLI からも、新規 RESC の `RestoreMonitorSnapshot @snapshot.save`
+で同じ経路を使える。復帰用 RESC を保存ファイルと同じディレクトリに置き、
+`emulation GetTimeSourceInfo` を続けて `penv run --script restore.resc`
+を実行する。セッション付き保存と CPU なしの単体保存の両方で
+仮想時刻 10 ms、同期量 2 ms を復帰した。既存マシンがある起動構成と
+末尾を切り詰めた保存ファイルは終了コード 1 で拒否した。
+
+固定上流 `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` の
+`Provides` / `Requires` 比較と CLI の出力は
+`target/monitor-provides-snapshot-proof/` にある。固定 Renode の
+`renode.jsonl` と penv の `restorable-penv.jsonl` で復帰時刻と同期量が一致した。
+比較に使用したデバッグバイナリの SHA-256 は
+`022fcda50973496083b94ece8c0d33044d2bdb6250719bfbd18e16d7ede607b0`。
+未変更の `Should Load HEX` と `Should Run Zephyr Console Echo Sample`
+も合格した（`target/monitor-restorable-hex/results.json`、
+`target/monitor-restorable-f072/results.json`）。
+代表 Robot 3 件の固定バイナリの SHA-256 は
+`10e779fde203ae303be52f7e93a72d8f41039f4b986ef403ed818e4d28639a4c`。
+Arty LiteX の `Should Boot` はゲストの起動出力を受信し、
+保存コマンドが CPU 付き構成を拒否したため未対応のまま
+（`target/monitor-restorable-arty/suite-0000.json`）。

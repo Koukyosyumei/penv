@@ -3952,6 +3952,39 @@ mod tests {
     }
 
     #[test]
+    fn restorable_snapshot_reconstructs_named_uart_platform() {
+        let directory = std::env::temp_dir().join(format!("penv-restorable-snapshot-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let dir = GeneratedRepl(directory);
+        let snapshot = dir.0.join("clock state.save");
+        let script = dir.0.join("restore.resc");
+        fs::write(&script, "RestoreMonitorSnapshot @\"clock state.save\"\n").unwrap();
+
+        let mut source = Machine::without_default_ram();
+        source.cpu_less = true;
+        source.bus.map_trivial_uart(0x2340, "uart1").unwrap();
+        source.run(9, &mut io::sink()).unwrap();
+        let session = Session {
+            machine: Some("clock board".into()),
+            variables: HashMap::from([("global.marker".into(), "42".into())]),
+            ..Session::default()
+        };
+        session.save(&source, &snapshot).unwrap();
+
+        let mut boot = load(&script, &dir.0).unwrap();
+        assert_eq!(boot.session.machine.as_deref(), Some("clock board"));
+        assert_eq!(fs::read_to_string(boot.platform.as_ref().unwrap()).unwrap(),
+            "uart1: UART.TrivialUart @ sysbus 0x2340\n");
+
+        let mut restored = Machine::without_default_ram();
+        restored.cpu_less = true;
+        restored.bus.map_trivial_uart(0x2340, "uart1").unwrap();
+        run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
+        assert_eq!(restored.elapsed_steps(), 9);
+        assert_eq!(resolve(&boot.session.variables, "$marker").unwrap(), "42");
+    }
+
+    #[test]
     fn monitor_tokens_keep_quoted_include_paths_together() {
         assert_eq!(
             command_words(r#"include @"scripts/a file.resc""#).unwrap(),
