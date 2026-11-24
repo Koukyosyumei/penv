@@ -1,6 +1,5 @@
 fixture	missing_api
 Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
-Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	The remaining six receive cases require frame encoding, acceptance filtering, FIFO release, overflow and interrupt latching.
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need KeyManager command, working-state, status and write-one-to-clear error registers. The fixture advances through the creator and owner derivation states, which require the ROM-controller digest and KMAC-256 over the configured keys and seeds.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The remaining case requires two Cortex-M cores with distinct CPU-scoped NVIC registrations at the same address; the production Cortex-M loader supports a single core and NVIC.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.

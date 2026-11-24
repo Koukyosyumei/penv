@@ -64,7 +64,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests	17	14	0	0	3	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMA180Test	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMC050Test	2	2	0	0	0	-
-src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	13	7	0	6	0	The remaining six receive cases require frame encoding, acceptance filtering, FIFO release, overflow and interrupt latching.
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	13	13	0	0	0	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.CortexA9GICTests	1	0	0	0	1	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	6	4	0	0	2	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	15	15	0	0	0	-

@@ -277,3 +277,158 @@ fn access_counter_with_bytes() {
     f.bus_write(0x2000, Width::Byte, 4);
     assert_eq!(f.bus_read(0x2004, Width::DoubleWord), 0);
 }
+
+const RCTRL: usize = 0xa3;
+
+impl Fixture {
+    fn receive(&self, id: u32, data: &[u8], control: u8) {
+        self.can.borrow_mut().receive(Frame {
+            id,
+            data: data.to_vec(),
+            extended: control & 0x80 != 0,
+            remote: control & 0x40 != 0,
+            fd: control & 0x20 != 0,
+            bit_rate_switch: control & 0x10 != 0,
+        });
+    }
+}
+
+#[test]
+fn receive_remote_frame_length_without_payload() {
+    let f = Fixture::new();
+    f.receive(0x123, &[0xa5; 4], 0x40);
+    assert_eq!(f.read(4), 0x44);
+    assert!((8..16).all(|offset| f.read(offset) == 0));
+}
+
+#[test]
+fn latch_receive_flag_only_if_enabled_at_reception() {
+    let f = Fixture::new();
+    f.write(ENABLE, 0);
+    f.receive(0x123, &[0xaa], 0);
+    assert_eq!(f.read(FLAGS), 0);
+    assert!(!f.irq());
+    f.write(ENABLE, 0x80);
+    assert!(!f.irq());
+    f.receive(0x124, &[0xbb], 0);
+    assert_eq!(f.read(FLAGS), 0x80);
+    assert!(f.irq());
+    f.write(FLAGS, 0x80);
+    assert!(!f.irq());
+}
+
+#[test]
+fn expose_oldest_frame_and_advance_on_release() {
+    let f = Fixture::new();
+    let fd_data: Vec<_> = (1..=12).collect();
+    f.receive(0x321, &[0xaa, 0xbb], 0);
+    f.receive(0x1234567, &fd_data, 0xb0);
+
+    assert_eq!(f.read(RCTRL) & 3, 2);
+    assert_eq!(
+        [0, 1, 4, 8, 9].map(|offset| f.read(offset)),
+        [0x21, 3, 2, 0xaa, 0xbb]
+    );
+    f.write(RCTRL, 0x10);
+    assert_eq!(f.read(RCTRL) & 3, 1);
+    assert_eq!(
+        [0, 1, 2, 3, 4].map(|offset| f.read(offset)),
+        [0x67, 0x45, 0x23, 1, 0xb9]
+    );
+    assert_eq!(
+        (8..20).map(|offset| f.read(offset)).collect::<Vec<_>>(),
+        fd_data
+    );
+    f.write(RCTRL, 0x10);
+    assert_eq!(f.read(RCTRL) & 3, 0);
+}
+
+#[test]
+fn apply_acceptance_mask_and_frame_type() {
+    let f = Fixture::new();
+    f.write(0xb6, 0);
+    f.receive(0x123, &[0xaa], 0);
+    assert_eq!(f.read(RCTRL) & 3, 0);
+
+    f.write_many(&[
+        (STATUS, 0x80),
+        (FILTER, 0x23),
+        (FILTER + 1, 1),
+        (0xb4, 0x20),
+        (FILTER, 0),
+        (FILTER + 1, 0xf8),
+        (FILTER + 2, 0xff),
+        (FILTER + 3, 0x5f),
+        (0xb6, 1),
+        (STATUS, 0),
+    ]);
+    f.write(FILTER, 0xff);
+    assert_eq!(f.read(FILTER), 0);
+
+    f.receive(0x124, &[0xbb], 0);
+    f.receive(0x123, &[0xcc], 0x80);
+    assert_eq!(f.read(RCTRL) & 3, 0);
+    assert_eq!(f.read(FLAGS), 0);
+    f.receive(0x123, &[0xdd], 0);
+    assert_eq!(f.read(RCTRL) & 3, 1);
+    assert_eq!(f.read(8), 0xdd);
+}
+
+#[test]
+fn signal_almost_full_at_scaled_warning_limit() {
+    let f = Fixture::new();
+    f.write_many(&[(0xa7, 0x2b), (ENABLE, 0x10)]);
+    for id in 0..3 {
+        f.receive(id, &[], 0);
+    }
+    assert_eq!(f.read(RCTRL) & 3, 1);
+    assert_eq!(f.read(FLAGS), 0);
+    assert!(!f.irq());
+
+    f.receive(3, &[], 0);
+    assert_eq!(f.read(RCTRL) & 3, 2);
+    assert_eq!(f.read(FLAGS), 0x10);
+    assert!(f.irq());
+    f.write(FLAGS, 0x10);
+    assert!(!f.irq());
+    f.receive(4, &[], 0);
+    assert_eq!(f.read(FLAGS), 0);
+    f.write_many(&[(RCTRL, 0x10), (RCTRL, 0x10)]);
+    assert_eq!(f.read(RCTRL) & 3, 1);
+}
+
+#[test]
+fn handle_both_receive_overflow_modes_and_software_reset() {
+    let f = Fixture::new();
+    for id in 0..16 {
+        f.receive(id, &[], 0);
+    }
+    assert_eq!(f.read(RCTRL) & 3, 3);
+    f.write(FLAGS, 0xf0);
+    f.receive(16, &[], 0);
+    assert_eq!(f.read(RCTRL) & 0x23, 0x23);
+    assert_eq!(f.read(FLAGS), 0xe0);
+    assert_eq!(f.read(0), 1);
+    assert!(f.irq());
+
+    f.write(STATUS, 0x80);
+    assert_eq!(f.read(RCTRL) & 0x23, 0);
+    assert_eq!(f.read(FLAGS), 0);
+    assert!(!f.irq());
+    f.receive(0x123, &[], 0);
+    assert_eq!(f.read(RCTRL) & 3, 0);
+    f.write(STATUS, 0);
+
+    f.write(RCTRL, 0x40);
+    for id in 0..16 {
+        f.receive(id, &[], 0);
+    }
+    f.write(FLAGS, 0xf0);
+    f.receive(16, &[], 0);
+    assert_eq!(f.read(RCTRL) & 0x63, 0x63);
+    assert_eq!(f.read(FLAGS), 0x60);
+    assert_eq!(f.read(0), 0);
+    f.write(RCTRL, 0x50);
+    assert_eq!(f.read(RCTRL) & 0x20, 0);
+    assert_eq!(f.read(0), 1);
+}

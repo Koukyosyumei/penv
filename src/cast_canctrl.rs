@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 
 use crate::{bus_translation::NativePeripheral, dma_engine::Width};
 
+const RX_CONTROL: usize = 0xa3;
+const RX_SIZE: usize = 80;
 const BUFFER: usize = 0x50;
 const TX_SIZE: usize = 72;
 const STATUS: usize = 0xa0;
@@ -29,6 +31,8 @@ pub struct CastCan {
     primary: [u8; TX_SIZE],
     secondary: [u8; TX_SIZE],
     queue: VecDeque<[u8; TX_SIZE]>,
+    received: VecDeque<[u8; RX_SIZE]>,
+    receive_overflow: bool,
     masks: [u32; CAPACITY],
     codes: [u32; CAPACITY],
     counter: u32,
@@ -42,6 +46,8 @@ impl Default for CastCan {
             primary: [0; TX_SIZE],
             secondary: [0; TX_SIZE],
             queue: VecDeque::new(),
+            received: VecDeque::new(),
+            receive_overflow: false,
             masks: [0; CAPACITY],
             codes: [0; CAPACITY],
             counter: 0,
@@ -75,6 +81,8 @@ impl CastCan {
         self.primary.fill(0);
         self.secondary.fill(0);
         self.queue.clear();
+        self.received.clear();
+        self.receive_overflow = false;
         self.codes.fill(0);
         self.masks.fill(0);
         self.masks[0] = 0x1fff_ffff;
@@ -99,6 +107,17 @@ impl CastCan {
 
     pub fn read_byte(&mut self, offset: usize) -> u8 {
         match offset {
+            0..=0x4f => self.received.front().map_or(0, |slot| slot[offset]),
+            RX_CONTROL => {
+                let count = self.received.len();
+                let status = match count {
+                    0 => 0,
+                    CAPACITY => 3,
+                    n if n >= self.almost_full_limit() => 2,
+                    _ => 1,
+                };
+                self.regs[offset] | status | (u8::from(self.receive_overflow) << 5)
+            }
             FILTER_WORD..=0xbb => {
                 let filter = usize::from(self.regs[FILTER_CONTROL] & 0xf);
                 self.filter_bank()[filter].to_le_bytes()[offset - FILTER_WORD]
@@ -137,6 +156,11 @@ impl CastCan {
                     let entering_reset = value & 0x80 != 0 && self.regs[STATUS] & 0x80 == 0;
                     if entering_reset {
                         self.queue.clear();
+                        self.received.clear();
+                        self.receive_overflow = false;
+                        self.regs[0xa1] = 0;
+                        self.regs[RX_CONTROL] &= 0x40;
+                        self.regs[0xa7] = (self.regs[0xa7] & 0xf0) | 0xb;
                         self.regs[FLAGS] = 0;
                     }
                     self.regs[STATUS] = value;
@@ -149,12 +173,24 @@ impl CastCan {
                     self.regs[0xa2] = self.regs[0xa2] & 0x84 | value & 0x20;
                     queue_next = value & 0x40 != 0;
                 }
+                RX_CONTROL => {
+                    self.regs[RX_CONTROL] = value & 0xc8;
+                    if value & 0x10 != 0 {
+                        self.received.pop_front();
+                        self.receive_overflow = false;
+                    }
+                }
                 FLAGS => self.regs[FLAGS] &= !value,
                 ENABLE => self.regs[ENABLE] = value & 0xfe,
                 FILTER_WORD..=0xbb if self.regs[STATUS] & 0x80 != 0 => {
                     let filter = usize::from(self.regs[FILTER_CONTROL] & 0xf);
                     let mut word = self.filter_bank()[filter].to_le_bytes();
-                    word[offset + index - FILTER_WORD] = value;
+                    let byte = offset + index - FILTER_WORD;
+                    word[byte] = if byte == 3 && self.regs[FILTER_CONTROL] & 0x20 == 0 {
+                        value & 0x1f
+                    } else {
+                        value
+                    };
                     self.filter_bank()[filter] = u32::from_le_bytes(word);
                 }
                 FILTER_WORD..=0xbb | 0xbc | 0xbd | 0..=0x4f => {}
@@ -165,7 +201,7 @@ impl CastCan {
         if self.regs[STATUS] & 0x80 != 0 {
             return;
         }
-        if queue_next && self.queue.len() < CAPACITY {
+        if queue_next && self.regs[0xa1] & 0x80 != 0 && self.queue.len() < CAPACITY {
             self.queue.push_back(self.secondary);
         }
         if let Some(value) = command {
@@ -184,6 +220,68 @@ impl CastCan {
                 self.send(self.primary, 8);
             }
         }
+    }
+
+    fn almost_full_limit(&self) -> usize {
+        (2 * usize::from((self.regs[0xa7] >> 4).max(1))).min(CAPACITY)
+    }
+
+    fn accepts(&self, frame: &Frame, identifier_mask: u32) -> bool {
+        let enabled = u16::from_le_bytes([self.regs[0xb6], self.regs[0xb7]]);
+        self.masks
+            .iter()
+            .zip(self.codes)
+            .enumerate()
+            .any(|(index, (&mask, code))| {
+                enabled & (1 << index) != 0
+                    && (mask & (1 << 30) == 0 || frame.extended == (mask & (1 << 29) != 0))
+                    && (frame.id ^ code) & identifier_mask & !mask == 0
+            })
+    }
+
+    pub fn receive(&mut self, frame: Frame) {
+        let identifier_mask = if frame.extended { 0x1fff_ffff } else { 0x7ff };
+        if self.regs[STATUS] & 0x80 != 0 || !self.accepts(&frame, identifier_mask) {
+            return;
+        }
+        let len = frame.data.len();
+        let dlc = if frame.fd {
+            FD_LENGTHS.iter().position(|&size| size == len)
+        } else {
+            (len <= 8).then_some(len)
+        };
+        let Some(dlc) = dlc else { return };
+        if self.received.len() == CAPACITY {
+            self.receive_overflow = true;
+            self.regs[FLAGS] |= self.regs[ENABLE] & 0x60;
+            if self.regs[RX_CONTROL] & 0x40 != 0 {
+                return;
+            }
+            self.received.pop_front();
+        }
+
+        let mut slot = [0; RX_SIZE];
+        slot[..4].copy_from_slice(&(frame.id & identifier_mask).to_le_bytes());
+        let remote = frame.remote && !frame.fd;
+        slot[4] = (u8::from(frame.extended) << 7)
+            | (u8::from(remote) << 6)
+            | (u8::from(frame.fd) << 5)
+            | (u8::from(frame.fd && frame.bit_rate_switch) << 4)
+            | dlc as u8;
+        if !remote {
+            slot[8..8 + len].copy_from_slice(&frame.data);
+        }
+        self.received.push_back(slot);
+
+        let count = self.received.len();
+        let mut flags = 0x80;
+        if count == self.almost_full_limit() {
+            flags |= 0x10;
+        }
+        if count == CAPACITY {
+            flags |= 0x20;
+        }
+        self.regs[FLAGS] |= self.regs[ENABLE] & flags;
     }
 
     fn send(&mut self, slot: [u8; TX_SIZE], interrupt: u8) {
