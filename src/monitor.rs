@@ -69,6 +69,7 @@ pub struct Boot {
 
 #[derive(Default)]
 pub struct Session {
+    macros: HashMap<String, Macro>,
     variables: HashMap<String, String>,
     machine: Option<String>,
     number_mode: NumberMode,
@@ -1263,21 +1264,30 @@ pub fn serve(
         boot.session.machine.clone_from(&session.machine);
         boot.session.number_mode = session.number_mode;
         let mut existing_machine = true;
-        let mut included_variables = None;
+        let mut included_state = None;
         let parsed = command_words(text).and_then(|words| {
-            if let [verb @ ("include" | "i" | "ExecuteScript"), value] = words.as_slice() {
+            let include = match words.as_slice() {
+                [verb @ ("include" | "i" | "ExecuteScript"), value] => Some((*verb, *value)),
+                _ => None,
+            };
+            if include.is_some() || matches!(words.first(), Some(&("macro" | "runMacro"))) {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-                let source = include_path(verb, value, &cwd.join(path), &cwd, root, &session.variables)?;
-                if matches!(source.extension().and_then(|ext| ext.to_str()), Some("repl" | "cs" | "py")) {
-                    return Err("live include requires a RESC command script".into());
-                }
                 let mut state = ScriptState {
                     boot: std::mem::take(&mut boot),
                     machine: true,
                     variables: session.variables.clone(),
+                    macros: session.macros.clone(),
                     ..ScriptState::default()
                 };
-                load_file(&source, root, &mut state)?;
+                if let Some((verb, value)) = include {
+                    let source = include_path(verb, value, &cwd.join(path), &cwd, root, &state.variables)?;
+                    if matches!(source.extension().and_then(|ext| ext.to_str()), Some("repl" | "cs" | "py")) {
+                        return Err("live include requires a RESC command script".into());
+                    }
+                    load_file(&source, root, &mut state)?;
+                } else {
+                    load_text(path, cwd.join(path), root, &mut state, text)?;
+                }
                 if !state.boot.post_run.is_empty() {
                     return Err("post-run script actions are unavailable in a live include".into());
                 }
@@ -1287,7 +1297,7 @@ pub fn serve(
                     return Err("use live Save and Load as separate monitor commands".into());
                 }
                 boot = state.boot;
-                included_variables = Some(state.variables);
+                included_state = Some((state.variables, state.macros));
                 return Ok(());
             }
             if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
@@ -1299,8 +1309,9 @@ pub fn serve(
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => {
                 session.number_mode = boot.session.number_mode;
-                if let Some(variables) = included_variables.take() {
+                if let Some((variables, macros)) = included_state.take() {
                     session.variables = variables;
+                    session.macros = macros;
                 }
                 frame(&mut output, "OK", &[])
             }
@@ -1383,15 +1394,16 @@ pub fn serve(
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
-            (Ok(()), commands) if included_variables.is_some() || commands.len() == 1 => {
+            (Ok(()), commands) if included_state.is_some() || commands.len() == 1 => {
                 let echo_assertion = matches!(commands,
                     [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo, _), .. }]
                         if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
                 match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true, None) {
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
-                        if let Some(variables) = included_variables.take() {
+                        if let Some((variables, macros)) = included_state.take() {
                             session.variables = variables;
+                            session.macros = macros;
                         }
                         frame(&mut output, if echo_assertion { "MATCH" } else { "OK" }, &bytes)
                     }
@@ -1879,6 +1891,7 @@ fn unquote(text: &str) -> &str {
         .unwrap_or(text)
 }
 
+#[derive(Clone)]
 struct Macro {
     script: PathBuf,
     commands: Vec<(usize, String)>,
@@ -2039,6 +2052,7 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
     }
     let mut boot = state.boot;
     boot.session.variables = state.variables;
+    boot.session.macros = state.macros;
     if !session && !state.machine && !boot.has_platform() && !boot.started
         && (!boot.monitor_output.is_empty() || !boot.runtime.is_empty())
         && boot.runtime.iter().all(|command| is_console_action(&command.action))
@@ -2205,16 +2219,12 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         if let Some(declaration) = text.strip_prefix("macro ") {
             let declaration = declaration.trim();
             if let Some((name, body)) = declaration.split_once(char::is_whitespace) {
-                let body = body
-                    .trim()
-                    .strip_prefix("\"\"\"")
-                    .and_then(|body| body.strip_suffix("\"\"\""))
-                    .ok_or_else(|| error("expected triple-quoted macro body"))?;
+                let body = monitor_string(body.trim()).ok_or_else(|| error("expected quoted macro body"))?;
                 state.macros.insert(
                     name.into(),
                     Macro {
                         script: path.into(),
-                        commands: vec![(line, body.into())],
+                        commands: vec![(line, body)],
                     },
                 );
                 continue;
