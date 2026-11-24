@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,182 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,187 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,214 |
+| 移植待ち | 2,209 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 29 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 28 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -234,6 +234,13 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 ## RegistersTests のフィールド定義と全幅アクセス
 
-9件を移植した。負の幅、8・16・32・64 ビットの末尾境界、重複、値の範囲外、全幅読み書き、書き込みコールバックを検証した。列挙型と数値は同じビットフィールド API を介して扱い、共有セットアップは移植したケースで使うフィールドに絞った。残り25件にはアクセスモード、リセット、読み出し・変更・レジスタ全体のコールバック、値プロバイダーが必要。
+9件を移植した。負の幅、8・16・32・64 ビットの末尾境界、重複、値の範囲外、全幅読み書き、書き込みコールバックを検証した。列挙型と数値は同じビットフィールド API を介して扱い、共有セットアップは移植したケースで使うフィールドに絞った。残り25件は下記のバッチで移植した。
 
 - [公式 ID](nunit-evidence/targeted-register-fields.tsv)と[実行ログ](nunit-evidence/targeted-register-fields.log)
+
+## RegistersTests のアクセスモードとコールバック
+
+共有レジスタの全21フィールドを定義し、アクセスモードとリセットの20件、読み出し・書き込み・変更の通知と値プロバイダーの5件を追加した。列挙型の未定義値はビット値として保持する。公式34件すべてが対象実行で合格した。
+
+- [アクセスモードの公式 ID](nunit-evidence/targeted-register-modes.tsv)と[実行ログ](nunit-evidence/targeted-register-modes.log)
+- [コールバックの公式 ID](nunit-evidence/targeted-register-callbacks.tsv)と[34件の実行ログ](nunit-evidence/targeted-register-callbacks.log)

@@ -32,12 +32,38 @@ pub enum WriteMode {
 
 type Callback<'a> = Box<dyn FnMut(u64, u64) + 'a>;
 
+#[derive(Default)]
+struct Callbacks<'a> {
+    read: Option<Callback<'a>>,
+    write: Option<Callback<'a>>,
+    change: Option<Callback<'a>>,
+}
+
+impl Callbacks<'_> {
+    fn notify(&mut self, before: u64, input: u64, after: u64, reading: bool) {
+        let access = if reading {
+            &mut self.read
+        } else {
+            &mut self.write
+        };
+        if let Some(callback) = access {
+            callback(before, input);
+        }
+        if before != after {
+            if let Some(callback) = &mut self.change {
+                callback(before, after);
+            }
+        }
+    }
+}
+
 struct Field<'a> {
     shift: u32,
     mask: u64,
     read: ReadMode,
     write: WriteMode,
-    on_write: Option<Callback<'a>>,
+    callbacks: Callbacks<'a>,
+    provider: Option<Box<dyn FnMut(u64) -> u64 + 'a>>,
 }
 
 pub struct Register<'a> {
@@ -46,6 +72,7 @@ pub struct Register<'a> {
     value: u64,
     reset_value: u64,
     fields: Vec<Field<'a>>,
+    callbacks: Callbacks<'a>,
 }
 
 impl<'a> Register<'a> {
@@ -57,6 +84,7 @@ impl<'a> Register<'a> {
             value: reset_value,
             reset_value,
             fields: Vec::new(),
+            callbacks: Callbacks::default(),
         }
     }
 
@@ -77,13 +105,34 @@ impl<'a> Register<'a> {
             mask,
             read: ReadMode::Value,
             write: WriteMode::Value,
-            on_write: None,
+            callbacks: Callbacks::default(),
+            provider: None,
         });
         Ok(id)
     }
 
     pub fn on_write(&mut self, id: FieldId, callback: impl FnMut(u64, u64) + 'a) {
-        self.fields[id.0].on_write = Some(Box::new(callback));
+        self.fields[id.0].callbacks.write = Some(Box::new(callback));
+    }
+
+    pub fn observe_field(&mut self, id: FieldId, callback: impl FnMut(u64, u64) + Clone + 'a) {
+        self.fields[id.0].callbacks = Callbacks {
+            read: Some(Box::new(callback.clone())),
+            write: Some(Box::new(callback.clone())),
+            change: Some(Box::new(callback)),
+        };
+    }
+
+    pub fn observe_register(&mut self, callback: impl FnMut(u64, u64) + Clone + 'a) {
+        self.callbacks = Callbacks {
+            read: Some(Box::new(callback.clone())),
+            write: Some(Box::new(callback.clone())),
+            change: Some(Box::new(callback)),
+        };
+    }
+
+    pub fn provide(&mut self, id: FieldId, provider: impl FnMut(u64) -> u64 + 'a) {
+        self.fields[id.0].provider = Some(Box::new(provider));
     }
 
     pub fn get(&self, id: FieldId) -> u64 {
@@ -110,6 +159,13 @@ impl<'a> Register<'a> {
     }
 
     pub fn read(&mut self) -> u64 {
+        for field in &mut self.fields {
+            if let Some(provider) = &mut field.provider {
+                let value = provider((self.value >> field.shift) & field.mask) & field.mask;
+                self.value = (self.value & !(field.mask << field.shift)) | (value << field.shift);
+            }
+        }
+        let old = self.value;
         let mut result = 0;
         for field in &self.fields {
             let positioned = field.mask << field.shift;
@@ -122,10 +178,12 @@ impl<'a> Register<'a> {
                 _ => {}
             }
         }
+        self.notify(old, self.value, true);
         result
     }
 
     pub fn write(&mut self, value: u64) {
+        let before = self.value;
         for field in &mut self.fields {
             let old = (self.value >> field.shift) & field.mask;
             let input = (value >> field.shift) & field.mask;
@@ -142,9 +200,35 @@ impl<'a> Register<'a> {
                 WriteMode::ZeroToggle => old ^ (field.mask & !input),
             };
             self.value = (self.value & !(field.mask << field.shift)) | (new << field.shift);
-            if let Some(callback) = &mut field.on_write {
-                callback(old, new);
+        }
+        self.notify(before, value, false);
+    }
+
+    fn notify(&mut self, before: u64, input: u64, reading: bool) {
+        // Access handlers run before any field change handlers.
+        for field in &mut self.fields {
+            let access = if reading {
+                &mut field.callbacks.read
+            } else {
+                &mut field.callbacks.write
+            };
+            if let Some(callback) = access {
+                callback(
+                    (before >> field.shift) & field.mask,
+                    (input >> field.shift) & field.mask,
+                );
             }
         }
+        let after = self.value;
+        for field in &mut self.fields {
+            let old = (before >> field.shift) & field.mask;
+            let new = (after >> field.shift) & field.mask;
+            if old != new {
+                if let Some(callback) = &mut field.callbacks.change {
+                    callback(old, new);
+                }
+            }
+        }
+        self.callbacks.notify(before, input, after, reading);
     }
 }

@@ -41,7 +41,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	4	0	0	4	0	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests	20	20	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ReadExtensionsTest	30	30	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RegistersTests	34	29	0	5	0	Twenty-nine cases cover field definitions, access modes, reset, full-width values and write callbacks. Five remain for read and change callbacks, value providers and register-wide callbacks.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RegistersTests	34	34	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SVDParserTests	38	0	0	38	0	There is no SVD XML parser implementing peripheral/register inheritance, dimensions and bus registration.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializableMappedSegmentTests	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests	7	0	0	7	0	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.

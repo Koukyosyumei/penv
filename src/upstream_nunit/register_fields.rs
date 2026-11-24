@@ -4,10 +4,9 @@ use crate::register_fields::{FieldError, Register};
 
 #[test]
 fn should_not_accept_out_of_bounds_values() {
-    let mut register = Register::new(64, 0x3780);
-    let two_bit_enum = register.define(0, 2).unwrap();
-    register.define(2, 1).unwrap();
-    let four_bit_value = register.define(3, 4).unwrap();
+    let (mut register, fields, _) = complex_register();
+    let two_bit_enum = fields[0];
+    let four_bit_value = fields[2];
     assert_eq!(
         register.set(two_bit_enum, 1 << 2),
         Err(FieldError::ValueOutOfRange)
@@ -105,7 +104,7 @@ use crate::register_fields::{FieldId, ReadMode as R, WriteMode as W};
 const RESET: u64 = 0x3780;
 const READ_MASK: u64 = 0b0000_1111_1110_0111__1111_1111_1111_1111;
 
-fn complex_register() -> (Register<'static>, [FieldId; 21]) {
+fn complex_register() -> (Register<'static>, [FieldId; 21], Observers) {
     let mut reg = Register::new(64, RESET);
     let fields = [
         (0, 2, R::Value, W::Value),
@@ -128,25 +127,41 @@ fn complex_register() -> (Register<'static>, [FieldId; 21]) {
         (29, 1, R::None, W::ZeroToggle),
         (30, 1, R::Set, W::None),
         (31, 1, R::Value, W::Clear),
+        (32, 1, R::Value, W::Set),
     ]
     .map(|(shift, width, read, write)| {
         let id = reg.define(shift, width).unwrap();
         reg.modes(id, read, write);
         id
     });
-    let top = reg.define(32, 1).unwrap();
-    reg.modes(top, R::Value, W::Set);
-    (
-        reg,
-        std::array::from_fn(|index| fields.get(index).copied().unwrap_or(top)),
-    )
+    let observers = Observers::default();
+    for (id, report) in [fields[3], fields[4], fields[5]]
+        .into_iter()
+        .zip(&observers.fields)
+    {
+        reg.observe_field(id, report.callback());
+    }
+    reg.observe_register(observers.global.callback());
+    for (index, id) in fields[13..=15].iter().enumerate() {
+        let enabled = observers.enabled.clone();
+        reg.provide(*id, move |value| {
+            if !enabled.get() {
+                value
+            } else if index == 1 {
+                value ^ 1
+            } else {
+                value + 1
+            }
+        });
+    }
+    (reg, fields, observers)
 }
 
 macro_rules! field_case {
     ($name:ident, |$reg:ident, $fields:ident| $body:block) => {
         #[test]
         fn $name() {
-            let (mut $reg, $fields) = complex_register();
+            let (mut $reg, $fields, _) = complex_register();
             $body
         }
     };
@@ -261,3 +276,83 @@ field_case!(should_write_to_set, |reg, f| {
     reg.write(0);
     assert_eq!(reg.get(f[20]), 1);
 });
+
+use std::rc::Rc;
+
+#[derive(Default)]
+struct Report(Rc<Cell<(u32, u64, u64)>>);
+
+impl Report {
+    fn callback(&self) -> impl FnMut(u64, u64) + Clone + use<> {
+        let record = self.0.clone();
+        move |old, new| record.set((record.get().0 + 1, old, new))
+    }
+}
+
+#[derive(Default)]
+struct Observers {
+    fields: [Report; 3],
+    global: Report,
+    enabled: Rc<Cell<bool>>,
+}
+
+#[test]
+fn should_call_read_handler() {
+    let (mut reg, _, obs) = complex_register();
+    for report in &obs.fields {
+        assert_eq!(report.0.get().0, 0);
+    }
+    reg.read();
+    for report in &obs.fields {
+        let (calls, old, new) = report.0.get();
+        assert_eq!(calls, 1);
+        assert_eq!(old, new);
+    }
+}
+
+#[test]
+fn should_retrieve_value_from_handler() {
+    let (mut reg, _, obs) = complex_register();
+    obs.enabled.set(true);
+    reg.write(3 << 22 | 1 << 25);
+    assert_eq!(reg.read() & READ_MASK, 4 << 22 | 1 << 26);
+}
+
+#[test]
+fn should_call_write_and_change_handler() {
+    let (mut reg, _, obs) = complex_register();
+    for report in &obs.fields {
+        assert_eq!(report.0.get().0, 0);
+    }
+    reg.write(0x2a80);
+    let [enumeration, flag, number] = obs.fields.map(|report| report.0.get());
+    assert_eq!(enumeration, (2, 3, 1));
+    assert_eq!(flag.0, 1);
+    assert_eq!(flag.1, flag.2);
+    assert_eq!(number, (2, 13, 10));
+}
+
+#[test]
+fn should_call_global_read_handler() {
+    let (mut reg, fields, obs) = complex_register();
+    reg.set(fields[18], 1).unwrap();
+    assert_eq!(obs.global.0.get().0, 0);
+    reg.read();
+    let (calls, old, new) = obs.global.0.get();
+    assert_eq!(calls, 1);
+    assert_eq!(old & READ_MASK, RESET & READ_MASK);
+    assert_eq!(new & READ_MASK, RESET & READ_MASK);
+}
+
+#[test]
+fn should_call_global_write_and_change_handler() {
+    const WRITE_MASK: u64 = 0b0000_1111_1101_1000__0111_1111_1111_1111;
+    let (mut reg, _, obs) = complex_register();
+    reg.reset();
+    assert_eq!(obs.global.0.get().0, 0);
+    reg.write(0x2a80 & WRITE_MASK);
+    let (calls, old, new) = obs.global.0.get();
+    assert_eq!(calls, 2);
+    assert_eq!(old, RESET);
+    assert_eq!(new & WRITE_MASK, 0x2a80 & WRITE_MASK);
+}
