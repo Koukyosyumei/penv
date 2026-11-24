@@ -1,9 +1,10 @@
 use crate::address_range::{AddressRange, MinimalRanges};
-use crate::symbol::Symbol;
+use crate::symbol::{Symbol, SymbolBinding, SymbolType};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 
-type SymbolKey = (String, u64, u64);
+type SymbolKey = (String, u64, u64, SymbolType, SymbolBinding);
 type InternedSymbols = HashMap<SymbolKey, Weak<Symbol>>;
 static SYMBOLS: LazyLock<Mutex<InternedSymbols>> = LazyLock::new(Mutex::default);
 
@@ -60,7 +61,14 @@ impl SymbolLookup {
                 } else {
                     Self::intern(
                         &mut interned,
-                        Symbol::new(range.start, range.end + 1, &symbol.name).unwrap(),
+                        Symbol::with_metadata(
+                            range.start,
+                            range.end + 1,
+                            &symbol.name,
+                            symbol.kind,
+                            symbol.binding,
+                        )
+                        .unwrap(),
                     )
                 };
                 merged.push(remaining);
@@ -71,7 +79,13 @@ impl SymbolLookup {
     }
 
     fn intern(interned: &mut InternedSymbols, symbol: Symbol) -> Arc<Symbol> {
-        let key = (symbol.name.clone(), symbol.start(), symbol.end());
+        let key = (
+            symbol.name.clone(),
+            symbol.start(),
+            symbol.end(),
+            symbol.kind,
+            symbol.binding,
+        );
         if let Some(existing) = interned.get(&key).and_then(Weak::upgrade) {
             return existing;
         }
@@ -91,9 +105,27 @@ impl SymbolLookup {
     }
 
     pub fn by_address(&self, address: u64) -> Option<&Arc<Symbol>> {
+        let priority = |symbol: &&Arc<Symbol>| {
+            (
+                Reverse(symbol.start()),
+                symbol.end(),
+                Reverse(symbol.kind),
+                Reverse(symbol.binding),
+            )
+        };
         self.symbols
             .iter()
             .filter(|symbol| symbol.contains_address(address))
-            .min_by_key(|symbol| (std::cmp::Reverse(symbol.start()), symbol.end()))
+            .min_by_key(priority)
+            .or_else(|| {
+                if address > self.symbols.iter().map(|symbol| symbol.end()).max()? {
+                    return None;
+                }
+                self.symbols
+                    .iter()
+                    .filter(|symbol| symbol.start() < address)
+                    .min_by_key(priority)
+                    .filter(|symbol| symbol.start() == symbol.end())
+            })
     }
 }

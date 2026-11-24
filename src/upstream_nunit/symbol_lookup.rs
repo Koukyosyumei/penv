@@ -387,3 +387,95 @@ fn should_work_with_stacked_test() {
     );
     assert_eq!(name_at(&lookup, 100), None);
 }
+
+#[test]
+fn should_have_more_and_less_important_via_name() {
+    use crate::symbol::{SymbolBinding, SymbolType};
+    let mut lookup = SymbolLookup::default();
+    lookup.insert_symbols([
+        Symbol::new(0, 10, "LessImportant").unwrap(),
+        Symbol::with_metadata(
+            0,
+            10,
+            "MoreImportant",
+            SymbolType::Function,
+            SymbolBinding::Global,
+        )
+        .unwrap(),
+    ]);
+    assert!(lookup.by_name("MoreImportant").next().is_some());
+    assert!(lookup.by_name("LessImportant").next().is_some());
+}
+
+#[test]
+fn should_have_important_via_address() {
+    use crate::symbol::{SymbolBinding, SymbolType};
+    let mut symbols = Vec::new();
+    for kind in [
+        SymbolType::Function,
+        SymbolType::NotSpecified,
+        SymbolType::ProcessorSpecific,
+        SymbolType::Section,
+        SymbolType::Object,
+        SymbolType::File,
+    ] {
+        for binding in [
+            SymbolBinding::Global,
+            SymbolBinding::Local,
+            SymbolBinding::ProcessorSpecific,
+            SymbolBinding::Weak,
+        ] {
+            symbols.push(
+                Symbol::with_metadata(0, 10, symbols.len().to_string(), kind, binding).unwrap(),
+            );
+        }
+    }
+    for (index, symbol) in symbols.iter().enumerate() {
+        let mut lookup = SymbolLookup::default();
+        lookup.insert_symbols(symbols[index..].iter().cloned());
+        assert_eq!(
+            lookup.by_address(5).map(|symbol| symbol.as_ref()),
+            Some(symbol)
+        );
+        let mut lookup = SymbolLookup::default();
+        lookup.insert_symbols(symbols[index..].iter().rev().cloned());
+        assert_eq!(
+            lookup.by_address(5).map(|symbol| symbol.as_ref()),
+            Some(symbol)
+        );
+    }
+}
+
+#[test]
+fn should_correctly_guess_zero_length_symbol() {
+    let lookup = lookup_for(&[
+        ("一", 20, 0),
+        ("三", 30, 10),
+        ("国", 40, 0),
+        ("五", 50, 50),
+        ("中", 60, 10),
+        ("猫", 65, 0),
+        ("私", 80, 0),
+        ("糞", 100, 0),
+        ("二", 110, 0),
+    ]);
+    assert_eq!(name_at(&lookup, 19), None);
+    assert_names(
+        &lookup,
+        &[
+            (20, "一"),
+            (21, "一"),
+            (40, "国"),
+            (41, "国"),
+            (65, "猫"),
+            (66, "中"),
+            (70, "五"),
+            (80, "私"),
+            (81, "五"),
+            (100, "糞"),
+            (101, "糞"),
+            (110, "二"),
+        ],
+    );
+    assert_eq!(name_at(&lookup, 111), None);
+}

@@ -1,8 +1,28 @@
 use crate::address_range::{AddressRange, RangeError};
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SymbolType {
+    File,
+    Object,
+    Section,
+    ProcessorSpecific,
+    NotSpecified,
+    Function,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SymbolBinding {
+    Weak,
+    ProcessorSpecific,
+    Local,
+    Global,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Symbol {
     pub name: String,
+    pub kind: SymbolType,
+    pub binding: SymbolBinding,
     range: AddressRange,
     end: u64,
 }
@@ -10,10 +30,28 @@ pub struct Symbol {
 impl Symbol {
     /// The end address is exclusive. A zero-length symbol occupies its start address.
     pub fn new(start: u64, end: u64, name: impl Into<String>) -> Result<Self, RangeError> {
+        Self::with_metadata(
+            start,
+            end,
+            name,
+            SymbolType::NotSpecified,
+            SymbolBinding::Global,
+        )
+    }
+
+    pub fn with_metadata(
+        start: u64,
+        end: u64,
+        name: impl Into<String>,
+        kind: SymbolType,
+        binding: SymbolBinding,
+    ) -> Result<Self, RangeError> {
         let size = end.checked_sub(start).ok_or(RangeError::InvalidEnd)?;
         let range = AddressRange::by(start, size.max(1))?;
         Ok(Self {
             name: name.into(),
+            kind,
+            binding,
             range,
             end,
         })
