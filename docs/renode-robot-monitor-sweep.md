@@ -494,3 +494,16 @@ R0–R14 と PC を保存する。旧 RAM 専用形式も読み込める。
 復帰後に実機種モデルの UART から `pong` を得た
 （`target/monitor-snapshot-gpr-proof/nrf-clear.log`）。
 実行後の保存と、周辺機器やイベントキューを含む状態復帰は未対応。
+
+起動前スナップショットの読み込みは通常 RESC とライブモニターで
+同じ Rust 実装を使う。`target/monitor-cross-snapshot-proof/replay.py` は
+一方で保存し、もう一方の新しいプロセスで復帰する両方向のコマンドを実行する。
+ライブで保存した PC、R0、同期量を通常 RESC から確認した。通常 RESC
+からの保存は従来どおりメモリーと起動前 CPU レジスターを含む形式を使う。
+同じ検証ディレクトリの `renode.log` には、固定 Renode が別プロセスで
+保存ファイルを読み込んで PC と R0 を復元した記録がある。
+
+`target/monitor-pause-include-proof/` の `timed.resc` を固定 Renode、
+通常 CLI、ライブモニターで読み込み、`pause` 後に報告された仮想時間
+1 ms、3 ms、3.1 ms が一致した。penv の通常 CLI と Robot のライブ経路は
+`start` と `pause` を共通の Rust アクションで扱う。
