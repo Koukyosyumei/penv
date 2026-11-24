@@ -832,3 +832,22 @@ Rust モニターテスト 21 件が合格した。
 `Should Fail On Loading Nonexisting Script` と `Should Fail On Command Error`
 を未変更のまま再実行し、両方とも合格した
 （`target/monitor-inspect-include-2f4d095-{script,include}/results.json`）。
+
+`ee1e628` では、起動前とライブの双方で、不正な `log` および
+`Save` / `Load` のシグネチャを Rust が拒否する。固定 Renode と同じ
+`log invalid_commmand` と `Save invalid_value` の RPC コマンド列で、
+拒否と診断を比較した。後続の正常な `log` と `lastLog` も成功した
+（`target/monitor-param-proof/{renode,penv}.jsonl`）。
+未変更の不正組み込み引数、不正保存引数、履歴上限、HEX の 4 ケースは
+合格した（`target/monitor-params-ee1e628-*/results.json`）。
+正常な保存と復帰も通常 CLI の既存コマンド列で再確認し、
+仮想時刻 10 ms と同期量 2 ms が一致した。
+
+`d7d2cc3` では、`echo` と `log` の引用符とエスケープを Rust の
+共通処理でデコードする。ログレベルは固定 Renode と同じく、
+整数または引用符付きのレベル名を受け付ける。
+`target/monitor-string-proof/strings.resc` を通常 CLI と Robot RPC で
+比較し、引用符、バックスラッシュ、INFO と WARNING の結果が一致した。
+ログのホスト時刻は比較から除外した。Rust モニターテスト 21 件が合格した。
+同じビルドで未変更の `Should Call Conditional Set`、`Should Overflow Buffer`、
+`Should Load HEX` が合格した（`target/monitor-strings-d7d2cc3-*/results.json`）。
