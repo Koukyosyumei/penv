@@ -611,9 +611,6 @@ fn run_commands(
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
             Action::ReadCpuMips(mode) => {
-                if !machine.is_cortex_m() {
-                    return Err("PerformanceInMips requires a Cortex-M CPU".into());
-                }
                 mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
             }
             Action::TimeSourceInfo => {
