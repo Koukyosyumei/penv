@@ -3,7 +3,7 @@ const CALIBRATION: [u8; 22] = [
     0x80, 0x00, 0xdd, 0xf9, 0x0b, 0x34,
 ];
 
-pub(super) struct Bmp180 {
+pub(crate) struct Bmp180 {
     temperature: f64,
     pressure: u32,
     register: u8,
@@ -13,7 +13,7 @@ pub(super) struct Bmp180 {
 }
 
 impl Bmp180 {
-    pub(super) fn new(temperature: f64, pressure: u32) -> Self {
+    pub(crate) fn new(temperature: f64, pressure: u32) -> Self {
         Self {
             temperature,
             pressure,
@@ -24,15 +24,15 @@ impl Bmp180 {
         }
     }
 
-    pub(super) fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         *self = Self::new(self.temperature, self.pressure);
     }
 
-    pub(super) fn start_write(&mut self) {
+    pub(crate) fn start_write(&mut self) {
         self.addressed = false;
     }
 
-    pub(super) fn write(&mut self, byte: u8) {
+    pub(crate) fn write(&mut self, byte: u8) {
         if !self.addressed {
             self.register = byte;
             self.addressed = true;
@@ -61,7 +61,7 @@ impl Bmp180 {
         }
     }
 
-    pub(super) fn read(&mut self) -> u8 {
+    pub(crate) fn read(&mut self) -> u8 {
         let value = match self.register {
             0xaa..=0xbf => CALIBRATION[usize::from(self.register - 0xaa)],
             0xd0 => 0x55,
@@ -73,5 +73,17 @@ impl Bmp180 {
             self.register += 1;
         }
         value
+    }
+}
+
+impl crate::efr32_i2c::Slave for Bmp180 {
+    fn write(&mut self, bytes: &[u8]) {
+        self.start_write();
+        for &byte in bytes {
+            self.write(byte);
+        }
+    }
+    fn read(&mut self, count: usize) -> Vec<u8> {
+        (0..count).map(|_| self.read()).collect()
     }
 }

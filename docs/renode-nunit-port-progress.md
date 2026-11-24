@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,119 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,134 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,277 |
+| 移植待ち | 2,262 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 31 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 30 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -219,3 +219,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 
 - [公式 ID](nunit-evidence/targeted-machine-registry.tsv)と[実行ログ](nunit-evidence/targeted-machine-registry.log)
 - [管理スレッドの公式 ID](nunit-evidence/targeted-machine-managed.tsv)と[実行ログ](nunit-evidence/targeted-machine-managed.log)
+
+## EFR32 I²C
+
+元のベースアドレスと周辺機器アドレスで、1・2バイトの送受信、FIFO の非破壊参照、割り込み、BMP180 のリセット値を検証し、公式15件が合格した。コントローラーはテストと同じようにバスへ直接登録して使い、BMP180 は既存のレジスタモデルを再利用した。
+
+- [公式 ID](nunit-evidence/targeted-efr32_i2c.tsv)と[実行ログ](nunit-evidence/targeted-efr32_i2c.log)

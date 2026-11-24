@@ -12,6 +12,7 @@ pub mod pseudorandom;
 pub mod sht21;
 pub mod bma180;
 pub mod efm32_i2c;
+pub mod efr32_i2c;
 pub mod lpc43xx_gpio;
 pub mod cadence_ttc;
 pub mod cadence_uart;

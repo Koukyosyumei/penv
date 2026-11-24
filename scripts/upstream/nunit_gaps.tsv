@@ -13,7 +13,6 @@ Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	There is no general Iro
 Antmicro.Renode.MonitorTests.FeaturesTests	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
-Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	EFR32 I2C controller registers, FIFO and interrupt state machine are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_AES_Tests	OpenTitan AES interaction and register model are absent; existing STM32 AES models expose a different register map.
 Antmicro.Renode.PeripheralsTests.OpenTitan_I2C_Test	OpenTitan I2C register/FIFO model and interrupt state machine are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need KeyManager command, working-state, status and write-one-to-clear error registers. The fixture advances through the creator and owner derivation states, which require the ROM-controller digest and KMAC-256 over the configured keys and seeds.
