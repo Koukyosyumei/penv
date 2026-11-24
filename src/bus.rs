@@ -3767,38 +3767,36 @@ impl Bus {
     }
 
     pub fn tag(&mut self, start: u32, size: u32, default: u64, throws: bool) -> Result<(), String> {
-        let end = size
-            .checked_sub(1)
-            .and_then(|last| start.checked_add(last))
-            .ok_or("tag range must be nonempty and within the 32-bit bus")?;
+        use crate::address_range::AddressRange;
+        let invalid = "tag range must be nonempty and within the 32-bit bus";
+        let range = AddressRange::by(start.into(), size.into()).map_err(|_| invalid)?;
+        let end = u32::try_from(range.end).map_err(|_| invalid)?;
         let tag = BusTag {
             start,
             end,
             default,
             throws,
         };
+        let bounds = |tag: &BusTag| AddressRange {
+            start: tag.start.into(),
+            end: tag.end.into(),
+        };
         if let Some(index) = self
             .policy_tags
             .iter()
-            .position(|tag| tag.start <= end && start <= tag.end)
+            .position(|tag| bounds(tag).intersect(range).is_some())
         {
             let parent = self.policy_tags[index];
-            if start < parent.start || end > parent.end {
+            let parent_bounds = bounds(&parent);
+            if !parent_bounds.contains_range(range) {
                 return Err("subtag must be completely contained in a single existing tag".into());
             }
             self.policy_tags.swap_remove(index);
-            if parent.start < start {
-                self.policy_tags.push(BusTag {
-                    end: start - 1,
-                    ..parent
-                });
-            }
-            if end < parent.end {
-                self.policy_tags.push(BusTag {
-                    start: end + 1,
-                    ..parent
-                });
-            }
+            self.policy_tags.extend(parent_bounds.subtract(range).map(|remaining| BusTag {
+                start: remaining.start as u32,
+                end: remaining.end as u32,
+                ..parent
+            }));
         }
         self.policy_tags.push(tag);
         Ok(())
