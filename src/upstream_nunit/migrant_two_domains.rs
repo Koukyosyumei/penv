@@ -261,3 +261,28 @@ configurations!(nested_struct_removal, nested_struct_removal);
 configurations!(field_insertion, field_insertion);
 configurations!(base_addition, base_addition);
 configurations!(base_removal, base_removal);
+
+fn generic_interface(write: bool, read: bool) {
+    // The class key includes the kind and identity of the closed type argument.
+    const CLASS: &str = "A<interface IX>";
+    const FIELDS: &[(&str, FieldKind)] = &[("f", FieldKind::Integer)];
+    const CODECS: &[Codec] = &[generated_record!(CLASS; f: integer)];
+    let mut graph = Graph::default();
+    let root = record(&mut graph, CLASS, vec![Value::Integer(1)]);
+    let (graph, root) = transfer(
+        &graph,
+        root,
+        &[stamp(CLASS, 1, FIELDS)],
+        &[stamp(CLASS, 2, FIELDS)],
+        CODECS,
+        (write, read),
+        VersionPolicy {
+            allow_inheritance_chain_change: true,
+            ..VersionPolicy::default()
+        },
+        None,
+    );
+    assert_eq!(fields(&graph, root)[0], Value::Integer(1));
+}
+
+configurations!(generic_interface, generic_interface);

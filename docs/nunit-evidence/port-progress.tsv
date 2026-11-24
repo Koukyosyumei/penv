@@ -9,7 +9,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.PrimitiveReaderWriterTests
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	1504	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	16	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests	176	176	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	24	0	12	0	The Rust format supports separate reader and writer schemas, including nested field and base changes. Remaining cases need constructor-created objects, interface generic identities and separate assembly version metadata.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	28	0	8	0	The Rust format supports separate reader and writer schemas, including nested field and base changes. Remaining cases need constructor-created objects, interface generic identities and separate assembly version metadata.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TypeDescriptorComparisonTests	11	11	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.VersionToleranceTests	148	148	0	0	0	-
 lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ParserTests	49	49	0	0	0	-

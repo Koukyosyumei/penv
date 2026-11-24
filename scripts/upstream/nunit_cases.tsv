@@ -3338,3 +3338,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,False
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,True).ShouldHandleBaseClassRemoval	upstream_nunit::migrant_two_domains::base_removal::write_false_read_true	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,False).ShouldHandleBaseClassRemoval	upstream_nunit::migrant_two_domains::base_removal::write_true_read_false	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,True).ShouldHandleBaseClassRemoval	upstream_nunit::migrant_two_domains::base_removal::write_true_read_true	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,False).ShouldSerializeGenericTypeWithInterface	upstream_nunit::migrant_two_domains::generic_interface::write_false_read_false	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(False,True).ShouldSerializeGenericTypeWithInterface	upstream_nunit::migrant_two_domains::generic_interface::write_false_read_true	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,False).ShouldSerializeGenericTypeWithInterface	upstream_nunit::migrant_two_domains::generic_interface::write_true_read_false	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests(True,True).ShouldSerializeGenericTypeWithInterface	upstream_nunit::migrant_two_domains::generic_interface::write_true_read_true	new
