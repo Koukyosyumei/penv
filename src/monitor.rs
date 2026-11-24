@@ -64,6 +64,7 @@ pub struct Boot {
 pub struct Session {
     variables: HashMap<String, String>,
     machine: Option<String>,
+    using_sysbus: bool,
 }
 
 pub struct GeneratedRepl(PathBuf);
@@ -814,6 +815,7 @@ pub fn serve(
             ..Boot::default()
         };
         boot.session.machine.clone_from(&session.machine);
+        boot.session.using_sysbus = session.using_sysbus;
         let mut existing_machine = true;
         let parsed = command_words(text).and_then(|words| {
             if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
@@ -821,6 +823,9 @@ pub fn serve(
             }
             execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, Path::new("."), 1)
         });
+        if parsed.is_ok() {
+            session.using_sysbus = boot.session.using_sysbus;
+        }
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => frame(&mut output, "OK", &[]),
@@ -1514,7 +1519,7 @@ fn assign_variable(
     }
     let scope = machine.map(|name| name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
     let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
-    if !conditional || resolve(variables, &format!("${name}")).is_err() {
+    if !conditional || variable_binding(variables, name).is_none() {
         if name.starts_with("global.") {
             variables.insert(name.to_owned(), value.to_owned());
         } else if let Some(scope) = scope {
@@ -1528,6 +1533,14 @@ fn assign_variable(
     Ok(true)
 }
 
+fn variable_binding<'a>(variables: &'a HashMap<String, String>, name: &str) -> Option<&'a String> {
+    variables.get(name).or_else(|| {
+        name.strip_prefix("global.")
+            .and_then(|short| variables.get(short))
+            .or_else(|| variables.get(&format!("global.{name}")))
+    })
+}
+
 fn resolve<'a>(variables: &'a HashMap<String, String>, mut value: &'a str) -> Result<&'a str, String> {
     let mut remaining = variables.len();
     while let Some(name) = value.strip_prefix('$').or_else(|| value.strip_prefix("@$")) {
@@ -1537,14 +1550,7 @@ fn resolve<'a>(variables: &'a HashMap<String, String>, mut value: &'a str) -> Re
         if remaining == 0 {
             return Err(format!("unknown or recursive variable {name}"));
         }
-        value = variables
-            .get(name)
-            .or_else(|| {
-                name.strip_prefix("global.")
-                    .and_then(|short| variables.get(short))
-                    .or_else(|| variables.get(&format!("global.{name}")))
-            })
-            .ok_or_else(|| format!("unknown variable {name}"))?;
+        value = variable_binding(variables, name).ok_or_else(|| format!("unknown variable {name}"))?;
         remaining -= 1;
     }
     Ok(value)
@@ -1599,8 +1605,20 @@ fn execute(
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
-    if matches!(words, [] | ["using", "sysbus"]) {
+    if words.is_empty() {
         return Ok(());
+    }
+    if words == ["using", "sysbus"] {
+        boot.session.using_sysbus = true;
+        return Ok(());
+    }
+    if boot.session.using_sysbus && matches!(words.first(),
+        Some(&("ReadByte" | "ReadWord" | "ReadDoubleWord" | "ReadQuadWord" |
+            "WriteByte" | "WriteWord" | "WriteDoubleWord" | "WriteQuadWord" |
+            "LoadELF" | "LoadHEX" | "LoadBinary"))
+    ) {
+        let qualified: Vec<_> = std::iter::once("sysbus").chain(words.iter().copied()).collect();
+        return execute(text, &qualified, variables, machine, boot, script, root, line);
     }
     let resolve = |value| resolve(variables, value);
     if let ["machine", "UserState", value] = words
@@ -3464,7 +3482,7 @@ sysbus LoadELF @hss.elf
 
     #[test]
     fn reads_boot_commands_and_reports_macro_source_lines() {
-        let directory = std::env::temp_dir().join(format!("penv-resc-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("penv-common-resc-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let script = directory.join("boot.resc");
         let content = concat!(

@@ -174,6 +174,7 @@ Options:
   --framebuffer-out PATH  Write the final LiteX framebuffer as PPM
   --asset-dir DIR    Resolve RESC firmware URLs to local files by filename
   --script PATH      Read boot settings from a Renode RESC file
+                     Use - with --monitor-stdio for a PENV-STARTUP byte frame
   --monitor-stdio    Run a framed monitor session on stdin/stdout
   --raw              Load a flat binary (default: ELF)
   --rv64             Run a raw image on an RV64IM CPU
