@@ -2692,6 +2692,7 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                 | ["SetDefaultUartTimeout" | "CreateTerminalTester" | "TestMonitorUartIdle"
                     | "WaitForLineOnUart" | "WaitForTesterPrompt" | "WaitForNextLineOnUart"
                     | "WaitForBytesOnUart" | "ShouldNotBeOnUart", ..]
+                | ["WaitForMonitorLog" | "AssertAbsentMonitorLog", ..]
                 | ["emulation", "SetGlobalQuantum" | "SetQuantum" | "RunFor" | "RunUntil", _]
                 | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
             || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
@@ -3275,6 +3276,20 @@ fn execute(
                 cpu.trim_start_matches("sysbus.").to_owned(), address,
                 triple.to_owned(), source.to_owned(), boot.session.number_mode,
             ))
+        }
+        [command @ ("WaitForMonitorLog" | "AssertAbsentMonitorLog"), timeout, args @ ..]
+            if timeout.starts_with('$') =>
+        {
+            let timeout = unquote(resolve(timeout)?);
+            if timeout.is_empty() || timeout.chars().any(char::is_whitespace) {
+                return Err("expected a single log timeout value".into());
+            }
+            let mut command = format!("{command} {timeout}");
+            for argument in args {
+                command.push(' ');
+                command.push_str(argument);
+            }
+            Some(Action::MonitorLog(command))
         }
         [command, ..] if crate::monitor_log::is_command(command) => {
             Some(Action::MonitorLog(text.to_owned()))
