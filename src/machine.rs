@@ -964,24 +964,32 @@ impl Machine {
             return Err("CPU-less snapshots require an idle event queue".into());
         }
         let (base, name) = self.bus.snapshot_trivial_uart()?;
-        let mut data = b"PENVIOST\x01".to_vec();
-        data.extend_from_slice(&base.to_le_bytes());
+        let mut data = base.to_le_bytes().to_vec();
         data.extend_from_slice(&(name.len() as u64).to_le_bytes());
         data.extend_from_slice(name.as_bytes());
         Ok(data)
     }
 
     fn write_cpu_less_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
-        let mut data = self.cpu_less_snapshot_prefix()?;
+        let mut data = b"PENVIOST\x02".to_vec();
+        data.extend_from_slice(&self.cpu_less_snapshot_prefix()?);
         data.extend_from_slice(&self.elapsed_steps().to_le_bytes());
         data.extend_from_slice(&self.monitor_quantum.to_le_bytes());
         data.push(u8::from(self.primary.monitor_paused));
+        data.extend_from_slice(&self.bus.default_uart_timeout().to_le_bytes());
         output.write_all(&data).map_err(|error| error.to_string())
     }
 
     fn read_cpu_less_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
         let prefix = self.cpu_less_snapshot_prefix()?;
-        let mut data = vec![0; prefix.len() + 17];
+        let mut header = [0; 9];
+        input.read_exact(&mut header).map_err(|error| error.to_string())?;
+        let has_uart_timeout = match &header {
+            b"PENVIOST\x01" => false,
+            b"PENVIOST\x02" => true,
+            _ => return Err("unknown CPU-less snapshot format".into()),
+        };
+        let mut data = vec![0; prefix.len() + if has_uart_timeout { 25 } else { 17 }];
         input.read_exact(&mut data).map_err(|error| error.to_string())?;
         if !data.starts_with(&prefix) || input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
             return Err("CPU-less snapshot does not match the platform or format".into());
@@ -994,6 +1002,9 @@ impl Machine {
         }
         self.reset_monitor_time(steps, quantum);
         self.primary.monitor_paused = state[16] != 0;
+        if has_uart_timeout {
+            self.bus.set_default_uart_timeout(u64::from_le_bytes(state[17..25].try_into().unwrap()));
+        }
         self.boot_memory_cleared = false;
         Ok(())
     }
@@ -3096,9 +3107,11 @@ mod tests {
         let mut machine = device(0x1000);
         machine.run(5, &mut std::io::sink()).unwrap();
         machine.monitor_quantum = 20;
+        machine.bus.set_default_uart_timeout(200);
         let mut snapshot = Vec::new();
         machine.write_boot_snapshot(&mut snapshot).unwrap();
         machine.run(7, &mut std::io::sink()).unwrap();
+        machine.bus.set_default_uart_timeout(300);
         assert_eq!(machine.elapsed_steps(), 12);
 
         let mut other = device(0x2000);
@@ -3110,6 +3123,7 @@ mod tests {
         machine.read_boot_snapshot(&mut snapshot.as_slice()).unwrap();
         assert_eq!(machine.elapsed_steps(), 5);
         assert_eq!(machine.monitor_quantum, 20);
+        assert_eq!(machine.bus.default_uart_timeout(), 200);
         machine.run(2, &mut std::io::sink()).unwrap();
         assert_eq!(machine.elapsed_steps(), 7);
     }
