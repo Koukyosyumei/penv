@@ -968,3 +968,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeListOfInterfaces	upstream_nunit::migrant_object_stream::list_of_interfaces_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeClassWithArrayOfNestedGenericArguments	upstream_nunit::migrant_object_stream::nested_generic_array_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeListOfInterfaces	upstream_nunit::migrant_object_stream::list_of_interfaces_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldAllowBoxedValueTypeSurrogation	upstream_nunit::migrant_surrogate::boxed_value_surrogate_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldAllowBoxedValueTypeSurrogation	upstream_nunit::migrant_surrogate::boxed_value_surrogate_stamped	new

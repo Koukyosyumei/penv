@@ -18,6 +18,8 @@ const fn stamp(
 
 const STAMPS: &[TypeStamp<'static>] = &[
     stamp("System.Object", &[]),
+    stamp("System.Int32", &[("m_value", FieldKind::Integer)]),
+    stamp("IntSurrogate", &[("Cwi.Field", FieldKind::Integer)]),
     stamp(
         "SurrogateMockA",
         &[("<Field>k__BackingField", FieldKind::Integer)],
@@ -523,4 +525,56 @@ modes!(
     registration_after_read_plain,
     registration_after_read_stamped,
     should_reject_registration_after_read
+);
+
+fn boxed_value_surrogate(stamped: bool) {
+    fn integer_field(source: &Object) -> i64 {
+        let Object::Record { fields, .. } = source else {
+            panic!("expected surrogate record");
+        };
+        let [Value::Integer(number)] = fields.as_slice() else {
+            panic!("expected one integer field");
+        };
+        *number
+    }
+
+    let mut graph = Graph::default();
+    let original = graph.insert(record("System.Int32", vec![Value::Integer(199)]));
+    let mut encode = Surrogates::default();
+    encode
+        .register("System.Int32", |_, value| {
+            Ok(record(
+                "IntSurrogate",
+                vec![Value::Integer(integer_field(value) + 100)],
+            ))
+        })
+        .unwrap();
+    let mut restore = Surrogates::default();
+    restore
+        .register("IntSurrogate", |_, value| {
+            Ok(record(
+                "System.Int32",
+                vec![Value::Integer(integer_field(value))],
+            ))
+        })
+        .unwrap();
+    round_trip(
+        &graph,
+        original,
+        stamped,
+        &mut encode,
+        &mut restore,
+        |graph, copy| {
+            assert_eq!(
+                graph.get(copy),
+                Some(&record("System.Int32", vec![Value::Integer(299)]))
+            );
+        },
+    );
+}
+
+modes!(
+    boxed_value_surrogate_plain,
+    boxed_value_surrogate_stamped,
+    boxed_value_surrogate
 );
