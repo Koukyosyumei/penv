@@ -29,7 +29,9 @@ def write_case(case, record, directory):
 
 
 def assess(test, endpoint):
-    failures = [call for call in endpoint.calls if call["status"] != "ok"]
+    # Robot can time out while an XML-RPC keyword is still running.
+    failures = [call for call in endpoint.calls if call.get("status") not in (None, "ok")]
+    in_flight = any("status" not in call for call in endpoint.calls)
     issue = next((call for call in failures if call["status"] == "unsupported"), None)
     if issue:
         status, category, reason = "unsupported", issue["category"], issue["message"]
@@ -43,6 +45,9 @@ def assess(test, endpoint):
         if test.status == "PASS":
             status, category = "not_run", "environment"
             reason = f"error handled by Robot without a verified penv assertion: {reason}"
+    elif in_flight:
+        status, category = "not_run", "environment"
+        reason = test.message or "Robot ended while penv monitor operation was still pending"
     elif endpoint.measurements and test.status == "PASS":
         status, category, reason = "pass", "passed", "penv observation and Robot case passed"
     elif endpoint.measurements and test.status == "FAIL":
@@ -187,6 +192,17 @@ def run_suite(task, *, options, renode, binary, assets):
             records.update(listener.results)
             for node in ET.parse(xml).getroot().findall("./suite/test"):
                 name = node.get("name")
+                case, directory = active[name]
+                if name not in records:
+                    status = node.find("status")
+                    monitor = directory / "monitor.jsonl"
+                    records[name] = dict(
+                        status="not_run", category="environment",
+                        reason=status.text or "Robot listener did not finish collecting the case",
+                        robot_status=status.get("status"), evidence=str(xml),
+                        measurements=[json.loads(line) for line in monitor.read_text().splitlines()]
+                        if monitor.is_file() else [],
+                    )
                 missing = next((msg.text for msg in node.iter("msg") if msg.get("level") == "FAIL"
                                 and re.search(r"No keyword with name .* found", msg.text or "")), None)
                 if missing:
