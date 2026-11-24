@@ -377,7 +377,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         return value
                     return self.operation(command, assertion=True)
                 if (re.fullmatch(r"(?:(?:emulation|machine)\s+GetTimeSourceInfo|emulation\s+(?:IsStarted|SingleStepBlocking))", command)
-                        or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)):
+                        or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
+                        or re.fullmatch(r"[\w.]+\s+(?:PC|MSTATUS|MEPC|MCAUSE|MTVAL|ExecutionMode)", command)):
                     return self.operation(command, assertion=True)
                 if re.match(r"(?:include|i|ExecuteScript|log|Save|Load)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)

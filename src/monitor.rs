@@ -847,7 +847,7 @@ fn run_commands<'a>(
                 machine.monitor_execution_mode(cpu, *single_step).and_then(|state| {
                     if single_step.is_none() {
                         let mode = if state { "SingleStep" } else { "Continuous" };
-                        writeln!(output.output, "{mode}").map_err(|error| error.to_string())?;
+                        writeln!(output.reply(), "{mode}").map_err(|error| error.to_string())?;
                     }
                     Ok(None)
                 })
@@ -944,13 +944,13 @@ fn run_commands<'a>(
                 }
             }
             Action::ReadCpuPc(cpu) => machine.monitor_named_pc(cpu).and_then(|pc| {
-                writeln!(output.output, "0x{pc:08x}")
+                writeln!(output.reply(), "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
             }),
             Action::CpuRegister(cpu, register, value) => {
                 machine.monitor_named_register(cpu, register, *value).and_then(|value| {
                     if let Some(value) = value {
-                        writeln!(output.output, "0x{value:x}").map_err(|error| error.to_string())?;
+                        writeln!(output.reply(), "0x{value:x}").map_err(|error| error.to_string())?;
                     }
                     Ok(None)
                 })
