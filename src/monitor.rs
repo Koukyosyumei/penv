@@ -946,11 +946,8 @@ fn run_commands(
                 .map(|()| None),
             Action::CreateUartTester(target, binary, timeout) => machine
                 .bus
-                .create_uart_tester(target, *binary)
-                .and_then(|id| {
-                    machine.bus.set_uart_tester_timeout(id, timeout.unwrap_or_else(|| machine.bus.default_uart_timeout()));
-                    writeln!(output.output, "{id}").map_err(|e| e.to_string())
-                })
+                .create_uart_tester(target, *binary, *timeout)
+                .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
                 .map(|()| None),
             Action::DefaultUartTimeout(timeout) => {
                 machine.bus.set_default_uart_timeout(*timeout);

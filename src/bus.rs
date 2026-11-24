@@ -207,6 +207,12 @@ enum TesterHistory {
     Binary(BinaryUartHistory),
 }
 
+struct UartTester {
+    port: TesterPort,
+    history: TesterHistory,
+    timeout: u64,
+}
+
 impl TesterHistory {
     fn receive(&mut self, byte: u8) {
         match self {
@@ -436,8 +442,7 @@ pub struct Bus {
     stm32_uart_history: Vec<Option<UartHistory>>,
     stm32_uart_input: usize,
     step_hz: Option<u32>,
-    uart_testers: Vec<(TesterPort, TesterHistory)>,
-    uart_tester_timeouts: BTreeMap<usize, u64>,
+    uart_testers: Vec<UartTester>,
     default_uart_timeout: Option<u64>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
@@ -5009,16 +5014,16 @@ impl Bus {
     }
 
     fn observe_uart(
-        testers: &mut [(TesterPort, TesterHistory)],
+        testers: &mut [UartTester],
         logs: &mut [(TesterPort, String, Vec<u8>)],
         port: TesterPort,
         bytes: &[u8],
         console: bool,
     ) {
         for &byte in bytes {
-            for (tester, history) in testers.iter_mut() {
-                if *tester == port {
-                    history.receive(byte);
+            for tester in testers.iter_mut() {
+                if tester.port == port {
+                    tester.history.receive(byte);
                 }
             }
             for (analyzer, name, line) in logs.iter_mut() {
@@ -5037,12 +5042,12 @@ impl Bus {
         }
     }
 
-    pub fn create_uart_tester(&mut self, target: &str, binary: bool) -> Result<usize, String> {
+    pub fn create_uart_tester(&mut self, target: &str, binary: bool, timeout: Option<u64>) -> Result<usize, String> {
         let port = self.tester_port(target)?;
         if let Some(id) = self
             .uart_testers
             .iter()
-            .position(|(index, _)| *index == port)
+            .position(|tester| tester.port == port)
         {
             return Ok(id);
         }
@@ -5052,7 +5057,8 @@ impl Bus {
         } else {
             TesterHistory::Text(UartHistory::default())
         };
-        self.uart_testers.push((port, history));
+        let timeout = timeout.unwrap_or_else(|| self.default_uart_timeout());
+        self.uart_testers.push(UartTester { port, history, timeout });
         Ok(id)
     }
 
@@ -5076,13 +5082,8 @@ impl Bus {
         self.default_uart_timeout = Some(timeout);
     }
 
-    pub(crate) fn set_uart_tester_timeout(&mut self, id: usize, timeout: u64) {
-        self.uart_tester_timeouts.entry(id).or_insert(timeout);
-    }
-
     pub(crate) fn uart_tester_timeout(&self, id: Option<usize>) -> Result<u64, String> {
-        let id = self.uart_tester_id(id)?;
-        Ok(self.uart_tester_timeouts.get(&id).copied().unwrap_or_else(|| self.default_uart_timeout()))
+        Ok(self.uart_testers[self.uart_tester_id(id)?].timeout)
     }
 
     fn uart_tester_id(&self, id: Option<usize>) -> Result<usize, String> {
@@ -5097,7 +5098,7 @@ impl Bus {
 
     fn uart_tester(&mut self, id: Option<usize>) -> Result<(usize, &mut TesterHistory), String> {
         let id = self.uart_tester_id(id)?;
-        Ok((id, &mut self.uart_testers[id].1))
+        Ok((id, &mut self.uart_testers[id].history))
     }
 
     #[cfg(test)]
@@ -5127,12 +5128,12 @@ impl Bus {
     }
 
     pub(crate) fn uart_activity_changed(&self, id: usize, previous: u64) -> bool {
-        matches!(&self.uart_testers[id].1, TesterHistory::Text(history) if history.activity != previous)
+        matches!(&self.uart_testers[id].history, TesterHistory::Text(history) if history.activity != previous)
     }
 
     pub fn uart_tester_matched_line(&self, watch: UartWatch) -> Option<String> {
         let UartWatch::Tester(id) = watch else { return None };
-        match &self.uart_testers.get(id)?.1 {
+        match &self.uart_testers.get(id)?.history {
             TesterHistory::Text(history) => history.matched_line(),
             TesterHistory::Binary(_) => None,
         }
@@ -5166,7 +5167,7 @@ impl Bus {
 
     pub fn uart_watch_failure(&self, watch: UartWatch) -> Option<&str> {
         if let UartWatch::Tester(id) = watch
-            && let TesterHistory::Text(history) = &self.uart_testers[id].1
+            && let TesterHistory::Text(history) = &self.uart_testers[id].history
         {
             return history.failure();
         }
@@ -5175,7 +5176,7 @@ impl Bus {
 
     pub fn take_uart_byte_match(&mut self, watch: UartWatch) -> Option<BinaryUartMatch> {
         if let UartWatch::Tester(id) = watch
-            && let TesterHistory::Binary(history) = &mut self.uart_testers[id].1
+            && let TesterHistory::Binary(history) = &mut self.uart_testers[id].history
         {
             return history.take_result();
         }
@@ -5199,7 +5200,7 @@ impl Bus {
     pub fn stm32_uart_matched(&self, watch: UartWatch) -> bool {
         match watch {
             UartWatch::Port(index) => self.stm32_uart_history[index].as_ref().unwrap().matched(),
-            UartWatch::Tester(id) => self.uart_testers[id].1.matched(),
+            UartWatch::Tester(id) => self.uart_testers[id].history.matched(),
         }
     }
 
@@ -5209,7 +5210,7 @@ impl Bus {
                 .as_mut()
                 .unwrap()
                 .finish_wait(),
-            UartWatch::Tester(id) => self.uart_testers[id].1.finish_wait(),
+            UartWatch::Tester(id) => self.uart_testers[id].history.finish_wait(),
         }
     }
 
@@ -8148,8 +8149,11 @@ mod tests {
             bus.write(base + 0x28, 1, u32::from(*byte), &mut output)
                 .unwrap();
         }
-        assert_eq!(bus.create_uart_tester("usart1", false).unwrap(), 0);
-        assert_eq!(bus.create_uart_tester("sysbus.usart1", false).unwrap(), 0);
+        bus.set_default_uart_timeout(2 * CORTEX_M_STEP_HZ);
+        assert_eq!(bus.create_uart_tester("usart1", false, None).unwrap(), 0);
+        bus.set_default_uart_timeout(3 * CORTEX_M_STEP_HZ);
+        assert_eq!(bus.create_uart_tester("sysbus.usart1", false, Some(1)).unwrap(), 0);
+        assert_eq!(bus.uart_tester_timeout(None).unwrap(), 2 * CORTEX_M_STEP_HZ);
         let watch = bus.watch_uart_tester(None, "before").unwrap();
         assert!(!bus.stm32_uart_matched(watch));
         bus.finish_stm32_uart_watch(watch);
