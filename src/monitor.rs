@@ -33,6 +33,9 @@ pub struct Boot {
     pub mtvec: Option<u32>,
     pub cpu_control: Vec<CpuControl>,
     pub platform: Option<PathBuf>,
+    inline_repl: Vec<String>,
+    pub generated_repl: Option<GeneratedRepl>,
+    pub session: Session,
     pub serial_analyzer: Option<String>,
     pub image: Option<Asset>,
     pub hex: bool,
@@ -55,6 +58,51 @@ pub struct Boot {
     hooks: HashMap<String, String>,
     pub sd_cards: Vec<SdAttachment>,
     started: bool,
+}
+
+#[derive(Default)]
+pub struct Session {
+    variables: HashMap<String, String>,
+    machine: Option<String>,
+}
+
+pub struct GeneratedRepl(PathBuf);
+
+impl Drop for GeneratedRepl {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Boot {
+    fn has_platform(&self) -> bool {
+        self.platform.is_some() || !self.inline_repl.is_empty()
+    }
+
+    fn materialize_platform(&mut self) -> Result<(), String> {
+        if self.inline_repl.is_empty() {
+            return Ok(());
+        }
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "penv-repl-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir(&dir).map_err(|e| e.to_string())?;
+        let guard = GeneratedRepl(dir);
+        let path = guard.0.join("platform.repl");
+        let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
+        if let Some(base) = &self.platform {
+            let base = fs::canonicalize(base).map_err(|e| format!("{}: {e}", base.display()))?;
+            writeln!(file, "using {:?}", base.to_string_lossy()).map_err(|e| e.to_string())?;
+        }
+        for source in &self.inline_repl {
+            writeln!(file, "{source}").map_err(|e| e.to_string())?;
+        }
+        self.platform = Some(path);
+        self.generated_repl = Some(guard);
+        Ok(())
+    }
 }
 
 pub struct RuntimeCommand {
@@ -713,6 +761,7 @@ pub fn serve(
     mut input: impl BufRead,
     mut output: impl Write,
     startup_output: &str,
+    mut session: Session,
 ) -> Result<(), String> {
     fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
         writeln!(output, "{status} {}", bytes.len())?;
@@ -753,12 +802,17 @@ pub fn serve(
             started: true,
             ..Boot::default()
         };
+        boot.session.machine.clone_from(&session.machine);
         let mut existing_machine = true;
         let parsed = command_words(text).and_then(|words| {
-            execute(text, &words, &HashMap::new(), &mut existing_machine, &mut boot, path, Path::new("."), 1)
+            if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
+                return Ok(());
+            }
+            execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, Path::new("."), 1)
         });
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
+            (Ok(()), []) => frame(&mut output, "OK", &[]),
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
                 let result = uart_timeout_steps(*steps, machine.bus.monitor_step_hz())
                     .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
@@ -1130,8 +1184,12 @@ pub fn load_for_session(path: &Path, root: &Path) -> Result<Boot, String> {
 
 fn load_script(path: &Path, root: &Path, session: bool) -> Result<Boot, String> {
     let mut state = ScriptState::default();
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    state.variables.insert("global.CWD".into(), format!("@\"{}\"", cwd.display()));
     load_file(path, root, &mut state)?;
     let mut boot = state.boot;
+    boot.session.variables = state.variables;
+    boot.materialize_platform()?;
     if let [
         RuntimeCommand {
             action: Action::RunFor(steps),
@@ -1197,6 +1255,30 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
         let text = raw.trim();
         let error = |message: &str| format!("{}:{}: {message}", path.display(), line + 1);
         if text.is_empty() || text.starts_with('#') || text.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = text.strip_prefix("machine LoadPlatformDescriptionFromString ") {
+            if !state.machine || state.boot.started || state.boot.image.is_some() {
+                return Err(error("inline REPL requires a machine before firmware loads"));
+            }
+            let value = value.trim();
+            let source = if let Some(first) = value.strip_prefix("\"\"\"") {
+                let mut body = first.to_owned();
+                while !body.ends_with("\"\"\"") {
+                    let (_, next) = cursor.next().ok_or_else(|| error("unterminated inline REPL"))?;
+                    body.push('\n');
+                    body.push_str(next);
+                }
+                body.truncate(body.len() - 3);
+                body
+            } else {
+                let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
+                let inner = value.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                    .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                    .ok_or_else(|| error("expected quoted inline REPL"))?;
+                inner.replace("\\\"", "\"")
+            };
+            state.boot.inline_repl.push(source);
             continue;
         }
         if let Some(name) = text
@@ -1277,26 +1359,11 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
             );
             continue;
         }
-        if let Some(assignment) = text.strip_prefix('$') {
-            let (name, value) = assignment
-                .split_once('=')
-                .ok_or_else(|| error("expected variable assignment"))?;
-            let name = name.trim();
-            if let Some(name) = name.strip_suffix('?') {
-                if resolve(&state.variables, &format!("${}", name.trim())).is_err() {
-                    state.variables.entry(name.trim().into()).or_insert_with(|| value.trim().into());
-                }
-            } else {
-                state.variables.insert(name.into(), value.trim().into());
-            }
+        let words = command_words(text).map_err(|e| error(&e))?;
+        if assign_variable(text, &words, state.boot.session.machine.as_deref(), &mut state.variables).map_err(|e| error(&e))? {
             continue;
         }
-        let words = command_words(text).map_err(|e| error(&e))?;
         match words.as_slice() {
-            ["set", name, value] => {
-                let name = name.strip_prefix('$').unwrap_or(name);
-                state.variables.insert(name.into(), (*value).into());
-            }
             ["include" | "i", value] => {
                 if state.boot.started {
                     return Err(error(
@@ -1321,7 +1388,7 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
                     }
                 };
                 match included.extension().and_then(|suffix| suffix.to_str()) {
-                    Some("repl") if state.boot.platform.is_none() => {
+                    Some("repl") if !state.boot.has_platform() => {
                         state.machine = true;
                         state.boot.platform = Some(included);
                     }
@@ -1387,9 +1454,44 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
     Ok(())
 }
 
+fn assign_variable(
+    text: &str,
+    words: &[&str],
+    machine: Option<&str>,
+    variables: &mut HashMap<String, String>,
+) -> Result<bool, String> {
+    let (name, value, conditional) = match words {
+        ["set", name, value] => (name.trim_start_matches('$'), *value, false),
+        _ if text.starts_with('$') => {
+            let (name, value) = text[1..].split_once('=').ok_or("expected variable assignment")?;
+            let name = name.trim();
+            let name_without_suffix = name.trim_end_matches('?').trim();
+            (name_without_suffix, value.trim(), name.ends_with('?'))
+        }
+        _ => return Ok(false),
+    };
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') || value.is_empty() {
+        return Err("invalid monitor variable assignment".into());
+    }
+    let scope = machine.map(|name| name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
+    let local = scope.as_ref().and_then(|scope| name.strip_prefix(scope)?.strip_prefix('.'));
+    if !conditional || resolve(variables, &format!("${name}")).is_err() {
+        if name.starts_with("global.") {
+            variables.insert(name.to_owned(), value.to_owned());
+        } else if let Some(scope) = scope {
+            let local = local.unwrap_or(name).to_owned();
+            variables.insert(format!("{scope}.{local}"), value.to_owned());
+            variables.insert(local, value.to_owned());
+        } else {
+            variables.insert(format!("global.{name}"), value.to_owned());
+        }
+    }
+    Ok(true)
+}
+
 fn resolve<'a>(variables: &'a HashMap<String, String>, mut value: &'a str) -> Result<&'a str, String> {
     let mut remaining = variables.len();
-    while let Some(name) = value.strip_prefix('$') {
+    while let Some(name) = value.strip_prefix('$').or_else(|| value.strip_prefix("@$")) {
         if name.is_empty() {
             return Err("missing variable name".into());
         }
@@ -1502,7 +1604,7 @@ fn execute(
         return Ok(());
     }
     if let [cpu, "WfiAsNop", value] = words
-        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+        && !boot.started && boot.runtime.is_empty() && boot.has_platform()
     {
         let enabled = match unquote(resolve(value)?) {
             "true" => true,
@@ -1513,7 +1615,7 @@ fn execute(
         return Ok(());
     }
     if let ["sysbus", "LogPeripheralAccess", name, options @ ..] = words
-        && !boot.started && boot.runtime.is_empty() && boot.platform.is_some()
+        && !boot.started && boot.runtime.is_empty() && boot.has_platform()
     {
         let enabled = match options {
             [] | ["true"] => true,
@@ -1609,7 +1711,16 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
-        ["mach" | "machine", "set", "0"] => Some(Action::SelectMachineZero),
+        ["mach" | "machine", "set", name] if *machine => {
+            let name = unquote(resolve(name)?);
+            if name != "0" && boot.session.machine.as_deref() != Some(name) {
+                return Err(format!("unknown machine {name:?}"));
+            }
+            if !boot.started && boot.runtime.is_empty() {
+                return Ok(());
+            }
+            Some(Action::SelectMachineZero)
+        }
         ["sysbus", method, address, rest @ ..]
             if matches!(
                 *method,
@@ -2273,26 +2384,26 @@ fn execute(
         return Err("commands after start are unsupported in a boot script".into());
     }
     match words {
-        ["mach" | "machine", "create", name @ ..] if name.len() <= 1 => {
-            if let Some(name) = name.first() {
-                resolve(*name)?;
-            }
-            if std::mem::replace(machine, true) {
+        ["mach" | "machine", "create" | "add", name @ ..] if name.len() <= 1 => {
+            if *machine {
                 return Err("multiple machines are unsupported".into());
             }
+            let name = name.first().map(|name| resolve(name)).transpose()?.unwrap_or("machine-0");
+            boot.session.machine = Some(unquote(name).to_owned());
+            *machine = true;
         }
         ["machine", "LoadPlatformDescription", value] if *machine && boot.platform.is_none() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @platform-path")?;
-            boot.platform = Some(local_path(&path_value(file), script, root));
+            boot.platform = Some(local_path(&path_value(unquote(file)), script, root));
         }
-        ["machine", "SdCardFromFile", args @ ..] if boot.platform.is_some() => {
+        ["machine", "SdCardFromFile", args @ ..] if boot.has_platform() => {
             boot.sd_cards
                 .push(SdAttachment::parse(args, resolve, script)?);
         }
         ["sysbus", "LoadELF", value, options @ ..]
-            if boot.platform.is_some() && boot.image.is_none() && options.len() <= 1 =>
+            if boot.has_platform() && boot.image.is_none() && options.len() <= 1 =>
         {
             boot.use_virtual_elf_addresses = match options {
                 [] | ["false" | "False"] => false,
@@ -2304,20 +2415,20 @@ fn execute(
                 .ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
         }
-        ["sysbus", "LoadHEX", value] if boot.platform.is_some() && boot.image.is_none() => {
+        ["sysbus", "LoadHEX", value] if boot.has_platform() && boot.image.is_none() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
             boot.image = Some(Asset::new(file, script));
             boot.hex = true;
         }
-        [cpu, "VectorTableOffset", value] if boot.platform.is_some() => {
+        [cpu, "VectorTableOffset", value] if boot.has_platform() => {
             boot.vector_tables.push((
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).to_string(),
                 crate::parse_address(resolve(value)?)?,
             ));
         }
-        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.platform.is_some() => {
+        ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.has_platform() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @firmware-path")?;
@@ -2326,7 +2437,7 @@ fn execute(
                 crate::parse_address(resolve(address)?)?,
             ));
         }
-        [device, "LoadPCM" | "Output", value] if boot.platform.is_some() => {
+        [device, "LoadPCM" | "Output", value] if boot.has_platform() => {
             let device = device.strip_prefix("sysbus.").unwrap_or(device).to_string();
             let path = resolve(value)?
                 .strip_prefix('@')
@@ -2383,7 +2494,7 @@ fn execute(
             let name = unquote(resolve(name)?);
             boot.network.file = Some((Asset::new(file, script), name.into()));
         }
-        ["sysbus", "SilenceRange", start, size] if boot.platform.is_some() => {
+        ["sysbus", "SilenceRange", start, size] if boot.has_platform() => {
             let start = start
                 .strip_prefix('<')
                 .ok_or("expected SilenceRange <start size>")?;
@@ -2393,7 +2504,7 @@ fn execute(
             boot.silence_ranges
                 .push((crate::parse_address(start)?, crate::parse_address(size)?));
         }
-        ["sysbus", "LoadSymbolsFrom", value] if boot.platform.is_some() => {
+        ["sysbus", "LoadSymbolsFrom", value] if boot.has_platform() => {
             let file = resolve(value)?
                 .strip_prefix('@')
                 .ok_or("expected @symbol-path")?;
@@ -2409,7 +2520,7 @@ fn execute(
             }
             // Single-machine execution already synchronizes after each instruction.
         }
-        [target, "Pressed" | "Released"] if boot.platform.is_some() && target.contains('.') => {
+        [target, "Pressed" | "Released"] if boot.has_platform() && target.contains('.') => {
             let (gpio, button) = target.rsplit_once('.').unwrap();
             boot.mpfs_buttons.push((
                 gpio.trim_start_matches("sysbus.").to_string(),
@@ -2424,7 +2535,7 @@ fn execute(
             "GetSymbolAddress",
             symbol,
             callback,
-        ] if boot.platform.is_some() => {
+        ] if boot.has_platform() => {
             let symbol = symbol
                 .strip_prefix('"')
                 .and_then(|s| s.strip_suffix("\"`"))
@@ -2461,7 +2572,7 @@ fn execute(
         ["emulation", "SetGlobalSerialExecution", "True"] => {
             // The interpreter already executes harts serially.
         }
-        [cpu, "PC", arguments @ ..] if boot.platform.is_some() && arguments.len() <= 1 => {
+        [cpu, "PC", arguments @ ..] if boot.has_platform() && arguments.len() <= 1 => {
             let value = arguments
                 .first()
                 .map(|value| crate::parse_address(resolve(value)?))
@@ -2471,20 +2582,20 @@ fn execute(
                 value,
             ));
         }
-        ["cpu" | "sysbus.cpu", "ResetVector", value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "ResetVector", value] if boot.has_platform() => {
             boot.cpu_control
                 .push(CpuControl::ResetVector(crate::parse_address(resolve(
                     value,
                 )?)?));
         }
-        ["cpu" | "sysbus.cpu", "Reset"] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "Reset"] if boot.has_platform() => {
             boot.cpu_control.push(CpuControl::Reset);
         }
         [
             "cpu" | "sysbus.cpu",
             register @ ("MTVEC" | "STVEC"),
             arguments @ ..,
-        ] if boot.platform.is_some() && arguments.len() <= 1 => {
+        ] if boot.has_platform() && arguments.len() <= 1 => {
             let register = if *register == "MTVEC" {
                 TrapVector::Machine
             } else {
@@ -2501,7 +2612,7 @@ fn execute(
             "cpu" | "sysbus.cpu",
             "LogFunctionNames",
             value @ ("true" | "false"),
-        ] if boot.platform.is_some() => {
+        ] if boot.has_platform() => {
             boot.log_function_names = *value == "true";
         }
         [
@@ -2509,7 +2620,7 @@ fn execute(
             command @ ("ConfigCSRRead" | "AddressCSRRead" | "ConfigCSRWrite" | "AddressCSRWrite"),
             index,
             arguments @ ..,
-        ] if boot.platform.is_some()
+        ] if boot.has_platform()
             && arguments.len() == usize::from(command.ends_with("Write")) =>
         {
             let path = device.strip_prefix("sysbus.").unwrap_or(device);
@@ -2525,36 +2636,36 @@ fn execute(
                 value,
             ));
         }
-        ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "GetRegister", index] if boot.has_platform() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::Integer(index, None));
         }
-        ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "SetRegister", index, value] if boot.has_platform() => {
             let index = crate::parse_address(unquote(resolve(index)?))?;
             let value = crate::parse_address(resolve(value)?)?;
             boot.cpu_registers
                 .push(CpuRegisterCommand::Integer(index, Some(value)));
         }
-        ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "SetMachineIrqMask", value] if boot.has_platform() => {
             boot.mask = Some(crate::parse_address(resolve(value)?)?);
         }
-        ["cpu" | "sysbus.cpu", "SetSupervisorIrqMask", value] if boot.platform.is_some() => {
+        ["cpu" | "sysbus.cpu", "SetSupervisorIrqMask", value] if boot.has_platform() => {
             boot.supervisor_mask = Some(crate::parse_address(resolve(value)?)?);
         }
-        [button, action @ ("Press" | "Release" | "Toggle")] if boot.platform.is_some() => {
+        [button, action @ ("Press" | "Release" | "Toggle")] if boot.has_platform() => {
             let action = crate::litex_panel::ButtonAction::parse(action).unwrap();
             boot.buttons.push((button.to_string(), action));
         }
         ["start"]
-            if boot.platform.is_some() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
+            if boot.has_platform() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
         {
             boot.started = true;
         }
-        ["showAnalyzer", "sysbus.uart" | "uart"] if boot.platform.is_some() => {
+        ["showAnalyzer", "sysbus.uart" | "uart"] if boot.has_platform() => {
             // UART output is already connected to stdout.
         }
-        ["showAnalyzer", analyzer] if boot.platform.is_some() => {
+        ["showAnalyzer", analyzer] if boot.has_platform() => {
             if analyzer
                 .rsplit('.')
                 .next()
@@ -2907,7 +3018,11 @@ impl Asset {
             let assets = assets.ok_or_else(|| {
                 format!("script references {value}; use --asset-dir with local assets")
             })?;
-            return Ok(assets.join(name));
+            let path = assets.join(name);
+            if !path.is_file() {
+                return Err(format!("monitor asset unavailable: {value}"));
+            }
+            return Ok(path);
         }
         Ok(local_path(value, &self.script, root))
     }

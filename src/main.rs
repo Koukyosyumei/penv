@@ -1387,6 +1387,8 @@ fn run() -> Result<ExitCode, String> {
     let mut riscv_wfi_as_nop = Vec::new();
     let mut monitor_user_state = None;
     let mut monitor_output = Vec::new();
+    let mut monitor_session = monitor::Session::default();
+    let mut _generated_repl = None;
     if let Some(capacity) = monitor_log_capacity {
         if !monitor_stdio {
             return Err("--monitor-log-capacity requires --monitor-stdio".into());
@@ -1497,6 +1499,8 @@ fn run() -> Result<ExitCode, String> {
                 litex_tftp::Server::new(server.ip, server.port, server.filename, data),
             ));
         }
+        _generated_repl = boot.generated_repl;
+        monitor_session = boot.session;
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
         mtvec = mtvec.or(boot.mtvec.map(u64::from));
@@ -2185,7 +2189,7 @@ fn run() -> Result<ExitCode, String> {
         if !output.is_empty() {
             output.push_str("\r\n");
         }
-        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output)?;
+        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output, monitor_session)?;
         return Ok(ExitCode::SUCCESS);
     }
     if max_steps == Some(0) && !static_memory_script {

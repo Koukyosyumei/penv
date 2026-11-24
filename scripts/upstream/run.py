@@ -288,6 +288,8 @@ def main():
     parser.add_argument("--case", help="exact Robot test name")
     parser.add_argument("--host-case-timeout", type=int, default=130,
                         help="elapsed host seconds allowed per Robot case (default 130)")
+    parser.add_argument("--rust-monitor", action="store_true",
+                        help="forward monitor commands unchanged to the Rust session")
     parser.add_argument("--negative-control", action="store_true", help="additional short-deadline HEX pilot")
     parser.add_argument("--nunit-root", type=Path, help="writable pinned clone with upstream build prerequisites")
     parser.add_argument("--dotnet", default="dotnet")
@@ -345,7 +347,7 @@ def main():
             assets.mkdir()
             from batch import run_batch
             results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs,
-                                     args.host_case_timeout))
+                                     args.host_case_timeout, args.rust_monitor))
             if args.negative_control:
                 pilot, = [row for row in rows if row["path"] == DEFAULT_ROBOT[0]
                           and row["name"] == "Should Load HEX"]

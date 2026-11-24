@@ -19,6 +19,7 @@ from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStart
 class LiveEndpoint(MemoryKeywords, Endpoint):
     proc = None
     pending_state = None
+    rust_monitor = False
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
         "Set Default Tester": "set_default_tester",
@@ -217,6 +218,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         return str(self.assets / uri.rsplit("/", 1)[1])
 
     def execute_script(self, script):
+        if self.rust_monitor:
+            return self.execute("include " + at_path(Path(script.removeprefix("@"))))
         return self.load_script(self.monitor_input.path(script.removeprefix("@")))
 
     def include(self, tokens):
@@ -278,6 +281,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         elif fragments:
             raise Unsupported(f"Execute Command machine context or arguments: {fragments}")
         command = command.strip()
+        if self.rust_monitor:
+            if self.proc is None:
+                self.commands.append(command)
+                self.calls[-1]["stage"] = "queued_monitor_command"
+                return ""
+            return self.operation(command)
         assigned = self.monitor_input.assign(command)
         if assigned is not None:
             name, value = assigned
@@ -506,6 +515,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def ensure_running(self):
         if self.proc is not None:
             return
+        if self.rust_monitor and self.script is None:
+            self.script = self.out / "boot.resc"
+            self.script.write_text("\n".join(self.commands) + "\n", encoding="utf-8")
         if not self.script and (not self.commands or not (self.platform or self.inline)):
             raise Unsupported("requires a single machine and platform")
         platform = self.platform
@@ -547,6 +559,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     self.buffer = b""
                     downloads.add(missing[1])
                     self.fetch(self.script_urls[missing[1]])
+                    continue
+                missing_asset = re.search(r"monitor asset unavailable: (" + PUBLIC_ASSET.pattern + r")$", error)
+                if missing_asset and missing_asset[1] not in downloads:
+                    self.close()
+                    self.buffer = b""
+                    downloads.add(missing_asset[1])
+                    self.fetch(missing_asset[1])
                     continue
                 if "monitor session cannot operate multiple machines" in error:
                     raise Unsupported(error) from exc
@@ -629,7 +648,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         raise Unsupported(f"unsupported Robot keyword option {arg}")
 
     def terminal(self, uart, *args):
-        if not self.image or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
+        if not (self.image or self.rust_monitor) or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
             raise Unsupported(f"Create Terminal Tester: {uart}")
         options = self.log_options(args, {"timeout", "defaultPauseEmulation"}, ("timeout",))
         if "defaultPauseEmulation" in options:
@@ -683,7 +702,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.operation(f"{command} {self.uart_text(pattern)} testerId={tester_id} treatAsRegex={str(regex).lower()}")
 
     def start(self):
-        if self.started or not self.image:
+        if self.started or not (self.image or self.rust_monitor):
             raise Unsupported("Start Emulation needs a loaded image on one machine")
         self.ensure_running()
         self.started = True
