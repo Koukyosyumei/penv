@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,312 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,336 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 83 |
+| 移植待ち | 59 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -504,3 +504,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 基底型から派生型へ移された同名フィールドの20件を移植した。宣言型で修飾したフィールド名により、削除と追加の両方を許可したときだけ復元に成功することを照合した。最終の対象実行では140件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-moved-fields.tsv)・[実行ログ](nunit-evidence/targeted-migrant-moved-fields.log)
 
 型スタンプ重複排除の8件を移植した。値が `null` のリストフィールドも宣言型と型引数を保持し、型名をストリーム内のIDで共有する。上流と同じASCII範囲の抽出でプリミティブ型名と開いたジェネリック型名がそれぞれ1回だけ現れることを照合した。`VersionToleranceTests` の全148件が対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-declared-types.tsv)・[実行ログ](nunit-evidence/targeted-migrant-declared-types.log)
+
+`TwoDomainTests` の24件を移植した。書き込みと読み込みに個別のスキーマを設定し、クラス、構造体、入れ子の構造体のフィールド変更と基底型の追加・削除を検証した。上流の復元値と4つの読み書き構成を維持し、対象実行では24件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-two-domains.tsv)・[実行ログ](nunit-evidence/targeted-migrant-two-domains.log)

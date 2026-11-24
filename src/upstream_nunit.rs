@@ -98,3 +98,5 @@ mod monitor_features;
 mod monitor_action_arguments;
 
 mod migrant_version_tolerance;
+
+mod migrant_two_domains;
