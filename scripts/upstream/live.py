@@ -390,7 +390,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 return ""
             if select:
                 self.operation(select)
-            return self.operation(command)
+            return self.operation(command, assertion=command == "printenv")
         if args or machine is not None:
             raise Unsupported("Execute Command machine context requires the Rust monitor")
         assigned = self.monitor_input.assign(command)

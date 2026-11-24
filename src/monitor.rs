@@ -2023,7 +2023,7 @@ impl ScriptState {
 
 fn describe_monitor_token(token: &str) -> (&'static str, String) {
     if let Some(path) = token.strip_prefix('@') {
-        return ("PathToken", path_value(path));
+        return ("PathToken", path_value(unquote(path)));
     }
     if let Some(value) = monitor_string(token) {
         return ("StringToken", value);
