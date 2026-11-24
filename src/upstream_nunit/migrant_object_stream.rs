@@ -398,6 +398,8 @@ const GRAPH_CODECS: &[Codec] = &[
     generated_record!("GenericClassWithLatePostDeserializationHook"; ),
     generated_record!("Issue60InnerClass"; first: decimal, second: decimal),
     generated_record!("Issue60OuterClass"; value: decimal, inner: reference),
+    generated_record!("GenericBox<AnotherContainingType>"; element: reference),
+    generated_record!("AnotherContainingType"; pointer: reference),
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -417,6 +419,32 @@ impl From<bool> for GraphMethods {
 }
 
 impl GraphMethods {
+    fn writer<'a, 's, W: std::io::Write>(
+        self,
+        mut writer: ObjectWriter<'a, 's, W>,
+    ) -> ObjectWriter<'a, 's, W> {
+        if self.stamped {
+            writer = writer.with_type_stamps(STAMPS);
+        }
+        if self.write {
+            writer = writer.with_generated_records(GRAPH_CODECS);
+        }
+        writer
+    }
+
+    fn reader<'a, 's, R: std::io::Read>(
+        self,
+        mut reader: ObjectReader<'a, 's, R>,
+    ) -> ObjectReader<'a, 's, R> {
+        if self.stamped {
+            reader = reader.with_type_stamps(STAMPS);
+        }
+        if self.read {
+            reader = reader.with_generated_records(GRAPH_CODECS);
+        }
+        reader
+    }
+
     fn clone(
         self,
         graph: &Graph,
@@ -1197,7 +1225,8 @@ stamp_modes!(
     boxed_non_null_nullable
 );
 
-fn two_serializations(stamped: bool) {
+fn two_serializations(methods: impl Into<GraphMethods>) {
+    let methods = methods.into();
     let mut graph = Graph::default();
     let one = Value::Ref(graph.insert(string("One")));
     let two = boxed_integer(&mut graph, 2);
@@ -1206,19 +1235,18 @@ fn two_serializations(stamped: bool) {
     let mut stream = Cursor::new(Vec::new());
     // Serializer.Serialize starts a fresh write with an independently flushed buffer.
     for _ in 0..2 {
-        let mut writer = ObjectWriter::new(&mut stream, &graph, References::PerRoot, true);
-        if stamped {
-            writer = writer.with_type_stamps(STAMPS);
-        }
+        let mut writer = methods.writer(ObjectWriter::new(
+            &mut stream,
+            &graph,
+            References::PerRoot,
+            true,
+        ));
         writer.write_object(root).unwrap();
         writer.finish().unwrap();
     }
     stream.rewind().unwrap();
     for _ in 0..2 {
-        let mut reader = ObjectReader::new(&mut stream, References::PerRoot, true);
-        if stamped {
-            reader = reader.with_type_stamps(STAMPS);
-        }
+        let mut reader = methods.reader(ObjectReader::new(&mut stream, References::PerRoot, true));
         let copy = reader.read_object().unwrap();
         let actual = array_values(reader.graph(), copy);
         let expected = array_values(&graph, root);
@@ -1916,11 +1944,12 @@ fn custom_item_set(methods: impl Into<GraphMethods>) {
     assert_eq!(restored.len(), 3);
 }
 
-fn two_different_serializations(stamped: bool) {
+fn two_different_serializations(methods: impl Into<GraphMethods>) {
     fn new_simple(graph: &mut Graph) -> ObjectId {
         graph.insert(record("SimpleClass", vec![Value::Integer(0), Value::Null]))
     }
 
+    let methods = methods.into();
     let mut graph = Graph::default();
     let first = new_simple(&mut graph);
     let second = new_simple(&mut graph);
@@ -1928,7 +1957,7 @@ fn two_different_serializations(stamped: bool) {
         "SimpleContainer",
         vec![Value::Ref(first), Value::Ref(second)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.clone(&graph, root);
     assert!(reader.graph().get(copy).is_some());
 
     let mut graph = Graph::default();
@@ -1938,7 +1967,7 @@ fn two_different_serializations(stamped: bool) {
     let root = graph.insert(Object::Array(
         [simple, first, second].map(Value::Ref).to_vec(),
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.clone(&graph, root);
     assert!(reader.graph().get(copy).is_some());
     let actual = array_values(reader.graph(), copy);
     for (value, expected) in
@@ -2118,15 +2147,15 @@ fn omit_transient_field(methods: impl Into<GraphMethods>) {
     );
 }
 
-fn reject_unserializable_root(stamped: bool, transient: bool) {
+fn reject_unserializable_root(methods: impl Into<GraphMethods>, transient: bool) {
+    let methods = methods.into();
     let mut graph = Graph::default();
     let root = transient.then(|| graph.insert(record("TransientClass", vec![Value::Null])));
     let mut stream = Cursor::new(Vec::new());
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true)
-        .with_transients(&TRANSIENTS);
-    if stamped {
-        writer = writer.with_type_stamps(STAMPS);
-    }
+    let mut writer = methods.writer(
+        ObjectWriter::new(&mut stream, &graph, References::Preserve, true)
+            .with_transients(&TRANSIENTS),
+    );
     assert_eq!(
         writer.write_root(root).unwrap_err().kind(),
         std::io::ErrorKind::InvalidInput
@@ -2154,14 +2183,17 @@ stamp_modes!(
     |s| reject_unserializable_root(s, true)
 );
 
-fn reject_resource(stamped: bool, class: &str, resource: NativeResource) {
+fn reject_resource(methods: impl Into<GraphMethods>, class: &str, resource: NativeResource) {
+    let methods = methods.into();
     let mut graph = Graph::default();
     let root = graph.insert(record(class, vec![Value::NativeResource(resource)]));
     let mut stream = Cursor::new(Vec::new());
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
-    if stamped {
-        writer = writer.with_type_stamps(STAMPS);
-    }
+    let mut writer = methods.writer(ObjectWriter::new(
+        &mut stream,
+        &graph,
+        References::Preserve,
+        true,
+    ));
     let error = writer.write_object(root).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
     assert_eq!(
@@ -2192,7 +2224,8 @@ stamp_modes!(
     |s| reject_resource(s, "ClassWithThreadLocal", NativeResource::ThreadLocal)
 );
 
-fn native_resource_path(stamped: bool) {
+fn native_resource_path(methods: impl Into<GraphMethods>) {
+    let methods = methods.into();
     let mut graph = Graph::default();
     let pointer = graph.insert(record(
         "ClassWithIntPtr",
@@ -2204,10 +2237,12 @@ fn native_resource_path(stamped: bool) {
         vec![Value::Ref(middle)],
     ));
     let mut stream = Cursor::new(Vec::new());
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
-    if stamped {
-        writer = writer.with_type_stamps(STAMPS);
-    }
+    let mut writer = methods.writer(ObjectWriter::new(
+        &mut stream,
+        &graph,
+        References::Preserve,
+        true,
+    ));
     let error = writer.write_object(root).unwrap_err();
     let resource = error
         .get_ref()
@@ -2894,4 +2929,33 @@ mod serial_generated_initialization {
     configurations!(constructor_nested, constructor_for_nested_field);
     configurations!(late_hook, generic_late_hook);
     configurations!(issue_60, issue_60);
+}
+
+mod serial_generated_write_boundaries {
+    use super::*;
+    configurations!(null_root, |m| reject_unserializable_root(m, false));
+    configurations!(transient_root, |m| reject_unserializable_root(m, true));
+    configurations!(intptr, |m| reject_resource(
+        m,
+        "ClassWithIntPtr",
+        NativeResource::IntPtr(0x666)
+    ));
+    configurations!(pointer, |m| reject_resource(
+        m,
+        "ClassWithPointer",
+        NativeResource::Pointer(0)
+    ));
+    configurations!(spinlock, |m| reject_resource(
+        m,
+        "ClassWithSpinLock",
+        NativeResource::SpinLock
+    ));
+    configurations!(thread_local, |m| reject_resource(
+        m,
+        "ClassWithThreadLocal",
+        NativeResource::ThreadLocal
+    ));
+    configurations!(pointer_path, native_resource_path);
+    configurations!(two_serializations, two_serializations);
+    configurations!(different_serializations, two_different_serializations);
 }

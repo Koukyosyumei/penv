@@ -574,10 +574,6 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     if !self.allow_xml_surrogates && class == super::xml_surrogate::CLASS {
                         return Err(super::xml_surrogate::disabled());
                     }
-                    if let Some(codecs) = self.generated {
-                        let codec = find_codec(codecs, class)?;
-                        (codec.write)(&mut ValidateGeneratedFields, fields)?;
-                    }
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.validate(fields)?;
                     }
@@ -633,6 +629,12 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     }
                     _ => {}
                 }
+            }
+            // Detect unsupported native values before selecting the field codec.
+            // This preserves the full resource path in both write methods.
+            if let (Some(codecs), Object::Record { class, fields }) = (self.generated, object) {
+                let codec = find_codec(codecs, class)?;
+                (codec.write)(&mut ValidateGeneratedFields, fields)?;
             }
             if let Some(replacement) = replacement {
                 self.replacements.insert(id, replacement);

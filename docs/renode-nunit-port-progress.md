@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,985 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,039 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,411 |
+| 移植待ち | 1,357 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -354,3 +354,9 @@ GUID と BigInteger の型別フィールド処理を追加した。カスタム
 一時クラス・フィールドの除外、コンストラクターでの復元、後処理フック、GitHub Issue 60 の Decimal を生成読み書き3組み合わせと型スタンプ有無で検証した。追加42件が合格した。
 
 - [公式 ID](nunit-evidence/targeted-migrant-serialization-initialization.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-initialization.log)
+
+## Migrant SerializationTests の書き込み境界
+
+null・一時オブジェクトのルートとネイティブリソースの拒否、問題のフィールドまでの参照経路、同一設定での連続シリアライズを検証した。拒否ケースでは書き込み時点で処理が終わるため、読み出し方式は公式設定として維持されるが実行には到達しない。対象54件が合格した。
+
+- [公式 ID](nunit-evidence/targeted-migrant-serialization-write-boundaries.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-write-boundaries.log)
