@@ -97,6 +97,7 @@ pub(crate) fn handle(
     machine: &mut Machine,
     command: &str,
     budget: u64,
+    output: &mut impl io::Write,
 ) -> Option<Result<(&'static str, String), String>> {
     let words: Vec<_> = command.split_ascii_whitespace().collect();
     match words.as_slice() {
@@ -199,7 +200,7 @@ pub(crate) fn handle(
                     })
                 };
                 let checked = std::cell::Cell::new(revision());
-                (stop, _) = crate::monitor::run_until_deadline(machine, limit, &mut io::sink(), |_, _| {
+                (stop, _) = crate::monitor::run_until_deadline(machine, limit, output, |_, _| {
                     let current = revision();
                     checked.replace(current) != current && find(true).is_some()
                 })?;
@@ -265,7 +266,7 @@ mod tests {
         attach(4).unwrap();
         let command = "AssertAbsentMonitorLog 1 literal keep any 78";
         for (options, expected) in [("no-start pause", "STOP"), ("start pause", "MATCH")] {
-            let result = handle(&mut machine, &format!("{command} {options}"), u64::MAX)
+            let result = handle(&mut machine, &format!("{command} {options}"), u64::MAX, &mut io::sink())
                 .unwrap().unwrap();
             assert_eq!(result.0, expected);
             assert!(machine.primary.monitor_paused);
@@ -277,7 +278,7 @@ mod tests {
     fn script_budget_cannot_satisfy_a_larger_absence_window() {
         let mut machine = Machine::new(4096).unwrap();
         attach(4).unwrap();
-        let result = handle(&mut machine, "AssertAbsentMonitorLog 1 literal keep any 78", 0)
+        let result = handle(&mut machine, "AssertAbsentMonitorLog 1 literal keep any 78", 0, &mut io::sink())
             .unwrap().unwrap();
         assert_eq!(result, ("STOP", "Limit".into()));
         assert_eq!(machine.elapsed_steps(), 0);
@@ -289,7 +290,7 @@ mod tests {
         machine.primary.monitor_paused = true;
         attach(4).unwrap();
         let (status, reason) = handle(
-            &mut machine, "AssertAbsentMonitorLog 1 literal keep any 78", u64::MAX,
+            &mut machine, "AssertAbsentMonitorLog 1 literal keep any 78", u64::MAX, &mut io::sink(),
         ).unwrap().unwrap();
         assert_eq!((status, reason.as_str()), ("STOP", "Paused"));
     }
@@ -298,7 +299,7 @@ mod tests {
     fn log_absence_rejects_matches_and_dropped_entries() {
         let mut machine = Machine::new(4096).unwrap();
         let absent = "AssertAbsentMonitorLog 0 literal keep any 6e6565646c65";
-        let run = |machine: &mut Machine, command| handle(machine, command, u64::MAX).unwrap().unwrap().0;
+        let run = |machine: &mut Machine, command| handle(machine, command, u64::MAX, &mut io::sink()).unwrap().unwrap().0;
         attach(1).unwrap();
         assert_eq!(run(&mut machine, absent), "MATCH");
         record(2, "needle");
@@ -316,7 +317,7 @@ mod tests {
         attach(4).unwrap();
         record(2, "expected");
         record(2, "failure 42");
-        let run = |machine: &mut Machine, command| handle(machine, command, u64::MAX).unwrap().unwrap();
+        let run = |machine: &mut Machine, command| handle(machine, command, u64::MAX, &mut io::sink()).unwrap().unwrap();
         run(
             &mut machine,
             "RegisterFailingMonitorLog regex 6661696c757265205b302d395d",
@@ -339,7 +340,7 @@ mod tests {
         record(0, "debug");
         record(1, "info");
         let wait =
-            |machine: &mut Machine, command: &str| handle(machine, command, u64::MAX).unwrap().unwrap();
+            |machine: &mut Machine, command: &str| handle(machine, command, u64::MAX, &mut io::sink()).unwrap().unwrap();
         assert_eq!(
             wait(
                 &mut machine,

@@ -623,7 +623,7 @@ fn run_commands(
             }
             Action::MonitorLog(command) => {
                 let start = machine.elapsed_steps();
-                let (status, message) = crate::monitor_log::handle(machine, command, budget)
+                let (status, message) = crate::monitor_log::handle(machine, command, budget, &mut output)
                     .ok_or("invalid log monitor command")??;
                 budget -= machine.elapsed_steps().wrapping_sub(start);
                 match status {
@@ -1059,7 +1059,7 @@ pub fn serve(
             }.map_err(|error| error.to_string())?;
             continue;
         }
-        if let Some(result) = crate::monitor_log::handle(machine, text, u64::MAX) {
+        if let Some(result) = crate::monitor_log::handle(machine, text, u64::MAX, &mut io::sink()) {
             match result {
                 Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
                 Err(error) if error.starts_with("unsupported") => {
