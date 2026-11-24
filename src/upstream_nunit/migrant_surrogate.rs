@@ -638,3 +638,68 @@ modes!(
     generic_registration_count_stamped,
     generic_registration_count
 );
+
+fn place_object_for_surrogate_preserving_identity(stamped: bool) {
+    let mut graph = Graph::default();
+    let b = graph.insert(record("SurrogateMockB", vec![]));
+    let nested_items = graph.insert(Object::Array(vec![Value::Ref(b)]));
+    let nested = graph.insert(record("List<object>", vec![Value::Ref(nested_items)]));
+    let second = graph.insert(record("SurrogateMockB", vec![]));
+    let items = graph.insert(Object::Array(vec![
+        Value::Ref(b),
+        Value::Ref(nested),
+        Value::Ref(second),
+    ]));
+    let root = graph.insert(record("List<object>", vec![Value::Ref(items)]));
+
+    let counter = std::cell::Cell::new(0);
+    let factory = |_, _: &Object| {
+        let value = counter.get();
+        counter.set(value + 1);
+        Ok(a(value))
+    };
+    let mut probe = Surrogates::default();
+    probe.register("SurrogateMockB", factory).unwrap();
+    let mut restore = Surrogates::default();
+    restore.register("SurrogateMockB", factory).unwrap();
+
+    let mut bytes = Vec::new();
+    let mut writer = ObjectWriter::new(&mut bytes, &graph, References::Preserve, true)
+        .with_restore_prototypes(&mut probe);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+
+    let mut reader = ObjectReader::new(Cursor::new(bytes), References::Preserve, true)
+        .with_surrogates(&mut restore);
+    if stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
+    let id = reader.read_object().unwrap();
+    fn list(graph: &Graph, id: ObjectId) -> &[Value] {
+        let Some(Object::Record { class, fields }) = graph.get(id) else {
+            panic!("expected list");
+        };
+        assert_eq!(class, "List<object>");
+        let Some(Object::Array(items)) = graph.get(ref_id(&fields[0])) else {
+            panic!("expected list items");
+        };
+        items
+    }
+    let graph = reader.graph();
+    let outer = list(graph, id);
+    let nested = list(graph, ref_id(&outer[1]));
+    assert_eq!(outer[0], nested[0]);
+    assert_ne!(outer[0], outer[2]);
+    assert_eq!(graph.get(ref_id(&outer[0])), Some(&a(3)));
+    assert_eq!(graph.get(ref_id(&outer[2])), Some(&a(2)));
+    reader.finish().unwrap();
+}
+
+modes!(
+    place_read_identity_plain,
+    place_read_identity_stamped,
+    place_object_for_surrogate_preserving_identity
+);

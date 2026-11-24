@@ -1,0 +1,3 @@
+official_id	nunit_id	rust_test	rust_outcome
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldPlaceObjectForSurrogatePreservingIdentity	0-3077	upstream_nunit::migrant_surrogate::place_read_identity_plain	passed
+lib/Migrant/Tests/Tests.csproj::Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldPlaceObjectForSurrogatePreservingIdentity	0-2985	upstream_nunit::migrant_surrogate::place_read_identity_stamped	passed

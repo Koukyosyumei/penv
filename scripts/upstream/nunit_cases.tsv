@@ -1078,3 +1078,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializ
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithNull	upstream_nunit::migrant_blocking_collection::nullable_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithPrimitives	upstream_nunit::migrant_blocking_collection::primitives_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests(False,False,False,True).ShouldSerializeBlockingCollectionWithStrings	upstream_nunit::migrant_blocking_collection::strings_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,False).ShouldPlaceObjectForSurrogatePreservingIdentity	upstream_nunit::migrant_surrogate::place_read_identity_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests(False,False,True).ShouldPlaceObjectForSurrogatePreservingIdentity	upstream_nunit::migrant_surrogate::place_read_identity_stamped	new

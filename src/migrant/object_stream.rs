@@ -3,7 +3,7 @@
 //! This uses Migrant's primitive encoding with a Rust object-record format.
 use super::primitive::{Decimal, Guid, Reader, Writer};
 use super::surrogate::Surrogates;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{hash_map::Entry, HashMap};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Weak};
 
@@ -343,6 +343,8 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     stamps: Option<&'a [TypeStamp<'a>]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
+    restore_prototype: Option<&'a mut Surrogates<'s>>,
+    restore_classes: HashMap<ObjectId, String>,
     before_write: Option<ObjectObserver<'s>>,
     after_write: Option<ObjectObserver<'s>>,
 }
@@ -373,6 +375,8 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             stamps: None,
             transients: None,
             surrogates: None,
+            restore_prototype: None,
+            restore_classes: HashMap::new(),
             before_write: None,
             after_write: None,
         }
@@ -415,6 +419,13 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
         self.surrogates = Some(surrogates);
+        self
+    }
+
+    /// Record the restored class by invoking each matching read factory once
+    /// when a new surrogate record is discovered.
+    pub fn with_restore_prototypes(mut self, factories: &'a mut Surrogates<'s>) -> Self {
+        self.restore_prototype = Some(factories);
         self
     }
 
@@ -484,6 +495,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         self.frame_base = self.ids.len();
         self.pending.clear();
         self.replacements.clear();
+        self.restore_classes.clear();
         let root = match self.discover(graph, root) {
             Ok(root) => root,
             Err(error) => {
@@ -521,6 +533,14 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             });
             let replacement = projected.or(replacement);
             let object = replacement.as_ref().unwrap_or(original);
+            if let Some(factories) = &mut self.restore_prototype {
+                if let Some(prototype) = factories.convert(id, object)? {
+                    let Object::Record { class, .. } = prototype else {
+                        return Err(invalid("restore prototype must be a record"));
+                    };
+                    self.restore_classes.insert(id, class);
+                }
+            }
             let values = match object {
                 Object::String(_) => &[],
                 Object::Bytes(bytes) => {
@@ -620,7 +640,12 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     self.data.string(value)?;
                 }
                 Object::Record { class, fields } => {
-                    self.data.bytes(&[1])?;
+                    if let Some(restored_class) = self.restore_classes.get(id) {
+                        self.data.bytes(&[5])?;
+                        self.data.string(restored_class)?;
+                    } else {
+                        self.data.bytes(&[1])?;
+                    }
                     self.data.string(class)?;
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.write(&mut self.data)?;
@@ -925,10 +950,15 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             return Err(invalid("invalid root reference or object limit exceeded"));
         }
         let mut objects = Vec::new();
-        for _ in 0..count {
-            objects.push(match self.data.byte()? {
+        let mut restore_classes = HashMap::new();
+        for index in 0..count {
+            let kind = self.data.byte()?;
+            objects.push(match kind {
                 0 => Object::String(self.data.string()?),
-                1 => {
+                1 | 5 => {
+                    if kind == 5 {
+                        restore_classes.insert(index, self.data.string()?);
+                    }
                     let class = self.data.string()?;
                     let stamp = self
                         .stamps
@@ -971,7 +1001,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             });
         }
         if let Some(surrogates) = self.surrogates.as_mut() {
-            for (index, object) in objects.iter_mut().enumerate() {
+            for (index, object) in objects.iter_mut().enumerate().rev() {
                 let id = ObjectId(old_len + index);
                 if let Object::Record { class, .. } = object {
                     let has_late_hook = self.late_hooks.iter().any(|hook| &hook.class == class)
@@ -986,6 +1016,12 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     }
                 }
                 if let Some(replacement) = surrogates.convert(id, object)? {
+                    if let Some(expected) = restore_classes.remove(&index) {
+                        if !matches!(&replacement, Object::Record { class, .. } if *class == expected)
+                        {
+                            return Err(invalid("restored class differs from stream prototype"));
+                        }
+                    }
                     let fields = match &replacement {
                         Object::String(_) | Object::Bytes(_) => &[][..],
                         Object::Record { fields, .. } | Object::Array(fields) => fields,
@@ -1005,6 +1041,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     *object = replacement;
                 }
             }
+        }
+        if !restore_classes.is_empty() {
+            return Err(invalid("missing restore factory for stream prototype"));
         }
         if !self.read_hooks.is_empty() {
             RestoredFrame {
