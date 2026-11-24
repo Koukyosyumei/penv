@@ -2367,14 +2367,39 @@ fn load_platform(
                 return Err(entry.error(&format!("expected CLINT connection {expected}")));
             }
         }
+        let address = if let Some(registration) = entry.registration_list()
+            .and_then(|items| match items.as_slice() {
+                [item] => item.strip_prefix("sysbus new Bus.BusPointRegistration"),
+                _ => None,
+            })
+        {
+            let body = registration.trim().strip_prefix('{').and_then(|text| text.strip_suffix('}'))
+                .ok_or_else(|| entry.error("expected a CLINT bus point registration body"))?;
+            let fields = object_fields(body).map_err(|error| entry.error(error))?;
+            let mut address = None;
+            let mut registration_cpu = None;
+            for (key, value) in fields {
+                match key {
+                    "address" if address.is_none() => address = Some(number(value).map_err(|error| entry.error(&error))?),
+                    "cpu" if registration_cpu.is_none() => registration_cpu = Some(value),
+                    _ => return Err(entry.error("unsupported or duplicate CLINT bus point field")),
+                }
+            }
+            if configs.len() != 1 || registration_cpu != Some(configs[0].1.name.as_str()) {
+                return Err(entry.error("expected a CLINT bus point scoped to its single attached CPU"));
+            }
+            address.ok_or_else(|| entry.error("missing CLINT bus point address"))?
+        } else {
+            entry.address()?
+        };
         // VexRiscv's custom CLINT wiring uses the established one-tick-per-step
         // time base used by the LiteX Linux demos.
         if let Some(frequency) = frequency.filter(|_| !uses_vex_irq(cpu)) {
             machine
                 .bus
-                .map_clint_with_frequency(entry.address()?, targets, frequency)
+                .map_clint_with_frequency(address, targets, frequency)
         } else {
-            machine.bus.map_clint(entry.address()?, targets)
+            machine.bus.map_clint(address, targets)
         }
         .map_err(|e| entry.error(&e))?;
         if wires.is_empty() {

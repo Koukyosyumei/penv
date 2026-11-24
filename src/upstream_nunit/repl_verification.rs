@@ -2151,3 +2151,24 @@ cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
             .starts_with("An item with the same key has already been added.")
     );
 }
+
+#[test]
+fn should_not_detect_cycle_in_signal_connection() {
+    let files = super::upstream_using_tests::Files::new();
+    let path = files.0.join("input.repl");
+    fs::write(
+        &path,
+        r#"
+clint: IRQControllers.CoreLevelInterruptor @ {
+        sysbus new Bus.BusPointRegistration { address: 0x002000000; cpu: cpu_rv }
+    }
+    [0,1] -> cpu_rv@[3,7]
+    frequency: 10000000
+
+cpu_rv: CPU.RiscV32 @ sysbus
+    cpuType: "rv32ima"
+    timeProvider: clint"#,
+    )
+    .unwrap();
+    crate::platform::check(&path).unwrap();
+}
