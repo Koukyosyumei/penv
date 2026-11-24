@@ -2480,8 +2480,10 @@ fn execute(
     }
     let action = match words {
         ["DescribeMonitorSnapshotPlatform"] => Some(Action::DescribeSnapshotPlatform),
-        ["pause"] => Some(Action::SetEmulationPaused(true)),
-        ["start"] if boot.started || !boot.runtime.is_empty() => {
+        ["pause" | "p"] => Some(Action::SetEmulationPaused(true)),
+        ["start" | "s"]
+            if boot.started || !boot.runtime.is_empty() || (*machine && !boot.has_platform()) =>
+        {
             boot.started = true;
             Some(Action::SetEmulationPaused(false))
         }
@@ -3685,7 +3687,7 @@ fn execute(
             let action = crate::litex_panel::ButtonAction::parse(action).unwrap();
             boot.buttons.push((button.to_string(), action));
         }
-        ["start"]
+        ["start" | "s"]
             if boot.has_platform() && (boot.image.is_some() || !boot.binaries.is_empty()) =>
         {
             boot.started = true;

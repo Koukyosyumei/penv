@@ -866,7 +866,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.operation(f"{command} {self.uart_text(pattern)}{selector} treatAsRegex={str(regex).lower()}")
 
     def start(self):
-        if self.started or not (self.image or self.rust_monitor):
+        if not self.rust_monitor and (self.started or not self.image):
             raise Unsupported("Start Emulation needs a loaded image on one machine")
         if self.rust_monitor:
             self.operation("start")
