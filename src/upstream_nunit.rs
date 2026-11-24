@@ -17,6 +17,7 @@ mod option_validation;
 mod option_parser;
 mod system_bus;
 mod time_interval;
+mod clock_source;
 mod tracked_register_bytes;
 mod write_extensions;
 
