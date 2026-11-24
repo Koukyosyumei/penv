@@ -370,7 +370,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 if select:
                     self.commands.append(select)
                 # Only route read-only queries here. Rust parses and evaluates the original command.
-                if re.match(r"echo(?:\s|$)", command):
+                if re.match(r"(?:echo|lastLog)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
                         return value

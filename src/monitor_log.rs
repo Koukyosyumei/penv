@@ -1,4 +1,4 @@
-//! Log capture for one Robot monitor session on the emulation thread.
+//! Monitor log history and tester capture on the emulation thread.
 use crate::machine::{Machine, Stop};
 use std::{cell::RefCell, collections::VecDeque, io};
 
@@ -41,11 +41,70 @@ impl LogPattern {
     }
 }
 
+pub(crate) const HISTORY_LIMIT: usize = 1000;
+pub(crate) const DEFAULT_TAIL: usize = 20;
+
+#[derive(Default)]
+struct History {
+    entries: VecDeque<String>,
+    minimum_level: Option<i8>,
+}
+
+pub(crate) fn enable_history() {
+    HISTORY.with_borrow_mut(|history| *history = Some(History::default()));
+}
+
+pub(crate) fn tail(count: usize) -> Vec<String> {
+    HISTORY.with_borrow(|history| {
+        history.as_ref().map_or_else(Vec::new, |history| {
+            history.entries.iter().skip(history.entries.len().saturating_sub(count))
+                .cloned().collect()
+        })
+    })
+}
+
+pub(crate) fn parse_level(value: &str) -> Result<i8, String> {
+    match value {
+        "-1" | "Noisy" => Ok(-1),
+        "0" | "Debug" => Ok(0),
+        "1" | "Info" => Ok(1),
+        "2" | "Warning" => Ok(2),
+        "3" | "Error" => Ok(3),
+        _ => Err(format!("unsupported monitor log level {value:?}")),
+    }
+}
+
+fn history_entry(level: i8, message: &str) -> String {
+    let level = match level {
+        -1 => "NOISY",
+        0 => "DEBUG",
+        1 => "INFO",
+        2 => "WARNING",
+        3 => "ERROR",
+        _ => "LOG",
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let seconds = now.as_secs() % 86_400;
+    format!("{:02}:{:02}:{:02}.{:04} [{level}] {message}",
+        seconds / 3600, seconds / 60 % 60, seconds % 60, now.subsec_micros() / 100)
+}
+
 thread_local! {
+    static HISTORY: RefCell<Option<History>> = const { RefCell::new(None) };
     static CAPTURE: RefCell<Option<Capture>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn record(level: i8, message: &str) {
+    HISTORY.with_borrow_mut(|history| {
+        if let Some(history) = history
+            && level >= history.minimum_level.unwrap_or(1)
+        {
+            if history.entries.len() == HISTORY_LIMIT {
+                history.entries.pop_front();
+            }
+            history.entries.push_back(history_entry(level, message));
+        }
+    });
     CAPTURE.with_borrow_mut(|capture| {
         if let Some(capture) = capture
             && level >= capture.minimum_level
@@ -61,6 +120,11 @@ pub(crate) fn record(level: i8, message: &str) {
 }
 
 pub(crate) fn set_level(level: i8) {
+    HISTORY.with_borrow_mut(|history| {
+        if let Some(history) = history {
+            history.minimum_level = Some(level);
+        }
+    });
     CAPTURE.with_borrow_mut(|capture| {
         if let Some(capture) = capture {
             capture.minimum_level = level;
@@ -257,6 +321,20 @@ fn decode(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_history_evicts_one_entry_without_consuming_the_tail() {
+        enable_history();
+        for index in 0..=HISTORY_LIMIT {
+            record(1, &format!("Script: unique {index:04}"));
+        }
+        record(0, "filtered");
+        let entries = tail(HISTORY_LIMIT);
+        assert_eq!(entries.len(), HISTORY_LIMIT);
+        assert!(entries[0].ends_with("Script: unique 0001"));
+        assert!(entries.last().unwrap().ends_with("Script: unique 1000"));
+        assert_eq!(tail(1), entries[HISTORY_LIMIT - 1..]);
+    }
 
     #[test]
     fn explicit_log_wait_can_resume_and_pause_at_the_deadline() {

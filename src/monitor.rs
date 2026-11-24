@@ -336,6 +336,8 @@ enum Action {
     RunToSyncPoint,
     SetQuantum(u64),
     LogLevel(i8),
+    ScriptLog(i8, String),
+    LastLog(usize),
     UserState(Option<String>),
     Echo(String),
     Illuminance(String, f64),
@@ -530,7 +532,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
-                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_)
+                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
@@ -858,6 +860,11 @@ fn run_commands(
                         .map_err(|error| error.to_string())
                 }
             }
+            Action::ScriptLog(level, message) => {
+                crate::monitor_log::record(*level, message);
+                Ok(None)
+            }
+            Action::LastLog(count) => write_last_log(*count, output.output).map(|()| None),
             Action::LogLevel(level) => {
                 machine.bus.set_monitor_log_level(*level);
                 Ok(None)
@@ -1136,6 +1143,13 @@ fn run_commands(
         }
     }
     Ok((Stop::ScriptComplete, retired))
+}
+
+fn write_last_log(count: usize, output: &mut impl Write) -> Result<(), String> {
+    for entry in crate::monitor_log::tail(count) {
+        writeln!(output, "{entry}").map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
@@ -1779,20 +1793,35 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     let mut state = script_state()?;
     // Inspect only read-only commands that resolve in startup state.
     // A queued runtime operation may change that state, so use the live monitor then.
-    if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _]))
+    if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _]))
         || load_text(&source, source.clone(), root, &mut state, &body).is_err()
         || state.machine
         || state.boot.has_platform()
         || state.boot.started
-        || !state.boot.runtime.is_empty()
+        || !state.boot.runtime.iter().all(|command| matches!(command.action,
+            Action::ScriptLog(..) | Action::LogLevel(_)))
     {
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
     state.boot.monitor_output.clear();
-    Ok(match load_text(&source, source.clone(), root, &mut state, &command) {
-        Ok(()) => StartupInput::Reply("OK", state.boot.monitor_output.join("\n")),
-        Err(error) => StartupInput::Reply("ERROR", error),
-    })
+    if let Err(error) = load_text(&source, source.clone(), root, &mut state, &command) {
+        return Ok(StartupInput::Reply("ERROR", error));
+    }
+    crate::monitor_log::enable_history();
+    if let Some(level) = state.boot.monitor_log_level {
+        crate::monitor_log::set_level(level);
+    }
+    let mut output = state.boot.monitor_output.join("\n").into_bytes();
+    for command in &state.boot.runtime {
+        match &command.action {
+            Action::ScriptLog(level, message) => crate::monitor_log::record(*level, message),
+            Action::LogLevel(level) => crate::monitor_log::set_level(*level),
+            Action::LastLog(count) => write_last_log(*count, &mut output)?,
+            Action::Echo(message) => output.extend_from_slice(message.as_bytes()),
+            _ => return Ok(StartupInput::Reply("DEFER", String::new())),
+        }
+    }
+    Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?))
 }
 
 fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, String> {
@@ -2310,15 +2339,7 @@ fn execute(
         return Ok(());
     }
     if let ["logLevel", value] = words {
-        let value = resolve(value)?;
-        let level = match unquote(value) {
-            "-1" | "Noisy" => -1,
-            "0" | "Debug" => 0,
-            "1" | "Info" => 1,
-            "2" | "Warning" => 2,
-            "3" | "Error" => 3,
-            _ => return Err(format!("unsupported monitor log level {value:?}")),
-        };
+        let level = crate::monitor_log::parse_level(unquote(resolve(value)?))?;
         if boot.started || !boot.runtime.is_empty() {
             boot.runtime.push(RuntimeCommand {
                 line,
@@ -2425,6 +2446,26 @@ fn execute(
         ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started || !boot.runtime.is_empty() => {
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
             Some(Action::CpuMips(mips))
+        }
+        ["log", value, level @ ..] if level.len() <= 1 => {
+            let value = resolve(value)?;
+            let message = value.strip_prefix('"').and_then(|value| value.strip_suffix('"'))
+                .ok_or("log expects a quoted message")?;
+            let level = match level {
+                [] => 1,
+                [level] => crate::monitor_log::parse_level(unquote(resolve(level)?))?,
+                _ => unreachable!(),
+            };
+            Some(Action::ScriptLog(level, format!("Script: {message}")))
+        }
+        ["lastLog", count @ ..] if count.len() <= 1 => {
+            let count = count.first().map(|count| resolve(count)?.parse::<i32>()
+                .map_err(|_| "invalid log entry count".to_string())).transpose()?
+                .map_or(crate::monitor_log::DEFAULT_TAIL, |count| count.max(0) as usize);
+            if count > crate::monitor_log::HISTORY_LIMIT {
+                return Err(format!("The number of entries cannot be larger than {}", crate::monitor_log::HISTORY_LIMIT));
+            }
+            Some(Action::LastLog(count))
         }
         ["emulation", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
         ["TestMonitorUartIdle", timeout, options @ ..] if boot.started && options.len() <= 1 => {
@@ -3239,6 +3280,8 @@ fn execute(
                         | Action::RunFor(_)
                         | Action::RunUntil(_)
                         | Action::RunToSyncPoint
+                        | Action::ScriptLog(..)
+                        | Action::LastLog(_)
                         | Action::TimeSourceInfo
                         | Action::DescribeSnapshotPlatform
                         | Action::SaveMemory(..)

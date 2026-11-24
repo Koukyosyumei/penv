@@ -1393,6 +1393,9 @@ fn run() -> Result<ExitCode, String> {
     let mut monitor_output = Vec::new();
     let mut monitor_session = monitor::Session::default();
     let mut _generated_repl = None;
+    if monitor_stdio || script.is_some() {
+        monitor_log::enable_history();
+    }
     if let Some(capacity) = monitor_log_capacity {
         if !monitor_stdio {
             return Err("--monitor-log-capacity requires --monitor-stdio".into());
