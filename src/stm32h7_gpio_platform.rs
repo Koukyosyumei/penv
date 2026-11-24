@@ -193,7 +193,8 @@ pub fn configure(
     }
 
     configure_gpio_links(entries, &ports, machine)?;
-    for (_, port) in ports {
+    for (entry, port) in ports {
+        machine.bus.name_stm32_gpio(entry.to_owned(), port.base);
         machine.bus.map_h7_gpio(port)?;
     }
     Ok(())

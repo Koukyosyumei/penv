@@ -70,7 +70,8 @@ enum Action {
     Echo(String),
     Illuminance(String, f64),
     ClicGpio(String, u32, bool),
-    LogTrivialUart(String),
+    LogUart(String),
+    GpioWire(String, u8, String, u8),
     IlluminanceFeed(String, PathBuf),
     RunRemaining,
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
@@ -423,7 +424,9 @@ pub fn run(
                 .filter(|clic| clic.name == *name)
                 .ok_or_else(|| format!("unsupported CLIC target {name:?}"))
                 .and_then(|clic| clic.gpio(*id, *asserted)).map(|()| None),
-            Action::LogTrivialUart(target) => machine.bus.log_trivial_uart(target).map(|()| None),
+            Action::GpioWire(from, output_pin, to, input_pin) => machine.bus
+                .connect_stm32_gpio(from, *output_pin, to, *input_pin).map(|()| None),
+            Action::LogUart(target) => machine.bus.log_uart(target).map(|()| None),
             Action::Illuminance(sensor, value) => machine.bus.set_illuminance(sensor, *value).map(|()| None),
             Action::IlluminanceFeed(sensor, path) => machine.bus.feed_illuminance(sensor, path).map(|()| None),
             Action::Echo(message) => writeln!(output.output, "{message}")
@@ -1451,12 +1454,17 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        ["ConnectMonitorGpio", source, output, target, input] if boot.started => Some(Action::GpioWire(
+            (*source).to_owned(), output.parse().map_err(|_| "invalid source GPIO pin")?,
+            (*target).to_owned(), input.parse().map_err(|_| "invalid target GPIO pin")?,
+        )),
+
         [target, "OnGPIO", id, asserted] if boot.started => Some(Action::ClicGpio(
             resolve(target)?.trim_start_matches("sysbus.").to_owned(),
             crate::parse_address(resolve(id)?)?, parse_tester_bool(resolve(asserted)?)?,
         )),
-        ["showAnalyzer", target, "LoggingUartAnalyzer"] if boot.started => {
-            Some(Action::LogTrivialUart(resolve(target)?.to_owned()))
+        ["showAnalyzer", target] | ["showAnalyzer", target, "LoggingUartAnalyzer"] if boot.started => {
+            Some(Action::LogUart(resolve(target)?.to_owned()))
         }
 
         [sensor, "Illuminance", value] if boot.started && sensor.starts_with("sysbus.") => {

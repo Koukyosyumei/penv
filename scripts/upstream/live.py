@@ -181,7 +181,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         return str(self.assets / uri.rsplit("/", 1)[1])
 
     def execute_script(self, script):
-        return self.load_script(self.monitor_input.path(script))
+        return self.load_script(self.monitor_input.path(script.removeprefix("@")))
 
     def include(self, tokens):
         if not tokens:
@@ -267,9 +267,16 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if re.fullmatch(r"numbersMode (Hexadecimal|Decimal|Both)", command):
             self.numbers = command.split()[1]
             return ""
-        if not self.commands and re.fullmatch(r'mach create(?: "[^"\r\n]+")?', command):
-            self.commands.append(command)
-            self.monitor_input.name_machine(command.removeprefix("mach create").strip().strip('"') or "machine")
+        selected = re.fullmatch(r'mach set "([^"\r\n]+)"', command)
+        if selected and self.commands and self.commands[0] == f'mach create "{selected[1]}"':
+            return ""
+        if re.fullmatch(r"(?:sysbus\.)?[\w.]+ (?:Press|Release|PressAndRelease)", command):
+            return self.operation(command)
+        machine = re.fullmatch(r'mach (?:create|add)(?: "([^"\r\n]+)")?', command)
+        if machine and not self.commands and not self.proc and not self.script:
+            name = machine[1] or "machine"
+            self.commands.append(f'mach create "{name}"' if machine[1] else "mach create")
+            self.monitor_input.name_machine(name)
             return ""
         if self.commands and not self.started and not self.proc:
             tokens = words(command)
@@ -299,6 +306,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if self.image and re.fullmatch(r"sysbus\.cpu VectorTableOffset 0x[0-9a-fA-F]+", command):
                 self.commands.append(command)
                 return ""
+        wiring = re.fullmatch(
+            r"""machine LoadPlatformDescriptionFromString ["'](gpioPort[A-Z]):\s*\{\s*(\d+)\s*->\s*(gpioPort[A-Z])@(\d+)\s*\}["']""", command)
+        if wiring:
+            return self.operation("ConnectMonitorGpio " + " ".join(wiring.groups()))
         tokens = words(command)
         if len(tokens) == 3 and re.fullmatch(r"sysbus\.[\w.]+", tokens[0]):
             sensor, method, argument = tokens
@@ -315,7 +326,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 file = self.monitor_input.path(argument)
                 return self.operation(f"{sensor} {method} {at_path(file)}")
         if (re.fullmatch(r"(?:sysbus\.)?[\w.]+ OnGPIO (?:0x[0-9a-fA-F]+|\d+) (?:true|false)", command, re.I)
-                or re.fullmatch(r"showAnalyzer (?:sysbus\.)?[\w.]+ LoggingUartAnalyzer", command)):
+                or re.fullmatch(r"showAnalyzer (?:sysbus\.)?[\w.]+(?: LoggingUartAnalyzer)?", command)):
             return self.operation(command)
         scalar = r"(?:Read|Write)(?:Byte|Word|DoubleWord|QuadWord)"
         if self.using_bus and re.match(scalar + r" ", command):
@@ -528,12 +539,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             return arg.split("=", 1)[1]
         raise Unsupported(f"unsupported Robot keyword option {arg}")
 
-    def terminal(self, uart, timeout=None):
+    def terminal(self, uart, *args):
         if self.uart or not self.image or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
             raise Unsupported(f"Create Terminal Tester: {uart}")
-        if timeout is not None and "=" in timeout:
-            timeout = self.option(timeout, "timeout")
-        self.uart_timeout = self.duration(timeout if timeout is not None else self.timeout)
+        options = self.log_options(args, {"timeout", "defaultPauseEmulation"}, ("timeout",))
+        if "defaultPauseEmulation" in options:
+            self.log_bool(options["defaultPauseEmulation"])
+        self.uart_timeout = self.duration(options.get("timeout", self.timeout))
         result = int(self.operation(f"CreateTerminalTester {uart}").strip())
         self.uart = uart
         return result
@@ -547,12 +559,17 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def wait_for(self, verb, expected, *args):
         if not self.uart:
             raise Unsupported("requires a terminal tester")
-        options = self.log_options(args, {"timeout", "treatAsRegex"}, ("timeout",))
+        options = self.log_options(args, {"timeout", "treatAsRegex", "includeUnfinishedLine"}, ("timeout",))
         deadline = self.duration(options.get("timeout", self.uart_timeout))
         regex = self.log_bool(options.get("treatAsRegex", "false"))
         self.started = True
-        return {"Line": self.operation(
-            f"{verb} {self.literal(expected)} timeout={deadline} treatAsRegex={str(regex).lower()}")}
+        if self.log_bool(options.get("includeUnfinishedLine", "false")):
+            if verb == "ShouldNotBeOnUart":
+                raise Unsupported("unfinished UART line absence is unsupported")
+            verb = "WaitForTesterPrompt"
+        line = self.operation(f"{verb} {self.literal(expected)} timeout={deadline} treatAsRegex={str(regex).lower()}")
+        match = re.search(expected, line) if regex else None
+        return {"Line": line, "Groups": list(match.groups()) if match else []}
 
     def wait(self, expected, *args):
         return self.wait_for("WaitForLineOnUart", expected, *args)

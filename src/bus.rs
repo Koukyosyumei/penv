@@ -193,6 +193,14 @@ pub enum UartWatch {
     Tester(usize),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TesterPort {
+    Stm32(usize),
+    Trivial,
+    LiteX,
+    Nrf(usize),
+}
+
 enum TesterHistory {
     Text(UartHistory),
     Binary(BinaryUartHistory),
@@ -405,7 +413,8 @@ pub struct Bus {
     nrf_clock_remainder: u64,
     uart_tx: Option<u32>,
     trivial_uart: Option<(u32, String)>,
-    trivial_uart_log: Option<Vec<u8>>,
+    uart_logs: Vec<(TesterPort, String, Vec<u8>)>,
+    named_stm32_gpios: Vec<(String, u32)>,
     pub uart: Option<MuraxUart>,
     ns16550: Option<Ns16550>,
     litex_uart: Option<LiteXUart>,
@@ -426,7 +435,7 @@ pub struct Bus {
     stm32_uart_history: Vec<Option<UartHistory>>,
     stm32_uart_input: usize,
     step_hz: Option<u32>,
-    uart_testers: Vec<(Option<usize>, TesterHistory)>,
+    uart_testers: Vec<(TesterPort, TesterHistory)>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -2079,6 +2088,24 @@ impl Bus {
             .iter()
             .find(|port| port.base == *gpio)
             .map(|port| port.pins() & (1 << pin) != 0)
+    }
+
+    pub(crate) fn name_stm32_gpio(&mut self, name: String, base: u32) {
+        self.named_stm32_gpios.push((name, base));
+    }
+
+    pub(crate) fn connect_stm32_gpio(&mut self, source: &str, output: u8, target: &str, input: u8) -> Result<(), String> {
+        let port = |name: &str| self.named_stm32_gpios.iter()
+            .find(|(port, _)| port == name).map(|(_, base)| *base)
+            .ok_or_else(|| format!("unsupported STM32 GPIO port {name:?}"));
+        let (source, target) = ((port(source)?, output), (port(target)?, input));
+        if output >= 16 || input >= 16 {
+            return Err("STM32 GPIO pins must be between 0 and 15".into());
+        }
+        if !self.gpio_wires.iter().any(|wire| wire.source == source && wire.target == target) {
+            self.gpio_wires.push(GpioWire { source, target, level: false });
+        }
+        Ok(())
     }
 
     pub fn set_gpio_links(&mut self, pins: Vec<TimerPin>, wires: Vec<GpioWire>) {
@@ -3775,7 +3802,11 @@ impl Bus {
 
     pub fn tick_litex_uart(&mut self, step: u64, output: &mut impl Write) -> io::Result<()> {
         if let Some(uart) = self.litex_uart.as_mut() {
-            uart.tick(step, output)?;
+            let mut bytes = Vec::new();
+            uart.tick(step, &mut bytes)?;
+            output.write_all(&bytes)?;
+            let console = self.monitor_log_enabled(1);
+            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::LiteX, &bytes, console);
         }
         Ok(())
     }
@@ -4770,6 +4801,19 @@ impl Bus {
         text: &str,
         ending: &[u8],
     ) -> Result<(), String> {
+        let port = self.tester_port(name)?;
+        let bytes = text.bytes().chain(ending.iter().copied());
+        if port == TesterPort::LiteX {
+            self.litex_uart.as_mut().unwrap().queue_input(bytes.collect());
+            return Ok(());
+        }
+        if let TesterPort::Nrf(index) = port {
+            let mut uart = self.nrf_peripherals.remove(index);
+            uart.queue_input(bytes.collect());
+            let result = uart.receive(self).map_err(|e| e.to_string());
+            self.nrf_peripherals.insert(index, uart);
+            return result;
+        }
         let name = name.strip_prefix("sysbus.").unwrap_or(name);
         let uart = self
             .stm32_uarts
@@ -4869,21 +4913,61 @@ impl Bus {
         self.trivial_uart.as_ref().is_some_and(|(_, name)| name == target)
     }
 
-    pub(crate) fn log_trivial_uart(&mut self, target: &str) -> Result<(), String> {
-        if !self.is_trivial_uart(target) {
-            return Err(format!("unsupported LoggingUartAnalyzer target {target:?}"));
+    fn tester_port(&self, target: &str) -> Result<TesterPort, String> {
+        let name = target.strip_prefix("sysbus.").unwrap_or(target);
+        if self.is_trivial_uart(target) {
+            Ok(TesterPort::Trivial)
+        } else if self.litex_uart.is_some() && name == "uart" {
+            Ok(TesterPort::LiteX)
+        } else if let Some(index) = self.nrf_peripherals.iter()
+            .position(|device| device.is_uart() && device.name == name)
+        {
+            Ok(TesterPort::Nrf(index))
+        } else {
+            self.stm32_usart_index(target).map(TesterPort::Stm32)
+                .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))
         }
-        self.trivial_uart_log.get_or_insert_with(Vec::new);
+    }
+
+    pub(crate) fn log_uart(&mut self, target: &str) -> Result<(), String> {
+        let port = self.tester_port(target)?;
+        if !self.uart_logs.iter().any(|(existing, _, _)| *existing == port) {
+            self.uart_logs.push((port, target.to_owned(), Vec::new()));
+        }
         Ok(())
     }
 
+    fn observe_uart(
+        testers: &mut [(TesterPort, TesterHistory)],
+        logs: &mut [(TesterPort, String, Vec<u8>)],
+        port: TesterPort,
+        bytes: &[u8],
+        console: bool,
+    ) {
+        for &byte in bytes {
+            for (tester, history) in testers.iter_mut() {
+                if *tester == port {
+                    history.receive(byte);
+                }
+            }
+            for (analyzer, name, line) in logs.iter_mut() {
+                if *analyzer != port {
+                    continue;
+                }
+                if byte == b'\n' {
+                    let message = format!("{name}: {}", String::from_utf8_lossy(line).trim_end_matches('\r'));
+                    crate::monitor_log::record(1, &message);
+                    if console { eprintln!("{message}"); }
+                    line.clear();
+                } else if line.len() < crate::uart::UART_HISTORY_BYTES {
+                    line.push(byte);
+                }
+            }
+        }
+    }
+
     pub fn create_uart_tester(&mut self, target: &str, binary: bool) -> Result<usize, String> {
-        let port = if self.is_trivial_uart(target) {
-            None
-        } else {
-            Some(self.stm32_usart_index(target)
-                .map_err(|_| format!("UART peripheral not found or of wrong type: {target:?}"))?)
-        };
+        let port = self.tester_port(target)?;
         if let Some(id) = self
             .uart_testers
             .iter()
@@ -6684,24 +6768,8 @@ impl Bus {
         {
             let byte = value as u8;
             uart.write_all(&[byte]).map_err(BusError::Output)?;
-            for (port, history) in &mut self.uart_testers {
-                if port.is_none() {
-                    history.receive(byte);
-                }
-            }
-            if let Some(line) = &mut self.trivial_uart_log {
-                if byte == b'\n' {
-                    let name = &self.trivial_uart.as_ref().unwrap().1;
-                    let message = format!("{name}: {}", String::from_utf8_lossy(line).trim_end_matches('\r'));
-                    crate::monitor_log::record(1, &message);
-                    if self.monitor_log_enabled(1) {
-                        eprintln!("{message}");
-                    }
-                    self.trivial_uart_log.as_mut().unwrap().clear();
-                } else if line.len() < crate::uart::UART_HISTORY_BYTES {
-                    line.push(byte);
-                }
-            }
+            let console = self.monitor_log_enabled(1);
+            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::Trivial, &[byte], console);
             return Ok(());
         }
         #[cfg(test)]
@@ -6754,11 +6822,22 @@ impl Bus {
                 .position(|device| device.contains(address))
         {
             let mut device = self.nrf_peripherals.remove(index);
-            let result = device.write(address, value, self, uart);
+            let mut bytes = Vec::new();
+            let is_uart = device.is_uart();
+            let result = if is_uart {
+                device.write(address, value, self, &mut bytes)
+            } else {
+                device.write(address, value, self, uart)
+            };
             for (gpio, pin, high) in device.sensor_irqs() {
                 self.apply_nrf_input(gpio, pin, high);
             }
             self.nrf_peripherals.insert(index, device);
+            if is_uart {
+                uart.write_all(&bytes).map_err(BusError::Output)?;
+                let console = self.monitor_log_enabled(1);
+                Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::Nrf(index), &bytes, console);
+            }
             return result;
         }
         if width == 4
@@ -6834,7 +6913,12 @@ impl Bus {
         if let Some(device) = self.litex_uart.as_mut()
             && let Some(offset) = device.offset(address, width)
         {
-            return device.write(offset, value, uart).map_err(BusError::Output);
+            let mut bytes = Vec::new();
+            device.write(offset, value, &mut bytes).map_err(BusError::Output)?;
+            uart.write_all(&bytes).map_err(BusError::Output)?;
+            let console = self.monitor_log_enabled(1);
+            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::LiteX, &bytes, console);
+            return Ok(());
         }
         if matches!(width, 1 | 4)
             && let Some(device) = self.litex_timer.as_mut()
@@ -6908,17 +6992,15 @@ impl Bus {
             if !usart_clocked(self.h7_network_control.as_ref(), device) {
                 return Ok(());
             }
+            let console = self.monitor_log_level.unwrap_or(1) <= 1;
             return device
                 .write(address, width, value, |byte| {
                     uart.write_all(&[byte])?;
                     if let Some(Some(history)) = self.stm32_uart_history.get_mut(index) {
                         history.receive(byte);
                     }
-                    for (port, history) in &mut self.uart_testers {
-                        if *port == Some(index) {
-                            history.receive(byte);
-                        }
-                    }
+                    Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs,
+                        TesterPort::Stm32(index), &[byte], console);
                     Ok(())
                 })
                 .map_err(BusError::Output);
