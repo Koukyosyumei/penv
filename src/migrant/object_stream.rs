@@ -19,6 +19,7 @@ pub enum FieldKind {
     Reference = 3,
     NullableInteger = 4,
     Guid = 5,
+    BigInteger = 6,
 }
 
 #[derive(Clone, Copy)]
@@ -47,6 +48,7 @@ impl TypeStamp<'_> {
                         | (FieldKind::NullableInteger, Value::Null | Value::Integer(_))
                         | (FieldKind::Float, Value::Float(_))
                         | (FieldKind::Guid, Value::Guid(_))
+                        | (FieldKind::BigInteger, Value::BigInteger(_))
                         | (FieldKind::Reference, Value::Null | Value::Ref(_))
                 )
             })
@@ -92,6 +94,8 @@ pub enum Value {
     Integer(i64),
     Float(f64),
     Guid(Guid),
+    /// Little-endian signed two's-complement bytes.
+    BigInteger(Vec<u8>),
     Ref(ObjectId),
 }
 
@@ -350,8 +354,14 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 return Err(invalid("object field limit exceeded"));
             }
             for value in values {
-                if let Value::Ref(id) = value {
-                    self.intern(graph, *id)?;
+                match value {
+                    Value::Ref(id) => {
+                        self.intern(graph, *id)?;
+                    }
+                    Value::BigInteger(bytes) if bytes.is_empty() || bytes.len() > MAX_ITEMS => {
+                        return Err(invalid("invalid big integer length"));
+                    }
+                    _ => {}
                 }
             }
             if let Some(replacement) = replacement {
@@ -435,6 +445,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 Value::Guid(value) => {
                     data.bytes(&[4])?;
                     data.guid(*value)?;
+                }
+                Value::BigInteger(bytes) => {
+                    data.bytes(&[5])?;
+                    data.unsigned(bytes.len() as u64)?;
+                    data.bytes(bytes)?;
                 }
                 Value::Ref(id) => {
                     data.bytes(&[3])?;
@@ -692,6 +707,15 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     Value::Ref(ObjectId(base + id))
                 }
                 4 => Value::Guid(self.data.guid()?),
+                5 => {
+                    let length = self.count()?;
+                    if length == 0 {
+                        return Err(invalid("invalid big integer length"));
+                    }
+                    let mut bytes = vec![0; length];
+                    self.data.bytes(&mut bytes)?;
+                    Value::BigInteger(bytes)
+                }
                 _ => return Err(invalid("unknown value kind")),
             });
         }

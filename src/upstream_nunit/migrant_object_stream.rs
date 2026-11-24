@@ -83,6 +83,14 @@ const STAMPS: &[TypeStamp<'static>] = &[
             ("<Str>k__BackingField", FieldKind::Reference),
         ],
     ),
+    stamp(
+        "GenericBox<BigInteger>",
+        &[("<Element>k__BackingField", FieldKind::BigInteger)],
+    ),
+    stamp(
+        "System.Numerics.BigInteger",
+        &[("value", FieldKind::BigInteger)],
+    ),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1731,4 +1739,69 @@ stamp_modes!(
     class_with_guid_plain,
     class_with_guid_stamped,
     class_with_guid
+);
+
+fn big_integer_inputs() -> [Value; 3] {
+    let positive = ((1u128 << 64) + 5).to_le_bytes()[..9].to_vec();
+
+    // Build 3^100 without narrowing through a machine integer.
+    let mut magnitude = vec![1u8];
+    for _ in 0..100 {
+        let mut carry = 0;
+        for byte in &mut magnitude {
+            let product = u16::from(*byte) * 3 + carry;
+            *byte = product as u8;
+            carry = product >> 8;
+        }
+        if carry != 0 {
+            magnitude.push(carry as u8);
+        }
+    }
+    if magnitude.last().unwrap() & 0x80 != 0 {
+        magnitude.push(0);
+    }
+    // Negate the signed fixed-width representation, least significant byte first.
+    let mut carry = 1u16;
+    for byte in &mut magnitude {
+        carry += u16::from(!*byte);
+        *byte = carry as u8;
+        carry >>= 8;
+    }
+    [
+        Value::BigInteger(positive),
+        Value::BigInteger(magnitude),
+        Value::BigInteger(vec![0]),
+    ]
+}
+
+fn big_integer_round_trip(stamped: bool) {
+    let inputs = big_integer_inputs();
+    for value in &inputs {
+        let mut graph = Graph::default();
+        let root = graph.insert(record("GenericBox<BigInteger>", vec![value.clone()]));
+        let (reader, copy) = deep_clone(&graph, root, stamped);
+        assert_eq!(fields(reader.graph().get(copy).unwrap())[0], *value);
+
+        let mut graph = Graph::default();
+        let boxed = graph.insert(record("System.Numerics.BigInteger", vec![value.clone()]));
+        let root = graph.insert(record("Box", vec![Value::Ref(boxed)]));
+        let (reader, copy) = deep_clone(&graph, root, stamped);
+        let graph = reader.graph();
+        let boxed = reference(&fields(graph.get(copy).unwrap())[0]);
+        assert_eq!(
+            graph.get(boxed),
+            Some(&record("System.Numerics.BigInteger", vec![value.clone()]))
+        );
+    }
+
+    let mut graph = Graph::default();
+    let root = graph.insert(Object::Array(inputs.to_vec()));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(array_values(reader.graph(), copy), inputs);
+}
+
+stamp_modes!(
+    big_integer_plain,
+    big_integer_stamped,
+    big_integer_round_trip
 );
