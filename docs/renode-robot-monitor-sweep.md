@@ -944,3 +944,28 @@ FU540 の元の起動スクリプトを使った penv の確認では
 HEX と STM32F072b Console Echo は合格し、Rust モニターテスト 21 件、
 シングルステップ制御 1 件、GEM 1 件も合格した
 （`target/monitor-step-{gem-2582bdf,serial-8aa85da}-*/results.json`）。
+
+`815c1a6` は、テキスト UART 待機が期限に達した場合に、Rust が計測した
+開始・終了の仮想時刻と、未消費 UART バッファの末尾 512 バイトを返す。
+固定 Renode と同じ RPC コマンド列で、UART に行 `A` が存在していても、
+別の文字列を期限 0 で待つと失敗し、仮想時刻が進まないことを確認した
+（`target/monitor-uart-tail-proof/{renode,penv}.jsonl`）。
+
+FU540 の未変更ケースは同じ UART アサーションで `FAIL`。
+実測の待機区間は 0–8 秒、UART 履歴は空だった。
+期限後の e51 は `PC=0x80000004`、`MCAUSE=0x2`、`MEPC=0x80000008`
+を返した。これは期限後に観測した状態で、最初のトラップを特定した値ではない
+（`target/monitor-uart-tail-proof/fu540.log`）。
+`target/monitor-reg-d0b5e15-*/results.json` の HEX と
+STM32F072b Console Echo は合格した。
+
+`d0b5e15` と `898d0e2` は、モニターの PC、CSR、実行モード照会を
+起動時の応答に含め、ファームウェアがない構成でも実行モードを設定できる
+ようにした。固定 Renode の RV32 マシンと同じ RPC コマンド列で
+PC、MCAUSE、MEPC、MTVAL の数値と、`Continuous` から `SingleStep` への遷移が
+一致した。固定 Renode が実行モードに付加するヘルプ文は比較に含めていない。
+通常 CLI と起動フレームの結果も一致した
+（`target/monitor-startup-reg-proof/`）。
+Rust の UART 関連テスト 34 件とモニター関連テスト 21 件が合格した。
+最終ビルドの HEX と STM32F072b Console Echo も合格した
+（`target/monitor-execmode-898d0e2-*/results.json`）。
