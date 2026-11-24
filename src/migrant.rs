@@ -9,3 +9,4 @@ pub mod type_descriptor;
 pub mod object_stream;
 pub mod blocking_collection;
 pub mod reflection_serializer;
+pub mod generated_record;

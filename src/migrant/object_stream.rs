@@ -1,6 +1,7 @@
 //! Reference-preserving object streams for Rust graph descriptors.
 //!
 //! This uses Migrant's primitive encoding with a Rust object-record format.
+use super::generated_record::{Codec, RecordInput, RecordOutput};
 use super::primitive::{Decimal, Guid, Reader, Writer};
 use super::surrogate::Surrogates;
 use std::collections::{hash_map::Entry, HashMap};
@@ -342,6 +343,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
     allow_xml_surrogates: bool,
+    generated: Option<&'a [Codec]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
     restore_prototype: Option<&'a mut Surrogates<'s>>,
@@ -375,6 +377,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             replacements: HashMap::new(),
             stamps: None,
             allow_xml_surrogates: true,
+            generated: None,
             transients: None,
             surrogates: None,
             restore_prototype: None,
@@ -438,6 +441,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     pub(super) fn allow_xml_surrogates(mut self, allow: bool) -> Self {
         self.allow_xml_surrogates = allow;
+        self
+    }
+
+    pub fn with_generated_records(mut self, codecs: &'a [Codec]) -> Self {
+        self.generated = Some(codecs);
         self
     }
 
@@ -560,6 +568,10 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     if !self.allow_xml_surrogates && class == super::xml_surrogate::CLASS {
                         return Err(super::xml_surrogate::disabled());
                     }
+                    if let Some(codecs) = self.generated {
+                        let codec = find_codec(codecs, class)?;
+                        (codec.write)(&mut ValidateGeneratedFields, fields)?;
+                    }
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.validate(fields)?;
                     }
@@ -660,7 +672,18 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.write(&mut self.data)?;
                     }
-                    Self::write_values(&mut self.data, &self.ids, fields)?;
+                    if let Some(codecs) = self.generated {
+                        let codec = find_codec(codecs, class)?;
+                        (codec.write)(
+                            &mut GeneratedOutput {
+                                data: &mut self.data,
+                                ids: &self.ids,
+                            },
+                            fields,
+                        )?;
+                    } else {
+                        Self::write_values(&mut self.data, &self.ids, fields)?;
+                    }
                 }
                 Object::Array(values) => {
                     self.data.bytes(&[2])?;
@@ -799,6 +822,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
     allow_xml_surrogates: bool,
+    generated: Option<&'a [Codec]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
     after_read: Option<ObjectObserver<'s>>,
@@ -815,6 +839,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             references,
             stamps: None,
             allow_xml_surrogates: true,
+            generated: None,
             transients: None,
             surrogates: None,
             after_read: None,
@@ -848,6 +873,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
 
     pub(super) fn allow_xml_surrogates(mut self, allow: bool) -> Self {
         self.allow_xml_surrogates = allow;
+        self
+    }
+
+    pub fn with_generated_records(mut self, codecs: &'a [Codec]) -> Self {
+        self.generated = Some(codecs);
         self
     }
 
@@ -987,7 +1017,16 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     if let Some(stamp) = stamp {
                         stamp.verify(&mut self.data)?;
                     }
-                    let mut fields = self.read_values(base, limit)?;
+                    let mut fields = if let Some(codecs) = self.generated {
+                        let codec = find_codec(codecs, &class)?;
+                        (codec.read)(&mut GeneratedInput {
+                            data: &mut self.data,
+                            base,
+                            limit,
+                        })?
+                    } else {
+                        self.read_values(base, limit)?
+                    };
                     if let Some(stamp) = stamp {
                         stamp.validate(&fields)?;
                     }
@@ -1156,5 +1195,102 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
 
     pub fn finish(self) -> io::Result<()> {
         self.data.finish()
+    }
+}
+
+fn find_codec<'a>(codecs: &'a [Codec], class: &str) -> io::Result<&'a Codec> {
+    codecs
+        .iter()
+        .find(|codec| codec.class == class)
+        .ok_or_else(|| invalid("no generated codec for record"))
+}
+
+struct ValidateGeneratedFields;
+
+impl RecordOutput for ValidateGeneratedFields {
+    fn count(&mut self, _: usize) -> io::Result<()> {
+        Ok(())
+    }
+    fn integer(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Integer(_)) {
+            Ok(())
+        } else {
+            Err(invalid("expected generated integer field"))
+        }
+    }
+    fn reference(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Null | Value::Ref(_)) {
+            Ok(())
+        } else {
+            Err(invalid("expected generated reference field"))
+        }
+    }
+}
+
+struct GeneratedOutput<'a, W: Write> {
+    data: &'a mut Writer<W>,
+    ids: &'a HashMap<ObjectId, usize>,
+}
+impl<W: Write> RecordOutput for GeneratedOutput<'_, W> {
+    fn count(&mut self, count: usize) -> io::Result<()> {
+        self.data.unsigned(count as u64)
+    }
+
+    fn integer(&mut self, value: &Value) -> io::Result<()> {
+        let Value::Integer(value) = value else {
+            return Err(invalid("expected generated integer field"));
+        };
+        self.data.bytes(&[1])?;
+        self.data.signed(*value)
+    }
+
+    fn reference(&mut self, value: &Value) -> io::Result<()> {
+        match value {
+            Value::Null => self.data.bytes(&[0]),
+            Value::Ref(id) => {
+                let id = self
+                    .ids
+                    .get(id)
+                    .ok_or_else(|| invalid("unknown generated reference"))?;
+                self.data.bytes(&[3])?;
+                self.data.unsigned(*id as u64)
+            }
+            _ => Err(invalid("expected generated reference field")),
+        }
+    }
+}
+
+struct GeneratedInput<'a, R: Read> {
+    data: &'a mut Reader<R>,
+    base: usize,
+    limit: usize,
+}
+impl<R: Read> RecordInput for GeneratedInput<'_, R> {
+    fn expect_count(&mut self, count: usize) -> io::Result<()> {
+        if self.data.unsigned()? != count as u64 {
+            return Err(invalid("incorrect generated record field count"));
+        }
+        Ok(())
+    }
+
+    fn integer(&mut self) -> io::Result<Value> {
+        if self.data.byte()? != 1 {
+            return Err(invalid("expected generated integer field"));
+        }
+        Ok(Value::Integer(self.data.signed()?))
+    }
+
+    fn reference(&mut self) -> io::Result<Value> {
+        match self.data.byte()? {
+            0 => Ok(Value::Null),
+            3 => {
+                let id = self.data.unsigned()?;
+                if id >= self.limit as u64 {
+                    return Err(invalid("generated reference outside stream table"));
+                }
+                Ok(Value::Ref(ObjectId(self.base + id as usize)))
+            }
+            _ => Err(invalid("expected generated reference field")),
+        }
     }
 }

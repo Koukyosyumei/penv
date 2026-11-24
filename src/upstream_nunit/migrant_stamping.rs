@@ -1,3 +1,4 @@
+use crate::migrant::generated_record::{generated_record, Codec};
 use crate::migrant::object_stream::{
     FieldKind, Graph, Object, ObjectReader, ObjectWriter, References, TypeStamp, Value,
 };
@@ -15,7 +16,9 @@ const STAMPS: [TypeStamp<'static>; 1] = [TypeStamp {
     ],
 }];
 
-fn write_self_cycle(stamped: bool) -> (Cursor<Vec<u8>>, i64) {
+const GENERATED: &[Codec] = &[generated_record!(CLASS; number: integer, obj: reference)];
+
+fn write_self_cycle(stamped: bool, generated: bool) -> (Cursor<Vec<u8>>, i64) {
     let number = i64::from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -36,17 +39,28 @@ fn write_self_cycle(stamped: bool) -> (Cursor<Vec<u8>>, i64) {
     if stamped {
         writer = writer.with_type_stamps(&STAMPS);
     }
+    if generated {
+        writer = writer.with_generated_records(GENERATED);
+    }
     writer.write_object(root).unwrap();
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
     (stream, number)
 }
 
-fn check_config(serialize_with_stamps: bool, deserialize_with_stamps: bool) {
-    let (stream, number) = write_self_cycle(serialize_with_stamps);
+fn check_config(
+    write_generated: bool,
+    read_generated: bool,
+    serialize_with_stamps: bool,
+    deserialize_with_stamps: bool,
+) {
+    let (stream, number) = write_self_cycle(serialize_with_stamps, write_generated);
     let mut reader = ObjectReader::new(stream, References::Preserve, true);
     if deserialize_with_stamps {
         reader = reader.with_type_stamps(&STAMPS);
+    }
+    if read_generated {
+        reader = reader.with_generated_records(GENERATED);
     }
     let result = reader.read_object();
     if serialize_with_stamps == deserialize_with_stamps {
@@ -70,27 +84,27 @@ fn check_config(serialize_with_stamps: bool, deserialize_with_stamps: bool) {
 
 #[test]
 fn stamped_to_stamped() {
-    check_config(true, true);
+    check_config(false, false, true, true);
 }
 
 #[test]
 fn stamped_to_unstamped() {
-    check_config(true, false);
+    check_config(false, false, true, false);
 }
 
 #[test]
 fn unstamped_to_stamped() {
-    check_config(false, true);
+    check_config(false, false, false, true);
 }
 
 #[test]
 fn unstamped_to_unstamped() {
-    check_config(false, false);
+    check_config(false, false, false, false);
 }
 
 #[test]
 fn rejects_a_different_field_stamp_before_restoring_the_cycle() {
-    let (stream, _) = write_self_cycle(true);
+    let (stream, _) = write_self_cycle(true, false);
     let incompatible = [TypeStamp {
         fields: &[
             ("renamed", FieldKind::Integer),
@@ -104,4 +118,64 @@ fn rejects_a_different_field_stamp_before_restoring_the_cycle() {
         reader.read_object().unwrap_err().kind(),
         std::io::ErrorKind::InvalidData
     );
+}
+
+#[test]
+fn reflection_generated_stamped_to_stamped() {
+    check_config(false, true, true, true);
+}
+
+#[test]
+fn reflection_generated_stamped_to_unstamped() {
+    check_config(false, true, true, false);
+}
+
+#[test]
+fn reflection_generated_unstamped_to_stamped() {
+    check_config(false, true, false, true);
+}
+
+#[test]
+fn reflection_generated_unstamped_to_unstamped() {
+    check_config(false, true, false, false);
+}
+
+#[test]
+fn generated_reflection_stamped_to_stamped() {
+    check_config(true, false, true, true);
+}
+
+#[test]
+fn generated_reflection_stamped_to_unstamped() {
+    check_config(true, false, true, false);
+}
+
+#[test]
+fn generated_reflection_unstamped_to_stamped() {
+    check_config(true, false, false, true);
+}
+
+#[test]
+fn generated_reflection_unstamped_to_unstamped() {
+    check_config(true, false, false, false);
+}
+
+#[test]
+fn generated_generated_stamped_to_stamped() {
+    check_config(true, true, true, true);
+}
+
+#[test]
+fn generated_generated_stamped_to_unstamped() {
+    check_config(true, true, true, false);
+}
+
+#[test]
+fn generated_generated_unstamped_to_stamped() {
+    check_config(true, true, false, true);
+}
+
+#[test]
+fn generated_generated_unstamped_to_unstamped() {
+    check_config(true, true, false, false);
 }

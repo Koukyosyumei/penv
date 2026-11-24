@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,268 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,280 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,128 |
+| 移植待ち | 2,116 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 23 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 22 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -282,3 +282,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 XML 有効・型スタンプ有無の6件を追加した。反射シリアライザーで XML サロゲートの許可を設定し、既存の XML 型ラウンドトリップでも同じ設定を使った。null ケースの整数はオブジェクト参照として格納する。反射経路は12件すべて合格し、生成経路の36件が残る。
 
 - [公式 ID](nunit-evidence/targeted-migrant-blocking-xml.tsv)と[実行ログ](nunit-evidence/targeted-migrant-blocking-xml.log)
+
+## Migrant StampingTests の生成経路
+
+Rust マクロで型ごとの専用フィールドコーデックを生成し、読み出しと書き込みで独立に選択できるようにした。時刻のミリ秒値と自己参照を持つオブジェクトを使い、スタンプ設定が一致する4通りと不一致の組み合わせを含む公式16件すべてを確認した。コーデックは Rust のグラフ形式を使う。
+
+- [追加12件の公式 ID](nunit-evidence/targeted-migrant-stamping-generated.tsv)と[実行ログ](nunit-evidence/targeted-migrant-stamping-generated.log)
