@@ -444,6 +444,7 @@ enum Action {
     MonitorAlias(String, String),
     MonitorMacro(String, Macro),
     InvokeMonitorMacro(String, PathBuf),
+    InvokeMonitorAlias(String, PathBuf, PathBuf),
     MonitorEcho(String, PathBuf),
     SaveMemory(PathBuf, bool),
     ClearMemory,
@@ -634,7 +635,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorAlias(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -707,30 +708,30 @@ fn run_commands<'a>(
                 .map(|()| None),
             Action::InvokeMonitorMacro(name, root) => (|| {
                 let body = session.macros.get(name).ok_or("unknown macro")?;
-                let mut boot = Boot {
-                    platform: Some(body.script.clone()),
-                    image: Some(Asset::new("", &body.script)),
-                    started: true,
-                    ..Boot::default()
-                };
-                boot.session.machine.clone_from(&session.machine);
-                boot.session.number_mode = session.number_mode;
+                let mut boot = live_command_boot(&body.script, session);
                 let mut existing_machine = true;
                 expand_macro(body, &session.variables, &mut existing_machine, &mut boot, root)?;
-                if !boot.post_run.is_empty() || boot.runtime.iter().any(|entry| matches!(
-                    entry.action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory
-                )) {
-                    return Err("snapshot and post-run commands are unavailable in a deferred macro".into());
-                }
-                session.number_mode = boot.session.number_mode;
-                if boot.runtime.is_empty() {
-                    return Ok(None);
-                }
                 let start = machine.elapsed_steps();
-                let replies = output.replies.as_mut().map(|reply| &mut **reply as &mut dyn Write);
-                let (stop, count) = run_commands(
-                    machine, &boot.runtime, budget, &mut *output.output, session, replies,
-                )?;
+                let (stop, count) = run_deferred_commands(machine, boot, budget, &mut output, session)?;
+                retired += count;
+                budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
+                Ok((stop != Stop::ScriptComplete).then_some(stop))
+            })(),
+            Action::InvokeMonitorAlias(text, canonical, root) => (|| {
+                let mut state = ScriptState {
+                    boot: live_command_boot(&command.source, session),
+                    machine: true,
+                    variables: session.variables.clone(),
+                    macros: session.macros.clone(),
+                    aliases: session.aliases.clone(),
+                    ..ScriptState::default()
+                };
+                load_text(&command.source, canonical.clone(), root, &mut state, text)?;
+                let start = machine.elapsed_steps();
+                let (stop, count) = run_deferred_commands(machine, state.boot, budget, &mut output, session)?;
+                session.variables = state.variables;
+                session.macros = state.macros;
+                session.aliases = state.aliases;
                 retired += count;
                 budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
                 Ok((stop != Stop::ScriptComplete).then_some(stop))
@@ -1327,6 +1328,34 @@ fn run_commands<'a>(
     Ok((Stop::ScriptComplete, retired))
 }
 
+fn live_command_boot(path: &Path, session: &Session) -> Boot {
+    let mut boot = Boot {
+        platform: Some(path.to_owned()),
+        image: Some(Asset::new("", path)),
+        started: true,
+        ..Boot::default()
+    };
+    boot.session.machine.clone_from(&session.machine);
+    boot.session.number_mode = session.number_mode;
+    boot
+}
+
+fn run_deferred_commands(
+    machine: &mut Machine, boot: Boot, budget: u64, output: &mut ScriptOutput<'_>, session: &mut Session,
+) -> Result<(Stop, u64), String> {
+    if !boot.post_run.is_empty() || boot.runtime.iter().any(|entry| matches!(
+        entry.action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory
+    )) {
+        return Err("snapshot and post-run commands are unavailable in a deferred invocation".into());
+    }
+    session.number_mode = boot.session.number_mode;
+    if boot.runtime.is_empty() {
+        return Ok((Stop::ScriptComplete, 0));
+    }
+    let replies = output.replies.as_mut().map(|reply| &mut **reply as &mut dyn Write);
+    run_commands(machine, &boot.runtime, budget, &mut *output.output, session, replies)
+}
+
 fn write_last_log(count: usize, output: &mut impl Write) -> Result<(), String> {
     for entry in crate::monitor_log::tail(count) {
         writeln!(output, "{entry}").map_err(|error| error.to_string())?;
@@ -1383,14 +1412,7 @@ pub fn serve(
             }.map_err(|error| error.to_string())?;
             continue;
         }
-        let mut boot = Boot {
-            platform: Some(path.into()),
-            image: Some(Asset::new("", path)),
-            started: true,
-            ..Boot::default()
-        };
-        boot.session.machine.clone_from(&session.machine);
-        boot.session.number_mode = session.number_mode;
+        let mut boot = live_command_boot(path, &session);
         let mut existing_machine = true;
         let mut included_state = None;
         let parsed = command_words(text).and_then(|words| {
@@ -2206,7 +2228,7 @@ fn is_console_action(action: &Action) -> bool {
 
 fn is_monitor_snapshot_action(action: &Action) -> bool {
     matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
-        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..))
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorAlias(..))
 }
 
 fn is_empty_machine_action(action: &Action) -> bool {
@@ -2591,6 +2613,13 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     }) else {
                         return Err(error(&failure));
                     };
+                    if has_snapshot_boundary(&state.boot) {
+                        state.boot.runtime.push(RuntimeCommand {
+                            line: line + 1, source: path.to_owned(),
+                            action: Action::InvokeMonitorAlias(text.to_owned(), canonical.clone(), root.to_owned()),
+                        });
+                        continue;
+                    }
                     let Some(command) = monitor_alias(&state.aliases, state.boot.session.machine.as_deref(), verb) else {
                         return Err(error(&failure));
                     };
