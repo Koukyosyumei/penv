@@ -2832,7 +2832,7 @@ fn execute(
         _ => None,
     };
     if let Some(action) = action {
-        if boot.platform.is_none()
+        if !boot.has_platform()
             || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
