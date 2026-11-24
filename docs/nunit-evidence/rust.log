@@ -1,23 +1,34 @@
-warning: fields `name`, `offset`, `width`, and `value` are never read
-   --> src/bus.rs:309:5
+   Compiling penv v0.1.0 (/home/ec2-user/Dev/penv-renode-nunit)
+warning: variant `Report` is never constructed
+   --> src/bus.rs:177:5
     |
-308 | struct RamIoRead {
-    |        --------- fields in this struct
-309 |     name: String,
-    |     ^^^^
-310 |     offset: usize,
+175 | pub enum UnhandledAccess {
+    |          --------------- variant in this enum
+176 |     DoNotReport,
+177 |     Report,
     |     ^^^^^^
-311 |     width: usize,
-    |     ^^^^^
-312 |     value: u32,
-    |     ^^^^^
     |
+    = note: `UnhandledAccess` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
-warning: fields `0` and `1` are never read
-   --> src/bus.rs:317:13
+warning: fields `name`, `offset`, `width`, and `value` are never read
+   --> src/bus.rs:310:5
     |
-317 |     Write32(u32, u32),
+309 | struct RamIoRead {
+    |        --------- fields in this struct
+310 |     name: String,
+    |     ^^^^
+311 |     offset: usize,
+    |     ^^^^^^
+312 |     width: usize,
+    |     ^^^^^
+313 |     value: u32,
+    |     ^^^^^
+
+warning: fields `0` and `1` are never read
+   --> src/bus.rs:318:13
+    |
+318 |     Write32(u32, u32),
     |     ------- ^^^  ^^^
     |     |
     |     fields in this variant
@@ -25,14 +36,14 @@ warning: fields `0` and `1` are never read
     = note: `CpuHook` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
 help: consider changing the fields to be of unit type to suppress this warning while preserving the field numbering, or remove the fields
     |
-317 -     Write32(u32, u32),
-317 +     Write32((), ()),
+318 -     Write32(u32, u32),
+318 +     Write32((), ()),
     |
 
 warning: field `0` is never read
-   --> src/bus.rs:318:9
+   --> src/bus.rs:319:9
     |
-318 |     Log(String),
+319 |     Log(String),
     |     --- ^^^^^^
     |     |
     |     field in this variant
@@ -40,80 +51,80 @@ warning: field `0` is never read
     = note: `CpuHook` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
 help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
     |
-318 -     Log(String),
-318 +     Log(()),
+319 -     Log(String),
+319 +     Log(()),
     |
 
-warning: fields `thumb_block_pc_log`, `itstate_log_hook`, and `h7_sdmmc_names` are never read
-   --> src/bus.rs:385:9
+warning: fields `mock_byte_peripherals`, `thumb_block_pc_log`, `itstate_log_hook`, and `h7_sdmmc_names` are never read
+   --> src/bus.rs:363:5
     |
-347 | pub struct Bus {
+348 | pub struct Bus {
     |            --- fields in this struct
 ...
-385 |     pub thumb_block_pc_log: bool,
+363 |     mock_byte_peripherals: Vec<(std::ops::Range<u64>, std::collections::HashMap<u32, u8>)>,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+...
+386 |     pub thumb_block_pc_log: bool,
     |         ^^^^^^^^^^^^^^^^^^
-386 |     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
+387 |     pub itstate_log_hook: Option<crate::thumb::opcode_counter::HookPhase>,
     |         ^^^^^^^^^^^^^^^^
 ...
-485 |     h7_sdmmc_names: Vec<String>,
+486 |     h7_sdmmc_names: Vec<String>,
     |     ^^^^^^^^^^^^^^
 
 warning: function `invalidate_reservations` is never used
-   --> src/bus.rs:583:4
+   --> src/bus.rs:584:4
     |
-583 | fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
+584 | fn invalidate_reservations(reservations: &mut [Option<u32>], written: std::ops::Range<u64>) {
     |    ^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: multiple methods are never used
-    --> src/bus.rs:1009:12
+    --> src/bus.rs:1017:12
      |
- 711 | impl Bus {
+ 713 | impl Bus {
      | -------- methods in this implementation
 ...
-1009 |     pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
+1017 |     pub fn write_ram_io_logs(&mut self, pc: u32, output: &mut impl Write) -> Result<(), String> {
      |            ^^^^^^^^^^^^^^^^^
 ...
-1635 |     pub(crate) fn tag_with_policy(
+1652 |     pub(crate) fn tag_with_policy(
      |                   ^^^^^^^^^^^^^^^
 ...
-2620 |     pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
+2637 |     pub fn nrf_uart_irq(&mut self, name: &str, level: Option<bool>) -> Result<bool, String> {
      |            ^^^^^^^^^^^^
 ...
-2979 |     pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
+2996 |     pub fn map_trivial_uart(&mut self, base: u32) -> Result<(), String> {
      |            ^^^^^^^^^^^^^^^^
 ...
-3654 |     pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
+3674 |     pub fn add_thumb_read_watchpoint(&mut self, address: u32, width: usize) {
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-4996 |     pub fn map_command_error_peripheral(
+5014 |     pub fn map_command_error_peripheral(
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-5346 |     pub fn guest_memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
+5364 |     pub fn guest_memory(&mut self, address: u32, width: usize) -> Result<&mut [u8], BusError> {
      |            ^^^^^^^^^^^^
 ...
-5590 |     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
+5608 |     pub fn apply_cpu_hooks(&mut self, pc: u32, output: &mut impl Write) -> Result<bool, BusError> {
      |            ^^^^^^^^^^^^^^^
 ...
-5700 |     pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
+5718 |     pub fn take_thumb_data_fault(&mut self) -> Option<u32> {
      |            ^^^^^^^^^^^^^^^^^^^^^
 ...
-5722 |     pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
+5740 |     pub fn read_cortex_m_ram_or_mock_word(&self, address: u32) -> Result<u32, BusError> {
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ...
-6469 |     pub fn write_cortex_m_exception_stack(
+6487 |     pub fn write_cortex_m_exception_stack(
      |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: associated functions `zeroed` and `doubleword` are never used
+warning: associated function `zeroed` is never used
   --> src/constant_mmio.rs:52:12
    |
 14 | impl ConstantMmio {
-   | ----------------- associated functions in this implementation
+   | ----------------- associated function in this implementation
 ...
 52 |     pub fn zeroed(base: u32, size: u32) -> Self {
    |            ^^^^^^
-...
-62 |     pub fn doubleword(base: u32, size: u32, value: u32) -> Result<Self, String> {
-   |            ^^^^^^^^^^
 
 warning: field `uart_line_start` is never read
    --> src/machine.rs:142:5
@@ -794,11 +805,33 @@ help: use `let _ = ...` to ignore the resulting value
 706 |         let _ = bus.queue_uart_input(b"A".to_vec());
     |         +++++++
 
-warning: `penv` (bin "penv" test) generated 75 warnings (1 duplicate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+warning: `penv` (bin "penv" test) generated 76 warnings (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
      Running unittests src/main.rs (target/debug/build/penv/ef98090358d6baa7/out/penv-ef98090358d6baa7)
 
-running 54 tests
+running 422 tests
+test bus::gpio_connector_tests::upstream_gpio_external_removal_disconnects_source_endpoint ... ok
+test bus::gpio_connector_tests::upstream_gpio_source_machine_disposal_preserves_external_destination ... ok
+test bus::gpio_connector_tests::upstream_gpio_source_unregister_preserves_external_destination ... ok
+test bus::memory_segment_cases::upstream_find_byte_pattern ... ok
+test bus::memory_segment_cases::upstream_overlapping_write ... ok
+test bus::memory_segment_cases::upstream_partial_write_at_beginning ... ok
+test bus::memory_segment_cases::upstream_partial_write_at_end ... ok
+test bus::memory_segment_cases::upstream_read_bytes_both_memory ... ok
+test bus::memory_segment_cases::upstream_read_bytes_both_peripherals ... ok
+test bus::memory_segment_cases::upstream_read_bytes_memory_peripheral ... ok
+test bus::memory_segment_cases::upstream_read_bytes_peripheral_memory ... ok
+test bus::memory_segment_cases::upstream_write_to_hole ... ok
+test bus::memory_segment_cases::upstream_write_to_memory_segment ... ok
+test bus::tests::renode_systembus_propagates_peripheral_command_error_identity ... ok
+test bus::unhandled_access_cases::upstream_default_unmapped_read_returns_zero ... ok
+test bus::unhandled_access_cases::upstream_preserve_exception_when_splitting_tag ... ok
+test bus::unhandled_access_cases::upstream_tag_exception_reporting_disabled ... ok
+test bus::unhandled_access_cases::upstream_tag_forces_exception ... ok
+test bus::unhandled_access_cases::upstream_tag_without_exception ... ok
+test bus::unhandled_access_cases::upstream_tagged_throw_if_not_tagged ... ok
+test bus::unhandled_access_cases::upstream_unmapped_throw_exception ... ok
+test bus::unhandled_access_cases::upstream_unmapped_throw_if_not_tagged ... ok
 test crc::tests::renode_crc_16 ... ok
 test crc::tests::renode_crc_16_ccitt ... ok
 test crc::tests::renode_crc_31_philips ... ok
@@ -818,6 +851,117 @@ test ft5336::tests::inverted_test ... ok
 test ft5336::tests::normal_test ... ok
 test ft5336::tests::rotated_inverted_test ... ok
 test ft5336::tests::rotated_test ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_connects_bounded_receiver ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_endpoints_are_empty_when_not_connected ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_propagates_connected_endpoint ... ok
+test nrf52840::gpio_line::tests::upstream_gpio_rejects_illegal_input_number ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_local_receiver ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_multi_irq ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_multiplexed_groups ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_simple ... ok
+test repl_parser::upstream_parser_tests::renode_irq_syntax_simple_multiplexed ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_attribute_and_non_identifier_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_empty_statement_and_one_attribute_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_no_attrbutes_and_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_one_attribute_in_braces_with_multiple_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_two_attributes_and_non_identifier_in_braces_and_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_entry_with_two_attributes_in_braces_with_trailing_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_multiple_registration_points_with_non_identifier_in_braces_with_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_in_braces_and_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_registration_point_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_registration_point_in_braces_with_leading_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_registration_point_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_fail_on_non_identifier_with_with_multiple_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_comma ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_missing_closing_brace ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_missing_colon ... ok
+test repl_parser::upstream_parser_tests::should_not_parse_dict_with_missing_separator ... ok
+test repl_parser::upstream_parser_tests::should_parse_bool ... ok
+test repl_parser::upstream_parser_tests::should_parse_dict_with_trailing_separator ... ok
+test repl_parser::upstream_parser_tests::should_parse_empty_dict ... ok
+test repl_parser::upstream_parser_tests::should_parse_empty_file ... ok
+test repl_parser::upstream_parser_tests::should_parse_empty_list ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_all_attributes ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_many_attributes_with_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_many_registration_points ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_many_registration_points_with_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_no_attrbutes ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_one_attribute ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_one_attribute_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_one_attribute_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_range_registration_point ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_shorthand_enum_value ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_simple_registration_info ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_string_registration_point ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_two_attributes ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_two_attributes_in_braces_and_all_semicolons ... ok
+test repl_parser::upstream_parser_tests::should_parse_entry_with_two_attributes_in_braces_and_one_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_parse_example ... ok
+test repl_parser::upstream_parser_tests::should_parse_init_attribute_with_more_lines ... ok
+test repl_parser::upstream_parser_tests::should_parse_init_attribute_with_one_line ... ok
+test repl_parser::upstream_parser_tests::should_parse_init_attribute_with_semicolon_in_quotes ... ok
+test repl_parser::upstream_parser_tests::should_parse_list_of_numbers_with_trailing_comma ... ok
+test repl_parser::upstream_parser_tests::should_parse_list_with_inline_object ... ok
+test repl_parser::upstream_parser_tests::should_parse_list_with_mixed_simple_values ... ok
+test repl_parser::upstream_parser_tests::should_parse_local_and_non_local_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_nested_lists ... ok
+test repl_parser::upstream_parser_tests::should_parse_object_value ... ok
+test repl_parser::upstream_parser_tests::should_parse_simple_dict ... ok
+test repl_parser::upstream_parser_tests::should_parse_simple_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_single_registration_point_in_braces ... ok
+test repl_parser::upstream_parser_tests::should_parse_single_registration_point_in_braces_with_semicolon ... ok
+test repl_parser::upstream_parser_tests::should_parse_string_with_escaped_backslashes ... ok
+test repl_parser::upstream_parser_tests::should_parse_two_entries ... ok
+test repl_parser::upstream_parser_tests::should_parse_two_short_entries ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_and_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry2 ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry3 ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry4 ... ok
+test repl_parser::upstream_parser_tests::should_parse_using_entry5 ... ok
+test repl_parser::upstream_parser_tests::should_parse_with_mixed_line_endings ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_beginning_line_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_correct_line_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_empty_lines_at_the_end_of_source ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_initial_indent ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_multiline_comments ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_multiline_comments_in_one_line ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_multiline_comments_within_braces ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_handle_text_on_the_first_line ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_line_comments_and_strings ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_multiline_comment_closes_before_end_of_line ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_not_process_indent_in_braces ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_brace_in_string ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_double_dedent ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_double_dedent_at_the_end_of_file ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_empty_file ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_simple_file ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_two_lines_with_no_indent ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_process_two_lines_with_no_indent_and_separation ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_single_line_multiline_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_uncorrect_line_comment ... ok
+test repl_parser::upstream_prelexer_tests::renode_prelexer_unterminated_string ... ok
+test repl_parser::upstream_using_tests::backslash_should_not_be_path_separator_on_unix ... ok
+test repl_parser::upstream_using_tests::should_fail_on_directly_recurring_usings ... ok
+test repl_parser::upstream_using_tests::should_fail_on_duplicate_using_entry ... ok
+test repl_parser::upstream_using_tests::should_fail_on_non_existing_using_file ... ok
+test repl_parser::upstream_using_tests::should_fail_on_recurring_usings ... ok
+test repl_parser::upstream_using_tests::should_handle_absolute_path_unix ... ok
+test repl_parser::upstream_using_tests::should_handle_relative_path_in_parent_directory_unix ... ok
+test repl_parser::upstream_using_tests::should_handle_relative_path_in_same_directory_unix ... ok
+test stm32_can::f4::tests::renode_stmcan_init_test ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_keep_hsecsson_enabled ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_csi ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_hse ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_hsi ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_disabling_pll1 ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_invalid_writes_to_divp1 ... ok
+test stm32h7_net_control::upstream_rcc_tests::should_prevent_plls_modification_while_running ... ok
+test stm32h7_timer::comparing_timer_cases::should_clear_when_value_set_to_zero ... ok
+test stm32h7_timer::comparing_timer_cases::should_generate_compare_event_at_compare_after_clear ... ok
+test stm32h7_timer::comparing_timer_cases::should_handle_compare_value_change_when_enabled ... ok
+test stm32h7_timer::comparing_timer_cases::should_not_generate_additional_compare_event ... ok
 test stm32h7_timer::limit_timer_cases::upstream_alarm_disabled ... ok
 test stm32h7_timer::limit_timer_cases::upstream_alarm_enabled ... ok
 test stm32h7_timer::limit_timer_cases::upstream_microsecond_precision_events ... ok
@@ -827,9 +971,219 @@ test stm32h7_timer::limit_timer_cases::upstream_should_not_exceed_limit_ascendin
 test stm32h7_timer::limit_timer_cases::upstream_should_not_exceed_limit_descending ... ok
 test stm32h7_timer::limit_timer_cases::upstream_submicrosecond_precision_events ... ok
 test stm32h7_timer::limit_timer_cases::upstream_switch_direction_at_zero ... ok
+test sync_action::tests::renode_time_source_should_execute_delayed_action_added_later_in_nearest_synced_state ... ok
+test sync_action::tests::renode_time_source_should_execute_delayed_action_in_nearest_synced_state_exactly_once ... ok
+test sync_action::tests::renode_time_source_should_execute_delayed_action_in_synced_state_exactly_once ... ok
+test sync_action::tests::renode_time_source_should_execute_non_aligned_delayed_action_in_synced_state_exactly_once ... ok
+test time_handle::tests::renode_time_handle_disabling_blocked_sink_completes_the_remaining_grant ... ok
+test time_handle::tests::renode_time_handle_disposal_disables_grant_readiness ... ok
+test time_handle::tests::renode_time_handle_reenabled_sink_waits_without_consuming_unrequested_grant ... ok
+test time_handle::tests::renode_time_handle_reports_progress_without_counting_residuum_twice ... ok
+test time_handle::tests::renode_time_handle_request_returns_immediately_after_grant_on_reactivated_source ... ok
+test time_handle::tests::renode_time_handle_request_returns_without_grant_when_disabled ... ok
+test time_handle::tests::renode_time_handle_second_wait_after_break_returns_zero ... ok
+test time_handle::tests::renode_time_handle_wait_without_request_returns_without_progress ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_break_wakes_wait_after_unblock ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_break_wakes_wait_grant_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_break_wakes_wait_request_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_continue_wakes_wait_after_unblock ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_continue_wakes_wait_grant_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_continue_wakes_wait_request_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_deactivating_source_wakes_request ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_disabling_sink_wakes_request ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_latch_defers_reenable_until_unlatch ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_reactivation_allows_a_later_grant ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_request_blocks_after_break ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_request_observes_source_activity_changes ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_request_wakes_on_grant ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_after_break_is_immediate ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_after_continue_is_immediate ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_blocks_grant_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_blocks_request_first ... ok
+test time_handle::threaded::tests::renode_threaded_time_handle_wait_on_disabled_sink_is_immediate ... ok
+test time_handle::threaded::tests::upstream_unblock_handle_after_break ... ok
+test time_handle::threaded::tests::upstream_wait_after_break_grant_first ... ok
+test time_handle::threaded::tests::upstream_wait_after_continue_grant_first ... ok
+test time_source::grants::dispatch_tests::renode_time_source_dispatches_blocking_at_end_of_grant ... ok
+test time_source::grants::dispatch_tests::renode_time_source_dispatches_two_blocking_sinks ... ok
+test time_source::grants::dispatch_tests::renode_time_source_dispatches_updates_after_blocking ... ok
+test time_source::tests::renode_time_source_should_handle_multiple_sinks ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_different_quantum ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_not_aligned_quantum ... ok
+test time_source::tests::renode_time_source_should_handle_slave_time_source_with_same_quantum ... ok
+test upstream_nunit::bit_helper::should_calculate_double_word_mask ... ok
+test upstream_nunit::bit_helper::should_calculate_quad_word_mask ... ok
+test upstream_nunit::bit_helper::should_get_double_word_masked_value ... ok
+test upstream_nunit::bit_helper::should_get_quad_word_masked_value ... ok
+test upstream_nunit::bit_helper::should_reverse_bits_by_byte ... ok
+test upstream_nunit::bit_helper::should_reverse_bits_by_word ... ok
+test upstream_nunit::bit_helper::should_reverse_double_word_bits ... ok
+test upstream_nunit::bit_helper::should_reverse_quadruple_word_bits ... ok
+test upstream_nunit::bit_helper::should_set_double_word_masked_value ... ok
+test upstream_nunit::bit_helper::should_set_quad_word_masked_value ... ok
+test upstream_nunit::circular_buffer::should_detect_overflow ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_dequeue_with_wrap ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_dequeue_without_wrap ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_peek_with_wrap ... ok
+test upstream_nunit::circular_buffer::should_enqueue_and_peek_without_wrap ... ok
+test upstream_nunit::circular_buffer::should_never_wrap_with_single_element ... ok
+test upstream_nunit::circular_buffer::should_not_change_count_when_peeked ... ok
+test upstream_nunit::circular_buffer::should_not_dequeue_when_empty ... ok
+test upstream_nunit::circular_buffer::should_not_detect_overflow ... ok
+test upstream_nunit::circular_buffer::should_not_peek_when_empty ... ok
+test upstream_nunit::circular_buffer::should_save_with_exact_size ... ok
+test upstream_nunit::circular_buffer::should_save_with_wrap ... ok
+test upstream_nunit::circular_buffer::should_save_with_wrap_array ... ok
+test upstream_nunit::circular_buffer::should_save_without_wrap ... ok
+test upstream_nunit::circular_buffer::should_save_without_wrap_array ... ok
+test upstream_nunit::dma_engine::array_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::array_to_raw_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::mapped_to_raw_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_array_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_mapped_8_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_1_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_2_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_4_8 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_1 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_2 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_4 ... ok
+test upstream_nunit::dma_engine::raw_to_raw_8_8 ... ok
 test upstream_nunit::hexadecimal_unsigned_long_0ff ... ok
 test upstream_nunit::hexadecimal_unsigned_long_1000 ... ok
 test upstream_nunit::hexadecimal_unsigned_long_12ab ... ok
+test upstream_nunit::memory::read_write_memory_bigger_than_2gb ... ok
 test upstream_nunit::misc::bytes_from_hex_string ... ok
 test upstream_nunit::parser_primitives::decimal_range ... ok
 test upstream_nunit::parser_primitives::hexadecimal_range ... ok
@@ -853,6 +1207,31 @@ test upstream_nunit::parser_primitives::rejects_spaced_fraction ... ok
 test upstream_nunit::parser_primitives::rejects_trailing_minus ... ok
 test upstream_nunit::quoted_string ... ok
 test upstream_nunit::quoted_string_with_semicolon ... ok
+test upstream_nunit::range::create_range_with_extensions ... ok
+test upstream_nunit::range::minimal_ranges_collection_add ... ok
+test upstream_nunit::range::minimal_ranges_collection_remove_outside ... ok
+test upstream_nunit::range::minimal_ranges_collection_remove_subrange ... ok
+test upstream_nunit::range::should_contain_first_address ... ok
+test upstream_nunit::range::should_contain_itself ... ok
+test upstream_nunit::range::should_contain_last_address ... ok
+test upstream_nunit::range::should_handle_creating_range_from_zero_to_ulong_max_value ... ok
+test upstream_nunit::range::should_handle_creating_range_with_invalid_end_address ... ok
+test upstream_nunit::range::should_handle_creating_range_with_invalid_size ... ok
+test upstream_nunit::range::should_intersect_range ... ok
+test upstream_nunit::range::should_intersect_ranges_with_one_common_address ... ok
+test upstream_nunit::range::should_not_contain_nearby_addresses ... ok
+test upstream_nunit::range::should_shift_range ... ok
+test upstream_nunit::range::subtract_contained ... ok
+test upstream_nunit::range::subtract_containing ... ok
+test upstream_nunit::range::subtract_itself ... ok
+test upstream_nunit::range::subtract_left ... ok
+test upstream_nunit::range::subtract_no_intersection ... ok
+test upstream_nunit::range::subtract_right ... ok
+test upstream_nunit::system_bus::find_after_many_registrations ... ok
+test upstream_nunit::system_bus::find_after_registration ... ok
+test upstream_nunit::time_interval::should_not_allow_overflow_on_addition ... ok
+test upstream_nunit::time_interval::should_not_allow_overflow_on_substraction ... ok
+test upstream_nunit::time_interval::should_return_correct_result_from_substraction ... ok
 
-test result: ok. 54 passed; 0 failed; 0 ignored; 0 measured; 569 filtered out; finished in 0.01s
+test result: ok. 422 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 0.09s
 

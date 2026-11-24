@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
-from nunit_mapping import case_parameters, load_mapping
+from nunit_mapping import case_parameters, load_mapping, runtime_host_excluded
 from penv_robot import Endpoint
 
 
@@ -229,7 +229,9 @@ def discover_nunit(root, dotnet, projects, host, output):
             # Retain the engine ID for those occurrences in this pinned discovery.
             unique_id = case_id if ids[case_id] == 1 else f"{case_id} [NUnit {engine_id}]"
             mapped = MAPPING.get((project, case_id))
-            excluded = not categories.isdisjoint(host["exclude"])
+            excluded = (not categories.isdisjoint(host["exclude"])
+                        or runtime_host_excluded(node.attrib["classname"], method,
+                                                 host["os"] == "windows"))
             runstate = node.attrib["runstate"]
             if excluded:
                 status = "excluded"

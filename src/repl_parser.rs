@@ -801,6 +801,8 @@ fn resolve_using(argument: &str, include_dir: &Path, root: &Path) -> std::io::Re
             Component::ParentDir => {
                 resolved.pop();
             }
+            #[cfg(windows)]
+            Component::RootDir => resolved.push(std::path::MAIN_SEPARATOR_STR),
             _ => resolved.push(component),
         }
     }
@@ -1244,3 +1246,7 @@ mod upstream_parser_tests;
 #[cfg(test)]
 #[path = "upstream_nunit/prelexer.rs"]
 mod upstream_prelexer_tests;
+
+#[cfg(test)]
+#[path = "upstream_nunit/repl_using.rs"]
+mod upstream_using_tests;

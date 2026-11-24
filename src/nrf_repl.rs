@@ -355,10 +355,13 @@ pub fn load(path: &Path, root: Option<&Path>, stm32f0_console: bool) -> Result<M
                 {
                     nrf52840::map_aliases(entry, &mut machine.bus, size)?;
                 } else {
-                    machine
-                        .bus
-                        .map_ram(entry.address()?, size)
-                        .map_err(|e| entry.error(&e))?;
+                    let base = entry.address()?;
+                    if entry.model == "Memory.ArrayMemory" {
+                        machine.bus.map_array_memory(base, size)
+                    } else {
+                        machine.bus.map_ram(base, size)
+                    }
+                    .map_err(|e| entry.error(&e))?;
                 }
                 ram = true;
             }

@@ -22,4 +22,22 @@ def case_parameters(method, display_name):
     if method in {"ShouldParseHexadecimalLong", "ShouldParseNumber", "ShouldNotParseNumber"}:
         if parameters.startswith('("') and parameters.endswith('")'):
             return {"number": parameters[2:-2]}
+    if method == "ShouldReadBytes":
+        flags = parameters.removeprefix("(").removesuffix(")").split(",")
+        if len(flags) == 2 and set(flags) <= {"True", "False"}:
+            first, second = flags
+            return {"isFirstMemory": first == "True", "isSecondMemory": second == "True"}
+    if method == "ShouldTransferDataFromSourceToDestination":
+        args = parameters.removeprefix("(").removesuffix(")").split(",")
+        if len(args) == 4:
+            source, destination, read_width, write_width = args
+            return {"sourcePlaceType": source, "destinationPlaceType": destination,
+                    "sourceAccessWidth": int(read_width), "destinationAccessWidth": int(write_width)}
     return {"display": parameters} if parameters else {}
+
+
+def runtime_host_excluded(fixture, method, windows):
+    # UsingTests calls Assert.Ignore at runtime on the other operating systems.
+    if fixture != "Antmicro.Renode.UnitTests.PlatformDescription.UsingTests":
+        return False
+    return (method.endswith("Windows") and not windows) or (method.endswith("Unix") and windows)

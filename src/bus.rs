@@ -236,6 +236,7 @@ pub(crate) struct Region {
     log_access: bool,
     bytes: Vec<u8>,
     flash_pages: Option<Vec<bool>>,
+    array_memory: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -647,6 +648,7 @@ impl Region {
             mapped,
             bytes,
             flash_pages: None,
+            array_memory: false,
             privileged: false,
             name: None,
             log_access: false,
@@ -833,6 +835,12 @@ impl Bus {
             return Err(format!("invalid RAM range at {base:#010x} ({size} bytes)"));
         }
         self.map_ram64(u64::from(base), size)
+    }
+
+    pub(crate) fn map_array_memory(&mut self, base: u32, size: usize) -> Result<(), String> {
+        self.map_ram(base, size)?;
+        self.regions.last_mut().unwrap().array_memory = true;
+        Ok(())
     }
 
     pub fn map_ram64(&mut self, base: u64, size: usize) -> Result<(), String> {
@@ -1042,6 +1050,14 @@ impl Bus {
     }
 
     pub fn map_ram_views(&mut self, bases: &[u32], size: usize) -> Result<(), String> {
+        self.map_memory_views(bases, size, false)
+    }
+
+    pub(crate) fn map_array_memory_views(&mut self, bases: &[u32], size: usize) -> Result<(), String> {
+        self.map_memory_views(bases, size, true)
+    }
+
+    fn map_memory_views(&mut self, bases: &[u32], size: usize, array: bool) -> Result<(), String> {
         let Some((&base, aliases)) = bases.split_first() else {
             return Err("expected at least one RAM address".into());
         };
@@ -1060,6 +1076,7 @@ impl Bus {
         }
         let mut region = Region::new(u64::from(base), size, size)?;
         region.aliases.extend_from_slice(aliases);
+        region.array_memory = array;
         self.regions.push(region);
         Ok(())
     }
@@ -3248,16 +3265,19 @@ impl Bus {
         let Some(transfer) = dma.next_transfer(requests) else {
             return Ok(());
         };
-        let value = match transfer.read_width {
-            1 => self.read::<1>(transfer.from),
-            2 => self.read::<2>(transfer.from),
-            4 => self.read::<4>(transfer.from),
-            _ => Err(BusError::Unmapped(transfer.from, transfer.read_width)),
+        use crate::dma_engine::{DmaBus, Width};
+        let scalar_width = |address, width| match width {
+            1 => Ok(Width::Byte),
+            2 => Ok(Width::Word),
+            4 => Ok(Width::DoubleWord),
+            _ => Err(BusError::Unmapped(address, width)),
         };
-        let result = value.and_then(|value| match transfer.write_width {
-            width @ (1 | 2 | 4) => self.write(transfer.to, width, value, output),
-            width => Err(BusError::Unmapped(transfer.to, width)),
-        });
+        let result = scalar_width(transfer.from, transfer.read_width)
+            .and_then(|width| self.read_unit(transfer.from.into(), width))
+            .and_then(|value| {
+                let width = scalar_width(transfer.to, transfer.write_width)?;
+                self.write_unit(transfer.to.into(), width, value, output)
+            });
         self.stm32_dma
             .as_mut()
             .unwrap()
@@ -6087,7 +6107,7 @@ impl Bus {
         }
         if let Some(value) = self.constant_mmio.iter().find_map(|peripheral| {
             peripheral
-                .offset(address, 1)
+                .offset(address, N)
                 .map(|offset| peripheral.read(offset, N))
         }) {
             return Ok(value);
@@ -7469,6 +7489,84 @@ impl Bus {
             return Ok(());
         }
         Err(ram_error)
+    }
+}
+
+impl crate::dma_engine::DmaBus for Bus {
+    type Error = BusError;
+
+    fn mapping(&self, address: u64) -> crate::dma_engine::Mapping {
+        use crate::dma_engine::Mapping;
+        if let Some((index, _)) = self.ram_location64(address, 1) {
+            return if self.regions[index].array_memory {
+                Mapping::Peripheral
+            } else {
+                Mapping::MappedMemory
+            };
+        }
+        if address <= u32::MAX.into() && self.peripheral_overlaps(address, address + 1) {
+            Mapping::Peripheral
+        } else {
+            Mapping::Unmapped
+        }
+    }
+
+    fn read_unit(&mut self, address: u64, width: crate::dma_engine::Width) -> Result<u64, BusError> {
+        use crate::dma_engine::Width::*;
+        let count = width as usize;
+        if address > u32::MAX.into() || width == QuadWord {
+            let mut unit = [0; 8];
+            let memory = self.ram64(address, count)
+                .ok_or(BusError::Unmapped(address as u32, count))?;
+            unit[..count].copy_from_slice(memory);
+            return Ok(u64::from_le_bytes(unit));
+        }
+        let address = address as u32;
+        match width {
+            Byte => self.read::<1>(address),
+            Word => self.read::<2>(address),
+            DoubleWord => self.read::<4>(address),
+            QuadWord => unreachable!(),
+        }.map(u64::from)
+    }
+
+    fn write_unit(
+        &mut self, address: u64, width: crate::dma_engine::Width, value: u64, mut output: &mut dyn Write,
+    ) -> Result<(), BusError> {
+        let count = width as usize;
+        if address > u32::MAX.into() || count == 8 {
+            let memory = self.memory64(address, count)
+                .ok_or(BusError::Unmapped(address as u32, count))?;
+            memory.copy_from_slice(&value.to_le_bytes()[..count]);
+            return Ok(());
+        }
+        self.write(address as u32, count, value as u32, &mut output)
+    }
+
+    fn read_block(&mut self, address: u64, bytes: &mut [u8]) -> Result<(), BusError> {
+        if let Some(memory) = self.ram64(address, bytes.len()) {
+            bytes.copy_from_slice(memory);
+            return Ok(());
+        }
+        let address = u32::try_from(address)
+            .map_err(|_| BusError::Unmapped(address as u32, bytes.len()))?;
+        let count = bytes.len();
+        for (byte, read) in bytes.iter_mut().zip(self.read_bytes(address, count)?) {
+            *byte = read?;
+        }
+        Ok(())
+    }
+
+    fn write_block(
+        &mut self, address: u64, bytes: &[u8], mut output: &mut dyn Write,
+    ) -> Result<(), BusError> {
+        if let Some(memory) = self.memory64(address, bytes.len()) {
+            memory.copy_from_slice(bytes);
+            return Ok(());
+        }
+        let address = u32::try_from(address)
+            .map_err(|_| BusError::Unmapped(address as u32, bytes.len()))?;
+        self.write_bytes(address, bytes, &mut output)
     }
 }
 

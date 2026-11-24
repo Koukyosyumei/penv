@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
-from nunit_mapping import PIN, case_parameters, load_mapping
+from nunit_mapping import PIN, case_parameters, load_mapping, runtime_host_excluded
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,6 +104,8 @@ def discover(project, mapping, clone, dotnet, output):
         row = mapping.get(unique_name)
         runstate = case["runstate"]
         if not exclusions.isdisjoint(categories):
+            status = "excluded"
+        elif runtime_host_excluded(case["classname"], case["methodname"], platform.system() == "Windows"):
             status = "excluded"
         elif runstate != "Runnable":
             status = {"Ignored": "ignored", "Skipped": "skipped",
@@ -194,10 +196,13 @@ def main():
         fixtures[(case["project"], case["fixture"])][case["status"]] += 1
 
     totals = Counter(case["status"] for case in cases)
+    inactive = ("excluded", "ignored", "skipped", "explicit", "not_runnable")
     summary = dict(ported=len(mapped), newly_ported=sum(case["origin"] == "new" for case in mapped),
                    passed=totals["pass"], failed=totals["fail"], not_run=totals["not_run"],
-                   discovered=len(cases), api_missing=totals["api_missing"],
-                   unmapped=totals["unmapped"], selected=len(tests))
+                   discovered=len(cases), runnable=len(cases) - sum(totals[state] for state in inactive),
+                   api_missing=totals["api_missing"], unmapped=totals["unmapped"], selected=len(tests),
+                   mapped_excluded=sum(case["status"] in inactive for case in mapped),
+                   **{state: totals[state] for state in inactive})
     report = dict(renode_sha=PIN, submodule_shas=revisions,
                   penv_sha=git(ROOT, "rev-parse", "HEAD"), discovery=discovery_runs, summary=summary,
                   rust=dict(command=command, exit_code=status, log=log.name, binary_sha256=binary_sha),
@@ -215,7 +220,7 @@ def main():
         writer.writerow(("project", "fixture", "discovered", *states, "missing_api"))
         for (project, fixture), counts in sorted(fixtures.items()):
             writer.writerow((project, fixture, sum(counts.values()), *(counts[state] for state in states),
-                             notes.get(fixture, "") if counts["api_missing"] else ""))
+                             notes.get(fixture, "-") if counts["api_missing"] else "-"))
 
     print(json.dumps(summary), out)
     return int(status != 0 or totals["pass"] != len(tests))

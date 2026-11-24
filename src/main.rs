@@ -12,6 +12,7 @@ mod crc;
 mod cpu_python_hook;
 mod csr;
 mod designware_usb;
+pub mod dma_engine;
 mod dwt;
 mod ethernet;
 mod ethernet_switch;

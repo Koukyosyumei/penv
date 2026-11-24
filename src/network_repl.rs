@@ -579,10 +579,11 @@ fn build_machine_with_timing(
                 } else {
                     entry.address()?
                 };
-                machine
-                    .bus
-                    .map_ram(address, size as usize)
-                    .map_err(|e| entry.error(&e))?;
+                if entry.model == "Memory.ArrayMemory" {
+                    machine.bus.map_array_memory(address, size as usize)
+                } else {
+                    machine.bus.map_ram(address, size as usize)
+                }.map_err(|e| entry.error(&e))?;
                 for (line, command) in commands {
                     let error = |detail: &str| format!("{line}: {}: {detail}", entry.name);
                     let (offset, width, value) =
