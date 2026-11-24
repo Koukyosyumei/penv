@@ -102,7 +102,8 @@ const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
 const SESSION_SNAPSHOT_V3: &[u8; 9] = b"PENVSESS\x03";
 const SESSION_SNAPSHOT_V4: &[u8; 9] = b"PENVSESS\x04";
 const SESSION_SNAPSHOT_V5: &[u8; 9] = b"PENVSESS\x05";
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x06";
+const SESSION_SNAPSHOT_V6: &[u8; 9] = b"PENVSESS\x06";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x07";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -128,6 +129,7 @@ fn write_snapshot(
 
 struct SnapshotMetadata {
     selected: String,
+    user_state: String,
     machine_cleared: bool,
     quantum: Option<u64>,
     cpu_mips: Option<u32>,
@@ -139,6 +141,8 @@ struct SnapshotMetadata {
 fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
     let header = input.fill_buf().map_err(|e| e.to_string())?;
     let version = if header.starts_with(SESSION_SNAPSHOT) {
+        7
+    } else if header.starts_with(SESSION_SNAPSHOT_V6) {
         6
     } else if header.starts_with(SESSION_SNAPSHOT_V5) {
         5
@@ -203,6 +207,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
     } else {
         false
     };
+    let user_state = if version >= 7 { read_string(&mut data)? } else { String::new() };
     let mut macros = HashMap::new();
     if version >= 4 {
         let count = read_size(&mut data)?;
@@ -239,7 +244,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
             return Err("invalid monitor variable snapshot".into());
         }
     }
-    Ok(Some(SnapshotMetadata { selected, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
+    Ok(Some(SnapshotMetadata { selected, user_state, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
 }
 
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
@@ -276,9 +281,13 @@ impl Session {
             data.extend_from_slice(text.as_bytes());
             Ok(())
         }
+        let has_user_state = !machine.bus.monitor_user_state.is_empty();
         encode(&mut data, self.machine.as_deref().unwrap_or_default())?;
-        if self.machine_cleared {
-            data.push(1);
+        if has_user_state || self.machine_cleared {
+            data.push(u8::from(self.machine_cleared));
+        }
+        if has_user_state {
+            encode(&mut data, &machine.bus.monitor_user_state)?;
         }
         fn encode_size(data: &mut Vec<u8>, value: usize) -> Result<(), String> {
             if data.len() > MAX_MONITOR_PAYLOAD - 4 {
@@ -288,7 +297,7 @@ impl Session {
             data.extend_from_slice(&value.to_le_bytes());
             Ok(())
         }
-        if self.machine_cleared || !self.macros.is_empty() || !self.aliases.is_empty() {
+        if has_user_state || self.machine_cleared || !self.macros.is_empty() || !self.aliases.is_empty() {
             let mut macros: Vec<_> = self.macros.iter().collect();
             macros.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, macros.len())?;
@@ -302,7 +311,7 @@ impl Session {
                 }
             }
         }
-        if self.machine_cleared || !self.aliases.is_empty() {
+        if has_user_state || self.machine_cleared || !self.aliases.is_empty() {
             let mut aliases: Vec<_> = self.aliases.iter().collect();
             aliases.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, aliases.len())?;
@@ -316,8 +325,10 @@ impl Session {
             encode(&mut data, value)?;
         }
         write_snapshot(path, |file| {
-            let version = if self.machine_cleared {
+            let version = if has_user_state {
                 SESSION_SNAPSHOT
+            } else if self.machine_cleared {
+                SESSION_SNAPSHOT_V6
             } else if !self.aliases.is_empty() {
                 SESSION_SNAPSHOT_V5
             } else if !self.macros.is_empty() {
@@ -338,7 +349,7 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            let Some(SnapshotMetadata { selected, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
+            let Some(SnapshotMetadata { selected, user_state, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
                 read_snapshot_metadata(&mut input)?
             else {
                 return machine.read_boot_snapshot(&mut input);
@@ -364,6 +375,7 @@ impl Session {
             if let Some(quantum) = quantum {
                 machine.monitor_quantum = quantum;
             }
+            machine.bus.monitor_user_state = user_state;
             self.variables = variables;
             self.machine_cleared = machine_cleared;
             self.macros = macros;
@@ -4951,6 +4963,7 @@ greet "hello world"
         let mut source = Machine::without_default_ram();
         source.cpu_less = true;
         source.bus.map_trivial_uart(0x2340, "uart1").unwrap();
+        source.bus.monitor_user_state = "saved state".into();
         source.run(9, &mut io::sink()).unwrap();
         let session = Session {
             machine: Some("clock board".into()),
@@ -4970,6 +4983,7 @@ greet "hello world"
         restored.bus.map_trivial_uart(0x2340, "uart1").unwrap();
         run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
         assert_eq!(restored.elapsed_steps(), 9);
+        assert_eq!(restored.bus.monitor_user_state, "saved state");
         assert_eq!(boot.session.selected_machine(), None);
         assert_eq!(boot.session.machine.as_deref(), Some("clock board"));
         assert_eq!(resolve(&boot.session.variables, "$marker").unwrap(), "42");

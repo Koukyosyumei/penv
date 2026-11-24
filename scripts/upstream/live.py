@@ -389,7 +389,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         return value
                     return self.operation(command, assertion=True)
-                if (re.fullmatch(r"(?:(?:emulation|machine)\s+GetTimeSourceInfo|emulation\s+(?:IsStarted|SingleStepBlocking))", command)
+                if (re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|IsStarted|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
                         or re.fullmatch(r"[\w.]+\s+(?:PC|MSTATUS|MEPC|MCAUSE|MTVAL|ExecutionMode)", command)):
                     return self.operation(command, assertion=True)
