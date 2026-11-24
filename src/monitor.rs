@@ -495,12 +495,12 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
 
 pub fn run(
     machine: &mut Machine,
-    _script: &Path,
+    session: &mut Session,
     commands: &[RuntimeCommand],
     budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    run_commands(machine, commands, budget, output, None)
+    run_commands(machine, commands, budget, output, session, false)
 }
 
 fn run_commands(
@@ -508,7 +508,8 @@ fn run_commands(
     commands: &[RuntimeCommand],
     mut budget: u64,
     output: &mut impl Write,
-    mut session: Option<&mut Session>,
+    session: &mut Session,
+    save_session: bool,
 ) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
         return machine.run(budget, output);
@@ -546,18 +547,18 @@ fn run_commands(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
-            Action::SaveMemory(path) => match session.as_deref() {
-                Some(session) => session.save(machine, path),
-                None => write_snapshot(path, |file| machine.write_boot_snapshot(file)),
+            Action::SaveMemory(path) => {
+                if save_session {
+                    session.save(machine, path)
+                } else {
+                    write_snapshot(path, |file| machine.write_boot_snapshot(file))
+                }
             }.map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
                 cleared = true;
                 None
             }),
-            Action::LoadMemory(path) => match session.as_deref_mut() {
-                Some(session) => session.load(machine, path),
-                None => machine.load_memory_snapshot(path),
-            }.map(|()| {
+            Action::LoadMemory(path) => session.load(machine, path).map(|()| {
                 cleared = false;
                 None
             }),
@@ -1194,7 +1195,7 @@ pub fn serve(
                 }
             }
             (Ok(()), commands) if included_variables.is_some() || commands.len() == 1 => {
-                match run_commands(machine, commands, u64::MAX, &mut bytes, Some(&mut session)) {
+                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true) {
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
                         if let Some(variables) = included_variables.take() {
@@ -3743,7 +3744,7 @@ mod tests {
                 .unwrap();
             for _ in 0..2 {
                 assert_eq!(
-                    run(&mut machine, script, &boot.runtime, 0, &mut output).unwrap(),
+                    run(&mut machine, &mut Session::default(), &boot.runtime, 0, &mut output).unwrap(),
                     (Stop::ScriptComplete, 0)
                 );
                 assert_eq!(machine.bus.read::<4>(GPIO + 0x10).unwrap() & 1, 0);
@@ -3807,7 +3808,7 @@ mod tests {
             1,
         )
         .unwrap();
-        run(&mut machine, script, &boot.runtime, 0, &mut io::sink()).unwrap();
+        run(&mut machine, &mut Session::default(), &boot.runtime, 0, &mut io::sink()).unwrap();
         assert_eq!(machine.bus.read::<4>(ICSR).unwrap(), 1 << 31);
         assert!(machine.bus.pend_nvic_exception("other", 2).is_err());
         assert!(machine.bus.pend_nvic_exception("nvic", 4).is_err());

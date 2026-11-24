@@ -2209,7 +2209,7 @@ fn run() -> Result<ExitCode, String> {
         if !runtime.is_empty() {
             let (stop, _) = monitor::run(
                 &mut machine,
-                script.as_deref().ok_or("missing monitor script")?,
+                &mut monitor_session,
                 &runtime,
                 max_steps.unwrap_or(10_000_000),
                 &mut io::stderr().lock(),
@@ -2332,8 +2332,8 @@ fn run() -> Result<ExitCode, String> {
         } else {
             machine.run_radio_pair(&mut peer, limit, &mut output)
         }
-    } else if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
-        monitor::run(&mut machine, script, &runtime, limit, &mut output)
+    } else if script.is_some() && !runtime.is_empty() {
+        monitor::run(&mut machine, &mut monitor_session, &runtime, limit, &mut output)
     } else {
         run_machine(
             &mut machine,

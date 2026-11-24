@@ -966,12 +966,6 @@ impl Machine {
         Ok(())
     }
 
-    pub fn load_memory_snapshot(&mut self, path: &Path) -> Result<(), String> {
-        self.check_memory_snapshot()?;
-        let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.read_boot_snapshot(&mut file).map_err(|e| format!("{}: {e}", path.display()))
-    }
-
     pub(crate) fn read_boot_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
         self.check_memory_snapshot()?;
         let mut load = || -> std::io::Result<_> {
