@@ -300,7 +300,7 @@ fn registration_points(
     Ok(points)
 }
 
-fn declaration_separator(line: &str) -> Option<usize> {
+pub(crate) fn declaration_separator(line: &str) -> Option<usize> {
     let mut depth = 0;
     for (index, delimiter) in unquoted_delimiters(line, &['{', '}', ';']) {
         match delimiter {

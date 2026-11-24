@@ -296,14 +296,21 @@ fn parse(
     let mut registration_depth: i32 = 0;
     let mut property_block = false;
     let mut lines = content.lines().enumerate();
-    while let Some((index, raw)) = lines.next() {
+    let mut remainder = None;
+    while let Some((index, raw)) = remainder.take().or_else(|| lines.next()) {
         if multiline_script {
             if raw.contains("'''") {
                 multiline_script = false;
             }
             continue;
         }
-        let line = without_comment(raw);
+        let mut line = without_comment(raw);
+        if !property_block && registration_depth == 0 && !line.starts_with(char::is_whitespace)
+            && let Some(separator) = crate::repl_parser::declaration_separator(line)
+        {
+            remainder = Some((index, line[separator + 1..].trim_start()));
+            line = &line[..separator];
+        }
         let text = line.trim();
         let lineno = index + 1;
         let error = |detail: &str| format!("{}:{lineno}: {detail}", path.display());
@@ -3642,6 +3649,27 @@ fn keys_in<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_multiple_inline_declarations_on_one_line() {
+        let directory = std::env::temp_dir().join(format!("penv-inline-declarations-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("platform.repl");
+        fs::write(&path, concat!(
+            "first: Memory.MappedMemory @ sysbus 0x1000 { size: 0x100; }; ",
+            "second: Memory.MappedMemory @ sysbus 0x2000 { size: 0x200 }\n",
+        )).unwrap();
+
+        let mut entries = Vec::new();
+        let result = parse(&path, &directory, &mut HashSet::new(), &mut entries);
+        fs::remove_dir_all(directory).unwrap();
+        result.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "first");
+        assert_eq!(entries[0].body, [(1, "size: 0x100".into())]);
+        assert_eq!(entries[1].name, "second");
+        assert_eq!(entries[1].body, [(1, "size: 0x200".into())]);
+    }
 
     #[test]
     fn loads_litex_phy_and_clock_controller_from_repl() {
