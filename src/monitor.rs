@@ -111,6 +111,9 @@ fn write_snapshot(
     path: &Path,
     write: impl FnOnce(&mut fs::File) -> Result<(), String>,
 ) -> Result<(), String> {
+    if let Some(error) = inspect_snapshot_destination(path) {
+        return Err(error);
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let temporary = path.with_file_name(format!(
@@ -2327,12 +2330,16 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
-    if let Ok(["Load", value]) = command_words(command.trim()).as_deref() {
+    if let Ok([verb @ ("Load" | "Save"), value]) = command_words(command.trim()).as_deref() {
         let mut pending = script_state()?;
         if load_text(&source, source.clone(), root, &mut pending, &body).is_ok()
             && pending.boot.runtime.is_empty()
             && let Ok(path) = snapshot_path(value, source.parent().unwrap_or(Path::new(".")), &pending.variables)
-            && let Some(error) = inspect_snapshot_input(&path)
+            && let Some(error) = if *verb == "Load" {
+                inspect_snapshot_input(&path)
+            } else {
+                inspect_snapshot_destination(&path)
+            }
         {
             return Ok(StartupInput::Reply("REJECTED", error));
         }
@@ -2896,6 +2903,15 @@ const SNAPSHOT_PARAMETERS: &str = "Parameters did not match the signature: expec
 
 fn invalid_command_parameters(error: &str) -> bool {
     matches!(error, LOG_PARAMETERS | LOG_LEVEL_PARAMETERS | SNAPSHOT_PARAMETERS)
+}
+
+fn inspect_snapshot_destination(path: &Path) -> Option<String> {
+    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let missing = match fs::metadata(parent) {
+        Ok(metadata) => !metadata.is_dir(),
+        Err(error) => matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory),
+    };
+    missing.then(|| format!("Could not find a part of the path '{}'.", path.display()))
 }
 
 fn inspect_snapshot_input(path: &Path) -> Option<String> {
@@ -5199,6 +5215,8 @@ greet "hello world"
         assert_eq!(inspect(machine, "logLevel 4").0, "REJECTED");
         let missing = format!("@/tmp/penv-missing-snapshot-{}.save", std::process::id());
         assert_eq!(inspect(machine, &format!("Load {missing}")).0, "REJECTED");
+        let no_directory = format!("@/tmp/penv-missing-snapshot-directory-{}/state.save", std::process::id());
+        assert_eq!(inspect(machine, &format!("Save {no_directory}")).0, "REJECTED");
         let pending = format!("{machine}Save {missing}\n");
         assert_eq!(inspect(&pending, &format!("Load {missing}")).0, "DEFER");
         assert_eq!(inspect(machine, "logLevel 2").0, "DEFER");
