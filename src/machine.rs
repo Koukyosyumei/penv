@@ -928,8 +928,11 @@ impl Machine {
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
         self.check_memory_snapshot()?;
         (|| -> std::io::Result<()> {
-            output.write_all(b"PENVBOOT\x01")?;
+            output.write_all(b"PENVBOOT\x02")?;
             output.write_all(&self.raw_load_address().to_le_bytes())?;
+            for value in self.primary.registers[..15].iter().copied().chain([self.primary.pc]) {
+                output.write_all(&value.to_le_bytes())?;
+            }
             self.bus.save_memory(output)
         })().map_err(|e| e.to_string())
     }
@@ -948,34 +951,53 @@ impl Machine {
 
     pub(crate) fn read_boot_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
         self.check_memory_snapshot()?;
-        let mut load = || -> std::io::Result<u32> {
+        let mut load = || -> std::io::Result<_> {
+            fn read_word(input: &mut impl Read) -> std::io::Result<u32> {
+                let mut bytes = [0; 4];
+                input.read_exact(&mut bytes)?;
+                Ok(u32::from_le_bytes(bytes))
+            }
             let mut header = [0; 9];
             input.read_exact(&mut header)?;
-            if &header != b"PENVBOOT\x01" {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "unknown snapshot format",
-                ));
-            }
-            let mut address = [0; 4];
-            input.read_exact(&mut address)?;
-            let address = u32::from_le_bytes(address);
+            let has_registers = match &header {
+                b"PENVBOOT\x01" => false,
+                b"PENVBOOT\x02" => true,
+                _ => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData, "unknown snapshot format",
+                )),
+            };
+            let address = read_word(input)?;
             if address & 0x7f != 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "invalid snapshot vector table address",
                 ));
             }
+            let mut registers = [0; 16];
+            if has_registers {
+                for value in &mut registers {
+                    *value = read_word(input)?;
+                }
+            }
             self.bus.restore_memory(input)?;
-            Ok(address)
+            Ok((address, has_registers.then_some(registers)))
         };
-        let address = load().map_err(|e| e.to_string())?;
-        self.primary
-            .thumb
-            .as_mut()
-            .unwrap()
-            .set_vector_base(address);
-        self.primary.reset_cortex_m(&mut self.bus)
+        let (address, registers) = load().map_err(|e| e.to_string())?;
+        let thumb = self.primary.thumb.as_mut().unwrap();
+        thumb.set_vector_base(address);
+        let Some(registers) = registers else {
+            return self.primary.reset_cortex_m(&mut self.bus);
+        };
+        thumb.reset_state();
+        if let Some(nvic) = self.bus.nvic.as_mut() {
+            nvic.set_vector_base(address);
+            nvic.lockup = false;
+            nvic.set_active_exceptions(0);
+        }
+        self.primary.registers.fill(0);
+        self.primary.registers[..15].copy_from_slice(&registers[..15]);
+        self.primary.pc = registers[15];
+        Ok(())
     }
 
     pub fn schedule_reset(&mut self, step: u64) -> Result<(), String> {
