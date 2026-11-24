@@ -20,7 +20,7 @@ use crate::{
 
 #[derive(Default)]
 pub struct Boot {
-    pub binaries: Vec<(Asset, u32)>,
+    pub binaries: Vec<(Asset, u64)>,
     pub network: Network,
     pub video_analyzers: Vec<String>,
     pub pcm_inputs: Vec<(String, Asset)>,
@@ -3638,7 +3638,7 @@ fn execute(
             let args = monitor_string(resolve(args)?).ok_or("expected quoted FDT boot arguments")?;
             let append = append.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?.unwrap_or(true);
             asset.fdt_bootargs = Some((args, append));
-            boot.binaries.push((asset, crate::parse_address(resolve(address)?)?));
+            boot.binaries.push((asset, crate::parse_address64(resolve(address)?)?));
         }
         ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.has_platform() => {
             let file = resolve(value)?
@@ -3646,7 +3646,7 @@ fn execute(
                 .ok_or("expected @firmware-path")?;
             boot.binaries.push((
                 Asset::new(file, script),
-                crate::parse_address(resolve(address)?)?,
+                crate::parse_address64(resolve(address)?)?,
             ));
         }
         [device, "LoadPCM" | "Output", value] if boot.has_platform() => {

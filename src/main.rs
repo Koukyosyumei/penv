@@ -1507,7 +1507,7 @@ fn run() -> Result<ExitCode, String> {
                     .boot
                     .binaries
                     .into_iter()
-                    .map(|(image, address)| (monitor::Asset::new(&image, &boot.source), address))
+                    .map(|(image, address)| (monitor::Asset::new(&image, &boot.source), u64::from(address)))
                     .collect();
                 common.boot_pcs = boot.boot.boot_pcs;
                 common.mtvec = boot.boot.mtvec;
@@ -1563,7 +1563,7 @@ fn run() -> Result<ExitCode, String> {
         }
         for (value, address) in boot.binaries {
             let path = value.input_path(root, asset_dir.as_deref())?;
-            binaries.push((path, u64::from(address), value.fdt_bootargs));
+            binaries.push((path, address, value.fdt_bootargs));
         }
         sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
