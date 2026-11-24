@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,350 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,353 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 45 |
+| 移植待ち | 42 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 9 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 8 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -514,3 +514,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 アセンブリバージョン変更の4件を移植した。Rust のフレームに1つのアセンブリバージョンを記録し、モジュールリビジョンとは独立に変更可否を判断する。上流の `1.0` から `1.1` へ移行した際に、入れ子の整数フィールド `a.c == 1` を照合した。`TwoDomainTests` の全36件が対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-domain-assembly.tsv)・[実行ログ](nunit-evidence/targeted-migrant-domain-assembly.log)
 
 eMMC カードのコマンド・データ API を追加し、SPI モードの拒否とセクター指定による読み書きの2件を移植した。[公式IDとの対応](nunit-evidence/targeted-sd-emmc-sectors.tsv)・[実行ログ](nunit-evidence/targeted-sd-emmc-sectors.log)
+
+CMD6 のパーティション切り替え、CMD8 の `EXT_CSD` 転送、CMD0 のリセットを eMMC カード API に追加し、残り3件を移植した。ユーザーデータ領域とブート領域の内容、切り替えエラーと設定維持を照合した。`SDCardEmmcTest` の全5件が合格した。テストは上流同様にカード API を直接使用し、ホストコントローラー統合は対象外。[公式IDとの対応](nunit-evidence/targeted-sd-emmc-partitions.tsv)・[実行ログ](nunit-evidence/targeted-sd-emmc-partitions.log)

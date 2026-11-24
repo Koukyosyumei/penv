@@ -1,0 +1,8 @@
+$ cargo test --locked --bin penv upstream_nunit::sd_emmc
+running 5 tests
+test upstream_nunit::sd_emmc::should_reject_spi_mode ... ok
+test upstream_nunit::sd_emmc::should_reject_unavailable_general_purpose_partition ... ok
+test upstream_nunit::sd_emmc::should_keep_hardware_partitions_separate ... ok
+test upstream_nunit::sd_emmc::should_use_sector_addressing_for_emmc ... ok
+test upstream_nunit::sd_emmc::should_reset_partition_and_extended_csd_transfer_on_cmd0 ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3846 filtered out; finished in 0.00s

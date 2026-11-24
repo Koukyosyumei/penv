@@ -3,7 +3,6 @@ Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need KeyManager command, working-state, status and write-one-to-clear error registers. The fixture advances through the creator and owner derivation states, which require the ROM-controller digest and KMAC-256 over the configured keys and seeds.
 Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device flash passthrough and FIFO model are absent.
-Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The remaining case requires two Cortex-M cores with distinct CPU-scoped NVIC registrations at the same address; the production Cortex-M loader supports a single core and NVIC.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
