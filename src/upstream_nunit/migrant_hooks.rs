@@ -20,6 +20,48 @@ const fn stamp(
 }
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    stamp("PreSerializationMock", &[("Invoked", FieldKind::Boolean)]),
+    stamp(
+        "PreSerializationMockDerived",
+        &[
+            ("Invoked", FieldKind::Boolean),
+            ("DerivedInvoked", FieldKind::Boolean),
+        ],
+    ),
+    stamp(
+        "ImmediatePostSerializationMock",
+        &[("Invoked", FieldKind::Boolean)],
+    ),
+    stamp(
+        "ImmediatePostSerializationMockDerived",
+        &[
+            ("Invoked", FieldKind::Boolean),
+            ("DerivedInvoked", FieldKind::Boolean),
+        ],
+    ),
+    stamp("StaticImmediatePostSerializationMock", &[]),
+    stamp("LatePostSerializationMockA", &[("B", FieldKind::Reference)]),
+    stamp(
+        "PostSerializationMockB",
+        &[("PostSerialized", FieldKind::Boolean)],
+    ),
+    stamp("ClassSendingExcetpionDuringSerialization", &[]),
+    stamp(
+        "PrePostSerializationMock",
+        &[
+            ("PreExecuted", FieldKind::Boolean),
+            ("PostExecuted", FieldKind::Boolean),
+            ("SendingException", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "LatePrePostSerializationMock",
+        &[
+            ("PreExecuted", FieldKind::Boolean),
+            ("PostExecuted", FieldKind::Boolean),
+            ("SendingException", FieldKind::Reference),
+        ],
+    ),
     stamp(
         "PostDeserializationMock",
         &[("Invoked", FieldKind::Boolean)],
@@ -467,3 +509,204 @@ fn global_observers(stamped: bool) {
 }
 
 modes!(global_plain, global_stamped, global_observers);
+
+use crate::migrant::write_hooks::{WriteHook, WriteHookPhase, write_hooked};
+
+fn write_and_restore(
+    graph: &mut Graph,
+    root: ObjectId,
+    stamped: bool,
+    hooks: &[WriteHook<'_>],
+) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
+    let mut stream = Cursor::new(Vec::new());
+    write_hooked(&mut stream, graph, root, stamped.then_some(STAMPS), hooks).unwrap();
+    stream.rewind().unwrap();
+    let mut reader = ObjectReader::new(stream, References::Preserve, true);
+    if stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
+    let root = reader.read_object().unwrap();
+    (reader, root)
+}
+
+fn set_original_flag(graph: &mut Graph, object: ObjectId, index: usize) -> io::Result<()> {
+    let Some(Object::Record { fields, .. }) = graph.get_mut(object) else {
+        panic!("expected a record");
+    };
+    fields[index] = Value::Boolean(true);
+    Ok(())
+}
+
+fn phase_flags(stamped: bool, before: bool, derived: bool) {
+    let (class, phase) = match (before, derived) {
+        (true, false) => ("PreSerializationMock", WriteHookPhase::Before),
+        (true, true) => ("PreSerializationMockDerived", WriteHookPhase::Before),
+        (false, false) => ("ImmediatePostSerializationMock", WriteHookPhase::After),
+        (false, true) => (
+            "ImmediatePostSerializationMockDerived",
+            WriteHookPhase::After,
+        ),
+    };
+    let count = if derived { 2 } else { 1 };
+    let mut graph = Graph::default();
+    let root = record(&mut graph, class, vec![Value::Boolean(false); count]);
+    let hooks = [
+        WriteHook {
+            class,
+            phase,
+            apply: |graph, id| set_original_flag(graph, id, 0),
+        },
+        WriteHook {
+            class,
+            phase,
+            apply: |graph, id| set_original_flag(graph, id, 1),
+        },
+    ];
+    let (reader, copy) = write_and_restore(&mut graph, root, stamped, &hooks[..count]);
+    assert_eq!(fields(graph.get(root)), vec![Value::Boolean(true); count]);
+    assert_eq!(
+        fields(reader.graph().get(copy)),
+        vec![Value::Boolean(before); count]
+    );
+}
+
+thread_local! { static STATIC_INVOKED: Cell<bool> = const { Cell::new(false) }; }
+
+fn static_post(stamped: bool) {
+    STATIC_INVOKED.set(false);
+    let mut graph = Graph::default();
+    let class = "StaticImmediatePostSerializationMock";
+    let root = record(&mut graph, class, vec![]);
+    let hooks = [WriteHook {
+        class,
+        phase: WriteHookPhase::After,
+        apply: |_, _| {
+            STATIC_INVOKED.set(true);
+            Ok(())
+        },
+    }];
+    write_and_restore(&mut graph, root, stamped, &hooks);
+    assert!(STATIC_INVOKED.get());
+}
+
+fn child_immediate_before_late(stamped: bool) {
+    let mut graph = Graph::default();
+    let child = record(
+        &mut graph,
+        "PostSerializationMockB",
+        vec![Value::Boolean(false)],
+    );
+    let root = record(
+        &mut graph,
+        "LatePostSerializationMockA",
+        vec![Value::Ref(child)],
+    );
+    let hooks = [
+        WriteHook {
+            class: "PostSerializationMockB",
+            phase: WriteHookPhase::After,
+            apply: |graph, id| set_original_flag(graph, id, 0),
+        },
+        WriteHook {
+            class: "LatePostSerializationMockA",
+            phase: WriteHookPhase::Late,
+            apply: |graph, root| {
+                let child = id(&fields(graph.get(root))[0]);
+                if fields(graph.get(child))[0] != Value::Boolean(true) {
+                    return Err(io::Error::other(
+                        "child immediate serialization hook has not run",
+                    ));
+                }
+                Ok(())
+            },
+        },
+    ];
+    write_and_restore(&mut graph, root, stamped, &hooks);
+}
+
+fn post_even_on_error(stamped: bool, late: bool) {
+    let mut graph = Graph::default();
+    let child_class = "ClassSendingExcetpionDuringSerialization";
+    let child = record(&mut graph, child_class, vec![]);
+    let class = if late {
+        "LatePrePostSerializationMock"
+    } else {
+        "PrePostSerializationMock"
+    };
+    let root = record(
+        &mut graph,
+        class,
+        vec![
+            Value::Boolean(false),
+            Value::Boolean(false),
+            Value::Ref(child),
+        ],
+    );
+    let hooks = [
+        WriteHook {
+            class,
+            phase: WriteHookPhase::Before,
+            apply: |graph, id| set_original_flag(graph, id, 0),
+        },
+        WriteHook {
+            class,
+            phase: if late {
+                WriteHookPhase::Late
+            } else {
+                WriteHookPhase::After
+            },
+            apply: |graph, id| set_original_flag(graph, id, 1),
+        },
+        WriteHook {
+            class: child_class,
+            phase: WriteHookPhase::Before,
+            apply: |_, _| Err(io::Error::other("serialization hook failure")),
+        },
+    ];
+    let error = write_hooked(
+        Vec::new(),
+        &mut graph,
+        root,
+        stamped.then_some(STAMPS),
+        &hooks,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "serialization hook failure");
+    assert_eq!(
+        fields(graph.get(root))[..2],
+        [Value::Boolean(true), Value::Boolean(true)]
+    );
+}
+
+modes!(pre_write_plain, pre_write_stamped, |s| phase_flags(
+    s, true, false
+));
+modes!(derived_pre_write_plain, derived_pre_write_stamped, |s| {
+    phase_flags(s, true, true)
+});
+modes!(post_write_plain, post_write_stamped, |s| phase_flags(
+    s, false, false
+));
+modes!(derived_post_write_plain, derived_post_write_stamped, |s| {
+    phase_flags(s, false, true)
+});
+modes!(static_post_plain, static_post_stamped, static_post);
+modes!(
+    late_post_write_plain,
+    late_post_write_stamped,
+    child_immediate_before_late
+);
+// The upstream method uses the same serialization object and assertions.
+modes!(
+    late_post_read_named_plain,
+    late_post_read_named_stamped,
+    child_immediate_before_late
+);
+modes!(error_early_plain, error_early_stamped, |s| {
+    post_even_on_error(s, false)
+});
+modes!(
+    error_late_plain,
+    error_late_stamped,
+    |s| post_even_on_error(s, true)
+);
