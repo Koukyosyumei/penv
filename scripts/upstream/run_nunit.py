@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 
-from nunit_mapping import PIN, case_parameters, load_mapping, runtime_host_excluded
+from nunit_mapping import PIN, case_parameters, load_mapping, runtime_host_excluded, runtime_inconclusive
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +110,8 @@ def discover(project, mapping, clone, dotnet, output):
         elif runstate != "Runnable":
             status = {"Ignored": "ignored", "Skipped": "skipped",
                       "Explicit": "explicit"}.get(runstate, "not_runnable")
+        elif runtime_inconclusive(name):
+            status = "inconclusive"
         else:
             status = "not_run" if row else "unmapped"
         cases.append(dict(project=project, official_fullname=name,
@@ -196,7 +198,7 @@ def main():
         fixtures[(case["project"], case["fixture"])][case["status"]] += 1
 
     totals = Counter(case["status"] for case in cases)
-    inactive = ("excluded", "ignored", "skipped", "explicit", "not_runnable")
+    inactive = ("excluded", "ignored", "skipped", "explicit", "not_runnable", "inconclusive")
     summary = dict(ported=len(mapped), newly_ported=sum(case["origin"] == "new" for case in mapped),
                    passed=totals["pass"], failed=totals["fail"], not_run=totals["not_run"],
                    discovered=len(cases), runnable=len(cases) - sum(totals[state] for state in inactive),

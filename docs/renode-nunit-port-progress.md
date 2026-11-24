@@ -7,10 +7,11 @@
 | --- | ---: |
 | Linux 対象で Rust 移植・公式 ID 対応済み | 2,948 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 448 |
+| 移植待ち | 447 |
 | 上流 Ignore | 14 |
+| 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 15 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 14 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -403,3 +404,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 イベント配列の各要素が共有キャプチャを通じて親を参照するケースと、`List<bool>` を型引数とする閉じたジェネリックメソッドのデリゲートを各16構成で移植した。閉じたメソッドは Rust のグラフ上で型引数を含む登録名と受信側への自己参照で表現する。対象実行で32件が合格し、Migrant `SerializationTests` の公式1,504件すべてに対応が揃った。[公式IDとの対応](nunit-evidence/targeted-migrant-delegate-graphs.tsv)・[実行ログ](nunit-evidence/targeted-migrant-delegate-graphs.log)
 
 `TypeExtensionsCacheTests` の11件を移植した。CLR リフレクションの入力を Rust のメンバー記述子で明示し、キャッシュを初期化して同じ問い合わせを2回実行したときのミス数、列挙型の要素型、公開問い合わせの網羅を検証した。[公式IDとの対応](nunit-evidence/targeted-type-extensions-cache.tsv)・[実行ログ](nunit-evidence/targeted-type-extensions-cache.log)
+
+`CortexA9GICTests.ShouldSendAndReceiveIPI`（公式 NUnit ID `0-1036`）の固定上流メソッド本体は `Assert.Inconclusive()` のみ。進捗表では非実行対象に、NUnit ランナーでは `inconclusive` に分類する。[公式IDと分類根拠](nunit-evidence/upstream-cortex-a9-gic-inconclusive.tsv)

@@ -51,3 +51,8 @@ def runtime_host_excluded(fixture, method, windows):
     if fixture != "Antmicro.Renode.UnitTests.PlatformDescription.UsingTests":
         return False
     return (method.endswith("Windows") and not windows) or (method.endswith("Unix") and windows)
+
+
+def runtime_inconclusive(fullname):
+    # At PIN this method consists solely of Assert.Inconclusive().
+    return fullname == "Antmicro.Renode.PeripheralsTests.CortexA9GICTests.ShouldSendAndReceiveIPI"

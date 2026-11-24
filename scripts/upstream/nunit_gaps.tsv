@@ -4,7 +4,6 @@ Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-toleran
 Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	The monitor has no reflection-driven action binder for optional, named, array and variadic arguments on the fixture's test emulation object.
 Antmicro.Renode.MonitorTests.FeaturesTests	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.
 Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
-Antmicro.Renode.PeripheralsTests.CortexA9GICTests	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
 Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need KeyManager command, working-state, status and write-one-to-clear error registers. The fixture advances through the creator and owner derivation states, which require the ROM-controller digest and KMAC-256 over the configured keys and seeds.
 Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device flash passthrough and FIFO model are absent.
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.

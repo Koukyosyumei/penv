@@ -1,0 +1,2 @@
+official_id	nunit_id	upstream_outcome	basis
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj::Antmicro.Renode.PeripheralsTests.CortexA9GICTests.ShouldSendAndReceiveIPI	0-1036	inconclusive	Pinned method body consists solely of Assert.Inconclusive();

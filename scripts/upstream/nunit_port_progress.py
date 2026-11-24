@@ -11,7 +11,7 @@ import sys
 
 sys.dont_write_bytecode = True
 
-from nunit_mapping import load_mapping
+from nunit_mapping import load_mapping, runtime_inconclusive
 
 
 def main():
@@ -37,7 +37,9 @@ def main():
             if key in mapping:
                 status = "ported_excluded" if row["status"] == "excluded" else "ported"
                 matched.add(key)
-            elif row["status"] in {"ignored", "skipped", "excluded", "explicit", "not_runnable"}:
+            elif runtime_inconclusive(name) or row["status"] in {
+                "ignored", "skipped", "excluded", "explicit", "not_runnable", "inconclusive"
+            }:
                 status = "inactive"
             else:
                 status = "pending"
