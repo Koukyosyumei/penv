@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 911 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 923 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,485 |
+| 移植待ち | 2,473 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 48 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 47 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -73,10 +73,15 @@ PseudorandomNumberGeneratorTests の3件を移植した。対象を絞った Rus
 インスタンスごとのシードとスレッド別の状態を Rust の形式で保存する。
 [公式 ID 別の結果](nunit-evidence/targeted-clock-weak-table-random.tsv) · [対象実行ログ](nunit-evidence/targeted-clock-weak-table-random.log)
 
-今回の追加は26件。Migrant の列挙型、スタック、継承と値型の24件、
+前回の追加は26件。Migrant の列挙型、スタック、継承と値型の24件、
 SerializableMappedSegmentTests の全2件。対象を絞った Rust 実行で全件合格した。
 セグメントはバッファを Rust のグラフ形式に保存し、未割り当て状態と割り当て済み状態を復元する。
 [公式 ID 別の結果](nunit-evidence/targeted-enums-structs-segments.tsv) · [対象実行ログ](nunit-evidence/targeted-enums-structs-segments.log)
+
+今回の追加は12件。Migrant のカスタムキーと異なるルート型の6件、GUIDの4件、
+SHT21の実行対象2件を移植した。対象を絞った Rust 実行で全件合格した。
+SHT21 はコマンドパケットをモデルに直接渡し、固定シードで測定値を再現できるようにした。
+[公式 ID 別の結果](nunit-evidence/targeted-guid-collections-sht21.tsv) · [対象実行ログ](nunit-evidence/targeted-guid-collections-sht21.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。

@@ -120,6 +120,12 @@ SerializationTests の反射読み書き・型スタンプ有無の2設定へ24�
 Rust 側では入れ子の値型をフィールドパス付きの型記述子で表す。
 [公式 ID 別の結果](nunit-evidence/targeted-enums-structs-segments.tsv)
 
-残りは9 fixture・1,971ケース。生成読み書き、コレクションと CLR 型の
+SerializationTests の反射読み書き・型スタンプ有無の2設定へ10件を追加した。
+カスタムオブジェクトを使う辞書・集合の要素数、同じ設定で別のストリームに書いた
+異なるルート型、GUIDとそのバイト列から導いた値を検証した。GUIDの入力は既存の
+プリミティブ fixture と同じ生成器を固定シードで使う。
+[公式 ID 別の結果](nunit-evidence/targeted-guid-collections-sht21.tsv)
+
+残りは9 fixture・1,961ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
