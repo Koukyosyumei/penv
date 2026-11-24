@@ -1996,3 +1996,45 @@ sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSenderWithTwoInterrupts @ sysbus
     assert_eq!(output.receiver, receiver);
     assert_eq!(second.receiver, first.receiver);
 }
+
+#[test]
+fn should_fail_on_using_already_registered_peripherals_name() {
+    let mut platform = creation::CreatedPlatform::default();
+    platform.register_existing_peripheral("peripheral", 0, 1);
+    let result = creation::create_on_platform(
+        "
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockCPU",
+        Path::new("."),
+        platform,
+        &mut RecordingInit::default(),
+    );
+    let error = result.err().expect("expected duplicate declaration");
+    assert!(error.contains("VariableAlreadyDeclared:"), "{error}");
+}
+
+#[test]
+fn should_take_already_registered_peripherals_as_variables() {
+    let mut platform = creation::CreatedPlatform::default();
+    let existing = platform.register_existing_cpu("cpu", 1);
+    let platform = creation::create_on_platform(
+        "
+newCpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 2
+    OtherCpu: cpu",
+        Path::new("."),
+        platform,
+        &mut RecordingInit::default(),
+    )
+    .unwrap();
+    let new_cpu = platform.cpu("sysbus.newCpu").unwrap();
+    let existing_cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert!(std::ptr::eq(
+        platform.other_cpu(new_cpu).unwrap(),
+        existing_cpu
+    ));
+    assert_eq!(platform.cpu_id("sysbus.cpu"), Some(existing));
+    assert_eq!(platform.cpu_slot(existing), Some(1));
+    assert_eq!(
+        platform.cpu_slot(platform.cpu_id("sysbus.newCpu").unwrap()),
+        Some(2)
+    );
+}

@@ -159,10 +159,12 @@ pub(crate) enum TwoState {
 }
 
 /// Objects and sysbus registrations created from a platform description.
+#[derive(Default)]
 pub(crate) struct CreatedPlatform {
     objects: Vec<CreatedObject>,
     registered: HashMap<String, usize>,
     next_endpoint: usize,
+    sysbus: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -182,6 +184,7 @@ pub(crate) struct Endpoint {
 struct CreatedObject {
     model: Model,
     cpu: Option<Cpu>,
+    cpu_slot: Option<u32>,
     ranges: Vec<(u64, u64)>,
     enum_arguments: EnumArguments,
     scalar: Option<ScalarValue>,
@@ -339,6 +342,37 @@ impl Collections {
 
 impl CreatedPlatform {
     #[cfg(test)]
+    pub(crate) fn register_existing_cpu(&mut self, name: &str, slot: u32) -> usize {
+        let mut model = CreatedObject::new(Model::Cpu);
+        model.cpu_slot = Some(slot);
+        self.register_existing(name, model)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_existing_peripheral(&mut self, name: &str, base: u64, size: u64) {
+        let mut model = CreatedObject::new(Model::EmptyPeripheral);
+        model.ranges.push((base, size));
+        self.register_existing(name, model);
+    }
+
+    #[cfg(test)]
+    fn register_existing(&mut self, name: &str, object: CreatedObject) -> usize {
+        let id = self.objects.len();
+        assert!(
+            self.registered
+                .insert(format!("sysbus.{name}"), id)
+                .is_none()
+        );
+        self.objects.push(object);
+        id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cpu_slot(&self, id: usize) -> Option<u32> {
+        self.objects[id].cpu_slot
+    }
+
+    #[cfg(test)]
     pub(crate) fn is_combined_input(&self, id: usize) -> bool {
         self.objects[id].model == Model::CombinedInput
     }
@@ -434,15 +468,31 @@ pub(crate) fn create_with_init(
     root: &Path,
     handler: &mut impl InitHandler,
 ) -> Result<CreatedPlatform, String> {
+    create_on_platform(content, root, CreatedPlatform::default(), handler)
+}
+
+pub(crate) fn create_on_platform(
+    content: &str,
+    root: &Path,
+    mut platform: CreatedPlatform,
+    handler: &mut impl InitHandler,
+) -> Result<CreatedPlatform, String> {
     let entries = inline_entries(content, root)?;
-    let mut globals = HashMap::new();
+    let first_new_object = platform.objects.len();
+    let existing_names: Vec<_> = platform
+        .registered
+        .iter()
+        .filter_map(|(path, &id)| {
+            let name = path.strip_prefix("sysbus.")?;
+            (!name.contains('.')).then(|| (name.to_owned(), id))
+        })
+        .collect();
+    let mut globals: HashMap<_, _> = existing_names
+        .iter()
+        .map(|(name, id)| (name.as_str(), *id))
+        .collect();
     let mut locals = HashMap::new();
     let mut targets = Vec::with_capacity(entries.len());
-    let mut platform = CreatedPlatform {
-        objects: Vec::new(),
-        registered: HashMap::new(),
-        next_endpoint: 0,
-    };
     for entry in &entries {
         validate_entry_properties(&entry.body, |source, name| {
             format!("{source}: PropertyOrCtorNameUsedMoreThanOnce: {name}")
@@ -490,8 +540,11 @@ pub(crate) fn create_with_init(
         platform.objects.push(CreatedObject::new(model));
         targets.push(Some(id));
     }
-    let sysbus = platform.objects.len();
-    platform.objects.push(CreatedObject::new(Model::Sysbus));
+    let sysbus = *platform.sysbus.get_or_insert_with(|| {
+        let id = platform.objects.len();
+        platform.objects.push(CreatedObject::new(Model::Sysbus));
+        id
+    });
     globals.insert("sysbus", sysbus);
     let mut init = Vec::new();
     let mut preinit = Vec::new();
@@ -584,7 +637,11 @@ pub(crate) fn create_with_init(
                             }
                             platform.objects[id].ranges.push((base, size));
                         }
-                        Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
+                        Some(RegistrationValue::Other(value)) if number(value).is_ok() => {
+                            if platform.objects[id].model == Model::Cpu {
+                                platform.objects[id].cpu_slot = Some(number(value)?);
+                            }
+                        }
                         Some(RegistrationValue::Other(value)) if value.starts_with("new ") => {
                             let (object, _) =
                                 object_prefix(value).map_err(|error| entry.error(error))?;
@@ -695,13 +752,19 @@ pub(crate) fn create_with_init(
     for (entry, object) in entries
         .iter()
         .filter(|entry| !entry.model.is_empty())
-        .zip(&mut platform.objects)
+        .zip(&mut platform.objects[first_new_object..])
     {
         object
             .finish_constructor()
             .map_err(|error| entry.error(&error))?;
     }
     let mut ranges = Vec::new();
+    let mut previous_ids = HashSet::new();
+    for &id in platform.registered.values() {
+        if !pending.contains_key(&id) && previous_ids.insert(id) {
+            ranges.extend(platform.objects[id].ranges.iter().copied());
+        }
+    }
     for &id in pending.keys() {
         ranges.extend(
             platform.objects[id]
@@ -862,6 +925,7 @@ impl CreatedObject {
         Self {
             model,
             cpu: (model == Model::Cpu).then(Cpu::default),
+            cpu_slot: None,
             ranges: Vec::new(),
             enum_arguments: EnumArguments::default(),
             scalar: None,
