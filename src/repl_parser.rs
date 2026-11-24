@@ -225,6 +225,69 @@ impl ReplComments {
     }
 }
 
+pub(crate) fn prelex(source: &str) -> Result<Vec<String>, &'static str> {
+    let source = source.replace('\r', "");
+    let mut comments = ReplComments::default();
+    let mut lines: Vec<_> = source
+        .split('\n')
+        .map(|line| comments.line(line))
+        .collect::<Result<_, _>>()?;
+    if comments.in_block {
+        return Err("unterminated block comment");
+    }
+    let mut nonempty = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (!line.trim().is_empty()).then_some(index));
+    let Some(first) = nonempty.next() else {
+        return Ok(lines);
+    };
+    if repl_indent(&lines[first])? != 0 {
+        return Err("WrongIndent: First line with text cannot be indented.");
+    }
+
+    let indices: Vec<_> = std::iter::once(first).chain(nonempty).collect();
+    let mut indent = 0;
+    let mut braces = 0;
+    for pair in indices.windows(2) {
+        let (current, next) = (pair[0], pair[1]);
+        braces += brace_depth(&lines[current]);
+        if braces <= 0 {
+            let next_indent = repl_indent(&lines[next])?;
+            decorate_repl_line(&mut lines[current], indent, next_indent, false);
+            indent = next_indent;
+        }
+        for blank in &mut lines[current + 1..next] {
+            blank.clear();
+        }
+    }
+    let last = *indices.last().unwrap();
+    decorate_repl_line(&mut lines[last], indent, 0, true);
+    for blank in &mut lines[last + 1..] {
+        blank.clear();
+    }
+    Ok(lines)
+}
+
+fn repl_indent(line: &str) -> Result<usize, &'static str> {
+    let spaces = line.bytes().take_while(|&byte| byte == b' ').count();
+    if spaces % 4 != 0 {
+        return Err("WrongIndent: Indent length must be a multiple of four spaces.");
+    }
+    Ok(spaces / 4)
+}
+
+fn decorate_repl_line(line: &mut String, indent: usize, next: usize, last: bool) {
+    if next > indent {
+        line.extend(std::iter::repeat_n('{', next - indent));
+    } else {
+        line.extend(std::iter::repeat_n('}', indent - next));
+        if !last {
+            line.push(';');
+        }
+    }
+}
+
 fn unquoted_delimiters<'a>(
     text: &'a str,
     delimiters: &'static [char],
@@ -1144,3 +1207,7 @@ pub(crate) fn sized_sysbus_address(registration: &str, size: u32) -> Result<u32,
 #[cfg(test)]
 #[path = "upstream_nunit/repl_parser.rs"]
 mod upstream_parser_tests;
+
+#[cfg(test)]
+#[path = "upstream_nunit/prelexer.rs"]
+mod upstream_prelexer_tests;
