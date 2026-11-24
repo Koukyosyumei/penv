@@ -14,6 +14,7 @@ pub mod bma180;
 pub mod efm32_i2c;
 pub mod lpc43xx_gpio;
 pub mod cadence_ttc;
+pub mod cadence_uart;
 pub mod weak_multi_table;
 pub mod option_validation;
 mod andes_csr;

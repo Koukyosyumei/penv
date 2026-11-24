@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,055 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,061 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,341 |
+| 移植待ち | 2,335 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 38 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 37 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -160,3 +160,9 @@ LPC43xx GPIO の5件は上流と同じバス登録後に周辺機器のレジス
 
 - [GPIO の公式 ID ごとの結果](nunit-evidence/targeted-lpc43xx_gpio.tsv)と[実行ログ](nunit-evidence/targeted-lpc43xx_gpio.log)
 - [TTC の公式 ID ごとの結果](nunit-evidence/targeted-cadence_ttc.tsv)と[実行ログ](nunit-evidence/targeted-cadence_ttc.log)
+
+## Cadence UART
+
+割り込みの読み出しクリア・書き込みクリア、TX 無効時の FIFO 閾値とオーバーフロー、RX オーバーフロー設定の6件が対象実行で合格した。実装の送信は上流の既定値と同じ即時送信。遅延送信やボーレート設定はこの実装の対象外。
+
+- [公式 ID ごとの結果](nunit-evidence/targeted-cadence_uart.tsv)と[実行ログ](nunit-evidence/targeted-cadence_uart.log)

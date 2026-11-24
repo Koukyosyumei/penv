@@ -19,6 +19,7 @@ mod bma180;
 mod efm32_i2c;
 mod lpc43xx_gpio;
 mod cadence_ttc;
+mod cadence_uart;
 mod weak_multi_table;
 mod option_validation;
 mod option_parser;
