@@ -802,3 +802,12 @@ Rust のモニター 21 件とログ 8 件は合格。
 （`target/monitor-active-proof/activity.resc`）。
 未変更の HEX、未マップ読み出しのログ待機、STM32F072b Console Echo は
 `9a564d2` で合格した（`target/monitor-active-9a564d2-*/results.json`）。
+`b71cbd6` は、トップレベルのセミコロンで同一行の REPL 宣言を分ける。
+プロパティの括弧内や引用符内は宣言の境界に含めず、エラーの行番号は物理行を
+指す。CPU と RAM の宣言を同一行に書いた
+`target/monitor-repl-decl-proof/declarations.resc` を同じ入力で比較し、
+固定 Renode、penv の通常 CLI、起動フレームで RAM の読み出し値
+`0x00001234` が一致した。
+未変更の HEX は合格した。precise-pause の無通信ケースは新しい構文解析を
+通過し、STM32L071 の `Analog.STM32_ADC` 未対応へ進んだ
+（`target/monitor-repl-decl-b71cbd6-{hex,idle}/results.json`）。
