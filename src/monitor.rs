@@ -731,7 +731,7 @@ fn run_commands<'a>(
                 budget -= machine.elapsed_steps().wrapping_sub(start);
                 match status {
                     "OK" => Ok(None),
-                    "MATCH" => writeln!(output.output, "{message}")
+                    "MATCH" => writeln!(output.reply(), "{message}")
                         .map(|()| None).map_err(|error| error.to_string()),
                     _ => Err(format!("log monitor {status}: {message}")),
                 }

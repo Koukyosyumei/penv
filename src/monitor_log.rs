@@ -205,11 +205,11 @@ pub(crate) fn handle(
             pattern,
             options @ ..,
         ] => Some((|| {
-            let (start, pause) = match options {
-                [] => (false, false),
-                [start @ ("start" | "no-start"), pause @ ("pause" | "continue")] =>
-                    (*start == "start", *pause == "pause"),
-                _ => return Err("expected log wait options: start|no-start pause|continue".into()),
+            let (mode, pause) = match options {
+                [] => ("no-start", false),
+                [mode @ ("start" | "no-start" | "buffered"), pause @ ("pause" | "continue")] =>
+                    (*mode, *pause == "pause"),
+                _ => return Err("expected log wait options: start|no-start|buffered pause|continue".into()),
             };
             let absent = *operation == "AssertAbsentMonitorLog";
             let ms = steps
@@ -254,8 +254,10 @@ pub(crate) fn handle(
             let limit = steps.min(budget);
             let mut found = find(keep);
             let mut stop = Stop::Limit;
-            if found.is_none() && limit != 0 {
-                if start {
+            if found.is_none() && limit != 0 && mode == "buffered" {
+                stop = Stop::Paused;
+            } else if found.is_none() && limit != 0 {
+                if mode == "start" {
                     machine.primary.monitor_paused = false;
                 }
                 let revision = || {
@@ -334,6 +336,20 @@ mod tests {
         assert!(entries[0].ends_with("Script: unique 0001"));
         assert!(entries.last().unwrap().ends_with("Script: unique 1000"));
         assert_eq!(tail(1), entries[HISTORY_LIMIT - 1..]);
+    }
+
+    #[test]
+    fn stopped_log_wait_matches_buffered_entries_without_advancing_time() {
+        let mut machine = Machine::new(4096).unwrap();
+        attach(4).unwrap();
+        let command = "WaitForMonitorLog 1000 literal consume any 78 buffered pause";
+        record(1, "x");
+        let mut output = io::sink();
+        let observed = handle(&mut machine, command, u64::MAX, &mut output).unwrap().unwrap();
+        assert_eq!(observed, ("MATCH", "x".into()));
+        let missing = handle(&mut machine, command, u64::MAX, &mut output).unwrap().unwrap();
+        assert_eq!(missing, ("STOP", "Paused".into()));
+        assert_eq!(machine.elapsed_steps(), 0);
     }
 
     #[test]

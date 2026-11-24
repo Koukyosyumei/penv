@@ -246,7 +246,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported("log tester pause-on-match requires the Rust monitor")
         timeout = int(Decimal(self.duration(options.get("timeout", self.log_timeout))) * 1000)
         starts = self.log_bool(options.get("startEmulation", "true"))
-        if timeout and not (starts or self.started):
+        if not self.rust_monitor and timeout and not (starts or self.started):
             raise Unsupported("cannot wait for virtual time while emulation is stopped")
         keep = "keep" if self.log_bool(options.get("keep", "false")) else "consume"
         kind = "regex" if self.log_bool(options.get("treatAsRegex", "false")) else "literal"
@@ -256,7 +256,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported("unknown log level")
         flags = ""
         if self.rust_monitor:
-            flags = (" start" if starts else " no-start") + (" pause" if pause else " continue")
+            mode = "start" if starts else "no-start" if self.started else "buffered"
+            flags = f" {mode}" + (" pause" if pause else " continue")
         result = self.operation(
             f"{command} {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}{flags}")
         if timeout and starts:
