@@ -592,3 +592,62 @@ not a single line '''"#,
     assert!(error.contains("SyntaxError:"), "{error}");
     assert_eq!(error.lines().nth(1), Some("At 3:37:"));
 }
+
+#[test]
+fn should_handle_empty_numerical_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithNumericalAttrubute @ sysbus  <0, 1>
+    mockInt: empty"#, Path::new(".")).unwrap();
+    assert_eq!(
+        platform.scalar("sysbus.mockPeripheral").unwrap(),
+        &creation::ScalarValue::Integer(0)
+    );
+}
+
+#[test]
+fn should_handle_empty_string_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithStringAttribute @ sysbus  <0, 1>
+    mockString: empty"#, Path::new(".")).unwrap();
+    assert_eq!(
+        platform.scalar("sysbus.mockPeripheral").unwrap(),
+        &creation::ScalarValue::String(None)
+    );
+}
+
+#[test]
+fn should_handle_empty_range_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithRangeAttribute @ sysbus  <0, 1>
+    mockRange: empty"#, Path::new(".")).unwrap();
+    assert_eq!(
+        platform.scalar("sysbus.mockPeripheral").unwrap(),
+        &creation::ScalarValue::Range(0, 0)
+    );
+}
+
+#[test]
+fn should_handle_empty_object_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithObjectAttribute @ sysbus  <0, 1>
+    mockObject: empty"#, Path::new(".")).unwrap();
+    assert_eq!(
+        platform.scalar("sysbus.mockPeripheral").unwrap(),
+        &creation::ScalarValue::Object(None)
+    );
+}
+
+#[test]
+fn should_handle_empty_enum_value() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    EnumValue: empty"#,
+        Path::new("."),
+    )
+    .unwrap();
+    assert_eq!(
+        platform.cpu("sysbus.cpu").unwrap().enum_value,
+        creation::TwoState::One
+    );
+}

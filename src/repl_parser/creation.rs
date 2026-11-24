@@ -7,7 +7,51 @@ enum Model {
     Cpu,
     EmptyPeripheral,
     EnumPeripheral,
+    ScalarPeripheral(ScalarKind),
     External,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ScalarKind {
+    Integer,
+    String,
+    Range,
+    Object,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ScalarValue {
+    Integer(i32),
+    String(Option<String>),
+    Range(u64, u64),
+    Object(Option<usize>),
+}
+
+impl ScalarKind {
+    fn bind(
+        self,
+        name: &str,
+        value: &str,
+        resolve: impl Fn(&str) -> Option<usize>,
+    ) -> Option<ScalarValue> {
+        match (self, name, value) {
+            (Self::Integer, "mockInt", "empty") => Some(ScalarValue::Integer(0)),
+            (Self::Integer, "mockInt", value) => value.parse().ok().map(ScalarValue::Integer),
+            (Self::String, "mockString", "empty") => Some(ScalarValue::String(None)),
+            (Self::String, "mockString", value) => quoted_value(value)
+                .ok()
+                .map(|s| ScalarValue::String(Some(s))),
+            (Self::Range, "mockRange", "empty") => Some(ScalarValue::Range(0, 0)),
+            (Self::Range, "mockRange", value) => range_value(value)
+                .ok()
+                .map(|(base, size)| ScalarValue::Range(base, size)),
+            (Self::Object, "mockObject", "empty") => Some(ScalarValue::Object(None)),
+            (Self::Object, "mockObject", value) => {
+                resolve(value).map(|id| ScalarValue::Object(Some(id)))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Model {
@@ -15,6 +59,18 @@ impl Model {
         match name {
             "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithEnumAttribute" => {
                 Some(Self::EnumPeripheral)
+            }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithObjectAttribute" => {
+                Some(Self::ScalarPeripheral(ScalarKind::Object))
+            }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithRangeAttribute" => {
+                Some(Self::ScalarPeripheral(ScalarKind::Range))
+            }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithStringAttribute" => {
+                Some(Self::ScalarPeripheral(ScalarKind::String))
+            }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithNumericalAttrubute" => {
+                Some(Self::ScalarPeripheral(ScalarKind::Integer))
             }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
@@ -49,6 +105,7 @@ struct CreatedObject {
     cpu: Option<Cpu>,
     ranges: Vec<(u64, u64)>,
     enum_arguments: EnumArguments,
+    scalar: Option<ScalarValue>,
 }
 
 struct EnumArguments {
@@ -91,6 +148,13 @@ impl EnumArguments {
 }
 
 impl CreatedPlatform {
+    #[cfg(test)]
+    pub(crate) fn scalar(&self, qualified_name: &str) -> Option<&ScalarValue> {
+        self.objects[*self.registered.get(qualified_name)?]
+            .scalar
+            .as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn enum_values(&self, qualified_name: &str) -> Option<(u8, u8)> {
         let object = &self.objects[*self.registered.get(qualified_name)?];
@@ -150,6 +214,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             cpu: (model == Model::Cpu).then(Cpu::default),
             ranges: Vec::new(),
             enum_arguments: EnumArguments::default(),
+            scalar: None,
         });
         targets.push(Some(id));
     }
@@ -200,7 +265,9 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                             .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
                         let model = match platform.objects[target].model {
                             Model::Cpu => "CPU",
-                            Model::EmptyPeripheral | Model::EnumPeripheral => "peripheral",
+                            Model::EmptyPeripheral
+                            | Model::EnumPeripheral
+                            | Model::ScalarPeripheral(_) => "peripheral",
                             Model::External => "external",
                         };
                         return Err(entry.error(&format!(
@@ -233,6 +300,15 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             )?;
         }
     }
+    for (entry, object) in entries
+        .iter()
+        .filter(|entry| !entry.model.is_empty())
+        .zip(&platform.objects)
+    {
+        if matches!(object.model, Model::ScalarPeripheral(_)) && object.scalar.is_none() {
+            return Err(entry.error("NoCtor: missing required scalar constructor argument"));
+        }
+    }
     Ok(platform)
 }
 
@@ -252,6 +328,12 @@ impl CreatedPlatform {
         if self.objects[id].model == Model::EnumPeripheral {
             return self.objects[id].enum_arguments.bind(name, value, source);
         }
+        if let Model::ScalarPeripheral(kind) = self.objects[id].model {
+            self.objects[id].scalar = Some(kind.bind(name, value, resolve).ok_or_else(|| {
+                format!("{source}: NoCtor: invalid scalar constructor argument {name}")
+            })?);
+            return Ok(());
+        }
         let target = if name == "OtherCpu" && self.objects[id].model == Model::Cpu {
             Some(if value.starts_with("new ") {
                 let (object, tail) =
@@ -270,6 +352,7 @@ impl CreatedPlatform {
                     cpu: Some(Cpu::default()),
                     ranges: Vec::new(),
                     enum_arguments: EnumArguments::default(),
+                    scalar: None,
                 });
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {
@@ -309,7 +392,7 @@ impl CreatedPlatform {
             "EnumValue" => {
                 cpu.enum_value = match symbolic_value(value) {
                     Some(
-                        SymbolicValue::Reference("One" | "none")
+                        SymbolicValue::Reference("One" | "none" | "empty")
                         | SymbolicValue::Enum(Some("TwoStateEnum"), "One"),
                     ) => TwoState::One,
                     Some(
