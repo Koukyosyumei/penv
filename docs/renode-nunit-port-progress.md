@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,105 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,153 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,291 |
+| 移植待ち | 1,243 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -360,3 +360,12 @@ GUID と BigInteger の型別フィールド処理を追加した。カスタム
 null・一時オブジェクトのルートとネイティブリソースの拒否、問題のフィールドまでの参照経路、同一設定での連続シリアライズを検証した。拒否ケースでは書き込み時点で処理が終わるため、読み出し方式は公式設定として維持されるが実行には到達しない。対象54件が合格した。
 
 - [公式 ID](nunit-evidence/targeted-migrant-serialization-write-boundaries.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-write-boundaries.log)
+
+## Migrant SerializationTests の生成配列とユーザーオブジェクトのリスト
+
+自己参照、混合型、バイト列、2次元・4次元、ゼロ長次元を含む配列の66件を追加した。生成経路では配列の整数・参照フィールドに型別の処理を使い、バイト列は共通の一括処理を使う。
+
+treatCollectionsAsUserObjects=true の6つのリストメソッドを追加した。Rust のグラフ形式にバッキング配列・件数・バージョンを持つレコードとして格納し、空・入れ子・null・100,000要素のリストと循環参照を検証した。読み書きと型スタンプの8設定で48件が合格した。
+
+- [配列の公式 ID](nunit-evidence/targeted-migrant-serialization-arrays.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-arrays.log)
+- [リストの公式 ID](nunit-evidence/targeted-migrant-serialization-user-lists.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-user-lists.log)

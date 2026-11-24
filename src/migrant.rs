@@ -10,3 +10,4 @@ pub mod object_stream;
 pub mod blocking_collection;
 pub mod graph_serializer;
 pub mod generated_record;
+pub mod user_list;

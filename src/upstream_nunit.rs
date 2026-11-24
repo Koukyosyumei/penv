@@ -90,3 +90,4 @@ mod migrant_hooks;
 mod multi_tree;
 mod multi_value_dictionary;
 mod migrant_object_stream;
+mod migrant_user_lists;
