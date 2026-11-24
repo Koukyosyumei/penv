@@ -219,6 +219,7 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    RunUntil(u64),
     RunToSyncPoint,
     SetQuantum(u64),
     LogLevel(i8),
@@ -539,23 +540,17 @@ fn run_commands(
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::NrfCpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
             Action::TimeSourceInfo => {
-                let ns = machine.monitor_elapsed_ns();
-                let seconds = ns / 1_000_000_000;
-                writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}.{:09}",
-                    seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
-                    .and_then(|()| {
-                        let ns = u128::from(machine.monitor_quantum) * 10;
-                        let seconds = ns / 1_000_000_000;
-                        writeln!(output.output, "Quantum: {:02}:{:02}:{:02}.{:09}",
-                            seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
-                    }).map(|()| None).map_err(|error| error.to_string())
+                writeln!(output.output, "Elapsed Virtual Time: {}\nQuantum: {}",
+                    monitor_timestamp(machine.monitor_elapsed_ns()),
+                    monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
+                    .map(|()| None).map_err(|error| error.to_string())
             }
             Action::UartIdle(_) => Err("UART idle check requires the live monitor".into()),
             Action::SetQuantum(duration) => {
                 machine.monitor_quantum = *duration;
                 Ok(None)
             }
-            Action::RunToSyncPoint | Action::RunFor(_) | Action::CpuStep(..) => {
+            Action::RunToSyncPoint | Action::RunFor(_) | Action::RunUntil(_) | Action::CpuStep(..) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
                     _ => Ok(()),
@@ -569,6 +564,22 @@ fn run_commands(
                         Action::RunFor(duration) => duration_cycles(
                             duration, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
                         )?,
+                        Action::RunUntil(timestamp) => {
+                            let deadline = u128::from(timestamp) * 10;
+                            let elapsed = machine.monitor_elapsed_ns();
+                            if deadline < elapsed {
+                                crate::monitor_log::record(2, &format!(
+                                    "Given timestamp '{}' is from the past. Current elapsed virtual time is {}",
+                                    monitor_timestamp(deadline), monitor_timestamp(elapsed),
+                                ));
+                            }
+                            let remaining = deadline.saturating_sub(elapsed);
+                            duration_cycles(
+                                remaining.try_into().map_err(|_| "virtual timestamp exceeds the supported range")?,
+                                1_000_000_000,
+                                machine.bus.monitor_step_hz(),
+                            )?
+                        }
                         Action::RunToSyncPoint => duration_cycles(
                             machine.monitor_quantum, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
                         )?,
@@ -1072,6 +1083,12 @@ pub fn serve(
         };
         reply.map_err(|error| error.to_string())?;
     }
+}
+
+fn monitor_timestamp(ns: u128) -> String {
+    let seconds = ns / 1_000_000_000;
+    format!("{:02}:{:02}:{:02}.{:09}",
+        seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
 }
 
 pub(crate) fn duration_cycles(duration: u64, units_per_second: u64, rate: u64) -> Result<u64, String> {
@@ -2549,6 +2566,9 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
                 *state == "Set",
             ))
+        }
+        ["emulation", "RunUntil", timestamp] => {
+            Some(Action::RunUntil(duration_steps(resolve(timestamp)?)?))
         }
         ["emulation", "RunFor", duration] => {
             Some(Action::RunFor(duration_steps(resolve(duration)?)?))
