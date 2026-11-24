@@ -202,3 +202,19 @@ target/renode-venv/bin/python scripts/upstream/run.py --jobs 1 \
 再実行は元の5件すべて PASS。`target/robot-veml7700-resd/results.json` に
 SHA、コマンド、ケースID、測定を記録した。HEX と STM32F072b の7件は
 合計6 PASS、1 UNSUPPORTED で、UART アダプター変更前の結果と一致した。
+
+### CLIC と UART アダプターの変更をまとめた全件実行
+
+`495f119` の固定バイナリで304スイート、2,197件を最大10並列で実行した。
+`target/robot-clic-veml-sweep/results.json` の確定値は192 PASS、14 FAIL、
+1,716 UNSUPPORTED、133 SKIP、142 NOT_RUN。
+前回の全件測定 `45160e6` に比べて150件が UNSUPPORTED から PASS に移った。
+内訳は CLIC 署名144件、VEML7700 5件、UART の正規表現を使う
+`STM32F4_Discovery.robot::Should Not Crash On RTC Writes` 1件。
+Cortex-M TrustZone の6件は起動時に `enableTrustZone` プロパティーで
+止まり、UNSUPPORTED から NOT_RUN に移った。
+
+署名スイート以外の CLIC 8件には、TrivialUart の Robot テスター2件、
+REPL の CLIC 上書き2件、アセンブリーの再配置4件が残る。
+ケースIDとパラメーターを照合した差分は
+`target/clic-supervisor/grouped-verdict-delta.json` に保存した。
