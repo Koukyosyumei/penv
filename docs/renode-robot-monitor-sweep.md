@@ -1122,3 +1122,25 @@ Rust モニター22件とログ8件が合格。広い `monitor` フィルター�
 33件合格、2件失敗で、失敗は従来からの BusFault ステップ時のフック出力差
 （`target/monitor-log-lifecycle-all-monitor.log`、
 `target/monitor-snapshot-proof/baseline-step.log`）。
+
+### UART テスターの履歴消去と結果変換
+
+`960b96e` は `Clear Terminal Tester Report` を Rust の UART テスターへ
+渡し、完了済みのテキスト行を消去する。固定 Renode と同じ TrivialUart
+操作で、完了行 `A` は消去され、途中の `B` は改行を追加すると
+時刻 0 ms の行として受信できた。通常 CLI でも同じ操作が成功した
+（`target/monitor-clear-uart-proof/`）。バイナリモードでは
+消去後も `41 0a 42` がバッファに残ることを両方で確認した。
+この比較ではテスター作成の位置引数を penv 側の名前付き引数に変換した
+（`target/monitor-clear-uart-binary-proof/`）。
+
+`ba42394` は Rust 経路で UART テスター ID と既定期限を Python に
+重複保持せず、成功したテキスト待機の `IsFailingString` も返す。
+固定 Renode と `B` の結果オブジェクト全体が一致した。
+
+Rust の UART テストは35件合格。未変更の最終 Robot 実行では
+全256バイトのテスターケース、STM32F072b Console Echo、モニター保存・復元
+の計4件が合格。他の2,193件は未実行
+（`target/monitor-uart-results-robot/results.json`）。
+別実行の SiFive FE310 を使う UART 2件は
+`UART.SiFive_UART` で未対応（`target/monitor-clear-uart-robot/results.json`）。
