@@ -528,3 +528,15 @@ UART の既定期限とテスター選択は Rust が処理する。
 penv は ELF シンボルを使う起動コマンドの解析を通過し、次の
 `UART.SiFive_UART` のロードで未対応となった
 （`target/monitor-uart-symbol-selected/results.json`）。
+
+UART の送信先、送信後のエコー待機と既定のエコーポリシーは Rust の
+テスターが処理する。`target/monitor-tester-send-proof/` には
+同じゼファーのコンソールファームウェアで通常 RESC とライブモニターが
+`Echo working?` を受信した記録と、未変更の上流ケースを固定 Renode で
+実行した結果がある。`target/monitor-tester-echo-default-proof/` では
+エコーを返さない UART に対し、既定の待機を無効にすると送信が成功し、
+明示的に待機を指定すると両方で失敗した。
+
+`target/monitor-uart-delimiter-proof/` では CR を行末に指定し、同じ nRF
+ファームウェアの2行を固定 Renode と同じ内容で取得した。2行目の
+先頭の LF も一致した。
