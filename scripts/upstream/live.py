@@ -38,6 +38,7 @@ class LiveEndpoint(Endpoint):
         self.platform = None
         self.script = None
         self.script_urls = {}
+        self.log_level = None
         self.monitor_input = MonitorInput(self.root, self.out, self.assets)
         self.replaying = False
         self.inline = []
@@ -147,6 +148,7 @@ class LiveEndpoint(Endpoint):
             raise Unsupported("RESC inclusion requires a fresh machine or monitor")
         self.script = self.out / "include.resc"
         self.script.write_text("\n".join([*self.monitor_input.script_prefix(), *self.commands,
+                                          *([self.log_level] if self.log_level else []),
                                           f"include {at_path(candidate)}"]) + "\n")
         urls = script_asset_urls(candidate, self.root)
         urls.update(PUBLIC_ASSET.findall("\n".join(self.monitor_input.script_prefix())))
@@ -187,6 +189,11 @@ class LiveEndpoint(Endpoint):
         if expanded != command:
             self.calls[-1]["expanded_command"] = expanded
             command = expanded
+        if re.fullmatch(r'logLevel (?:-1|[0-3]|"(?:Noisy|Debug|Info|Warning|Error)")', command):
+            if not self.proc:
+                self.log_level = command
+                return ""
+            return self.operation(command)
         if command == "using sysbus":
             self.using_bus = True
             return ""
@@ -299,6 +306,7 @@ class LiveEndpoint(Endpoint):
             script = self.out / "boot.resc"
             script.write_text("\n".join([self.commands[0],
                               f"machine LoadPlatformDescription {at_path(platform)}",
+                              *([self.log_level] if self.log_level else []),
                               *self.commands[1:]]) + "\n")
             cmd.extend(["--script", str(script), "--asset-dir", str(self.assets)])
         else:
@@ -334,6 +342,8 @@ class LiveEndpoint(Endpoint):
             raise RuntimeError(f"expected penv READY, got {status}")
         self.process_command = cmd
         self.calls[-1].update(penv_ready=True, stage="emulation")
+        if self.log_level and not self.image:
+            self.operation(self.log_level)
 
     def operation(self, command, assertion=False):
         self.ensure_running()

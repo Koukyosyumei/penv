@@ -1367,6 +1367,7 @@ fn run() -> Result<ExitCode, String> {
     let mut zephyr = zephyr_boot::BootOptions::default();
     let mut cpu_registers = Vec::new();
     let mut log_function_names = false;
+    let mut monitor_log_level = None;
     if monitor_stdio && (uart_stdin || (platform_path.is_none() && script.is_none())) {
         return Err("--monitor-stdio requires a platform or script and exclusive stdin".into());
     }
@@ -1476,6 +1477,7 @@ fn run() -> Result<ExitCode, String> {
         mtvec = mtvec.or(boot.mtvec.map(u64::from));
         cpu_registers = boot.cpu_registers;
         log_function_names = boot.log_function_names;
+        monitor_log_level = boot.monitor_log_level;
         vex_irq_mask = vex_irq_mask.or(boot.mask);
         vex_supervisor_irq_mask = boot.supervisor_mask;
         hex = boot.hex;
@@ -1591,6 +1593,9 @@ fn run() -> Result<ExitCode, String> {
                 Machine::new(ram_mib.unwrap_or(16) * 1024 * 1024)?
             }
         };
+        if let Some(level) = monitor_log_level {
+            machine.bus.set_monitor_log_level(level);
+        }
         machine.report_uart_steps(uart_steps);
         if let Some(path) = &camera_image {
             machine.bus.set_nrf_camera_image(

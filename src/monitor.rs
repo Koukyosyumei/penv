@@ -40,6 +40,7 @@ pub struct Boot {
     pub runtime: Vec<RuntimeCommand>,
     pub use_virtual_elf_addresses: bool,
     pub log_function_names: bool,
+    pub monitor_log_level: Option<i8>,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -59,6 +60,7 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    LogLevel(i8),
     RunRemaining,
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
@@ -376,6 +378,10 @@ pub fn run(
                         .push((address.unwrap_or(hart.pc), hook.clone()));
                     None
                 })
+            }
+            Action::LogLevel(level) => {
+                machine.bus.set_monitor_log_level(*level);
+                Ok(None)
             }
             Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
             Action::NvicWrite(target, offset, value) => machine
@@ -1292,6 +1298,28 @@ fn execute(
         return Ok(());
     }
     let resolve = |value| resolve(variables, value);
+    if let ["logLevel", value] = words {
+        let value = resolve(value)?;
+        let level = match unquote(value) {
+            "-1" | "Debug" => -1,
+            "0" | "Info" => 0,
+            "1" | "Warning" => 1,
+            "2" | "Error" => 2,
+            "3" => 3,
+            "Noisy" if value.starts_with('"') => -2,
+            _ => return Err(format!("unsupported monitor log level {value:?}")),
+        };
+        if boot.started || !boot.runtime.is_empty() {
+            boot.runtime.push(RuntimeCommand {
+                line,
+                source: script.to_owned(),
+                action: Action::LogLevel(level),
+            });
+        } else {
+            boot.monitor_log_level = Some(level);
+        }
+        return Ok(());
+    }
     let action = match words {
         [verb @ ("Save" | "Load"), path] => {
             let path = resolve(path)?
