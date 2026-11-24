@@ -65,6 +65,12 @@ const STAMPS: &[TypeStamp<'static>] = &[
             ("Element.B", FieldKind::Reference),
         ],
     ),
+    stamp("CustomObject", &[("Field", FieldKind::Reference)]),
+    stamp(
+        "Dictionary<CustomObject,string>",
+        &[("items", FieldKind::Reference)],
+    ),
+    stamp("HashSet<CustomObject>", &[("items", FieldKind::Reference)]),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1563,3 +1569,105 @@ stamp_modes!(complex_struct_plain, complex_struct_stamped, |s| {
 stamp_modes!(struct_in_class_plain, struct_in_class_stamped, |s| {
     struct_with_string(s, "GenericBox<SimpleStruct>", &[1])
 });
+
+fn new_custom_object(graph: &mut Graph) -> Value {
+    let inner = graph.insert(record("System.Object", vec![]));
+    Value::Ref(graph.insert(record("CustomObject", vec![Value::Ref(inner)])))
+}
+
+fn custom_identity(graph: &Graph, value: &Value) -> ObjectId {
+    let id = reference(value);
+    let Some(Object::Record { class, fields }) = graph.get(id) else {
+        panic!("expected CustomObject");
+    };
+    assert_eq!(class, "CustomObject");
+    let identity = reference(&fields[0]);
+    assert_eq!(graph.get(identity), Some(&record("System.Object", vec![])));
+    identity
+}
+
+fn custom_key_dictionary(stamped: bool) {
+    let mut graph = Graph::default();
+    let entries = ["test1", "test2", "test3"].map(|text| {
+        (
+            new_custom_object(&mut graph),
+            Value::Ref(graph.insert(string(text))),
+        )
+    });
+    let class = "Dictionary<CustomObject,string>";
+    let root = dictionary(&mut graph, class, entries);
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored: std::collections::HashMap<_, _> = dictionary_entries(graph, copy, class)
+        .map(|(key, value)| (custom_identity(graph, key), string_value(graph, value)))
+        .collect();
+    assert_eq!(restored.len(), 3);
+}
+
+fn custom_item_set(stamped: bool) {
+    let mut graph = Graph::default();
+    let items = (0..3).map(|_| new_custom_object(&mut graph)).collect();
+    let class = "HashSet<CustomObject>";
+    let root = list(&mut graph, class, items);
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored: std::collections::HashSet<_> = list_values(graph, copy, class)
+        .iter()
+        .map(|value| custom_identity(graph, value))
+        .collect();
+    assert_eq!(restored.len(), 3);
+}
+
+fn two_different_serializations(stamped: bool) {
+    fn new_simple(graph: &mut Graph) -> ObjectId {
+        graph.insert(record("SimpleClass", vec![Value::Integer(0), Value::Null]))
+    }
+
+    let mut graph = Graph::default();
+    let first = new_simple(&mut graph);
+    let second = new_simple(&mut graph);
+    let root = graph.insert(record(
+        "SimpleContainer",
+        vec![Value::Ref(first), Value::Ref(second)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert!(reader.graph().get(copy).is_some());
+
+    let mut graph = Graph::default();
+    let simple = new_simple(&mut graph);
+    let first = graph.insert(record("SimpleContainer", vec![Value::Null, Value::Null]));
+    let second = graph.insert(record("SimpleContainer", vec![Value::Null, Value::Null]));
+    let root = graph.insert(Object::Array(
+        [simple, first, second].map(Value::Ref).to_vec(),
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert!(reader.graph().get(copy).is_some());
+    let actual = array_values(reader.graph(), copy);
+    for (value, expected) in
+        actual
+            .iter()
+            .zip(["SimpleClass", "SimpleContainer", "SimpleContainer"])
+    {
+        let Some(Object::Record { class, .. }) = reader.graph().get(reference(value)) else {
+            panic!("expected an object record");
+        };
+        assert_eq!(class, expected);
+    }
+    assert_eq!(actual.len(), 3);
+}
+
+stamp_modes!(
+    custom_key_dictionary_plain,
+    custom_key_dictionary_stamped,
+    custom_key_dictionary
+);
+stamp_modes!(
+    custom_item_set_plain,
+    custom_item_set_stamped,
+    custom_item_set
+);
+stamp_modes!(
+    different_serializations_plain,
+    different_serializations_stamped,
+    two_different_serializations
+);

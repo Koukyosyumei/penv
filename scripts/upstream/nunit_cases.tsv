@@ -913,3 +913,9 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeSimpleStruct	upstream_nunit::migrant_object_stream::simple_struct_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeStructInClass	upstream_nunit::migrant_object_stream::struct_in_class_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeWithInheritance	upstream_nunit::migrant_object_stream::derived_class_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeDictionaryWithCustomObject	upstream_nunit::migrant_object_stream::custom_key_dictionary_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeHashsetWithCustomObject	upstream_nunit::migrant_object_stream::custom_item_set_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeTwoTimesDifferentObjects	upstream_nunit::migrant_object_stream::different_serializations_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeDictionaryWithCustomObject	upstream_nunit::migrant_object_stream::custom_key_dictionary_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeHashsetWithCustomObject	upstream_nunit::migrant_object_stream::custom_item_set_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeTwoTimesDifferentObjects	upstream_nunit::migrant_object_stream::different_serializations_stamped	new
