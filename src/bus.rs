@@ -4911,15 +4911,15 @@ impl Bus {
         text: &str,
         ending: &[u8],
     ) -> Result<(), String> {
-        self.write_uart_input(name, text.bytes().chain(ending.iter().copied()))
+        self.write_uart_input(name, text.bytes().chain(ending.iter().copied()), false)
     }
 
     pub(crate) fn write_uart_tester_input(&mut self, name: &str, text: &str, ending: &[u8]) -> Result<(), String> {
         let bytes = text.encode_utf16().map(|character| character as u8);
-        self.write_uart_input(name, bytes.chain(ending.iter().copied()))
+        self.write_uart_input(name, bytes.chain(ending.iter().copied()), true)
     }
 
-    fn write_uart_input(&mut self, name: &str, bytes: impl Iterator<Item = u8>) -> Result<(), String> {
+    fn write_uart_input(&mut self, name: &str, bytes: impl Iterator<Item = u8>, tester: bool) -> Result<(), String> {
         let port = self.tester_port(name)?;
         if port == TesterPort::LiteX {
             self.litex_uart.as_mut().unwrap().queue_input(bytes.collect());
@@ -4944,7 +4944,11 @@ impl Bus {
             .find(|uart| uart.name == name)
             .ok_or_else(|| format!("unknown STM32 UART {name:?}"))?;
         if usart_clocked(self.h7_network_control.as_ref(), uart) {
-            uart.queue_input(bytes);
+            if tester {
+                uart.queue_tester_input(bytes);
+            } else {
+                uart.queue_input(bytes);
+            }
         }
         Ok(())
     }
