@@ -52,6 +52,5 @@ Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	The remaining ShouldDema
 Antmicro.Renode.UnitTests.SystemBusTests	The remaining runnable cases need the generic object-registration pause/resume lifecycle, multiple native access callbacks within one region, parametrized registration or null CPU registration APIs.
 Antmicro.Renode.UnitTests.TimeTests	There is no BaseClockSource API with independently registered mutable ClockEntry callbacks and observation at each deadline.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
-Antmicro.Renode.Utilities.SimpleCacheTests	There is no general memoization API keyed by generator identity and ordered, potentially null object arguments.
 Antmicro.Renode.Utilities.TypeExtensionsCacheTests	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.
 UnitTests.TimeSourceTests	Remaining runnable cases need wall-clock pacing controls, a disposable master/slave grant registration, or recording/replay of arbitrary external peripheral method calls.

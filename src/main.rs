@@ -3,6 +3,7 @@ pub mod access_translation;
 pub mod address_range;
 pub mod symbol;
 pub mod symbol_lookup;
+pub mod simple_cache;
 mod andes_csr;
 mod bit_field;
 mod bitmanip;
