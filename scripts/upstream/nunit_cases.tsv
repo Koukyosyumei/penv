@@ -919,3 +919,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeDictionaryWithCustomObject	upstream_nunit::migrant_object_stream::custom_key_dictionary_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeHashsetWithCustomObject	upstream_nunit::migrant_object_stream::custom_item_set_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeTwoTimesDifferentObjects	upstream_nunit::migrant_object_stream::different_serializations_stamped	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.SHT21Test.InitTest	upstream_nunit::sht21::init_test	new
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.SHT21Test.ReadTemperatureTest	upstream_nunit::sht21::read_temperature_test	new
