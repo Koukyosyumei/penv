@@ -208,6 +208,7 @@ enum TesterHistory {
 }
 
 struct UartTester {
+    target: String,
     port: TesterPort,
     history: TesterHistory,
     timeout: u64,
@@ -5058,7 +5059,7 @@ impl Bus {
             TesterHistory::Text(UartHistory::default())
         };
         let timeout = timeout.unwrap_or_else(|| self.default_uart_timeout());
-        self.uart_testers.push(UartTester { port, history, timeout });
+        self.uart_testers.push(UartTester { target: target.into(), port, history, timeout });
         Ok(id)
     }
 
@@ -5084,6 +5085,10 @@ impl Bus {
 
     pub(crate) fn uart_tester_timeout(&self, id: Option<usize>) -> Result<u64, String> {
         Ok(self.uart_testers[self.uart_tester_id(id)?].timeout)
+    }
+
+    pub(crate) fn uart_tester_target(&self, id: Option<usize>) -> Result<&str, String> {
+        Ok(&self.uart_testers[self.uart_tester_id(id)?].target)
     }
 
     fn uart_tester_id(&self, id: Option<usize>) -> Result<usize, String> {

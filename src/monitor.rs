@@ -378,6 +378,7 @@ enum Action {
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
+    WriteTesterUart(Option<usize>, String, &'static [u8], bool),
 }
 
 struct BusScalar {
@@ -1048,6 +1049,31 @@ fn run_commands(
                         None
                     })
             }
+            Action::WriteTesterUart(id, text, ending, echo) => {
+                let target = machine.bus.uart_tester_target(*id)?.to_owned();
+                let cycles = if *echo && !text.is_empty() {
+                    Some(uart_wait_cycles(machine, *id, None)?)
+                } else {
+                    None
+                };
+                machine.external_event(ExternalEvent::UartLine(target, text.clone(), ending.to_vec()))?;
+                if let Some(cycles) = cycles {
+                    let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt)?;
+                    let start = machine.elapsed_steps();
+                    let limit = cycles.min(budget);
+                    let (stop, count) = run_uart_watch(machine, watch, limit, &mut output)
+                        .map_err(|error| format!("{}:{}: {error}", command.source.display(), command.line))?;
+                    retired += count;
+                    budget -= machine.elapsed_steps().wrapping_sub(start);
+                    match stop {
+                        Stop::OutputMatch => Ok(None),
+                        Stop::Limit if cycles == limit => Err(format!("Terminal tester failed! UART echo {text:?} was not received")),
+                        _ => Err(format!("UART echo wait ended before completion ({stop:?})")),
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
             Action::WriteUartLine(target, text, ending) => machine
                 .external_event(ExternalEvent::UartLine(
                     target.clone(),
@@ -1222,6 +1248,9 @@ pub fn serve(
                     }
                     Err(error) if (error.starts_with("<monitor>:1: PC ")
                         || error.starts_with("<monitor>:1: Register ")) && error.contains(" value assertion failed,") => {
+                        frame(&mut output, "FAIL", error.as_bytes())
+                    }
+                    Err(error) if error.starts_with("<monitor>:1: Terminal tester failed!") => {
                         frame(&mut output, "FAIL", error.as_bytes())
                     }
                     Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ") => {
@@ -2536,6 +2565,28 @@ fn execute(
                 end,
                 timeout,
             ))
+        }
+        ["WriteTesterUart", ..] => {
+            let (value, options) = uart_text_argument(text["WriteTesterUart".len()..].trim_start())?;
+            let args: Vec<_> = options.split_whitespace().collect();
+            let [ending, echo, selector @ ..] = args.as_slice() else {
+                return Err("expected UART ending and echo option".into());
+            };
+            let ending: &[u8] = match *ending {
+                "CR" => b"\r",
+                "None" => b"",
+                _ => return Err("expected UART ending CR or None".into()),
+            };
+            let echo = parse_tester_bool(resolve(echo)?)?;
+            let id = match selector {
+                [] => None,
+                [value] => {
+                    let id = value.strip_prefix("testerId=").ok_or("expected testerId=ID")?;
+                    Some(crate::parse_address(resolve(id)?)? as usize)
+                }
+                _ => return Err("expected at most one UART tester selector".into()),
+            };
+            Some(Action::WriteTesterUart(id, value, ending, echo))
         }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();
