@@ -8208,28 +8208,25 @@ mod unhandled_access_cases {
     use super::*;
 
     fn address_error(bus: &mut Bus, address: u32) {
-        assert!(matches!(bus.read::<1>(address), Err(BusError::Unmapped(a, 1)) if a == address));
+        assert!(matches!(bus.read_scalar::<1>(address, true), Err(BusError::AddressError(a)) if a == address));
         assert!(
-            matches!(bus.write(address, 1, 0, &mut std::io::sink()), Err(BusError::Unmapped(a, 1)) if a == address)
+            matches!(bus.write_scalar(address, 1, 0, &mut std::io::sink(), true), Err(BusError::AddressError(a)) if a == address)
         );
     }
 
     #[test]
     fn upstream_preserve_exception_when_splitting_tag() {
-        let mut bus = Bus {
-            unhandled_access: Some(UnhandledAccess::Report),
-            ..Bus::default()
-        };
+        let mut bus = Bus::default();
         bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0, true).unwrap();
         bus.tag(0x1010, 0x101f - 0x1010 + 1, 0, false).unwrap();
         assert!(matches!(
-            bus.read::<1>(0x1000),
-            Err(BusError::Unmapped(0x1000, 1))
+            bus.read_scalar::<1>(0x1000, true),
+            Err(BusError::AddressError(0x1000))
         ));
-        assert_eq!(bus.read::<1>(0x1010).unwrap(), 0);
+        assert_eq!(bus.read_scalar::<1>(0x1010, true).unwrap(), 0);
         assert!(matches!(
-            bus.read::<1>(0x10f0),
-            Err(BusError::Unmapped(0x10f0, 1))
+            bus.read_scalar::<1>(0x10f0, true),
+            Err(BusError::AddressError(0x10f0))
         ));
     }
 
@@ -8246,12 +8243,17 @@ mod unhandled_access_cases {
 
     #[test]
     fn upstream_default_unmapped_read_returns_zero() {
-        assert_eq!(Bus::default().read::<1>(0xabcd1234).unwrap(), 0);
+        assert_eq!(Bus::default().read_scalar::<1>(0xabcd1234, true).unwrap(), 0);
     }
 
     #[test]
     fn raw_bus_retains_unmapped_faults() {
-        address_error(&mut Bus::new(4096).unwrap(), 0xabcd1234);
+        let mut bus = Bus::new(4096).unwrap();
+        assert!(matches!(bus.read::<1>(0xabcd1234), Err(BusError::Unmapped(0xabcd1234, 1))));
+        assert!(matches!(
+            bus.write(0xabcd1234, 1, 0, &mut std::io::sink()),
+            Err(BusError::Unmapped(0xabcd1234, 1))
+        ));
     }
 
     #[test]
@@ -8280,29 +8282,23 @@ mod unhandled_access_cases {
         };
         bus.tag(0xabcd1200, 0xabcd12ff - 0xabcd1200 + 1, 0x42, false)
             .unwrap();
-        bus.write(0xabcd1234, 1, 0, &mut std::io::sink()).unwrap();
-        assert_eq!(bus.read::<1>(0xabcd1234).unwrap(), 0x42);
+        bus.write_scalar(0xabcd1234, 1, 0, &mut std::io::sink(), true).unwrap();
+        assert_eq!(bus.read_scalar::<1>(0xabcd1234, true).unwrap(), 0x42);
     }
 
     #[test]
     fn upstream_tag_forces_exception() {
-        let mut bus = Bus {
-            unhandled_access: Some(UnhandledAccess::Report),
-            ..Bus::default()
-        };
+        let mut bus = Bus::default();
         bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0, true).unwrap();
         address_error(&mut bus, 0x1000);
     }
 
     #[test]
     fn upstream_tag_without_exception() {
-        let mut bus = Bus {
-            unhandled_access: Some(UnhandledAccess::Report),
-            ..Bus::default()
-        };
+        let mut bus = Bus::default();
         bus.tag(0x1000, 0x10ff - 0x1000 + 1, 0x42, false).unwrap();
-        bus.write(0x1000, 1, 0, &mut std::io::sink()).unwrap();
-        assert_eq!(bus.read::<1>(0x1000).unwrap(), 0x42);
+        bus.write_scalar(0x1000, 1, 0, &mut std::io::sink(), true).unwrap();
+        assert_eq!(bus.read_scalar::<1>(0x1000, true).unwrap(), 0x42);
     }
 
     #[test]
@@ -8325,7 +8321,7 @@ mod memory_segment_cases {
     fn exercise(address: u32, bytes: &[u8], expected: &[u8]) {
         let mut bus = Bus::default();
         bus.map_ram(0, 16).unwrap();
-        bus.map_ram(0xc000_0000, 16).unwrap();
+        bus.map_ram_alias(0, 0xc000_0000, 16).unwrap();
         bus.write_memory_bytes(address, bytes).unwrap();
         assert_eq!(
             bus.read_memory_bytes(address, bytes.len()).unwrap(),
@@ -8448,18 +8444,19 @@ mod memory_segment_cases {
             if memory {
                 bus.map_ram(base, 100).unwrap();
             } else {
-                bus.mock_byte_peripherals
-                    .push((u64::from(base)..u64::from(base) + 100, Default::default()));
+                bus.byte_peripheral
+                    .extend((base..base + 100).map(|address| (address, 0)));
             }
         }
         let bytes: Vec<_> = (0..350).map(|value| (value % 255) as u8).collect();
-        bus.write_bus_bytes(0, &bytes, false, &mut std::io::sink())
+        bus.write_bytes(0, &bytes, &mut std::io::sink())
             .unwrap();
         let mut expected = [0; 350];
         for range in [50..150, 200..300] {
             expected[range.clone()].copy_from_slice(&bytes[range]);
         }
-        assert_eq!(bus.read_bus_bytes(0, 350, false).unwrap(), expected);
+        let result = bus.read_bytes(0, 350).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(result, expected);
     }
 }
 
