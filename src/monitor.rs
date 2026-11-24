@@ -2068,23 +2068,32 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
 fn include_path(
     value: &str, path: &Path, origin: &Path, root: &Path, variables: &HashMap<String, String>,
 ) -> Result<PathBuf, String> {
+    if let Some(path) = anchored_path(value, origin, variables)? {
+        return Ok(path);
+    }
+    let value = resolve(variables, value)?;
+    let file = path_value(unquote(value.trim_start_matches('@')));
+    let candidate = root.join(&file);
+    Ok(if candidate.is_file() { candidate } else { local_path(&file, path, root) })
+}
+
+fn anchored_path(
+    value: &str, origin: &Path, variables: &HashMap<String, String>,
+) -> Result<Option<PathBuf>, String> {
     if let Some(relative) = value
         .strip_prefix("$ORIGIN/")
         .or_else(|| value.strip_prefix("$global.ORIGIN/"))
     {
-        return Ok(origin.join(path_value(relative)));
+        return Ok(Some(origin.join(path_value(relative))));
     }
     if let Some(relative) = value
         .strip_prefix("$CWD/")
         .or_else(|| value.strip_prefix("$global.CWD/"))
     {
         let cwd = resolve(variables, "$global.CWD")?;
-        return Ok(Path::new(unquote(cwd.trim_start_matches('@'))).join(path_value(relative)));
+        return Ok(Some(Path::new(unquote(cwd.trim_start_matches('@'))).join(path_value(relative))));
     }
-    let value = resolve(variables, value)?;
-    let file = path_value(unquote(value.trim_start_matches('@')));
-    let candidate = root.join(&file);
-    Ok(if candidate.is_file() { candidate } else { local_path(&file, path, root) })
+    Ok(None)
 }
 
 fn assign_variable(
@@ -3240,10 +3249,16 @@ fn execute(
             *machine = true;
         }
         ["machine", "LoadPlatformDescription", value] if *machine && boot.platform.is_none() => {
-            let file = resolve(value)?
-                .strip_prefix('@')
-                .ok_or("expected @platform-path")?;
-            boot.platform = Some(local_path(&path_value(unquote(file)), script, root));
+            let origin = resolve("$global.ORIGIN").unwrap_or(".");
+            let origin = Path::new(unquote(origin.trim_start_matches('@')));
+            boot.platform = Some(if let Some(path) = anchored_path(value, origin, variables)? {
+                path
+            } else {
+                let file = resolve(value)?
+                    .strip_prefix('@')
+                    .ok_or("expected @platform-path")?;
+                local_path(&path_value(unquote(file)), script, root)
+            });
         }
         ["machine", "SdCardFromFile", args @ ..] if boot.has_platform() => {
             boot.sd_cards
@@ -3986,6 +4001,23 @@ mod tests {
         run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
         assert_eq!(restored.elapsed_steps(), 9);
         assert_eq!(resolve(&boot.session.variables, "$marker").unwrap(), "42");
+    }
+
+    #[test]
+    fn platform_paths_use_the_nested_script_origin() {
+        let directory = std::env::temp_dir().join(format!("penv-nested-platform-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let dir = GeneratedRepl(directory);
+        let child = dir.0.join("nested");
+        fs::create_dir(&child).unwrap();
+        let board = child.join("board.repl");
+        fs::write(&board, "uart0: UART.TrivialUart @ sysbus 0x1000\n").unwrap();
+        fs::write(child.join("child.resc"), "machine LoadPlatformDescription $ORIGIN/board.repl\n").unwrap();
+        let script = dir.0.join("boot.resc");
+        fs::write(&script, "mach create\ninclude $ORIGIN/nested/child.resc\n").unwrap();
+
+        let boot = load_for_session(&script, &dir.0).unwrap();
+        assert_eq!(boot.platform, Some(board.canonicalize().unwrap()));
     }
 
     #[test]
