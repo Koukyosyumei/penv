@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 pub enum Kind {
     Bool,
     Integer,
+    NullableInteger,
     Text,
 }
 
@@ -40,14 +41,21 @@ pub enum ParseError {
 
 pub type Values = BTreeMap<String, Value>;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParsedOption {
+    pub long: String,
+    pub short: Option<char>,
+    pub value: Value,
+}
+
 #[derive(Default)]
 pub struct OptionsParser {
     pub throw_validation_exception: bool,
-    parsed: Vec<String>,
+    parsed: Vec<ParsedOption>,
 }
 
 impl OptionsParser {
-    pub fn parsed_options(&self) -> &[String] {
+    pub fn parsed_options(&self) -> &[ParsedOption] {
         &self.parsed
     }
 
@@ -61,7 +69,9 @@ impl OptionsParser {
         self.parsed.clear();
         for option in schema {
             if let Some(default) = &option.default {
-                if default.kind() != option.kind {
+                if default.kind() != option.kind
+                    && !(option.kind == Kind::NullableInteger && default.kind() == Kind::Integer)
+                {
                     return Err(ParseError::Configuration(format!(
                         "Default value for option '{}' is of unexpected type.",
                         option.long
@@ -117,7 +127,8 @@ impl OptionsParser {
                 if option.kind != Kind::Bool
                     && args.peek().is_some_and(|arg| {
                         !arg.starts_with('-')
-                            || (option.kind == Kind::Integer && arg.parse::<i32>().is_ok())
+                            || (matches!(option.kind, Kind::Integer | Kind::NullableInteger)
+                                && arg.parse::<i32>().is_ok())
                     })
                 {
                     args.next()
@@ -130,13 +141,30 @@ impl OptionsParser {
                 (Kind::Bool, Some(argument)) => {
                     argument.to_ascii_lowercase().parse().ok().map(Value::Bool)
                 }
-                (Kind::Integer, Some(argument)) => argument.parse().ok().map(Value::Integer),
+                (Kind::Integer | Kind::NullableInteger, Some(argument)) => {
+                    argument.parse().ok().map(Value::Integer)
+                }
                 (Kind::Text, Some(argument)) => Some(Value::Text(argument.into())),
                 _ => None,
             }
-            .ok_or_else(|| format!("Option '{}' requires a valid argument", option.long))?;
-            values.insert(option.long.into(), value);
-            self.parsed.push(option.long.into());
+            .ok_or_else(|| {
+                let expected = match option.kind {
+                    Kind::Bool => "Boolean",
+                    Kind::Integer => "Int32",
+                    Kind::NullableInteger => "Nullable<Int32>",
+                    Kind::Text => "String",
+                };
+                format!(
+                    "Option '{}' requires parameter of type '{expected}'",
+                    option.long
+                )
+            })?;
+            values.insert(option.long.into(), value.clone());
+            self.parsed.push(ParsedOption {
+                long: option.long.into(),
+                short: option.short,
+                value,
+            });
         }
         if let Some(missing) = schema
             .iter()

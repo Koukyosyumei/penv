@@ -13,6 +13,7 @@ mod symbol_deduplication;
 mod symbol_lookup;
 mod simple_cache;
 mod option_validation;
+mod option_parser;
 mod system_bus;
 mod time_interval;
 mod tracked_register_bytes;
