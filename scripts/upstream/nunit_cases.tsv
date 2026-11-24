@@ -655,6 +655,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeReferenceToSelf	upstream_nunit::migrant_object_stream::should_serialize_reference_to_self	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldSerializeSimpleClass	upstream_nunit::migrant_object_stream::should_serialize_simple_class	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests.ShouldContain	upstream_nunit::symbol::should_contain	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests.ShouldDemangle	upstream_nunit::symbol::should_demangle	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests.ShouldNotContain	upstream_nunit::symbol::should_not_contain	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests.ShouldNotOverlap	upstream_nunit::symbol::should_not_overlap	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests.ShouldOverlap	upstream_nunit::symbol::should_overlap	new

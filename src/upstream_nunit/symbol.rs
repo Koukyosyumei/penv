@@ -75,3 +75,30 @@ fn should_not_contain() {
         assert!(!symbol[left].contains(&symbol[right]));
     }
 }
+
+#[test]
+fn should_demangle() {
+    let cases = [
+        (
+            "_ZN2cl2pl4consC1ERKSs",
+            "cl::pl::cons::complete object constructor",
+        ),
+        ("_Z1hic", "h"),
+        ("?h@@YAXHD@Z", "?h@@YAXHD@Z"),
+        (
+            "_ZN4Test6Ne$ted12staticMemberE3abc",
+            "Test::Ne$ted::staticMember",
+        ),
+        (
+            "_ZNSt8ios_base4InitC1Ev@plt",
+            "std::ios_base::Init::complete object constructor",
+        ),
+        (
+            "_ZN6tflite12_GLOBAL__N_14EvalEP13TfLiteContextP10TfLiteNode",
+            "tflite::(anonymous namespace)::Eval",
+        ),
+    ];
+    for (name, expected) in cases {
+        assert_eq!(Symbol::new(0, 0, name).unwrap().name, expected);
+    }
+}

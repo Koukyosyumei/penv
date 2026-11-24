@@ -37,6 +37,5 @@ Antmicro.Renode.UnitTests.RegistersTests	There is no generic declarative registe
 Antmicro.Renode.UnitTests.SVDParserTests	There is no SVD XML parser implementing peripheral/register inheritance, dimensions and bus registration.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
-Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
 Antmicro.Renode.Utilities.TypeExtensionsCacheTests	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.
