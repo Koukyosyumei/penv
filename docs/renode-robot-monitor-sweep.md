@@ -765,3 +765,40 @@ UART 待機中に 40 秒のホスト制限に達した
 と同期量 2 ms が一致した。
 この変更後も未変更の HEX と STM32F072b Console Echo は合格した
 （`target/monitor-pause-7b13622-{hex,uart}/results.json`）。
+
+`9e6be15` では、UART テスターの既定値と各行・プロンプト・バイト待機の
+`pauseEmulation` を Rust へ渡す。Rust は一致時に停止し、後続の待機に
+進行が必要な場合は再開する。バッファ内で既に一致している場合と、その後の
+仮想時間の再開を Rust テストで確認した。`313f9d7` では
+`Write Line To Uart` のエコー待機も同じ処理を使い、個別指定を受け付ける。
+
+固定 Renode `c38ac3babcd38a7144b9498e3ca4c2226b76aa37` と同じ
+Robot RPC コマンド列で、`TrivialUart` へ出力した行 `A` を
+`pauseEmulation=true` で取得した。両方とも取得後の仮想時刻は 0 ns、
+同期量は 100 µs だった。RPC の記録は
+`target/monitor-uart-pause-proof/{renode,penv}.jsonl`。
+未変更の全バイト値の正規表現、STM32F072b Console Echo、HEX は
+`313f9d7` で合格した（`target/monitor-uart-pause-313f9d7-*/results.json`）。
+
+`5804a17` は UART の無通信確認を、仮想期限に達した場合のみ
+指定に従って停止する処理へつなぐ。固定 Renode と penv は
+`Test If Uart Is Idle` の 20 ms 待機で同じ仮想時刻を返した。
+通常 CLI の同じ Rust アクションでも 20 ms と同期量 100 µs を確認した
+（`target/monitor-uart-idle-proof/`）。このビルドでは全バイト値の
+正規表現と STM32F072b Console Echo が合格した。未変更の
+`Terminal Tester Idle Assert Should Start Emulation` は、初期化時の
+同一行に複数宣言を含む REPL が拒否されたため `NOT_RUN`
+（`target/monitor-uart-idle-5804a17-idle/results.json`）。
+
+`9a564d2` は Rust のモニターで開始・停止を保持し、`emulation IsStarted`
+と開始を要求しないログ待機の判断に使う。固定 Renode と同じ
+RPC コマンド列で、初期状態、停止指定なしの無通信待機後、`p` 後、
+停止指定ありの無通信待機後が `False, True, False, False` で一致した
+（`target/monitor-active-proof/{renode,penv}.jsonl`）。
+Rust のモニター 21 件とログ 8 件は合格。
+広い `monitor` フィルターで失敗した CPU ステップ 2 件は、
+変更前 `5804a17` でも再現した（`target/monitor-active-baseline.log`）。
+通常 CLI でも `s` と `p` の前後は両方とも `False, True, False`
+（`target/monitor-active-proof/activity.resc`）。
+未変更の HEX、未マップ読み出しのログ待機、STM32F072b Console Echo は
+`9a564d2` で合格した（`target/monitor-active-9a564d2-*/results.json`）。
