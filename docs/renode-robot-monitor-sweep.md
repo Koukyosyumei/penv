@@ -592,3 +592,18 @@ CPU を持たない `TrivialUart` 構成では、実行後の仮想時刻と同�
 `target/monitor-cpuless-clear-proof/`）。後者は `Clear` を挟む。
 破損データや異なる UART 配置を拒否した場合、時刻は変化しない。
 この形式は未接続の UART と空のイベントキューを対象とする。
+
+CPU なしの `TrivialUart` 構成では、Robot の `Provides Serialization`
+が Rust のスナップショットを保存し、`Requires` が別プロセスで
+プラットフォームを構成して読み込む。構成コマンドは Rust が現在の
+マシンと UART 配置から生成する。`target/monitor-provides-snapshot-proof/`
+に固定 Renode と penv の RPC 比較があり、復帰後の 10 ms と同期量 2 ms
+が一致した。提供側の `RunFor` は復帰時の起動入力に含まれない。
+
+新しい CPU なしスナップショットは UART の既定期限も保存する。
+`target/monitor-provides-uart-policy-proof/` で、保存時の既定期限 2 ms
+が復帰され、旧形式の読み込みでは現在の既定期限を維持することを確認した。
+未変更の全256バイト正規表現ケースは合格した。
+Arty LiteX の `Should Boot` は `H2U` を受信した後、
+実行中のゲスト CPU を含む `Provides Serialization` で未対応となった
+（`target/monitor-provides-arty/results.json`）。
