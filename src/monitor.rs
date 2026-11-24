@@ -69,7 +69,8 @@ pub struct Session {
 }
 
 const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x02";
+const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x03";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 impl Session {
@@ -101,6 +102,8 @@ impl Session {
         let result = (|| {
             file.write_all(SESSION_SNAPSHOT).map_err(|e| e.to_string())?;
             file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
+            let mips = (machine.bus.monitor_step_hz() / 1_000_000) as u32;
+            file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&data).map_err(|e| e.to_string())?;
             machine.write_boot_snapshot(&mut file)?;
@@ -118,6 +121,8 @@ impl Session {
         let result = (|| {
             let header = input.fill_buf().map_err(|e| e.to_string())?;
             let version = if header.starts_with(SESSION_SNAPSHOT) {
+                3
+            } else if header.starts_with(SESSION_SNAPSHOT_V2) {
                 2
             } else if header.starts_with(SESSION_SNAPSHOT_V1) {
                 1
@@ -125,7 +130,7 @@ impl Session {
                 return machine.read_boot_snapshot(&mut input);
             };
             input.consume(SESSION_SNAPSHOT.len());
-            let quantum = if version == 2 {
+            let quantum = if version >= 2 {
                 let mut bytes = [0; 8];
                 input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
                 let quantum = u64::from_le_bytes(bytes);
@@ -133,6 +138,17 @@ impl Session {
                     return Err("invalid snapshot synchronization quantum".into());
                 }
                 Some(quantum)
+            } else {
+                None
+            };
+            let cpu_mips = if version >= 3 {
+                let mut bytes = [0; 4];
+                input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+                let mips = u32::from_le_bytes(bytes);
+                if !machine.is_cortex_m() || mips == 0 || mips.checked_mul(1_000_000).is_none() {
+                    return Err("invalid snapshot CPU speed".into());
+                }
+                Some(mips)
             } else {
                 None
             };
@@ -172,6 +188,9 @@ impl Session {
                 }
             }
             machine.read_boot_snapshot(&mut input)?;
+            if let Some(mips) = cpu_mips {
+                machine.set_monitor_cpu_rate(mips)?;
+            }
             if let Some(quantum) = quantum {
                 machine.monitor_quantum = quantum;
             }
