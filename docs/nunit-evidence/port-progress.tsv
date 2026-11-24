@@ -18,7 +18,7 @@ src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antm
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	5	0	0	5	0	There is no general IronPython monitor command context with the fixture's stateful next-value command and Python execution, sleep, or arbitrary dump helpers.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.FeaturesTests	2	0	0	2	0	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.
 src/Infrastructure/src/Emulator/Extensions/MonitorTests/MonitorTests.csproj	Antmicro.Renode.MonitorTests.TokenizerTests	18	0	0	18	0	The active monitor parser does not expose the typed token stream and recoverable tokenization positions used by the fixture.
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	6	0	0	6	0	There is no RegistersEnumParser for C enum extraction with preprocessor conditions, aliases and indexed registers.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	6	6	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.AccessConditionParserTests	15	15	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ByteArrayWithAccessTrackingTests	11	11	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.Collections.CircularBufferTests	15	15	0	0	0	-

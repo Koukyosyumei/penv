@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,064 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,070 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,332 |
+| 移植待ち | 2,326 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 35 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 34 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -178,3 +178,9 @@ LPC43xx GPIO の5件は上流と同じバス登録後に周辺機器のレジス
 DualI2CAddressBMC050Test は同じ BMC050 を 0x18 と 0x10 に登録し、再 START を経て読み出したチップ ID、割り込み、ポーリング回数を検証する。モデルは同期的にパケットを転送する。上流の Ignore 2件はインベントリに残している。
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-efm32-dual-address.tsv)と[実行ログ](nunit-evidence/targeted-efm32-dual-address.log)
+
+## Registers enum パーサー
+
+公式の6入力を使い、レジスタ名・幅・値、条件付き行の有無、インデックス付きグループ、コメントと空行を確認した。パーサーは fixture が使う C enum の構文を扱う。
+
+- [公式 ID ごとの結果](nunit-evidence/targeted-register_enum.tsv)と[実行ログ](nunit-evidence/targeted-register_enum.log)

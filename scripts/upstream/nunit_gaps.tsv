@@ -8,7 +8,6 @@ Antmicro.Migrant.Tests.StampingTests	All four reflection-mode stamp configuratio
 Antmicro.Migrant.Tests.SurrogateTests	Reflection substitutions cover exact, inherited, interface and open-generic matching. Remaining cases need the read-side callback ordering for multiply referenced surrogates and generated reader/writer paths, including generated converter caching.
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
-Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	There is no RegistersEnumParser for C enum extraction with preprocessor conditions, aliases and indexed registers.
 Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	The monitor has no reflection-driven action binder for optional, named, array and variadic arguments on the fixture's test emulation object.
 Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	There is no general IronPython monitor command context with the fixture's stateful next-value command and Python execution, sleep, or arbitrary dump helpers.
 Antmicro.Renode.MonitorTests.FeaturesTests	There is no dynamic CLR command auto-registration or runtime loading of C# extension methods.

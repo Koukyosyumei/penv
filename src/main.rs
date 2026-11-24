@@ -16,6 +16,7 @@ pub mod lpc43xx_gpio;
 pub mod cadence_ttc;
 pub mod cadence_uart;
 pub mod bmc050;
+pub mod register_enum;
 pub mod weak_multi_table;
 pub mod option_validation;
 mod andes_csr;
