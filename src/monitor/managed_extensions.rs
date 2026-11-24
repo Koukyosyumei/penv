@@ -153,3 +153,31 @@ fn run(command: &mut Command) -> Result<String, String> {
         ))
     }
 }
+
+#[derive(Default)]
+pub(super) struct Session {
+    compiler: Option<Compiler>,
+    assemblies: Vec<(PathBuf, Metadata)>,
+}
+
+impl Session {
+    pub(super) fn include(&mut self, source: &Path) -> Result<(), String> {
+        if self.compiler.is_none() {
+            self.compiler = Some(Compiler::new()?);
+        }
+        let compiler = self.compiler.as_mut().unwrap();
+        let assembly = compiler.compile(&[source.to_owned()])?;
+        let metadata = compiler.scan(&assembly)?;
+        self.assemblies.push((assembly, metadata));
+        Ok(())
+    }
+
+    pub(super) fn invoke(&self, method: &str) -> Option<Result<String, String>> {
+        let (assembly, _) = self
+            .assemblies
+            .iter()
+            .rev()
+            .find(|(_, metadata)| metadata.methods.contains(method))?;
+        Some(self.compiler.as_ref().unwrap().invoke(assembly, method))
+    }
+}

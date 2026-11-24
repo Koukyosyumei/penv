@@ -611,6 +611,8 @@ impl AutoLoadCommand {
 #[derive(Default)]
 pub(crate) struct MonitorBuiltins {
     next_value: i64,
+    seed: u32,
+    extensions: managed_extensions::Session,
     commands: std::collections::BTreeMap<&'static str, AutoLoadCommand>,
 }
 
@@ -650,6 +652,37 @@ impl MonitorBuiltins {
                     }
                 }),
             );
+        }
+        if matches!(command, "i" | "include") {
+            let words = match command_words(text) {
+                Ok(words) => words,
+                Err(error) => return Some(Err(error)),
+            };
+            if let [_, source] = words.as_slice()
+                && let Some(path) = source.strip_prefix('@')
+                && Path::new(&path_value(path)).extension().is_some_and(|ext| ext == "cs")
+            {
+                return Some(self.extensions.include(Path::new(&path_value(path))).map(|()| String::new()));
+            }
+        }
+        if command == "emulation" {
+            let words = match command_words(text) {
+                Ok(words) => words,
+                Err(error) => return Some(Err(error)),
+            };
+            match words.as_slice() {
+                ["emulation", "GetSeed"] => return Some(Ok(format!("{}\n", self.seed))),
+                ["emulation", "SetSeed", seed] => return Some(crate::parse_address(seed).map(|seed| {
+                    self.seed = seed;
+                    String::new()
+                })),
+                ["emulation", method] => {
+                    if let Some(result) = self.extensions.invoke(method) {
+                        return Some(result);
+                    }
+                }
+                _ => {}
+            }
         }
         if !matches!(command, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
             return None;

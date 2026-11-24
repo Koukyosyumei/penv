@@ -28,10 +28,10 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
 
 
-def run(command, cwd, log, timeout=600):
+def run(command, cwd, log, timeout=600, env=None):
     with log.open("wb") as output:
         return subprocess.run(command, cwd=cwd, stdout=output, stderr=subprocess.STDOUT,
-                              timeout=timeout, env={**os.environ, "DOTNET_CLI_UI_LANGUAGE": "en-US"}).returncode
+                              timeout=timeout, env={**os.environ, "DOTNET_CLI_UI_LANGUAGE": "en-US", **(env or {})}).returncode
 
 
 def manifest_projects(source):
@@ -178,7 +178,7 @@ def main():
     command = ["cargo", "test", "--locked", "--color", "never", "--bin", "penv", "--",
                "--exact", "--test-threads=1", *tests]
     log = out / "rust.log"
-    status = run(command, ROOT, log)
+    status = run(command, ROOT, log, env={"PENV_DOTNET": dotnet})
     rust_output = log.read_text()
     binary = re.search(r"^\s*Running unittests .* \((.+)\)$", rust_output, re.MULTILINE)
     binary_sha = hashlib.sha256((ROOT / binary[1]).read_bytes()).hexdigest() if binary else None

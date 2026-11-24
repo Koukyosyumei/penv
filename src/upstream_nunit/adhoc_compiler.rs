@@ -34,3 +34,25 @@ fn should_compile_cs_file() {
             .contains("Antmicro.Renode.Utilities.MockExtension")
     );
 }
+
+#[test]
+fn should_handle_new_extensions_from_loaded_assembly() {
+    use crate::{machine::Machine, monitor::MonitorBuiltins};
+
+    let mut monitor = MonitorBuiltins::default();
+    let mut machine = Machine::without_default_ram();
+    let path = fixture_path("MockExtension.cs");
+    let mut contents = String::new();
+    for command in [
+        "emulation GetSeed".to_owned(),
+        format!("i @{}", path.to_string_lossy().replace(' ', r"\ ")),
+        "emulation GetMockString".to_owned(),
+    ] {
+        let reply = monitor
+            .execute(&mut machine, &command)
+            .unwrap_or_else(|| panic!("unrecognized monitor command {command}"))
+            .unwrap_or_else(|error| panic!("{command}: {error}"));
+        contents.push_str(&reply);
+    }
+    assert!(contents.contains("this is an extension"));
+}

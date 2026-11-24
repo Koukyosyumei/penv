@@ -5,14 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,394 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,395 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1 |
+| 移植待ち | 0 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 1 fixture の
-ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
+進捗表は公式インベントリと対応表から生成した。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
 前回の追加は52件。Migrant の TypeDescriptorComparisonTests が11件、
@@ -574,3 +573,8 @@ AdHocCompilerTests の空ファイルと固定上流の MockExtension.cs を対�
 コンパイルし、CLR に読み込んで型と拡張メソッドを検出する2件を移植した。
 対象実行は2件合格、0件失敗。`PENV_DOTNET` に固定上流のビルドで使用した SDK を指定した。
 [公式 ID 別結果](nunit-evidence/targeted-adhoc-compiler.tsv) · [対象実行ログ](nunit-evidence/targeted-adhoc-compiler.log)
+
+Monitor の C# 拡張ケースを追加した。単一の Monitor セッションで `emulation GetSeed`、
+`i @<file>`、`emulation GetMockString` を順に実行し、上流の出力条件を確認した。
+対象実行はコンパイラー分も含め公式3件が合格、0件失敗。
+[追加ケースの公式 ID 別結果](nunit-evidence/targeted-monitor-managed-extension.tsv) · [対象実行ログ](nunit-evidence/targeted-monitor-managed-extension.log)
