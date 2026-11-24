@@ -294,6 +294,7 @@ enum AssemblyAddress {
 }
 
 enum Action {
+    SetEmulationPaused(bool),
     MonitorLog(String),
     AssembleBlock(String, AssemblyAddress, String, String, NumberMode),
     RunFor(u64),
@@ -488,7 +489,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
                     | Action::AssembleBlock(..) | Action::BusScalar(_)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
-                    | Action::AssertCpuValue(..) | Action::CpuRegister(..)
+                    | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
             )
         })
 }
@@ -650,6 +651,10 @@ fn run_commands(
                         .map(|()| None).map_err(|error| error.to_string()),
                     _ => Err(format!("log monitor {status}: {message}")),
                 }
+            }
+            Action::SetEmulationPaused(paused) => {
+                machine.primary.monitor_paused = *paused;
+                Ok(None)
             }
             Action::UartIdle(timeout, tester) => {
                 let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
@@ -1078,11 +1083,6 @@ pub fn serve(
         } else {
             line.trim()
         };
-        if matches!(text, "start" | "pause") {
-            machine.primary.monitor_paused = text == "pause";
-            frame(&mut output, "OK", &[]).map_err(|error| error.to_string())?;
-            continue;
-        }
         if let Some(result) = crate::monitor_asm::handle(machine, text) {
             match result {
                 Ok(size) => frame(&mut output, "OK", size.to_string().as_bytes()),
@@ -2116,6 +2116,11 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        ["pause"] => Some(Action::SetEmulationPaused(true)),
+        ["start"] if boot.started || !boot.runtime.is_empty() => {
+            boot.started = true;
+            Some(Action::SetEmulationPaused(false))
+        }
         [cpu, "AssembleBlock", address, source, options @ ..] => {
             let source = resolve(source)?;
             let source = source.strip_prefix("\"\"\"").and_then(|s| s.strip_suffix("\"\"\""))
@@ -2900,6 +2905,7 @@ fn execute(
                         | Action::CpuPc(..)
                         | Action::CpuStep(..)
                         | Action::CpuRegister(..)
+                        | Action::SetEmulationPaused(_)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)
@@ -2915,18 +2921,6 @@ fn execute(
             source: script.to_owned(),
             action,
         });
-        return Ok(());
-    }
-    // A terminal tester can attach before start. The next runtime wait drives
-    // the machine with the tester already attached.
-    if words == ["start"]
-        && !boot.started
-        && !boot.runtime.is_empty()
-        && boot.runtime.iter().all(|command| {
-            matches!(command.action, Action::CreateUartTester(..) | Action::DefaultUartTester(_))
-        })
-    {
-        boot.started = true;
         return Ok(());
     }
     if boot.started || !boot.runtime.is_empty() {
