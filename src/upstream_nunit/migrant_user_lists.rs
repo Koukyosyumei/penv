@@ -14,7 +14,21 @@ const INTERFACES: &str = "List<IInterface>";
 const INTERFACE_CONTAINER: &str = "ClassWithTheListOfInterfaces";
 const IMPLEMENTATIONS: [&str; 2] = ["ImplementingInterfaceOne", "ImplementingInterfaceTwo"];
 
+const STACK: &str = "Stack";
+const CHAR_STACK: &str = "Stack<char>";
+const QUEUE: &str = "Queue<int>";
+
+const STACK_FIELDS: &[(&str, FieldKind)] = &[
+    ("_array", FieldKind::Reference),
+    ("_size", FieldKind::Integer),
+    ("_version", FieldKind::Integer),
+];
+
 const CODECS: &[Codec] = &[
+    generated_record!(STACK; array: reference, size: integer, version: integer),
+    generated_record!(CHAR_STACK; array: reference, size: integer, version: integer),
+    generated_record!(QUEUE; array: reference, head: integer, tail: integer, size: integer, version: integer),
+    generated_record!("System.Char"; value: integer),
     generated_record!(INTS; items: reference, size: integer, version: integer),
     generated_record!(NESTED; items: reference, size: integer, version: integer),
     generated_record!(OBJECTS; items: reference, size: integer, version: integer),
@@ -28,6 +42,36 @@ const CODECS: &[Codec] = &[
 ];
 
 const STAMPS: &[TypeStamp<'static>] = &[
+    TypeStamp {
+        class: STACK,
+        module: "mscorlib",
+        revision: 0,
+        fields: STACK_FIELDS,
+    },
+    TypeStamp {
+        class: CHAR_STACK,
+        module: "mscorlib",
+        revision: 0,
+        fields: STACK_FIELDS,
+    },
+    TypeStamp {
+        class: QUEUE,
+        module: "mscorlib",
+        revision: 0,
+        fields: &[
+            ("_array", FieldKind::Reference),
+            ("_head", FieldKind::Integer),
+            ("_tail", FieldKind::Integer),
+            ("_size", FieldKind::Integer),
+            ("_version", FieldKind::Integer),
+        ],
+    },
+    TypeStamp {
+        class: "System.Char",
+        module: "mscorlib",
+        revision: 0,
+        fields: &[("m_value", FieldKind::Integer)],
+    },
     user_list::type_stamp(INTS),
     user_list::type_stamp(NESTED),
     user_list::type_stamp(OBJECTS),
@@ -210,6 +254,103 @@ fn interface_list(options: Options) {
     assert_eq!(items.len(), 100);
 }
 
+fn character_stack(options: Options, boxed: bool) {
+    let mut graph = Graph::default();
+    let input: Vec<_> = "It works!".encode_utf16().map(i64::from).collect();
+    let mut backing: Vec<_> = input
+        .iter()
+        .map(|&ch| {
+            let ch = Value::Integer(ch);
+            if boxed {
+                Value::Ref(graph.insert(record("System.Char", vec![ch])))
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let size = Value::Integer(backing.len() as i64);
+    let class = if boxed {
+        backing.resize(10, Value::Null);
+        STACK
+    } else {
+        backing.resize(16, Value::Integer(0));
+        CHAR_STACK
+    };
+    let backing = graph.insert(Object::Array(backing));
+    let root = graph.insert(record(class, vec![Value::Ref(backing), size.clone(), size]));
+    let (restored, copy) = options.restore(&graph, root);
+    let Some(Object::Record {
+        class: actual,
+        fields,
+    }) = restored.get(copy)
+    else {
+        panic!("expected stack");
+    };
+    assert_eq!(actual, class);
+    let [Value::Ref(array), Value::Integer(size), Value::Integer(_)] = fields.as_slice() else {
+        panic!("expected stack fields");
+    };
+    let Some(Object::Array(items)) = restored.get(*array) else {
+        panic!("expected stack backing array");
+    };
+    let actual: Vec<_> = items[..usize::try_from(*size).unwrap()]
+        .iter()
+        .rev()
+        .map(|item| {
+            let item = if boxed {
+                let Some(Object::Record { class, fields }) = restored.get(reference(item)) else {
+                    panic!("expected boxed character");
+                };
+                assert_eq!(class, "System.Char");
+                &fields[0]
+            } else {
+                item
+            };
+            let Value::Integer(ch) = item else {
+                panic!("expected character");
+            };
+            *ch
+        })
+        .collect();
+    assert_eq!(actual, input.into_iter().rev().collect::<Vec<_>>());
+}
+
+fn integer_queue(options: Options) {
+    let mut graph = Graph::default();
+    let input = [1, 3, 5].map(Value::Integer);
+    let mut backing = input.to_vec();
+    backing.resize(4, Value::Integer(0));
+    let array = graph.insert(Object::Array(backing));
+    let root = graph.insert(record(
+        QUEUE,
+        vec![
+            Value::Ref(array),
+            Value::Integer(0),
+            Value::Integer(3),
+            Value::Integer(3),
+            Value::Integer(4),
+        ],
+    ));
+    let (restored, copy) = options.restore(&graph, root);
+    let Some(Object::Record { class, fields }) = restored.get(copy) else {
+        panic!("expected queue");
+    };
+    assert_eq!(class, QUEUE);
+    let [Value::Ref(array), Value::Integer(head), Value::Integer(_), Value::Integer(size), Value::Integer(_)] =
+        fields.as_slice()
+    else {
+        panic!("expected queue fields");
+    };
+    let Some(Object::Array(items)) = restored.get(*array) else {
+        panic!("expected queue backing array");
+    };
+    let head = usize::try_from(*head).unwrap();
+    let actual: Vec<_> = (0..usize::try_from(*size).unwrap())
+        .map(|offset| items[(head + offset) % items.len()].clone())
+        .collect();
+    assert_eq!(actual, input);
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -289,3 +430,6 @@ configurations!(with_null, list_with_null);
 configurations!(identity, list_identity);
 configurations!(boxed_identity, boxed_identity);
 configurations!(interface_list, interface_list);
+configurations!(nongeneric_stack, |m| character_stack(m, true));
+configurations!(generic_stack, |m| character_stack(m, false));
+configurations!(queue, integer_queue);

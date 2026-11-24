@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,665 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,689 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 731 |
+| 移植待ち | 707 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -381,3 +381,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 同じ8構成で、null・transient・ネイティブリソースの書き込み拒否と、同一セッションでの再シリアライズを検証する9メソッドを移植した。対象実行で72件すべてが合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-boundaries.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-boundaries.log)
 
 同じ8構成で、transient メンバーの除外、復元時の初期化とフック、カスタムペイロードの読み取り境界、入れ子のジェネリック配列、および Issue 60 の decimal 値を検証する12メソッドを移植した。対象実行で96件すべてが合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-lifecycle.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-lifecycle.log)
+
+非ジェネリックとジェネリックのスタック、およびキューを、バック配列・要素数・バージョンと、キューの読み取り・書き込み位置を持つユーザーオブジェクトとして復元した。新規24件を含む対象グループ88件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-sequences.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-sequences.log)
