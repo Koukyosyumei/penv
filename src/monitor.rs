@@ -74,6 +74,7 @@ pub struct Session {
     aliases: HashMap<String, String>,
     variables: HashMap<String, String>,
     machine: Option<String>,
+    machine_cleared: bool,
     number_mode: NumberMode,
 }
 
@@ -100,7 +101,8 @@ const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
 const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
 const SESSION_SNAPSHOT_V3: &[u8; 9] = b"PENVSESS\x03";
 const SESSION_SNAPSHOT_V4: &[u8; 9] = b"PENVSESS\x04";
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x05";
+const SESSION_SNAPSHOT_V5: &[u8; 9] = b"PENVSESS\x05";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x06";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -126,6 +128,7 @@ fn write_snapshot(
 
 struct SnapshotMetadata {
     selected: String,
+    machine_cleared: bool,
     quantum: Option<u64>,
     cpu_mips: Option<u32>,
     variables: HashMap<String, String>,
@@ -136,6 +139,8 @@ struct SnapshotMetadata {
 fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
     let header = input.fill_buf().map_err(|e| e.to_string())?;
     let version = if header.starts_with(SESSION_SNAPSHOT) {
+        6
+    } else if header.starts_with(SESSION_SNAPSHOT_V5) {
         5
     } else if header.starts_with(SESSION_SNAPSHOT_V4) {
         4
@@ -187,6 +192,17 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
     input.read_exact(&mut data).map_err(|e| e.to_string())?;
     let mut data = data.as_slice();
     let selected = read_string(&mut data)?;
+    let machine_cleared = if version >= 6 {
+        let (&flag, remaining) = data.split_first().ok_or("missing machine selection flag")?;
+        data = remaining;
+        match flag {
+            0 => false,
+            1 => true,
+            _ => return Err("invalid machine selection flag".into()),
+        }
+    } else {
+        false
+    };
     let mut macros = HashMap::new();
     if version >= 4 {
         let count = read_size(&mut data)?;
@@ -223,7 +239,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
             return Err("invalid monitor variable snapshot".into());
         }
     }
-    Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables, macros, aliases }))
+    Ok(Some(SnapshotMetadata { selected, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
 }
 
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
@@ -242,6 +258,10 @@ fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<Stri
 }
 
 impl Session {
+    fn selected_machine(&self) -> Option<&str> {
+        self.machine.as_deref().filter(|_| !self.machine_cleared)
+    }
+
     fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
         let mut data = Vec::new();
         let mut entries: Vec<_> = self.variables.iter()
@@ -257,6 +277,9 @@ impl Session {
             Ok(())
         }
         encode(&mut data, self.machine.as_deref().unwrap_or_default())?;
+        if self.machine_cleared {
+            data.push(1);
+        }
         fn encode_size(data: &mut Vec<u8>, value: usize) -> Result<(), String> {
             if data.len() > MAX_MONITOR_PAYLOAD - 4 {
                 return Err("monitor snapshot exceeds size limit".into());
@@ -265,7 +288,7 @@ impl Session {
             data.extend_from_slice(&value.to_le_bytes());
             Ok(())
         }
-        if !self.macros.is_empty() || !self.aliases.is_empty() {
+        if self.machine_cleared || !self.macros.is_empty() || !self.aliases.is_empty() {
             let mut macros: Vec<_> = self.macros.iter().collect();
             macros.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, macros.len())?;
@@ -279,7 +302,7 @@ impl Session {
                 }
             }
         }
-        if !self.aliases.is_empty() {
+        if self.machine_cleared || !self.aliases.is_empty() {
             let mut aliases: Vec<_> = self.aliases.iter().collect();
             aliases.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, aliases.len())?;
@@ -293,8 +316,10 @@ impl Session {
             encode(&mut data, value)?;
         }
         write_snapshot(path, |file| {
-            let version = if !self.aliases.is_empty() {
+            let version = if self.machine_cleared {
                 SESSION_SNAPSHOT
+            } else if !self.aliases.is_empty() {
+                SESSION_SNAPSHOT_V5
             } else if !self.macros.is_empty() {
                 SESSION_SNAPSHOT_V4
             } else {
@@ -313,7 +338,7 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            let Some(SnapshotMetadata { selected, quantum, cpu_mips, mut variables, macros, aliases }) =
+            let Some(SnapshotMetadata { selected, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
                 read_snapshot_metadata(&mut input)?
             else {
                 return machine.read_boot_snapshot(&mut input);
@@ -340,6 +365,7 @@ impl Session {
                 machine.monitor_quantum = quantum;
             }
             self.variables = variables;
+            self.machine_cleared = machine_cleared;
             self.macros = macros;
             self.aliases = aliases;
             Ok(())
@@ -450,7 +476,7 @@ enum Action {
     SaveMemory(PathBuf, bool),
     ClearMemory,
     LoadMemory(PathBuf),
-    SelectMachineZero,
+    SetMachineCleared(bool),
     FindBytes(FindBytes),
     BusScalar(BusScalar),
     RecordTo(PathBuf),
@@ -637,7 +663,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DefaultUartTester(_) | Action::ClearUartTesterReport(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -730,7 +756,9 @@ fn run_commands<'a>(
                 };
                 load_text(&command.source, canonical.clone(), root, &mut state, text)?;
                 let start = machine.elapsed_steps();
+                let machine_cleared = state.boot.session.machine_cleared;
                 let (stop, count) = run_deferred_commands(machine, state.boot, budget, &mut output, session)?;
+                session.machine_cleared = machine_cleared;
                 session.variables = state.variables;
                 session.macros = state.macros;
                 session.aliases = state.aliases;
@@ -747,7 +775,7 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::MonitorAssignment(text, origin) => command_words(text).and_then(|words| {
-                assign_variable(text, &words, session.machine.as_deref(), &mut session.variables, Some(origin))
+                assign_variable(text, &words, session.machine.as_deref().filter(|_| !session.machine_cleared), &mut session.variables, Some(origin))
             }).map(|_| None),
             Action::MonitorEcho(value, origin) => monitor_echo(value, &session.variables, origin).and_then(|message| {
                 writeln!(output.reply(), "{message}").map_err(|error| error.to_string())
@@ -774,7 +802,10 @@ fn run_commands<'a>(
                 cleared = false;
                 None
             }),
-            Action::SelectMachineZero => Ok(None),
+            Action::SetMachineCleared(cleared) => {
+                apply_machine_selection(&mut session.machine_cleared, *cleared, session.machine.as_deref(), &mut session.variables);
+                Ok(None)
+            }
             Action::BusScalar(access) => {
                 if access.value.is_none() {
                     access.apply(&mut machine.bus, &mut output.reply())
@@ -1343,6 +1374,7 @@ fn live_command_boot(path: &Path, session: &Session) -> Boot {
         ..Boot::default()
     };
     boot.session.machine.clone_from(&session.machine);
+    boot.session.machine_cleared = session.machine_cleared;
     boot.session.number_mode = session.number_mode;
     boot
 }
@@ -1429,7 +1461,8 @@ pub fn serve(
             };
             if include.is_some() || words.first().is_some_and(|verb|
                 matches!(*verb, "alias" | "macro" | "runMacro" | "printenv")
-                    || monitor_alias(&session.aliases, session.machine.as_deref(), verb).is_some())
+                    || matches!(words.as_slice(), ["mach" | "machine", "set" | "clear", ..])
+                    || monitor_alias(&session.aliases, session.selected_machine(), verb).is_some())
             {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
                 let mut state = ScriptState {
@@ -1461,7 +1494,7 @@ pub fn serve(
                 included_state = Some((state.variables, state.macros, state.aliases));
                 return Ok(());
             }
-            if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables, None)? {
+            if assign_variable(text, &words, session.machine.as_deref().filter(|_| !session.machine_cleared), &mut session.variables, None)? {
                 return Ok(());
             }
             execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, root, 1)
@@ -1470,6 +1503,7 @@ pub fn serve(
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => {
                 session.number_mode = boot.session.number_mode;
+                session.machine_cleared = boot.session.machine_cleared;
                 if let Some((variables, macros, aliases)) = included_state.take() {
                     session.variables = variables;
                     session.macros = macros;
@@ -1564,6 +1598,7 @@ pub fn serve(
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
                         if let Some((variables, macros, aliases)) = included_state.take() {
+                            session.machine_cleared = boot.session.machine_cleared;
                             session.variables = variables;
                             session.macros = macros;
                             session.aliases = aliases;
@@ -2251,14 +2286,14 @@ fn is_log_capture_setup(action: &Action) -> bool {
 
 fn is_monitor_snapshot_action(action: &Action) -> bool {
     matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
-        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..))
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::SetMachineCleared(_) | Action::InvokeMonitorMacro(..) | Action::InvokeMonitorScript(..))
 }
 
 fn is_empty_machine_action(action: &Action) -> bool {
     is_console_action(action) || is_monitor_snapshot_action(action) || matches!(action,
         Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
         | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::RunFor(_) | Action::RunUntil(_)
-        | Action::RunToSyncPoint | Action::SetEmulationPaused(_) | Action::SelectMachineZero
+        | Action::RunToSyncPoint | Action::SetEmulationPaused(_)
         | Action::ClearMemory | Action::DescribeSnapshotPlatform)
 }
 
@@ -2434,7 +2469,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         }
         let text = text.as_ref();
         if let Some(value) = text.strip_prefix("machine LoadPlatformDescriptionFromString ") {
-            if !state.machine {
+            if !state.machine || state.boot.session.machine_cleared {
                 return Err(error("inline REPL requires a machine"));
             }
             let value = value.trim();
@@ -2541,12 +2576,18 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
             });
             continue;
         }
-        if assign_variable(text, &words, state.boot.session.machine.as_deref(), &mut state.variables, None)
+        if assign_variable(text, &words, state.boot.session.selected_machine(), &mut state.variables, None)
             .map_err(|e| error(&e))?
         {
             continue;
         }
         match words.as_slice() {
+            ["mach" | "machine", "set", selector] => {
+                validate_machine_selection(selector, &state.variables, state.boot.session.machine.as_deref(), state.machine)
+                    .map_err(|e| error(&e))?;
+                set_script_machine_selection(state, false, path, line + 1);
+            }
+            ["mach" | "machine", "clear"] => set_script_machine_selection(state, true, path, line + 1),
             ["RestoreMonitorSnapshot", value] => {
                 if state.machine || state.boot.has_platform() || state.boot.started || !state.boot.runtime.is_empty() {
                     return Err(error("snapshot bootstrap requires a fresh monitor"));
@@ -2612,7 +2653,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                 {
                     return Err(error("invalid monitor alias"));
                 }
-                let scope = state.boot.session.machine.as_deref().map(normalized_monitor_scope);
+                let scope = state.boot.session.selected_machine().map(normalized_monitor_scope);
                 let key = if name.contains('.') { (*name).to_owned() }
                     else { format!("{}.{name}", scope.as_deref().unwrap_or("global")) };
                 if follows_snapshot {
@@ -2653,7 +2694,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                         });
                         continue;
                     }
-                    let Some(command) = monitor_alias(&state.aliases, state.boot.session.machine.as_deref(), verb) else {
+                    let Some(command) = monitor_alias(&state.aliases, state.boot.session.selected_machine(), verb) else {
                         return Err(error(&failure));
                     };
                     let expanded = format!("{command}{}", &text[verb.len()..]);
@@ -2792,6 +2833,39 @@ fn assign_variable(
     Ok(true)
 }
 
+fn apply_machine_selection(
+    cleared: &mut bool, next: bool, machine: Option<&str>, variables: &mut HashMap<String, String>,
+) {
+    if *cleared == next {
+        return;
+    }
+    *cleared = next;
+    if let Some(name) = machine {
+        let prefix = format!("{}.", normalized_monitor_scope(name));
+        let locals: Vec<_> = variables.iter().filter_map(|(key, value)| {
+            key.strip_prefix(&prefix).map(|name| (name.to_owned(), value.clone()))
+        }).collect();
+        for (name, value) in locals {
+            if next {
+                variables.remove(&name);
+            } else {
+                variables.insert(name, value);
+            }
+        }
+    }
+}
+
+fn set_script_machine_selection(state: &mut ScriptState, cleared: bool, path: &Path, line: usize) {
+    if has_snapshot_boundary(&state.boot) {
+        state.boot.runtime.push(RuntimeCommand {
+            line, source: path.to_owned(), action: Action::SetMachineCleared(cleared),
+        });
+    } else {
+        apply_machine_selection(&mut state.boot.session.machine_cleared, cleared,
+            state.boot.session.machine.as_deref(), &mut state.variables);
+    }
+}
+
 fn validate_machine_selection(
     selector: &str, variables: &HashMap<String, String>, machine: Option<&str>, exists: bool,
 ) -> Result<(), String> {
@@ -2926,9 +3000,17 @@ fn execute(
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
+    if boot.session.machine_cleared && words.first().is_some_and(|word|
+        matches!(*word, "machine" | "cpu" | "sysbus") || word.starts_with("sysbus."))
+    {
+        return Err(format!("No such command or device: {}", words[0]));
+    }
     match words {
         [] => return Ok(()),
         ["using", "sysbus"] => return Ok(()),
+        ["mach" | "machine", "set", selector] if !boot.session.machine_cleared => {
+            return validate_machine_selection(selector, variables, boot.session.machine.as_deref(), *machine);
+        }
         ["AttachMonitorLog", capacity] if !*machine && !boot.started && boot.runtime.is_empty() => {
             boot.initial_log_capacity = Some(crate::monitor_log::parse_capacity(capacity)?);
             return Ok(());
@@ -3190,13 +3272,6 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
-        ["mach" | "machine", "set", selector] => {
-            validate_machine_selection(selector, variables, boot.session.machine.as_deref(), *machine)?;
-            if !boot.started && boot.runtime.is_empty() {
-                return Ok(());
-            }
-            Some(Action::SelectMachineZero)
-        }
         ["sysbus", method, address, rest @ ..]
             if matches!(
                 *method,
@@ -4013,6 +4088,7 @@ fn execute(
             }
             let name = name.first().map(|name| resolve(name)).transpose()?.unwrap_or("machine-0");
             boot.session.machine = Some(unquote(name).to_owned());
+            boot.session.machine_cleared = false;
             *machine = true;
         }
         ["machine", "LoadPlatformDescription", value] if *machine && boot.platform.is_none() => {
@@ -4862,6 +4938,7 @@ greet "hello world"
         source.run(9, &mut io::sink()).unwrap();
         let session = Session {
             machine: Some("clock board".into()),
+            machine_cleared: true,
             variables: HashMap::from([("global.marker".into(), "42".into())]),
             ..Session::default()
         };
@@ -4877,6 +4954,8 @@ greet "hello world"
         restored.bus.map_trivial_uart(0x2340, "uart1").unwrap();
         run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
         assert_eq!(restored.elapsed_steps(), 9);
+        assert_eq!(boot.session.selected_machine(), None);
+        assert_eq!(boot.session.machine.as_deref(), Some("clock board"));
         assert_eq!(resolve(&boot.session.variables, "$marker").unwrap(), "42");
     }
 
