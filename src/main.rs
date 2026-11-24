@@ -1,3 +1,4 @@
+pub mod access_translation;
 pub mod address_range;
 mod andes_csr;
 mod bit_field;

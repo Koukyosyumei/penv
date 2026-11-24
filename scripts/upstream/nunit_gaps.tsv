@@ -50,7 +50,6 @@ Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	The remaining runnable 
 Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	The REPL loaders lack the fixture's generic reflection-based creation and verification pipeline, including typed constructor, registration and property diagnostics on managed mock types.
 Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	There is no emulation-wide seeded generator with deterministic per-thread sequences and persisted state.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
-Antmicro.Renode.UnitTests.ReadExtensionsTest	Bus implementations use device-specific/inline translations. There is no generic byte, word, double-word and quad-word peripheral adapter covering both byte orders and unaligned reads.
 Antmicro.Renode.UnitTests.RegistersTests	There is no generic declarative register-field API implementing read/write callbacks, field modes and register collections for the fixture.
 Antmicro.Renode.UnitTests.SVDParserTests	There is no SVD XML parser implementing peripheral/register inheritance, dimensions and bus registration.
 Antmicro.Renode.UnitTests.SerializableMappedSegmentTests	There is no serializable MappedSegment object with lazy segment access and the corresponding persisted buffer representation.

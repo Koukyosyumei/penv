@@ -3,6 +3,7 @@ mod circular_buffer;
 mod dma_engine;
 mod misc;
 mod parser_primitives;
+mod read_extensions;
 mod range;
 mod system_bus;
 mod time_interval;
