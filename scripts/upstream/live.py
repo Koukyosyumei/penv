@@ -10,16 +10,19 @@ import subprocess
 import tempfile
 import time
 
+from memory_keywords import MemoryKeywords
 from monitor_input import MonitorInput, PUBLIC_ASSET, at_path, script_asset_urls, words
 from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStartupError,
                         PenvUnsupported, Unsupported)
 
 
-class LiveEndpoint(Endpoint):
+class LiveEndpoint(MemoryKeywords, Endpoint):
     proc = None
     pending_state = None
-    keywords = dict(Endpoint.keywords, **{
+    keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
+        "Create Log Tester": "create_log_tester",
+        "Wait For Log Entry": "wait_for_log",
         "Write Line To Uart": "write_line",
         "Create LED Tester": "create_led",
         "Assert LED State": "assert_led",
@@ -38,6 +41,10 @@ class LiveEndpoint(Endpoint):
         self.platform = None
         self.script = None
         self.script_urls = {}
+        self.log_level = None
+        self.log_capacity = None
+        self.log_timeout = None
+        self.memory_symbols = {}
         self.monitor_input = MonitorInput(self.root, self.out, self.assets)
         self.replaying = False
         self.inline = []
@@ -108,6 +115,64 @@ class LiveEndpoint(Endpoint):
         if action != "None":
             raise Unsupported(f"HotSpot action {action} requires additional lifecycle support")
 
+    @staticmethod
+    def log_options(args, allowed, positional):
+        provided = {}
+        for i, argument in enumerate(args):
+            name, separator, value = str(argument).partition("=")
+            if not separator:
+                if i >= len(positional):
+                    raise Unsupported("unsupported log keyword arguments")
+                name, value = positional[i], argument
+            if name not in allowed or name in provided:
+                raise Unsupported(f"unsupported or duplicate log keyword option {name}")
+            provided[name] = str(value)
+        return provided
+
+    @staticmethod
+    def log_bool(value):
+        token = value.lower()
+        if token not in {"true", "false"}:
+            raise Unsupported(f"expected a boolean log option, got {value}")
+        return token == "true"
+
+    def create_log_tester(self, timeout, *args):
+        if isinstance(timeout, str) and timeout.startswith("timeout="):
+            timeout = self.option(timeout, "timeout")
+        options = self.log_options(args, {"defaultPauseEmulation", "maxLogEntries"},
+                                   ("defaultPauseEmulation", "maxLogEntries"))
+        if self.log_bool(options.get("defaultPauseEmulation", "false")):
+            raise Unsupported("log tester pause-on-match requires asynchronous emulation")
+        self.log_timeout = self.duration(timeout)
+        self.log_capacity = int(options.get("maxLogEntries", "1000000"))
+        if not 1 <= self.log_capacity <= 1000000:
+            raise Unsupported("log tester capacity outside supported range")
+        if self.proc:
+            self.operation(f"AttachMonitorLog {self.log_capacity}")
+
+    def wait_for_log(self, pattern, *args):
+        if self.log_timeout is None:
+            raise Unsupported("create a log tester before waiting")
+        positional = ("timeout", "keep", "treatAsRegex", "pauseEmulation", "level", "startEmulation")
+        options = self.log_options(args, set(positional), positional)
+        if self.log_bool(options.get("pauseEmulation", "false")):
+            raise Unsupported("log tester pause-on-match requires asynchronous emulation")
+        timeout = int(Decimal(self.duration(options.get("timeout", self.log_timeout))) * 1000)
+        starts = self.log_bool(options.get("startEmulation", "true"))
+        if timeout and not (starts or self.started):
+            raise Unsupported("cannot wait for virtual time while emulation is stopped")
+        keep = "keep" if self.log_bool(options.get("keep", "false")) else "consume"
+        kind = "regex" if self.log_bool(options.get("treatAsRegex", "false")) else "literal"
+        levels = {"Noisy": -1, "Debug": 0, "Info": 1, "Warning": 2, "Error": 3, "null": "any"}
+        level = levels.get(options.get("level", "null"))
+        if level is None:
+            raise Unsupported("unknown log level")
+        result = self.operation(
+            f"WaitForMonitorLog {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}")
+        if timeout and starts:
+            self.started = True
+        return result
+
     def download_file(self, uri):
         if not PUBLIC_ASSET.fullmatch(uri):
             raise Unsupported("Download File requires a versioned public Renode asset")
@@ -115,8 +180,7 @@ class LiveEndpoint(Endpoint):
         return str(self.assets / uri.rsplit("/", 1)[1])
 
     def execute_script(self, script):
-        self.load_script(self.monitor_input.path(script))
-        return ""
+        return self.load_script(self.monitor_input.path(script))
 
     def include(self, tokens):
         if not tokens:
@@ -138,8 +202,9 @@ class LiveEndpoint(Endpoint):
             self.platform = file
             self.calls[-1]["include"]["stage"] = "platform selected for penv load"
         else:
-            self.load_script(file)
+            output = self.load_script(file)
             self.calls[-1]["include"]["stage"] = "penv monitor ready"
+            return output
         return ""
 
     def load_script(self, candidate):
@@ -147,12 +212,13 @@ class LiveEndpoint(Endpoint):
             raise Unsupported("RESC inclusion requires a fresh machine or monitor")
         self.script = self.out / "include.resc"
         self.script.write_text("\n".join([*self.monitor_input.script_prefix(), *self.commands,
+                                          *([self.log_level] if self.log_level else []),
                                           f"include {at_path(candidate)}"]) + "\n")
         urls = script_asset_urls(candidate, self.root)
         urls.update(PUBLIC_ASSET.findall("\n".join(self.monitor_input.script_prefix())))
         self.script_urls = {url.rsplit("/", 1)[-1]: url for url in urls}
         self.image = True
-        self.ensure_running()
+        return self.ensure_running()
 
     def close(self):
         proc = getattr(self, "proc", None)
@@ -187,6 +253,13 @@ class LiveEndpoint(Endpoint):
         if expanded != command:
             self.calls[-1]["expanded_command"] = expanded
             command = expanded
+        if re.fullmatch(r'logLevel (?:-1|[0-3]|"(?:Noisy|Debug|Info|Warning|Error)")', command):
+            if not self.proc:
+                self.log_level = command
+                return ""
+            return self.operation(command)
+        if len(tokens) in {2, 3} and tokens[:2] == ["machine", "UserState"]:
+            return self.operation(command)
         if command == "using sysbus":
             self.using_bus = True
             return ""
@@ -234,8 +307,34 @@ class LiveEndpoint(Endpoint):
             reading = command.startswith("sysbus Read")
             data = self.operation(command, assertion=reading)
             return self.format_number(data) if reading else data
-        cpu = r"(?:sysbus\.)?cpu[\w]* "
+        cpu = r"(?:sysbus\.)?(?:cpu|u54|e51)[\w]* "
         number = r"(?:0x[\da-fA-F]+|\d+)"
+        assembly = re.fullmatch(
+            rf'({cpu.strip()}) AssembleBlock (0x[0-9a-fA-F]+|[0-9]+|`(?:sysbus\.)?[\w.]+ PC`) (.+)',
+            command, flags=re.DOTALL)
+        if assembly:
+            target, address, body = assembly.groups()
+            if address.startswith("`"):
+                address = self.operation(address[1:-1]).strip()
+            if body.startswith('"""') and body.endswith('"""'):
+                body = body[3:-3]
+            elif body.startswith('"') and body.endswith('"'):
+                body = body[1:-1]
+            else:
+                raise Unsupported("AssembleBlock requires quoted assembly")
+            return self.operation(
+                f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {body.encode().hex()}")
+        if re.fullmatch(cpu + r'(?:MTVEC|STVEC)(?: ' + number + r')?', command):
+            reading = command.endswith((" MTVEC", " STVEC"))
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if reading else value
+        if re.fullmatch(cpu + r'ExecutionMode(?: (?:SingleStep|Continuous))?', command):
+            return self.operation(command, assertion=command.endswith(" ExecutionMode"))
+        if re.fullmatch(cpu + r'(?:GetRegister "?[\w]+"?|SetRegister "?[\w]+"? ' + number
+                        + r'|MEPC|MCAUSE|MTVAL)', command):
+            reading = " SetRegister " not in command
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if reading else value
         if re.fullmatch(cpu + r"(?:PC(?: " + number + r")?|IsHalted(?: (?:true|false|True|False))?|"
                         r"Pause|Resume|IsPaused|Step(?: " + number + r")?|"
                         r"EvaluateConditionCode " + number + r'|GetRegister "?[cx]psr"?)', command):
@@ -293,12 +392,15 @@ class LiveEndpoint(Endpoint):
             platform = self.out / "platform.repl"
             platform.write_text("\n".join(self.inline) + "\n")
         cmd = [str(self.binary), "run", "--platform-root", str(self.root), "--monitor-stdio"]
+        if self.log_capacity is not None:
+            cmd.extend(["--monitor-log-capacity", str(self.log_capacity)])
         if self.script:
             cmd.extend(["--script", str(self.script), "--asset-dir", str(self.assets)])
         elif self.image:
             script = self.out / "boot.resc"
             script.write_text("\n".join([self.commands[0],
                               f"machine LoadPlatformDescription {at_path(platform)}",
+                              *([self.log_level] if self.log_level else []),
                               *self.commands[1:]]) + "\n")
             cmd.extend(["--script", str(script), "--asset-dir", str(self.assets)])
         else:
@@ -310,7 +412,7 @@ class LiveEndpoint(Endpoint):
                 self.proc = subprocess.Popen(cmd, cwd=self.out, stdin=subprocess.PIPE,
                                              stdout=subprocess.PIPE, stderr=stderr, bufsize=0)
             try:
-                status, _ = self.receive()
+                status, startup_output = self.receive()
                 break
             except RuntimeError as exc:
                 lines = str(exc).splitlines()
@@ -325,7 +427,7 @@ class LiveEndpoint(Endpoint):
                 if "monitor session cannot operate multiple machines" in error:
                     raise Unsupported(error) from exc
                 if re.search(r"unsupported (?:platform model|peripheral|CPU|monitor command|command)|"
-                             r"unknown (?:model|CPU)|commands after start are unsupported", error, re.I):
+                             r"unknown (?:model|CPU)|commands after start are unsupported|unsupported.*(?:hook|AddHook)", error, re.I):
                     raise PenvUnsupported(str(exc)) from exc
                 if re.search(r"No such file|Permission denied|missing firmware image", error, re.I):
                     raise
@@ -334,6 +436,9 @@ class LiveEndpoint(Endpoint):
             raise RuntimeError(f"expected penv READY, got {status}")
         self.process_command = cmd
         self.calls[-1].update(penv_ready=True, stage="emulation")
+        if self.log_level and not self.image:
+            self.operation(self.log_level)
+        return startup_output
 
     def operation(self, command, assertion=False):
         self.ensure_running()
@@ -358,6 +463,8 @@ class LiveEndpoint(Endpoint):
         self.calls[-1]["monitor"] = measurement
         with (self.out / "monitor.jsonl").open("a") as log:
             print(json.dumps(measurement), file=log)
+        if status == "UNSUPPORTED" and "could not start llvm-mc" in value:
+            raise OSError(value)
         if status == "UNSUPPORTED" or status == "ERROR" and re.search(
                 r"UART peripheral not found|unknown STM32 UART|unknown LED|not a Cortex-M CPU|"
                 r"requires a Cortex-M platform|unsupported monitor", value, re.I):

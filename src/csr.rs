@@ -434,6 +434,15 @@ impl Csr {
             .ok_or_else(error)
     }
 
+    pub(crate) fn monitor_trap_register(&self, name: &str) -> Option<u32> {
+        self.read(match name {
+            "mepc" => 0x341,
+            "mcause" => 0x342,
+            "mtval" => 0x343,
+            _ => return None,
+        })
+    }
+
     fn read(&self, address: u32) -> Option<u32> {
         Some(match address {
             0x008..=0x00a | 0x00f | 0xc20..=0xc22 if self.status & VS != 0 => {

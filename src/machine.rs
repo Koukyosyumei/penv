@@ -204,6 +204,7 @@ pub struct Hart {
     cpu_wait_asserted: bool,
     pub monitor_paused: bool,
     pub monitor_halted: bool,
+    monitor_single_step: bool,
     pub monitor_hooks: Vec<(u32, CpuHook)>,
     reset_held: bool,
     reset_release: Option<SyncAction<()>>,
@@ -386,6 +387,7 @@ impl Machine {
                 cpu_wait_asserted: false,
                 monitor_paused: false,
                 monitor_halted: false,
+                monitor_single_step: false,
                 monitor_hooks: Vec::new(),
                 reset_held: false,
                 reset_release: None,
@@ -485,6 +487,120 @@ impl Machine {
             .as_ref()
             .expect("validated RV64 CPU")
             .translate_read(&mut self.bus, address)
+    }
+
+    pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
+        Ok(self.named_hart(name)?.program_counter())
+    }
+
+    pub(crate) fn monitor_named_register(
+        &mut self, name: &str, register: &str, value: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        const ABI: [&str; 32] = [
+            "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2",
+            "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9",
+            "s10", "s11", "t3", "t4", "t5", "t6",
+        ];
+        let hart = self.named_hart(name)?;
+        let register = register.to_ascii_lowercase();
+        if let Some(vector) = match register.as_str() {
+            "mtvec" => Some(crate::csr::TrapVector::Machine),
+            "stvec" => Some(crate::csr::TrapVector::Supervisor),
+            _ => None,
+        } {
+            if let Some(cpu) = &mut hart.rv64 {
+                return cpu.privilege.monitor_trap_vector(vector, value);
+            }
+            let value = value.map(u32::try_from).transpose()
+                .map_err(|_| "trap vector exceeds RV32 width")?;
+            return hart.monitor_trap_vector(vector, value).map(|value| value.map(u64::from));
+        }
+        if value.is_none() && matches!(register.as_str(), "mepc" | "mcause" | "mtval") {
+            let result = match &hart.rv64 {
+                Some(cpu) => cpu.monitor_register(&register),
+                None if hart.thumb.is_none() => hart.csr.monitor_trap_register(&register).map(u64::from),
+                None => None,
+            };
+            return result.map(Some).ok_or_else(|| format!("unsupported monitor register {register}"));
+        }
+        let index = match register.as_str() {
+            "fp" => Some(8),
+            register => ABI.iter().position(|name| *name == register).or_else(|| {
+                let value = register.strip_prefix('x').unwrap_or(register);
+                crate::parse_address(value).ok().map(|index| index as usize)
+            }),
+        }.filter(|index| *index < 32)
+            .ok_or_else(|| format!("unsupported monitor register {register}"))?;
+        if let Some(cpu) = &mut hart.rv64 {
+            return match value {
+                Some(_) if index == 0 => Err("The 'X0' register is read-only.".into()),
+                Some(value) => { cpu.initialize_gpr(index, value); Ok(None) }
+                None => Ok(cpu.monitor_register(&format!("x{index}"))),
+            };
+        }
+        let value = value.map(u32::try_from).transpose().map_err(|_| "register value exceeds RV32 width")?;
+        hart.monitor_integer_register(index as u32, value).map(|value| value.map(u64::from))
+    }
+
+    pub(crate) fn monitor_assembly_target(
+        &mut self, name: &str,
+    ) -> Result<(Option<usize>, &'static str, String), String> {
+        if let Ok(index) = self.rv64_hart_by_name(name) {
+            let cpu = self.hart_mut(index).rv64.as_ref().expect("named RV64 CPU");
+            return Ok((Some(index), "riscv64", cpu.isa().llvm_features()));
+        }
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_some() || hart.csr.embedded_base {
+            return Err("unsupported monitor assembler target".into());
+        }
+        let available = [
+            ("+m", hart.csr.m_extension), ("+a", hart.csr.a_extension),
+            ("+c", hart.csr.c_extension), ("+f", hart.csr.f_extension),
+            ("+d", hart.csr.d_extension), ("+zba", hart.bitmanip.zba),
+            ("+zbb", hart.bitmanip.zbb), ("+zbc", hart.bitmanip.zbc),
+            ("+zbs", hart.bitmanip.zbs), ("+zicond", hart.zicond),
+            ("+zacas", hart.zacas),
+        ];
+        let features = available.into_iter().filter_map(|(name, enabled)| enabled.then_some(name))
+            .collect::<Vec<_>>().join(",");
+        Ok((None, "riscv32", features))
+    }
+
+    pub(crate) fn monitor_execution_mode(
+        &mut self, name: &str, single_step: Option<bool>,
+    ) -> Result<bool, String> {
+        let hart = self.named_hart(name)?;
+        if hart.thumb.is_some() {
+            return Err("unsupported monitor ExecutionMode for Cortex-M".into());
+        }
+        if let Some(single_step) = single_step {
+            hart.monitor_single_step = single_step;
+        }
+        Ok(hart.monitor_single_step)
+    }
+
+    pub(crate) fn monitor_riscv_halted(
+        &mut self, name: &str, halted: Option<bool>,
+    ) -> Result<bool, String> {
+        let hart = self.named_hart(name)?;
+        if let Some(halted) = halted {
+            hart.monitor_halted = halted;
+        }
+        Ok(hart.monitor_halted)
+    }
+
+    pub(crate) fn monitor_step_riscv(&mut self, name: &str, steps: u64, output: &mut impl Write)
+        -> Result<(Stop, u64), String>
+    {
+        let index = std::iter::once(&self.primary).chain(&self.secondary)
+            .position(|hart| hart.name.as_deref() == Some(name) && hart.thumb.is_none())
+            .ok_or_else(|| format!("unknown RISC-V CPU {name:?}"))?;
+        let hart = self.hart_mut(index);
+        if hart.monitor_halted {
+            return Ok((Stop::Limit, 0));
+        }
+        hart.monitor_single_step = true;
+        self.run_selected(steps, Some(index), output, |_, _| false)
     }
 
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
@@ -1423,6 +1539,14 @@ impl Machine {
             if self.halted & (1 << index) != 0 {
                 continue;
             }
+            if hart.thumb.is_none() && (hart.monitor_halted
+                || (selected.is_none() && hart.monitor_single_step))
+            {
+                if matched(&self.bus, output) {
+                    return Ok((Stop::OutputMatch, retired));
+                }
+                continue;
+            }
             let trace = self.pc_trace.as_ref().filter(|(id, _)| *id == index);
             let trace_pc = trace.map(|_| {
                 hart.rv64
@@ -2013,7 +2137,12 @@ impl Hart {
                     .filter(|(address, _)| *address == self.pc)
                 {
                     match hook {
-                        CpuHook::Log(message) => eprintln!("{message}"),
+                        CpuHook::Log(message) => {
+                            crate::monitor_log::record(1, message);
+                            if bus.monitor_log_enabled(1) {
+                                eprintln!("{message}");
+                            }
+                        }
                         CpuHook::WriteDoubleWord(address, value) => bus
                             .write_scalar(*address, 4, *value, output, true)
                             .map_err(|error| format!("CPU hook at {:#010x}: {error}", self.pc))?,

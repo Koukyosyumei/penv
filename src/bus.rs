@@ -345,6 +345,8 @@ struct NrfGpioConnector {
 
 #[derive(Default)]
 pub struct Bus {
+    monitor_log_level: Option<i8>,
+    pub monitor_user_state: String,
     #[cfg(test)]
     pub faulting_accesses: Option<std::ops::RangeInclusive<u32>>,
     #[cfg(test)]
@@ -3089,6 +3091,15 @@ impl Bus {
         Ok(0xe000_e000 + offset)
     }
 
+    pub fn set_monitor_log_level(&mut self, level: i8) {
+        self.monitor_log_level = Some(level);
+        crate::monitor_log::set_level(level);
+    }
+
+    pub fn monitor_log_enabled(&self, severity: i8) -> bool {
+        severity >= self.monitor_log_level.unwrap_or(1)
+    }
+
     pub fn enable_nvic_log(&mut self, target: &str) -> Result<(), String> {
         self.validate_nvic_name(target)?;
         self.systick
@@ -5594,7 +5605,12 @@ impl Bus {
         for hook in hooks {
             match hook {
                 CpuHook::Write32(address, value) => self.write(address, 4, value, output)?,
-                CpuHook::Log(message) => writeln!(output, "{message}").map_err(BusError::Output)?,
+                CpuHook::Log(message) => {
+                    crate::monitor_log::record(1, &message);
+                    if self.monitor_log_enabled(1) {
+                        writeln!(output, "{message}").map_err(BusError::Output)?;
+                    }
+                }
                 CpuHook::Pause => {
                     writeln!(output, "Machine paused").map_err(BusError::Output)?;
                     return Ok(true);

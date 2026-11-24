@@ -137,9 +137,9 @@ impl F4Flash {
             let sector = (self.control >> 3) & 15;
             (self.sector(sector)?, 1 << sector)
         } else {
-            eprintln!(
-                "flash_controller: Tried to erase flash, but MER and SER are reset. This should be forbidden, ignoring..."
-            );
+            let warning = "flash_controller: Tried to erase flash, but MER and SER are reset. This should be forbidden, ignoring...";
+            crate::monitor_log::record(2, warning);
+            eprintln!("{warning}");
             return None;
         };
         if (self.option_bytes >> 16) & sectors != sectors {

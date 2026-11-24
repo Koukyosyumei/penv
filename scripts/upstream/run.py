@@ -296,8 +296,6 @@ def main():
     rows, projects, providers, options = inventory(renode, host)
     if args.all and (args.suite or args.case):
         parser.error("--all cannot be combined with --suite or --case")
-    if args.all and not args.nunit_root:
-        parser.error("--all requires --nunit-root so all official NUnit IDs are included")
     selected = [row for row in rows if (args.all or row["path"] in (args.suite or DEFAULT_ROBOT))
                 and (args.case is None or row["name"] == args.case)]
     if not args.inventory_only and not selected:

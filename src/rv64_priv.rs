@@ -298,6 +298,24 @@ impl Privilege {
         self.machine.write(0x05, vector);
     }
 
+    pub(crate) fn monitor_trap_vector(
+        &mut self, register: crate::csr::TrapVector, value: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        let trap = match register {
+            crate::csr::TrapVector::Machine => &mut self.machine,
+            crate::csr::TrapVector::Supervisor if self.levels == Levels::MachineSupervisorUser => {
+                &mut self.supervisor
+            }
+            crate::csr::TrapVector::Supervisor => return Err("STVEC requires supervisor mode".into()),
+        };
+        if let Some(value) = value {
+            trap.write(0x05, value);
+            Ok(None)
+        } else {
+            Ok(Some(trap.vector.unwrap_or(0)))
+        }
+    }
+
     pub(crate) fn monitor_register(&self, name: &str) -> Option<u64> {
         Some(match name {
             "vstart" => return self.vector.as_ref()?.read(0x008),
