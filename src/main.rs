@@ -18,6 +18,7 @@ mod float;
 mod ft5336;
 mod host_pty;
 mod iis2mdc;
+mod fdt;
 mod image;
 mod image64;
 mod ina228;
@@ -1562,7 +1563,7 @@ fn run() -> Result<ExitCode, String> {
         }
         for (value, address) in boot.binaries {
             let path = value.input_path(root, asset_dir.as_deref())?;
-            binaries.push((path, u64::from(address)));
+            binaries.push((path, u64::from(address), value.fdt_bootargs));
         }
         sd_cards = boot.sd_cards;
         mpfs_buttons = boot.mpfs_buttons;
@@ -1911,10 +1912,20 @@ fn run() -> Result<ExitCode, String> {
                     .set_mtvec(u32::try_from(value).map_err(|_| "mtvec exceeds 32 bits")?);
             }
         }
-        for (path, address) in &binaries {
-            let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            image::load_binary(&mut machine, file, *address)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+        for (path, address, fdt_bootargs) in &binaries {
+            let result = if let Some((args, append)) = fdt_bootargs {
+                fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
+                    let updated = fdt::with_bootargs(&bytes, args, *append).map_err(str::to_owned)?;
+                    let memory = machine.bus.memory64(*address, updated.len())
+                        .ok_or_else(|| format!("unmapped RAM access at {address:#x}"))?;
+                    memory.copy_from_slice(&updated);
+                    Ok(())
+                })
+            } else {
+                File::open(path).map_err(|e| e.to_string())
+                    .and_then(|file| image::load_binary(&mut machine, file, *address))
+            };
+            result.map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.bus.renode_unmapped_data = renode_unmapped_data
             || (monitor_stdio && !empty_monitor_machine && !machine.is_cortex_m());

@@ -1783,6 +1783,7 @@ impl Boot {
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct Asset {
+    pub fdt_bootargs: Option<(String, bool)>,
     value: String,
     script: PathBuf,
 }
@@ -3629,6 +3630,16 @@ fn execute(
                 crate::parse_address(resolve(value)?)?,
             ));
         }
+        ["sysbus", "LoadFdt", value, address, args, append @ ..]
+            if boot.has_platform() && append.len() <= 1 =>
+        {
+            let file = resolve(value)?.strip_prefix('@').ok_or("expected @firmware-path")?;
+            let mut asset = Asset::new(file, script);
+            let args = monitor_string(resolve(args)?).ok_or("expected quoted FDT boot arguments")?;
+            let append = append.first().map(|value| parse_tester_bool(resolve(value)?)).transpose()?.unwrap_or(true);
+            asset.fdt_bootargs = Some((args, append));
+            boot.binaries.push((asset, crate::parse_address(resolve(address)?)?));
+        }
         ["sysbus", "LoadBinary" | "LoadFdt", value, address] if boot.has_platform() => {
             let file = resolve(value)?
                 .strip_prefix('@')
@@ -4252,6 +4263,7 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
 impl Asset {
     pub(crate) fn new(value: &str, script: &Path) -> Self {
         Self {
+            fdt_bootargs: None,
             value: path_value(unquote(value)),
             script: script.into(),
         }
@@ -4575,6 +4587,7 @@ mod tests {
         let mut boot = Boot {
             platform: Some("board.repl".into()),
             image: Some(Asset {
+                fdt_bootargs: None,
                 value: "test.hex".into(),
                 script: "test.resc".into(),
             }),
