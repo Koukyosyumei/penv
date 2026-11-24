@@ -1248,6 +1248,23 @@ impl RecordOutput for ValidateGeneratedFields {
         }
     }
 
+    fn guid(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Guid(_)) {
+            Ok(())
+        } else {
+            Err(invalid("expected generated GUID field"))
+        }
+    }
+
+    fn big_integer(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::BigInteger(bytes) if !bytes.is_empty() && bytes.len() <= MAX_ITEMS)
+        {
+            Ok(())
+        } else {
+            Err(invalid("invalid generated BigInteger field"))
+        }
+    }
+
     fn reference(&mut self, value: &Value) -> io::Result<()> {
         if matches!(value, Value::Null | Value::Ref(_)) {
             Ok(())
@@ -1295,6 +1312,24 @@ impl<W: Write> RecordOutput for GeneratedOutput<'_, W> {
         };
         self.data.bytes(&[2])?;
         self.data.bytes(&value.to_le_bytes())
+    }
+
+    fn guid(&mut self, value: &Value) -> io::Result<()> {
+        let Value::Guid(value) = value else {
+            return Err(invalid("expected generated GUID field"));
+        };
+        self.data.bytes(&[4])?;
+        self.data.guid(*value)
+    }
+
+    fn big_integer(&mut self, value: &Value) -> io::Result<()> {
+        ValidateGeneratedFields.big_integer(value)?;
+        let Value::BigInteger(bytes) = value else {
+            unreachable!()
+        };
+        self.data.bytes(&[5])?;
+        self.data.unsigned(bytes.len() as u64)?;
+        self.data.bytes(bytes)
     }
 
     fn reference(&mut self, value: &Value) -> io::Result<()> {
@@ -1359,6 +1394,26 @@ impl<R: Read> RecordInput for GeneratedInput<'_, R> {
         let mut bytes = [0; 8];
         self.data.bytes(&mut bytes)?;
         Ok(Value::Float(f64::from_le_bytes(bytes)))
+    }
+
+    fn guid(&mut self) -> io::Result<Value> {
+        if self.data.byte()? != 4 {
+            return Err(invalid("expected generated GUID field"));
+        }
+        Ok(Value::Guid(self.data.guid()?))
+    }
+
+    fn big_integer(&mut self) -> io::Result<Value> {
+        if self.data.byte()? != 5 {
+            return Err(invalid("expected generated BigInteger field"));
+        }
+        let count = self.data.unsigned()?;
+        if count == 0 || count > MAX_ITEMS as u64 {
+            return Err(invalid("invalid BigInteger field length"));
+        }
+        let mut bytes = vec![0; count as usize];
+        self.data.bytes(&mut bytes)?;
+        Ok(Value::BigInteger(bytes))
     }
 
     fn reference(&mut self) -> io::Result<Value> {

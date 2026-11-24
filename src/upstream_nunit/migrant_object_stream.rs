@@ -378,6 +378,19 @@ const GRAPH_CODECS: &[Codec] = &[
     generated_record!("Dictionary<CustomObject,string>"; items: reference),
     generated_record!("HashSet<CustomObject>"; items: reference),
     generated_record!("CustomObject"; identity: reference),
+    generated_record!("GenericBox<Guid>"; value: guid),
+    generated_record!("ClassWithGuid"; id: guid, number: integer, text: reference),
+    generated_record!("GenericBox<BigInteger>"; value: big_integer),
+    generated_record!("System.Numerics.BigInteger"; value: big_integer),
+    generated_record!("SpeciallySerializable"; payload: reference),
+    generated_record!("StructGenericBox<SpeciallySerializable>"; element: reference),
+    generated_record!("BadlySerializable"; payload: reference),
+    generated_record!("GenericClassWithNestedGenericArgument<string>"; items: reference),
+    generated_record!("GenericClass<string>"; value: reference),
+    generated_record!("ClassWithTheListOfInterfaces"; items: reference),
+    generated_record!("List<IInterface>"; items: reference),
+    generated_record!("ImplementingInterfaceOne"; ),
+    generated_record!("ImplementingInterfaceTwo"; ),
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -1940,18 +1953,18 @@ stamp_modes!(
     two_different_serializations
 );
 
-fn box_with_guid(stamped: bool) {
+fn box_with_guid(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let id = super::migrant::Random(0x268a_31af_f145_0f51).guid();
     let root = graph.insert(record("GenericBox<Guid>", vec![Value::Guid(id)]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         Value::Guid(id)
     );
 }
 
-fn class_with_guid(stamped: bool) {
+fn class_with_guid(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let mut random = super::migrant::Random(0x67f9_e71b_25da_1d98);
     let id = random.guid();
@@ -1969,7 +1982,7 @@ fn class_with_guid(stamped: bool) {
         "ClassWithGuid",
         vec![Value::Guid(id), Value::Integer(number), Value::Ref(str_id)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let Some(Object::Record { class, fields }) = graph.get(copy) else {
         panic!("expected ClassWithGuid");
@@ -2020,18 +2033,19 @@ fn big_integer_inputs() -> [Value; 3] {
     ]
 }
 
-fn big_integer_round_trip(stamped: bool) {
+fn big_integer_round_trip(methods: impl Into<GraphMethods>) {
     let inputs = big_integer_inputs();
+    let methods = methods.into();
     for value in &inputs {
         let mut graph = Graph::default();
         let root = graph.insert(record("GenericBox<BigInteger>", vec![value.clone()]));
-        let (reader, copy) = deep_clone(&graph, root, stamped);
+        let (reader, copy) = methods.clone(&graph, root);
         assert_eq!(fields(reader.graph().get(copy).unwrap())[0], *value);
 
         let mut graph = Graph::default();
         let boxed = graph.insert(record("System.Numerics.BigInteger", vec![value.clone()]));
         let root = graph.insert(record("Box", vec![Value::Ref(boxed)]));
-        let (reader, copy) = deep_clone(&graph, root, stamped);
+        let (reader, copy) = methods.clone(&graph, root);
         let graph = reader.graph();
         let boxed = reference(&fields(graph.get(copy).unwrap())[0]);
         assert_eq!(
@@ -2042,7 +2056,7 @@ fn big_integer_round_trip(stamped: bool) {
 
     let mut graph = Graph::default();
     let root = graph.insert(Object::Array(inputs.to_vec()));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.clone(&graph, root);
     assert_eq!(array_values(reader.graph(), copy), inputs);
 }
 
@@ -2278,19 +2292,19 @@ impl SpeciallySerializable {
     }
 }
 
-fn specially_serializable(stamped: bool) {
+fn specially_serializable(methods: impl Into<GraphMethods>) {
     let original =
         SpeciallySerializable::fill(&mut super::migrant::Random(0x7ebc_5aaa_33a6_a9f2), 100);
     let mut graph = Graph::default();
     let root = original.store(&mut graph);
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(
         original.data(),
         SpeciallySerializable::restore(reader.graph(), copy).data()
     );
 }
 
-fn special_in_array(stamped: bool) {
+fn special_in_array(methods: impl Into<GraphMethods>) {
     let mut random = super::migrant::Random(0xe4b7_395e_148f_a5c2);
     let first = SpeciallySerializable::fill(&mut random, 100);
     let last = SpeciallySerializable::fill(&mut random, 100);
@@ -2302,7 +2316,7 @@ fn special_in_array(stamped: bool) {
     let root = graph.insert(Object::Array(
         [first_id, text, boxed, last_id].map(Value::Ref).to_vec(),
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let items = array_values(graph, copy);
     let first_id = reference(&items[0]);
@@ -2320,7 +2334,7 @@ fn special_in_array(stamped: bool) {
     );
 }
 
-fn special_in_struct(stamped: bool) {
+fn special_in_struct(methods: impl Into<GraphMethods>) {
     let original =
         SpeciallySerializable::fill(&mut super::migrant::Random(0xab60_45e8_39c1_87ef), 100);
     let mut graph = Graph::default();
@@ -2329,7 +2343,7 @@ fn special_in_struct(stamped: bool) {
         "StructGenericBox<SpeciallySerializable>",
         vec![Value::Ref(special)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let special = reference(&fields(graph.get(copy).unwrap())[0]);
     assert_eq!(
@@ -2338,7 +2352,7 @@ fn special_in_struct(stamped: bool) {
     );
 }
 
-fn detect_stream_shift(stamped: bool) {
+fn detect_stream_shift(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let payload = crate::migrant::custom_payload::save(|writer| {
         for i in 0..3 {
@@ -2348,7 +2362,7 @@ fn detect_stream_shift(stamped: bool) {
     })
     .unwrap();
     let root = custom_record(&mut graph, "BadlySerializable", payload);
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let payload = custom_bytes(reader.graph(), copy, "BadlySerializable");
     let result = crate::migrant::custom_payload::load(payload, |reader| {
         reader.signed()?;
@@ -2379,7 +2393,7 @@ stamp_modes!(
     detect_stream_shift
 );
 
-fn nested_generic_array(stamped: bool) {
+fn nested_generic_array(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let text = graph.insert(string("test"));
     let generic = graph.insert(record("GenericClass<string>", vec![Value::Ref(text)]));
@@ -2388,7 +2402,7 @@ fn nested_generic_array(stamped: bool) {
         "GenericClassWithNestedGenericArgument<string>",
         vec![Value::Ref(array)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored = graph.get(copy).expect("expected restored object");
     let array = reference(&fields(restored)[0]);
@@ -2398,7 +2412,7 @@ fn nested_generic_array(stamped: bool) {
     assert_eq!(string_value(graph, &fields(item)[0]), "test");
 }
 
-fn list_of_interfaces(stamped: bool) {
+fn list_of_interfaces(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let variants = ["ImplementingInterfaceOne", "ImplementingInterfaceTwo"];
     let items = (0..100)
@@ -2409,7 +2423,7 @@ fn list_of_interfaces(stamped: bool) {
         "ClassWithTheListOfInterfaces",
         vec![Value::Ref(entries)],
     ));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored = graph.get(copy).expect("expected restored object");
     let items = list_values(graph, reference(&fields(restored)[0]), "List<IInterface>");
@@ -2821,4 +2835,17 @@ mod serial_generated_maps_sets {
     configurations!(readonly_collection, read_only_collection);
     configurations!(custom_key_dictionary, custom_key_dictionary);
     configurations!(custom_item_set, custom_item_set);
+}
+
+mod serial_generated_payloads {
+    use super::*;
+    configurations!(guid_box, box_with_guid);
+    configurations!(guid_class, class_with_guid);
+    configurations!(big_integer, big_integer_round_trip);
+    configurations!(special, specially_serializable);
+    configurations!(special_array_identity, special_in_array);
+    configurations!(special_struct, special_in_struct);
+    configurations!(stream_shift, detect_stream_shift);
+    configurations!(nested_generic_array, nested_generic_array);
+    configurations!(interface_list, list_of_interfaces);
 }
