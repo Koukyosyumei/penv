@@ -84,5 +84,5 @@ tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.Platfo
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.ParserPrimitivesTest	25	25	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.ParserTests	66	66	0	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.PreLexerTests	21	21	0	0	0	-
-tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	20	8	3	9	0	The remaining runnable cases require the CreationDriver's mock CPU object creation, scoped cross-include CPU reference resolution and post-load sysbus.cpu lookup.
+tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	20	17	3	0	0	-
 tests/unit-tests/RenodeTests/RenodeTests.csproj	Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	46	0	0	46	0	The REPL loaders lack the fixture's generic reflection-based creation and verification pipeline, including typed constructor, registration and property diagnostics on managed mock types.

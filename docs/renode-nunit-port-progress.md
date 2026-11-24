@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,948 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,957 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 447 |
+| 移植待ち | 438 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 14 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 13 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -406,3 +406,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `TypeExtensionsCacheTests` の11件を移植した。CLR リフレクションの入力を Rust のメンバー記述子で明示し、キャッシュを初期化して同じ問い合わせを2回実行したときのミス数、列挙型の要素型、公開問い合わせの網羅を検証した。[公式IDとの対応](nunit-evidence/targeted-type-extensions-cache.tsv)・[実行ログ](nunit-evidence/targeted-type-extensions-cache.log)
 
 `CortexA9GICTests.ShouldSendAndReceiveIPI`（公式 NUnit ID `0-1036`）の固定上流メソッド本体は `Assert.Inconclusive()` のみ。進捗表では非実行対象に、NUnit ランナーでは `inconclusive` に分類する。[公式IDと分類根拠](nunit-evidence/upstream-cortex-a9-gic-inconclusive.tsv)
+
+`UsingTests` の残り9件を移植した。REPL を解析し、MockCPU を生成する Rust の経路でファイル内ローカル参照、インクルード間の参照とオーバーライド順を検証した。登録後の `sysbus.cpu` から最終プロパティ値を取得し、9件が合格した。[公式IDとの対応](nunit-evidence/targeted-using-creation.tsv)・[実行ログ](nunit-evidence/targeted-using-creation.log)

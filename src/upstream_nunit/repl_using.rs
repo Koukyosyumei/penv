@@ -156,3 +156,153 @@ fn backslash_should_not_be_path_separator_on_unix() {
         Path::new(r"/tmp/plat\form.repl")
     );
 }
+
+fn create_platform(
+    source: &str,
+    includes: &[(&str, &str)],
+) -> Result<creation::CpuPlatform, String> {
+    let files = Files::new();
+    for (name, content) in includes {
+        fs::write(files.0.join(name), content).unwrap();
+    }
+    creation::create_cpus(source, &files.0)
+}
+
+fn assert_override(source: &str, imports: &[(&str, &str)], expected: &str) {
+    let machine = create_platform(source, imports).unwrap();
+    let cpu = machine.cpu("sysbus.cpu").unwrap();
+    assert_eq!(cpu.placeholder.as_deref(), Some(expected));
+}
+
+#[test]
+fn renode_override_0() {
+    assert_override(
+        "\nusing \"A\"\nusing \"B\"\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 0x0\n    Placeholder: \"set by source first\"\n\ncpu:\n    Placeholder: \"set by source second\"\n",
+        &[
+            ("A", "\ncpu:\n    Placeholder: \"set by A\"\n"),
+            ("B", "\nusing \"C\"\ncpu:\n    Placeholder: \"set by B\"\n"),
+            ("C", "\ncpu:\n    Placeholder: \"set by C\"\n"),
+        ],
+        "set by source second",
+    );
+}
+
+#[test]
+fn renode_override_1() {
+    assert_override(
+        "\nusing \"A\"\nusing \"B\"\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n",
+        &[
+            (
+                "A",
+                "\ncpu:\n    Placeholder: \"set by A first\"\ncpu:\n    Placeholder: \"set by A second\"\n",
+            ),
+            (
+                "B",
+                "\nusing \"C\"\ncpu:\n    Placeholder: \"set by B first\"\ncpu:\n    Placeholder: \"set by B second\"\n",
+            ),
+            (
+                "C",
+                "\ncpu:\n    Placeholder: \"set by C first\"\ncpu:\n    Placeholder: \"set by C second\"\n",
+            ),
+        ],
+        "set by B second",
+    );
+}
+
+#[test]
+fn renode_override_2() {
+    assert_override(
+        "\nusing \"A\"\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 0x0\n",
+        &[
+            ("A", "\nusing \"B\"\ncpu:\n    Placeholder: \"set by A\"\n"),
+            ("B", "\ncpu:\n    Placeholder: \"set by B\"\n"),
+        ],
+        "set by A",
+    );
+}
+
+#[test]
+fn renode_override_3() {
+    assert_override(
+        "\nusing \"A\"\nusing \"B\"\nusing \"C\"\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n",
+        &[
+            (
+                "A",
+                "\ncpu:\n    Placeholder: \"set by A first\"\ncpu:\n    Placeholder: \"set by A second\"\n",
+            ),
+            (
+                "B",
+                "\ncpu:\n    Placeholder: \"set by B first\"\ncpu:\n    Placeholder: \"set by B second\"\n",
+            ),
+            ("C", "\nusing \"A\";\n"),
+        ],
+        "set by A second",
+    );
+}
+
+#[test]
+fn renode_override_4() {
+    assert_override(
+        "\nusing \"A\"\nusing \"B\"\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus\n",
+        &[
+            (
+                "A",
+                "\ncpu:\n    Placeholder: \"set by A first\"\ncpu:\n    Placeholder: \"set by A second\"\n",
+            ),
+            (
+                "B",
+                "\nusing \"A\"\ncpu:\n    Placeholder: \"set by B first\"\ncpu:\n    Placeholder: \"set by B second\"\n",
+            ),
+        ],
+        "set by B second",
+    );
+}
+
+#[test]
+fn renode_using_reference_direct() {
+    create_platform(
+        "\nusing \"A\"\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu1",
+        &[("A", "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU")],
+    )
+    .unwrap();
+}
+
+#[test]
+fn renode_using_reference_private() {
+    assert!(
+        create_platform(
+            "\nusing \"A\"\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu1",
+            &[("A", "\nlocal cpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU")]
+        )
+        .err()
+        .unwrap()
+        .contains("MissingReference:")
+    );
+}
+
+#[test]
+fn renode_using_reference_nested() {
+    create_platform(
+        "\nusing \"A\"\ncpu3: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu2",
+        &[
+            (
+                "A",
+                "\nusing \"B\"\ncpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: cpu1",
+            ),
+            ("B", "\ncpu1: Antmicro.Renode.UnitTests.Mocks.MockCPU"),
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn renode_using_reference_reverse() {
+    create_platform(
+        "\nusing \"A\"\notherCpu: Antmicro.Renode.UnitTests.Mocks.MockCPU",
+        &[(
+            "A",
+            "\ncpu: Antmicro.Renode.UnitTests.Mocks.MockCPU\n    OtherCpu: otherCpu",
+        )],
+    )
+    .unwrap();
+}

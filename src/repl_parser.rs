@@ -1,3 +1,5 @@
+pub(crate) mod creation;
+
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -1199,12 +1201,16 @@ pub(crate) fn parse_inline(
     content: &str,
     root: &Path,
 ) -> Result<Vec<crate::network_repl::Entry>, String> {
+    convert(inline_entries(content, root)?)
+}
+
+fn inline_entries(content: &str, root: &Path) -> Result<Vec<Entry>, String> {
     let source = Path::new("<inline REPL>");
     let mut entries = Vec::new();
     parse_text(content, source, &mut entries, |filename, entries| {
         load_using(filename, root, root, &mut HashSet::new(), entries)
     })?;
-    convert(entries)
+    Ok(entries)
 }
 
 fn convert(entries: Vec<Entry>) -> Result<Vec<crate::network_repl::Entry>, String> {

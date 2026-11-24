@@ -8,7 +8,6 @@ Antmicro.Renode.PeripheralsTests.OpenTitan_KeyManagerTest	All five cases need Ke
 Antmicro.Renode.PeripheralsTests.OpenTitan_SpiDeviceTest	OpenTitan SPI Device flash passthrough and FIFO model are absent.
 Antmicro.Renode.PeripheralsTests.SDCardEmmcTest	SD controllers lack an eMMC card model with CMD6 partition switching, EXT_CSD transfer, and separate user and boot areas.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The active REPL loader lacks a generic CreationDriver for the fixture's mock CPU/peripheral factories, reflection-based property binding and lifecycle assertions.
-Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	The remaining runnable cases require the CreationDriver's mock CPU object creation, scoped cross-include CPU reference resolution and post-load sysbus.cpu lookup.
 Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	The REPL loaders lack the fixture's generic reflection-based creation and verification pipeline, including typed constructor, registration and property diagnostics on managed mock types.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
