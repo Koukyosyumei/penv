@@ -856,3 +856,38 @@ cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
     assert_eq!(dict[&cpu1], 1);
     assert_eq!(dict[&cpu2], 2);
 }
+
+#[test]
+fn should_fail_on_empty_keyword_as_type() {
+    assert_error(
+        r#"
+mockPeripheral: empty @ sysbus <0, 1>
+    value: 0"#,
+        "SyntaxError",
+    );
+}
+
+#[test]
+fn should_fail_on_empty_keyword_as_registration_destination() {
+    assert_error(
+        r#"
+mockPeripheral:  Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ empty <0, 1>
+    value: 0"#,
+        "SyntaxError",
+    );
+}
+
+#[test]
+fn should_fail_on_empty_keyword_as_parameter_name() {
+    assert_error(
+        r#"
+mockPeripheral:  Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>
+    empty: 0"#,
+        "SyntaxError",
+    );
+}
+
+#[test]
+fn should_fail_on_empty_keyword_as_using_parameter() {
+    assert_error(r#"using empty"#, "SyntaxError");
+}

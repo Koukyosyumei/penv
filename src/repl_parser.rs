@@ -357,6 +357,9 @@ fn registration_point(item: &str) -> Result<(&str, Option<RegistrationValue<'_>>
         .find(|&(_, c)| !c.is_alphanumeric() && c != '_')
         .map_or(item.len(), |(index, _)| index);
     let (register, value) = item.split_at(end);
+    if register == "empty" {
+        return Err("SyntaxError: empty cannot name a registration destination");
+    }
     let value = value.trim();
     let point = match value.as_bytes().first() {
         None => None,
@@ -1100,6 +1103,9 @@ fn parse_text(
                     return Err(error("unexpected text after REPL object"));
                 }
             }
+            if property_key(&property) == Some("empty") {
+                return Err(error("SyntaxError: empty cannot name a property"));
+            }
             current
                 .as_mut()
                 .ok_or_else(|| error("property has no declaration"))?
@@ -1171,6 +1177,9 @@ fn parse_text(
             }
             None => (declaration.trim(), None),
         };
+        if model == "empty" {
+            return Err(error("SyntaxError: empty cannot name a type"));
+        }
         current = Some(Entry {
             name: name.into(),
             model: model.into(),
