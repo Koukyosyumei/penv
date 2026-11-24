@@ -2254,14 +2254,36 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         let body = read_monitor_text(&mut input, length)?;
         return load_script(&source, root, true, Some(&body)).map(|boot| StartupInput::Boot(Box::new(boot)));
     }
-    let length = header.strip_prefix("PENV-INSPECT ")
-        .ok_or("expected PENV-STARTUP or PENV-INSPECT followed by the byte count")?;
+    let chain_length = header.strip_prefix("PENV-INSPECT-CHAIN ");
+    let length = chain_length.or_else(|| header.strip_prefix("PENV-INSPECT "))
+        .ok_or("expected a monitor startup or inspection frame followed by the byte count")?;
+    let inspect_chain = chain_length.is_some();
     let body = read_monitor_text(&mut input, length)?;
     header.clear();
     input.by_ref().take(64).read_line(&mut header).map_err(|e| e.to_string())?;
     let length = header.strip_prefix("PENV-COMMAND ").ok_or("expected PENV-COMMAND")?;
     let command = read_monitor_text(&mut input, length)?;
     let mut state = script_state()?;
+    if inspect_chain {
+        let mut separators = Vec::new();
+        if command_tokens(command.trim(), Some(&mut separators)).is_ok()
+            && !separators.is_empty()
+            && load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.machine && state.boot.runtime.iter().all(|entry| is_console_action(&entry.action))
+        {
+            state.boot.monitor_output.clear();
+            state.boot.runtime.retain(|entry| !matches!(entry.action, Action::Echo(_) | Action::LastLog(_)));
+            if load_text(&source, source.clone(), root, &mut state, &command).is_ok()
+                && !state.machine && !state.boot.has_platform() && !state.boot.started
+                && state.boot.runtime.iter().all(|entry| is_console_action(&entry.action))
+            {
+                let mut output = Vec::new();
+                run_console_script(&state.boot, &mut output)?;
+                return Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?));
+            }
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     if let Ok(["mach" | "machine", "set", selector]) = command_words(command.trim()).as_deref() {
         if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
             && let Err(error) = validate_machine_selection(

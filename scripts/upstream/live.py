@@ -336,10 +336,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             finally:
                 proc.stdout.close()
 
-    def inspect_startup(self, command):
+    def inspect_startup(self, command, *, chain=False):
         startup = ("\n".join(self.commands) + "\n").encode()
         query = command.encode()
-        request = (f"PENV-INSPECT {len(startup)}\n".encode() + startup
+        frame = "PENV-INSPECT-CHAIN" if chain else "PENV-INSPECT"
+        request = (f"{frame} {len(startup)}\n".encode() + startup
                    + f"PENV-COMMAND {len(query)}\n".encode() + query)
         argv = [str(self.binary), "run", "--platform-root", str(self.root),
                 "--monitor-stdio", "--script", "-"]
@@ -383,6 +384,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     self.commands.append(select)
                 if re.fullmatch(r"(?:mach|machine)\s+set\s+.+", command, re.DOTALL):
                     self.inspect_startup(command)
+                if ";" in command:
+                    reply, value = self.inspect_startup(command, chain=True)
+                    if reply == "OK":
+                        self.commands.append(command)
+                        return value
                 # Only route read-only queries here. Rust parses and evaluates the original command.
                 if re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)
