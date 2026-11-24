@@ -453,11 +453,16 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 return Err(error);
             }
         };
-        self.write_frame(graph, root)
+        self.write_frame(graph, root)?;
+        if let Some(surrogates) = self.surrogates.as_mut() {
+            surrogates.close_registration();
+        }
+        Ok(())
     }
 
     fn discover(&mut self, graph: &Graph, root: ObjectId) -> io::Result<usize> {
         let root = self.intern(graph, root)?;
+        let mut parents = HashMap::new();
         let mut index = 0;
         // Reserve identities before visiting children, including forward and cyclic edges.
         while let Some(id) = self.pending.get(index).copied() {
@@ -866,6 +871,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
         self.graph
             .objects
             .extend(objects.into_iter().map(|object| Some(Arc::new(object))));
+        if let Some(surrogates) = self.surrogates.as_mut() {
+            surrogates.close_registration();
+        }
         Ok(Some(ObjectId(base + root)))
     }
 

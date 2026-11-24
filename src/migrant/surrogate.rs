@@ -10,36 +10,59 @@ struct Registration<'a> {
     converter: Option<Converter<'a>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegistrationClosed;
+
 #[derive(Default)]
 pub struct Surrogates<'a> {
     parents: HashMap<String, Vec<String>>,
     registrations: Vec<Registration<'a>>,
+    closed: bool,
 }
 
 impl<'a> Surrogates<'a> {
     /// Describe direct matches such as a base class, an implemented interface,
     /// or the generic definition of a closed type.
-    pub fn describe(&mut self, class: &str, parents: &[&str]) {
+    pub fn describe(&mut self, class: &str, parents: &[&str]) -> Result<(), RegistrationClosed> {
+        self.check_open()?;
         self.parents.insert(
             class.into(),
             parents.iter().map(|parent| (*parent).into()).collect(),
         );
+        Ok(())
     }
 
     pub fn register(
         &mut self,
         class: impl Into<String>,
         converter: impl FnMut(ObjectId, &Object) -> io::Result<Object> + 'a,
-    ) {
-        self.set(class.into(), Some(Box::new(converter)));
+    ) -> Result<(), RegistrationClosed> {
+        self.set(class.into(), Some(Box::new(converter)))
     }
 
     /// Stop fallback to a more general registration when this type matches.
-    pub fn disable(&mut self, class: impl Into<String>) {
-        self.set(class.into(), None);
+    pub fn disable(&mut self, class: impl Into<String>) -> Result<(), RegistrationClosed> {
+        self.set(class.into(), None)
     }
 
-    fn set(&mut self, class: String, converter: Option<Converter<'a>>) {
+    pub(super) fn close_registration(&mut self) {
+        self.closed = true;
+    }
+
+    fn check_open(&self) -> Result<(), RegistrationClosed> {
+        if self.closed {
+            Err(RegistrationClosed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn set(
+        &mut self,
+        class: String,
+        converter: Option<Converter<'a>>,
+    ) -> Result<(), RegistrationClosed> {
+        self.check_open()?;
         if let Some(existing) = self
             .registrations
             .iter_mut()
@@ -49,6 +72,7 @@ impl<'a> Surrogates<'a> {
         } else {
             self.registrations.push(Registration { class, converter });
         }
+        Ok(())
     }
 
     fn matches(&self, candidate: &str, class: &str) -> bool {

@@ -1,7 +1,7 @@
 use crate::migrant::object_stream::{
     FieldKind, Graph, Object, ObjectId, ObjectReader, ObjectWriter, References, TypeStamp, Value,
 };
-use crate::migrant::surrogate::Surrogates;
+use crate::migrant::surrogate::{RegistrationClosed, Surrogates};
 use std::io::{Cursor, Seek};
 
 const fn stamp(
@@ -69,7 +69,9 @@ fn place_object_for_surrogate(stamped: bool) {
     let mut graph = Graph::default();
     let root = graph.insert(record("SurrogateMockB", vec![]));
     let mut restore = Surrogates::default();
-    restore.register("SurrogateMockB", |_, _| Ok(a(999)));
+    restore
+        .register("SurrogateMockB", |_, _| Ok(a(999)))
+        .unwrap();
     round_trip(
         &graph,
         root,
@@ -84,7 +86,7 @@ fn place_surrogate_for_object(stamped: bool) {
     let mut graph = Graph::default();
     let root = graph.insert(record("SurrogateMockB", vec![]));
     let mut encode = Surrogates::default();
-    encode.register("SurrogateMockB", |_, _| Ok(a(1)));
+    encode.register("SurrogateMockB", |_, _| Ok(a(1))).unwrap();
     round_trip(
         &graph,
         root,
@@ -114,11 +116,13 @@ fn place_surrogate_for_object_preserving_identity(stamped: bool) {
     let root = graph.insert(record("List<object>", vec![Value::Ref(items)]));
     let counter = std::cell::Cell::new(0);
     let mut encode = Surrogates::default();
-    encode.register("SurrogateMockB", |_, _| {
-        let value = counter.get();
-        counter.set(value + 1);
-        Ok(a(value))
-    });
+    encode
+        .register("SurrogateMockB", |_, _| {
+            let value = counter.get();
+            counter.set(value + 1);
+            Ok(a(value))
+        })
+        .unwrap();
     round_trip(
         &graph,
         root,
@@ -146,10 +150,12 @@ fn do_surrogate_object_swap(stamped: bool, times: usize) {
     let root = graph.insert(record("SurrogateMockB", vec![]));
     let mut encode = Surrogates::default();
     let mut restore = Surrogates::default();
-    encode.register("SurrogateMockB", |_, _| Ok(a(1)));
-    restore.register("SurrogateMockA", |_, _| {
-        Ok(record("SurrogateMockC", vec![]))
-    });
+    encode.register("SurrogateMockB", |_, _| Ok(a(1))).unwrap();
+    restore
+        .register("SurrogateMockA", |_, _| {
+            Ok(record("SurrogateMockC", vec![]))
+        })
+        .unwrap();
     for _ in 0..times {
         round_trip(
             &graph,
@@ -166,9 +172,11 @@ fn deserialize_surrogate_pointing_to_itself(stamped: bool) {
     let mut graph = Graph::default();
     let root = graph.insert(record("System.Object", vec![]));
     let mut restore = Surrogates::default();
-    restore.register("System.Object", |id, _| {
-        Ok(record("SurrogateMockJ", vec![Value::Ref(id)]))
-    });
+    restore
+        .register("System.Object", |id, _| {
+            Ok(record("SurrogateMockJ", vec![Value::Ref(id)]))
+        })
+        .unwrap();
     round_trip(
         &graph,
         root,
@@ -233,12 +241,12 @@ const F_STRING: &str = "SurrogateMockF<string>";
 const I_STRING: &str = "SurrogateMockI<string>";
 
 fn describe_types(rules: &mut Surrogates<'_>) {
-    rules.describe(D, &[C]);
-    rules.describe(E, &[IE]);
-    rules.describe(H, &[IE, IG]);
-    rules.describe(F_STRING, &[OPEN_F]);
-    rules.describe(OPEN_I, &[OPEN_F]);
-    rules.describe(I_STRING, &[F_STRING, OPEN_I]);
+    rules.describe(D, &[C]).unwrap();
+    rules.describe(E, &[IE]).unwrap();
+    rules.describe(H, &[IE, IG]).unwrap();
+    rules.describe(F_STRING, &[OPEN_F]).unwrap();
+    rules.describe(OPEN_I, &[OPEN_F]).unwrap();
+    rules.describe(I_STRING, &[F_STRING, OPEN_I]).unwrap();
 }
 
 fn empty_case(
@@ -260,7 +268,9 @@ fn match_parent(stamped: bool, source: &str, target: &str, on_read: bool) {
     let mut restore = Surrogates::default();
     let rules = if on_read { &mut restore } else { &mut encode };
     describe_types(rules);
-    rules.register(target, |_, _| Ok(record("SurrogateMockB", vec![])));
+    rules
+        .register(target, |_, _| Ok(record("SurrogateMockB", vec![])))
+        .unwrap();
     empty_case(
         stamped,
         source,
@@ -273,8 +283,10 @@ fn match_parent(stamped: bool, source: &str, target: &str, on_read: bool) {
 fn prefer_specific(stamped: bool) {
     let mut encode = Surrogates::default();
     describe_types(&mut encode);
-    encode.register(C, |_, _| Ok(a(1)));
-    encode.register(D, |_, _| Ok(record("SurrogateMockB", vec![])));
+    encode.register(C, |_, _| Ok(a(1))).unwrap();
+    encode
+        .register(D, |_, _| Ok(record("SurrogateMockB", vec![])))
+        .unwrap();
     empty_case(
         stamped,
         D,
@@ -287,8 +299,12 @@ fn prefer_specific(stamped: bool) {
 fn prefer_first_interface(stamped: bool) {
     let mut encode = Surrogates::default();
     describe_types(&mut encode);
-    encode.register(IG, |_, _| Ok(Object::String("g".into())));
-    encode.register(IE, |_, _| Ok(Object::String("e".into())));
+    encode
+        .register(IG, |_, _| Ok(Object::String("g".into())))
+        .unwrap();
+    encode
+        .register(IE, |_, _| Ok(Object::String("e".into())))
+        .unwrap();
     empty_case(
         stamped,
         H,
@@ -335,12 +351,14 @@ fn extract_generic_field(stamped: bool) {
         "test",
         |graph, encode| {
             // As in the upstream callback, use the first instance field.
-            encode.register(OPEN_F, move |_, object| {
-                let Object::Record { fields, .. } = object else {
-                    unreachable!()
-                };
-                Ok(graph.get(ref_id(&fields[0])).unwrap().clone())
-            });
+            encode
+                .register(OPEN_F, move |_, object| {
+                    let Object::Record { fields, .. } = object else {
+                        unreachable!()
+                    };
+                    Ok(graph.get(ref_id(&fields[0])).unwrap().clone())
+                })
+                .unwrap();
         },
         None,
     );
@@ -352,8 +370,12 @@ fn prefer_closed_generic(stamped: bool) {
         F_STRING,
         "test",
         |_, encode| {
-            encode.register(OPEN_F, |_, _| Ok(Object::String("general".into())));
-            encode.register(F_STRING, |_, _| Ok(Object::String("special".into())));
+            encode
+                .register(OPEN_F, |_, _| Ok(Object::String("general".into())))
+                .unwrap();
+            encode
+                .register(F_STRING, |_, _| Ok(Object::String("special".into())))
+                .unwrap();
         },
         Some("special"),
     );
@@ -365,18 +387,22 @@ fn match_generic_base(stamped: bool, also_register_derived: bool) {
         I_STRING,
         "something",
         |_, encode| {
-            encode.register(OPEN_F, move |_, _| {
-                Ok(Object::String(
-                    if also_register_derived {
-                        "fail"
-                    } else {
-                        "success"
-                    }
-                    .into(),
-                ))
-            });
+            encode
+                .register(OPEN_F, move |_, _| {
+                    Ok(Object::String(
+                        if also_register_derived {
+                            "fail"
+                        } else {
+                            "success"
+                        }
+                        .into(),
+                    ))
+                })
+                .unwrap();
             if also_register_derived {
-                encode.register(OPEN_I, |_, _| Ok(Object::String("success".into())));
+                encode
+                    .register(OPEN_I, |_, _| Ok(Object::String("success".into())))
+                    .unwrap();
             }
         },
         Some("success"),
@@ -386,8 +412,10 @@ fn match_generic_base(stamped: bool, also_register_derived: bool) {
 fn disable_specific(stamped: bool) {
     let mut encode = Surrogates::default();
     describe_types(&mut encode);
-    encode.register(C, |_, _| Ok(Object::String("fail".into())));
-    encode.disable(D);
+    encode
+        .register(C, |_, _| Ok(Object::String("fail".into())))
+        .unwrap();
+    encode.disable(D).unwrap();
     empty_case(
         stamped,
         D,
@@ -450,3 +478,49 @@ modes!(
     true
 );
 modes!(disable_plain, disable_stamped, disable_specific);
+
+fn should_reject_registration_after_write(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("System.Object", vec![]));
+    let mut rules = Surrogates::default();
+    let mut writer = ObjectWriter::new(std::io::sink(), &graph, References::Preserve, true)
+        .with_surrogates(&mut rules);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+    assert_eq!(
+        rules.register("System.Object", |_, _| Ok(record("System.Object", vec![]))),
+        Err(RegistrationClosed)
+    );
+}
+
+fn should_reject_registration_after_read(stamped: bool) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record("System.Object", vec![]));
+    let mut rules = Surrogates::default();
+    round_trip(
+        &graph,
+        root,
+        stamped,
+        &mut Surrogates::default(),
+        &mut rules,
+        |_, _| {},
+    );
+    assert_eq!(
+        rules.register("System.Object", |_, _| Ok(record("System.Object", vec![]))),
+        Err(RegistrationClosed)
+    );
+}
+
+modes!(
+    registration_after_write_plain,
+    registration_after_write_stamped,
+    should_reject_registration_after_write
+);
+modes!(
+    registration_after_read_plain,
+    registration_after_read_stamped,
+    should_reject_registration_after_read
+);
