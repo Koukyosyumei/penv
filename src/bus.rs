@@ -5192,6 +5192,13 @@ impl Bus {
         ))
     }
 
+    pub(crate) fn uart_tester_matched_unfinished_line(&self, watch: UartWatch) -> bool {
+        matches!(watch, UartWatch::Tester(id) if matches!(
+            &self.uart_testers[id].history,
+            TesterHistory::Text(history) if history.matched_unfinished_line()
+        ))
+    }
+
     pub fn uart_tester_matched_line(&self, watch: UartWatch) -> Option<String> {
         let UartWatch::Tester(id) = watch else { return None };
         match &self.uart_testers.get(id)?.history {

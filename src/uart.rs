@@ -562,6 +562,10 @@ impl UartHistory {
         self.active.as_ref().is_some_and(|matcher| matcher.first_only && matcher.matched_completed_line)
     }
 
+    pub(crate) fn matched_unfinished_line(&self) -> bool {
+        self.active.as_ref().is_some_and(|active| active.matched && !active.matched_completed_line)
+    }
+
     pub fn matched_line(&self) -> Option<String> {
         let matched = self.active.as_ref().filter(|active| active.matched)?;
         Some(String::from_utf8_lossy(&matched.line.iter().copied().collect::<Vec<_>>()).into_owned())

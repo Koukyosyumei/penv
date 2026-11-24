@@ -714,14 +714,19 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise PenvExecutionError(f"penv monitor stopped during {command}: {exc}") from exc
         groups = []
         binary_result = None
+        timestamp_ms = None
         if status == "MATCHBYTES":
             content, *fields = value.split("\t")
             binary_result = {"Content": bytes.fromhex(content),
                              "Groups": [bytes.fromhex(field) for field in fields],
                              "Timestamp": 0.0}
             status = "MATCH"
-        elif status == "MATCHCAPTURES":
-            line, *captures = value.split("\t")
+        elif status in {"MATCHCAPTURES", "MATCHTIMEDUART"}:
+            fields = value.split("\t")
+            if status == "MATCHTIMEDUART":
+                timestamp_ns, *fields = fields
+                timestamp_ms = int(timestamp_ns) / 1_000_000
+            line, *captures = fields
             value = bytes.fromhex(line).decode()
             groups = [bytes.fromhex(field).decode() for field in captures]
             status = "MATCH"
@@ -729,6 +734,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                            elapsed_s=time.monotonic() - begin, stage="emulation")
         if uart_captures:
             measurement["groups"] = groups
+            if timestamp_ms is not None:
+                measurement["timestamp_ms"] = timestamp_ms
         if status in {"MATCH", "REJECTED"} or status == "OK" and assertion:
             measurement["result"] = "pass"
             self.measurements.append(measurement)
@@ -755,7 +762,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise PenvExecutionError(value)
         if binary_result is not None:
             return binary_result
-        return {"Line": value, "Groups": groups} if uart_captures else value
+        if uart_captures:
+            result = {"Line": value, "Groups": groups}
+            if timestamp_ms is not None:
+                result["Timestamp"] = timestamp_ms
+            return result
+        return value
 
     @staticmethod
     def duration(value):
