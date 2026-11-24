@@ -6,6 +6,7 @@ pub mod address_range;
 pub mod symbol;
 pub mod symbol_lookup;
 pub mod simple_cache;
+pub mod pseudorandom;
 pub mod weak_multi_table;
 pub mod option_validation;
 mod andes_csr;
