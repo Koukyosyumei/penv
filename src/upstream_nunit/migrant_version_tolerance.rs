@@ -15,6 +15,7 @@ enum Level {
     Inheritance,
     Add,
     Remove,
+    AddAndRemove,
     Guid,
 }
 
@@ -721,5 +722,132 @@ mod base_renaming {
     #[test]
     fn write_true_read_true_guid() {
         base_renaming(true, true, Level::Guid);
+    }
+}
+
+fn moved_field(write: bool, read: bool, level: Level) {
+    // Names are qualified by their declaring class so these represent
+    // different fields even though their simple names and value types coincide.
+    const BEFORE: &[(&str, FieldKind)] = &[
+        ("BaseA:a", FieldKind::Reference),
+        ("A:b", FieldKind::Integer),
+    ];
+    const AFTER: &[(&str, FieldKind)] =
+        &[("A:a", FieldKind::Reference), ("A:b", FieldKind::Integer)];
+    const CODECS: &[Codec] = &[generated_record!("A"; a: reference, b: integer)];
+    let source = TypeStamp {
+        class: "A",
+        module: "Dynamic",
+        revision: 1,
+        fields: BEFORE,
+    };
+    let target = TypeStamp {
+        revision: 2,
+        fields: AFTER,
+        ..source
+    };
+    let policy = VersionPolicy {
+        allow_module_revision_change: true,
+        allow_inheritance_chain_change: matches!(level, Level::Inheritance),
+        allow_field_addition: matches!(level, Level::Add | Level::AddAndRemove),
+        allow_field_removal: matches!(level, Level::Remove | Level::AddAndRemove),
+    };
+    let result = round_trip(
+        source,
+        target,
+        vec![Value::Null, Value::Integer(0)],
+        write,
+        read,
+        CODECS,
+        policy,
+        Some((&["BaseA"], &["BaseA"])),
+    );
+    assert_tolerance(
+        result,
+        policy.allow_field_addition && policy.allow_field_removal,
+    );
+}
+
+mod moved_fields {
+    use super::*;
+    #[test]
+    fn write_false_read_false_addandremove() {
+        moved_field(false, false, Level::AddAndRemove);
+    }
+    #[test]
+    fn write_false_read_false_inheritance() {
+        moved_field(false, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_false_add() {
+        moved_field(false, false, Level::Add);
+    }
+    #[test]
+    fn write_false_read_false_remove() {
+        moved_field(false, false, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_false_guid() {
+        moved_field(false, false, Level::Guid);
+    }
+    #[test]
+    fn write_false_read_true_addandremove() {
+        moved_field(false, true, Level::AddAndRemove);
+    }
+    #[test]
+    fn write_false_read_true_inheritance() {
+        moved_field(false, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_false_read_true_add() {
+        moved_field(false, true, Level::Add);
+    }
+    #[test]
+    fn write_false_read_true_remove() {
+        moved_field(false, true, Level::Remove);
+    }
+    #[test]
+    fn write_false_read_true_guid() {
+        moved_field(false, true, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_false_addandremove() {
+        moved_field(true, false, Level::AddAndRemove);
+    }
+    #[test]
+    fn write_true_read_false_inheritance() {
+        moved_field(true, false, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_false_add() {
+        moved_field(true, false, Level::Add);
+    }
+    #[test]
+    fn write_true_read_false_remove() {
+        moved_field(true, false, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_false_guid() {
+        moved_field(true, false, Level::Guid);
+    }
+    #[test]
+    fn write_true_read_true_addandremove() {
+        moved_field(true, true, Level::AddAndRemove);
+    }
+    #[test]
+    fn write_true_read_true_inheritance() {
+        moved_field(true, true, Level::Inheritance);
+    }
+    #[test]
+    fn write_true_read_true_add() {
+        moved_field(true, true, Level::Add);
+    }
+    #[test]
+    fn write_true_read_true_remove() {
+        moved_field(true, true, Level::Remove);
+    }
+    #[test]
+    fn write_true_read_true_guid() {
+        moved_field(true, true, Level::Guid);
     }
 }

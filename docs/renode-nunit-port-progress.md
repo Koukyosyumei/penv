@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,284 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,304 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 111 |
+| 移植待ち | 91 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -500,3 +500,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 直接フィールドの追加・削除40件を移植した。入力スタンプから復元先のフィールド名への対応を求め、追加フィールドは既定値に、削除フィールドは復元結果から除外する。生成読み込みは入力スキーマ用の Rust コーデックで値を読み、復元先へ写像する。最終の対象実行で60件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-field-projection.tsv)・[実行ログ](nunit-evidence/targeted-migrant-field-projection.log)
 
 基底型の挿入・削除・名前変更60件を移植した。Rust の型スタンプに継承階層を明示する構成を追加し、上流の4読み書き構成と5許可レベルで復元の成否を照合した。[公式IDとの対応](nunit-evidence/targeted-migrant-hierarchy.tsv)・[実行ログ](nunit-evidence/targeted-migrant-hierarchy.log)
+
+基底型から派生型へ移された同名フィールドの20件を移植した。宣言型で修飾したフィールド名により、削除と追加の両方を許可したときだけ復元に成功することを照合した。最終の対象実行では140件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-moved-fields.tsv)・[実行ログ](nunit-evidence/targeted-migrant-moved-fields.log)
