@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,040 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,044 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,356 |
+| 移植待ち | 2,352 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 41 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 40 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -132,7 +132,7 @@ SystemBus の実行対象26件の公式 ID 対応が揃った。上流 Ignore �
 CPU のテストにはバス登録用の識別子とアーキテクチャ名を使う。
 [公式 ID 別の結果](nunit-evidence/targeted-bus-lifecycle-paced-time.tsv) · [対象実行ログ](nunit-evidence/targeted-bus-lifecycle-paced-time.log)
 
-今回の追加は3件。TimeSourceTests の外部メソッド呼び出し記録・再生1件と、
+前回の追加は3件。TimeSourceTests の外部メソッド呼び出し記録・再生1件と、
 Migrant のジェネリックサロゲート2件。TimeSourceTests の実行対象14件の公式 ID 対応が
 揃った。記録・再生では同じマシンティックで呼び出しを再生し、固定シードの待機時間を
 使ってテストのタイムラインを進める。Rust ではディスパッチャーを明示的に進行させる。
@@ -146,3 +146,10 @@ Migrant の未移植分には、生成読み書き、組み込みサロゲート
 python3 scripts/upstream/nunit_port_progress.py \
   docs/nunit-evidence/inventory.jsonl.gz docs/nunit-evidence/port-progress.tsv
 ```
+
+## EFM32 I²C と SymbolTests
+
+EFM32 I²C のレジスタ初期化・制御・割り込み3件と、SymbolTests の名前復元1件を追加した。4件すべて対象実行で合格した。EFM32 I²C の残り1件には BMC050 のアドレス登録と START・STOP によるデータ交換が必要。名前復元には GNU c++filt を使用し、実行できない環境では元の名前を保持する。
+
+- [公式 ID ごとの結果](nunit-evidence/targeted-efm32-symbols.tsv)
+- [対象実行ログ](nunit-evidence/targeted-efm32-symbols.log)
