@@ -276,6 +276,8 @@ def main():
     parser.add_argument("--renode", type=Path, default=ROOT.parent / "renode")
     parser.add_argument("--out", required=True, type=Path, help="new evidence directory")
     parser.add_argument("--inventory-only", action="store_true")
+    parser.add_argument("--all", action="store_true", help="queue all host-selected Robot suites")
+    parser.add_argument("--jobs", type=int, choices=range(1, 11), default=10)
     parser.add_argument("--suite", action="append", help="manifest-relative Robot suite path")
     parser.add_argument("--case", help="exact Robot test name")
     parser.add_argument("--negative-control", action="store_true", help="additional short-deadline HEX pilot")
@@ -297,7 +299,11 @@ def main():
                 exclude=["excluded", f"exclude_{system}", f"exclude_host_{arch}"],
                 skip=["skipped", f"skip_{system}"])
     rows, projects, providers, options = inventory(renode, host)
-    selected = [row for row in rows if row["path"] in (args.suite or DEFAULT_ROBOT)
+    if args.all and args.suite:
+        parser.error("--all and --suite are mutually exclusive")
+    if args.all and not args.nunit_root:
+        parser.error("--all requires --nunit-root so all official NUnit IDs are included")
+    selected = [row for row in rows if (args.all or row["path"] in (args.suite or DEFAULT_ROBOT))
                 and (args.case is None or row["name"] == args.case)]
     if not args.inventory_only and not selected:
         parser.error("no host-selected Robot cases match")
@@ -328,45 +334,60 @@ def main():
         metadata["penv_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
         assets = out / "assets"
         assets.mkdir()
-        tasks = [(case, False) for case in selected]
+        from batch import run_batch
+        results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs))
         if args.negative_control:
             pilot, = [row for row in rows if row["path"] == DEFAULT_ROBOT[0]
                       and row["name"] == "Should Load HEX"]
-            tasks.append((pilot, True))
-        for i, (case, negative) in enumerate(tasks):
-            directory = out / f"robot-{i:04d}"
+            directory = out / "negative-control"
             directory.mkdir()
-            result = run_robot(case, providers[case["path"]], options, renode, binary,
-                               directory, assets, negative)
-            record = dict(case, **result)
+            result = run_robot(pilot, providers[pilot["path"]], options, renode, binary,
+                               directory, assets, True)
+            record = dict(pilot, engine="penv", **result)
             write_json(directory / "case.json", record)
             results.append(record)
-            print(result["status"], case["id"], case["parameters"], flush=True)
     if nunit_root:
         metadata["dotnet"] = log_command(out, "dotnet-version", [args.dotnet, "--version"], nunit_root)
         nunit, nunit_runs = discover_nunit(nunit_root, args.dotnet, projects, host, out / "nunit")
         for row in nunit:
             if row["status"] == "not_run" and row["rust_test"] and not args.inventory_only:
                 row = run_rust(row, out / "nunit", out / "cargo")
+            row["engine"] = "penv-rust"
+            if row["status"] == "unmapped":
+                row.update(status="unsupported", reason="no equivalent Rust test")
             results.append(row)
     else:
         nunit_runs = [dict(item, status="discovery_not_run") for item in projects]
     check_upstream(renode)
     if git(ROOT, "rev-parse", "HEAD") != penv_sha or git(ROOT, "status", "--porcelain", "-uno"):
         raise ValueError("penv sources changed during the run")
+    completed_keys = {(row["id"], row["parameters"]["hotspot_action"])
+                      for row in results if row.get("path") and row["status"] != "diagnostic"}
+    results.extend(dict(row, engine="penv", status="not_run", reason="outside execution selection")
+                   for row in rows if (row["id"], row["parameters"]["hotspot_action"])
+                   not in completed_keys)
     counts = dict(Counter(row["status"] for row in results))
+    coverage = {"pass": "PASS", "fail": "FAIL", "unsupported": "UNSUPPORTED",
+                "skipped": "SKIP", "excluded": "SKIP"}
+    for row in results:
+        row["verdict"] = coverage.get(row["status"], "NOT_RUN") if row["status"] != "diagnostic" else None
+    metadata["upstream_execution"] = "discovery only; no upstream results used as penv verdicts"
     metadata["nunit_resources_sha"] = (
         git(nunit_root / "lib/resources", "rev-parse", "HEAD")
         if nunit_root and (nunit_root / "lib/resources/.git").exists() else None
     )
     metadata["measured_cases"] = counts.get("pass", 0) + counts.get("fail", 0)
     write_json(out / "results.json", dict(metadata=metadata, counts=counts,
+                                         verdicts=dict(Counter(row["verdict"] for row in results
+                                                               if row["verdict"])),
                                          nunit=nunit_runs, cases=results))
     print(counts)
     accepted = {"pass", "skipped", "unmapped", "diagnostic", "excluded", "not_runnable"}
     if args.inventory_only:
         accepted.add("not_run")
-    return int(any(status not in accepted for status in counts)
+    return int(any(row["status"] not in accepted and row.get("reason") != "outside execution selection"
+                   and not (row.get("engine") == "penv-rust" and row["status"] == "unsupported")
+                   for row in results)
                or any(row.get("status") == "diagnostic" and row["outcome"] != "fail"
                       for row in results)
                or bool(nunit_root and any(run["status"] != "discovered" for run in nunit_runs))

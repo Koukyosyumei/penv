@@ -3,6 +3,7 @@
 import hashlib
 import re
 import subprocess
+import tempfile
 import time
 import urllib.request
 from xmlrpc.server import SimpleXMLRPCServer
@@ -30,6 +31,12 @@ class Endpoint:
         self.timeout = "8"
         self.calls = []
         self.measurements = []
+        self.reset()
+
+    def begin_case(self, out):
+        self.out = out
+        self.calls.clear()
+        self.measurements.clear()
         self.reset()
 
     def get_keyword_names(self):
@@ -106,7 +113,11 @@ class Endpoint:
             data = asset.read_bytes()
         if len(data) != int(pin[1]) or hashlib.sha1(data).hexdigest() != pin[2]:
             raise ValueError(f"upstream firmware integrity check failed: {url}")
-        asset.write_bytes(data)
+        if not asset.exists():
+            with tempfile.NamedTemporaryFile(dir=self.assets, delete=False) as staged:
+                staged.write(data)
+            from pathlib import Path
+            Path(staged.name).replace(asset)
         self.calls[-1].update(asset=str(asset), sha256=hashlib.sha256(data).hexdigest())
 
     def terminal(self, uart):
