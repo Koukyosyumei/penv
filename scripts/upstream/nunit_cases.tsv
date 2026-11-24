@@ -946,3 +946,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldOmitTransientClass	upstream_nunit::migrant_object_stream::omit_transient_class_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldOmitTransientField	upstream_nunit::migrant_object_stream::omit_transient_field_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldThrowOnThreadLocalSerialization	upstream_nunit::migrant_object_stream::reject_thread_local_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).GithubIssue60	upstream_nunit::migrant_object_stream::issue_60_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,False).ShouldFindPathToPointerContainingObject	upstream_nunit::migrant_object_stream::native_resource_path_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).GithubIssue60	upstream_nunit::migrant_object_stream::issue_60_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldFindPathToPointerContainingObject	upstream_nunit::migrant_object_stream::native_resource_path_stamped	new

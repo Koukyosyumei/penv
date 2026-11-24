@@ -1,7 +1,7 @@
 //! Reference-preserving object streams for Rust graph descriptors.
 //!
 //! This uses Migrant's primitive encoding with a Rust object-record format.
-use super::primitive::{Guid, Reader, Writer};
+use super::primitive::{Decimal, Guid, Reader, Writer};
 use super::surrogate::Surrogates;
 use std::collections::{HashMap, hash_map::Entry};
 use std::io::{self, Read, Write};
@@ -21,6 +21,8 @@ pub enum FieldKind {
     Guid = 5,
     BigInteger = 6,
     NativeResource = 7,
+    Decimal = 8,
+    NullableDecimal = 9,
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +53,8 @@ impl TypeStamp<'_> {
                         | (FieldKind::Guid, Value::Guid(_))
                         | (FieldKind::BigInteger, Value::BigInteger(_))
                         | (FieldKind::NativeResource, Value::NativeResource(_))
+                        | (FieldKind::Decimal, Value::Decimal(_))
+                        | (FieldKind::NullableDecimal, Value::Null | Value::Decimal(_))
                         | (FieldKind::Reference, Value::Null | Value::Ref(_))
                 )
             })
@@ -98,25 +102,32 @@ pub enum NativeResource {
     ThreadLocal,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NonSerializableResource(pub NativeResource);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NonSerializableResource {
+    pub resource: NativeResource,
+    pub path: Vec<String>,
+}
 
 impl std::fmt::Display for NonSerializableResource {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
             "native resource {:?} cannot be serialized",
-            self.0
-        )
+            self.resource
+        )?;
+        if !self.path.is_empty() {
+            write!(formatter, " at {}", self.path.join(" -> "))?;
+        }
+        Ok(())
     }
 }
 
 impl std::error::Error for NonSerializableResource {}
 
-fn unsupported(resource: NativeResource) -> io::Error {
+fn unsupported(resource: NativeResource, path: Vec<String>) -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
-        NonSerializableResource(resource),
+        NonSerializableResource { resource, path },
     )
 }
 
@@ -129,6 +140,7 @@ pub enum Value {
     /// Little-endian signed two's-complement bytes.
     BigInteger(Vec<u8>),
     NativeResource(NativeResource),
+    Decimal(Decimal),
     Ref(ObjectId),
 }
 
@@ -489,9 +501,36 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             }
             for value in values {
                 match value {
-                    Value::NativeResource(resource) => return Err(unsupported(*resource)),
-                    Value::Ref(id) => {
-                        self.intern(graph, *id)?;
+                    Value::NativeResource(resource) => {
+                        let mut path = Vec::new();
+                        let mut current = id;
+                        loop {
+                            let object = if current == id {
+                                object
+                            } else {
+                                self.replacements
+                                    .get(&current)
+                                    .or_else(|| graph.get(current))
+                                    .unwrap()
+                            };
+                            path.push(match object {
+                                Object::Record { class, .. } => class.clone(),
+                                _ => "array".into(),
+                            });
+                            let Some(&parent) = parents.get(&current) else {
+                                break;
+                            };
+                            current = parent;
+                        }
+                        path.reverse();
+                        return Err(unsupported(*resource, path));
+                    }
+                    Value::Ref(child) => {
+                        let ready = self.pending.len();
+                        self.intern(graph, *child)?;
+                        if self.pending.len() != ready {
+                            parents.insert(*child, id);
+                        }
                     }
                     Value::BigInteger(bytes) if bytes.is_empty() || bytes.len() > MAX_ITEMS => {
                         return Err(invalid("invalid big integer length"));
@@ -581,7 +620,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     data.bytes(&[4])?;
                     data.guid(*value)?;
                 }
-                Value::NativeResource(resource) => return Err(unsupported(*resource)),
+                Value::NativeResource(resource) => return Err(unsupported(*resource, Vec::new())),
+                Value::Decimal(value) => {
+                    data.bytes(&[6])?;
+                    data.decimal(*value)?;
+                }
                 Value::BigInteger(bytes) => {
                     data.bytes(&[5])?;
                     data.unsigned(bytes.len() as u64)?;
@@ -862,6 +905,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                     self.data.bytes(&mut bytes)?;
                     Value::BigInteger(bytes)
                 }
+                6 => Value::Decimal(self.data.decimal()?),
                 _ => return Err(invalid("unknown value kind")),
             });
         }

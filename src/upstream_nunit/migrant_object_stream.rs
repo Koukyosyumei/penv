@@ -112,6 +112,28 @@ const STAMPS: &[TypeStamp<'static>] = &[
         "ClassWithThreadLocal",
         &[("<ThreadLocal>k__BackingField", FieldKind::NativeResource)],
     ),
+    stamp(
+        "GenericBox<AnotherContainingType>",
+        &[("Element", FieldKind::Reference)],
+    ),
+    stamp(
+        "AnotherContainingType",
+        &[("WithIntPtr", FieldKind::Reference)],
+    ),
+    stamp(
+        "Issue60OuterClass",
+        &[
+            ("Field1", FieldKind::Decimal),
+            ("Inner", FieldKind::Reference),
+        ],
+    ),
+    stamp(
+        "Issue60InnerClass",
+        &[
+            ("Field2", FieldKind::NullableDecimal),
+            ("Field3", FieldKind::NullableDecimal),
+        ],
+    ),
     stamp("System.Object", &[]),
     stamp("Dictionary<int,int>", &[("items", FieldKind::Reference)]),
     stamp("Hashtable", &[("items", FieldKind::Reference)]),
@@ -1920,7 +1942,10 @@ fn reject_resource(stamped: bool, class: &str, resource: NativeResource) {
         error
             .get_ref()
             .and_then(|error| error.downcast_ref::<NonSerializableResource>()),
-        Some(&NonSerializableResource(resource))
+        Some(&NonSerializableResource {
+            resource,
+            path: vec![class.into()]
+        })
     );
     drop(writer);
     assert_eq!(stream.position(), 0);
@@ -1940,3 +1965,69 @@ stamp_modes!(
     reject_thread_local_stamped,
     |s| reject_resource(s, "ClassWithThreadLocal", NativeResource::ThreadLocal)
 );
+
+fn native_resource_path(stamped: bool) {
+    let mut graph = Graph::default();
+    let pointer = graph.insert(record(
+        "ClassWithIntPtr",
+        vec![Value::NativeResource(NativeResource::IntPtr(0))],
+    ));
+    let middle = graph.insert(record("AnotherContainingType", vec![Value::Ref(pointer)]));
+    let root = graph.insert(record(
+        "GenericBox<AnotherContainingType>",
+        vec![Value::Ref(middle)],
+    ));
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    let error = writer.write_object(root).unwrap_err();
+    let resource = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<NonSerializableResource>())
+        .unwrap();
+    assert_eq!(
+        resource.path,
+        [
+            "GenericBox<AnotherContainingType>",
+            "AnotherContainingType",
+            "ClassWithIntPtr"
+        ]
+    );
+}
+
+fn decimal_value(value: u32) -> Value {
+    Value::Decimal(crate::migrant::primitive::Decimal {
+        magnitude: [value, 0, 0],
+        negative: false,
+        scale: 0,
+    })
+}
+
+fn issue_60(stamped: bool) {
+    let mut graph = Graph::default();
+    let inner = graph.insert(record(
+        "Issue60InnerClass",
+        vec![decimal_value(1), decimal_value(2)],
+    ));
+    let root = graph.insert(record(
+        "Issue60OuterClass",
+        vec![decimal_value(0), Value::Ref(inner)],
+    ));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored = fields(graph.get(copy).unwrap());
+    assert_eq!(restored[0], decimal_value(0));
+    assert_eq!(
+        fields(graph.get(reference(&restored[1])).unwrap()),
+        [decimal_value(1), decimal_value(2)]
+    );
+}
+
+stamp_modes!(
+    native_resource_path_plain,
+    native_resource_path_stamped,
+    native_resource_path
+);
+stamp_modes!(issue_60_plain, issue_60_stamped, issue_60);
