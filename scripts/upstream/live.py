@@ -317,6 +317,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 self.commands.append(f"sysbus LoadBinary {source} {tokens[3]}")
                 self.image = True
                 return ""
+            if (self.image and any(item.startswith("sysbus LoadBinary ") for item in self.commands)
+                    and re.fullmatch(r"(?:sysbus\.)?cpu[\w]* PC (?:0x[\da-fA-F]+|\d+)", command)):
+                self.commands.append(command)
+                return ""
             if self.image and re.fullmatch(r"sysbus\.cpu VectorTableOffset 0x[0-9a-fA-F]+", command):
                 self.commands.append(command)
                 return ""

@@ -2468,9 +2468,11 @@ impl Bus {
     }
 
     pub fn nrf_adxl_input(&mut self, name: &str) -> Option<&mut [i16; 3]> {
-        self.nrf_peripherals
-            .iter_mut()
-            .find_map(|device| device.adxl_input(name))
+        if let Some((controller, sensor)) = name.split_once('.') {
+            return self.nrf_peripherals.iter_mut().find(|device| device.name == controller)?
+                .adxl_input(sensor);
+        }
+        self.nrf_peripherals.iter_mut().find_map(|device| device.adxl_input(name))
     }
 
     pub fn set_nrf_camera_image(&mut self, image: Vec<u8>) -> Result<(), String> {

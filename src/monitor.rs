@@ -1518,7 +1518,7 @@ fn execute(
                 return Err("acceleration must be within ±200 g".into());
             }
             let axis = match *axis { "AccelerationX" => 0, "AccelerationY" => 1, _ => 2 };
-            let target = target.rsplit('.').next().unwrap_or(target).to_owned();
+            let target = target.trim_start_matches("sysbus.").to_owned();
             Some(Action::AdxlAxis(target, axis, (value * 10.0).round() as i16))
         }
         [target, "State"] if boot.started && target.rsplit('.').next().is_some_and(|part| part.starts_with("led")) => {
