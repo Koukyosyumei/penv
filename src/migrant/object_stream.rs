@@ -1,0 +1,308 @@
+//! Reference-preserving object streams for Rust graph descriptors.
+//!
+//! This uses Migrant's primitive encoding with a Rust object-record format.
+use super::primitive::{Reader, Writer};
+use std::collections::{hash_map::Entry, HashMap};
+use std::io::{self, Read, Write};
+
+const MAX_ITEMS: usize = 1_000_000;
+const ROOT: u8 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ObjectId(usize);
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Null,
+    Integer(i64),
+    Float(f64),
+    Ref(ObjectId),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Object {
+    String(String),
+    Record { class: String, fields: Vec<Value> },
+    Array(Vec<Value>),
+}
+
+#[derive(Default)]
+pub struct Graph {
+    objects: Vec<Object>,
+}
+
+impl Graph {
+    pub fn insert(&mut self, object: Object) -> ObjectId {
+        let id = ObjectId(self.objects.len());
+        self.objects.push(object);
+        id
+    }
+
+    pub fn get(&self, id: ObjectId) -> Option<&Object> {
+        self.objects.get(id.0)
+    }
+
+    pub fn get_mut(&mut self, id: ObjectId) -> Option<&mut Object> {
+        self.objects.get_mut(id.0)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum References {
+    PerRoot,
+    Preserve,
+}
+
+fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+pub struct ObjectWriter<'a, W: Write> {
+    data: Writer<W>,
+    graph: &'a Graph,
+    references: References,
+    ids: HashMap<ObjectId, usize>,
+    pending: Vec<ObjectId>,
+}
+
+impl<'a, W: Write> ObjectWriter<'a, W> {
+    pub fn new(stream: W, graph: &'a Graph, references: References, buffered: bool) -> Self {
+        Self {
+            data: Writer::new(stream, buffered),
+            graph,
+            references,
+            ids: HashMap::new(),
+            pending: Vec::new(),
+        }
+    }
+
+    fn intern(&mut self, id: ObjectId) -> io::Result<usize> {
+        let next = self.ids.len();
+        match self.ids.entry(id) {
+            Entry::Occupied(entry) => Ok(*entry.get()),
+            Entry::Vacant(entry) => {
+                if next >= MAX_ITEMS || self.graph.get(id).is_none() {
+                    return Err(invalid("invalid graph reference or object limit exceeded"));
+                }
+                entry.insert(next);
+                self.pending.push(id);
+                Ok(next)
+            }
+        }
+    }
+
+    pub fn write_object(&mut self, root: ObjectId) -> io::Result<()> {
+        if self.references == References::PerRoot {
+            self.ids.clear();
+        }
+        self.pending.clear();
+        let root = match self.discover(root) {
+            Ok(root) => root,
+            Err(error) => {
+                for id in self.pending.drain(..) {
+                    self.ids.remove(&id);
+                }
+                return Err(error);
+            }
+        };
+        self.write_frame(root)
+    }
+
+    fn discover(&mut self, root: ObjectId) -> io::Result<usize> {
+        let root = self.intern(root)?;
+        let mut index = 0;
+        // Reserve identities before visiting children, including forward and cyclic edges.
+        while let Some(id) = self.pending.get(index).copied() {
+            let object = self.graph.get(id).unwrap();
+            let values = match object {
+                Object::String(_) => &[],
+                Object::Record { fields, .. } | Object::Array(fields) => fields.as_slice(),
+            };
+            if values.len() > MAX_ITEMS {
+                return Err(invalid("object field limit exceeded"));
+            }
+            for value in values {
+                if let Value::Ref(id) = value {
+                    self.intern(*id)?;
+                }
+            }
+            index += 1;
+        }
+
+        Ok(root)
+    }
+
+    fn write_frame(&mut self, root: usize) -> io::Result<()> {
+        self.data.bytes(&[ROOT])?;
+        self.data.unsigned(root as u64)?;
+        self.data.unsigned(self.pending.len() as u64)?;
+        for id in &self.pending {
+            match self.graph.get(*id).unwrap() {
+                Object::String(value) => {
+                    self.data.bytes(&[0])?;
+                    self.data.string(value)?;
+                }
+                Object::Record { class, fields } => {
+                    self.data.bytes(&[1])?;
+                    self.data.string(class)?;
+                    Self::write_values(&mut self.data, &self.ids, fields)?;
+                }
+                Object::Array(values) => {
+                    self.data.bytes(&[2])?;
+                    Self::write_values(&mut self.data, &self.ids, values)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_values(
+        data: &mut Writer<W>,
+        ids: &HashMap<ObjectId, usize>,
+        values: &[Value],
+    ) -> io::Result<()> {
+        data.unsigned(values.len() as u64)?;
+        for value in values {
+            match value {
+                Value::Null => data.bytes(&[0])?,
+                Value::Integer(value) => {
+                    data.bytes(&[1])?;
+                    data.signed(*value)?;
+                }
+                Value::Float(value) => {
+                    data.bytes(&[2])?;
+                    data.bytes(&value.to_le_bytes())?;
+                }
+                Value::Ref(id) => {
+                    data.bytes(&[3])?;
+                    data.unsigned(ids[id] as u64)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finish(self) -> io::Result<()> {
+        self.data.finish()
+    }
+}
+
+pub struct ObjectReader<R: Read> {
+    data: Reader<R>,
+    graph: Graph,
+    references: References,
+}
+
+impl<R: Read> ObjectReader<R> {
+    pub fn new(stream: R, references: References, buffered: bool) -> Self {
+        Self {
+            data: Reader::new(stream, buffered),
+            graph: Graph::default(),
+            references,
+        }
+    }
+
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
+    pub fn read_object(&mut self) -> io::Result<ObjectId> {
+        self.next_impl()?
+            .ok_or_else(|| io::ErrorKind::UnexpectedEof.into())
+    }
+
+    pub fn read_many(&mut self) -> impl Iterator<Item = io::Result<ObjectId>> + '_ {
+        let mut done = false;
+        std::iter::from_fn(move || {
+            if done {
+                return None;
+            }
+            match self.next_impl() {
+                Ok(Some(id)) => Some(Ok(id)),
+                Ok(None) => {
+                    done = true;
+                    None
+                }
+                Err(error) => {
+                    done = true;
+                    Some(Err(error))
+                }
+            }
+        })
+    }
+
+    fn next_impl(&mut self) -> io::Result<Option<ObjectId>> {
+        match self.data.byte() {
+            Ok(ROOT) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(error),
+            Ok(_) => return Err(invalid("invalid object record marker")),
+        }
+        let old_len = self.graph.objects.len();
+        let base = if self.references == References::Preserve {
+            0
+        } else {
+            old_len
+        };
+        let root = self.count()?;
+        let count = self.count()?;
+        let end = old_len
+            .checked_add(count)
+            .ok_or_else(|| invalid("object limit exceeded"))?;
+        let limit = end - base;
+        if limit > MAX_ITEMS || root >= limit {
+            return Err(invalid("invalid root reference or object limit exceeded"));
+        }
+        let mut objects = Vec::new();
+        for _ in 0..count {
+            objects.push(match self.data.byte()? {
+                0 => Object::String(self.data.string()?),
+                1 => Object::Record {
+                    class: self.data.string()?,
+                    fields: self.read_values(base, limit)?,
+                },
+                2 => Object::Array(self.read_values(base, limit)?),
+                _ => return Err(invalid("unknown object kind")),
+            });
+        }
+        // Publish all objects together after validating every edge.
+        self.graph.objects.extend(objects);
+        Ok(Some(ObjectId(base + root)))
+    }
+
+    fn count(&mut self) -> io::Result<usize> {
+        usize::try_from(self.data.unsigned()?)
+            .ok()
+            .filter(|&count| count <= MAX_ITEMS)
+            .ok_or_else(|| invalid("object stream item limit exceeded"))
+    }
+
+    fn read_values(&mut self, base: usize, limit: usize) -> io::Result<Vec<Value>> {
+        let count = self.count()?;
+        let mut values = Vec::new();
+        for _ in 0..count {
+            values.push(match self.data.byte()? {
+                0 => Value::Null,
+                1 => Value::Integer(self.data.signed()?),
+                2 => {
+                    let mut bytes = [0; 8];
+                    self.data.bytes(&mut bytes)?;
+                    Value::Float(f64::from_le_bytes(bytes))
+                }
+                3 => {
+                    let id = self.count()?;
+                    if id >= limit {
+                        return Err(invalid("object reference outside stream table"));
+                    }
+                    Value::Ref(ObjectId(base + id))
+                }
+                _ => return Err(invalid("unknown value kind")),
+            });
+        }
+        Ok(values)
+    }
+
+    pub fn finish(self) -> io::Result<()> {
+        self.data.finish()
+    }
+}
