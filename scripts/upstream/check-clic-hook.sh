@@ -27,7 +27,7 @@ cat >"$out/signature.s" <<'ASM'
 _start:
     wfi
 rvtest_code_end:
-    nop
+    j rvtest_code_end
 .data
 .globl begin_signature
 .globl end_signature
@@ -46,16 +46,16 @@ for scenario in match mismatch wait; do
     esac
     printf '%s\n' "$sig" >"$out/$scenario.signature"
     {
-        printf 'mach create\nmachine LoadPlatformDescription @"%s/board.repl"\n' "$out"
-        printf 'machine UserState @"%s/%s.signature"\n' "$out" "$scenario"
+        printf 'mach create\nmachine LoadPlatformDescription @%s/board.repl\n' "$out"
+        printf 'machine UserState @%s/%s.signature\n' "$out" "$scenario"
         sed -n '/^set end_hookscript$/,/^set sigwrite_hookscript$/{ /^set sigwrite_hookscript$/d; p; }' \
             "$root/tests/peripherals/CLIC/CLIC-test-setup.resc"
-        printf 'sysbus LoadELF @"%s/signature.elf"\n' "$out"
+        printf 'sysbus LoadELF @%s/signature.elf\n' "$out"
         printf '%s\n' 'cpu AddHook `sysbus GetSymbolAddress "rvtest_code_end"` $end_hookscript'
         printf 'sysbus LogPeripheralAccess ram\ncpu WfiAsNop %s\n' "$nop"
     } >"$out/$scenario.resc"
     status=0
-    "$binary" run --script "$out/$scenario.resc" --platform-root "$root" --max-steps 4 \
+    "$binary" run --script "$out/$scenario.resc" --platform-root "$root" --max-steps 2 \
         >"$out/$scenario.stdout" 2>"$out/$scenario.stderr" || status=$?
     test "$status" -eq 2
 done
@@ -65,3 +65,16 @@ grep -F 'Wrong generated signature #0: 11223344 different than reference signatu
 ! grep -F 'All signatures correct' "$out/mismatch.stderr" || exit 1
 ! grep -F 'Sig path:' "$out/wait.stderr" || exit 1
 grep -i 'limit' "$out/wait.stderr"
+
+# Exercise the same log predicate as the upstream Robot case through the monitor.
+pattern=416c6c207369676e61747572657320636f7272656374
+for scenario in match mismatch wait; do
+    printf 'WaitForMonitorLog 1 literal consume any %s\n' "$pattern" |
+        "$binary" run --monitor-stdio --monitor-log-capacity 1024 \
+            --platform-root "$root" --script "$out/$scenario.resc" \
+            >"$out/$scenario.monitor" 2>"$out/$scenario.monitor.stderr"
+done
+grep -Fx 'MATCH 22' "$out/match.monitor"
+grep -Fx 'All signatures correct' "$out/match.monitor"
+grep -F 'Expected pattern "All signatures correct" did not appear in the log' \
+    "$out/mismatch.monitor" "$out/wait.monitor"
