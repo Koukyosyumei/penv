@@ -371,10 +371,10 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool, Option<u64>, Option<bool>, bool),
+    CreateUartTester(String, bool, Option<u64>, Option<bool>, bool, bool),
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
-    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, bool),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool, Option<bool>),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
@@ -947,8 +947,9 @@ fn run_commands(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary, timeout, echo, carriage_return) => {
+            Action::CreateUartTester(target, binary, timeout, echo, carriage_return, next_line) => {
                 machine.bus.set_default_uart_echo(*echo);
+                machine.bus.set_default_uart_next_line(*next_line);
                 machine.bus.create_uart_tester(target, *binary, *timeout, *carriage_return)
                     .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
                     .map(|()| None)
@@ -1059,7 +1060,7 @@ fn run_commands(
                 };
                 machine.external_event(ExternalEvent::UartLine(target, text.clone(), ending.to_vec()))?;
                 if let Some(cycles) = cycles {
-                    let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, false)?;
+                    let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
                     let start = machine.elapsed_steps();
                     let limit = cycles.min(budget);
                     let (stop, count) = run_uart_watch(machine, watch, limit, &mut output)
@@ -2432,6 +2433,7 @@ fn execute(
             let mut timeout = None;
             let mut echo = None;
             let mut carriage_return = None;
+            let mut next_line = None;
             for option in options {
                 match option.split_once('=') {
                     Some(("timeout", value)) if timeout.is_none() => {
@@ -2443,6 +2445,9 @@ fn execute(
                             "TreatCarriageReturnAsEndLine" => true,
                             _ => return Err("unsupported UART endLineOption".into()),
                         });
+                    }
+                    Some(("defaultMatchNextLine", value)) if next_line.is_none() => {
+                        next_line = Some(parse_tester_bool(resolve(value)?)?);
                     }
                     Some(("defaultWaitForEcho", value)) if echo.is_none() => {
                         echo = Some(parse_tester_bool(resolve(value)?)?);
@@ -2464,6 +2469,7 @@ fn execute(
                 timeout,
                 echo,
                 carriage_return.unwrap_or(false),
+                next_line.unwrap_or(false),
             ))
         }
         ["SetDefaultUartTimeout", value] => Some(Action::DefaultUartTimeout(duration_steps(resolve(value)?)?)),
@@ -2514,11 +2520,11 @@ fn execute(
                 pattern.clone(),
                 options.regex.then(|| regex::Regex::new(&pattern))
                     .transpose().map_err(|e| format!("invalid UART text regex: {e}"))?,
-                if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
+                if *command == "WaitForTesterPrompt" || options.unfinished { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
                 *command == "ShouldNotBeOnUart",
                 options.capture_groups,
-                options.first_only,
+                if *command == "ShouldNotBeOnUart" { Some(false) } else { options.first_only },
             ))
         }
         [
@@ -3498,7 +3504,8 @@ struct TesterWaitOptions {
     match_start: bool,
     regex: bool,
     capture_groups: bool,
-    first_only: bool,
+    first_only: Option<bool>,
+    unfinished: bool,
 }
 
 fn tester_wait_options<'a>(
@@ -3512,6 +3519,7 @@ fn tester_wait_options<'a>(
     let mut regex = None;
     let mut capture_groups = None;
     let mut first_only = None;
+    let mut unfinished = None;
     for option in options.split_whitespace() {
         match option.split_once('=') {
             Some(("testerId", value)) if id.is_none() => {
@@ -3524,6 +3532,11 @@ fn tester_wait_options<'a>(
                 if kind == TesterOptionsKind::Bytes && match_start.is_none() =>
             {
                 match_start = Some(parse_tester_bool(resolve(value)?)?);
+            }
+            Some(("includeUnfinishedLine", value))
+                if kind == TesterOptionsKind::Line && unfinished.is_none() =>
+            {
+                unfinished = Some(parse_tester_bool(resolve(value)?)?);
             }
             Some(("matchNextLine", value))
                 if kind == TesterOptionsKind::Line && first_only.is_none() =>
@@ -3551,7 +3564,8 @@ fn tester_wait_options<'a>(
         match_start: match_start.unwrap_or(false),
         regex: regex.unwrap_or(false),
         capture_groups: capture_groups.unwrap_or(false),
-        first_only: first_only.unwrap_or(false),
+        first_only,
+        unfinished: unfinished.unwrap_or(false),
     })
 }
 

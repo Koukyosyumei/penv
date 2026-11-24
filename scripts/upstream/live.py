@@ -730,7 +730,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported(f"Create Terminal Tester: {uart}")
         allowed = {"timeout", "defaultPauseEmulation"}
         if self.rust_monitor:
-            allowed.update(("defaultWaitForEcho", "endLineOption"))
+            allowed.update(("defaultWaitForEcho", "endLineOption", "defaultMatchNextLine"))
         options = self.log_options(args, allowed, ("timeout",))
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
@@ -744,7 +744,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if ending is not None and ending not in {"TreatLineFeedAsEndLine", "TreatCarriageReturnAsEndLine"}:
             raise Unsupported(f"invalid endLineOption {ending!r}")
         delimiter = f" endLineOption={ending}" if ending else ""
-        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}").strip())
+        first = ""
+        if "defaultMatchNextLine" in options:
+            first = f" defaultMatchNextLine={str(self.log_bool(options['defaultMatchNextLine'])).lower()}"
+        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result
 
@@ -822,14 +825,17 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         deadline = f" timeout={self.duration(timeout)}" if timeout is not None else ""
         regex = self.log_bool(options.get("treatAsRegex", "false"))
         self.started = True
-        if self.log_bool(options.get("includeUnfinishedLine", "false")):
+        unfinished = self.log_bool(options.get("includeUnfinishedLine", "false"))
+        if unfinished and not self.rust_monitor:
             if verb == "ShouldNotBeOnUart":
-                raise Unsupported("unfinished UART line absence is unsupported")
+                raise Unsupported("unfinished UART line absence requires the Rust monitor")
             verb = "WaitForTesterPrompt"
         captures = regex and verb != "ShouldNotBeOnUart"
         command = f"{verb} {self.uart_text(expected)}{selector}{deadline} treatAsRegex={str(regex).lower()}"
         if captures:
             command += " captureGroups=true"
+        if unfinished and self.rust_monitor:
+            command += " includeUnfinishedLine=true"
         if "matchNextLine" in options:
             command += f" matchNextLine={str(self.log_bool(options['matchNextLine'])).lower()}"
         return self.operation(command, uart_captures=True)

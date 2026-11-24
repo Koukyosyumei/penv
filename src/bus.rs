@@ -446,6 +446,7 @@ pub struct Bus {
     uart_testers: Vec<UartTester>,
     default_uart_timeout: Option<u64>,
     default_uart_echo: Option<bool>,
+    default_uart_next_line: bool,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -5076,6 +5077,10 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn set_default_uart_next_line(&mut self, next_line: bool) {
+        self.default_uart_next_line = next_line;
+    }
+
     pub(crate) fn default_uart_echo(&self) -> bool {
         self.default_uart_echo.unwrap_or(true)
     }
@@ -5121,12 +5126,13 @@ impl Bus {
         id: Option<usize>,
         pattern: &str,
     ) -> Result<UartWatch, String> {
-        self.watch_uart_tester_text(id, pattern, None, UartWaitMode::Lf, false)
+        self.watch_uart_tester_text(id, pattern, None, UartWaitMode::Lf, Some(false))
     }
 
     pub fn watch_uart_tester_text(
-        &mut self, id: Option<usize>, pattern: &str, regex: Option<regex::Regex>, mode: UartWaitMode, first_only: bool,
+        &mut self, id: Option<usize>, pattern: &str, regex: Option<regex::Regex>, mode: UartWaitMode, first_only: Option<bool>,
     ) -> Result<UartWatch, String> {
+        let first_only = first_only.unwrap_or(self.default_uart_next_line);
         let (id, TesterHistory::Text(history)) = self.uart_tester(id)? else {
             return Err("Attempt to wait for text on a tester configured in binary mode.".into());
         };
