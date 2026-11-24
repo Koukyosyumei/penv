@@ -109,6 +109,11 @@ SerializationTests の反射読み書き・型スタンプ有無の2設定に20�
 これらのコレクションは Rust の型付きレコードと要素配列で表現する。
 [公式 ID 別の結果](nunit-evidence/targeted-collections-options.tsv)
 
-残りは9 fixture・2,005ケース。生成読み書き、コレクションと CLR 型の
+SerializationTests の反射読み書き・型スタンプ有無の2設定に10件を追加した。
+バイト配列は専用タグで復元し、空配列・空リストと、長さ0の軸を持つ
+2次元・3次元配列の復元も検証した。
+[公式 ID 別の結果](nunit-evidence/targeted-parser-empty-arrays.tsv)
+
+残りは9 fixture・1,995ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
