@@ -3056,7 +3056,7 @@ fn snapshot_path(
     if let Some(path) = monitor_string(value) {
         return Ok(script_dir.join(path));
     }
-    let path = resolve(variables, value)?.strip_prefix('@').ok_or(SNAPSHOT_PARAMETERS)?;
+    let path = monitor_path_token(resolve(variables, value)?).ok_or(SNAPSHOT_PARAMETERS)?;
     Ok(script_dir.join(path_value(unquote(path))))
 }
 
@@ -5148,6 +5148,10 @@ fn platform_file_missing(path: &Path) -> bool {
     }
 }
 
+fn monitor_path_token(value: &str) -> Option<&str> {
+    value.strip_prefix('@').map(|path| path.trim_start_matches('@'))
+}
+
 fn platform_path(
     value: &str, script: &Path, root: &Path, variables: &HashMap<String, String>,
 ) -> Result<PathBuf, String> {
@@ -5158,7 +5162,7 @@ fn platform_path(
     if let Some(path) = monitor_string(value) {
         return Ok(PathBuf::from(path));
     }
-    let file = value.strip_prefix('@').ok_or("expected a platform path")?;
+    let file = monitor_path_token(value).ok_or("expected a platform path")?;
     Ok(local_path(&path_value(unquote(file)), script, root))
 }
 
@@ -5174,6 +5178,21 @@ fn local_path(value: &str, script: &Path, root: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_and_snapshot_paths_accept_repeated_at_signs() {
+        let root = Path::new("/tmp/penv-path-token");
+        let variables = HashMap::from([("global.board".into(), "@@@board.repl".into())]);
+        assert_eq!(
+            platform_path("$board", Path::new("boot.resc"), root, &variables).unwrap(),
+            root.join("board.repl"),
+        );
+        assert_eq!(
+            snapshot_path("@@state.save", root, &variables).unwrap(),
+            root.join("state.save"),
+        );
+        assert!(snapshot_path("state.save", root, &variables).is_err());
+    }
 
     #[test]
     fn live_repl_overlay_uses_the_repl_parser_for_gpio_connections() {
