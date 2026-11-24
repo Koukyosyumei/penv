@@ -443,6 +443,7 @@ enum Action {
     MonitorAssignment(String, PathBuf),
     MonitorAlias(String, String),
     MonitorMacro(String, Macro),
+    InvokeMonitorMacro(String, PathBuf),
     MonitorEcho(String, PathBuf),
     SaveMemory(PathBuf, bool),
     ClearMemory,
@@ -589,13 +590,13 @@ impl ScalarWidth {
     }
 }
 
-struct ScriptOutput<'a, W> {
-    output: &'a mut W,
+struct ScriptOutput<'a> {
+    output: &'a mut dyn Write,
     history: Option<UartHistory>,
     replies: Option<&'a mut dyn Write>,
 }
 
-impl<W: Write> ScriptOutput<'_, W> {
+impl ScriptOutput<'_> {
     fn reply(&mut self) -> &mut dyn Write {
         match self.replies.as_deref_mut() {
             Some(replies) => replies,
@@ -604,7 +605,7 @@ impl<W: Write> ScriptOutput<'_, W> {
     }
 }
 
-impl<W: Write> Write for ScriptOutput<'_, W> {
+impl Write for ScriptOutput<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let written = self.output.write(bytes)?;
         if let Some(history) = &mut self.history {
@@ -633,7 +634,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::DescribeEnvironment
-                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
+                    | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..) | Action::TimeSourceInfo | Action::SetQuantum(_) | Action::EmulationIsStarted | Action::SingleStepBlocking(_) | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
         })
 }
@@ -663,12 +664,12 @@ fn run_commands<'a>(
     machine: &mut Machine,
     commands: &[RuntimeCommand],
     mut budget: u64,
-    output: &'a mut impl Write,
+    mut output: &'a mut dyn Write,
     session: &mut Session,
     replies: Option<&'a mut dyn Write>,
 ) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
-        return machine.run(budget, output);
+        return machine.run(budget, &mut output);
     }
     let mut output = ScriptOutput {
         output,
@@ -704,6 +705,36 @@ fn run_commands<'a>(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
+            Action::InvokeMonitorMacro(name, root) => (|| {
+                let body = session.macros.get(name).ok_or("unknown macro")?;
+                let mut boot = Boot {
+                    platform: Some(body.script.clone()),
+                    image: Some(Asset::new("", &body.script)),
+                    started: true,
+                    ..Boot::default()
+                };
+                boot.session.machine.clone_from(&session.machine);
+                boot.session.number_mode = session.number_mode;
+                let mut existing_machine = true;
+                expand_macro(body, &session.variables, &mut existing_machine, &mut boot, root)?;
+                if !boot.post_run.is_empty() || boot.runtime.iter().any(|entry| matches!(
+                    entry.action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::ClearMemory
+                )) {
+                    return Err("snapshot and post-run commands are unavailable in a deferred macro".into());
+                }
+                session.number_mode = boot.session.number_mode;
+                if boot.runtime.is_empty() {
+                    return Ok(None);
+                }
+                let start = machine.elapsed_steps();
+                let replies = output.replies.as_mut().map(|reply| &mut **reply as &mut dyn Write);
+                let (stop, count) = run_commands(
+                    machine, &boot.runtime, budget, &mut *output.output, session, replies,
+                )?;
+                retired += count;
+                budget = budget.saturating_sub(machine.elapsed_steps().wrapping_sub(start));
+                Ok((stop != Stop::ScriptComplete).then_some(stop))
+            })(),
             Action::MonitorAlias(name, command) => {
                 session.aliases.insert(name.clone(), command.clone());
                 Ok(None)
@@ -749,7 +780,7 @@ fn run_commands<'a>(
                 }
             }.map(|()| None),
             Action::FindBytes(search) => search
-                .write_matches(&machine.bus, "", output.output)
+                .write_matches(&machine.bus, "", &mut output.output)
                 .map(|()| None),
             Action::RunRemaining => machine.run(budget, &mut output).map(|(stop, count)| {
                 retired += count;
@@ -809,7 +840,7 @@ fn run_commands<'a>(
                 if machine.cpu_less {
                     return Err("the platform has no CPU".into());
                 }
-                mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
+                mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, &mut output.output).map(|()| None)
             }
             Action::SingleStepBlocking(value) => {
                 if let Some(value) = value {
@@ -836,7 +867,7 @@ fn run_commands<'a>(
                     AssemblyAddress::ProgramCounter(cpu) => machine.monitor_named_pc(cpu)?,
                 };
                 crate::monitor_asm::assemble_source(machine, cpu, address, triple, source)
-                    .and_then(|size| mode.print(size as u64, 4, output.output))
+                    .and_then(|size| mode.print(size as u64, 4, &mut output.output))
                     .map(|()| None)
             }
             Action::MonitorLog(command) => {
@@ -1103,7 +1134,7 @@ fn run_commands<'a>(
                 Ok(None)
             }
             Action::ReadBytes(address, count) => {
-                read_bus_bytes(machine, *address, *count, output.output).map(|()| None)
+                read_bus_bytes(machine, *address, *count, &mut output.output).map(|()| None)
             }
             Action::WriteBytes(address, bytes) => machine
                 .bus
@@ -1135,7 +1166,7 @@ fn run_commands<'a>(
             Action::TraceRcc => machine.bus.trace_rcc().map(|()| None),
             Action::WriteRcc(offset, value) => machine.bus.rcc_base().and_then(|base| {
                 let address = base.checked_add(*offset).ok_or("RCC address overflow")?;
-                machine.bus.write_scalar(address, 4, *value, output.output, true)
+                machine.bus.write_scalar(address, 4, *value, &mut output.output, true)
                     .map(|()| None).map_err(|error| error.to_string())
             }),
             Action::Frequency(target, frequency) => {
@@ -1175,10 +1206,10 @@ fn run_commands<'a>(
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
                         let matched = matched.ok_or_else(|| format!("Terminal tester failed! Byte pattern was not received ({stop:?})"))?;
-                        write_hex_list(matched.content, 2, output.output).map_err(|e| e.to_string())?;
+                        write_hex_list(matched.content, 2, &mut output.output).map_err(|e| e.to_string())?;
                         for group in matched.groups {
                             match group {
-                                Some(bytes) => write_hex_list(bytes, 2, output.output),
+                                Some(bytes) => write_hex_list(bytes, 2, &mut output.output),
                                 None => writeln!(output.output, "null"),
                             }.map_err(|e| e.to_string())?;
                         }
@@ -1815,7 +1846,7 @@ fn wait_for_uart(
     pattern: &str,
     end: UartWaitMode,
     budget: u64,
-    output: &mut ScriptOutput<'_, impl Write>,
+    output: &mut ScriptOutput<'_>,
 ) -> Result<(Stop, u64), String> {
     if let Some(target) = target {
         let watch = machine.bus.watch_stm32_uart(target, pattern, end)?;
@@ -2175,7 +2206,7 @@ fn is_console_action(action: &Action) -> bool {
 
 fn is_monitor_snapshot_action(action: &Action) -> bool {
     matches!(action, Action::SaveMemory(..) | Action::LoadMemory(_) | Action::DescribeEnvironment
-        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..))
+        | Action::MonitorAssignment(..) | Action::MonitorEcho(..) | Action::MonitorAlias(..) | Action::MonitorMacro(..) | Action::InvokeMonitorMacro(..))
 }
 
 fn is_empty_machine_action(action: &Action) -> bool {
@@ -2310,7 +2341,18 @@ fn load_file(path: &Path, root: &Path, state: &mut ScriptState) -> Result<(), St
     load_text(path, canonical, root, state, &content)
 }
 
-fn follows_snapshot(boot: &Boot) -> bool {
+fn expand_macro(
+    body: &Macro, variables: &HashMap<String, String>, machine: &mut bool, boot: &mut Boot, root: &Path,
+) -> Result<(), String> {
+    for (index, command) in &body.commands {
+        command_words(command).and_then(|words| {
+            execute(command, &words, variables, machine, boot, &body.script, root, index + 1)
+        }).map_err(|error| format!("{}:{}: {error}", body.script.display(), index + 1))?;
+    }
+    Ok(())
+}
+
+fn has_snapshot_boundary(boot: &Boot) -> bool {
     boot.runtime.iter().any(|command| matches!(
         command.action, Action::SaveMemory(..) | Action::LoadMemory(_)
     ))
@@ -2432,7 +2474,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                 (declaration, commands)
             };
             let body = Macro { script: path.into(), commands };
-            if follows_snapshot(&state.boot) {
+            if has_snapshot_boundary(&state.boot) {
                 state.boot.runtime.push(RuntimeCommand {
                     line: line + 1, source: path.to_owned(), action: Action::MonitorMacro(name.into(), body),
                 });
@@ -2444,7 +2486,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         let words = command_words(text).map_err(|e| error(&e))?;
         let assignment = text.starts_with('$') || matches!(words.as_slice(), ["set", _, _]);
         let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"] | ["alias", _, _]))
-            && follows_snapshot(&state.boot);
+            && has_snapshot_boundary(&state.boot);
         if follows_snapshot && assignment {
             state.boot.runtime.push(RuntimeCommand {
                 line: line + 1, source: path.to_owned(),
@@ -2528,24 +2570,14 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
             }
             ["alias", ..] => return Err(error("invalid monitor alias parameters")),
             ["runMacro", name] if name.starts_with('$') => {
-                let body = state
-                    .macros
-                    .get(&name[1..])
-                    .ok_or_else(|| error("unknown macro"))?;
-                for (index, command) in &body.commands {
-                    let words = command_words(command)
-                        .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
-                    execute(
-                        command,
-                        &words,
-                        &state.variables,
-                        &mut state.machine,
-                        &mut state.boot,
-                        &body.script,
-                        root,
-                        index + 1,
-                    )
-                    .map_err(|e| format!("{}:{}: {e}", body.script.display(), index + 1))?;
+                if has_snapshot_boundary(&state.boot) {
+                    state.boot.runtime.push(RuntimeCommand {
+                        line: line + 1, source: path.to_owned(),
+                        action: Action::InvokeMonitorMacro(name[1..].into(), root.to_owned()),
+                    });
+                } else {
+                    let body = state.macros.get(&name[1..]).ok_or_else(|| error("unknown macro"))?;
+                    expand_macro(body, &state.variables, &mut state.machine, &mut state.boot, root)?;
                 }
             }
             _ => {
