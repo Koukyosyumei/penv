@@ -31,6 +31,10 @@ def write_case(case, record, directory):
 def assess(test, endpoint):
     # Robot can time out while an XML-RPC keyword is still running.
     failures = [call for call in endpoint.calls if call.get("status") not in (None, "ok")]
+    if test.status == "PASS":
+        # A typed rejection came from an actual monitor lookup. Robot's
+        # successful error assertion supplies the expected-outcome check.
+        failures = [call for call in failures if call.get("monitor", {}).get("reply") != "REJECTED"]
     in_flight = any("status" not in call for call in endpoint.calls)
     issue = next((call for call in failures if call["status"] == "unsupported"), None)
     if issue:
