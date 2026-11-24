@@ -125,6 +125,7 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
+    RunCycles(u64),
     LogLevel(i8),
     UserState(Option<String>),
     Echo(String),
@@ -433,17 +434,21 @@ pub fn run(
                     .map(|()| None).map_err(|error| error.to_string())
             }
             Action::UartIdle(_) => Err("UART idle check requires the live monitor".into()),
-            Action::RunFor(steps) | Action::CpuStep(_, steps) => {
+            Action::RunFor(steps) | Action::RunCycles(steps) | Action::CpuStep(_, steps) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
-                    _ if machine.is_cortex_m() => Ok(()),
-                    _ => Err("RunFor requires a Cortex-M platform".into()),
+                    _ => Ok(()),
                 };
                 valid_cpu.and_then(|()| {
                     if machine.primary.monitor_paused {
                         return Ok(None);
                     }
-                    let chunk = (*steps).min(budget);
+                    let steps = if matches!(command.action, Action::RunFor(_)) {
+                        duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?
+                    } else {
+                        *steps
+                    };
+                    let chunk = steps.min(budget);
                     let start = machine.elapsed_steps();
                     TimeHandle::run_grant(chunk, |granted| {
                         let result = machine.run(granted, &mut output)?;
@@ -452,7 +457,7 @@ pub fn run(
                     .map(|((stop, count), used)| {
                         retired += count;
                         budget -= used;
-                        (stop != Stop::Limit || (chunk < *steps && !machine.primary.monitor_paused))
+                        (stop != Stop::Limit || (chunk < steps && !machine.primary.monitor_paused))
                             .then_some(stop)
                     })
                 })
@@ -672,7 +677,7 @@ pub fn run(
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = uart_timeout_steps(*timeout, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
+                    let result = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles.min(budget), &mut output));
                     let matched = machine.bus.take_uart_byte_match(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
@@ -694,7 +699,7 @@ pub fn run(
             Action::WaitForTester(id, pattern, regex, mode, timeout, absent) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
-                    uart_timeout_steps(*timeout, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
+                    duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
                         .and_then(|cycles| run_uart_watch(machine, watch, cycles.min(budget), &mut output))
                 }).and_then(|(stop, count)| {
                     retired += count;
@@ -860,7 +865,7 @@ pub fn serve(
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), []) => frame(&mut output, "OK", &[]),
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
-                let result = uart_timeout_steps(*steps, machine.bus.monitor_step_hz())
+                let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                     .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
                         machine.run_until(cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
                     }));
@@ -875,7 +880,7 @@ pub fn serve(
 
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
-                    let stop = uart_timeout_steps(*timeout, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
+                    let stop = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles, &mut bytes));
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
@@ -923,10 +928,10 @@ pub fn serve(
     }
 }
 
-fn uart_timeout_steps(duration: u64, rate: u64) -> Result<u64, String> {
+pub(crate) fn duration_cycles(duration: u64, units_per_second: u64, rate: u64) -> Result<u64, String> {
     let cycles = (u128::from(duration) * u128::from(rate))
-        .div_ceil(u128::from(CORTEX_M_STEP_HZ));
-    u64::try_from(cycles).map_err(|_| "UART duration exceeds virtual time".to_owned())
+        .div_ceil(u128::from(units_per_second));
+    u64::try_from(cycles).map_err(|_| "duration exceeds virtual time".to_owned())
 }
 
 fn read_bus_bytes(
@@ -2331,7 +2336,7 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunFor(1)),
+        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunCycles(1)),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
         [target, "Reset"] => {
             let cpu = resolve(target)?;

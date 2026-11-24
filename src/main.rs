@@ -2146,6 +2146,11 @@ fn run() -> Result<ExitCode, String> {
         Ok(machine)
     };
     let mut machine = boot_machine()?;
+    let run_steps = run_steps
+        .map(|duration| monitor::duration_cycles(
+            duration, bus::CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+        ))
+        .transpose()?;
     if inspect_only {
         return Ok(ExitCode::SUCCESS);
     }

@@ -134,10 +134,7 @@ pub(crate) fn handle(
             let ms = steps
                 .parse::<u64>()
                 .map_err(|_| "invalid timeout milliseconds")?;
-            let steps = ms
-                .checked_mul(machine.bus.monitor_step_hz())
-                .ok_or("monitor log timeout exceeds virtual-time range")?
-                / 1000;
+            let steps = crate::monitor::duration_cycles(ms, 1000, machine.bus.monitor_step_hz())?;
             let keep = absent
                 || match *keep {
                     "keep" => true,
