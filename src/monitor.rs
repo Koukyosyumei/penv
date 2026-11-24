@@ -371,7 +371,7 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool, Option<u64>, Option<bool>),
+    CreateUartTester(String, bool, Option<u64>, Option<bool>, bool),
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
     WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool),
@@ -947,9 +947,9 @@ fn run_commands(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary, timeout, echo) => {
+            Action::CreateUartTester(target, binary, timeout, echo, carriage_return) => {
                 machine.bus.set_default_uart_echo(*echo);
-                machine.bus.create_uart_tester(target, *binary, *timeout)
+                machine.bus.create_uart_tester(target, *binary, *timeout, *carriage_return)
                     .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
                     .map(|()| None)
             }
@@ -2426,10 +2426,18 @@ fn execute(
             let mut binary = None;
             let mut timeout = None;
             let mut echo = None;
+            let mut carriage_return = None;
             for option in options {
                 match option.split_once('=') {
                     Some(("timeout", value)) if timeout.is_none() => {
                         timeout = Some(duration_steps(resolve(value)?)?);
+                    }
+                    Some(("endLineOption", value)) if carriage_return.is_none() => {
+                        carriage_return = Some(match resolve(value)? {
+                            "TreatLineFeedAsEndLine" => false,
+                            "TreatCarriageReturnAsEndLine" => true,
+                            _ => return Err("unsupported UART endLineOption".into()),
+                        });
                     }
                     Some(("defaultWaitForEcho", value)) if echo.is_none() => {
                         echo = Some(parse_tester_bool(resolve(value)?)?);
@@ -2450,6 +2458,7 @@ fn execute(
                 binary.unwrap_or(false),
                 timeout,
                 echo,
+                carriage_return.unwrap_or(false),
             ))
         }
         ["SetDefaultUartTimeout", value] => Some(Action::DefaultUartTimeout(duration_steps(resolve(value)?)?)),

@@ -5044,7 +5044,7 @@ impl Bus {
         }
     }
 
-    pub fn create_uart_tester(&mut self, target: &str, binary: bool, timeout: Option<u64>) -> Result<usize, String> {
+    pub fn create_uart_tester(&mut self, target: &str, binary: bool, timeout: Option<u64>, carriage_return: bool) -> Result<usize, String> {
         let port = self.tester_port(target)?;
         if let Some(id) = self
             .uart_testers
@@ -5057,7 +5057,7 @@ impl Bus {
         let history = if binary {
             TesterHistory::Binary(BinaryUartHistory::default())
         } else {
-            TesterHistory::Text(UartHistory::default())
+            TesterHistory::Text(UartHistory::with_carriage_return(carriage_return))
         };
         let timeout = timeout.unwrap_or_else(|| self.default_uart_timeout());
         self.uart_testers.push(UartTester { target: target.into(), port, history, timeout });
@@ -8164,9 +8164,9 @@ mod tests {
                 .unwrap();
         }
         bus.set_default_uart_timeout(2 * CORTEX_M_STEP_HZ);
-        assert_eq!(bus.create_uart_tester("usart1", false, None).unwrap(), 0);
+        assert_eq!(bus.create_uart_tester("usart1", false, None, false).unwrap(), 0);
         bus.set_default_uart_timeout(3 * CORTEX_M_STEP_HZ);
-        assert_eq!(bus.create_uart_tester("sysbus.usart1", false, Some(1)).unwrap(), 0);
+        assert_eq!(bus.create_uart_tester("sysbus.usart1", false, Some(1), false).unwrap(), 0);
         assert_eq!(bus.uart_tester_timeout(None).unwrap(), 2 * CORTEX_M_STEP_HZ);
         let watch = bus.watch_uart_tester(None, "before").unwrap();
         assert!(!bus.stm32_uart_matched(watch));

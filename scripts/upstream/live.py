@@ -730,7 +730,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported(f"Create Terminal Tester: {uart}")
         allowed = {"timeout", "defaultPauseEmulation"}
         if self.rust_monitor:
-            allowed.add("defaultWaitForEcho")
+            allowed.update(("defaultWaitForEcho", "endLineOption"))
         options = self.log_options(args, allowed, ("timeout",))
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
@@ -740,7 +740,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "defaultWaitForEcho" in options:
             enabled = self.log_bool(options["defaultWaitForEcho"])
             echo = f" defaultWaitForEcho={str(enabled).lower()}"
-        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}").strip())
+        ending = options.get("endLineOption")
+        if ending is not None and ending not in {"TreatLineFeedAsEndLine", "TreatCarriageReturnAsEndLine"}:
+            raise Unsupported(f"invalid endLineOption {ending!r}")
+        delimiter = f" endLineOption={ending}" if ending else ""
+        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result
 

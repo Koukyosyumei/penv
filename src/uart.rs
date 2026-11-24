@@ -299,12 +299,9 @@ struct UartLineMatch {
 }
 
 impl UartLineMatch {
-    fn new(pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode) -> Self {
+    fn new(pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode, carriage_return: bool) -> Self {
         Self {
-            end: match end {
-                UartWaitMode::Lf | UartWaitMode::Prompt => b'\n',
-                UartWaitMode::Cr => b'\r',
-            },
+            end: if carriage_return || matches!(end, UartWaitMode::Cr) { b'\r' } else { b'\n' },
             prompt: matches!(end, UartWaitMode::Prompt),
             pattern: pattern.as_bytes().to_vec(),
             regex,
@@ -374,6 +371,7 @@ impl FailingUartPattern {
 
 #[derive(Default)]
 pub struct UartHistory {
+    carriage_return: bool,
     unread: VecDeque<u8>,
     pub(crate) activity: u64,
     sgr: Vec<u8>,
@@ -383,6 +381,14 @@ pub struct UartHistory {
 }
 
 impl UartHistory {
+    pub fn with_carriage_return(carriage_return: bool) -> Self {
+        Self { carriage_return, ..Self::default() }
+    }
+
+    fn terminator(&self) -> u8 {
+        if self.carriage_return { b'\r' } else { b'\n' }
+    }
+
     pub fn set_failure(&mut self, pattern: FailingUartPattern, register: bool) {
         let index = self.failures.iter().position(|p| {
             p.pattern == pattern.pattern && p.regex.is_some() == pattern.regex.is_some()
@@ -403,7 +409,7 @@ impl UartHistory {
         let mut finished = Vec::new();
         let mut start = 0;
         for (index, &byte) in self.unread.iter().enumerate() {
-            if byte == b'\n' {
+            if byte == self.terminator() {
                 finished.push((start, index));
                 start = index + 1;
             }
@@ -416,7 +422,7 @@ impl UartHistory {
                     .skip(start)
                     .take(end - start)
                     .copied()
-                    .filter(|byte| !matches!(byte, 0 | b'\r'))
+                    .filter(|&byte| byte != 0 && (self.carriage_return || byte != b'\r'))
                     .collect();
                 let line: String = line.into_iter().map(char::from).collect();
                 if pattern.matches(&line) {
@@ -446,7 +452,7 @@ impl UartHistory {
 
     pub fn begin_text_wait(&mut self, pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode) {
         self.failure = None;
-        let mut matcher = UartLineMatch::new(pattern, regex, end);
+        let mut matcher = UartLineMatch::new(pattern, regex, end, self.carriage_return);
         if self.check_failure() {
             self.active = Some(matcher);
             return;
@@ -490,7 +496,7 @@ impl UartHistory {
     }
 
     fn receive_text_byte(&mut self, byte: u8) {
-        if byte == b'\n' && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
+        if byte == self.terminator() && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
             if self.unread.len() == UART_HISTORY_BYTES {
                 self.unread.pop_front();
             }
@@ -665,6 +671,28 @@ impl BinaryUartHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carriage_return_tester_finishes_matches_and_failing_lines() {
+        let mut history = UartHistory::with_carriage_return(true);
+        history.begin_wait("hello", UartWaitMode::Lf);
+        for byte in b"hello\n" {
+            history.receive(*byte);
+        }
+        assert!(!history.matched());
+        history.receive(b'\r');
+        assert!(history.matched());
+        history.finish_wait();
+        history.set_failure(FailingUartPattern {
+            pattern: "failure".into(),
+            regex: None,
+        }, true);
+        history.begin_wait("unrelated", UartWaitMode::Lf);
+        for byte in b"failure\r" {
+            history.receive(*byte);
+        }
+        assert_eq!(history.failure(), Some("failure"));
+    }
 
     #[test]
     fn renode_binary_uart_history_keeps_exact_cursor_after_matches_and_timeouts() {
