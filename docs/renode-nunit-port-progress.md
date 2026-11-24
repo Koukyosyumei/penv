@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,063 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,064 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,333 |
+| 移植待ち | 2,332 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 36 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 35 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -149,7 +149,7 @@ python3 scripts/upstream/nunit_port_progress.py \
 
 ## EFM32 I²C と SymbolTests
 
-EFM32 I²C のレジスタ初期化・制御・割り込み3件と、SymbolTests の名前復元1件を追加した。4件すべて対象実行で合格した。EFM32 I²C の残り1件には BMC050 のアドレス登録と START・STOP によるデータ交換が必要。名前復元には GNU c++filt を使用し、実行できない環境では元の名前を保持する。
+EFM32 I²C のレジスタ初期化・制御・割り込み3件と、SymbolTests の名前復元1件を追加した。4件すべて対象実行で合格した。EFM32 I²C の残り1件は下記のバッチで移植した。名前復元には GNU c++filt を使用し、実行できない環境では元の名前を保持する。
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-efm32-symbols.tsv)
 - [対象実行ログ](nunit-evidence/targeted-efm32-symbols.log)
@@ -172,3 +172,9 @@ LPC43xx GPIO の5件は上流と同じバス登録後に周辺機器のレジス
 公式 InitTest の97アサーションを、上流と同じパケット順で検証した。帯域幅レジスタの初期値は公式アサーションの 0x1f を採用した。固定 C# 本体の初期化式は 0x08 | 0x10 で 0x18 になるため、この点は公式テストと C# 本体に差がある。ReadDataTest は上流の単軸・複数軸の読み出しをそれぞれ5回検証する。計測式と姿勢の順序を維持し、乱数列は Rust 側で固定シードから生成する。
 
 - [公式 ID ごとの結果](nunit-evidence/targeted-bmc050.tsv)と[実行ログ](nunit-evidence/targeted-bmc050.log)
+
+## EFM32 I²C のアドレス切り替え
+
+DualI2CAddressBMC050Test は同じ BMC050 を 0x18 と 0x10 に登録し、再 START を経て読み出したチップ ID、割り込み、ポーリング回数を検証する。モデルは同期的にパケットを転送する。上流の Ignore 2件はインベントリに残している。
+
+- [公式 ID ごとの結果](nunit-evidence/targeted-efm32-dual-address.tsv)と[実行ログ](nunit-evidence/targeted-efm32-dual-address.log)

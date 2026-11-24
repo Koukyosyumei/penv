@@ -66,7 +66,7 @@ src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTes
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.BMC050Test	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.CAST_CANCTRLTests	13	0	0	13	0	CAST_CANCTRL peripheral, acceptance filters and message buffers are absent.
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.CortexA9GICTests	1	0	0	1	0	The Cortex-A9 host platform and its ARM Generic Interrupt Controller are absent.
-src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	6	3	0	1	2	Remaining DualI2CAddressBMC050Test needs addressed slave registration and I2C START/STOP packet exchange using the ported BMC050 register model.
+src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFM32GGI2CControllerTest	6	4	0	0	2	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.EFR32_I2CControllerTests	15	0	0	15	0	EFR32 I2C controller registers, FIFO and interrupt state machine are absent.
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.FT5336Test	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Peripherals/Test/PeripheralsTests/PeripheralsTests.csproj	Antmicro.Renode.PeripheralsTests.LPC43xx_GPIO_Test	5	5	0	0	0	-

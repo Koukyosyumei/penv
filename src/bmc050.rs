@@ -176,3 +176,13 @@ impl Bmc050 {
         self.registers[usize::from(register)] = stored;
     }
 }
+
+impl crate::efm32_i2c::I2cPacketSlave for Bmc050 {
+    fn write_packet(&mut self, packet: &[u8]) {
+        self.write(packet);
+    }
+
+    fn read_packet(&self) -> Vec<u8> {
+        self.read(1)
+    }
+}
