@@ -6,7 +6,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	28	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	102	102	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	1472	0	32	0	Ninety-two methods are mapped for both reading and writing modes with ordinary collection layout. Sixty-three record, value, array, stream boundary and lifecycle methods and twenty-two collection methods are also mapped with collection-as-user-object settings. Seven event and delegate methods are mapped across all sixteen settings. Remaining cases need delegates with backreferences and closed generic methods.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	1504	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	16	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SurrogateTests	176	176	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.TwoDomainTests	36	0	0	36	0	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.

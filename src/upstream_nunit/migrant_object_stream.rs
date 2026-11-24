@@ -20,6 +20,39 @@ const fn stamp(
 
 const STAMPS: &[TypeStamp<'static>] = &[
     TypeStamp {
+        class: "BoxingClass",
+        module: "Tests",
+        revision: 0,
+        fields: &[
+            ("ObjectWithAction", FieldKind::Reference),
+            ("ObjectWithItems", FieldKind::Reference),
+        ],
+    },
+    TypeStamp {
+        class: "ClassWithItems",
+        module: "Tests",
+        revision: 0,
+        fields: &[("Items", FieldKind::Reference)],
+    },
+    TypeStamp {
+        class: "ClassWithAction",
+        module: "Tests",
+        revision: 0,
+        fields: &[("Action", FieldKind::Reference)],
+    },
+    TypeStamp {
+        class: "ClassWithItemsCapture",
+        module: "Tests",
+        revision: 0,
+        fields: &[("owner", FieldKind::Reference), ("i", FieldKind::Integer)],
+    },
+    TypeStamp {
+        class: "GenericClassWithGenericDelegate<List<bool>>",
+        module: "Tests",
+        revision: 0,
+        fields: &[("del", FieldKind::Reference)],
+    },
+    TypeStamp {
         class: "CompanionSecondModule",
         module: "SecondModule",
         revision: 0,
@@ -381,6 +414,11 @@ fn clone_using_methods(
 }
 
 const GRAPH_CODECS: &[Codec] = &[
+    generated_record!("BoxingClass"; field0: reference, field1: reference),
+    generated_record!("ClassWithItems"; field0: reference),
+    generated_record!("ClassWithAction"; field0: reference),
+    generated_record!("ClassWithItemsCapture"; field0: reference, field1: integer),
+    generated_record!("GenericClassWithGenericDelegate<List<bool>>"; field0: reference),
     generated_record!("CompanionSecondModule"; field0: integer),
     generated_record!("ClassWithEvent<IInterfaceForDelegate>"; field0: reference),
     generated_record!("ClassImplementingInterfaceForDelegate"; field0: boolean),
@@ -3497,4 +3535,96 @@ mod serial_bound_methods {
     event_configs!(external, external_method_delegate);
     event_configs!(interface, |m| interface_delegate(m, false));
     event_configs!(lambda, |m| interface_delegate(m, true));
+}
+
+fn event_with_backreference(methods: GraphMethods) {
+    let mut graph = Graph::default();
+    let owner = graph.insert(record("ClassWithItems", vec![Value::Null]));
+    let capture = graph.insert(record(
+        "ClassWithItemsCapture",
+        vec![Value::Ref(owner), Value::Integer(2)],
+    ));
+    let name = graph.insert(string("ClassWithItemsCapture.Invoke"));
+    let items = std::array::from_fn::<_, 2, _>(|_| {
+        let entry = delegate::bind(&mut graph, name, capture);
+        let action = graph.insert(Object::Array(vec![entry]));
+        graph.insert(record("ClassWithAction", vec![Value::Ref(action)]))
+    });
+    let array = graph.insert(Object::Array(items.map(Value::Ref).to_vec()));
+    *graph.get_mut(owner).unwrap() = record("ClassWithItems", vec![Value::Ref(array)]);
+    let root = graph.insert(record(
+        "BoxingClass",
+        vec![Value::Ref(items[1]), Value::Ref(owner)],
+    ));
+    let (reader, copy) = methods.clone(&graph, root);
+    let restored = reader.graph();
+    let Some(Object::Record {
+        class,
+        fields: machine,
+    }) = restored.get(copy)
+    else {
+        panic!("expected restored BoxingClass");
+    };
+    assert_eq!(class, "BoxingClass");
+    let owner = reference(&machine[1]);
+    let array = reference(&fields(restored.get(owner).unwrap())[0]);
+    let items = array_values(restored, array);
+    assert_eq!(items.len(), 2);
+    assert_eq!(machine[0], items[1]);
+    let mut targets = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let action = &fields(restored.get(reference(item)).unwrap())[0];
+        assert_ne!(action, &Value::Null, "Array element: {index}");
+        let entry = reference(&array_values(restored, reference(action))[0]);
+        let invocation = fields(restored.get(entry).unwrap());
+        assert_eq!(
+            string_value(restored, &invocation[0]),
+            "ClassWithItemsCapture.Invoke"
+        );
+        let target = reference(&invocation[1]);
+        assert_eq!(
+            restored.get(target),
+            Some(&record(
+                "ClassWithItemsCapture",
+                vec![Value::Ref(owner), Value::Integer(2)]
+            ))
+        );
+        targets.push(target);
+    }
+    assert_eq!(targets[0], targets[1]);
+}
+
+fn closed_generic_delegate(methods: GraphMethods) {
+    const CLASS: &str = "GenericClassWithGenericDelegate<List<bool>>";
+    const METHOD: &str = "GenericClassWithGenericDelegate<List<bool>>.Action<List<bool>>";
+    let mut graph = Graph::default();
+    let root = graph.insert(record(CLASS, vec![Value::Null]));
+    let method = graph.insert(string(METHOD));
+    let entry = delegate::bind(&mut graph, method, root);
+    let invocation_list = graph.insert(Object::Array(vec![entry]));
+    *graph.get_mut(root).unwrap() = record(CLASS, vec![Value::Ref(invocation_list)]);
+
+    let (reader, copy) = methods.clone(&graph, root);
+    let restored = reader.graph();
+    let Some(Object::Record {
+        class,
+        fields: object,
+    }) = restored.get(copy)
+    else {
+        panic!("expected restored closed generic delegate owner");
+    };
+    assert_eq!(class, CLASS);
+    let entries = array_values(restored, reference(&object[0]));
+    let [entry] = entries else {
+        panic!("expected one method binding");
+    };
+    let binding = fields(restored.get(reference(entry)).unwrap());
+    assert_eq!(string_value(restored, &binding[0]), METHOD);
+    assert_eq!(binding[1], Value::Ref(copy));
+}
+
+mod serial_delegate_graphs {
+    use super::*;
+    event_configs!(backreference, event_with_backreference);
+    event_configs!(generic, closed_generic_delegate);
 }
