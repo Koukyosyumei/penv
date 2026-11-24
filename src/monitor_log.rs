@@ -138,7 +138,14 @@ pub(crate) fn handle(
             keep,
             level,
             pattern,
+            options @ ..,
         ] => Some((|| {
+            let (start, pause) = match options {
+                [] => (false, false),
+                [start @ ("start" | "no-start"), pause @ ("pause" | "continue")] =>
+                    (*start == "start", *pause == "pause"),
+                _ => return Err("expected log wait options: start|no-start pause|continue".into()),
+            };
             let absent = *operation == "AssertAbsentMonitorLog";
             let ms = steps
                 .parse::<u64>()
@@ -182,7 +189,10 @@ pub(crate) fn handle(
             let limit = steps.min(budget);
             let mut found = find(keep);
             let mut stop = Stop::Limit;
-            if found.is_none() && steps != 0 {
+            if found.is_none() && limit != 0 {
+                if start {
+                    machine.primary.monitor_paused = false;
+                }
                 let revision = || {
                     CAPTURE.with_borrow(|capture| {
                         capture.as_ref().expect("attached log tester").revision
@@ -194,6 +204,9 @@ pub(crate) fn handle(
                     checked.replace(current) != current && find(true).is_some()
                 })?;
                 found = find(keep);
+                if pause && (found.is_some() || (stop == Stop::Limit && limit == steps)) {
+                    machine.primary.monitor_paused = true;
+                }
             }
             let dropped =
                 CAPTURE.with_borrow(|capture| capture.as_ref().is_some_and(|c| c.dropped));
@@ -243,6 +256,22 @@ fn decode(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_log_wait_can_resume_and_pause_at_the_deadline() {
+        let mut machine = Machine::new(4096).unwrap();
+        machine.bus.write(0x8000_0000, 4, 0x6f, &mut io::sink()).unwrap();
+        machine.primary.monitor_paused = true;
+        attach(4).unwrap();
+        let command = "AssertAbsentMonitorLog 1 literal keep any 78";
+        for (options, expected) in [("no-start pause", "STOP"), ("start pause", "MATCH")] {
+            let result = handle(&mut machine, &format!("{command} {options}"), u64::MAX)
+                .unwrap().unwrap();
+            assert_eq!(result.0, expected);
+            assert!(machine.primary.monitor_paused);
+        }
+        assert_eq!(machine.elapsed_steps(), 1000);
+    }
 
     #[test]
     fn script_budget_cannot_satisfy_a_larger_absence_window() {

@@ -56,6 +56,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.log_level = None
         self.log_capacity = None
         self.log_timeout = None
+        self.log_pause = False
         self.memory_symbols = {}
         self.monitor_input = MonitorInput(self.root, self.out, self.assets)
         self.replaying = False
@@ -153,8 +154,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             timeout = self.option(timeout, "timeout")
         options = self.log_options(args, {"defaultPauseEmulation", "maxLogEntries"},
                                    ("defaultPauseEmulation", "maxLogEntries"))
-        if self.log_bool(options.get("defaultPauseEmulation", "false")):
-            raise Unsupported("log tester pause-on-match requires asynchronous emulation")
+        self.log_pause = self.log_bool(options.get("defaultPauseEmulation", "false"))
+        if self.log_pause and not self.rust_monitor:
+            raise Unsupported("log tester pause-on-match requires the Rust monitor")
         self.log_timeout = self.duration(timeout)
         self.log_capacity = int(options.get("maxLogEntries", "1000000"))
         if not 1 <= self.log_capacity <= 1000000:
@@ -193,8 +195,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if self.log_timeout is None:
             raise AssertionFailed("Log tester is not available")
         options = self.log_options(args, set(positional), positional)
-        if self.log_bool(options.get("pauseEmulation", "false")):
-            raise Unsupported("log tester pause-on-match requires asynchronous emulation")
+        pause = self.log_bool(options["pauseEmulation"]) if "pauseEmulation" in options else self.log_pause
+        if pause and not self.rust_monitor:
+            raise Unsupported("log tester pause-on-match requires the Rust monitor")
         timeout = int(Decimal(self.duration(options.get("timeout", self.log_timeout))) * 1000)
         starts = self.log_bool(options.get("startEmulation", "true"))
         if timeout and not (starts or self.started):
@@ -205,8 +208,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         level = levels.get(options.get("level", "null"))
         if level is None:
             raise Unsupported("unknown log level")
+        flags = ""
+        if self.rust_monitor:
+            flags = (" start" if starts else " no-start") + (" pause" if pause else " continue")
         result = self.operation(
-            f"{command} {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}")
+            f"{command} {timeout} {kind} {keep} {level} {pattern.encode().hex() or '-'}{flags}")
         if timeout and starts:
             self.started = True
         return result
