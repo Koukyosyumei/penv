@@ -774,6 +774,7 @@ pub fn serve(
     mut output: impl Write,
     startup_output: &str,
     mut session: Session,
+    root: &Path,
 ) -> Result<(), String> {
     fn frame(output: &mut impl Write, status: &str, bytes: &[u8]) -> io::Result<()> {
         writeln!(output, "{status} {}", bytes.len())?;
@@ -827,11 +828,33 @@ pub fn serve(
         };
         boot.session.machine.clone_from(&session.machine);
         let mut existing_machine = true;
+        let mut included = false;
         let parsed = command_words(text).and_then(|words| {
+            if let ["include" | "i", value] = words.as_slice() {
+                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                let source = include_path(value, &cwd.join(path), &cwd, root, &session.variables)?;
+                if matches!(source.extension().and_then(|ext| ext.to_str()), Some("repl" | "cs" | "py")) {
+                    return Err("live include requires a RESC command script".into());
+                }
+                let mut state = ScriptState {
+                    boot: std::mem::take(&mut boot),
+                    machine: true,
+                    variables: session.variables.clone(),
+                    ..ScriptState::default()
+                };
+                load_file(&source, root, &mut state)?;
+                if !state.boot.post_run.is_empty() {
+                    return Err("post-run script actions are unavailable in a live include".into());
+                }
+                boot = state.boot;
+                session.variables = state.variables;
+                included = true;
+                return Ok(());
+            }
             if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
                 return Ok(());
             }
-            execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, Path::new("."), 1)
+            execute(text, &words, &session.variables, &mut existing_machine, &mut boot, path, root, 1)
         });
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
@@ -879,8 +902,8 @@ pub fn serve(
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
-            (Ok(()), [command]) => {
-                match run(machine, path, std::slice::from_ref(command), u64::MAX, &mut bytes) {
+            (Ok(()), commands) if included || commands.len() == 1 => {
+                match run(machine, path, commands, u64::MAX, &mut bytes) {
                     Ok((Stop::ScriptComplete, _)) => frame(&mut output, "OK", &bytes),
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
@@ -1416,34 +1439,8 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         }
         match words.as_slice() {
             ["include" | "i", value] => {
-                if state.boot.started {
-                    return Err(error(
-                        "commands after start are unsupported in a boot script",
-                    ));
-                }
-                let included = if let Some(relative) = value
-                    .strip_prefix("$ORIGIN/")
-                    .or_else(|| value.strip_prefix("$global.ORIGIN/"))
-                {
-                    origin.join(path_value(relative))
-                } else if let Some(relative) = value
-                    .strip_prefix("$CWD/")
-                    .or_else(|| value.strip_prefix("$global.CWD/"))
-                {
-                    let cwd = resolve(&state.variables, "$global.CWD").map_err(|e| error(&e))?;
-                    Path::new(unquote(cwd.trim_start_matches('@'))).join(path_value(relative))
-                } else {
-                    let value = resolve(&state.variables, value).map_err(|e| error(&e))?;
-                    let file = unquote(value.strip_prefix('@').unwrap_or(value));
-                    let file = path_value(file);
-                    // Renode searches the current monitor path before the script fallback.
-                    let candidate = root.join(&file);
-                    if candidate.is_file() {
-                        candidate
-                    } else {
-                        local_path(&file, path, root)
-                    }
-                };
+                let included = include_path(value, path, origin, root, &state.variables)
+                    .map_err(|e| error(&e))?;
                 match included.extension().and_then(|suffix| suffix.to_str()) {
                     Some("repl") if !state.boot.has_platform() => {
                         state.machine = true;
@@ -1509,6 +1506,28 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
     }
     state.visiting.remove(&canonical);
     Ok(())
+}
+
+fn include_path(
+    value: &str, path: &Path, origin: &Path, root: &Path, variables: &HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    if let Some(relative) = value
+        .strip_prefix("$ORIGIN/")
+        .or_else(|| value.strip_prefix("$global.ORIGIN/"))
+    {
+        return Ok(origin.join(path_value(relative)));
+    }
+    if let Some(relative) = value
+        .strip_prefix("$CWD/")
+        .or_else(|| value.strip_prefix("$global.CWD/"))
+    {
+        let cwd = resolve(variables, "$global.CWD")?;
+        return Ok(Path::new(unquote(cwd.trim_start_matches('@'))).join(path_value(relative)));
+    }
+    let value = resolve(variables, value)?;
+    let file = path_value(unquote(value.trim_start_matches('@')));
+    let candidate = root.join(&file);
+    Ok(if candidate.is_file() { candidate } else { local_path(&file, path, root) })
 }
 
 fn assign_variable(

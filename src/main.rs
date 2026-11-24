@@ -2198,7 +2198,7 @@ fn run() -> Result<ExitCode, String> {
         if !output.is_empty() {
             output.push_str("\r\n");
         }
-        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output, monitor_session)?;
+        monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output, monitor_session, platform_root.as_deref().unwrap_or(std::path::Path::new(".")))?;
         return Ok(ExitCode::SUCCESS);
     }
     if max_steps == Some(0) && !static_memory_script {
