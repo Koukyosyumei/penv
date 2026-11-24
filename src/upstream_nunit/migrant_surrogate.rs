@@ -23,6 +23,8 @@ const STAMPS: &[TypeStamp<'static>] = &[
         &[("<Field>k__BackingField", FieldKind::Integer)],
     ),
     stamp("SurrogateMockB", &[]),
+    stamp("SurrogateMockD", &[]),
+    stamp("SurrogateMockE", &[]),
     stamp("List<object>", &[("items", FieldKind::Reference)]),
 ];
 
@@ -218,3 +220,233 @@ modes!(
     self_stamped,
     deserialize_surrogate_pointing_to_itself
 );
+
+const C: &str = "SurrogateMockC";
+const D: &str = "SurrogateMockD";
+const E: &str = "SurrogateMockE";
+const H: &str = "SurrogateMockH";
+const IE: &str = "ISurrogateMockE";
+const IG: &str = "ISurrogateMockG";
+const OPEN_F: &str = "SurrogateMockF<>";
+const OPEN_I: &str = "SurrogateMockI<>";
+const F_STRING: &str = "SurrogateMockF<string>";
+const I_STRING: &str = "SurrogateMockI<string>";
+
+fn describe_types(rules: &mut Surrogates<'_>) {
+    rules.describe(D, &[C]);
+    rules.describe(E, &[IE]);
+    rules.describe(H, &[IE, IG]);
+    rules.describe(F_STRING, &[OPEN_F]);
+    rules.describe(OPEN_I, &[OPEN_F]);
+    rules.describe(I_STRING, &[F_STRING, OPEN_I]);
+}
+
+fn empty_case(
+    stamped: bool,
+    class: &str,
+    encode: &mut Surrogates<'_>,
+    restore: &mut Surrogates<'_>,
+    expected: Object,
+) {
+    let mut graph = Graph::default();
+    let root = graph.insert(record(class, vec![]));
+    round_trip(&graph, root, stamped, encode, restore, |copy, id| {
+        assert_eq!(copy.get(id), Some(&expected));
+    });
+}
+
+fn match_parent(stamped: bool, source: &str, target: &str, on_read: bool) {
+    let mut encode = Surrogates::default();
+    let mut restore = Surrogates::default();
+    let rules = if on_read { &mut restore } else { &mut encode };
+    describe_types(rules);
+    rules.register(target, |_, _| Ok(record("SurrogateMockB", vec![])));
+    empty_case(
+        stamped,
+        source,
+        &mut encode,
+        &mut restore,
+        record("SurrogateMockB", vec![]),
+    );
+}
+
+fn prefer_specific(stamped: bool) {
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    encode.register(C, |_, _| Ok(a(1)));
+    encode.register(D, |_, _| Ok(record("SurrogateMockB", vec![])));
+    empty_case(
+        stamped,
+        D,
+        &mut encode,
+        &mut Surrogates::default(),
+        record("SurrogateMockB", vec![]),
+    );
+}
+
+fn prefer_first_interface(stamped: bool) {
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    encode.register(IG, |_, _| Ok(Object::String("g".into())));
+    encode.register(IE, |_, _| Ok(Object::String("e".into())));
+    empty_case(
+        stamped,
+        H,
+        &mut encode,
+        &mut Surrogates::default(),
+        Object::String("g".into()),
+    );
+}
+
+fn generic_case(
+    stamped: bool,
+    class: &str,
+    value: &str,
+    configure: impl for<'g> FnOnce(&'g Graph, &mut Surrogates<'g>),
+    expected: Option<&str>,
+) {
+    let mut graph = Graph::default();
+    let value = graph.insert(Object::String(value.into()));
+    let root = graph.insert(record(class, vec![Value::Ref(value)]));
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    configure(&graph, &mut encode);
+    round_trip(
+        &graph,
+        root,
+        stamped,
+        &mut encode,
+        &mut Surrogates::default(),
+        |copy, id| {
+            let Some(Object::String(result)) = copy.get(id) else {
+                panic!("expected a string");
+            };
+            if let Some(expected) = expected {
+                assert_eq!(result, expected);
+            }
+        },
+    );
+}
+
+fn extract_generic_field(stamped: bool) {
+    generic_case(
+        stamped,
+        F_STRING,
+        "test",
+        |graph, encode| {
+            // As in the upstream callback, use the first instance field.
+            encode.register(OPEN_F, move |_, object| {
+                let Object::Record { fields, .. } = object else {
+                    unreachable!()
+                };
+                Ok(graph.get(ref_id(&fields[0])).unwrap().clone())
+            });
+        },
+        None,
+    );
+}
+
+fn prefer_closed_generic(stamped: bool) {
+    generic_case(
+        stamped,
+        F_STRING,
+        "test",
+        |_, encode| {
+            encode.register(OPEN_F, |_, _| Ok(Object::String("general".into())));
+            encode.register(F_STRING, |_, _| Ok(Object::String("special".into())));
+        },
+        Some("special"),
+    );
+}
+
+fn match_generic_base(stamped: bool, also_register_derived: bool) {
+    generic_case(
+        stamped,
+        I_STRING,
+        "something",
+        |_, encode| {
+            encode.register(OPEN_F, move |_, _| {
+                Ok(Object::String(
+                    if also_register_derived {
+                        "fail"
+                    } else {
+                        "success"
+                    }
+                    .into(),
+                ))
+            });
+            if also_register_derived {
+                encode.register(OPEN_I, |_, _| Ok(Object::String("success".into())));
+            }
+        },
+        Some("success"),
+    );
+}
+
+fn disable_specific(stamped: bool) {
+    let mut encode = Surrogates::default();
+    describe_types(&mut encode);
+    encode.register(C, |_, _| Ok(Object::String("fail".into())));
+    encode.disable(D);
+    empty_case(
+        stamped,
+        D,
+        &mut encode,
+        &mut Surrogates::default(),
+        record(D, vec![]),
+    );
+}
+
+modes!(
+    derived_read_plain,
+    derived_read_stamped,
+    match_parent,
+    D,
+    C,
+    true
+);
+modes!(
+    derived_write_plain,
+    derived_write_stamped,
+    match_parent,
+    D,
+    C,
+    false
+);
+modes!(
+    interface_read_plain,
+    interface_read_stamped,
+    match_parent,
+    E,
+    IE,
+    true
+);
+modes!(
+    interface_write_plain,
+    interface_write_stamped,
+    match_parent,
+    E,
+    IE,
+    false
+);
+modes!(specific_plain, specific_stamped, prefer_specific);
+modes!(first_plain, first_stamped, prefer_first_interface);
+modes!(
+    generic_field_plain,
+    generic_field_stamped,
+    extract_generic_field
+);
+modes!(closed_plain, closed_stamped, prefer_closed_generic);
+modes!(
+    generic_base_plain,
+    generic_base_stamped,
+    match_generic_base,
+    false
+);
+modes!(
+    generic_specific_plain,
+    generic_specific_stamped,
+    match_generic_base,
+    true
+);
+modes!(disable_plain, disable_stamped, disable_specific);
