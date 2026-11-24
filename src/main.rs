@@ -1,4 +1,5 @@
 mod andes_csr;
+mod bit_field;
 mod bitmanip;
 mod bus;
 mod clint;

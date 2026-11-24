@@ -177,12 +177,14 @@ pub(super) fn register(isa: Isa, fields: Instruction, lhs: u64, rhs: u64) -> Opt
 }
 
 fn bit_mask(funct3: u32, funct7: u32, lhs: u64, shift: u32) -> Option<u64> {
-    let bit = 1 << (shift & 63);
+    use crate::bit_field::{mask, masked_value, set_masked_value};
+
+    let bit = shift & 63;
     Some(match (funct3, funct7) {
-        (1, 0x14) => lhs | bit,
-        (1, 0x24) => lhs & !bit,
-        (5, 0x24) => u64::from(lhs & bit != 0),
-        (1, 0x34) => lhs ^ bit,
+        (1, 0x14) => set_masked_value(lhs, 1, bit, 1),
+        (1, 0x24) => set_masked_value(lhs, 0, bit, 1),
+        (5, 0x24) => u64::from(masked_value(lhs, bit, 1) != 0),
+        (1, 0x34) => lhs ^ mask(1, bit),
         _ => return None,
     })
 }

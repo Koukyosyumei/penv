@@ -17,6 +17,16 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.LimitTimerTests.ShouldNotFireAlarmWhenInterruptsAreDisabled	stm32h7_timer::limit_timer_cases::upstream_alarm_disabled	existing
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.LimitTimerTests.ShouldSwitchDirectionProperly	stm32h7_timer::limit_timer_cases::upstream_switch_direction_at_zero	existing
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MemoryTests.ShouldReadWriteMemoryBiggerThan2GB	upstream_nunit::memory::read_write_memory_bigger_than_2gb	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldCalculateDoubleWordMask	upstream_nunit::bit_helper::should_calculate_double_word_mask	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldCalculateQuadWordMask	upstream_nunit::bit_helper::should_calculate_quad_word_mask	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldGetDoubleWordMaskedValue	upstream_nunit::bit_helper::should_get_double_word_masked_value	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldGetQuadWordMaskedValue	upstream_nunit::bit_helper::should_get_quad_word_masked_value	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldReverseBitsByByte	upstream_nunit::bit_helper::should_reverse_bits_by_byte	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldReverseBitsByWord	upstream_nunit::bit_helper::should_reverse_bits_by_word	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldReverseDoubleWordBits	upstream_nunit::bit_helper::should_reverse_double_word_bits	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldReverseQuadrupleWordBits	upstream_nunit::bit_helper::should_reverse_quadruple_word_bits	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldSetDoubleWordMaskedValue	upstream_nunit::bit_helper::should_set_double_word_masked_value	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.BitHelperTests.ShouldSetQuadWordMaskedValue	upstream_nunit::bit_helper::should_set_quad_word_masked_value	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.CRCTests.ShouldCalculateCRC16	crc::tests::renode_crc_16	existing
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.CRCTests.ShouldCalculateCRC16CCITT	crc::tests::renode_crc_16_ccitt	existing
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.Utilities.CRCTests.ShouldCalculateCRC31Philips	crc::tests::renode_crc_31_philips	existing

@@ -62,7 +62,7 @@ impl BitManip {
         }
         if self.zbkb {
             match (funct3, funct7, index) {
-                (5, 0x34, 7) => return Some(value.reverse_bits().swap_bytes()),
+                (5, 0x34, 7) => return Some(crate::bit_field::reverse_by_byte(value)),
                 (1, 0x04, 15) => {
                     let mut result = 0;
                     for bit in 0..16 {

@@ -1,3 +1,4 @@
+mod bit_helper;
 mod misc;
 mod parser_primitives;
 
