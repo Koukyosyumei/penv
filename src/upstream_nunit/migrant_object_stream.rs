@@ -366,6 +366,18 @@ const GRAPH_CODECS: &[Codec] = &[
     generated_record!("List<List<int>>"; items: reference),
     generated_record!("List<Box>"; items: reference),
     generated_record!("List<object>"; items: reference),
+    generated_record!("Dictionary<int,int>"; items: reference),
+    generated_record!("Hashtable"; items: reference),
+    generated_record!("ConcurrentDictionary<int,int>"; items: reference),
+    generated_record!("Dictionary<string,string>"; items: reference),
+    generated_record!("Dictionary<int,string>"; items: reference),
+    generated_record!("Queue<int>"; items: reference),
+    generated_record!("HashSet<int>"; items: reference),
+    generated_record!("ArrayList"; items: reference),
+    generated_record!("ReadOnlyCollection<object>"; items: reference),
+    generated_record!("Dictionary<CustomObject,string>"; items: reference),
+    generated_record!("HashSet<CustomObject>"; items: reference),
+    generated_record!("CustomObject"; identity: reference),
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -1377,7 +1389,7 @@ fn string_value<'a>(graph: &'a Graph, value: &Value) -> &'a str {
 }
 
 fn integer_dictionary(
-    stamped: bool,
+    methods: impl Into<GraphMethods>,
     class: &str,
     size: i32,
     values: impl Fn(i32) -> i32,
@@ -1403,7 +1415,7 @@ fn integer_dictionary(
         })
         .collect();
     let root = dictionary(&mut graph, class, entries);
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let actual: Vec<_> = dictionary_entries(graph, root, class)
         .map(|(key, value)| (integer_value(graph, key), integer_value(graph, value)))
@@ -1417,7 +1429,7 @@ fn integer_dictionary(
     );
 }
 
-fn string_dictionary(stamped: bool) {
+fn string_dictionary(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let expected = [("Ball", "Piłka"), ("Cat", "Kot"), ("Line", "Linia")];
     let entries = expected.map(|(key, value)| {
@@ -1428,7 +1440,7 @@ fn string_dictionary(stamped: bool) {
     });
     let class = "Dictionary<string,string>";
     let root = dictionary(&mut graph, class, entries);
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let actual: Vec<_> = dictionary_entries(graph, root, class)
         .map(|(key, value)| (string_value(graph, key), string_value(graph, value)))
@@ -1442,7 +1454,7 @@ fn string_dictionary(stamped: bool) {
     );
 }
 
-fn dictionary_identity(stamped: bool) {
+fn dictionary_identity(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let word = graph.insert(string("Word"));
     let one = graph.insert(string("One"));
@@ -1456,7 +1468,7 @@ fn dictionary_identity(stamped: bool) {
             (Value::Integer(30), Value::Ref(word)),
         ],
     );
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored: Vec<_> = dictionary_entries(graph, root, class).collect();
     assert_eq!(restored.len(), 3);
@@ -1473,7 +1485,7 @@ fn dictionary_identity(stamped: bool) {
     assert_ne!(reference(by_key[&10]), reference(by_key[&20]));
 }
 
-fn queue_and_set(stamped: bool, queue: bool) {
+fn queue_and_set(methods: impl Into<GraphMethods>, queue: bool) {
     let mut graph = Graph::default();
     let (class, input) = if queue {
         ("Queue<int>", [1, 3, 5])
@@ -1481,7 +1493,7 @@ fn queue_and_set(stamped: bool, queue: bool) {
         ("HashSet<int>", [1, 2, 3])
     };
     let root = list(&mut graph, class, input.map(Value::Integer).to_vec());
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let mut actual: Vec<_> = list_values(reader.graph(), root, class)
         .iter()
         .map(|value| integer_value(reader.graph(), value))
@@ -1522,7 +1534,7 @@ stamp_modes!(hash_set_plain, hash_set_stamped, |s| queue_and_set(
     s, false
 ));
 
-fn array_list_with_strings(stamped: bool) {
+fn array_list_with_strings(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let first = graph.insert(string("Word 1"));
     let second = graph.insert(string("Word 2"));
@@ -1540,7 +1552,7 @@ fn array_list_with_strings(stamped: bool) {
             .map(Value::Ref)
             .collect(),
     );
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored = list_values(graph, root, "ArrayList");
     assert_eq!(restored.len(), 4);
@@ -1556,11 +1568,11 @@ fn array_list_with_strings(stamped: bool) {
     assert_eq!(string_value(graph, &restored[3]), "Word 3");
 }
 
-fn array_list_with_primitives(stamped: bool) {
+fn array_list_with_primitives(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let boxed = [1, 2, 3].map(|value| boxed_integer(&mut graph, value));
     let root = list(&mut graph, "ArrayList", boxed.to_vec());
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored: Vec<_> = list_values(graph, root, "ArrayList")
         .iter()
@@ -1569,7 +1581,7 @@ fn array_list_with_primitives(stamped: bool) {
     assert_eq!(restored, [1, 2, 3]);
 }
 
-fn read_only_collection(stamped: bool) {
+fn read_only_collection(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let first = Value::Ref(graph.insert(string("asdasd")));
     let second = boxed_integer(&mut graph, 1);
@@ -1579,7 +1591,7 @@ fn read_only_collection(stamped: bool) {
         "ReadOnlyCollection<object>",
         vec![Value::Ref(inner)],
     ));
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let Some(Object::Record { class, fields }) = graph.get(root) else {
         panic!("expected collection");
@@ -1842,7 +1854,7 @@ fn custom_identity(graph: &Graph, value: &Value) -> ObjectId {
     identity
 }
 
-fn custom_key_dictionary(stamped: bool) {
+fn custom_key_dictionary(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let entries = ["test1", "test2", "test3"].map(|text| {
         (
@@ -1852,7 +1864,7 @@ fn custom_key_dictionary(stamped: bool) {
     });
     let class = "Dictionary<CustomObject,string>";
     let root = dictionary(&mut graph, class, entries);
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored: std::collections::HashMap<_, _> = dictionary_entries(graph, copy, class)
         .map(|(key, value)| (custom_identity(graph, key), string_value(graph, value)))
@@ -1860,12 +1872,12 @@ fn custom_key_dictionary(stamped: bool) {
     assert_eq!(restored.len(), 3);
 }
 
-fn custom_item_set(stamped: bool) {
+fn custom_item_set(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let items = (0..3).map(|_| new_custom_object(&mut graph)).collect();
     let class = "HashSet<CustomObject>";
     let root = list(&mut graph, class, items);
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let restored: std::collections::HashSet<_> = list_values(graph, copy, class)
         .iter()
@@ -2775,4 +2787,38 @@ mod serial_generated_boxes_lists {
     configurations!(list_of_lists, list_of_lists);
     configurations!(list_with_null, list_with_null);
     configurations!(list_identity, list_self_identity);
+}
+
+mod serial_generated_maps_sets {
+    use super::*;
+    configurations!(integer_dictionary, |m| integer_dictionary(
+        m,
+        "Dictionary<int,int>",
+        100,
+        |i| i + 1,
+        false
+    ));
+    configurations!(hashtable, |m| integer_dictionary(
+        m,
+        "Hashtable",
+        100,
+        |i| i + 1,
+        true
+    ));
+    configurations!(concurrent_dictionary, |m| integer_dictionary(
+        m,
+        "ConcurrentDictionary<int,int>",
+        10,
+        |i| 2 * i,
+        false
+    ));
+    configurations!(string_dictionary, string_dictionary);
+    configurations!(dictionary_identity, dictionary_identity);
+    configurations!(queue, |m| queue_and_set(m, true));
+    configurations!(hash_set, |m| queue_and_set(m, false));
+    configurations!(mixed_array_list, array_list_with_strings);
+    configurations!(primitive_array_list, array_list_with_primitives);
+    configurations!(readonly_collection, read_only_collection);
+    configurations!(custom_key_dictionary, custom_key_dictionary);
+    configurations!(custom_item_set, custom_item_set);
 }
