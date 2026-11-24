@@ -967,6 +967,14 @@ fn load_platform(
     } else if let Some(controller) = flash_controller {
         return Err(controller.error("expected an attached Micron MT25Q flash chip"));
     }
+    if let [entry] = entries.as_slice()
+        && entry.model == "UART.TrivialUart"
+    {
+        keys(entry, &[])?;
+        machine.bus.map_trivial_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
+        machine.cpu_less = true;
+        return Ok(machine);
+    }
     if cpus.is_empty() || (require_ram && !ram) {
         return Err(format!(
             "{}: platform requires at least one CPU{}",

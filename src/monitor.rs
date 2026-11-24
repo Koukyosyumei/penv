@@ -346,7 +346,7 @@ enum Action {
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
     NvicLog(String),
-    NvicWrite(String, u32, u32),
+    PeripheralWrite(String, u32, u32),
     SynchroniseQuantum,
     CpuReset(String),
     CpuPc(String, u32),
@@ -494,6 +494,8 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::AssembleBlock(..) | Action::BusScalar(_)
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
+                    | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
+                    | Action::DefaultUartTester(_) | Action::WaitForBytes(..)
             )
         })
 }
@@ -817,16 +819,16 @@ fn run_commands(
                 Ok(None)
             }
             Action::NvicLog(target) => machine.bus.enable_nvic_log(target).map(|()| None),
-            Action::NvicWrite(target, offset, value) => machine
-                .bus
-                .nvic_register_address(target, *offset)
-                .and_then(|address| {
-                    machine
-                        .bus
-                        .write_scalar(address, 4, *value, &mut output, true)
-                        .map_err(|e| e.to_string())
-                })
-                .map(|()| None),
+            Action::PeripheralWrite(target, offset, value) => {
+                if let Some(address) = machine.bus.trivial_uart_register(target, *offset) {
+                    machine.bus.write_scalar(address, 4, *value, &mut io::sink(), true)
+                        .map(|()| None).map_err(|error| error.to_string())
+                } else {
+                    let address = machine.bus.nvic_register_address(target, *offset)?;
+                    machine.bus.write_scalar(address, 4, *value, &mut output, true)
+                        .map(|()| None).map_err(|error| error.to_string())
+                }
+            }
             Action::AssertCpuValue(cpu, register, expected) => {
                 let actual = match register {
                     Some(register) => machine.monitor_named_register(cpu, register, None)?
@@ -2929,7 +2931,7 @@ fn execute(
             ))
         }
         ["logLevel", "-1", target] => Some(Action::NvicLog(resolve(target)?.to_owned())),
-        [target, "WriteDoubleWord", offset, value] => Some(Action::NvicWrite(
+        [target, "WriteDoubleWord", offset, value] => Some(Action::PeripheralWrite(
             resolve(target)?.to_owned(),
             crate::parse_address(resolve(offset)?)?,
             crate::parse_address(resolve(value)?)?,
@@ -3070,6 +3072,10 @@ fn execute(
                         | Action::CpuRegister(..)
                         | Action::SetEmulationPaused(_)
                         | Action::DefaultUartTimeout(_)
+                        | Action::PeripheralWrite(..)
+                        | Action::CreateUartTester(..)
+                        | Action::DefaultUartTester(_)
+                        | Action::WaitForBytes(..)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)

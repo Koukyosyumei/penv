@@ -124,6 +124,7 @@ impl PcTrace {
 }
 
 pub struct Machine {
+    pub(crate) cpu_less: bool,
     pub bus: Bus,
     pub primary: Hart,
     pub function_symbols: Option<BTreeMap<u32, String>>,
@@ -417,6 +418,7 @@ impl Machine {
             elapsed_steps: 0,
             monitor_clock_ns: 0,
             monitor_clock_step: 0,
+            cpu_less: false,
             boot_memory_cleared: false,
             monitor_firmware: None,
             monitor_quantum: 10_000, // 100 microseconds in 10 ns monitor units.
@@ -1511,6 +1513,15 @@ impl Machine {
     ) -> Result<(Stop, u64), String> {
         if self.boot_memory_cleared {
             return Err("Load a boot snapshot after Clear".into());
+        }
+        if self.cpu_less {
+            if selected.is_some() {
+                return Err("the platform has no CPU".into());
+            }
+            let end = self.time_source.elapsed().saturating_add(limit);
+            self.time_source.grant_until(end);
+            self.elapsed_steps = self.time_source.elapsed();
+            return Ok((Stop::Limit, 0));
         }
         let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
         let stop_when_halted = self.stop_when_halted && selected.is_none();

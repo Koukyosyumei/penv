@@ -4985,9 +4985,14 @@ impl Bus {
         }
     }
 
-    fn is_trivial_uart(&self, target: &str) -> bool {
+    pub(crate) fn trivial_uart_register(&self, target: &str, offset: u32) -> Option<u32> {
         let target = target.strip_prefix("sysbus.").unwrap_or(target);
-        self.trivial_uart.as_ref().is_some_and(|(_, name)| name == target)
+        self.trivial_uart.as_ref().filter(|(_, name)| name == target && offset == 0)
+            .map(|(base, _)| *base)
+    }
+
+    fn is_trivial_uart(&self, target: &str) -> bool {
+        self.trivial_uart_register(target, 0).is_some()
     }
 
     fn tester_port(&self, target: &str) -> Result<TesterPort, String> {
