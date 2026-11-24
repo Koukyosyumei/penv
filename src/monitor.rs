@@ -616,7 +616,7 @@ impl MonitorBuiltins {
     pub(crate) fn execute(&mut self, machine: &mut Machine, text: &str) -> Option<Result<String, String>> {
         let command = text.split_whitespace().next()?;
         if let Some(registered) = self.commands.get(command) {
-            return Some(command_words(text).and_then(|words| (registered.execute)(machine, &words[1..])));
+            return Some(action_arguments::words(text).and_then(|words| (registered.execute)(machine, &words[1..])));
         }
         if !matches!(command, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
             return None;

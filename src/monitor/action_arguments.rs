@@ -46,3 +46,52 @@ pub(crate) fn bind<'a>(
         .collect::<Result<_, _>>()?;
     Ok(Arguments { fixed, rest })
 }
+
+/// Split registered command arguments while keeping a bracketed value intact.
+pub(crate) fn words(text: &str) -> Result<Vec<&str>, String> {
+    let mut result = Vec::new();
+    let mut start = None;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut brackets = 0usize;
+    for (index, ch) in text.char_indices() {
+        if let Some(delimiter) = quote {
+            if std::mem::take(&mut escaped) {
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                ch if ch == delimiter => quote = None,
+                _ => {}
+            }
+            continue;
+        }
+        if brackets == 0 && ch.is_whitespace() {
+            if let Some(start) = start.take() {
+                result.push(&text[start..index]);
+            }
+            continue;
+        }
+        if ch == '#' && start.is_none() {
+            break;
+        }
+        start.get_or_insert(index);
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '[' => brackets += 1,
+            ']' => {
+                brackets = brackets
+                    .checked_sub(1)
+                    .ok_or("unexpected closing bracket")?
+            }
+            _ => {}
+        }
+    }
+    if quote.is_some() || brackets != 0 {
+        return Err("unterminated quote or bracket".into());
+    }
+    if let Some(start) = start {
+        result.push(&text[start..]);
+    }
+    Ok(result)
+}

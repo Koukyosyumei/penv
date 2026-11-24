@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,121 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,143 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 274 |
+| 移植待ち | 252 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -486,3 +486,5 @@ CLINT の CPU スコープ付き登録を実際のプラットフォームロー
 モニターのコマンド登録と `help` の統合を追加し、登録したコマンドの説明が表示される `AutoLoadCommandTest` を移植した。Rust 側では型を直接登録する。[公式IDとの対応](nunit-evidence/targeted-monitor-features.tsv)・[実行ログ](nunit-evidence/targeted-monitor-features.log)
 
 `ActionArguments` の17件を移植した。上流のコマンド文字列と出力包含アサーションを維持し、名前・位置・省略可能引数と可変長整数引数を検証した。実行環境には C# 拡張の代わりに対応する Rust コールバックを登録する。このバッチは emulation メソッドに絞り、上流セットアップで用意する external オブジェクトとその後処理は今後の indexer バッチに残る。[公式IDとの対応](nunit-evidence/targeted-monitor-action-integers.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-integers.log)
+
+`ActionArguments` の配列・リスト22件を追加した。角括弧を含む引数を保持し、空配列、末尾カンマ、名前付き配列、`null` を含む整数配列、文字列の可変長引数を、上流と同じコマンドと出力で照合した。同名の2件は NUnit ID で区別した。[公式IDとの対応](nunit-evidence/targeted-monitor-action-arrays.tsv)・[実行ログ](nunit-evidence/targeted-monitor-action-arrays.log)
