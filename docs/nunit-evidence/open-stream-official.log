@@ -1,0 +1,8 @@
+Test run for /home/ec2-user/Dev/penv-renode-ci/target/renode-discovery/lib/Migrant/Tests/bin/Release/net10.0/Tests.dll (.NETCoreApp,Version=v10.0)
+VSTest version 18.0.1 (x64)
+
+Starting test execution, please wait...
+A total of 1 test files matched the specified pattern.
+Results File: /home/ec2-user/Dev/penv-renode-nunit/target/nunit-weak-followup/weak.trx
+
+Passed!  - Failed:     0, Passed:    28, Skipped:     0, Total:    28, Duration: 125 ms - Tests.dll (net10.0)

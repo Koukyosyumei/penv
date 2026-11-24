@@ -82,6 +82,15 @@ SurrogateTests の継承、インターフェース、ジェネリック定義�
 フォールバックを止める。固定 C# の保存済み結果と Rust の対象実行で22件が合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-hierarchy-symbol-lookup.tsv)
 
-残りは9 fixture・2,065ケース。弱参照保持、生成読み書き、コレクションと CLR 型の
+OpenStreamSerializationTests の `UseWeakReference` の2件を、反射読み書き設定で
+追加した。書き手はグラフとオブジェクト ID の対応を弱く保持し、グラフが
+解放された後もシリアル化済みのスロット番号は再使用しない。読み手は復元した
+ルートが所有するオブジェクトを弱く参照し、同じルートの再読込で実際の
+オブジェクト同一性を維持する。自己循環を含む最後のルートを解放した後は、
+失効した参照の読み込みを拒否する。上流の配列に対応する Rust のテストは、
+3つの読み込み結果を保持して比較する。残る21件には生成読み書きが必要。
+[公式 ID 別の結果](nunit-evidence/targeted-weak-stream-symbol.tsv) · [固定 C# の OpenStreamSerializationTests ログ](nunit-evidence/open-stream-official.log)
+
+残りは9 fixture・2,063ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
