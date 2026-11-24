@@ -851,3 +851,20 @@ Rust モニターテスト 21 件が合格した。
 ログのホスト時刻は比較から除外した。Rust モニターテスト 21 件が合格した。
 同じビルドで未変更の `Should Call Conditional Set`、`Should Overflow Buffer`、
 `Should Load HEX` が合格した（`target/monitor-strings-d7d2cc3-*/results.json`）。
+
+`db59cc5` と `7b00750` は UART テキスト応答の `Timestamp` を
+Rust の仮想時計から返す。未完成行は一致を確認した時刻を使い、
+完成行は UART が終端文字を受信した時刻を履歴に保持する。
+Python はフレーム内の ns をミリ秒に変換する。
+固定 Renode のバイナリ応答はコンストラクターで `Timestamp` を
+自身に代入するため、同じ 0 の互換動作を維持した。
+
+固定 Renode と同じ RPC コマンド列で、20 ms の時点で照会した
+未完成行の `Timestamp` は両方とも 20.0 ms だった。
+完成行は 20 ms で受信し、30 ms になってから取得しても
+両方とも `Timestamp` は 20.0 ms だった。
+証跡は `target/monitor-uart-{timestamp,completed}-proof/{renode,penv}.jsonl`。
+Rust モニター 21 件と UART 関連 34 件は合格した。
+仮想時計を共有した後もスナップショットの Rust テスト 3 件が合格した。
+未変更の HEX、STM32F072b Console Echo、全バイト値の正規表現は
+`7b00750` で合格した（`target/monitor-uart-completed-7b00750-*/results.json`）。
