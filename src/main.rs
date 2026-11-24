@@ -2167,6 +2167,7 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     let mut machine = boot_machine()?;
+    let command_budget = max_steps.unwrap_or(if machine.cpu_less { u64::MAX } else { 10_000_000 });
     machine.monitor_firmware.clone_from(&path);
     if let Some(quantum) = monitor_quantum {
         machine.monitor_quantum = quantum;
@@ -2217,7 +2218,7 @@ fn run() -> Result<ExitCode, String> {
                 &mut machine,
                 &mut monitor_session,
                 &runtime,
-                max_steps.unwrap_or(10_000_000),
+                command_budget,
                 &mut io::stderr().lock(),
             )?;
             if stop != Stop::ScriptComplete {
@@ -2297,7 +2298,7 @@ fn run() -> Result<ExitCode, String> {
     let start = Instant::now();
     let limit = match (max_steps, run_steps) {
         (Some(cli), Some(script)) => cli.min(script),
-        (cli, script) => cli.or(script).unwrap_or(10_000_000),
+        (cli, script) => cli.or(script).unwrap_or(command_budget),
     };
     if let Some(check) = uart_check {
         if uart_transcript.is_some() || uart_reply.is_some() {
