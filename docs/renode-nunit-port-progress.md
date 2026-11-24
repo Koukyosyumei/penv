@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,689 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,713 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 707 |
+| 移植待ち | 683 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -383,3 +383,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 同じ8構成で、transient メンバーの除外、復元時の初期化とフック、カスタムペイロードの読み取り境界、入れ子のジェネリック配列、および Issue 60 の decimal 値を検証する12メソッドを移植した。対象実行で96件すべてが合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-lifecycle.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-lifecycle.log)
 
 非ジェネリックとジェネリックのスタック、およびキューを、バック配列・要素数・バージョンと、キューの読み取り・書き込み位置を持つユーザーオブジェクトとして復元した。新規24件を含む対象グループ88件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-sequences.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-sequences.log)
+
+同じ8構成で、プリミティブと混在要素の `ArrayList` および `ReadOnlyCollection<object>` を移植した。配列の容量と論理要素数を区別し、読み取り専用ラッパーは元のリストへの参照を保持する。対象グループ112件が合格し、うち24件が新規対応。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-array-list.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-array-list.log)

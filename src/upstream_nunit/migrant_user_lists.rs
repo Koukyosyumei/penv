@@ -14,6 +14,9 @@ const INTERFACES: &str = "List<IInterface>";
 const INTERFACE_CONTAINER: &str = "ClassWithTheListOfInterfaces";
 const IMPLEMENTATIONS: [&str; 2] = ["ImplementingInterfaceOne", "ImplementingInterfaceTwo"];
 
+const ARRAY_LIST: &str = "ArrayList";
+const READ_ONLY: &str = "ReadOnlyCollection<object>";
+
 const STACK: &str = "Stack";
 const CHAR_STACK: &str = "Stack<char>";
 const QUEUE: &str = "Queue<int>";
@@ -25,6 +28,9 @@ const STACK_FIELDS: &[(&str, FieldKind)] = &[
 ];
 
 const CODECS: &[Codec] = &[
+    generated_record!(ARRAY_LIST; items: reference, size: integer, version: integer),
+    generated_record!(READ_ONLY; list: reference),
+    generated_record!("SimpleClass"; value: integer, string: reference),
     generated_record!(STACK; array: reference, size: integer, version: integer),
     generated_record!(CHAR_STACK; array: reference, size: integer, version: integer),
     generated_record!(QUEUE; array: reference, head: integer, tail: integer, size: integer, version: integer),
@@ -71,6 +77,19 @@ const STAMPS: &[TypeStamp<'static>] = &[
         module: "mscorlib",
         revision: 0,
         fields: &[("m_value", FieldKind::Integer)],
+    },
+    user_list::type_stamp(ARRAY_LIST),
+    TypeStamp {
+        class: READ_ONLY,
+        module: "mscorlib",
+        revision: 0,
+        fields: &[("list", FieldKind::Reference)],
+    },
+    TypeStamp {
+        class: "SimpleClass",
+        module: "Tests",
+        revision: 0,
+        fields: &[("Value", FieldKind::Integer), ("Str", FieldKind::Reference)],
     },
     user_list::type_stamp(INTS),
     user_list::type_stamp(NESTED),
@@ -351,6 +370,88 @@ fn integer_queue(options: Options) {
     assert_eq!(actual, input);
 }
 
+fn string_ref(graph: &mut Graph, value: &str) -> Value {
+    Value::Ref(graph.insert(Object::String(value.into())))
+}
+
+fn integer_ref(graph: &mut Graph, value: i64) -> Value {
+    Value::Ref(graph.insert(record("System.Int32", vec![Value::Integer(value)])))
+}
+
+fn assert_string(graph: &Graph, item: &Value, expected: &str) {
+    assert_eq!(
+        graph.get(reference(item)),
+        Some(&Object::String(expected.into()))
+    );
+}
+
+fn assert_integer(graph: &Graph, item: &Value, expected: i64) {
+    assert_eq!(
+        graph.get(reference(item)),
+        Some(&record("System.Int32", vec![Value::Integer(expected)]))
+    );
+}
+
+fn mixed_array_list(options: Options) {
+    let mut graph = Graph::default();
+    let first = string_ref(&mut graph, "Word 1");
+    let second = string_ref(&mut graph, "Word 2");
+    let text = string_ref(&mut graph, "Word 4");
+    let object = Value::Ref(graph.insert(record("SimpleClass", vec![Value::Integer(6), text])));
+    let last = string_ref(&mut graph, "Word 3");
+    let root = store(&mut graph, ARRAY_LIST, [first, second, object, last]);
+    let (restored, copy) = options.restore(&graph, root);
+    let items = UserList::restore(&restored, copy, ARRAY_LIST).unwrap();
+    let [first, second, object, last] = items else {
+        panic!("expected four array list items");
+    };
+    assert_string(&restored, first, "Word 1");
+    assert_string(&restored, second, "Word 2");
+    let Some(Object::Record { class, fields }) = restored.get(reference(object)) else {
+        panic!("expected SimpleClass");
+    };
+    assert_eq!(class, "SimpleClass");
+    assert_eq!(fields[0], Value::Integer(6));
+    assert_string(&restored, &fields[1], "Word 4");
+    assert_string(&restored, last, "Word 3");
+}
+
+fn primitive_array_list(options: Options) {
+    let mut graph = Graph::default();
+    let input = [1, 2, 3];
+    let boxed = input.map(|value| integer_ref(&mut graph, value));
+    let root = store(&mut graph, ARRAY_LIST, boxed);
+    let (restored, copy) = options.restore(&graph, root);
+    let items = UserList::restore(&restored, copy, ARRAY_LIST).unwrap();
+    assert_eq!(items.len(), input.len());
+    for (item, expected) in items.iter().zip(input) {
+        assert_integer(&restored, item, expected);
+    }
+}
+
+fn read_only_collection(options: Options) {
+    let mut graph = Graph::default();
+    let items = [
+        string_ref(&mut graph, "asdasd"),
+        integer_ref(&mut graph, 1),
+        string_ref(&mut graph, "cvzxcv"),
+    ];
+    let list = store(&mut graph, OBJECTS, items);
+    let root = graph.insert(record(READ_ONLY, vec![Value::Ref(list)]));
+    let (restored, copy) = options.restore(&graph, root);
+    let Some(Object::Record { class, fields }) = restored.get(copy) else {
+        panic!("expected read-only collection");
+    };
+    assert_eq!(class, READ_ONLY);
+    let items = UserList::restore(&restored, reference(&fields[0]), OBJECTS).unwrap();
+    let [first, second, third] = items else {
+        panic!("expected three collection items");
+    };
+    assert_string(&restored, first, "asdasd");
+    assert_integer(&restored, second, 1);
+    assert_string(&restored, third, "cvzxcv");
+}
+
 macro_rules! configurations {
     ($module:ident, $case:expr) => {
         mod $module {
@@ -433,3 +534,6 @@ configurations!(interface_list, interface_list);
 configurations!(nongeneric_stack, |m| character_stack(m, true));
 configurations!(generic_stack, |m| character_stack(m, false));
 configurations!(queue, integer_queue);
+configurations!(mixed_array_list, mixed_array_list);
+configurations!(primitive_array_list, primitive_array_list);
+configurations!(read_only_collection, read_only_collection);
