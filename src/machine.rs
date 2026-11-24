@@ -137,6 +137,7 @@ pub struct Machine {
     elapsed_steps: u64,
     monitor_clock_ns: u128,
     monitor_clock_step: u64,
+    pub(crate) monitor_quantum: u64,
     cpu_paused: bool,
     cpu_halted: bool,
     cpu_clock_stopped: bool,
@@ -414,6 +415,7 @@ impl Machine {
             elapsed_steps: 0,
             monitor_clock_ns: 0,
             monitor_clock_step: 0,
+            monitor_quantum: 10_000, // 100 microseconds in 10 ns monitor units.
             cpu_paused: false,
             cpu_halted: false,
             cpu_clock_stopped: false,

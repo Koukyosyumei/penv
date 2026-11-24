@@ -26,6 +26,7 @@ pub struct Boot {
     pub pcm_inputs: Vec<(String, Asset)>,
     pub pcm_outputs: Vec<(String, PathBuf)>,
     pub run_steps: Option<u64>,
+    pub quantum: Option<u64>,
     pub post_run: Vec<PostRun>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -218,7 +219,8 @@ pub struct RuntimeCommand {
 
 enum Action {
     RunFor(u64),
-    RunCycles(u64),
+    RunToSyncPoint,
+    SetQuantum(u64),
     LogLevel(i8),
     UserState(Option<String>),
     Echo(String),
@@ -541,10 +543,19 @@ fn run_commands(
                 let seconds = ns / 1_000_000_000;
                 writeln!(output.output, "Elapsed Virtual Time: {:02}:{:02}:{:02}.{:09}",
                     seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
-                    .map(|()| None).map_err(|error| error.to_string())
+                    .and_then(|()| {
+                        let ns = u128::from(machine.monitor_quantum) * 10;
+                        let seconds = ns / 1_000_000_000;
+                        writeln!(output.output, "Quantum: {:02}:{:02}:{:02}.{:09}",
+                            seconds / 3600, seconds / 60 % 60, seconds % 60, ns % 1_000_000_000)
+                    }).map(|()| None).map_err(|error| error.to_string())
             }
             Action::UartIdle(_) => Err("UART idle check requires the live monitor".into()),
-            Action::RunFor(steps) | Action::RunCycles(steps) | Action::CpuStep(_, steps) => {
+            Action::SetQuantum(duration) => {
+                machine.monitor_quantum = *duration;
+                Ok(None)
+            }
+            Action::RunToSyncPoint | Action::RunFor(_) | Action::CpuStep(..) => {
                 let valid_cpu = match &command.action {
                     Action::CpuStep(cpu, _) => machine.cortex_m_cpu(cpu).map(|_| ()),
                     _ => Ok(()),
@@ -553,10 +564,15 @@ fn run_commands(
                     if machine.primary.monitor_paused {
                         return Ok(None);
                     }
-                    let steps = if matches!(command.action, Action::RunFor(_)) {
-                        duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?
-                    } else {
-                        *steps
+                    let steps = match command.action {
+                        Action::CpuStep(_, steps) => steps,
+                        Action::RunFor(duration) => duration_cycles(
+                            duration, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                        )?,
+                        Action::RunToSyncPoint => duration_cycles(
+                            machine.monitor_quantum, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
+                        )?,
+                        _ => unreachable!(),
                     };
                     let chunk = steps.min(budget);
                     let start = machine.elapsed_steps();
@@ -1849,6 +1865,16 @@ fn execute(
         boot.trace_memory.push((name.trim_start_matches("sysbus.").to_owned(), enabled));
         return Ok(());
     }
+    if let ["emulation", "SetGlobalQuantum" | "SetQuantum", value] = words
+        && !boot.started && boot.runtime.is_empty()
+    {
+        let quantum = duration_steps(resolve(value)?).map_err(|error| format!("invalid emulation quantum: {error}"))?;
+        if quantum == 0 {
+            return Err("emulation quantum must be positive".into());
+        }
+        boot.quantum = Some(quantum);
+        return Ok(());
+    }
     let action = match words {
         [target, "VendorSpecific1", value] if boot.started => Some(Action::PhyRegister(
             (*target).to_owned(), u16::try_from(crate::parse_address(resolve(value)?)?)
@@ -2477,7 +2503,14 @@ fn execute(
                 cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
             ))
         }
-        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunCycles(1)),
+        ["emulation", "SetGlobalQuantum" | "SetQuantum", duration] => {
+            let quantum = duration_steps(resolve(duration)?).map_err(|error| format!("invalid emulation quantum: {error}"))?;
+            if quantum == 0 {
+                return Err("emulation quantum must be positive".into());
+            }
+            Some(Action::SetQuantum(quantum))
+        }
+        ["emulation", "RunToNearestSyncPoint"] => Some(Action::RunToSyncPoint),
         ["machine" | "mach", "Reset"] => Some(Action::MachineReset(Vec::new())),
         [target, "Reset"] => {
             let cpu = resolve(target)?;
@@ -2732,16 +2765,6 @@ fn execute(
                 .strip_prefix('@')
                 .ok_or("expected @symbol-path")?;
             boot.symbols.push(file.to_string());
-        }
-        ["emulation", "SetGlobalQuantum", value] => {
-            let seconds: f64 = resolve(value)?
-                .trim_matches('"')
-                .parse()
-                .map_err(|_| "invalid emulation quantum")?;
-            if !seconds.is_finite() || seconds <= 0.0 {
-                return Err("invalid emulation quantum".into());
-            }
-            // Single-machine execution already synchronizes after each instruction.
         }
         [target, "Pressed" | "Released"] if boot.has_platform() && target.contains('.') => {
             let (gpio, button) = target.rsplit_once('.').unwrap();

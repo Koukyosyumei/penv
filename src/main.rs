@@ -1372,6 +1372,7 @@ fn run() -> Result<ExitCode, String> {
     let mut pcm_inputs = Vec::new();
     let mut pcm_outputs = Vec::new();
     let mut run_steps = None;
+    let mut monitor_quantum = None;
     let mut post_run = Vec::new();
     let mut sd_cards = Vec::new();
     let mut sd_setup_only = false;
@@ -1556,6 +1557,7 @@ fn run() -> Result<ExitCode, String> {
         }
         pcm_outputs = boot.pcm_outputs;
         run_steps = boot.run_steps;
+        monitor_quantum = boot.quantum;
         post_run = boot.post_run;
         boot_pcs = boot.boot_pcs;
         vector_tables = boot.vector_tables;
@@ -2146,6 +2148,9 @@ fn run() -> Result<ExitCode, String> {
         Ok(machine)
     };
     let mut machine = boot_machine()?;
+    if let Some(quantum) = monitor_quantum {
+        machine.monitor_quantum = quantum;
+    }
     let run_steps = run_steps
         .map(|duration| monitor::duration_cycles(
             duration, bus::CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz(),
