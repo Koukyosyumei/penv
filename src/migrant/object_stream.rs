@@ -4,7 +4,7 @@
 use super::generated_record::{Codec, RecordInput, RecordOutput};
 use super::primitive::{Decimal, Guid, Reader, Writer};
 use super::surrogate::Surrogates;
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Weak};
 
@@ -43,6 +43,26 @@ fn stamp_for<'a>(stamps: &'a [TypeStamp<'a>], class: &str) -> io::Result<TypeSta
         .ok_or_else(|| invalid("missing type stamp for object class"))
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct VersionPolicy {
+    pub allow_module_revision_change: bool,
+}
+
+#[derive(Debug)]
+pub struct VersionToleranceError(&'static str);
+
+impl std::fmt::Display for VersionToleranceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for VersionToleranceError {}
+
+fn version_mismatch(reason: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, VersionToleranceError(reason))
+}
+
 impl TypeStamp<'_> {
     fn validate(self, values: &[Value]) -> io::Result<()> {
         if self.fields.len() != values.len()
@@ -78,16 +98,22 @@ impl TypeStamp<'_> {
         Ok(())
     }
 
-    fn verify(self, data: &mut Reader<impl Read>) -> io::Result<()> {
-        if data.string()? != self.module
-            || data.unsigned()? != self.revision
+    fn verify(self, data: &mut Reader<impl Read>, policy: VersionPolicy) -> io::Result<()> {
+        let module = data.string()?;
+        let revision = data.unsigned()?;
+        if module != self.module
+            || revision != self.revision && !policy.allow_module_revision_change
             || data.unsigned()? != self.fields.len() as u64
         {
-            return Err(invalid("object type stamp differs from local schema"));
+            return Err(version_mismatch(
+                "object type stamp differs from local schema",
+            ));
         }
         for &(name, kind) in self.fields {
             if data.string()? != name || data.byte()? != kind as u8 {
-                return Err(invalid("object field stamp differs from local schema"));
+                return Err(version_mismatch(
+                    "object field stamp differs from local schema",
+                ));
             }
         }
         Ok(())
@@ -898,6 +924,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     read_hooks: &'a [ReadHook<'a>],
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    version_policy: VersionPolicy,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
     generated: Option<&'a [Codec]>,
@@ -916,6 +943,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             read_hooks: &[],
             references,
             stamps: None,
+            version_policy: VersionPolicy::default(),
             allow_xml_surrogates: true,
             user_object_collections: None,
             generated: None,
@@ -967,6 +995,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
 
     pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
         self.stamps = Some(stamps);
+        self
+    }
+
+    pub fn with_version_policy(mut self, policy: VersionPolicy) -> Self {
+        self.version_policy = policy;
         self
     }
 
@@ -1099,7 +1132,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         .map(|stamps| stamp_for(stamps, &class))
                         .transpose()?;
                     if let Some(stamp) = stamp {
-                        stamp.verify(&mut self.data)?;
+                        stamp.verify(&mut self.data, self.version_policy)?;
                     }
                     let mut fields = if let Some(codecs) = self.generated {
                         let codec = find_codec(codecs, &class)?;
