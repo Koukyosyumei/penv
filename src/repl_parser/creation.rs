@@ -7,6 +7,7 @@ enum Model {
     Cpu,
     EmptyPeripheral,
     EnumPeripheral,
+    CollectionPeripheral,
     ScalarPeripheral(ScalarKind),
     External,
 }
@@ -72,6 +73,9 @@ impl Model {
             "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithNumericalAttrubute" => {
                 Some(Self::ScalarPeripheral(ScalarKind::Integer))
             }
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes" => {
+                Some(Self::CollectionPeripheral)
+            }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -106,6 +110,7 @@ struct CreatedObject {
     ranges: Vec<(u64, u64)>,
     enum_arguments: EnumArguments,
     scalar: Option<ScalarValue>,
+    collections: Collections,
 }
 
 struct EnumArguments {
@@ -147,7 +152,61 @@ impl EnumArguments {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct Collections {
+    pub(crate) integers: Option<Vec<i32>>,
+    pub(crate) array: Option<Vec<i32>>,
+    pub(crate) strings: Option<Vec<String>>,
+}
+
+fn bind_list<T>(
+    value: &str,
+    convert: impl Fn(ListItem<'_>) -> Option<T>,
+) -> Result<Option<Vec<T>>, String> {
+    if value == "empty" {
+        return Ok(None);
+    }
+    list_value(value)
+        .map_err(str::to_owned)?
+        .into_iter()
+        .map(|item| {
+            convert(item).ok_or_else(|| "TypeMismatch: incompatible collection element".into())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn signed_integer(item: ListItem<'_>) -> Option<i32> {
+    let ListItem::Number(value) = item else {
+        return None;
+    };
+    value.parse().ok()
+}
+
+impl Collections {
+    fn bind(&mut self, name: &str, value: &str) -> Result<(), String> {
+        match name {
+            "mockIntList" => self.integers = bind_list(value, signed_integer)?,
+            "mockIntArray" => self.array = bind_list(value, signed_integer)?,
+            "mockStringList" => {
+                self.strings = bind_list(value, |item| match item {
+                    ListItem::String(value) => Some(value),
+                    _ => None,
+                })?
+            }
+            _ => return Err(format!("PropertyDoesNotExist: {name}")),
+        }
+        Ok(())
+    }
+}
+
 impl CreatedPlatform {
+    #[cfg(test)]
+    pub(crate) fn collections(&self, qualified_name: &str) -> Option<&Collections> {
+        let object = &self.objects[*self.registered.get(qualified_name)?];
+        (object.model == Model::CollectionPeripheral).then_some(&object.collections)
+    }
+
     #[cfg(test)]
     pub(crate) fn scalar(&self, qualified_name: &str) -> Option<&ScalarValue> {
         self.objects[*self.registered.get(qualified_name)?]
@@ -215,6 +274,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             ranges: Vec::new(),
             enum_arguments: EnumArguments::default(),
             scalar: None,
+            collections: Collections::default(),
         });
         targets.push(Some(id));
     }
@@ -267,7 +327,8 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                             Model::Cpu => "CPU",
                             Model::EmptyPeripheral
                             | Model::EnumPeripheral
-                            | Model::ScalarPeripheral(_) => "peripheral",
+                            | Model::ScalarPeripheral(_)
+                            | Model::CollectionPeripheral => "peripheral",
                             Model::External => "external",
                         };
                         return Err(entry.error(&format!(
@@ -325,6 +386,12 @@ impl CreatedPlatform {
         if depth >= 64 {
             return Err(format!("{source}: inline object nesting limit exceeded"));
         }
+        if self.objects[id].model == Model::CollectionPeripheral {
+            return self.objects[id]
+                .collections
+                .bind(name, value)
+                .map_err(|error| format!("{source}: {error}"));
+        }
         if self.objects[id].model == Model::EnumPeripheral {
             return self.objects[id].enum_arguments.bind(name, value, source);
         }
@@ -353,6 +420,7 @@ impl CreatedPlatform {
                     ranges: Vec::new(),
                     enum_arguments: EnumArguments::default(),
                     scalar: None,
+                    collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {

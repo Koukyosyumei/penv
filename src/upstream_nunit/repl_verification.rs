@@ -668,3 +668,89 @@ not a single line '''"#,
         Some("this is ''' ''' ''' '''\nnot a single line ")
     );
 }
+
+#[test]
+fn should_handle_empty_list_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntList: empty"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.integers, None);
+}
+
+#[test]
+fn should_handle_empty_array_value() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntArray: empty"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.array, None);
+}
+
+#[test]
+fn should_handle_empty_list_of_integers() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntList: []"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.integers.as_deref(), Some([].as_slice()));
+}
+
+#[test]
+fn should_handle_list_of_integers() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntList: [2, 1, 37]"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.integers.as_deref(), Some([2, 1, 37].as_slice()));
+}
+
+#[test]
+fn should_handle_array_of_integers() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntArray: [1, 2, 34]"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.array.as_deref(), Some([1, 2, 34].as_slice()));
+}
+
+#[test]
+fn should_handle_list_of_strings() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockStringList: ["a", "b", "c"]"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.strings.as_ref().unwrap(), &["a", "b", "c"]);
+}
+
+#[test]
+fn should_fail_on_type_mismatch_in_list() {
+    assert_error(
+        r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntList: [1, "b", 3]"#,
+        "TypeMismatch",
+    );
+}
+
+#[test]
+fn should_fail_on_type_mismatch_in_array() {
+    assert_error(
+        r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntArray: [1, "b", 3]"#,
+        "TypeMismatch",
+    );
+}
+
+#[test]
+fn should_replace_list() {
+    let platform = creation::create_objects(r#"
+mockPeripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MockPeripheralWithCollectionAttributes @ sysbus  <0, 1>
+    mockIntList: [1, 2, 3]
+
+mockPeripheral:
+    mockIntList: [4, 5]"#, Path::new(".")).unwrap();
+    let value = platform.collections("sysbus.mockPeripheral").unwrap();
+    assert_eq!(value.integers.as_deref(), Some([4, 5].as_slice()));
+}
