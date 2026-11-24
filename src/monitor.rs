@@ -496,6 +496,8 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
+                    | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint
+                    | Action::TimeSourceInfo
             )
         })
 }
@@ -629,6 +631,9 @@ fn run_commands(
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
             Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
             Action::ReadCpuMips(mode) => {
+                if machine.cpu_less {
+                    return Err("the platform has no CPU".into());
+                }
                 mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
             }
             Action::TimeSourceInfo => {
@@ -1720,6 +1725,7 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
             ..
         },
     ] = boot.runtime.as_slice()
+        && (boot.image.is_some() || !boot.binaries.is_empty())
     {
         boot.run_steps = Some(*steps);
         boot.runtime.clear();
@@ -3087,6 +3093,10 @@ fn execute(
                         | Action::DefaultUartTester(_)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
+                        | Action::RunFor(_)
+                        | Action::RunUntil(_)
+                        | Action::RunToSyncPoint
+                        | Action::TimeSourceInfo
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)

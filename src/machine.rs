@@ -1478,6 +1478,9 @@ impl Machine {
     }
 
     pub(crate) fn set_monitor_cpu_rate(&mut self, mips: u32) -> Result<(), String> {
+        if self.cpu_less {
+            return Err("the platform has no CPU".into());
+        }
         let now = self.monitor_elapsed_ns();
         self.bus.set_monitor_cpu_mips(mips)?;
         self.monitor_clock_ns = now;

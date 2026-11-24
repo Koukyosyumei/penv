@@ -973,6 +973,8 @@ fn load_platform(
         keys(entry, &[])?;
         machine.bus.map_trivial_uart(entry.address()?, &entry.name).map_err(|e| entry.error(&e))?;
         machine.cpu_less = true;
+        // The master clock's unit is 10 ns even with no CPU attached.
+        machine.bus.set_step_hz(crate::bus::CORTEX_M_STEP_HZ as u32);
         return Ok(machine);
     }
     if cpus.is_empty() || (require_ram && !ram) {
