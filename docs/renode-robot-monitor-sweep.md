@@ -406,3 +406,22 @@ RAM の配置、ベクターテーブル、セッション変数を保存する�
 同じマシンのライブ `Load` で復元できる。既存のメモリーのみの形式も
 読み込める。実行中の CPU・周辺機器・イベントキューのスナップショットは
 対象外。
+
+固定 Renode と同じコマンド列で、起動後の `include` と変数による
+読み出し（`0x08001331`）、`RunUntil` の絶対時刻、同期点の量、
+保存後の RAM・変数・同期量の復帰を比較した。証跡は
+`target/monitor-live-include/`、`target/monitor-until-proof/`、
+`target/monitor-quantum-proof/`、`target/monitor-snapshot-proof/`、
+`target/monitor-snapshot-quantum-proof/` にある。
+`target/monitor-captures-proof/` には nRF ファームウェアの実際の起動行に
+対して Rust と固定 Renode が同じ正規表現キャプチャを返した記録がある。
+
+上流を変更せず、`--rust-monitor` で STM32F072b 6 件すべてと
+nRF52840 の `Should Restart After Watchdog Timeout` が合格した。
+`target/monitor-cortex-f072/results.json` と
+`target/monitor-cortex-nrf/results.json` にケース ID、ビルドの SHA と
+ハッシュ、実行コマンドおよび判定を記録した。LED 保持の期限を
+仮想時計に統一した後、`Should Run Zephyr Button Sample` と
+`Should Load HEX` を再実行し、両方が合格した
+（`target/monitor-led-button/results.json` と
+`target/monitor-led-hex/results.json`）。
