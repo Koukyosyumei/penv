@@ -298,6 +298,21 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if self.image and re.fullmatch(r"sysbus\.cpu VectorTableOffset 0x[0-9a-fA-F]+", command):
                 self.commands.append(command)
                 return ""
+        tokens = words(command)
+        if len(tokens) == 3 and re.fullmatch(r"sysbus\.[\w.]+", tokens[0]):
+            sensor, method, argument = tokens
+            if method == "Illuminance":
+                value = argument.removeprefix("illuminance=")
+                try:
+                    lux = Decimal(value)
+                except InvalidOperation:
+                    raise Unsupported(f"invalid illuminance {argument!r}")
+                if not lux.is_finite():
+                    raise Unsupported(f"invalid illuminance {argument!r}")
+                return self.operation(f"{sensor} Illuminance {value}")
+            if method == "FeedIlluminanceSamplesFromRESD":
+                file = self.monitor_input.path(argument)
+                return self.operation(f"{sensor} {method} {at_path(file)}")
         scalar = r"(?:Read|Write)(?:Byte|Word|DoubleWord|QuadWord)"
         if self.using_bus and re.match(scalar + r" ", command):
             command = "sysbus " + command
@@ -525,20 +540,21 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.ensure_running()
         self.started = True
 
-    def wait_for(self, verb, expected, timeout):
+    def wait_for(self, verb, expected, *args):
         if not self.uart:
             raise Unsupported("requires a terminal tester")
-        if timeout is not None and "=" in timeout:
-            timeout = self.option(timeout, "timeout")
-        deadline = self.duration(timeout if timeout is not None else self.uart_timeout)
+        options = self.log_options(args, {"timeout", "treatAsRegex"}, ("timeout",))
+        deadline = self.duration(options.get("timeout", self.uart_timeout))
+        regex = self.log_bool(options.get("treatAsRegex", "false"))
         self.started = True
-        return {"Line": self.operation(f"{verb} {self.literal(expected)} timeout={deadline}")}
+        return {"Line": self.operation(
+            f"{verb} {self.literal(expected)} timeout={deadline} treatAsRegex={str(regex).lower()}")}
 
-    def wait(self, expected, timeout=None):
-        return self.wait_for("WaitForLineOnUart", expected, timeout)
+    def wait(self, expected, *args):
+        return self.wait_for("WaitForLineOnUart", expected, *args)
 
-    def prompt(self, expected, timeout=None):
-        return self.wait_for("WaitForTesterPrompt", expected, timeout)
+    def prompt(self, expected, *args):
+        return self.wait_for("WaitForTesterPrompt", expected, *args)
 
     def write_line(self, content, option="waitForEcho=true"):
         if not self.started or not self.uart:

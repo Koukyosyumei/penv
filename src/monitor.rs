@@ -68,6 +68,8 @@ enum Action {
     LogLevel(i8),
     UserState(Option<String>),
     Echo(String),
+    Illuminance(String, f64),
+    IlluminanceFeed(String, PathBuf),
     RunRemaining,
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
@@ -116,7 +118,7 @@ enum Action {
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
     CreateUartTester(String, bool),
     DefaultUartTester(Option<usize>),
-    WaitForTester(Option<usize>, String, UartWaitMode, u64),
+    WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, u64),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, u64),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
@@ -415,6 +417,8 @@ pub fn run(
                     None
                 })
             }
+            Action::Illuminance(sensor, value) => machine.bus.set_illuminance(sensor, *value).map(|()| None),
+            Action::IlluminanceFeed(sensor, path) => machine.bus.feed_illuminance(sensor, path).map(|()| None),
             Action::Echo(message) => writeln!(output.output, "{message}")
                 .map(|()| None).map_err(|error| error.to_string()),
             Action::UserState(value) => {
@@ -571,9 +575,9 @@ pub fn run(
                     })
                 })
             }
-            Action::WaitForTester(id, pattern, mode, timeout) => {
+            Action::WaitForTester(id, pattern, regex, mode, timeout) => {
                 let start = machine.elapsed_steps();
-                machine.bus.watch_uart_tester_mode(*id, pattern, *mode).and_then(|watch| {
+                machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
                     run_uart_watch(machine, watch, (*timeout).min(budget), &mut output)
                 }).and_then(|(stop, count)| {
                     retired += count;
@@ -698,8 +702,8 @@ pub fn serve(
         });
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
-            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, mode, timeout), .. }]) => {
-                let result = machine.bus.watch_uart_tester_mode(*id, expected, *mode).and_then(|watch| {
+            (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout), .. }]) => {
+                let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
                     let stop = drive_uart_watch(machine, watch, *timeout, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
@@ -1438,6 +1442,17 @@ fn execute(
         return Ok(());
     }
     let action = match words {
+        [sensor, "Illuminance", value] if boot.started && sensor.starts_with("sysbus.") => {
+            let value = resolve(value)?.parse::<f64>().map_err(|_| "invalid illuminance")?;
+            Some(Action::Illuminance((*sensor).to_owned(), value))
+        }
+        [sensor, "FeedIlluminanceSamplesFromRESD", file]
+            if boot.started && sensor.starts_with("sysbus.") =>
+        {
+            let path = resolve(file)?.strip_prefix('@').ok_or("expected @RESD-path")?;
+            Some(Action::IlluminanceFeed((*sensor).to_owned(), PathBuf::from(path_value(path))))
+        }
+
         [verb @ ("Save" | "Load"), path] => {
             let path = resolve(path)?
                 .strip_prefix('@')
@@ -1636,6 +1651,8 @@ fn execute(
             Some(Action::WaitForTester(
                 options.id,
                 pattern.to_owned(),
+                options.regex.then(|| regex::Regex::new(pattern))
+                    .transpose().map_err(|e| format!("invalid UART text regex: {e}"))?,
                 if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
             ))
@@ -2588,7 +2605,7 @@ fn tester_wait_options<'a>(
             {
                 match_start = Some(parse_tester_bool(resolve(value)?)?);
             }
-            Some(("treatAsRegex", value)) if kind != TesterOptionsKind::Line && regex.is_none() => {
+            Some(("treatAsRegex", value)) if regex.is_none() => {
                 regex = Some(parse_tester_bool(resolve(value)?)?);
             }
             _ => {

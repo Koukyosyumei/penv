@@ -291,6 +291,7 @@ struct UartLineMatch {
     end: u8,
     prompt: bool,
     pattern: Vec<u8>,
+    regex: Option<regex::Regex>,
     tail: VecDeque<u8>,
     line: VecDeque<u8>,
     contains: bool,
@@ -298,7 +299,7 @@ struct UartLineMatch {
 }
 
 impl UartLineMatch {
-    fn new(pattern: &str, end: UartWaitMode) -> Self {
+    fn new(pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode) -> Self {
         Self {
             end: match end {
                 UartWaitMode::Lf | UartWaitMode::Prompt => b'\n',
@@ -306,6 +307,7 @@ impl UartLineMatch {
             },
             prompt: matches!(end, UartWaitMode::Prompt),
             pattern: pattern.as_bytes().to_vec(),
+            regex,
             tail: VecDeque::new(),
             line: VecDeque::new(),
             contains: false,
@@ -320,7 +322,7 @@ impl UartLineMatch {
             return;
         }
         if byte == self.end {
-            self.matched = self.contains;
+            self.matched = self.contains || self.regex_matches_line();
             self.tail.clear();
             if !self.matched {
                 self.line.clear();
@@ -331,7 +333,11 @@ impl UartLineMatch {
                 self.line.pop_front();
             }
             self.line.push_back(byte);
-            if !self.contains {
+            if self.regex.is_some() {
+                if self.prompt {
+                    self.contains = self.regex_matches_line();
+                }
+            } else if !self.contains {
                 if self.tail.len() == self.pattern.len() {
                     self.tail.pop_front();
                 }
@@ -339,6 +345,13 @@ impl UartLineMatch {
                 self.contains = self.tail.iter().eq(self.pattern.iter());
             }
         }
+    }
+
+    fn regex_matches_line(&self) -> bool {
+        self.regex.as_ref().is_some_and(|pattern| {
+            let bytes: Vec<_> = self.line.iter().copied().collect();
+            pattern.is_match(&String::from_utf8_lossy(&bytes))
+        })
     }
 }
 
@@ -426,8 +439,12 @@ impl UartHistory {
     }
 
     pub fn begin_wait(&mut self, pattern: &str, end: UartWaitMode) {
+        self.begin_text_wait(pattern, None, end);
+    }
+
+    pub fn begin_text_wait(&mut self, pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode) {
         self.failure = None;
-        let mut matcher = UartLineMatch::new(pattern, end);
+        let mut matcher = UartLineMatch::new(pattern, regex, end);
         if self.check_failure() {
             self.active = Some(matcher);
             return;
@@ -715,6 +732,24 @@ mod tests {
         history.finish_wait();
         history.begin_wait("response", UartWaitMode::Lf);
         assert!(history.matched());
+    }
+
+    #[test]
+    fn text_regex_wait_matches_a_finished_line_and_preserves_later_bytes() {
+        let mut history = UartHistory::default();
+        for &byte in b"lux: invalid\nlux: 49" {
+            history.receive(byte);
+        }
+        let expression = r"^lux: [0-9]+$";
+        history.begin_text_wait(expression, Some(regex::Regex::new(expression).unwrap()), UartWaitMode::Lf);
+        assert!(!history.matched());
+        for &byte in b"9\r\nnext\n" {
+            history.receive(byte);
+        }
+        assert_eq!(history.matched_line().as_deref(), Some("lux: 499"));
+        history.finish_wait();
+        history.begin_wait("next", UartWaitMode::Lf);
+        assert_eq!(history.matched_line().as_deref(), Some("next"));
     }
 
     #[test]

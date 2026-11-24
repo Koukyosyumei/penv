@@ -4916,19 +4916,16 @@ impl Bus {
         id: Option<usize>,
         pattern: &str,
     ) -> Result<UartWatch, String> {
-        self.watch_uart_tester_mode(id, pattern, UartWaitMode::Lf)
+        self.watch_uart_tester_text(id, pattern, None, UartWaitMode::Lf)
     }
 
-    pub fn watch_uart_tester_mode(
-        &mut self,
-        id: Option<usize>,
-        pattern: &str,
-        mode: UartWaitMode,
+    pub fn watch_uart_tester_text(
+        &mut self, id: Option<usize>, pattern: &str, regex: Option<regex::Regex>, mode: UartWaitMode,
     ) -> Result<UartWatch, String> {
         let (id, TesterHistory::Text(history)) = self.uart_tester(id)? else {
             return Err("Attempt to wait for text on a tester configured in binary mode.".into());
         };
-        history.begin_wait(pattern, mode);
+        history.begin_text_wait(pattern, regex, mode);
         Ok(UartWatch::Tester(id))
     }
 
