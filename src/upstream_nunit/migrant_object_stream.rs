@@ -3081,3 +3081,38 @@ mod serial_user_records {
         &[1]
     ));
 }
+
+mod serial_user_values_arrays {
+    use super::*;
+    user_configurations!(simple_enum, |m| enum_values(m, "SimpleEnum", &[1]));
+    user_configurations!(byte_enum, |m| enum_values(m, "EnumByte", &[200]));
+    user_configurations!(enums, multiple_enum_values);
+    user_configurations!(nullable_enum, nullable_enum);
+    user_configurations!(key_value_pair, key_value_pair);
+    user_configurations!(lazy_box, box_with_lazy_scan);
+    user_configurations!(actual_type, field_with_different_formal_and_actual_type);
+    user_configurations!(long_box, box_with_long);
+    user_configurations!(tuple, string_tuple);
+    user_configurations!(non_null_nullable, non_null_nullable);
+    user_configurations!(null_nullable, null_nullable);
+    user_configurations!(boxed_null_nullable, boxed_null_nullable);
+    user_configurations!(boxed_non_null_nullable, boxed_non_null_nullable);
+    user_configurations!(boxed_primitive, boxed_primitive);
+    user_configurations!(guid_box, box_with_guid);
+    user_configurations!(guid_class, class_with_guid);
+    user_configurations!(big_integer, big_integer_round_trip);
+    user_configurations!(
+        self_reference,
+        should_serialize_array_reference_to_self_with_stamping
+    );
+    user_configurations!(primitives, primitives_array);
+    user_configurations!(strings, strings_array);
+    user_configurations!(mixed, mixed_array);
+    user_configurations!(rectangular_primitives, rectangular_primitives);
+    user_configurations!(rectangular_strings, rectangular_strings);
+    user_configurations!(four_dimensional, four_dimensional_array);
+    user_configurations!(bytes, byte_array);
+    user_configurations!(empty, empty_array);
+    user_configurations!(empty_2d, |m| empty_rectangular(m, &[0, 0]));
+    user_configurations!(empty_3d, |m| empty_rectangular(m, &[2, 0, 2]));
+}

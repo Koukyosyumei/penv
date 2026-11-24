@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,257 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,481 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,139 |
+| 移植待ち | 915 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -373,3 +373,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 ### Migrant のユーザーオブジェクト設定でのレコード復元
 
 `TreatCollectionsAsUserObjects=True` の8構成で、空オブジェクト、共有参照、循環、継承、構造体、深さ45,000のグラフを含む13メソッドを移植した。Rust のストリームにコレクション設定を渡し、サポート済みの `List<T>` では設定に対応するレコード構造を検証する。新規104件と既存のリスト48件が対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-records.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-records.log)
+
+同じ8構成で、列挙値、nullable、ボックス化された値、GUID、BigInteger、多次元配列、配列自身への参照を含む28メソッドを追加した。対象実行で224件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-serialization-user-values-arrays.tsv)・[実行ログ](nunit-evidence/targeted-migrant-serialization-user-values-arrays.log)
