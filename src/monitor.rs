@@ -96,7 +96,8 @@ impl NumberMode {
 
 const SESSION_SNAPSHOT_V1: &[u8; 9] = b"PENVSESS\x01";
 const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x03";
+const SESSION_SNAPSHOT_V3: &[u8; 9] = b"PENVSESS\x03";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x04";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -125,11 +126,14 @@ struct SnapshotMetadata {
     quantum: Option<u64>,
     cpu_mips: Option<u32>,
     variables: HashMap<String, String>,
+    macros: HashMap<String, Macro>,
 }
 
 fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
     let header = input.fill_buf().map_err(|e| e.to_string())?;
     let version = if header.starts_with(SESSION_SNAPSHOT) {
+        4
+    } else if header.starts_with(SESSION_SNAPSHOT_V3) {
         3
     } else if header.starts_with(SESSION_SNAPSHOT_V2) {
         2
@@ -177,6 +181,23 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
     input.read_exact(&mut data).map_err(|e| e.to_string())?;
     let mut data = data.as_slice();
     let selected = read_string(&mut data)?;
+    let mut macros = HashMap::new();
+    if version >= 4 {
+        let count = read_size(&mut data)?;
+        for _ in 0..count {
+            let name = read_string(&mut data)?;
+            let script = PathBuf::from(read_string(&mut data)?);
+            let command_count = read_size(&mut data)?;
+            let mut commands = Vec::new();
+            for _ in 0..command_count {
+                let line = read_size(&mut data)?;
+                commands.push((line, read_string(&mut data)?));
+            }
+            if name.is_empty() || macros.insert(name, Macro { script, commands }).is_some() {
+                return Err("invalid monitor macro snapshot".into());
+            }
+        }
+    }
     let mut variables = HashMap::new();
     while !data.is_empty() {
         let key = read_string(&mut data)?;
@@ -185,7 +206,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
             return Err("invalid monitor variable snapshot".into());
         }
     }
-    Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables }))
+    Ok(Some(SnapshotMetadata { selected, quantum, cpu_mips, variables, macros }))
 }
 
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
@@ -219,12 +240,35 @@ impl Session {
             Ok(())
         }
         encode(&mut data, self.machine.as_deref().unwrap_or_default())?;
+        fn encode_size(data: &mut Vec<u8>, value: usize) -> Result<(), String> {
+            if data.len() > MAX_MONITOR_PAYLOAD - 4 {
+                return Err("monitor snapshot exceeds size limit".into());
+            }
+            let value = u32::try_from(value).map_err(|_| "monitor snapshot field exceeds size limit")?;
+            data.extend_from_slice(&value.to_le_bytes());
+            Ok(())
+        }
+        if !self.macros.is_empty() {
+            let mut macros: Vec<_> = self.macros.iter().collect();
+            macros.sort_unstable_by_key(|(name, _)| *name);
+            encode_size(&mut data, macros.len())?;
+            for (name, body) in macros {
+                encode(&mut data, name)?;
+                encode(&mut data, body.script.to_str().ok_or("monitor macro path is not UTF-8")?)?;
+                encode_size(&mut data, body.commands.len())?;
+                for (line, command) in &body.commands {
+                    encode_size(&mut data, *line)?;
+                    encode(&mut data, command)?;
+                }
+            }
+        }
         for (key, value) in entries {
             encode(&mut data, key)?;
             encode(&mut data, value)?;
         }
         write_snapshot(path, |file| {
-            file.write_all(SESSION_SNAPSHOT).map_err(|e| e.to_string())?;
+            let version = if self.macros.is_empty() { SESSION_SNAPSHOT_V3 } else { SESSION_SNAPSHOT };
+            file.write_all(version).map_err(|e| e.to_string())?;
             file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
             let mips = if machine.cpu_less { 0 } else { (machine.bus.monitor_step_hz() / 1_000_000) as u32 };
             file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
@@ -237,7 +281,7 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            let Some(SnapshotMetadata { selected, quantum, cpu_mips, mut variables }) =
+            let Some(SnapshotMetadata { selected, quantum, cpu_mips, mut variables, macros }) =
                 read_snapshot_metadata(&mut input)?
             else {
                 return machine.read_boot_snapshot(&mut input);
@@ -264,6 +308,7 @@ impl Session {
                 machine.monitor_quantum = quantum;
             }
             self.variables = variables;
+            self.macros = macros;
             Ok(())
         })();
         result.map_err(|e| format!("{}: {e}", path.display()))
