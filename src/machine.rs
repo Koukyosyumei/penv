@@ -795,6 +795,9 @@ impl Machine {
 
     fn apply_external_event(&mut self, event: &ExternalEvent) -> Result<(), String> {
         match event {
+            ExternalEvent::PeripheralCall { peripheral, method, arguments } => {
+                self.bus.dispatch_external_call(self.elapsed_steps(), peripheral, method, arguments)
+            }
             ExternalEvent::Button(name, pressed) => self.bus.set_named_button(name, *pressed),
             ExternalEvent::Adc(name, channel, volts) => {
                 self.bus.set_named_adc_input(name, *channel, *volts)

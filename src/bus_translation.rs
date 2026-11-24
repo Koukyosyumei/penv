@@ -34,6 +34,15 @@ pub trait NativePeripheral {
     fn pause(&mut self) {}
     fn resume(&mut self) {}
 
+    fn external_call(
+        &mut self,
+        _time: u64,
+        method: &str,
+        _arguments: &[i32],
+    ) -> Result<(), String> {
+        Err(format!("unsupported peripheral method {method:?}"))
+    }
+
     fn read_width(&mut self, region: Option<&str>, offset: u64, _width: Width) -> u64 {
         self.read(region, offset)
     }
@@ -51,6 +60,7 @@ pub struct Port {
 
 pub(crate) struct Registration {
     pub handle: PeripheralHandle,
+    pub name: Option<String>,
     pub ports: Vec<Port>,
     widths: Vec<Vec<Width>>,
     peripheral: Box<dyn NativePeripheral>,
@@ -65,10 +75,20 @@ impl Registration {
         let (ports, widths) = ports.into_iter().unzip();
         Self {
             handle,
+            name: None,
             ports,
             widths,
             peripheral,
         }
+    }
+
+    pub fn external_call(
+        &mut self,
+        time: u64,
+        method: &str,
+        arguments: &[i32],
+    ) -> Result<(), String> {
+        self.peripheral.external_call(time, method, arguments)
     }
 
     pub fn start(&mut self) {

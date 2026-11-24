@@ -1375,6 +1375,25 @@ impl Bus {
         self.translated_peripherals.iter().any(|peripheral| peripheral.handle == *handle)
     }
 
+    pub fn name_translated_peripheral(&mut self, handle: &crate::bus_translation::PeripheralHandle, name: &str) -> Result<(), String> {
+        if name.is_empty() || self.translated_peripherals.iter().any(|device| {
+            device.handle != *handle && device.name.as_deref() == Some(name)
+        }) {
+            return Err(format!("invalid or occupied peripheral name {name:?}"));
+        }
+        let device = self.translated_peripherals.iter_mut().find(|device| device.handle == *handle)
+            .ok_or("peripheral is not registered")?;
+        device.name = Some(name.into());
+        Ok(())
+    }
+
+    pub(crate) fn dispatch_external_call(&mut self, time: u64, peripheral: &str, method: &str, arguments: &[i32]) -> Result<(), String> {
+        let name = peripheral.strip_prefix("sysbus.").unwrap_or(peripheral);
+        let device = self.translated_peripherals.iter_mut().find(|device| device.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown peripheral {peripheral:?}"))?;
+        device.external_call(time, method, arguments)
+    }
+
     fn translated_group_for(&self, handle: &crate::bus_translation::PeripheralHandle) -> Option<&str> {
         self.translated_peripheral_groups.iter()
             .find(|(_, members)| members.contains(handle))

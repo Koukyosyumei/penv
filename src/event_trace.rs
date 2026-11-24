@@ -12,6 +12,11 @@ pub enum ExternalEvent {
     Button(String, bool),
     Adc(String, usize, f64),
     UartLine(String, String, Vec<u8>),
+    PeripheralCall {
+        peripheral: String,
+        method: String,
+        arguments: Vec<i32>,
+    },
 }
 
 pub struct Recorder(File);
@@ -35,6 +40,23 @@ impl Recorder {
                 "{step}\tadc\t{}\t{channel}\t{volts}",
                 encode(name.as_bytes())
             ),
+            ExternalEvent::PeripheralCall {
+                peripheral,
+                method,
+                arguments,
+            } => {
+                let arguments = arguments
+                    .iter()
+                    .map(i32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                writeln!(
+                    self.0,
+                    "{step}\tcall\t{}\t{}\t{arguments}",
+                    encode(peripheral.as_bytes()),
+                    encode(method.as_bytes())
+                )
+            }
             ExternalEvent::UartLine(name, text, ending) => writeln!(
                 self.0,
                 "{step}\tuart\t{}\t{}\t{}",
@@ -89,6 +111,17 @@ fn parse(line: &str) -> Result<(u64, ExternalEvent), &'static str> {
             channel.parse().map_err(|_| "invalid ADC channel")?,
             volts.parse().map_err(|_| "invalid ADC voltage")?,
         ),
+        ["call", peripheral, method, args] => ExternalEvent::PeripheralCall {
+            peripheral: decode_string(peripheral)?,
+            method: decode_string(method)?,
+            arguments: if args.is_empty() {
+                Vec::new()
+            } else {
+                args.split(',')
+                    .map(|arg| arg.parse().map_err(|_| "invalid peripheral argument"))
+                    .collect::<Result<_, _>>()?
+            },
+        },
         ["uart", name, text, ending] => {
             ExternalEvent::UartLine(decode_string(name)?, decode_string(text)?, decode(ending)?)
         }

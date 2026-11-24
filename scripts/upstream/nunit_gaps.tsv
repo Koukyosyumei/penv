@@ -40,4 +40,3 @@ Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	ELF loaders lack the f
 Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
 Antmicro.Renode.Utilities.TypeExtensionsCacheTests	There is no CLR reflection type-extension cache, including assembly/type invalidation behavior.
-UnitTests.TimeSourceTests	The remaining runnable case needs recording and replay of arbitrary external peripheral method calls against machine virtual time.
