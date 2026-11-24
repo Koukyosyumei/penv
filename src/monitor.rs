@@ -1508,11 +1508,15 @@ pub fn serve(
         let mut existing_machine = true;
         let mut included_state = None;
         let parsed = command_words(text).and_then(|words| {
-            let include = match words.as_slice() {
-                [verb @ ("include" | "i" | "ExecuteScript"), value] => Some((*verb, *value)),
-                _ => None,
-            };
-            if include.is_some() || words.first().is_some_and(|verb|
+            if matches!(words.as_slice(), ["include" | "i" | "ExecuteScript", _]) {
+                let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+                boot.runtime.push(RuntimeCommand {
+                    line: 1, source: path.to_owned(),
+                    action: Action::InvokeMonitorScript(text.to_owned(), cwd.join(path), root.to_owned()),
+                });
+                return Ok(());
+            }
+            if words.first().is_some_and(|verb|
                 matches!(*verb, "alias" | "macro" | "runMacro" | "printenv")
                     || matches!(words.as_slice(), ["mach" | "machine", "set" | "clear", ..])
                     || monitor_alias(&session.aliases, session.selected_machine(), verb).is_some())
@@ -1526,15 +1530,7 @@ pub fn serve(
                     aliases: session.aliases.clone(),
                     ..ScriptState::default()
                 };
-                if let Some((verb, value)) = include {
-                    let source = include_path(verb, value, &cwd.join(path), &cwd, root, &state.variables)?;
-                    if matches!(source.extension().and_then(|ext| ext.to_str()), Some("repl" | "cs" | "py")) {
-                        return Err("live include requires a RESC command script".into());
-                    }
-                    load_file(&source, root, &mut state)?;
-                } else {
-                    load_text(path, cwd.join(path), root, &mut state, text)?;
-                }
+                load_text(path, cwd.join(path), root, &mut state, text)?;
                 if !state.boot.post_run.is_empty() {
                     return Err("post-run script actions are unavailable in a live include".into());
                 }
