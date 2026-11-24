@@ -41,7 +41,6 @@ Antmicro.Renode.UnitTests.Collections.MultiValueDictionaryTests	There is no corr
 Antmicro.Renode.UnitTests.Collections.WeakMultiTableTest	There is no weak-key/value multi-table with the fixture's object collection and enumeration semantics.
 Antmicro.Renode.UnitTests.ComparingTimerTests	STM32 CCR permits values beyond ARR. There is no generic ComparingTimer setter that rejects a compare value above its limit.
 Antmicro.Renode.UnitTests.DataStorageTests	There is no DataStorage.CreateFromFile constructor covering null path, empty path and missing-file construction errors.
-Antmicro.Renode.UnitTests.DmaEngineTests	Device-specific DMA models do not expose generic DmaEngine.IssueCopy with independently configured source and destination widths, increment and stepping.
 Antmicro.Renode.UnitTests.GPIODetachingTests	The remaining cases require registering arbitrary mock GPIO connector and receiver objects on SystemBus, with a generic connection enumeration and unregister boundary.
 Antmicro.Renode.UnitTests.MachineTests	There is no generic IMachine registry and lifecycle for the fixture's managed mock peripheral graph.
 Antmicro.Renode.UnitTests.MemoryTests	MappedMemory has no exposed lazy segment Touch operation, stable segment pointer, or one-shot SegmentTouched notification.

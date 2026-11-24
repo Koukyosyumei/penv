@@ -1,5 +1,6 @@
 mod bit_helper;
 mod circular_buffer;
+mod dma_engine;
 mod misc;
 mod parser_primitives;
 mod range;

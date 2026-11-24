@@ -11,6 +11,7 @@ mod constant_mmio;
 mod crc;
 mod csr;
 mod designware_usb;
+pub mod dma_engine;
 mod dwt;
 mod ethernet;
 mod ethernet_switch;

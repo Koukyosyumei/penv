@@ -646,13 +646,13 @@ fn load_platform(
                     continue;
                 }
                 let addresses = entry.addresses()?;
-                machine
-                    .bus
-                    .map_ram_views(
-                        &addresses,
-                        number(size).map_err(|e| entry.error(&e))? as usize,
-                    )
-                    .map_err(|e| entry.error(&e))?;
+                let length = number(size).map_err(|e| entry.error(&e))? as usize;
+                if entry.model == "Memory.ArrayMemory" {
+                    machine.bus.map_array_memory_views(&addresses, length)
+                } else {
+                    machine.bus.map_ram_views(&addresses, length)
+                }
+                .map_err(|e| entry.error(&e))?;
                 if entry.model == "Memory.MappedMemory" {
                     memory_bases.insert(
                         entry.name.as_str(),
