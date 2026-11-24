@@ -177,6 +177,11 @@ BuiltinSurrogatesTests の XML サロゲート2件を追加した。型名と XM
 生成読み書きが必要。
 [公式 ID 別の結果](nunit-evidence/targeted-xml-peripheral-groups.tsv)
 
-残りは9 fixture・1,869ケース。生成読み書き、コレクションと CLR 型の
+SurrogateTests の反射読み書き2設定を追加した。閉じた入力型の型引数を保った
+サロゲートを int、float、int の順で復元し、反射設定では登録数が増えないことを
+検証した。生成設定で必要となるコンバーターのキャッシュは引き続き移植待ち。
+[公式 ID 別の結果](nunit-evidence/targeted-event-replay-generic-surrogate.tsv)
+
+残りは9 fixture・1,867ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
