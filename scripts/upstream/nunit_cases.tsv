@@ -808,3 +808,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeHashSetWithPrimitives	upstream_nunit::migrant_object_stream::hash_set_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeHashtable	upstream_nunit::migrant_object_stream::hashtable_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeQueue	upstream_nunit::migrant_object_stream::queue_stamped	new
+lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests.ShouldCallCustomValidator	upstream_nunit::option_validation::should_call_custom_validator	new
+lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests.ShouldSetDefaultValueWhenParameterIsNotFound	upstream_nunit::option_validation::should_set_default_value_when_parameter_is_not_found	new
+lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests.ShouldThrowAnExceptionWhenDefaultValueIsOfAWrongType	upstream_nunit::option_validation::should_throw_an_exception_when_default_value_is_of_a_wrong_type	new
+lib/options-parser/OptionsParserTests.csproj	Antmicro.OptionsParser.Tests.ValidationTests.ShouldThrowExceptionWhenRequiredParamterIsNotFound	upstream_nunit::option_validation::should_throw_exception_when_required_paramter_is_not_found	new

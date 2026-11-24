@@ -9,7 +9,6 @@ Antmicro.Migrant.Tests.SurrogateTests	Reflection substitutions cover exact, inhe
 Antmicro.Migrant.Tests.TwoDomainTests	There is no CLR AppDomain-compatible cross-domain Migrant serialization API.
 Antmicro.Migrant.Tests.VersionToleranceTests	There is no Migrant version-tolerant deserializer for changed assemblies and member layouts.
 Antmicro.OptionsParser.Tests.ParserTests	The penv CLI parses flags directly. It lacks the attribute-driven OptionsParser binder for short and long aliases, typed positional values and option groups.
-Antmicro.OptionsParser.Tests.ValidationTests	The CLI has no OptionsParser validation metadata and validation pipeline for option object fields.
 Antmicro.Renode.CoresSourceParser.RegisterEnumParserTests	There is no RegistersEnumParser for C enum extraction with preprocessor conditions, aliases and indexed registers.
 Antmicro.Renode.MonitorTests.CommandTests.ActionArguments	The monitor has no reflection-driven action binder for optional, named, array and variadic arguments on the fixture's test emulation object.
 Antmicro.Renode.MonitorTests.CommandTests.PythonCommands	There is no general IronPython monitor command context with the fixture's stateful next-value command and Python execution, sleep, or arbitrary dump helpers.
