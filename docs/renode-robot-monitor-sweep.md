@@ -425,3 +425,12 @@ nRF52840 の `Should Restart After Watchdog Timeout` が合格した。
 `Should Load HEX` を再実行し、両方が合格した
 （`target/monitor-led-button/results.json` と
 `target/monitor-led-hex/results.json`）。
+
+数値表示、UART アイドル、Robot のマシン引数は同じ Rust モニター経路で確認した。
+`target/monitor-namespace-proof/` には同一の RAM 読み出しについて
+Renode、penv の RESC ファイル、penv のライブモニターの出力がある。
+`target/monitor-idle-proof/` では nRF ウォッチドッグファームウェアを
+使い、UART 0 の活動を検出して失敗し、UART 1 のアイドル確認に成功した。
+`target/monitor-machine-context-proof/` では空白を含むマシン名で RAM を
+読み書きした。存在しないマシンを指定した書き込みは失敗し、RAM の値は
+変化しなかった。

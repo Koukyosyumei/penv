@@ -273,20 +273,31 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             finally:
                 proc.stdout.close()
 
-    def execute(self, command, *fragments):
+    def execute(self, command, *args, machine=None):
         if isinstance(command, list):
-            if fragments or not all(isinstance(item, str) for item in command):
-                raise Unsupported("unsupported Execute Command fragment arguments")
+            if not all(isinstance(item, str) for item in command):
+                raise Unsupported("unsupported Execute Command fragments")
             command = " ".join(command)
-        elif fragments:
-            raise Unsupported(f"Execute Command machine context or arguments: {fragments}")
         command = command.strip()
         if self.rust_monitor:
+            if args:
+                if len(args) != 1 or machine is not None or not isinstance(args[0], str):
+                    raise Unsupported("expected at most one Execute Command machine argument")
+                machine = args[0].removeprefix("machine=")
+            if machine is not None and not isinstance(machine, str):
+                raise Unsupported("Execute Command machine must be a name")
+            select = f"mach set {self.literal(machine)}" if machine and machine.strip() else None
             if self.proc is None:
+                if select:
+                    self.commands.append(select)
                 self.commands.append(command)
                 self.calls[-1]["stage"] = "queued_monitor_command"
                 return ""
+            if select:
+                self.operation(select)
             return self.operation(command)
+        if args or machine is not None:
+            raise Unsupported("Execute Command machine context requires the Rust monitor")
         assigned = self.monitor_input.assign(command)
         if assigned is not None:
             name, value = assigned

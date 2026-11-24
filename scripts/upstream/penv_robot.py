@@ -79,9 +79,10 @@ class Endpoint:
         call = dict(keyword=name, args=args, kwargs=kwargs)
         self.calls.append(call)
         try:
-            if kwargs:
+            kwargs = kwargs or {}
+            if kwargs and (name != "Execute Command" or set(kwargs) != {"machine"}):
                 raise Unsupported("named arguments")
-            result = robot_result(getattr(self, self.keywords[name])(*args))
+            result = robot_result(getattr(self, self.keywords[name])(*args, **kwargs))
         except PenvUnsupported as exc:
             call.update(status="unsupported", category="penv_unimplemented", message=str(exc))
         except (Unsupported, TypeError) as exc:
