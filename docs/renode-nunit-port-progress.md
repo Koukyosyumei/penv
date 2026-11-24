@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,390 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,391 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 5 |
+| 移植待ち | 4 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 4 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 3 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -559,3 +559,8 @@ SerializationTests の MockCPU 5件を移植した。CPU数1〜4と3つの名前
 SystemBus の登録・ローカル名と MockCPU 固有のペイロードをストリームから新しい Machine に復元した。
 対象 fixture の実行は7件合格、0件失敗。
 [追加5件の公式 ID 別結果](nunit-evidence/targeted-emulation-cpu.tsv) · [対象実行ログ](nunit-evidence/targeted-emulation-cpu.log)
+
+Python 周辺機器を持つ Machine のケースを追加した。周辺機器サイズ100と
+SystemBus の登録範囲 `0x100..0x110` を保存し、初期化済みスコープとともに新しい Machine へ復元した。
+対象 fixture は公式4件と回帰1件が合格、0件失敗。
+[追加ケースの公式 ID 別結果](nunit-evidence/targeted-python-machine.tsv) · [対象実行ログ](nunit-evidence/targeted-python-machine.log)

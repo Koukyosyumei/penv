@@ -129,6 +129,7 @@ pub(crate) struct PeripheralSnapshot {
     source: String,
     base: u64,
     size: u64,
+    mapped_size: u64,
     init_pending: bool,
     counter: u64,
     scope: String,
@@ -140,6 +141,7 @@ impl PeripheralSnapshot {
         writer.string(&self.source)?;
         writer.unsigned(self.base)?;
         writer.unsigned(self.size)?;
+        writer.unsigned(self.mapped_size)?;
         writer.unsigned(u64::from(self.init_pending))?;
         writer.unsigned(self.counter)?;
         writer.string(&self.scope)?;
@@ -152,6 +154,7 @@ impl PeripheralSnapshot {
         let source = reader.string()?;
         let base = reader.unsigned()?;
         let size = reader.unsigned()?;
+        let mapped_size = reader.unsigned()?;
         let init_pending = match reader.unsigned()? {
             0 => false,
             1 => true,
@@ -178,6 +181,7 @@ impl PeripheralSnapshot {
             source,
             base,
             size,
+            mapped_size,
             init_pending,
             counter,
             scope,
@@ -190,14 +194,28 @@ pub(crate) struct Peripheral {
     source: String,
     base: u64,
     end: u64,
+    size: u64,
     init_pending: bool,
     counter: u64,
 }
 
 impl Peripheral {
     pub fn new(source: &str, base: u64, size: u64, initable: bool) -> Result<Self, String> {
+        Self::new_mapped(source, base, size, size, initable)
+    }
+
+    pub(crate) fn new_mapped(
+        source: &str,
+        base: u64,
+        size: u64,
+        mapped_size: u64,
+        initable: bool,
+    ) -> Result<Self, String> {
+        if size == 0 || mapped_size > size {
+            return Err("invalid PyDev peripheral size".into());
+        }
         let end = base
-            .checked_add(size)
+            .checked_add(mapped_size)
             .filter(|&end| end > base)
             .ok_or("invalid PyDev address range")?;
         Ok(Self {
@@ -205,6 +223,7 @@ impl Peripheral {
             source: source.to_owned(),
             base,
             end,
+            size,
             init_pending: initable,
             counter: 0,
         })
@@ -220,7 +239,8 @@ impl Peripheral {
         Ok(PeripheralSnapshot {
             source: self.source.clone(),
             base: self.base,
-            size: self.end - self.base,
+            size: self.size,
+            mapped_size: self.end - self.base,
             init_pending: self.init_pending,
             counter: self.counter,
             scope: scope.to_owned(),
@@ -228,10 +248,11 @@ impl Peripheral {
     }
 
     pub(crate) fn from_snapshot(snapshot: PeripheralSnapshot) -> Result<Self, String> {
-        let mut peripheral = Self::new(
+        let mut peripheral = Self::new_mapped(
             &snapshot.source,
             snapshot.base,
             snapshot.size,
+            snapshot.mapped_size,
             snapshot.init_pending,
         )?;
         peripheral
@@ -239,6 +260,10 @@ impl Peripheral {
             .request(format_args!("restore {}", snapshot.scope))?;
         peripheral.counter = snapshot.counter;
         Ok(peripheral)
+    }
+
+    pub(crate) fn range(&self) -> (u64, u64) {
+        (self.base, self.end)
     }
 
     pub fn overlaps(&self, start: u64, end: u64) -> bool {

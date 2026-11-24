@@ -3392,3 +3392,4 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(3)	upstream_nunit::emulation_serialization::serialize_three_cpus	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(4)	upstream_nunit::emulation_serialization::serialize_four_cpus	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldRememberCpuNames	upstream_nunit::emulation_serialization::remember_cpu_names	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests.ShouldSerializeMachineWithSimplePyDev	upstream_nunit::python_peripheral_serialization::serialize_machine_with_simple_pydev	new

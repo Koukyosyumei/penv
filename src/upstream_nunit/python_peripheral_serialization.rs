@@ -98,3 +98,24 @@ if request.IsRead:
     assert_eq!(copy.access(0, 4, None).unwrap(), 666);
     assert_eq!(copy.access(4, 4, None).unwrap(), 3);
 }
+
+#[test]
+fn serialize_machine_with_simple_pydev() {
+    let source = "
+if request.IsInit:
+    num = 4
+    str = 'napis'
+if request.IsRead:
+    request.Value = num + len(str)
+";
+    let mut machine = Machine::without_default_ram();
+    machine
+        .bus
+        .map_pydev_range(source, 0x100, 100, 0x10, true)
+        .unwrap();
+    assert_eq!(machine.bus.read::<1>(0x100).unwrap(), 9);
+    let snapshot = machine.bus.snapshot_pydevs().unwrap();
+    let mut copy = Machine::without_default_ram();
+    copy.bus.restore_pydevs(snapshot).unwrap();
+    assert_eq!(copy.bus.read::<1>(0x100).unwrap(), 9);
+}

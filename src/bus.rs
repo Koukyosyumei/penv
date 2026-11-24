@@ -3872,17 +3872,52 @@ impl Bus {
         size: u32,
         initable: bool,
     ) -> Result<(), String> {
+        self.map_pydev_range(source, base, size, size, initable)
+    }
+
+    pub(crate) fn map_pydev_range(
+        &mut self,
+        source: &str,
+        base: u32,
+        size: u32,
+        mapped_size: u32,
+        initable: bool,
+    ) -> Result<(), String> {
         let base = u64::from(base);
-        let end = base + u64::from(size);
+        let end = base + u64::from(mapped_size);
         if end > 1 << 32 || self.overlaps(base, end) {
             return Err("overlapping or invalid Python peripheral range".into());
         }
-        self.pydevs.push(crate::pydev::Peripheral::new(
+        self.pydevs.push(crate::pydev::Peripheral::new_mapped(
             source,
             base,
             u64::from(size),
+            u64::from(mapped_size),
             initable,
         )?);
+        Ok(())
+    }
+
+    pub(crate) fn snapshot_pydevs(&mut self) -> Result<Vec<crate::pydev::PeripheralSnapshot>, String> {
+        self.pydevs.iter_mut().map(crate::pydev::Peripheral::snapshot).collect()
+    }
+
+    pub(crate) fn restore_pydevs(
+        &mut self,
+        snapshots: Vec<crate::pydev::PeripheralSnapshot>,
+    ) -> Result<(), String> {
+        let mut devices: Vec<crate::pydev::Peripheral> = Vec::new();
+        for snapshot in snapshots {
+            let device = crate::pydev::Peripheral::from_snapshot(snapshot)?;
+            let (base, end) = device.range();
+            if end > 1 << 32 || self.overlaps(base, end)
+                || devices.iter().any(|device| device.overlaps(base, end))
+            {
+                return Err("overlapping or invalid Python peripheral range".into());
+            }
+            devices.push(device);
+        }
+        self.pydevs.extend(devices);
         Ok(())
     }
 
