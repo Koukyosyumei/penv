@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,382 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,383 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 13 |
+| 移植待ち | 12 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -539,3 +539,8 @@ PythonPeripherals.SerializationTests の単体クローン2件を移植した。
 ワーカーの変数とインポートを保存し、新しいワーカーに復元する。
 対象実行は公式2件と復元基盤の回帰1件が合格、0件失敗。
 [公式 ID 別の結果](nunit-evidence/targeted-python-peripheral-snapshot.tsv) · [対象実行ログ](nunit-evidence/targeted-python-peripheral-snapshot.log)
+
+PythonPeripherals.SerializationTests のリスト・辞書ケースを移植した。CPython の
+辞書復元と Migrant の既存プリミティブ I/O を使い、メモリーストリームを巻き戻して復元する。
+対象実行は公式3件と回帰1件が合格、0件失敗。
+[追加ケースの公式 ID 別結果](nunit-evidence/targeted-python-peripheral-stream.tsv) · [対象実行ログ](nunit-evidence/targeted-python-peripheral-stream.log)

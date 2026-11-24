@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 };
 
@@ -132,6 +132,57 @@ pub(crate) struct PeripheralSnapshot {
     init_pending: bool,
     counter: u64,
     scope: String,
+}
+
+impl PeripheralSnapshot {
+    pub(crate) fn write_to(&self, output: impl Write) -> io::Result<()> {
+        let mut writer = crate::migrant::primitive::Writer::new(output, false);
+        writer.string(&self.source)?;
+        writer.unsigned(self.base)?;
+        writer.unsigned(self.size)?;
+        writer.unsigned(u64::from(self.init_pending))?;
+        writer.unsigned(self.counter)?;
+        writer.string(&self.scope)?;
+        writer.finish()
+    }
+
+    /// Reads an internal stream previously written by this process.
+    pub(crate) fn read_from(input: impl Read) -> io::Result<Self> {
+        let mut reader = crate::migrant::primitive::Reader::new(input, false);
+        let source = reader.string()?;
+        let base = reader.unsigned()?;
+        let size = reader.unsigned()?;
+        let init_pending = match reader.unsigned()? {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid PyDev init flag",
+                ));
+            }
+        };
+        let counter = reader.unsigned()?;
+        let scope = reader.string()?;
+        if scope.is_empty()
+            || scope.len() % 2 != 0
+            || !scope.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid PyDev scope",
+            ));
+        }
+        reader.finish()?;
+        Ok(Self {
+            source,
+            base,
+            size,
+            init_pending,
+            counter,
+            scope,
+        })
+    }
 }
 
 pub(crate) struct Peripheral {

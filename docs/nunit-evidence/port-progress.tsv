@@ -38,7 +38,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests	18	18	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	3	3	0	0	0	-
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	4	2	0	2	0	The remaining cases require stream serialization and dictionary reconstruction, plus cloning a machine with the Python peripheral and its bus registration.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	4	3	0	1	0	The remaining case needs whole-machine cloning that preserves the live Python scope and SystemBus registration independently of peripheral size.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RangeTests	20	20	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.ReadExtensionsTest	30	30	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.RegistersTests	34	34	0	0	0	-

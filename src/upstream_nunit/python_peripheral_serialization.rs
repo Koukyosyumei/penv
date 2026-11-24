@@ -70,3 +70,31 @@ if request.IsRead:
     assert_eq!(copy.access(8, 4, None).unwrap(), 1);
     assert_eq!(device.access(0, 4, None).unwrap(), 456);
 }
+
+#[test]
+fn serialize_pydev_with_list_and_dictionary() {
+    use std::io::{Cursor, Seek, SeekFrom};
+
+    use crate::pydev::PeripheralSnapshot;
+
+    let _machine = Machine::without_default_ram();
+    let source = "
+if request.IsInit:
+\tsome_list = [ 'a', 666 ]
+\tsome_dict = { 'lion': 'yellow', 'kitty': 'red' }
+if request.IsRead:
+\tif request.Offset == 0:
+\t\trequest.Value = some_list[1]
+\tif request.Offset == 4:
+\t\trequest.Value = len(some_dict['kitty'])
+";
+    let mut device = Peripheral::new(source, 0, 100, true).unwrap();
+    let mut stream = Cursor::new(Vec::new());
+    // The CPython worker marshals dictionary entries and restores a dictionary directly.
+    device.snapshot().unwrap().write_to(&mut stream).unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut copy =
+        Peripheral::from_snapshot(PeripheralSnapshot::read_from(stream).unwrap()).unwrap();
+    assert_eq!(copy.access(0, 4, None).unwrap(), 666);
+    assert_eq!(copy.access(4, 4, None).unwrap(), 3);
+}
