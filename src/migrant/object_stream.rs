@@ -1,6 +1,7 @@
 //! Reference-preserving object streams for Rust graph descriptors.
 //!
 //! This uses Migrant's primitive encoding with a Rust object-record format.
+use super::declared_types::{self, DeclaredFieldTypes, TypeReader, TypeWriter};
 use super::generated_record::{Codec, RecordInput, RecordOutput};
 use super::primitive::{Decimal, Guid, Reader, Writer};
 use super::surrogate::Surrogates;
@@ -12,6 +13,7 @@ const MAX_ITEMS: usize = 1_000_000;
 const ROOT: u8 = 1;
 const STAMPED_ROOT: u8 = 2;
 const HIERARCHY_STAMPED_ROOT: u8 = 3;
+const DECLARED_TYPES_ROOT: u8 = 4;
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -532,6 +534,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
     hierarchies: Option<&'a [TypeHierarchy<'a>]>,
+    declared_types: Option<&'a [DeclaredFieldTypes<'a>]>,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
     generated: Option<&'a [Codec]>,
@@ -568,6 +571,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             replacements: HashMap::new(),
             stamps: None,
             hierarchies: None,
+            declared_types: None,
             allow_xml_surrogates: true,
             user_object_collections: None,
             generated: None,
@@ -659,6 +663,18 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     ) -> Self {
         self.stamps = Some(stamps);
         self.hierarchies = Some(hierarchies);
+        self.declared_types = None;
+        self
+    }
+
+    pub fn with_declared_field_types(
+        mut self,
+        stamps: &'a [TypeStamp<'a>],
+        declared: &'a [DeclaredFieldTypes<'a>],
+    ) -> Self {
+        self.stamps = Some(stamps);
+        self.hierarchies = None;
+        self.declared_types = Some(declared);
         self
     }
 
@@ -857,7 +873,10 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     }
 
     fn write_frame(&mut self, graph: &Graph, root: usize) -> io::Result<()> {
-        self.data.bytes(&[if self.hierarchies.is_some() {
+        let mut type_names = TypeWriter::default();
+        self.data.bytes(&[if self.declared_types.is_some() {
+            DECLARED_TYPES_ROOT
+        } else if self.hierarchies.is_some() {
             HIERARCHY_STAMPED_ROOT
         } else if self.stamps.is_some() {
             STAMPED_ROOT
@@ -892,6 +911,13 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     self.data.string(class)?;
                     if let Some(hierarchies) = self.hierarchies {
                         write_bases(&mut self.data, bases_for(hierarchies, class))?;
+                    }
+                    if let Some(schemas) = self.declared_types {
+                        let declared = declared_types::fields_for(schemas, class)?;
+                        if declared.len() != fields.len() {
+                            return Err(invalid("declared field type count differs from record"));
+                        }
+                        type_names.write(&mut self.data, declared)?;
                     }
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.write(&mut self.data)?;
@@ -1086,6 +1112,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
     hierarchies: Option<&'a [TypeHierarchy<'a>]>,
+    declared_types: Option<&'a [DeclaredFieldTypes<'a>]>,
     version_policy: VersionPolicy,
     allow_xml_surrogates: bool,
     user_object_collections: Option<bool>,
@@ -1106,6 +1133,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             references,
             stamps: None,
             hierarchies: None,
+            declared_types: None,
             version_policy: VersionPolicy::default(),
             allow_xml_surrogates: true,
             user_object_collections: None,
@@ -1168,6 +1196,18 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
     ) -> Self {
         self.stamps = Some(stamps);
         self.hierarchies = Some(hierarchies);
+        self.declared_types = None;
+        self
+    }
+
+    pub fn with_declared_field_types(
+        mut self,
+        stamps: &'a [TypeStamp<'a>],
+        declared: &'a [DeclaredFieldTypes<'a>],
+    ) -> Self {
+        self.stamps = Some(stamps);
+        self.hierarchies = None;
+        self.declared_types = Some(declared);
         self
     }
 
@@ -1263,9 +1303,13 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
     fn next_impl(&mut self) -> io::Result<Option<ObjectId>> {
         match self.data.byte() {
             Ok(ROOT) if self.stamps.is_none() => {}
-            Ok(STAMPED_ROOT) if self.stamps.is_some() && self.hierarchies.is_none() => {}
+            Ok(STAMPED_ROOT)
+                if self.stamps.is_some()
+                    && self.hierarchies.is_none()
+                    && self.declared_types.is_none() => {}
             Ok(HIERARCHY_STAMPED_ROOT) if self.hierarchies.is_some() => {}
-            Ok(ROOT | STAMPED_ROOT | HIERARCHY_STAMPED_ROOT) => {
+            Ok(DECLARED_TYPES_ROOT) if self.declared_types.is_some() => {}
+            Ok(ROOT | STAMPED_ROOT | HIERARCHY_STAMPED_ROOT | DECLARED_TYPES_ROOT) => {
                 return Err(invalid("inconsistent object stream stamp configuration"));
             }
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -1288,6 +1332,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             return Err(invalid("invalid root reference or object limit exceeded"));
         }
         let mut objects = Vec::new();
+        let mut type_names = TypeReader::default();
         let mut restore_classes = HashMap::new();
         for index in 0..count {
             let kind = self.data.byte()?;
@@ -1307,6 +1352,10 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                             bases_for(hierarchies, &class),
                             self.version_policy,
                         )?;
+                    }
+                    if let Some(schemas) = self.declared_types {
+                        type_names
+                            .verify(&mut self.data, declared_types::fields_for(schemas, &class)?)?;
                     }
                     let stamp = self
                         .stamps

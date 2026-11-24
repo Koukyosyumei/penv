@@ -12,3 +12,4 @@ pub mod graph_serializer;
 pub mod generated_record;
 pub mod user_list;
 pub mod delegate;
+pub mod declared_types;

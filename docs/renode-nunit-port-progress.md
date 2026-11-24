@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,304 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,312 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 91 |
+| 移植待ち | 83 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 11 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 10 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -502,3 +502,5 @@ Migrant の `TestGuidVerification` 20件を移植した。Rust の型スタン�
 基底型の挿入・削除・名前変更60件を移植した。Rust の型スタンプに継承階層を明示する構成を追加し、上流の4読み書き構成と5許可レベルで復元の成否を照合した。[公式IDとの対応](nunit-evidence/targeted-migrant-hierarchy.tsv)・[実行ログ](nunit-evidence/targeted-migrant-hierarchy.log)
 
 基底型から派生型へ移された同名フィールドの20件を移植した。宣言型で修飾したフィールド名により、削除と追加の両方を許可したときだけ復元に成功することを照合した。最終の対象実行では140件が合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-moved-fields.tsv)・[実行ログ](nunit-evidence/targeted-migrant-moved-fields.log)
+
+型スタンプ重複排除の8件を移植した。値が `null` のリストフィールドも宣言型と型引数を保持し、型名をストリーム内のIDで共有する。上流と同じASCII範囲の抽出でプリミティブ型名と開いたジェネリック型名がそれぞれ1回だけ現れることを照合した。`VersionToleranceTests` の全148件が対象実行で合格した。[公式IDとの対応](nunit-evidence/targeted-migrant-declared-types.tsv)・[実行ログ](nunit-evidence/targeted-migrant-declared-types.log)

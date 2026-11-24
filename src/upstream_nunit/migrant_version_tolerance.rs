@@ -851,3 +851,105 @@ mod moved_fields {
         moved_field(true, true, Level::Guid);
     }
 }
+
+fn check_declared_stamp(write: bool, read: bool, pattern: &str) {
+    use crate::migrant::declared_types::DeclaredFieldTypes;
+
+    const CLASS: &str = "ClassWithGenerics";
+    const STAMPS: &[TypeStamp<'static>] = &[TypeStamp {
+        class: CLASS,
+        module: "Migrant.Tests",
+        revision: 0,
+        fields: &[
+            ("IntegerNumber", FieldKind::Integer),
+            ("SecondIntegerNumber", FieldKind::Integer),
+            ("ListOfIntegerNumbers", FieldKind::Reference),
+            ("FloatNumber", FieldKind::Float),
+            ("ListOfFloatNumbers", FieldKind::Reference),
+        ],
+    }];
+    const FIELDS: &[DeclaredFieldTypes<'static>] = &[DeclaredFieldTypes {
+        class: CLASS,
+        fields: &[
+            &["System.Int32"],
+            &["System.Int32"],
+            &["System.Collections.Generic.List`1", "System.Int32"],
+            &["System.Single"],
+            &["System.Collections.Generic.List`1", "System.Single"],
+        ],
+    }];
+    const CODECS: &[Codec] = &[generated_record!(CLASS;
+        first: integer, second: integer, integers: reference, number: float, floats: reference
+    )];
+    let mut graph = Graph::default();
+    let original = Object::Record {
+        class: CLASS.into(),
+        fields: vec![
+            Value::Integer(0),
+            Value::Integer(0),
+            Value::Null,
+            Value::Float(0.0),
+            Value::Null,
+        ],
+    };
+    let root = graph.insert(original.clone());
+    let mut stream = Vec::new();
+    let mut writer = ObjectWriter::new(&mut stream, &graph, References::PerRoot, true)
+        .with_declared_field_types(STAMPS, FIELDS);
+    if write {
+        writer = writer.with_generated_records(CODECS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+    let printable: String = stream
+        .iter()
+        .filter(|byte| (b' '..=b'~').contains(byte))
+        .map(|&byte| char::from(byte))
+        .collect();
+    assert_eq!(printable.match_indices(pattern).count(), 1);
+
+    let mut reader = ObjectReader::new(stream.as_slice(), References::PerRoot, true)
+        .with_declared_field_types(STAMPS, FIELDS);
+    if read {
+        reader = reader.with_generated_records(CODECS);
+    }
+    let restored = reader.read_object().unwrap();
+    assert_eq!(reader.graph().get(restored), Some(&original));
+    reader.finish().unwrap();
+}
+
+mod declared_types {
+    use super::*;
+    #[test]
+    fn primitive_write_false_read_false() {
+        check_declared_stamp(false, false, "System.Int32");
+    }
+    #[test]
+    fn generic_write_false_read_false() {
+        check_declared_stamp(false, false, "System.Collections.Generic.List`1");
+    }
+    #[test]
+    fn primitive_write_false_read_true() {
+        check_declared_stamp(false, true, "System.Int32");
+    }
+    #[test]
+    fn generic_write_false_read_true() {
+        check_declared_stamp(false, true, "System.Collections.Generic.List`1");
+    }
+    #[test]
+    fn primitive_write_true_read_false() {
+        check_declared_stamp(true, false, "System.Int32");
+    }
+    #[test]
+    fn generic_write_true_read_false() {
+        check_declared_stamp(true, false, "System.Collections.Generic.List`1");
+    }
+    #[test]
+    fn primitive_write_true_read_true() {
+        check_declared_stamp(true, true, "System.Int32");
+    }
+    #[test]
+    fn generic_write_true_read_true() {
+        check_declared_stamp(true, true, "System.Collections.Generic.List`1");
+    }
+}
