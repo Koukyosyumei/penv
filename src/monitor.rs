@@ -1763,18 +1763,15 @@ fn execute(
             ))
         }
         [command @ ("WaitForLineOnUart" | "WaitForTesterPrompt" | "ShouldNotBeOnUart"), ..] => {
-            let (pattern, arguments) = quoted_argument(
-                text[command.len()..].trim_start(),
-            )
-            .filter(|(pattern, _)| !pattern.is_empty())
-            .ok_or(
-                "expected WaitForLineOnUart \"literal text\" [testerId=number] [timeout=seconds]",
-            )?;
+            let (pattern, arguments) = uart_text_argument(text[command.len()..].trim_start())?;
+            if pattern.is_empty() {
+                return Err("UART wait pattern must be nonempty".into());
+            }
             let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Line)?;
             Some(Action::WaitForTester(
                 options.id,
-                pattern.to_owned(),
-                options.regex.then(|| regex::Regex::new(pattern))
+                pattern.clone(),
+                options.regex.then(|| regex::Regex::new(&pattern))
                     .transpose().map_err(|e| format!("invalid UART text regex: {e}"))?,
                 if *command == "WaitForTesterPrompt" { UartWaitMode::Prompt } else { UartWaitMode::Lf },
                 options.timeout,
@@ -1851,8 +1848,7 @@ fn execute(
         }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();
-            let (line, ending) = quoted_argument(args)
-                .ok_or("expected USART WriteLine \"literal text\" [line ending]")?;
+            let (line, ending) = uart_text_argument(args)?;
             let ending: &[u8] = match ending {
                 "" | "CR" | "true" => b"\r",
                 "LF" => b"\n",
@@ -1866,7 +1862,7 @@ fn execute(
             };
             Some(Action::WriteUartLine(
                 resolve(target)?.to_owned(),
-                line.to_owned(),
+                line,
                 ending,
             ))
         }
@@ -2783,6 +2779,20 @@ fn hex_pattern(value: &str) -> Result<Vec<u8>, String> {
                 .map_err(|_| "FindBytes requires complete hexadecimal bytes".into())
         })
         .collect()
+}
+
+fn uart_text_argument(value: &str) -> Result<(String, &str), String> {
+    if let Some(encoded) = value.strip_prefix("hex:") {
+        let (text, rest) = encoded.split_once(char::is_whitespace).unwrap_or((encoded, ""));
+        if text.len() % 2 != 0 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("UART text requires complete hexadecimal bytes".into());
+        }
+        let text = String::from_utf8(hex_pattern(text)?).map_err(|_| "UART text must be UTF-8")?;
+        return Ok((text, rest.trim()));
+    }
+    quoted_argument(value)
+        .map(|(text, rest)| (text.to_owned(), rest))
+        .ok_or_else(|| "expected quoted or hex-encoded UART text".into())
 }
 
 fn quoted_argument(value: &str) -> Option<(&str, &str)> {

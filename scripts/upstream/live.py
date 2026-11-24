@@ -566,6 +566,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported("requires a nonempty single-line literal")
         return '"' + value + '"'
 
+    @classmethod
+    def uart_text(cls, value):
+        if any(char in value for char in '"\\') or not value:
+            return "hex:" + value.encode().hex()
+        return cls.literal(value)
+
     @staticmethod
     def option(arg, name):
         if arg.startswith(name + "="):
@@ -600,7 +606,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             if verb == "ShouldNotBeOnUart":
                 raise Unsupported("unfinished UART line absence is unsupported")
             verb = "WaitForTesterPrompt"
-        line = self.operation(f"{verb} {self.literal(expected)} timeout={deadline} treatAsRegex={str(regex).lower()}")
+        line = self.operation(f"{verb} {self.uart_text(expected)} timeout={deadline} treatAsRegex={str(regex).lower()}")
         match = re.search(expected, line) if regex else None
         return {"Line": line, "Groups": list(match.groups()) if match else []}
 
@@ -616,7 +622,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def write_char(self, char):
         if not self.started or not self.uart or len(char) != 1 or not char.isascii():
             raise Unsupported("requires one ASCII character and a running UART tester")
-        self.operation(f"{self.uart} WriteLine {self.literal(char)} None")
+        self.operation(f"{self.uart} WriteLine {self.uart_text(char)} None")
         return {"Line": ""}
 
     def uart_idle(self, timeout):
@@ -631,7 +637,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         echo = self.option(option, "waitForEcho").lower()
         if echo not in {"true", "false"}:
             raise Unsupported(option)
-        self.operation(f"{self.uart} WriteLine {self.literal(content)} CR")
+        self.operation(f"{self.uart} WriteLine {self.uart_text(content)} CR")
         if echo == "true":
             self.prompt(content)
         return {"Line": ""}
