@@ -1034,3 +1034,29 @@ target/renode-venv/bin/python scripts/upstream/run.py --rust-monitor \
   --case 'Should Deserialize Monitor State' \
   --out target/monitor-env-repro
 ```
+
+### 通常 CLI とライブモニターの Save / Load
+
+`8261b48` は通常の RESC、フレーム起動、ライブモニターからの
+`Save` を同じ Rust スナップショット書き込みに統一する。
+従来の非ラップ形式は読み込み可能。名前付きの空マシンで
+固定 Renode と同じ `Save`・変数更新・`Load` の操作を行い、
+エイリアスが保存時の `saved value` を返すことを確認した
+（`target/monitor-shared-save-proof/`）。
+
+`2850809` は通常 CLI でもマシンを作成せずにモニター環境を保存・復元する。
+`bb0d243` は RESC の Save / Load 後の代入、`echo`、`printenv` を
+順に評価する。固定 Renode と同じマシンなしのコマンド列で、
+更新直後に `changed`、復元後に `saved value` を出力した
+（`target/monitor-save-order-proof/`）。CLI の回帰テストと既存の
+起動前スナップショットテスト2件、Rust モニターテスト22件が合格。
+広めの CLI 実行は15件合格、6件失敗。失敗6件は変更前の `7351e36` でも再現した
+（`target/monitor-save-order-prechange.log`）。
+
+同じ仕組みで実行後の任意の CPU・デバイス状態まで保存できる範囲は
+広がっていない。RESC 内の include・マクロ・エイリアスまで
+一律に遅延実行する変更も含めていない。
+
+`bb0d243` の未変更 Robot 実行は、モニター保存・復元の2件、
+HEX、STM32F072b Console Echo が合格。残り2,193件は未実行
+（`target/monitor-ordered-save-robot/results.json`）。
