@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 792 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 827 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,604 |
+| 移植待ち | 2,569 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 54 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 53 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -52,10 +52,14 @@ SymbolLookupTests の残り3件を移植した。SymbolLookupTests の Rust 対�
 新規24件すべてが合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-cache-rectangular-records.tsv) · [対象実行ログ](nunit-evidence/targeted-cache-rectangular-records.log)
 
-今回の追加は25件。MemoryTests の同時セグメント割り当て1件と、
+前回の追加は25件。MemoryTests の同時セグメント割り当て1件と、
 Migrant の nullable と連続ストリーム10件、リストとボックス化された値14件を移植した。
 対象を絞った Rust 実行で新規25件すべてが合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-memory-nullable-lists.tsv) · [対象実行ログ](nunit-evidence/targeted-memory-nullable-lists.log)
+
+今回の追加は35件。Migrant のコレクション20件、OptionsParser の ValidationTests
+全4件と ParserTests 11件。対象を絞った Rust 実行で新規35件すべてが合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-collections-options.tsv) · [対象実行ログ](nunit-evidence/targeted-collections-options.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。

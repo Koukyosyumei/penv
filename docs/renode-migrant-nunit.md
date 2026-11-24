@@ -103,6 +103,12 @@ nullable の null と整数、ボックス化された整数の参照同一性�
 参照可能な要素配列で表現する。
 [公式 ID 別の結果](nunit-evidence/targeted-memory-nullable-lists.tsv)
 
-残りは9 fixture・2,025ケース。生成読み書き、コレクションと CLR 型の
+SerializationTests の反射読み書き・型スタンプ有無の2設定に20件を追加した。
+辞書はキーと値の内容を順不同で比較し、共有文字列の参照同一性も確認した。
+キュー、集合、異種要素の ArrayList、読み取り専用ラッパーも検証した。
+これらのコレクションは Rust の型付きレコードと要素配列で表現する。
+[公式 ID 別の結果](nunit-evidence/targeted-collections-options.tsv)
+
+残りは9 fixture・2,005ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
