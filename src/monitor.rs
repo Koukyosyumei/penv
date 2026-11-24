@@ -2906,6 +2906,9 @@ fn invalid_command_parameters(error: &str) -> bool {
 }
 
 fn inspect_snapshot_destination(path: &Path) -> Option<String> {
+    if path.is_dir() {
+        return Some(format!("Cannot save snapshot to '{}': destination is a directory.", path.display()));
+    }
     let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let missing = match fs::metadata(parent) {
         Ok(metadata) => !metadata.is_dir(),
@@ -5217,6 +5220,7 @@ greet "hello world"
         assert_eq!(inspect(machine, &format!("Load {missing}")).0, "REJECTED");
         let no_directory = format!("@/tmp/penv-missing-snapshot-directory-{}/state.save", std::process::id());
         assert_eq!(inspect(machine, &format!("Save {no_directory}")).0, "REJECTED");
+        assert_eq!(inspect(machine, "Save @.").0, "REJECTED");
         let pending = format!("{machine}Save {missing}\n");
         assert_eq!(inspect(&pending, &format!("Load {missing}")).0, "DEFER");
         assert_eq!(inspect(machine, "logLevel 2").0, "DEFER");
