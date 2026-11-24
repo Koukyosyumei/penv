@@ -969,3 +969,33 @@ PC、MCAUSE、MEPC、MTVAL の数値と、`Continuous` から `SingleStep` へ�
 Rust の UART 関連テスト 34 件とモニター関連テスト 21 件が合格した。
 最終ビルドの HEX と STM32F072b Console Echo も合格した
 （`target/monitor-execmode-898d0e2-*/results.json`）。
+
+### RESC マクロのライブ実行と保存
+
+`16c88a3` は起動スクリプト、ライブの include、ライブの宣言で
+定義したマクロを同じ Rust モニターセッションに保持する。
+固定 Renode と penv に同じコマンド列を送り、起動後のマクロが
+変数の初期値と更新値を返すことを通常 CLI と Robot RPC で確認した
+（`target/monitor-live-macro-proof/`）。
+
+`8216b11` は復元可能なモニタースナップショットにマクロを保存する。
+マクロがある場合に v4 を書き、v1–v3 も読み込む。固定 Renode と同じ
+RPC コマンド列で、`Provides` の後に変数を更新し、`Requires` の後に
+`runMacro $hello` が保存時の `saved value` を返すことを確認した。
+penv は依存ケースを新しいセッションで開始し、スナップショットから
+復元した（`target/monitor-macro-snapshot-proof/{renode,penv}.jsonl`）。
+スナップショットの Rust テストは3件合格した。
+
+同ビルドで未変更の Robot ケース `Should Load HEX` と
+`Should Run Zephyr Console Echo Sample` は各1件合格した。
+`Should Serialize Monitor State` は `alias run test` で
+`UNSUPPORTED`。各実行は該当1件を選択し、他の2,196件は未実行。
+SHA、バイナリハッシュ、実行コマンド、個別判定は
+`target/monitor-macro-{hex,uart,state}/results.json` を参照。
+
+続く起動中のマクロ対応では、マシンなしで実行できるコンソールマクロの
+応答を Rust の起動照会から返し、マシンを必要とする操作は起動列に残す。
+固定 Renode と同じ5コマンドで、マクロから `initial`、変数更新後に
+`changed` を得た。比較は末尾の改行を除いて行った
+（`target/monitor-startup-macro-proof/{renode,penv}.jsonl`）。
+モニター関連の Rust テストは21件合格した。
