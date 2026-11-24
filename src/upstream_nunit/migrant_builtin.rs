@@ -40,7 +40,7 @@ fn regex_stamped() {
     regex_round_trip(true);
 }
 
-use crate::migrant::xml_surrogate::{self, XmlSerializable};
+use crate::migrant::{reflection_serializer::ReflectionSerializer, xml_surrogate::XmlSerializable};
 use std::io;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,28 +88,11 @@ fn custom_xml(stamped: bool) {
         text: "Xavier".into(),
         fake_pointer: 666,
     };
-    let mut graph = Graph::default();
-    let root = xml_surrogate::store(&mut graph, &data).unwrap();
-    let mut stream = Cursor::new(Vec::new());
-    const STAMPS: &[crate::migrant::object_stream::TypeStamp<'static>] =
-        &[xml_surrogate::TYPE_STAMP];
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
-    if stamped {
-        writer = writer.with_type_stamps(STAMPS);
-    }
-    writer.write_object(root).unwrap();
-    writer.finish().unwrap();
-    stream.rewind().unwrap();
-    let mut reader = ObjectReader::new(stream, References::Preserve, true);
-    if stamped {
-        reader = reader.with_type_stamps(STAMPS);
-    }
-    let id = reader.read_object().unwrap();
-    assert_eq!(
-        xml_surrogate::restore::<CustomXml>(reader.graph(), id).unwrap(),
-        data
-    );
-    reader.finish().unwrap();
+    let copy = ReflectionSerializer::default()
+        .with_xml_serializable(true)
+        .clone_xml(&data, stamped)
+        .unwrap();
+    assert_eq!(copy, data);
 }
 
 #[test]

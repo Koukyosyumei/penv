@@ -1,0 +1,23 @@
+$ cargo test --locked --bin penv upstream_nunit::migrant_blocking_collection
+running 12 tests
+test upstream_nunit::migrant_blocking_collection::primitives_plain ... ok
+test upstream_nunit::migrant_blocking_collection::strings_plain ... ok
+test upstream_nunit::migrant_blocking_collection::nullable_plain ... ok
+test upstream_nunit::migrant_blocking_collection::strings_stamped ... ok
+test upstream_nunit::migrant_blocking_collection::strings_xml_plain ... ok
+test upstream_nunit::migrant_blocking_collection::nullable_stamped ... ok
+test upstream_nunit::migrant_blocking_collection::strings_xml_stamped ... ok
+test upstream_nunit::migrant_blocking_collection::nullable_xml_stamped ... ok
+test upstream_nunit::migrant_blocking_collection::primitives_xml_plain ... ok
+test upstream_nunit::migrant_blocking_collection::primitives_stamped ... ok
+test upstream_nunit::migrant_blocking_collection::primitives_xml_stamped ... ok
+test upstream_nunit::migrant_blocking_collection::nullable_xml_plain ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1754 filtered out; finished in 0.00s
+
+$ cargo test --locked --bin penv upstream_nunit::migrant_builtin
+running 4 tests
+test upstream_nunit::migrant_builtin::custom_xml_stamped ... ok
+test upstream_nunit::migrant_builtin::custom_xml_plain ... ok
+test upstream_nunit::migrant_builtin::regex_stamped ... ok
+test upstream_nunit::migrant_builtin::regex_plain ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1762 filtered out; finished in 0.00s

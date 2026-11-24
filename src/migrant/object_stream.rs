@@ -341,6 +341,7 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     frame_base: usize,
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    allow_xml_surrogates: bool,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
     restore_prototype: Option<&'a mut Surrogates<'s>>,
@@ -373,6 +374,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             frame_base: 0,
             replacements: HashMap::new(),
             stamps: None,
+            allow_xml_surrogates: true,
             transients: None,
             surrogates: None,
             restore_prototype: None,
@@ -431,6 +433,11 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 
     pub fn with_transients(mut self, transients: &'a Transients<'a>) -> Self {
         self.transients = Some(transients);
+        self
+    }
+
+    pub(super) fn allow_xml_surrogates(mut self, allow: bool) -> Self {
+        self.allow_xml_surrogates = allow;
         self
     }
 
@@ -550,6 +557,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     &[]
                 }
                 Object::Record { class, fields } => {
+                    if !self.allow_xml_surrogates && class == super::xml_surrogate::CLASS {
+                        return Err(super::xml_surrogate::disabled());
+                    }
                     if let Some(stamps) = self.stamps {
                         stamp_for(stamps, class)?.validate(fields)?;
                     }
@@ -788,6 +798,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     read_hooks: &'a [ReadHook<'a>],
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    allow_xml_surrogates: bool,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
     after_read: Option<ObjectObserver<'s>>,
@@ -803,6 +814,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             read_hooks: &[],
             references,
             stamps: None,
+            allow_xml_surrogates: true,
             transients: None,
             surrogates: None,
             after_read: None,
@@ -831,6 +843,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
 
     pub fn with_transients(mut self, transients: &'a Transients<'a>) -> Self {
         self.transients = Some(transients);
+        self
+    }
+
+    pub(super) fn allow_xml_surrogates(mut self, allow: bool) -> Self {
+        self.allow_xml_surrogates = allow;
         self
     }
 
@@ -960,6 +977,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         restore_classes.insert(index, self.data.string()?);
                     }
                     let class = self.data.string()?;
+                    if !self.allow_xml_surrogates && class == super::xml_surrogate::CLASS {
+                        return Err(super::xml_surrogate::disabled());
+                    }
                     let stamp = self
                         .stamps
                         .map(|stamps| stamp_for(stamps, &class))
@@ -1127,6 +1147,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             });
         }
         Ok(values)
+    }
+
+    pub(super) fn finish_into_graph(self) -> io::Result<Graph> {
+        self.data.finish()?;
+        Ok(self.graph)
     }
 
     pub fn finish(self) -> io::Result<()> {

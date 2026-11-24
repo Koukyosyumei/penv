@@ -1,7 +1,7 @@
 use super::object_stream::{FieldKind, Graph, Object, ObjectId, TypeStamp, Value};
 use std::io;
 
-const CLASS: &str = "Antmicro.Migrant.BultinSurrogates.SurrogateForIXmlSerializable";
+pub(super) const CLASS: &str = "Antmicro.Migrant.BultinSurrogates.SurrogateForIXmlSerializable";
 
 pub const TYPE_STAMP: TypeStamp<'static> = TypeStamp {
     class: CLASS,
@@ -46,4 +46,11 @@ pub fn restore<T: XmlSerializable>(graph: &Graph, id: ObjectId) -> io::Result<T>
         return Err(invalid());
     };
     T::read_xml(bytes)
+}
+
+pub(super) fn disabled() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "XML serialization support is disabled",
+    )
 }

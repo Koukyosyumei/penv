@@ -1,14 +1,16 @@
-use std::{fmt::Debug, io::Cursor};
+use std::fmt::Debug;
 
 use crate::migrant::{
     blocking_collection::{self, BlockingCollection},
-    object_stream::{Graph, Object, ObjectReader, ObjectWriter, References, Value},
+    object_stream::{FieldKind, Graph, Object, TypeStamp, Value},
+    reflection_serializer::ReflectionSerializer,
 };
 
 fn round_trip<T: Eq + Ord + Debug>(
     element_type: &str,
     items: Vec<T>,
     stamped: bool,
+    xml: bool,
     encode: impl Fn(&mut Graph, &T) -> Value,
     decode: impl Fn(&Graph, &Value) -> T,
 ) {
@@ -19,21 +21,20 @@ fn round_trip<T: Eq + Ord + Debug>(
         collection.add(encode(&mut graph, item));
     }
     let root = collection.store(&mut graph, &class);
-    let stamps = [blocking_collection::type_stamp(&class)];
-    let mut stream = Vec::new();
-    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true);
-    if stamped {
-        writer = writer.with_type_stamps(&stamps);
-    }
-    writer.write_object(root).unwrap();
-    writer.finish().unwrap();
-
-    let mut reader = ObjectReader::new(Cursor::new(stream), References::Preserve, true);
-    if stamped {
-        reader = reader.with_type_stamps(&stamps);
-    }
-    let id = reader.read_object().unwrap();
-    let copy = BlockingCollection::restore(reader.graph(), id, &class).unwrap();
+    let stamps = [
+        blocking_collection::type_stamp(&class),
+        TypeStamp {
+            class: "System.Int32",
+            module: "mscorlib",
+            revision: 0,
+            fields: &[("m_value", FieldKind::Integer)],
+        },
+    ];
+    let (copy_graph, id) = ReflectionSerializer::default()
+        .with_xml_serializable(xml)
+        .clone_graph(&graph, root, stamped.then_some(&stamps))
+        .unwrap();
+    let copy = BlockingCollection::restore(&copy_graph, id, &class).unwrap();
     let mut expected: Vec<_> = collection
         .snapshot()
         .iter()
@@ -42,19 +43,19 @@ fn round_trip<T: Eq + Ord + Debug>(
     let mut actual: Vec<_> = copy
         .snapshot()
         .iter()
-        .map(|value| decode(reader.graph(), value))
+        .map(|value| decode(&copy_graph, value))
         .collect();
     expected.sort();
     actual.sort();
     assert_eq!(expected, actual);
-    reader.finish().unwrap();
 }
 
-fn primitives(stamped: bool) {
+fn primitives(stamped: bool, xml: bool) {
     round_trip(
         "System.Int32",
         vec![1, 2, 3],
         stamped,
+        xml,
         |_, &value| Value::Integer(value),
         |_, value| {
             let Value::Integer(value) = value else {
@@ -65,25 +66,43 @@ fn primitives(stamped: bool) {
     );
 }
 
-fn nullable(stamped: bool) {
+fn nullable(stamped: bool, xml: bool) {
     round_trip(
         "System.Object",
         vec![Some(1), None, Some(3)],
         stamped,
-        |_, &value| value.map_or(Value::Null, Value::Integer),
-        |_, value| match value {
+        xml,
+        |graph, &value| {
+            value.map_or(Value::Null, |value| {
+                Value::Ref(graph.insert(Object::Record {
+                    class: "System.Int32".into(),
+                    fields: vec![Value::Integer(value)],
+                }))
+            })
+        },
+        |graph, value| match value {
             Value::Null => None,
-            Value::Integer(value) => Some(*value),
+            Value::Ref(id) => {
+                let Some(Object::Record { class, fields }) = graph.get(*id) else {
+                    panic!("expected boxed integer");
+                };
+                assert_eq!(class, "System.Int32");
+                let [Value::Integer(value)] = fields.as_slice() else {
+                    panic!("expected boxed integer value");
+                };
+                Some(*value)
+            }
             _ => panic!("expected boxed integer or null"),
         },
     );
 }
 
-fn strings(stamped: bool) {
+fn strings(stamped: bool, xml: bool) {
     round_trip(
         "System.String",
         vec!["One".to_owned(), "Two".to_owned(), "Three".to_owned()],
         stamped,
+        xml,
         |graph, value| Value::Ref(graph.insert(Object::String(value.clone()))),
         |graph, value| {
             let Value::Ref(id) = value else {
@@ -99,25 +118,50 @@ fn strings(stamped: bool) {
 
 #[test]
 fn primitives_plain() {
-    primitives(false);
+    primitives(false, false);
 }
 #[test]
 fn nullable_plain() {
-    nullable(false);
+    nullable(false, false);
 }
 #[test]
 fn strings_plain() {
-    strings(false);
+    strings(false, false);
 }
 #[test]
 fn primitives_stamped() {
-    primitives(true);
+    primitives(true, false);
 }
 #[test]
 fn nullable_stamped() {
-    nullable(true);
+    nullable(true, false);
 }
 #[test]
 fn strings_stamped() {
-    strings(true);
+    strings(true, false);
+}
+
+#[test]
+fn primitives_xml_plain() {
+    primitives(false, true);
+}
+#[test]
+fn nullable_xml_plain() {
+    nullable(false, true);
+}
+#[test]
+fn strings_xml_plain() {
+    strings(false, true);
+}
+#[test]
+fn primitives_xml_stamped() {
+    primitives(true, true);
+}
+#[test]
+fn nullable_xml_stamped() {
+    nullable(true, true);
+}
+#[test]
+fn strings_xml_stamped() {
+    strings(true, true);
 }

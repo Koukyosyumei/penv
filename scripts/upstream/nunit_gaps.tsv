@@ -1,5 +1,5 @@
 fixture	missing_api
-Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	Six reflection cases with XML support disabled are ported. Six reflection cases with XML support enabled need serializer-level IXmlSerializable configuration. The other 36 cases need the generated writer and/or reader paths.
+Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	All twelve reflection cases are ported across XML support and type-stamp settings. The remaining 36 cases need the generated writer and/or reader paths.
 Antmicro.Migrant.Tests.BuiltinSurrogatesTests	Both reflection cases are ported for each stamp mode. The remaining 12 cases require generated reader and/or writer paths.
 Antmicro.Migrant.Tests.HooksTests	All 40 reflection read/write cases are ported across both stamp modes. The other 120 cases require generated reader and/or writer paths.
 Antmicro.Migrant.Tests.OpenStreamSerializationTests	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.

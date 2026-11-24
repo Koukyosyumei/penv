@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,262 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,268 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,134 |
+| 移植待ち | 2,128 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 23 fixture の
@@ -276,3 +276,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 10個の mock CPU のスロットと、1〜4個の CPU から1秒間に行う共有周辺機器読み出しを検証した。外部 CPU はスレッドで動作し、読み出し要求は同じマシンのバス上で直列に実行する。外部 CPU の登録は命令を実行する既存の hart 登録とは独立している。
 
 - [公式 ID](nunit-evidence/targeted-multi-cpu.tsv)と[実行ログ](nunit-evidence/targeted-multi-cpu.log)
+
+## Migrant BlockingCollection の XML 有効設定
+
+XML 有効・型スタンプ有無の6件を追加した。反射シリアライザーで XML サロゲートの許可を設定し、既存の XML 型ラウンドトリップでも同じ設定を使った。null ケースの整数はオブジェクト参照として格納する。反射経路は12件すべて合格し、生成経路の36件が残る。
+
+- [公式 ID](nunit-evidence/targeted-migrant-blocking-xml.tsv)と[実行ログ](nunit-evidence/targeted-migrant-blocking-xml.log)
