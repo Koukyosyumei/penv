@@ -66,6 +66,99 @@ pub struct Session {
     machine: Option<String>,
 }
 
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x01";
+const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
+
+impl Session {
+    fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let mut data = Vec::new();
+        let mut entries: Vec<_> = self.variables.iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "global.CWD" | "global.ORIGIN"))
+            .collect();
+        entries.sort_unstable();
+        fn encode(data: &mut Vec<u8>, text: &str) -> Result<(), String> {
+            if data.len().saturating_add(text.len()).saturating_add(4) > MAX_MONITOR_PAYLOAD {
+                return Err("monitor variable snapshot exceeds size limit".into());
+            }
+            data.extend_from_slice(&(text.len() as u32).to_le_bytes());
+            data.extend_from_slice(text.as_bytes());
+            Ok(())
+        }
+        encode(&mut data, self.machine.as_deref().unwrap_or_default())?;
+        for (key, value) in entries {
+            encode(&mut data, key)?;
+            encode(&mut data, value)?;
+        }
+        let temporary = path.with_file_name(format!(".penv-snapshot-{}-{}", std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)));
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
+            .map_err(|e| format!("{}: {e}", temporary.display()))?;
+        let result = (|| {
+            file.write_all(SESSION_SNAPSHOT).map_err(|e| e.to_string())?;
+            file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+            file.write_all(&data).map_err(|e| e.to_string())?;
+            machine.write_boot_snapshot(&mut file)?;
+            file.sync_all().map_err(|e| e.to_string())?;
+            fs::rename(&temporary, path).map_err(|e| e.to_string())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        result.map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
+        let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
+        let result = (|| {
+            if !input.fill_buf().map_err(|e| e.to_string())?.starts_with(SESSION_SNAPSHOT) {
+                return machine.read_boot_snapshot(&mut input);
+            }
+            input.consume(SESSION_SNAPSHOT.len());
+            fn read_size(input: &mut impl Read) -> Result<usize, String> {
+                let mut length = [0; 4];
+                input.read_exact(&mut length).map_err(|e| e.to_string())?;
+                Ok(u32::from_le_bytes(length) as usize)
+            }
+            fn read_string(data: &mut &[u8]) -> Result<String, String> {
+                let length = read_size(data)?;
+                let (text, remaining) = data.split_at_checked(length).ok_or("truncated monitor variable snapshot")?;
+                *data = remaining;
+                String::from_utf8(text.to_owned()).map_err(|e| e.to_string())
+            }
+            let size = read_size(&mut input)?;
+            if size > MAX_MONITOR_PAYLOAD {
+                return Err("monitor variable snapshot exceeds size limit".into());
+            }
+            let mut data = vec![0; size];
+            input.read_exact(&mut data).map_err(|e| e.to_string())?;
+            let mut data = data.as_slice();
+            let selected = read_string(&mut data)?;
+            if selected != self.machine.as_deref().unwrap_or_default() {
+                return Err("snapshot uses a different monitor machine".into());
+            }
+            let mut variables = HashMap::new();
+            while !data.is_empty() {
+                let key = read_string(&mut data)?;
+                let value = read_string(&mut data)?;
+                if matches!(key.as_str(), "global.CWD" | "global.ORIGIN") || variables.insert(key, value).is_some() {
+                    return Err("invalid monitor variable snapshot".into());
+                }
+            }
+            for key in ["global.CWD", "global.ORIGIN"] {
+                if let Some(value) = self.variables.get(key) {
+                    variables.insert(key.into(), value.clone());
+                }
+            }
+            machine.read_boot_snapshot(&mut input)?;
+            self.variables = variables;
+            Ok(())
+        })();
+        result.map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
 pub struct GeneratedRepl(PathBuf);
 
 impl Drop for GeneratedRepl {
@@ -320,8 +413,18 @@ pub fn run(
     machine: &mut Machine,
     _script: &Path,
     commands: &[RuntimeCommand],
+    budget: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    run_commands(machine, commands, budget, output, None)
+}
+
+fn run_commands(
+    machine: &mut Machine,
+    commands: &[RuntimeCommand],
     mut budget: u64,
     output: &mut impl Write,
+    mut session: Option<&mut Session>,
 ) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
         return machine.run(budget, output);
@@ -359,12 +462,18 @@ pub fn run(
                 .map(|_| ())
                 .and_then(|()| machine.finish_profile())
                 .map(|()| None),
-            Action::SaveMemory(path) => machine.save_memory_snapshot(path).map(|()| None),
+            Action::SaveMemory(path) => match session.as_deref() {
+                Some(session) => session.save(machine, path),
+                None => machine.save_memory_snapshot(path),
+            }.map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
                 cleared = true;
                 None
             }),
-            Action::LoadMemory(path) => machine.load_memory_snapshot(path).map(|()| {
+            Action::LoadMemory(path) => match session.as_deref_mut() {
+                Some(session) => session.load(machine, path),
+                None => machine.load_memory_snapshot(path),
+            }.map(|()| {
                 cleared = false;
                 None
             }),
@@ -833,7 +942,7 @@ pub fn serve(
         };
         boot.session.machine.clone_from(&session.machine);
         let mut existing_machine = true;
-        let mut included = false;
+        let mut included_variables = None;
         let parsed = command_words(text).and_then(|words| {
             if let ["include" | "i", value] = words.as_slice() {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -851,9 +960,13 @@ pub fn serve(
                 if !state.boot.post_run.is_empty() {
                     return Err("post-run script actions are unavailable in a live include".into());
                 }
+                if state.boot.runtime.iter().any(|command| matches!(command.action,
+                    Action::SaveMemory(_) | Action::LoadMemory(_)))
+                {
+                    return Err("use live Save and Load as separate monitor commands".into());
+                }
                 boot = state.boot;
-                session.variables = state.variables;
-                included = true;
+                included_variables = Some(state.variables);
                 return Ok(());
             }
             if assign_variable(text, &words, session.machine.as_deref(), &mut session.variables)? {
@@ -863,7 +976,12 @@ pub fn serve(
         });
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
-            (Ok(()), []) => frame(&mut output, "OK", &[]),
+            (Ok(()), []) => {
+                if let Some(variables) = included_variables.take() {
+                    session.variables = variables;
+                }
+                frame(&mut output, "OK", &[])
+            }
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
                 let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                     .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
@@ -907,9 +1025,14 @@ pub fn serve(
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
-            (Ok(()), commands) if included || commands.len() == 1 => {
-                match run(machine, path, commands, u64::MAX, &mut bytes) {
-                    Ok((Stop::ScriptComplete, _)) => frame(&mut output, "OK", &bytes),
+            (Ok(()), commands) if included_variables.is_some() || commands.len() == 1 => {
+                match run_commands(machine, commands, u64::MAX, &mut bytes, Some(&mut session)) {
+                    Ok((Stop::ScriptComplete, _)) => {
+                        if let Some(variables) = included_variables.take() {
+                            session.variables = variables;
+                        }
+                        frame(&mut output, "OK", &bytes)
+                    }
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
                     }
@@ -1259,7 +1382,7 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Boot,
 
 fn read_monitor_text(input: &mut impl Read, length: &str) -> Result<String, String> {
     let length = length.strip_suffix('\n').and_then(|length| length.trim_end().parse::<usize>().ok())
-        .filter(|length| *length <= 8 * 1024 * 1024)
+        .filter(|length| *length <= MAX_MONITOR_PAYLOAD)
         .ok_or("invalid monitor frame byte count")?;
     let mut body = vec![0; length];
     input.read_exact(&mut body).map_err(|e| format!("reading monitor frame: {e}"))?;
@@ -1792,7 +1915,7 @@ fn execute(
             let path = script
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
-                .join(unquote(path));
+                .join(path_value(unquote(path)));
             Some(if *verb == "Save" {
                 Action::SaveMemory(path)
             } else {

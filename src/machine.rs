@@ -910,13 +910,17 @@ impl Machine {
 
     pub fn save_memory_snapshot(&self, path: &Path) -> Result<(), String> {
         self.check_memory_snapshot()?;
-        let save = || -> std::io::Result<()> {
-            let mut file = std::fs::File::create(path)?;
-            file.write_all(b"PENVBOOT\x01")?;
-            file.write_all(&self.raw_load_address().to_le_bytes())?;
-            self.bus.save_memory(&mut file)
-        };
-        save().map_err(|e| format!("{}: {e}", path.display()))
+        let mut file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.write_boot_snapshot(&mut file).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
+        self.check_memory_snapshot()?;
+        (|| -> std::io::Result<()> {
+            output.write_all(b"PENVBOOT\x01")?;
+            output.write_all(&self.raw_load_address().to_le_bytes())?;
+            self.bus.save_memory(output)
+        })().map_err(|e| e.to_string())
     }
 
     pub fn clear_memory_snapshot(&mut self) -> Result<(), String> {
@@ -927,10 +931,15 @@ impl Machine {
 
     pub fn load_memory_snapshot(&mut self, path: &Path) -> Result<(), String> {
         self.check_memory_snapshot()?;
+        let mut file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.read_boot_snapshot(&mut file).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub(crate) fn read_boot_snapshot(&mut self, input: &mut impl Read) -> Result<(), String> {
+        self.check_memory_snapshot()?;
         let mut load = || -> std::io::Result<u32> {
-            let mut file = std::fs::File::open(path)?;
             let mut header = [0; 9];
-            file.read_exact(&mut header)?;
+            input.read_exact(&mut header)?;
             if &header != b"PENVBOOT\x01" {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -938,7 +947,7 @@ impl Machine {
                 ));
             }
             let mut address = [0; 4];
-            file.read_exact(&mut address)?;
+            input.read_exact(&mut address)?;
             let address = u32::from_le_bytes(address);
             if address & 0x7f != 0 {
                 return Err(std::io::Error::new(
@@ -946,10 +955,10 @@ impl Machine {
                     "invalid snapshot vector table address",
                 ));
             }
-            self.bus.restore_memory(&mut file)?;
+            self.bus.restore_memory(input)?;
             Ok(address)
         };
-        let address = load().map_err(|e| format!("{}: {e}", path.display()))?;
+        let address = load().map_err(|e| e.to_string())?;
         self.primary
             .thumb
             .as_mut()
