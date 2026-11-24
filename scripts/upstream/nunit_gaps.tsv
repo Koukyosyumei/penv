@@ -30,7 +30,6 @@ Antmicro.Renode.UnitTests.MachineTests	There is no generic IMachine registry and
 Antmicro.Renode.UnitTests.MultiCPUTests	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
 Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	There is no generic single-peripheral container with NullRegistrationPoint, registration-point enumeration and typed registration failures.
 Antmicro.Renode.UnitTests.PacketTests	There is no metadata-driven Packet encoder/decoder for fields with bit widths, offsets, nesting and endian annotations.
-Antmicro.Renode.UnitTests.PeripheralsGroupTests	There is no named generic peripheral grouping API with membership and unregister behavior for arbitrary mock peripherals.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The active REPL loader lacks a generic CreationDriver for the fixture's mock CPU/peripheral factories, reflection-based property binding and lifecycle assertions.
 Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	The remaining runnable cases require the CreationDriver's mock CPU object creation, scoped cross-include CPU reference resolution and post-load sysbus.cpu lookup.
 Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	The REPL loaders lack the fixture's generic reflection-based creation and verification pipeline, including typed constructor, registration and property diagnostics on managed mock types.

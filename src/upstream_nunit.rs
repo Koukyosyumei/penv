@@ -20,6 +20,7 @@ mod weak_multi_table;
 mod option_validation;
 mod option_parser;
 mod system_bus;
+mod peripherals_group;
 mod time_interval;
 mod clock_source;
 mod comparing_timer;

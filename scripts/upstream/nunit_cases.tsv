@@ -1020,3 +1020,6 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,Tru
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldProperlyExecuteHooksOnVirtualMethod	upstream_nunit::migrant_hooks::virtual_dispatch_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,False).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::custom_xml_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests(False,False,True).ShouldSerializeCustomIXmlSerializable	upstream_nunit::migrant_builtin::custom_xml_stamped	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests.ShouldNotAddUnregisteredPeripheralToGroup	upstream_nunit::peripherals_group::should_not_add_unregistered_peripheral_to_group	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests.ShouldNotUnregisterSinglePeripheralFromGroup	upstream_nunit::peripherals_group::should_not_unregister_single_peripheral_from_group	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests.ShouldUnregisterPeripheralGroups	upstream_nunit::peripherals_group::should_unregister_peripheral_groups	new

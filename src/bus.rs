@@ -369,6 +369,7 @@ pub struct Bus {
     rv64_reservations: [Option<Reservation64>; crate::machine::MAX_HARTS],
     constant_mmio: Vec<ConstantMmio>,
     translated_peripherals: Vec<crate::bus_translation::Registration>,
+    translated_peripheral_groups: std::collections::BTreeMap<String, Vec<crate::bus_translation::PeripheralHandle>>,
     translations_enabled: bool,
     pub ethernet: Vec<Controller>,
     h7_network_control: Option<NetworkControl>,
@@ -1080,9 +1081,13 @@ impl Bus {
     }
 
     pub(crate) fn unregister_from_address(&mut self, address: u32) -> Result<(), String> {
-        if let Some(device) = self.translated_peripherals.iter_mut().find(|device| {
+        if let Some(index) = self.translated_peripherals.iter().position(|device| {
             device.ports.iter().any(|port| port.base == address)
         }) {
+            if self.translated_group_for(&self.translated_peripherals[index].handle).is_some() {
+                return Err("cannot unregister a peripheral independently of its group".into());
+            }
+            let device = &mut self.translated_peripherals[index];
             device.ports.retain(|port| port.base != address);
             self.translated_peripherals.retain(|device| !device.ports.is_empty());
             return Ok(());
@@ -1297,6 +1302,21 @@ impl Bus {
         width: crate::dma_engine::Width,
         peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
     ) -> Result<(), String> {
+        self.register_translated_peripheral(
+            &crate::bus_translation::PeripheralHandle::default(), ports, width, peripheral,
+        )
+    }
+
+    pub fn register_translated_peripheral(
+        &mut self,
+        handle: &crate::bus_translation::PeripheralHandle,
+        ports: Vec<crate::bus_translation::Port>,
+        width: crate::dma_engine::Width,
+        peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
+    ) -> Result<(), String> {
+        if self.is_translated_peripheral_registered(handle) {
+            return Err("translated peripheral already registered".into());
+        }
         if ports.is_empty() {
             return Err("translated peripheral requires at least one port".into());
         }
@@ -1309,7 +1329,60 @@ impl Bus {
                 return Err("invalid or overlapping translated peripheral port".into());
             }
         }
-        self.translated_peripherals.push(crate::bus_translation::Registration::new(ports, width, peripheral));
+        self.translated_peripherals.push(crate::bus_translation::Registration::new(handle.clone(), ports, width, peripheral));
+        Ok(())
+    }
+
+    pub fn is_translated_peripheral_registered(
+        &self, handle: &crate::bus_translation::PeripheralHandle,
+    ) -> bool {
+        self.translated_peripherals.iter().any(|peripheral| peripheral.handle == *handle)
+    }
+
+    fn translated_group_for(&self, handle: &crate::bus_translation::PeripheralHandle) -> Option<&str> {
+        self.translated_peripheral_groups.iter()
+            .find(|(_, members)| members.contains(handle))
+            .map(|(name, _)| name.as_str())
+    }
+
+    pub fn get_or_create_translated_group(
+        &mut self, name: &str, handles: &[crate::bus_translation::PeripheralHandle],
+    ) -> Result<(), crate::bus_translation::RegistrationError> {
+        use crate::bus_translation::RegistrationError;
+        for handle in handles {
+            if !self.is_translated_peripheral_registered(handle) {
+                return Err(RegistrationError::NotRegistered);
+            }
+            if self.translated_group_for(handle).is_some_and(|previous| previous != name) {
+                return Err(RegistrationError::AlreadyGrouped);
+            }
+        }
+        let group = self.translated_peripheral_groups.entry(name.into()).or_default();
+        for handle in handles {
+            if !group.contains(handle) {
+                group.push(handle.clone());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn unregister_translated_peripheral(
+        &mut self, handle: &crate::bus_translation::PeripheralHandle,
+    ) -> Result<(), crate::bus_translation::RegistrationError> {
+        use crate::bus_translation::RegistrationError;
+        if self.translated_group_for(handle).is_some() {
+            return Err(RegistrationError::AlreadyGrouped);
+        }
+        let index = self.translated_peripherals.iter()
+            .position(|device| device.handle == *handle).ok_or(RegistrationError::NotRegistered)?;
+        self.translated_peripherals.remove(index);
+        Ok(())
+    }
+
+    pub fn unregister_translated_group(&mut self, name: &str) -> Result<(), crate::bus_translation::RegistrationError> {
+        use crate::bus_translation::RegistrationError;
+        let handles = self.translated_peripheral_groups.remove(name).ok_or(RegistrationError::GroupNotFound)?;
+        self.translated_peripherals.retain(|device| !handles.contains(&device.handle));
         Ok(())
     }
 

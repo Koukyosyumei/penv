@@ -3,6 +3,26 @@ use crate::{
     dma_engine::Width,
 };
 
+use std::sync::Arc;
+
+#[derive(Clone, Default)]
+pub struct PeripheralHandle(Arc<()>);
+
+impl PartialEq for PeripheralHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for PeripheralHandle {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegistrationError {
+    NotRegistered,
+    AlreadyGrouped,
+    GroupNotFound,
+}
+
 pub trait NativePeripheral {
     fn read(&mut self, region: Option<&str>, offset: u64) -> u64;
     fn write(&mut self, region: Option<&str>, offset: u64, value: u64);
@@ -15,14 +35,21 @@ pub struct Port {
 }
 
 pub(crate) struct Registration {
+    pub handle: PeripheralHandle,
     pub ports: Vec<Port>,
     width: Width,
     peripheral: Box<dyn NativePeripheral>,
 }
 
 impl Registration {
-    pub fn new(ports: Vec<Port>, width: Width, peripheral: Box<dyn NativePeripheral>) -> Self {
+    pub fn new(
+        handle: PeripheralHandle,
+        ports: Vec<Port>,
+        width: Width,
+        peripheral: Box<dyn NativePeripheral>,
+    ) -> Self {
         Self {
+            handle,
             ports,
             width,
             peripheral,
