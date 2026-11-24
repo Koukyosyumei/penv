@@ -737,6 +737,10 @@ impl Bus {
         Ok(())
     }
 
+    pub(crate) fn nrf_cpu_rate(&self) -> Option<u64> {
+        self.nrf_cpu_hz
+    }
+
     pub fn nrf_clock_ticks(&mut self) -> u64 {
         let Some(hz) = self.nrf_cpu_hz else {
             return 1;

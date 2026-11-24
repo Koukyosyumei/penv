@@ -608,7 +608,7 @@ pub fn run(
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = uart_timeout_steps(&machine.bus, *timeout)
+                    let result = uart_timeout_steps(*timeout, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles.min(budget), &mut output));
                     let matched = machine.bus.take_uart_byte_match(watch);
                     machine.bus.finish_stm32_uart_watch(watch);
@@ -630,7 +630,7 @@ pub fn run(
             Action::WaitForTester(id, pattern, regex, mode, timeout, absent) => {
                 let start = machine.elapsed_steps();
                 machine.bus.watch_uart_tester_text(*id, pattern, regex.clone(), *mode).and_then(|watch| {
-                    uart_timeout_steps(&machine.bus, *timeout)
+                    uart_timeout_steps(*timeout, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
                         .and_then(|cycles| run_uart_watch(machine, watch, cycles.min(budget), &mut output))
                 }).and_then(|(stop, count)| {
                     retired += count;
@@ -756,7 +756,7 @@ pub fn serve(
         let mut bytes = Vec::new();
         let reply = match (parsed, boot.runtime.as_slice()) {
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
-                let result = uart_timeout_steps(&machine.bus, *steps)
+                let result = uart_timeout_steps(*steps, machine.bus.monitor_step_hz())
                     .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
                         machine.run_until(cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
                     }));
@@ -771,7 +771,7 @@ pub fn serve(
 
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent), .. }]) => {
                 let result = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode).and_then(|watch| {
-                    let stop = uart_timeout_steps(&machine.bus, *timeout)
+                    let stop = uart_timeout_steps(*timeout, machine.bus.nrf_cpu_rate().unwrap_or(CORTEX_M_STEP_HZ))
                         .and_then(|cycles| drive_uart_watch(machine, watch, cycles, &mut bytes));
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
@@ -819,8 +819,7 @@ pub fn serve(
     }
 }
 
-fn uart_timeout_steps(bus: &crate::bus::Bus, duration: u64) -> Result<u64, String> {
-    let rate = bus.monitor_step_hz();
+fn uart_timeout_steps(duration: u64, rate: u64) -> Result<u64, String> {
     let cycles = (u128::from(duration) * u128::from(rate))
         .div_ceil(u128::from(CORTEX_M_STEP_HZ));
     u64::try_from(cycles).map_err(|_| "UART duration exceeds virtual time".to_owned())
