@@ -1272,3 +1272,110 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
         "PropertySettingException",
     );
 }
+
+#[derive(Default)]
+struct RecordingInit {
+    reject: bool,
+    executed: Vec<(String, Vec<String>)>,
+}
+
+impl creation::InitHandler for RecordingInit {
+    fn validate(&mut self, _: &str, _: &str) -> Result<(), String> {
+        if self.reject {
+            Err("Invalid init section".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn execute(&mut self, name: &str, commands: &[&str]) {
+        self.executed.push((
+            name.into(),
+            commands.iter().map(|&command| command.into()).collect(),
+        ));
+    }
+}
+
+fn assert_init(source: &str, object: &str, commands: &[&str]) {
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(source, Path::new("."), &mut handler).unwrap();
+    assert_eq!(
+        handler.executed,
+        [(
+            object.into(),
+            commands.iter().map(|&command| command.into()).collect()
+        )]
+    );
+}
+
+#[test]
+fn should_replace_init() {
+    assert_init(
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>
+    init:
+        Increment 1
+
+peri:
+    init:
+        Increment 2
+        Increment 3"#,
+        "peri",
+        &["Increment 2", "Increment 3"],
+    );
+}
+
+#[test]
+fn should_add_init() {
+    assert_init(
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    init:
+        Increment 1
+
+peri:
+    init add:
+        Increment 2
+        Increment 3"#,
+        "peri",
+        &["Increment 1", "Increment 2", "Increment 3"],
+    );
+}
+
+#[test]
+fn should_update_sysbus_init() {
+    assert_init(
+        r#"
+sysbus:
+    init:
+        WriteByte 0 1"#,
+        "sysbus",
+        &["WriteByte 0 1"],
+    );
+}
+
+#[test]
+fn should_process_entry_dependant_on_sysbus() {
+    creation::create_objects(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: sysbus"#,
+        Path::new("."),
+    )
+    .unwrap();
+}
+
+#[test]
+fn should_process_entry_dependant_on_sysbus_with_update_entry() {
+    creation::create_objects(
+        r#"
+sysbus:
+    init:
+        Method
+
+peripheral: Antmicro.Renode.UnitTests.Mocks.MockPeripheralWithDependency
+    other: sysbus"#,
+        Path::new("."),
+    )
+    .unwrap();
+}

@@ -4,6 +4,7 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Model {
+    Sysbus,
     Cpu,
     EmptyPeripheral,
     Register,
@@ -343,7 +344,29 @@ impl CreatedPlatform {
     }
 }
 
+pub(crate) trait InitHandler {
+    fn validate(&mut self, name: &str, command: &str) -> Result<(), String>;
+    fn execute(&mut self, name: &str, commands: &[&str]);
+}
+
+struct NoopInit;
+
+impl InitHandler for NoopInit {
+    fn validate(&mut self, _: &str, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn execute(&mut self, _: &str, _: &[&str]) {}
+}
+
 pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatform, String> {
+    create_with_init(content, root, &mut NoopInit)
+}
+
+pub(crate) fn create_with_init(
+    content: &str,
+    root: &Path,
+    handler: &mut impl InitHandler,
+) -> Result<CreatedPlatform, String> {
     let entries = inline_entries(content, root)?;
     let mut globals = HashMap::new();
     let mut locals = HashMap::new();
@@ -410,6 +433,21 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
         });
         targets.push(Some(id));
     }
+    let sysbus = platform.objects.len();
+    platform.objects.push(CreatedObject {
+        model: Model::Sysbus,
+        cpu: None,
+        ranges: Vec::new(),
+        enum_arguments: EnumArguments::default(),
+        scalar: None,
+        empty_peripheral_counter: 1,
+        empty_peripheral_value: None,
+        dependency: None,
+        throw_on_construction: false,
+        collections: Collections::default(),
+    });
+    globals.insert("sysbus", sysbus);
+    let mut init = Vec::<(usize, &str, Vec<&str>)>::new();
     let resolve = |scope: &Path, name: &str| {
         locals
             .get(&(scope, name))
@@ -537,6 +575,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                                 | Model::NonPeripheralRegister
                                 | Model::AmbiguousRegister => "non-peripheral",
                                 Model::MockRegistrationPoint => "mock registration point",
+                                Model::Sysbus => "system bus",
                             };
                             return Err(entry.error(&format!(
                                 "TypeMismatch: {model} is not a registration point"
@@ -551,7 +590,25 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
                 pending.insert(id, (entry.alias.as_deref().unwrap_or(&entry.name), parents));
             }
         }
-        for (source, property) in &entry.body {
+        let commands = entry
+            .body
+            .iter()
+            .position(|(_, text)| matches!(text.as_str(), "init:" | "init add:"));
+        if let Some(index) = commands {
+            let append = entry.body[index].1 == "init add:";
+            let additions = entry.body[index + 1..]
+                .iter()
+                .map(|(_, text)| text.as_str());
+            if let Some((_, _, existing)) = init.iter_mut().find(|(target, _, _)| *target == id) {
+                if !append {
+                    existing.clear();
+                }
+                existing.extend(additions);
+            } else {
+                init.push((id, &entry.name, additions.collect()));
+            }
+        }
+        for (source, property) in &entry.body[..commands.unwrap_or(entry.body.len())] {
             let (name, value) = property
                 .split_once(':')
                 .ok_or_else(|| format!("{source}: expected CPU property"))?;
@@ -642,6 +699,16 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
         }
     }
     platform.check_constructor_cycles()?;
+    for (_, name, commands) in &init {
+        for command in commands {
+            handler
+                .validate(name, command)
+                .map_err(|error| format!("InitSectionValidationError: {name}: {error}"))?;
+        }
+    }
+    for (_, name, commands) in init {
+        handler.execute(name, &commands);
+    }
     Ok(platform)
 }
 

@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,060 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,065 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 335 |
+| 移植待ち | 330 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -454,3 +454,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 登録処理の4件を移植した。先行宣言の登録点について型の互換性を確認し、範囲の重複と登録名の衝突を別の診断として検証した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-errors.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-errors.log)
 
 通常の宣言とインライン生成でのコンストラクタ例外、およびプロパティ設定例外の3件を移植した。登録処理を含む最終の対象実行で103件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-lifecycle-errors.tsv)・[実行ログ](nunit-evidence/targeted-repl-lifecycle-errors.log)
+
+初期化スクリプトと既存 `sysbus` の参照に関する5件を移植した。初期化ハンドラーへ渡る置換・追記後のコマンド列と、`sysbus` をコンストラクタの依存先として解決できることを照合した。[公式IDとの対応](nunit-evidence/targeted-repl-init.tsv)・[実行ログ](nunit-evidence/targeted-repl-init.log)
