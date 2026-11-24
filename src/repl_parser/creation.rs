@@ -6,6 +6,12 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 pub(crate) struct Cpu {
     pub(crate) placeholder: Option<String>,
     other_cpu: Option<usize>,
+    enum_value: Option<TwoState>,
+}
+
+enum TwoState {
+    One,
+    Two,
 }
 
 /// The CPU objects and sysbus registrations created from a platform description.
@@ -32,12 +38,18 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
         registered: HashMap::new(),
     };
     for entry in &entries {
+        validate_entry_properties(&entry.body, |source, name| {
+            format!("{source}: PropertyOrCtorNameUsedMoreThanOnce: {name}")
+        })?;
         if entry.model.is_empty() {
+            if entry.registration.is_none() && entry.body.is_empty() {
+                return Err(entry.error("EmptyEntry: no type, registration, or properties"));
+            }
             targets.push(None);
             continue;
         }
         if entry.model != MOCK_CPU {
-            return Err(entry.error("unsupported CPU model"));
+            return Err(entry.error(&format!("TypeNotResolved: {}", entry.model)));
         }
         let id = platform.cpus.len();
         let previous = if entry.local {
@@ -78,8 +90,10 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
             let value = value.trim();
             match name.trim() {
                 "Placeholder" => {
-                    cpu.placeholder =
-                        Some(quoted_value(value).map_err(|error| format!("{source}: {error}"))?)
+                    cpu.placeholder = Some(
+                        quoted_value(value)
+                            .map_err(|error| format!("{source}: TypeMismatch: {error}"))?,
+                    )
                 }
                 "OtherCpu" => {
                     cpu.other_cpu = Some(
@@ -87,7 +101,21 @@ pub(crate) fn create_cpus(content: &str, root: &Path) -> Result<CpuPlatform, Str
                             .ok_or_else(|| format!("{source}: MissingReference: {value}"))?,
                     )
                 }
-                name => return Err(format!("{source}: unknown CPU property {name}")),
+                "Model" => return Err(format!("{source}: PropertyNotWritable: Model")),
+                "EnumValue" => {
+                    cpu.enum_value = Some(match symbolic_value(value) {
+                        Some(
+                            SymbolicValue::Reference("One")
+                            | SymbolicValue::Enum(Some("TwoStateEnum"), "One"),
+                        ) => TwoState::One,
+                        Some(
+                            SymbolicValue::Reference("Two")
+                            | SymbolicValue::Enum(Some("TwoStateEnum"), "Two"),
+                        ) => TwoState::Two,
+                        _ => return Err(format!("{source}: TypeMismatch: expected TwoStateEnum")),
+                    });
+                }
+                name => return Err(format!("{source}: PropertyDoesNotExist: {name}")),
             }
         }
     }

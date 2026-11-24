@@ -1256,3 +1256,7 @@ mod upstream_prelexer_tests;
 #[cfg(test)]
 #[path = "upstream_nunit/repl_using.rs"]
 mod upstream_using_tests;
+
+#[cfg(test)]
+#[path = "upstream_nunit/repl_verification.rs"]
+mod upstream_verification_tests;
