@@ -52,6 +52,7 @@ mod memory;
 mod migrant;
 mod migrant_descriptor;
 mod migrant_stamping;
+mod migrant_surrogate;
 mod multi_tree;
 mod multi_value_dictionary;
 mod migrant_object_stream;

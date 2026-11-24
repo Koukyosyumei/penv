@@ -2,6 +2,7 @@
 //!
 //! This uses Migrant's primitive encoding with a Rust object-record format.
 use super::primitive::{Reader, Writer};
+use super::surrogate::Surrogates;
 use std::collections::{HashMap, hash_map::Entry};
 use std::io::{self, Read, Write};
 
@@ -126,16 +127,18 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-pub struct ObjectWriter<'a, W: Write> {
+pub struct ObjectWriter<'a, 's, W: Write> {
     data: Writer<W>,
     graph: &'a Graph,
     references: References,
     ids: HashMap<ObjectId, usize>,
     pending: Vec<ObjectId>,
+    replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    surrogates: Option<&'a mut Surrogates<'s>>,
 }
 
-impl<'a, W: Write> ObjectWriter<'a, W> {
+impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     pub fn new(stream: W, graph: &'a Graph, references: References, buffered: bool) -> Self {
         Self {
             data: Writer::new(stream, buffered),
@@ -143,8 +146,15 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
             references,
             ids: HashMap::new(),
             pending: Vec::new(),
+            replacements: HashMap::new(),
             stamps: None,
+            surrogates: None,
         }
+    }
+
+    pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
+        self.surrogates = Some(surrogates);
+        self
     }
 
     pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
@@ -172,6 +182,7 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
             self.ids.clear();
         }
         self.pending.clear();
+        self.replacements.clear();
         let root = match self.discover(root) {
             Ok(root) => root,
             Err(error) => {
@@ -189,7 +200,14 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
         let mut index = 0;
         // Reserve identities before visiting children, including forward and cyclic edges.
         while let Some(id) = self.pending.get(index).copied() {
-            let object = self.graph.get(id).unwrap();
+            let original = self.graph.get(id).unwrap();
+            let replacement = self
+                .surrogates
+                .as_mut()
+                .map(|surrogates| surrogates.convert(id, original))
+                .transpose()?
+                .flatten();
+            let object = replacement.as_ref().unwrap_or(original);
             let values = match object {
                 Object::String(_) => &[],
                 Object::Record { class, fields } => {
@@ -208,6 +226,9 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
                     self.intern(*id)?;
                 }
             }
+            if let Some(replacement) = replacement {
+                self.replacements.insert(id, replacement);
+            }
             index += 1;
         }
 
@@ -223,7 +244,12 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
         self.data.unsigned(root as u64)?;
         self.data.unsigned(self.pending.len() as u64)?;
         for id in &self.pending {
-            match self.graph.get(*id).unwrap() {
+            match self
+                .replacements
+                .get(id)
+                .or_else(|| self.graph.get(*id))
+                .unwrap()
+            {
                 Object::String(value) => {
                     self.data.bytes(&[0])?;
                     self.data.string(value)?;
@@ -276,21 +302,28 @@ impl<'a, W: Write> ObjectWriter<'a, W> {
     }
 }
 
-pub struct ObjectReader<'a, R: Read> {
+pub struct ObjectReader<'a, 's, R: Read> {
     data: Reader<R>,
     graph: Graph,
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
+    surrogates: Option<&'a mut Surrogates<'s>>,
 }
 
-impl<'a, R: Read> ObjectReader<'a, R> {
+impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
     pub fn new(stream: R, references: References, buffered: bool) -> Self {
         Self {
             data: Reader::new(stream, buffered),
             graph: Graph::default(),
             references,
             stamps: None,
+            surrogates: None,
         }
+    }
+
+    pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
+        self.surrogates = Some(surrogates);
+        self
     }
 
     pub fn with_type_stamps(mut self, stamps: &'a [TypeStamp<'a>]) -> Self {
@@ -375,6 +408,23 @@ impl<'a, R: Read> ObjectReader<'a, R> {
                 2 => Object::Array(self.read_values(base, limit)?),
                 _ => return Err(invalid("unknown object kind")),
             });
+        }
+        if let Some(surrogates) = self.surrogates.as_mut() {
+            for (index, object) in objects.iter_mut().enumerate() {
+                let id = ObjectId(old_len + index);
+                if let Some(replacement) = surrogates.convert(id, object)? {
+                    let fields = match &replacement {
+                        Object::String(_) => &[][..],
+                        Object::Record { fields, .. } | Object::Array(fields) => fields,
+                    };
+                    if fields.iter().any(
+                        |field| matches!(field, Value::Ref(id) if !(base..end).contains(&id.0)),
+                    ) {
+                        return Err(invalid("surrogate reference outside stream table"));
+                    }
+                    *object = replacement;
+                }
+            }
         }
         // Publish all objects together after validating every edge.
         self.graph.objects.extend(objects);

@@ -91,7 +91,7 @@ fn deep_clone(
     graph: &Graph,
     root: ObjectId,
     stamped: bool,
-) -> (ObjectReader<'static, Cursor<Vec<u8>>>, ObjectId) {
+) -> (ObjectReader<'static, 'static, Cursor<Vec<u8>>>, ObjectId) {
     let mut stream = Cursor::new(Vec::new());
     let mut writer = ObjectWriter::new(&mut stream, graph, References::Preserve, true);
     if stamped {
@@ -365,7 +365,7 @@ fn open_stream(
     roots: &[ObjectId],
     references: References,
     buffered: bool,
-) -> ObjectReader<'static, Cursor<Vec<u8>>> {
+) -> ObjectReader<'static, 'static, Cursor<Vec<u8>>> {
     let mut stream = Cursor::new(Vec::new());
     let mut writer =
         ObjectWriter::new(&mut stream, graph, references, buffered).with_type_stamps(STAMPS);
@@ -451,3 +451,79 @@ fn should_deserialize_many() {
     assert_eq!(before, after);
     reader.finish().unwrap();
 }
+
+fn array_values(graph: &Graph, root: ObjectId) -> &[Value] {
+    let Some(Object::Array(values)) = graph.get(root) else {
+        panic!("expected an array");
+    };
+    values
+}
+
+fn primitives_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let expected = [1, 2, 3, 4, 5, 6].map(Value::Integer);
+    let root = graph.insert(Object::Array(expected.to_vec()));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(array_values(reader.graph(), copy), expected);
+}
+
+fn strings_in_array(graph: &Graph, root: ObjectId) -> Vec<&str> {
+    array_values(graph, root)
+        .iter()
+        .filter_map(|value| {
+            let Value::Ref(id) = value else { return None };
+            match graph.get(*id) {
+                Some(Object::String(text)) => Some(text.as_str()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn strings_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let expected = ["One", "Two", "Three"];
+    let refs = expected.map(|text| Value::Ref(graph.insert(string(text))));
+    let root = graph.insert(Object::Array(refs.to_vec()));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(strings_in_array(reader.graph(), copy), expected);
+    assert_eq!(array_values(reader.graph(), copy).len(), expected.len());
+}
+
+fn mixed_array(stamped: bool) {
+    let mut graph = Graph::default();
+    let object = Value::Ref(graph.insert(record("System.Object", vec![])));
+    let one = Value::Ref(graph.insert(string("One")));
+    let two = Value::Ref(graph.insert(string("Two")));
+    let other = Value::Ref(graph.insert(record("System.Object", vec![])));
+    let root = graph.insert(Object::Array(vec![one, object.clone(), two, object, other]));
+    let (reader, copy) = deep_clone(&graph, root, stamped);
+    assert_eq!(
+        strings_in_array(&graph, root),
+        strings_in_array(reader.graph(), copy)
+    );
+    let values = array_values(reader.graph(), copy);
+    assert_eq!(reference(&values[1]), reference(&values[3]));
+    assert_ne!(reference(&values[3]), reference(&values[4]));
+}
+
+macro_rules! array_modes {
+    ($plain:ident, $stamped:ident, $check:ident) => {
+        #[test]
+        fn $plain() {
+            $check(false);
+        }
+        #[test]
+        fn $stamped() {
+            $check(true);
+        }
+    };
+}
+
+array_modes!(
+    primitives_array_plain,
+    primitives_array_stamped,
+    primitives_array
+);
+array_modes!(strings_array_plain, strings_array_stamped, strings_array);
+array_modes!(mixed_array_plain, mixed_array_stamped, mixed_array);
