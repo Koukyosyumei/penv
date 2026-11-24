@@ -762,7 +762,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def set_default_tester(self, value):
         tester_id = self.parse_tester_id(value)
-        if tester_id is not None:
+        if tester_id is not None and not self.rust_monitor:
             self.select_uart(tester_id)
         self.operation(f"SetDefaultTester {tester_id if tester_id is not None else 'null'}")
         self.default_tester = tester_id
@@ -776,9 +776,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def change_failing_uart(self, command, pattern, args):
         positional = ("treatAsRegex", "testerId")
         options = self.log_options(args, set(positional), positional)
-        tester_id, _ = self.select_uart(options.get("testerId"))
+        if self.rust_monitor:
+            tester_id = self.parse_tester_id(options.get("testerId"))
+        else:
+            tester_id, _ = self.select_uart(options.get("testerId"))
+        selector = f" testerId={tester_id}" if tester_id is not None else ""
         regex = self.log_bool(options.get("treatAsRegex", "false"))
-        self.operation(f"{command} {self.uart_text(pattern)} testerId={tester_id} treatAsRegex={str(regex).lower()}")
+        self.operation(f"{command} {self.uart_text(pattern)}{selector} treatAsRegex={str(regex).lower()}")
 
     def start(self):
         if self.started or not (self.image or self.rust_monitor):
