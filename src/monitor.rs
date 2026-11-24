@@ -339,6 +339,7 @@ enum Action {
     CpuPaused(String, Option<bool>),
     CpuHalted(String, Option<bool>),
     ReadCpuPc(String),
+    AssertCpuPc(String, u64),
     CpuRegister(String, String, Option<u64>),
     ExecutionMode(String, Option<bool>),
     AddCpuHook(String, Option<u32>, CpuHook),
@@ -486,6 +487,8 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
                     | Action::AssembleBlock(..) | Action::BusScalar(_)
+                    | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
+                    | Action::AssertCpuPc(..) | Action::CpuRegister(..)
             )
         })
 }
@@ -814,6 +817,13 @@ fn run_commands(
                         .map_err(|e| e.to_string())
                 })
                 .map(|()| None),
+            Action::AssertCpuPc(cpu, expected) => machine.monitor_named_pc(cpu).and_then(|actual| {
+                if actual == *expected {
+                    Ok(None)
+                } else {
+                    Err(format!("PC value assertion failed, actual: {actual:#x}, expected: {expected:#x}"))
+                }
+            }),
             Action::ReadCpuPc(cpu) => machine.monitor_named_pc(cpu).and_then(|pc| {
                 writeln!(output.output, "0x{pc:08x}")
                     .map_err(|error| error.to_string()).map(|()| None)
@@ -1188,6 +1198,9 @@ pub fn serve(
                     }
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
+                    }
+                    Err(error) if error.starts_with("<monitor>:1: PC value assertion failed,") => {
+                        frame(&mut output, "FAIL", error.as_bytes())
                     }
                     Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ") => {
                         frame(&mut output, "UNSUPPORTED", error.as_bytes())
@@ -2631,12 +2644,15 @@ fn execute(
             Some(Action::WriteBytes(address, bytes))
         }
 
-        [target, "Step", count] => {
+        ["AssertMonitorPC", cpu, value] => Some(Action::AssertCpuPc(
+            resolve(cpu)?.trim_start_matches("sysbus.").into(),
+            crate::parse_address64(resolve(value)?)?,
+        )),
+        [target, "Step", count @ ..] if count.len() <= 1 => {
             let cpu = resolve(target)?;
-            Some(Action::CpuStep(
-                cpu.strip_prefix("sysbus.").unwrap_or(cpu).into(),
-                u64::from(crate::parse_address(resolve(count)?)?),
-            ))
+            let count = count.first().map(|count| crate::parse_address64(resolve(count)?))
+                .transpose()?.unwrap_or(1);
+            Some(Action::CpuStep(cpu.trim_start_matches("sysbus.").into(), count))
         }
         [target, "EvaluateConditionCode", condition] => {
             let cpu = resolve(target)?;
@@ -2858,6 +2874,11 @@ fn execute(
                     action,
                     Action::BusScalar(_)
                         | Action::AssembleBlock(..)
+                        | Action::AssertCpuPc(..)
+                        | Action::ReadCpuPc(_)
+                        | Action::CpuPc(..)
+                        | Action::CpuStep(..)
+                        | Action::CpuRegister(..)
                         | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)

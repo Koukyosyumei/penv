@@ -22,6 +22,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     rust_monitor = False
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
+        "PC Should Be Equal": "assert_program_counter",
         "Set Default Tester": "set_default_tester",
         "Register Failing Uart String": "register_failing_uart",
         "Unregister Failing Uart String": "unregister_failing_uart",
@@ -112,6 +113,18 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 getattr(self, self.keywords[keyword])(*args)
         finally:
             self.replaying = False
+
+    def assert_program_counter(self, value, *args):
+        options = self.log_options(args, {"machine", "cpuName"}, ("machine", "cpuName"))
+        if not self.rust_monitor:
+            raise Unsupported("PC assertion requires the Rust monitor")
+        cpu = options.get("cpuName") or "cpu"
+        if not re.fullmatch(r"[\w.]+", cpu):
+            raise Unsupported("invalid CPU name")
+        if machine := options.get("machine"):
+            self.operation(f"mach set {self.literal(machine)}")
+        address = int(str(value), 16 if str(value).lower().startswith("0x") else 10)
+        self.operation(f"AssertMonitorPC {cpu} {address}", assertion=True)
 
     def temporary_file(self):
         with tempfile.NamedTemporaryFile(dir=self.out, delete=False) as file:
