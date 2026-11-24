@@ -779,3 +779,4 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,F
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeBoxedNullNullable	upstream_nunit::migrant_object_stream::boxed_null_nullable_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNonNullNullable	upstream_nunit::migrant_object_stream::non_null_nullable_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests(False,False,False,True).ShouldSerializeNullNullable	upstream_nunit::migrant_object_stream::null_nullable_stamped	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MemoryTests.ShouldReturnOnePointerWhenSegmentIsTouchedConcurrently	upstream_nunit::memory::should_return_one_pointer_when_segment_is_touched_concurrently	new

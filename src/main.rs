@@ -1,4 +1,5 @@
 pub mod access_condition;
+pub mod mapped_memory;
 pub mod access_translation;
 pub mod address_range;
 pub mod symbol;
