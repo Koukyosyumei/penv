@@ -5,6 +5,7 @@ const MOCK_CPU: &str = "Antmicro.Renode.UnitTests.Mocks.MockCPU";
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Model {
     Sysbus,
+    MachinePeripheral,
     CombinedInput,
     IrqSender,
     DualIrqSender,
@@ -136,6 +137,9 @@ impl Model {
                 Some(Self::NumberedGpio)
             }
             "Antmicro.Renode.UnitTests.Mocks.MockReceiver" => Some(Self::IrqReceiver),
+            "Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral" => {
+                Some(Self::MachinePeripheral)
+            }
             MOCK_CPU => Some(Self::Cpu),
             "Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral" => Some(Self::EmptyPeripheral),
             "Antmicro.Renode.UnitTests.Mocks.MockExternal" => Some(Self::External),
@@ -185,6 +189,7 @@ struct CreatedObject {
     model: Model,
     cpu: Option<Cpu>,
     cpu_slot: Option<u32>,
+    machine_argument: Option<i32>,
     ranges: Vec<(u64, u64)>,
     enum_arguments: EnumArguments,
     scalar: Option<ScalarValue>,
@@ -681,6 +686,7 @@ pub(crate) fn create_on_platform(
                                 | Model::AmbiguousRegister => "non-peripheral",
                                 Model::MockRegistrationPoint => "mock registration point",
                                 Model::Sysbus => "system bus",
+                                Model::MachinePeripheral => "peripheral",
                                 Model::CombinedInput => "IRQ combiner",
                                 Model::IrqSender
                                 | Model::DualIrqSender
@@ -926,6 +932,7 @@ impl CreatedObject {
             model,
             cpu: (model == Model::Cpu).then(Cpu::default),
             cpu_slot: None,
+            machine_argument: None,
             ranges: Vec::new(),
             enum_arguments: EnumArguments::default(),
             scalar: None,
@@ -940,6 +947,9 @@ impl CreatedObject {
     }
 
     fn finish_constructor(&mut self) -> Result<(), String> {
+        if self.model == Model::MachinePeripheral && self.machine_argument.is_none() {
+            return Err("NoCtor: missing integer machine parameter".into());
+        }
         if self.throw_on_construction {
             return Err("ConstructionException: Fake exception".into());
         }
@@ -1159,6 +1169,24 @@ impl CreatedPlatform {
     ) -> Result<(), String> {
         if depth >= 64 {
             return Err(format!("{source}: inline object nesting limit exceeded"));
+        }
+        if self.objects[id].model == Model::MachinePeripheral {
+            if name != "machine" {
+                return Err(format!(
+                    "{source}: NoCtor: {name} is not a user-supplied constructor parameter"
+                ));
+            }
+            let value = if value == "empty" {
+                0
+            } else {
+                value
+                    .parse::<i32>()
+                    .map_err(|_| format!("{source}: NoCtor: expected integer machine argument"))?
+            };
+            let bus = self.sysbus.expect("the existing machine has a system bus");
+            self.objects[id].machine_argument = Some(value);
+            self.objects[id].dependency = Some(bus);
+            return Ok(());
         }
         if self.objects[id].model == Model::NumberedGpio && name == "gpios" {
             self.objects[id].gpio_count =

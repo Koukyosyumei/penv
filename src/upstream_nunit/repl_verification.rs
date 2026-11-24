@@ -2038,3 +2038,27 @@ newCpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus 2
         Some(2)
     );
 }
+
+#[test]
+fn should_fail_on_assignment_of_machine_type_attribute() {
+    assert_error(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral @ sysbus <0, 1>
+    mach: empty
+    machine: empty
+"#,
+        "NoCtor",
+    );
+}
+
+#[test]
+fn should_not_fail_on_assignment_to_attribute_with_machine_parameter_name_that_is_not_machine() {
+    creation::create_objects(
+        r#"
+peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral @ sysbus <0, 1>
+    machine: empty
+"#,
+        Path::new("."),
+    )
+    .unwrap();
+}

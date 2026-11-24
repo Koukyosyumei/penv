@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,096 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,098 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 299 |
+| 移植待ち | 297 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -474,3 +474,5 @@ IRQ の切断と再接続4件を移植した。単一出力、数値範囲、複
 同じ受信ピンへ向かう出力を共有 `CombinedInput` に接続する1件を移植した。入力番号、両出力が参照する結合器の同一性、下流のピンと受信側を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-fanin.tsv)・[実行ログ](nunit-evidence/targeted-repl-fanin.log)
 
 既存プラットフォームに読み込む2件を移植した。事前登録名の再宣言を拒否し、新しい CPU から既存 CPU を参照した際には同一インスタンスと登録スロットを確認した。最終の対象実行で139件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-existing.tsv)・[実行ログ](nunit-evidence/targeted-repl-existing.log)
+
+`MachineTestPeripheral` の2件を移植した。暗黙のプラットフォーム依存と、明示的に設定できる整数引数 `machine` を区別し、`mach` の手動指定は上流と同じ診断で拒否した。[公式IDとの対応](nunit-evidence/targeted-repl-machine.tsv)・[実行ログ](nunit-evidence/targeted-repl-machine.log)
