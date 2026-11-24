@@ -158,3 +158,37 @@ fn init_test() {
         }
     }
 }
+
+#[test]
+fn read_data_test() {
+    let mut device = Bmc050::default();
+    device.reset();
+
+    fn read(device: &mut Bmc050, register: u8) -> Vec<u8> {
+        device.write(&[0xfc, register]);
+        device.read(1)
+    }
+    fn accelerometer(bytes: &[u8]) -> u16 {
+        ((u16::from(bytes[1]) << 2) & 0xffc) + ((u16::from(bytes[0]) >> 6) & 3)
+    }
+    fn magnetometer(bytes: &[u8]) -> u16 {
+        ((u16::from(bytes[1]) << 5) & 0x1fe0) + ((u16::from(bytes[0]) >> 3) & 0x1f)
+    }
+    for _ in 0..5 {
+        assert!(read(&mut device, 0x08)[0] > 0);
+        for register in [0x02, 0x04, 0x06] {
+            assert!(accelerometer(&read(&mut device, register)) > 0);
+        }
+        for register in [0x42, 0x44, 0x46, 0x48] {
+            assert!(magnetometer(&read(&mut device, register)) > 0);
+        }
+        let acc = read(&mut device, 0x02);
+        for offset in [0, 2, 4] {
+            assert!(accelerometer(&acc[offset..]) > 0);
+        }
+        let mag = read(&mut device, 0x42);
+        for offset in [0, 2, 4, 6] {
+            assert!(magnetometer(&mag[offset..]) > 0);
+        }
+    }
+}

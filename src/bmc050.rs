@@ -2,6 +2,8 @@ pub struct Bmc050 {
     registers: [u8; 0x53],
     write_data: u8,
     response: Vec<u8>,
+    orientation: u8,
+    random: u64,
 }
 
 impl Default for Bmc050 {
@@ -10,6 +12,8 @@ impl Default for Bmc050 {
             registers: [0; 0x53],
             write_data: 0,
             response: Vec::new(),
+            orientation: 0,
+            random: 1,
         };
         device.reset();
         device
@@ -46,6 +50,7 @@ impl Bmc050 {
             self.registers[register] = value;
         }
         self.write_data = 0;
+        self.orientation = 0;
     }
 
     pub fn write(&mut self, packet: &[u8]) {
@@ -58,20 +63,13 @@ impl Bmc050 {
         match operation {
             0xfd => self.write_register(*register, self.write_data),
             0xfc => {
-                let value = if *register == 0x40 {
-                    if self.registers[0x4b] & 1 == 1 {
-                        0x32
-                    } else {
-                        0
-                    }
-                } else {
-                    self.registers
-                        .get(usize::from(*register))
-                        .copied()
-                        .unwrap_or(0)
-                };
-                let crc = packet.iter().fold(value, |crc, byte| crc ^ byte);
-                self.response = vec![value, crc];
+                let mut response = self.read_payload(*register);
+                let checksum = packet
+                    .iter()
+                    .chain(&response)
+                    .fold(0, |crc, byte| crc ^ byte);
+                response.push(checksum);
+                self.response = response;
             }
             _ => {}
         }
@@ -82,6 +80,69 @@ impl Bmc050 {
             vec![0; count]
         } else {
             self.response.clone()
+        }
+    }
+
+    fn random_word(&mut self) -> u64 {
+        self.random ^= self.random << 13;
+        self.random ^= self.random >> 7;
+        self.random ^= self.random << 17;
+        self.random
+    }
+
+    fn sample(&mut self, mean: f64, sigma: f64) -> u16 {
+        let sign = if self.random_word() % 10 > 5 {
+            1.0
+        } else {
+            -1.0
+        };
+        let fraction = (self.random_word() >> 11) as f64 / (1u64 << 53) as f64;
+        (mean * (1.0 + sign * fraction / (2.0 * sigma))).round_ties_even() as u16
+    }
+
+    fn read_payload(&mut self, register: u8) -> Vec<u8> {
+        let positive = matches!(self.orientation, 0 | 4 | 5);
+        match register {
+            0x02..=0x07 => {
+                let axes = if register <= 0x03 { 3 } else { 1 };
+                let mut frame = Vec::with_capacity(axes * 2 + 1);
+                for _ in 0..axes {
+                    let value = self.sample(if positive { 900.0 } else { 100.0 }, 10.0) & 0x3ff;
+                    frame.extend([((value & 3) << 6) as u8 | 1, (value >> 2) as u8]);
+                }
+                if register <= 0x03 || register >= 0x06 {
+                    self.orientation = (self.orientation + 1) % 6;
+                }
+                frame
+            }
+            0x08 => vec![self.sample(25.0, 1.0) as u8],
+            0x40 => vec![if self.registers[0x4b] & 1 != 0 {
+                0x32
+            } else {
+                0
+            }],
+            0x42..=0x49 => {
+                let axes = if register <= 0x43 {
+                    3
+                } else {
+                    usize::from(register <= 0x47)
+                };
+                let mut frame = Vec::with_capacity(9);
+                for _ in 0..axes {
+                    let value = self.sample(if positive { 7900.0 } else { 290.0 }, 40.0) & 0x1fff;
+                    frame.extend([((value & 0x1f) << 3) as u8 | 1, (value >> 5) as u8]);
+                }
+                if register <= 0x43 || register >= 0x48 {
+                    let value = self.sample(50.0, 10.0);
+                    frame.extend([((value & 0x3f) << 2) as u8, (value >> 6) as u8]);
+                }
+                frame
+            }
+            _ => vec![self
+                .registers
+                .get(usize::from(register))
+                .copied()
+                .unwrap_or(0)],
         }
     }
 
