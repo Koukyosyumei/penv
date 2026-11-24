@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,380 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,382 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 15 |
+| 移植待ち | 13 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -534,3 +534,8 @@ OpenTitan KeyManager の5件を移植した。KMAC-256 で上流の状態遷移�
 ROMイメージを読み込まないセットアップは、上流ROMコントローラーの初期ダイジェストを注入して再現した。
 対象実行は5件合格、0件失敗。
 [公式 ID 別の結果](nunit-evidence/targeted-opentitan-key-manager.tsv) · [対象実行ログ](nunit-evidence/targeted-opentitan-key-manager.log)
+
+PythonPeripherals.SerializationTests の単体クローン2件を移植した。既存の CPython
+ワーカーの変数とインポートを保存し、新しいワーカーに復元する。
+対象実行は公式2件と復元基盤の回帰1件が合格、0件失敗。
+[公式 ID 別の結果](nunit-evidence/targeted-python-peripheral-snapshot.tsv) · [対象実行ログ](nunit-evidence/targeted-python-peripheral-snapshot.log)

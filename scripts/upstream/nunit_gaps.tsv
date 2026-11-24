@@ -1,6 +1,6 @@
 fixture	missing_api
 Antmicro.Renode.MonitorTests.FeaturesTests	The remaining case requires compiling and loading a C# extension and discovering its methods at runtime.
 Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The remaining case requires two Cortex-M cores with distinct CPU-scoped NVIC registrations at the same address; the production Cortex-M loader supports a single core and NVIC.
-Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
+Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The remaining cases require stream serialization and dictionary reconstruction, plus cloning a machine with the Python peripheral and its bus registration.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.

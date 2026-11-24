@@ -5,7 +5,9 @@ use std::{
 
 const WORKER: &str = r#"
 import contextlib
-from types import SimpleNamespace
+import importlib
+import marshal
+from types import ModuleType, SimpleNamespace
 import sys
 
 program = compile(sys.argv[1], "<PyDev>", "exec")
@@ -17,6 +19,21 @@ scope = {"self": PeripheralLog()}
 request = SimpleNamespace()
 print(0, flush=True)
 for line in sys.stdin:
+    if line == "save\n":
+        variables = {k: v for k, v in scope.items() if k not in ("self", "request", "__builtins__")}
+        modules = {k: v.__name__ for k, v in variables.items() if isinstance(v, ModuleType)}
+        values = {k: v for k, v in variables.items() if k not in modules}
+        try:
+            print(marshal.dumps((values, modules)).hex(), flush=True)
+        except (TypeError, ValueError):
+            print("unsupported scope value", flush=True)
+        continue
+    if line.startswith("restore "):
+        values, modules = marshal.loads(bytes.fromhex(line[8:]))
+        scope.update(values)
+        scope.update({k: importlib.import_module(name) for k, name in modules.items()})
+        print(0, flush=True)
+        continue
     kind, offset, address, width, value, counter = line.split()
     request.Type = kind.upper()
     request.IsInit = kind == "init"
@@ -67,14 +84,18 @@ impl Worker {
     }
 
     fn read_reply(&mut self) -> Result<u64, String> {
+        self.read_line()?
+            .trim()
+            .parse()
+            .map_err(|_| "Python peripheral did not return a value".into())
+    }
+
+    fn read_line(&mut self) -> Result<String, String> {
         let mut reply = String::new();
         self.output
             .read_line(&mut reply)
             .map_err(|error| format!("PyDev response: {error}"))?;
-        reply
-            .trim()
-            .parse()
-            .map_err(|_| "Python peripheral did not return a value".into())
+        Ok(reply)
     }
 }
 
@@ -104,8 +125,18 @@ enum Action {
     },
 }
 
+pub(crate) struct PeripheralSnapshot {
+    source: String,
+    base: u64,
+    size: u64,
+    init_pending: bool,
+    counter: u64,
+    scope: String,
+}
+
 pub(crate) struct Peripheral {
     worker: Worker,
+    source: String,
     base: u64,
     end: u64,
     init_pending: bool,
@@ -120,11 +151,43 @@ impl Peripheral {
             .ok_or("invalid PyDev address range")?;
         Ok(Self {
             worker: Worker::start(source)?,
+            source: source.to_owned(),
             base,
             end,
             init_pending: initable,
             counter: 0,
         })
+    }
+
+    pub(crate) fn snapshot(&mut self) -> Result<PeripheralSnapshot, String> {
+        writeln!(self.worker.input, "save").map_err(|error| format!("save PyDev: {error}"))?;
+        let reply = self.worker.read_line()?;
+        let scope = reply.trim();
+        if scope.is_empty() || !scope.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("could not snapshot Python peripheral scope".into());
+        }
+        Ok(PeripheralSnapshot {
+            source: self.source.clone(),
+            base: self.base,
+            size: self.end - self.base,
+            init_pending: self.init_pending,
+            counter: self.counter,
+            scope: scope.to_owned(),
+        })
+    }
+
+    pub(crate) fn from_snapshot(snapshot: PeripheralSnapshot) -> Result<Self, String> {
+        let mut peripheral = Self::new(
+            &snapshot.source,
+            snapshot.base,
+            snapshot.size,
+            snapshot.init_pending,
+        )?;
+        peripheral
+            .worker
+            .request(format_args!("restore {}", snapshot.scope))?;
+        peripheral.counter = snapshot.counter;
+        Ok(peripheral)
     }
 
     pub fn overlaps(&self, start: u64, end: u64) -> bool {
