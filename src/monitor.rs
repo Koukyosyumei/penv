@@ -417,7 +417,7 @@ enum Action {
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>, Option<bool>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
-    WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>),
+    WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>, Option<bool>),
 }
 
 struct BusScalar {
@@ -1137,7 +1137,7 @@ fn run_commands<'a>(
                         None
                     })
             }
-            Action::WriteTesterUart(id, text, ending, echo) => {
+            Action::WriteTesterUart(id, text, ending, echo, pause) => {
                 let target = machine.bus.uart_tester_target(*id)?.to_owned();
                 let cycles = if echo.unwrap_or_else(|| machine.bus.default_uart_echo()) && !text.is_empty() {
                     Some(uart_wait_cycles(machine, *id, None)?)
@@ -1149,7 +1149,7 @@ fn run_commands<'a>(
                     let watch = machine.bus.watch_uart_tester_text(*id, text, None, UartWaitMode::Prompt, Some(false))?;
                     let start = machine.elapsed_steps();
                     let limit = cycles.min(budget);
-                    let pause = machine.bus.default_uart_pause;
+                    let pause = pause.unwrap_or(machine.bus.default_uart_pause);
                     let (stop, count, _) = run_uart_watch(machine, watch, limit, Some(pause), &mut output)
                         .map_err(|error| format!("{}:{}: {error}", command.source.display(), command.line))?;
                     retired += count;
@@ -1348,7 +1348,7 @@ pub fn serve(
             }
             (Ok(()), commands) if included_variables.is_some() || commands.len() == 1 => {
                 let echo_assertion = matches!(commands,
-                    [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo), .. }]
+                    [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo, _), .. }]
                         if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
                 match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true, None) {
                     Ok((Stop::ScriptComplete, _)) => {
@@ -2976,15 +2976,20 @@ fn execute(
                 _ => return Err("expected UART ending CR or None".into()),
             };
             let echo = (*echo != "default").then(|| parse_tester_bool(resolve(echo)?)).transpose()?;
-            let id = match selector {
-                [] => None,
-                [value] => {
-                    let id = value.strip_prefix("testerId=").ok_or("expected testerId=ID")?;
-                    Some(crate::parse_address(resolve(id)?)? as usize)
+            let mut id = None;
+            let mut pause = None;
+            for option in selector {
+                match option.split_once('=') {
+                    Some(("testerId", value)) if id.is_none() => {
+                        id = Some(crate::parse_address(resolve(value)?)? as usize);
+                    }
+                    Some(("pauseEmulation", value)) if pause.is_none() => {
+                        pause = Some(parse_tester_bool(resolve(value)?)?);
+                    }
+                    _ => return Err(format!("unsupported or duplicate UART write option {option:?}")),
                 }
-                _ => return Err("expected at most one UART tester selector".into()),
-            };
-            Some(Action::WriteTesterUart(id, value, ending, echo))
+            }
+            Some(Action::WriteTesterUart(id, value, ending, echo, pause))
         }
         [target, "WriteLine", ..] => {
             let args = text[target.len()..].trim_start()["WriteLine".len()..].trim();

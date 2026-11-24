@@ -961,11 +961,11 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.operation(f"{uart} WriteLine {self.uart_text(char)} None")
         return {"Line": ""}
 
-    def write_tester_uart(self, content, ending, echo, tester):
+    def write_tester_uart(self, content, ending, echo, tester, pause=""):
         tester = self.parse_tester_id(tester)
         selector = f" testerId={tester}" if tester is not None else ""
         mode = "default" if echo is None else str(echo).lower()
-        self.operation(f"WriteTesterUart {self.uart_text(content)} {ending} {mode}{selector}")
+        self.operation(f"WriteTesterUart {self.uart_text(content)} {ending} {mode}{selector}{pause}")
         return {"Line": ""}
 
     def uart_idle(self, timeout, *args):
@@ -977,10 +977,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def write_line(self, content="", *args):
         positional = ("testerId", "waitForEcho")
+        if self.rust_monitor:
+            positional += ("pauseEmulation",)
         options = self.log_options(args, set(positional), positional)
         if self.rust_monitor:
             echo = self.log_bool(options["waitForEcho"]) if "waitForEcho" in options else None
-            return self.write_tester_uart(content, "CR", echo, options.get("testerId"))
+            return self.write_tester_uart(content, "CR", echo, options.get("testerId"),
+                                          self.uart_bool_option(options, "pauseEmulation"))
         if not self.started:
             raise Unsupported("requires a running UART tester")
         echo = self.log_bool(options.get("waitForEcho", "true"))
