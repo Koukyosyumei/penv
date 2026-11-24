@@ -656,6 +656,7 @@ pub fn serve(
         output.flush()
     }
 
+    let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
     let mut line = String::new();
     frame(&mut output, "READY", startup_output.as_bytes()).map_err(|error| error.to_string())?;
@@ -711,6 +712,12 @@ pub fn serve(
                 });
                 match result {
                     Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
+            (Ok(()), [RuntimeCommand { action: Action::CpuReset(cpu), .. }]) if !machine.is_cortex_m() => {
+                match machine.monitor_reset_cpu(cpu, &initial) {
+                    Ok(()) => frame(&mut output, "OK", &[]),
                     Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
                 }
             }
@@ -1866,6 +1873,14 @@ fn execute(
                 resolve(target)?.trim_start_matches("sysbus.").into(),
                 unquote(resolve(register)?).into(),
                 None,
+            ))
+        }
+        [target, "ResetVector", value @ ..]
+            if (boot.started || !boot.runtime.is_empty()) && value.len() <= 1 =>
+        {
+            let value = value.first().map(|value| crate::parse_address64(resolve(value)?)).transpose()?;
+            Some(Action::CpuRegister(
+                resolve(target)?.trim_start_matches("sysbus.").into(), "ResetVector".into(), value,
             ))
         }
         [target, register @ ("MTVEC" | "STVEC"), value @ ..]

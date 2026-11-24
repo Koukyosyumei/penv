@@ -489,6 +489,30 @@ impl Machine {
             .translate_read(&mut self.bus, address)
     }
 
+    pub(crate) fn initialize_monitor_reset_pcs(&mut self) {
+        for hart in std::iter::once(&mut self.primary).chain(&mut self.secondary) {
+            if let Some(cpu) = &mut hart.rv64 {
+                cpu.initialize_monitor_reset_pc();
+            } else if hart.thumb.is_none() {
+                hart.initialize_reset_pc();
+            }
+        }
+    }
+
+    pub(crate) fn monitor_reset_cpu(&mut self, name: &str, initial: &[Hart]) -> Result<(), String> {
+        let initial = initial.iter().find(|hart| hart.name.as_deref() == Some(name))
+            .ok_or_else(|| format!("unknown CPU {name:?}"))?;
+        let hart = self.named_hart(name)?;
+        if let Some(cpu) = &mut hart.rv64 {
+            cpu.reset_from(initial.rv64.as_ref().ok_or("missing initial RV64 CPU state")?);
+            hart.monitor_single_step = false;
+            hart.monitor_halted = false;
+            Ok(())
+        } else {
+            hart.monitor_reset(initial)
+        }
+    }
+
     pub(crate) fn monitor_named_pc(&mut self, name: &str) -> Result<u64, String> {
         Ok(self.named_hart(name)?.program_counter())
     }
@@ -503,6 +527,22 @@ impl Machine {
         ];
         let hart = self.named_hart(name)?;
         let register = register.to_ascii_lowercase();
+        if register == "resetvector" {
+            if let Some(cpu) = &mut hart.rv64 {
+                return Ok(match value {
+                    Some(value) => { cpu.set_reset_vector(value); None }
+                    None => cpu.monitor_register("resetvector"),
+                });
+            }
+            if let Some(value) = value {
+                hart.monitor_reset_vector(u32::try_from(value).map_err(|_| "reset vector exceeds RV32 width")?)?;
+                return Ok(None);
+            }
+            if hart.thumb.is_some() {
+                return Err("unsupported monitor ResetVector for Cortex-M".into());
+            }
+            return Ok(Some(u64::from(hart.reset_vector)));
+        }
         if let Some(vector) = match register.as_str() {
             "mtvec" => Some(crate::csr::TrapVector::Machine),
             "stvec" => Some(crate::csr::TrapVector::Supervisor),
@@ -609,6 +649,7 @@ impl Machine {
             cpu.set_program_counter(u64::from(entry));
         }
         hart.pc = entry;
+        hart.pc_written = true;
         hart.reset_pc_written |= hart.reset_held;
         Ok(())
     }

@@ -313,17 +313,28 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             rf'({cpu.strip()}) AssembleBlock (0x[0-9a-fA-F]+|[0-9]+|`(?:sysbus\.)?[\w.]+ PC`) (.+)',
             command, flags=re.DOTALL)
         if assembly:
-            target, address, body = assembly.groups()
+            target, address, suffix = assembly.groups()
+            arguments = re.fullmatch(
+                r'("""[\s\S]*?"""|"[^"]*")(?:\s+(null|"[\w-]+"))?(?:\s+(true|false))?',
+                suffix, flags=re.IGNORECASE)
+            if not arguments:
+                raise Unsupported("AssembleBlock needs quoted code and optional triple and dialect")
+            body, triple, alternate = arguments.groups()
+            if alternate and alternate.lower() == "true":
+                raise Unsupported("alternate assembly dialect is unavailable")
+            triple = triple.strip('"') if triple and triple.lower() != "null" else "default"
+            marker = 3 if body.startswith('"""') else 1
+            body = body[marker:-marker]
             if address.startswith("`"):
                 address = self.operation(address[1:-1]).strip()
-            if body.startswith('"""') and body.endswith('"""'):
-                body = body[3:-3]
-            elif body.startswith('"') and body.endswith('"'):
-                body = body[1:-1]
-            else:
-                raise Unsupported("AssembleBlock requires quoted assembly")
             return self.operation(
-                f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {body.encode().hex()}")
+                f"AssembleMonitorBlock {target.removeprefix('sysbus.')} {address} {triple} {body.encode().hex()}")
+        if re.fullmatch(cpu + r'ResetVector(?: ' + number + r')?', command):
+            reading = command.endswith(" ResetVector")
+            value = self.operation(command, assertion=reading)
+            return self.format_number(value) if reading else value
+        if re.fullmatch(cpu + r'Reset', command):
+            return self.operation(command)
         if re.fullmatch(cpu + r'(?:MTVEC|STVEC)(?: ' + number + r')?', command):
             reading = command.endswith((" MTVEC", " STVEC"))
             value = self.operation(command, assertion=reading)

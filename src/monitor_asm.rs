@@ -8,7 +8,7 @@ pub(crate) fn handle(machine: &mut Machine, command: &str) -> Option<Result<(), 
 
 fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
     let words: Vec<_> = command.split_whitespace().collect();
-    let [cpu, address, text] = words.as_slice() else {
+    let [cpu, address, requested_triple, text] = words.as_slice() else {
         return Err("AssembleBlock requires a CPU, an address, and assembly".into());
     };
     let address = crate::parse_address64(address)?;
@@ -35,6 +35,9 @@ fn assemble(machine: &mut Machine, command: &str) -> Result<(), String> {
         );
     }
     let (hart, triple, features) = machine.monitor_assembly_target(cpu)?;
+    if *requested_triple != "default" && *requested_triple != triple {
+        return Err(format!("assembler triple {requested_triple} is unavailable for {triple}"));
+    }
     let instructions = instructions.join(
         "
 ",

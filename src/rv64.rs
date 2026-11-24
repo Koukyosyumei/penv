@@ -32,6 +32,7 @@ pub struct Rv64 {
     pub(crate) stack_access_trace_name: Option<String>,
     pub pc: u64,
     reset_vector: u64,
+    reset_vector_configured: bool,
     pc_follows_reset_vector: bool,
     registers: [u64; 32],
     floating: [u64; 32],
@@ -223,6 +224,7 @@ impl Rv64 {
             stack_access_trace_name: None,
             pc: u64::from(RAM_BASE),
             reset_vector: u64::from(RAM_BASE),
+            reset_vector_configured: false,
             pc_follows_reset_vector: true,
             registers: [0; 32],
             floating: [0; 32],
@@ -235,10 +237,20 @@ impl Rv64 {
     }
 
     pub(crate) fn set_reset_vector(&mut self, address: u64) {
+        self.reset_vector_configured = true;
         self.reset_vector = address;
         if self.pc_follows_reset_vector {
             self.pc = address;
         }
+    }
+
+    pub(crate) fn initialize_monitor_reset_pc(&mut self) {
+        // A platform can override the Renode RISC-V default with resetVector.
+        if !self.reset_vector_configured {
+            self.reset_vector = 0x1000;
+        }
+        self.pc_follows_reset_vector = true;
+        self.pc = self.reset_vector;
     }
 
     pub(crate) fn set_program_counter(&mut self, address: u64) {

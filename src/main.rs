@@ -2136,6 +2136,9 @@ fn run() -> Result<ExitCode, String> {
         }
     }
     if monitor_stdio {
+        if script.is_none() && !has_firmware && !machine.is_cortex_m() {
+            machine.initialize_monitor_reset_pcs();
+        }
         if !post_run.is_empty() {
             return Err("unsupported command: post-run actions in a monitor session".into());
         }
