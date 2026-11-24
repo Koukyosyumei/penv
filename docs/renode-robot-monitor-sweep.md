@@ -1512,3 +1512,22 @@ CLI スナップショット回帰テストが合格。
 最終ビルドの未変更 Robot は保存・復元、HEX、STM32F072b Console Echo の
 4件合格、残り2,193件は未実行
 （`target/monitor-invalid-load-robot/results.json`）。
+
+### 無効な Save の起動前検証
+
+`6497675` は、保存先の親ディレクトリが存在しない場合を起動前に
+Rust が拒否し、実際の保存処理でも同じ検査を使う。
+固定 Renode と penv の Robot RPC で、起動前・ライブの両方で
+`Save` が失敗し、続く `echo` は `ready`、`IsStarted` は `False` を返した。
+通常 CLI はディレクトリを作成せず終了コード 1 を返した
+（`target/monitor-invalid-save-proof/`）。
+
+`15ca480` は保存先そのものがディレクトリの場合も、書き込み前に拒否する。
+固定 Renode と penv の RPC では拒否後も `ready` を読み出せた。
+通常 CLI でもエラーを確認し、ディレクトリ内の確認ファイルは保持された
+（`target/monitor-directory-save-proof/`）。
+
+Rust モニターテスト26件と作業ディレクトリを切り替える
+CLI スナップショット回帰テストが合格。
+未変更の最終 Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-directory-save-robot/results.json`）。
