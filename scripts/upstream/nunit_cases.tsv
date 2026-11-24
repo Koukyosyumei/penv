@@ -3387,3 +3387,8 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests.ShouldSerializePyDevWithListAndDictionary	upstream_nunit::python_peripheral_serialization::serialize_pydev_with_list_and_dictionary	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeMemory	upstream_nunit::emulation_serialization::serialize_memory	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeGPIOs	upstream_nunit::emulation_serialization::serialize_gpios	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(1)	upstream_nunit::emulation_serialization::serialize_one_cpu	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(2)	upstream_nunit::emulation_serialization::serialize_two_cpus	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(3)	upstream_nunit::emulation_serialization::serialize_three_cpus	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldSerializeAllCpus(4)	upstream_nunit::emulation_serialization::serialize_four_cpus	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SerializationTests.ShouldRememberCpuNames	upstream_nunit::emulation_serialization::remember_cpu_names	new

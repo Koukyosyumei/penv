@@ -5,13 +5,13 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,385 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,390 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 10 |
+| 移植待ち | 5 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 5 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 4 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -554,3 +554,8 @@ SerializationTests の GPIO ケースを追加した。既存の GPIO 経路と 
 参照付きストリームを使い、共有レシーバー、接続順、入力と出力の状態、復元後の接続を確認した。
 対象実行では MappedMemory と合わせて2件合格、0件失敗。
 [追加ケースの公式 ID 別結果](nunit-evidence/targeted-emulation-gpio.tsv) · [対象実行ログ](nunit-evidence/targeted-emulation-gpio.log)
+
+SerializationTests の MockCPU 5件を移植した。CPU数1〜4と3つの名前を維持し、
+SystemBus の登録・ローカル名と MockCPU 固有のペイロードをストリームから新しい Machine に復元した。
+対象 fixture の実行は7件合格、0件失敗。
+[追加5件の公式 ID 別結果](nunit-evidence/targeted-emulation-cpu.tsv) · [対象実行ログ](nunit-evidence/targeted-emulation-cpu.log)

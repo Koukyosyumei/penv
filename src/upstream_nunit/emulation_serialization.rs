@@ -293,3 +293,105 @@ fn serialize_gpios() {
         "Mock 1:9 is not signaled!"
     );
 }
+
+use crate::{bus::CpuRegistrationPoint, bus_translation::PeripheralHandle, machine::Machine};
+
+struct MockCpu {
+    handle: PeripheralHandle,
+    placeholder: Option<String>,
+}
+
+fn clone_machine_with_mock_cpus(placeholders: &[Option<&str>]) -> (Machine, Vec<MockCpu>) {
+    let mut machine = Machine::without_default_ram();
+    let cpus: Vec<_> = placeholders
+        .iter()
+        .map(|&placeholder| {
+            let cpu = MockCpu {
+                handle: PeripheralHandle::default(),
+                placeholder: placeholder.map(str::to_owned),
+            };
+            machine
+                .bus
+                .register_cpu_identity(&cpu.handle, "mock", Some(CpuRegistrationPoint::default()))
+                .unwrap();
+            if let Some(name) = placeholder {
+                machine.bus.set_cpu_local_name(&cpu.handle, name).unwrap();
+            }
+            cpu
+        })
+        .collect();
+
+    let mut stream = Cursor::new(Vec::new());
+    machine
+        .bus
+        .save_cpu_registrations(&mut stream, |handle| {
+            Ok(cpus
+                .iter()
+                .find(|cpu| &cpu.handle == handle)
+                .unwrap()
+                .placeholder
+                .clone())
+        })
+        .unwrap();
+    stream.set_position(0);
+    let mut copy = Machine::without_default_ram();
+    let cpus = copy
+        .bus
+        .restore_cpu_registrations(stream)
+        .unwrap()
+        .into_iter()
+        .map(|(handle, placeholder)| MockCpu {
+            handle,
+            placeholder,
+        })
+        .collect();
+    (copy, cpus)
+}
+
+fn assert_cpu_count(count: usize) {
+    let (copy, _) = clone_machine_with_mock_cpus(&vec![None; count]);
+    assert_eq!(copy.bus.cpu_registrations().len(), count);
+}
+
+#[test]
+fn serialize_one_cpu() {
+    assert_cpu_count(1);
+}
+
+#[test]
+fn serialize_two_cpus() {
+    assert_cpu_count(2);
+}
+
+#[test]
+fn serialize_three_cpus() {
+    assert_cpu_count(3);
+}
+
+#[test]
+fn serialize_four_cpus() {
+    assert_cpu_count(4);
+}
+
+#[test]
+fn remember_cpu_names() {
+    let names = ["Xavier", "Alice", "Bob"];
+    let (machine, cpus) = clone_machine_with_mock_cpus(&names.map(Some));
+    let registered = machine.bus.cpu_registrations();
+    let mut restored_names: Vec<_> = registered
+        .iter()
+        .map(|cpu| cpu.local_name.as_deref().unwrap())
+        .collect();
+    restored_names.sort_unstable();
+    let mut expected = names;
+    expected.sort_unstable();
+    assert_eq!(restored_names, expected);
+    for cpu in cpus {
+        let local_name = &registered
+            .iter()
+            .find(|entry| entry.handle == cpu.handle)
+            .unwrap()
+            .local_name;
+        assert_eq!(&cpu.placeholder, local_name);
+    }
+}

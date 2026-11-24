@@ -1,0 +1,10 @@
+$ cargo test --locked --bin penv upstream_nunit::emulation_serialization
+running 7 tests
+test upstream_nunit::emulation_serialization::serialize_two_cpus ... ok
+test upstream_nunit::emulation_serialization::serialize_four_cpus ... ok
+test upstream_nunit::emulation_serialization::serialize_one_cpu ... ok
+test upstream_nunit::emulation_serialization::serialize_three_cpus ... ok
+test upstream_nunit::emulation_serialization::remember_cpu_names ... ok
+test upstream_nunit::emulation_serialization::serialize_gpios ... ok
+test upstream_nunit::emulation_serialization::serialize_memory ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3882 filtered out; finished in 1.51s
