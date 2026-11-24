@@ -1318,3 +1318,22 @@ Rust モニターテスト22件と CLI スナップショット回帰テスト�
 未変更 Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-literal-include-nested-robot/results.json`）。
 検証対象は RESC と対応済みの単一マシンのスナップショット。
+
+### 共通 Rust パーサーでの runMacro
+
+`153eada` はライブおよび遅延実行のマクロ本体を Rust の RESC
+パーサーで処理し、本体内の変数変更と `Save` / `Load` を扱う。
+固定 Renode、通常 CLI、Robot RPC に同じコマンド列を送り、
+外側とマクロ内の別々の保存・復元で `changed`、`saved`、`changed`
+の順に値を得た（`target/monitor-macro-save-proof/`）。
+
+`f74fda9` は起動時のマクロも同じパーサーに通し、呼び出し先の
+ソース行と基準ディレクトリを維持する。固定 Renode、通常 CLI、
+Robot RPC で、ネストした起動時マクロによる変数変更を確認した
+（`target/monitor-macro-unified-proof/`）。
+再帰エラーを含む Rust モニターテスト22件が合格。
+比較したのは行単位のマクロと対応済みスナップショットの範囲。
+
+未変更 Robot は保存・復元、HEX、STM32F072b Console Echo の4件が合格。
+残り2,193件は未実行（`target/monitor-macro-unified-robot/results.json`）。
+CLI のスナップショット回帰テストも合格した。
