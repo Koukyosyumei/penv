@@ -1322,8 +1322,11 @@ pub fn serve(
                     let stop = drive_tester_watch(machine, watch, cycles, pause, &mut bytes);
                     let failure = machine.bus.uart_watch_failure(watch).map(str::to_owned);
                     let matched = machine.bus.uart_tester_matched_line(watch);
-                    let timestamp = machine.bus.uart_tester_matched_unfinished_line(watch)
-                        .then(|| machine.monitor_elapsed_ns());
+                    let timestamp = if machine.bus.uart_tester_matched_unfinished_line(watch) {
+                        Some(machine.monitor_elapsed_ns())
+                    } else {
+                        machine.bus.uart_tester_matched_timestamp(watch)
+                    };
                     let captures = if machine.bus.uart_tester_suppresses_captures(watch) {
                         None
                     } else {

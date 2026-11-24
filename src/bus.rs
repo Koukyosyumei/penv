@@ -215,9 +215,9 @@ struct UartTester {
 }
 
 impl TesterHistory {
-    fn receive(&mut self, byte: u8) {
+    fn receive(&mut self, byte: u8, timestamp: u128) {
         match self {
-            Self::Text(history) => history.receive(byte),
+            Self::Text(history) => history.receive_at(byte, timestamp),
             Self::Binary(history) => history.receive(byte),
         }
     }
@@ -443,6 +443,9 @@ pub struct Bus {
     stm32_uart_history: Vec<Option<UartHistory>>,
     stm32_uart_input: usize,
     step_hz: Option<u32>,
+    pub(crate) monitor_clock_ns: u128,
+    pub(crate) monitor_clock_step: u64,
+    pub(crate) uart_clock_step: u64,
     uart_testers: Vec<UartTester>,
     default_uart_timeout: Option<u64>,
     default_uart_echo: Option<bool>,
@@ -1346,6 +1349,12 @@ impl Bus {
         }
         self.set_step_hz(rate);
         Ok(())
+    }
+
+    pub(crate) fn monitor_time_ns(&self, step: u64) -> u128 {
+        self.monitor_clock_ns
+            + u128::from(step.wrapping_sub(self.monitor_clock_step)) * 1_000_000_000
+                / u128::from(self.monitor_step_hz())
     }
 
     pub(crate) fn monitor_step_hz(&self) -> u64 {
@@ -3876,7 +3885,7 @@ impl Bus {
         Some(result.and_then(|()| {
             output.write_all(&bytes)?;
             let console = self.monitor_log_enabled(1);
-            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::Rv64(index), &bytes, console);
+            self.observe_uart_output(TesterPort::Rv64(index), &bytes, console);
             Ok(())
         }))
     }
@@ -3887,7 +3896,7 @@ impl Bus {
             uart.tick(step, &mut bytes)?;
             output.write_all(&bytes)?;
             let console = self.monitor_log_enabled(1);
-            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::LiteX, &bytes, console);
+            self.observe_uart_output(TesterPort::LiteX, &bytes, console);
         }
         Ok(())
     }
@@ -5050,17 +5059,26 @@ impl Bus {
         Ok(())
     }
 
+    fn observe_uart_output(&mut self, port: TesterPort, bytes: &[u8], console: bool) {
+        if bytes.is_empty() || (self.uart_testers.is_empty() && self.uart_logs.is_empty()) {
+            return;
+        }
+        let timestamp = self.monitor_time_ns(self.uart_clock_step);
+        Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, port, bytes, console, timestamp);
+    }
+
     fn observe_uart(
         testers: &mut [UartTester],
         logs: &mut [(TesterPort, String, Vec<u8>)],
         port: TesterPort,
         bytes: &[u8],
         console: bool,
+        timestamp: u128,
     ) {
         for &byte in bytes {
             for tester in testers.iter_mut() {
                 if tester.port == port {
-                    tester.history.receive(byte);
+                    tester.history.receive(byte, timestamp);
                 }
             }
             for (analyzer, name, line) in logs.iter_mut() {
@@ -5190,6 +5208,14 @@ impl Bus {
             &self.uart_testers[id].history,
             TesterHistory::Text(history) if history.suppress_match_captures()
         ))
+    }
+
+    pub(crate) fn uart_tester_matched_timestamp(&self, watch: UartWatch) -> Option<u128> {
+        let UartWatch::Tester(id) = watch else { return None };
+        match &self.uart_testers.get(id)?.history {
+            TesterHistory::Text(history) => history.matched_timestamp(),
+            TesterHistory::Binary(_) => None,
+        }
     }
 
     pub(crate) fn uart_tester_matched_unfinished_line(&self, watch: UartWatch) -> bool {
@@ -6948,7 +6974,7 @@ impl Bus {
             let byte = value as u8;
             uart.write_all(&[byte]).map_err(BusError::Output)?;
             let console = self.monitor_log_enabled(1);
-            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::Trivial, &[byte], console);
+            self.observe_uart_output(TesterPort::Trivial, &[byte], console);
             return Ok(());
         }
         #[cfg(test)]
@@ -7015,7 +7041,7 @@ impl Bus {
             if is_uart {
                 uart.write_all(&bytes).map_err(BusError::Output)?;
                 let console = self.monitor_log_enabled(1);
-                Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::Nrf(index), &bytes, console);
+                self.observe_uart_output(TesterPort::Nrf(index), &bytes, console);
             }
             return result;
         }
@@ -7096,7 +7122,7 @@ impl Bus {
             device.write(offset, value, &mut bytes).map_err(BusError::Output)?;
             uart.write_all(&bytes).map_err(BusError::Output)?;
             let console = self.monitor_log_enabled(1);
-            Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs, TesterPort::LiteX, &bytes, console);
+            self.observe_uart_output(TesterPort::LiteX, &bytes, console);
             return Ok(());
         }
         if matches!(width, 1 | 4)
@@ -7162,6 +7188,13 @@ impl Bus {
         {
             return Ok(());
         }
+        let uart_timestamp = if !self.uart_testers.is_empty()
+            && self.stm32_uarts.iter().any(|device| device.contains(address))
+        {
+            self.monitor_time_ns(self.uart_clock_step)
+        } else {
+            0
+        };
         if let Some((index, device)) = self
             .stm32_uarts
             .iter_mut()
@@ -7179,7 +7212,7 @@ impl Bus {
                         history.receive(byte);
                     }
                     Self::observe_uart(&mut self.uart_testers, &mut self.uart_logs,
-                        TesterPort::Stm32(index), &[byte], console);
+                        TesterPort::Stm32(index), &[byte], console, uart_timestamp);
                     Ok(())
                 })
                 .map_err(BusError::Output);

@@ -397,7 +397,8 @@ impl FailingUartPattern {
 #[derive(Default)]
 pub struct UartHistory {
     carriage_return: bool,
-    unread: VecDeque<u8>,
+    unread: VecDeque<(u8, u128)>,
+    matched_timestamp: Option<u128>,
     pub(crate) activity: u64,
     sgr: Vec<u8>,
     active: Option<UartLineMatch>,
@@ -433,7 +434,7 @@ impl UartHistory {
         }
         let mut finished = Vec::new();
         let mut start = 0;
-        for (index, &byte) in self.unread.iter().enumerate() {
+        for (index, &(byte, _)) in self.unread.iter().enumerate() {
             if byte == self.terminator() {
                 finished.push((start, index));
                 start = index + 1;
@@ -446,7 +447,7 @@ impl UartHistory {
                     .iter()
                     .skip(start)
                     .take(end - start)
-                    .copied()
+                    .map(|&(byte, _)| byte)
                     .filter(|&byte| byte != 0 && (self.carriage_return || byte != b'\r'))
                     .collect();
                 let line: String = line.into_iter().map(char::from).collect();
@@ -483,15 +484,17 @@ impl UartHistory {
         &mut self, pattern: &str, regex: Option<regex::Regex>, end: UartWaitMode, first_only: bool,
     ) {
         self.failure = None;
+        self.matched_timestamp = None;
         let mut matcher = UartLineMatch::new(pattern, regex, end, self.carriage_return, first_only);
         if self.check_failure() {
             self.active = Some(matcher);
             return;
         }
-        if let Some(index) = self.unread.iter().position(|&byte| {
+        if let Some(index) = self.unread.iter().position(|&(byte, _)| {
             matcher.receive(byte);
             matcher.matched
         }) {
+            self.matched_timestamp = Some(self.unread[index].1);
             self.unread.drain(..=index);
         } else if matcher.prompt_matches() {
             // A buffered unfinished line is consumed in full, as in TerminalTester.
@@ -502,6 +505,10 @@ impl UartHistory {
     }
 
     pub fn receive(&mut self, byte: u8) {
+        self.receive_at(byte, 0);
+    }
+
+    pub(crate) fn receive_at(&mut self, byte: u8, timestamp: u128) {
         self.activity = self.activity.wrapping_add(1);
         if !self.sgr.is_empty() {
             if self.sgr.len() == 1 && byte == b'['
@@ -516,22 +523,22 @@ impl UartHistory {
                 return;
             }
             for pending in std::mem::take(&mut self.sgr) {
-                self.receive_text_byte(pending);
+                self.receive_text_byte(pending, timestamp);
             }
         }
         if byte == 0x1b {
             self.sgr.push(byte);
         } else {
-            self.receive_text_byte(byte);
+            self.receive_text_byte(byte, timestamp);
         }
     }
 
-    fn receive_text_byte(&mut self, byte: u8) {
+    fn receive_text_byte(&mut self, byte: u8, timestamp: u128) {
         if byte == self.terminator() && self.active.is_some() && !self.matched() && !self.failures.is_empty() {
             if self.unread.len() == UART_HISTORY_BYTES {
                 self.unread.pop_front();
             }
-            self.unread.push_back(byte);
+            self.unread.push_back((byte, timestamp));
             if self.check_failure() {
                 return;
             }
@@ -544,6 +551,9 @@ impl UartHistory {
             matcher.receive(byte);
             matcher.matched |= matcher.prompt_matches();
             if matcher.matched {
+                if matcher.matched_completed_line {
+                    self.matched_timestamp = Some(timestamp);
+                }
                 self.unread.clear();
                 return;
             }
@@ -551,7 +561,7 @@ impl UartHistory {
         if self.unread.len() == UART_HISTORY_BYTES {
             self.unread.pop_front();
         }
-        self.unread.push_back(byte);
+        self.unread.push_back((byte, timestamp));
     }
 
     pub fn matched(&self) -> bool {
@@ -566,6 +576,10 @@ impl UartHistory {
         self.active.as_ref().is_some_and(|active| active.matched && !active.matched_completed_line)
     }
 
+    pub(crate) fn matched_timestamp(&self) -> Option<u128> {
+        self.matched_timestamp
+    }
+
     pub fn matched_line(&self) -> Option<String> {
         let matched = self.active.as_ref().filter(|active| active.matched)?;
         Some(String::from_utf8_lossy(&matched.line.iter().copied().collect::<Vec<_>>()).into_owned())
@@ -574,6 +588,7 @@ impl UartHistory {
     pub fn finish_wait(&mut self) {
         self.active = None;
         self.failure = None;
+        self.matched_timestamp = None;
     }
 }
 

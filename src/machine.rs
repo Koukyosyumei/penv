@@ -139,8 +139,6 @@ pub struct Machine {
     halted: u8,
     pub(crate) stop_when_halted: bool,
     elapsed_steps: u64,
-    monitor_clock_ns: u128,
-    monitor_clock_step: u64,
     boot_memory_cleared: bool,
     pub(crate) monitor_firmware: Option<std::path::PathBuf>,
     pub(crate) monitor_quantum: u64,
@@ -419,8 +417,6 @@ impl Machine {
             halted: 0,
             stop_when_halted: false,
             elapsed_steps: 0,
-            monitor_clock_ns: 0,
-            monitor_clock_step: 0,
             cpu_less: false,
             empty_monitor: false,
             monitor_active: false,
@@ -1062,8 +1058,9 @@ impl Machine {
         self.time_source.grant_until(steps);
         self.elapsed_steps = steps;
         self.monitor_quantum = quantum;
-        self.monitor_clock_ns = 0;
-        self.monitor_clock_step = 0;
+        self.bus.monitor_clock_ns = 0;
+        self.bus.monitor_clock_step = 0;
+        self.bus.uart_clock_step = steps;
     }
 
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
@@ -1593,9 +1590,7 @@ impl Machine {
     }
 
     pub(crate) fn monitor_elapsed_ns(&self) -> u128 {
-        let steps = self.elapsed_steps().wrapping_sub(self.monitor_clock_step);
-        self.monitor_clock_ns + (u128::from(steps) * 1_000_000_000)
-            / u128::from(self.bus.monitor_step_hz())
+        self.bus.monitor_time_ns(self.elapsed_steps())
     }
 
     pub(crate) fn set_monitor_cpu_rate(&mut self, mips: u32) -> Result<(), String> {
@@ -1604,8 +1599,8 @@ impl Machine {
         }
         let now = self.monitor_elapsed_ns();
         self.bus.set_monitor_cpu_mips(mips)?;
-        self.monitor_clock_ns = now;
-        self.monitor_clock_step = self.elapsed_steps();
+        self.bus.monitor_clock_ns = now;
+        self.bus.monitor_clock_step = self.elapsed_steps();
         Ok(())
     }
 
@@ -1648,6 +1643,7 @@ impl Machine {
             let end = self.time_source.elapsed().saturating_add(limit);
             self.time_source.grant_until(end);
             self.elapsed_steps = self.time_source.elapsed();
+            self.bus.uart_clock_step = self.elapsed_steps;
             return Ok((Stop::Limit, 0));
         }
         let all_harts = ((1u16 << self.hart_count()) - 1) as u8;
@@ -1669,6 +1665,7 @@ impl Machine {
             self.time_source
                 .grant_until(self.time_source.elapsed().saturating_add(1));
             self.elapsed_steps = self.elapsed_steps.wrapping_add(1);
+            self.bus.uart_clock_step = self.elapsed_steps;
             while let Some(index) = self
                 .uart_device_events
                 .iter()
