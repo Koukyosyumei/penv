@@ -992,3 +992,5 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,Tru
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokePostHookAfterBothObjectsInCyclicReferenceAreDeserialized	upstream_nunit::migrant_hooks::cyclic_stamped	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldFailWithSurrogateAndLatePostDeserializationHook	upstream_nunit::migrant_hooks::surrogate_conflict_plain	new
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldFailWithSurrogateAndLatePostDeserializationHook	upstream_nunit::migrant_hooks::surrogate_conflict_stamped	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,False).ShouldInvokeGlobalHooks	upstream_nunit::migrant_hooks::global_plain	new
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests(False,False,True).ShouldInvokeGlobalHooks	upstream_nunit::migrant_hooks::global_stamped	new

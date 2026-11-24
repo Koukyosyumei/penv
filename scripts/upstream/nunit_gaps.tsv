@@ -1,7 +1,7 @@
 fixture	missing_api
 Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
 Antmicro.Migrant.Tests.BuiltinSurrogatesTests	Regex pattern round-trip is ported for reflection mode. Remaining cases need the custom IXmlSerializable adapter and generated reader/writer paths.
-Antmicro.Migrant.Tests.HooksTests	Reflection graph reads support registered immediate and late hooks. Remaining cases need serialization hooks, global callbacks, virtual method dispatch and generated reader/writer paths.
+Antmicro.Migrant.Tests.HooksTests	Reflection graph streams support registered read hooks and global observers. Remaining cases need mutating serialization hooks, failure and ordering semantics, virtual method dispatch, and generated reader/writer paths.
 Antmicro.Migrant.Tests.OpenStreamSerializationTests	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.
 Antmicro.Migrant.Tests.SerializationTests	Stamped and unstamped reflection modes restore record, array and ordered list graphs. Remaining settings and cases need generated reader/writer paths, collection-as-user-object layouts, dictionary and other CLR codecs, surrogate and hook dispatch, and delegate/state restoration.
 Antmicro.Migrant.Tests.StampingTests	All four reflection-mode stamp configurations are ported. The remaining 12 cases require the generated writer and/or reader paths.

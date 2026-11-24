@@ -329,6 +329,8 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+type ObjectObserver<'a> = Box<dyn FnMut(&Object) + 'a>;
+
 pub struct ObjectWriter<'a, 's, W: Write> {
     data: Writer<W>,
     graph: Option<&'a Graph>,
@@ -341,6 +343,8 @@ pub struct ObjectWriter<'a, 's, W: Write> {
     stamps: Option<&'a [TypeStamp<'a>]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
+    before_write: Option<ObjectObserver<'s>>,
+    after_write: Option<ObjectObserver<'s>>,
 }
 
 impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
@@ -369,6 +373,8 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             stamps: None,
             transients: None,
             surrogates: None,
+            before_write: None,
+            after_write: None,
         }
     }
 
@@ -395,6 +401,16 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         }
         history.slots += self.pending.len();
         Ok(())
+    }
+
+    pub fn with_write_observers(
+        mut self,
+        before: impl FnMut(&Object) + 's,
+        after: impl FnMut(&Object) + 's,
+    ) -> Self {
+        self.before_write = Some(Box::new(before));
+        self.after_write = Some(Box::new(after));
+        self
     }
 
     pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
@@ -491,6 +507,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         // Reserve identities before visiting children, including forward and cyclic edges.
         while let Some(id) = self.pending.get(index).copied() {
             let original = graph.get(id).unwrap();
+            if let Some(observer) = &mut self.before_write {
+                observer(original);
+            }
             let replacement = self
                 .surrogates
                 .as_mut()
@@ -624,6 +643,9 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                     Self::write_values(&mut self.data, &self.ids, elements)?;
                 }
             }
+            if let Some(observer) = &mut self.after_write {
+                observer(graph.get(*id).unwrap());
+            }
         }
         Ok(())
     }
@@ -743,6 +765,7 @@ pub struct ObjectReader<'a, 's, R: Read> {
     stamps: Option<&'a [TypeStamp<'a>]>,
     transients: Option<&'a Transients<'a>>,
     surrogates: Option<&'a mut Surrogates<'s>>,
+    after_read: Option<ObjectObserver<'s>>,
 }
 
 impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
@@ -757,7 +780,13 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             stamps: None,
             transients: None,
             surrogates: None,
+            after_read: None,
         }
+    }
+
+    pub fn with_read_observer(mut self, observer: impl FnMut(&Object) + 's) -> Self {
+        self.after_read = Some(Box::new(observer));
+        self
     }
 
     pub fn with_read_hooks(mut self, hooks: &'a [ReadHook<'a>]) -> Self {
@@ -996,6 +1025,11 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
                         return Err(invalid("hook reference outside stream table"));
                     }
                 }
+            }
+        }
+        if let Some(observer) = &mut self.after_read {
+            for object in objects.iter().rev() {
+                observer(object);
             }
         }
         // Publish all objects together after validating every edge.

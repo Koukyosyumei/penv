@@ -431,3 +431,39 @@ modes!(
     surrogate_conflict_stamped,
     reject_surrogate_with_late_hook
 );
+
+fn global_observers(stamped: bool) {
+    let pre_serialization = Cell::new(0);
+    let post_serialization = Cell::new(0);
+    let post_deserialization = Cell::new(0);
+    let mut graph = Graph::default();
+    let entries = ["One", "Two"].map(|text| Value::Ref(graph.insert(Object::String(text.into()))));
+    let root = graph.insert(Object::Array(entries.to_vec()));
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new(&mut stream, &graph, References::Preserve, true)
+        .with_write_observers(
+            |_| pre_serialization.set(pre_serialization.get() + 1),
+            |_| post_serialization.set(post_serialization.get() + 1),
+        );
+    if stamped {
+        writer = writer.with_type_stamps(STAMPS);
+    }
+    writer.write_object(root).unwrap();
+    writer.finish().unwrap();
+
+    assert_eq!(pre_serialization.get(), 3);
+    assert_eq!(post_serialization.get(), 3);
+    assert_eq!(post_deserialization.get(), 0);
+
+    stream.rewind().unwrap();
+    let mut reader = ObjectReader::new(stream, References::Preserve, true)
+        .with_read_observer(|_| post_deserialization.set(post_deserialization.get() + 1));
+    if stamped {
+        reader = reader.with_type_stamps(STAMPS);
+    }
+    reader.read_object().unwrap();
+    assert_eq!(post_deserialization.get(), 3);
+    reader.finish().unwrap();
+}
+
+modes!(global_plain, global_stamped, global_observers);
