@@ -161,3 +161,44 @@ HEX、STM32F072b、メモリアサーションの3スイートは両コミット
 `3172275` では4件とも元の Robot ケースを個別に走らせて PASS を確認した。
 この短い検証の証跡は `target/clic-reference/minhv-audit.json`。
 144件の集計は `419ab97` の結果として保持する。
+
+## RV32 CLIC の S-mode
+
+`a1b85ca` は `stvt`、`sintthresh`、`sintstatus`、`snxti` と
+S-mode のスクラッチ交換 CSR を実装する。割り込み先の特権は CLIC の
+属性で選択し、同期例外の `medeleg` と分けて扱う。S-mode のトラップから
+復帰すると以前の割り込みレベルを復元する。
+
+`sclicdeleg-01_default` は固定 Renode と penv の元の Robot ケースで合格。
+penv の診断ログでは104ワードの一致を確認した。全144件の penv 再計測では、
+直前の全件測定に対して76件の既存 PASS を維持し、68件が FAIL から PASS に移った。
+同時に実行した HEX、STM32F072b、メモリアサーションの67件は、
+ケースIDごとに従来の14 PASS、53 UNSUPPORTED と一致した。
+
+`target/clic-supervisor/official/robot_output.xml` が固定上流の代表ケースの証跡。
+penv の SHA-256、コマンド、各ケースのパラメーターと実測は
+`target/clic-supervisor-arch/results.json` に記録した。
+差分は `target/clic-supervisor/case-delta.json` にある。
+この144件とは別に、間接 CSR のペリフェラルアクセスを使う CLIC ケースがある。
+
+## Robot の照度入力と UART 正規表現
+
+`a6b7d70` は `Illuminance` と `FeedIlluminanceSamplesFromRESD` を
+既存の照度モデルにつなぎ、Robot の `treatAsRegex=true` をテキスト UART
+の実データに適用する。Rust の UART テストは18件合格した。
+固定上流の VEML7700 スイートで照度設定、定周期 RESD、タイムスタンプ付き
+RESD、Zephyr の旧・新ドライバーとシェル応答を測定した。
+
+公式の CSV 変換ツールは `construct==2.10.68` に依存する。初回の2件では
+変換用依存が欠け、空の RESD が渡された。固定上流の依存を venv に入れて
+同じスイートを再実行した。
+
+```sh
+target/renode-venv/bin/python -m pip install -r scripts/upstream/requirements.txt
+target/renode-venv/bin/python scripts/upstream/run.py --jobs 1 \
+  --suite tests/peripherals/VEML7700.robot --out target/robot-veml7700-reproduce
+```
+
+再実行は元の5件すべて PASS。`target/robot-veml7700-resd/results.json` に
+SHA、コマンド、ケースID、測定を記録した。HEX と STM32F072b の7件は
+合計6 PASS、1 UNSUPPORTED で、UART アダプター変更前の結果と一致した。
