@@ -14,6 +14,23 @@
 進捗表は公式インベントリと対応表から生成した。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
+## Linux での最終一括実行
+
+実行した Rust リビジョンは `c5111107f91b2faad617364f4524bc3e268f6891`。
+固定上流の Release discovery を6プロジェクトで再取得し、公式 ID、NUnit ID、
+fixture、実行状態、カテゴリ、パラメーターを保存済みインベントリと照合した。
+PrimitiveReaderWriterTests の102件は旧表の表示値を構造化して比較した。
+3395件合格、失敗0件、未実行0件、未対応0件。Windows 専用3件は移植済みで、
+上流のホスト条件に従い Linux の実行から除外した。上流 Ignore 14件と
+Inconclusive 1件も対象外。
+
+[集計](nunit-evidence/final-summary.json) ·
+[fixture 集計](nunit-evidence/final-fixtures.tsv) ·
+[公式 ID 別の全結果](nunit-evidence/final-inventory.jsonl.gz) ·
+[実行レポート](nunit-evidence/final-results.json.gz) ·
+[Rust 実行ログ](nunit-evidence/final-rust.log.gz) ·
+[上流 discovery XML とログ](nunit-evidence/final-discovery.tar.gz)
+
 前回の追加は52件。Migrant の TypeDescriptorComparisonTests が11件、
 SystemBus の幅変換が1件、レジスタバイトのアクセス追跡が11件、
 アクセス条件の DNF 変換と状態マスクが15件、MultiTree と MultiValueDictionary が各7件。
