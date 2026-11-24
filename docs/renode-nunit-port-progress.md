@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 976 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 992 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,420 |
+| 移植待ち | 2,404 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 45 fixture の
@@ -101,10 +101,14 @@ ComparingTimerTests の比較値上限1件。対象を絞った Rust 実行で�
 ジェネリック配列とインターフェースのリスト4件。対象を絞った Rust 実行で全件合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-custom-regex-generics.tsv) · [対象実行ログ](nunit-evidence/targeted-custom-regex-generics.log)
 
-今回の追加は10件。Migrant のボックス化された整数のサロゲート2件、
+前回の追加は10件。Migrant のボックス化された整数のサロゲート2件、
 コンストラクター指定のフィールド6件、復元後のフック2件を移植した。
 対象を絞った Rust 実行で全件合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-boxed-constructors-late-hook.tsv) · [対象実行ログ](nunit-evidence/targeted-boxed-constructors-late-hook.log)
+
+今回の追加は16件。Migrant の HooksTests を反射読み書き・型スタンプ有無の
+2設定で8メソッド移植した。対象を絞った Rust 実行で全件合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-migrant-read-global-hooks.tsv) · [対象実行ログ](nunit-evidence/targeted-migrant-read-global-hooks.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。
