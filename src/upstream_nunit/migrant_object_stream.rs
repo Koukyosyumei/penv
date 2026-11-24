@@ -30,6 +30,11 @@ const STAMPS: &[TypeStamp<'static>] = &[
     ),
     stamp("Queue<int>", &[("items", FieldKind::Reference)]),
     stamp("HashSet<int>", &[("items", FieldKind::Reference)]),
+    stamp("ArrayList", &[("items", FieldKind::Reference)]),
+    stamp(
+        "ReadOnlyCollection<object>",
+        &[("list", FieldKind::Reference)],
+    ),
     stamp("List<int>", &[("items", FieldKind::Reference)]),
     stamp("List<List<int>>", &[("items", FieldKind::Reference)]),
     stamp("List<Box>", &[("items", FieldKind::Reference)]),
@@ -1207,3 +1212,89 @@ stamp_modes!(queue_plain, queue_stamped, |s| queue_and_set(s, true));
 stamp_modes!(hash_set_plain, hash_set_stamped, |s| queue_and_set(
     s, false
 ));
+
+fn array_list_with_strings(stamped: bool) {
+    let mut graph = Graph::default();
+    let first = graph.insert(string("Word 1"));
+    let second = graph.insert(string("Word 2"));
+    let text = graph.insert(string("Word 4"));
+    let object = graph.insert(record(
+        "SimpleClass",
+        vec![Value::Integer(6), Value::Ref(text)],
+    ));
+    let last = graph.insert(string("Word 3"));
+    let root = list(
+        &mut graph,
+        "ArrayList",
+        vec![first, second, object, last]
+            .into_iter()
+            .map(Value::Ref)
+            .collect(),
+    );
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored = list_values(graph, root, "ArrayList");
+    assert_eq!(restored.len(), 4);
+    assert_eq!(string_value(graph, &restored[0]), "Word 1");
+    assert_eq!(string_value(graph, &restored[1]), "Word 2");
+    let object = graph.get(reference(&restored[2])).unwrap();
+    let Object::Record { class, fields } = object else {
+        panic!("expected SimpleClass");
+    };
+    assert_eq!(class, "SimpleClass");
+    assert_eq!(fields[0], Value::Integer(6));
+    assert_eq!(string_value(graph, &fields[1]), "Word 4");
+    assert_eq!(string_value(graph, &restored[3]), "Word 3");
+}
+
+fn array_list_with_primitives(stamped: bool) {
+    let mut graph = Graph::default();
+    let boxed = [1, 2, 3].map(|value| boxed_integer(&mut graph, value));
+    let root = list(&mut graph, "ArrayList", boxed.to_vec());
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let restored: Vec<_> = list_values(graph, root, "ArrayList")
+        .iter()
+        .map(|value| integer_value(graph, value))
+        .collect();
+    assert_eq!(restored, [1, 2, 3]);
+}
+
+fn read_only_collection(stamped: bool) {
+    let mut graph = Graph::default();
+    let first = Value::Ref(graph.insert(string("asdasd")));
+    let second = boxed_integer(&mut graph, 1);
+    let third = Value::Ref(graph.insert(string("cvzxcv")));
+    let inner = list(&mut graph, "List<object>", vec![first, second, third]);
+    let root = graph.insert(record(
+        "ReadOnlyCollection<object>",
+        vec![Value::Ref(inner)],
+    ));
+    let (reader, root) = deep_clone(&graph, root, stamped);
+    let graph = reader.graph();
+    let Some(Object::Record { class, fields }) = graph.get(root) else {
+        panic!("expected collection");
+    };
+    assert_eq!(class, "ReadOnlyCollection<object>");
+    let restored = list_values(graph, reference(&fields[0]), "List<object>");
+    assert_eq!(restored.len(), 3);
+    assert_eq!(string_value(graph, &restored[0]), "asdasd");
+    assert_eq!(integer_value(graph, &restored[1]), 1);
+    assert_eq!(string_value(graph, &restored[2]), "cvzxcv");
+}
+
+stamp_modes!(
+    array_list_strings_plain,
+    array_list_strings_stamped,
+    array_list_with_strings
+);
+stamp_modes!(
+    array_list_primitives_plain,
+    array_list_primitives_stamped,
+    array_list_with_primitives
+);
+stamp_modes!(
+    read_only_collection_plain,
+    read_only_collection_stamped,
+    read_only_collection
+);
