@@ -1254,9 +1254,9 @@ pub fn serve(
         let mut existing_machine = true;
         let mut included_variables = None;
         let parsed = command_words(text).and_then(|words| {
-            if let ["include" | "i", value] = words.as_slice() {
+            if let [verb @ ("include" | "i" | "ExecuteScript"), value] = words.as_slice() {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-                let source = include_path(value, &cwd.join(path), &cwd, root, &session.variables)?;
+                let source = include_path(verb, value, &cwd.join(path), &cwd, root, &session.variables)?;
                 if matches!(source.extension().and_then(|ext| ext.to_str()), Some("repl" | "cs" | "py")) {
                     return Err("live include requires a RESC command script".into());
                 }
@@ -1383,6 +1383,9 @@ pub fn serve(
                         frame(&mut output, "ERROR", error.as_bytes())
                     }
                 }
+            }
+            (Err(error), _) if missing_include(&error) => {
+                frame(&mut output, "REJECTED", error.as_bytes())
             }
             (Err(error), _) if error.starts_with("Wrong machine number.")
                 || (error.starts_with("Machine ") && error.ends_with(" not found.")) => {
@@ -1876,6 +1879,16 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     let length = header.strip_prefix("PENV-COMMAND ").ok_or("expected PENV-COMMAND")?;
     let command = read_monitor_text(&mut input, length)?;
     let mut state = script_state()?;
+    if let Ok([verb @ ("include" | "i" | "ExecuteScript"), value]) = command_words(command.trim()).as_deref() {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok() {
+            let origin = source.parent().unwrap_or(Path::new("."));
+            if let Err(error) = include_path(verb, value, &source, origin, root, &state.variables) {
+                let status = if missing_include(&error) { "REJECTED" } else { "ERROR" };
+                return Ok(StartupInput::Reply(status, error));
+            }
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     // Inspect only read-only commands that resolve in startup state.
     // A queued runtime operation may change that state, so use the live monitor then.
     if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _]))
@@ -2183,8 +2196,8 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                     line: line + 1, source: path.to_owned(), action: Action::LoadMemory(snapshot),
                 });
             }
-            ["include" | "i", value] => {
-                let included = include_path(value, path, origin, root, &state.variables)
+            [verb @ ("include" | "i" | "ExecuteScript"), value] => {
+                let included = include_path(verb, value, path, origin, root, &state.variables)
                     .map_err(|e| error(&e))?;
                 match included.extension().and_then(|suffix| suffix.to_str()) {
                     Some("repl") if !state.boot.has_platform() => {
@@ -2253,16 +2266,29 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
     Ok(())
 }
 
+fn missing_include(message: &str) -> bool {
+    message.starts_with("File does not exist: ") || message.starts_with("Could not find file: ")
+}
+
 fn include_path(
-    value: &str, path: &Path, origin: &Path, root: &Path, variables: &HashMap<String, String>,
+    verb: &str, value: &str, path: &Path, origin: &Path, root: &Path, variables: &HashMap<String, String>,
 ) -> Result<PathBuf, String> {
-    if let Some(path) = anchored_path(value, origin, variables)? {
-        return Ok(path);
+    let file = if let Some(path) = anchored_path(value, origin, variables)? {
+        path
+    } else {
+        let value = resolve(variables, value)?;
+        let file = path_value(unquote(value.trim_start_matches('@')));
+        let candidate = root.join(&file);
+        if candidate.is_file() { candidate } else { local_path(&file, path, root) }
+    };
+    match fs::metadata(&file) {
+        Ok(_) => Ok(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let message = if verb == "ExecuteScript" { "Could not find file" } else { "File does not exist" };
+            Err(format!("{message}: {}", file.display()))
+        }
+        Err(error) => Err(format!("{}: {error}", file.display())),
     }
-    let value = resolve(variables, value)?;
-    let file = path_value(unquote(value.trim_start_matches('@')));
-    let candidate = root.join(&file);
-    Ok(if candidate.is_file() { candidate } else { local_path(&file, path, root) })
 }
 
 fn monitor_origin(variables: &HashMap<String, String>) -> &Path {

@@ -272,7 +272,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
 
     def execute_script(self, script):
         if self.rust_monitor:
-            return self.execute("include " + at_path(Path(script.removeprefix("@"))))
+            return self.execute("ExecuteScript " + at_path(Path(script.removeprefix("@"))))
         return self.load_script(self.monitor_input.path(script.removeprefix("@")))
 
     def include(self, tokens):
@@ -347,9 +347,9 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         self.calls[-1]["monitor"] = measurement
         with (self.out / "monitor.jsonl").open("a") as log:
             print(json.dumps(measurement), file=log)
-        if reply == "OK":
+        if reply in {"OK", "REJECTED"}:
             self.measurements.append(dict(measurement, result="pass"))
-        elif reply != "DEFER":
+        if reply not in {"OK", "DEFER"}:
             raise PenvExecutionError(value)
         return reply, value
 
@@ -379,6 +379,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 if (re.fullmatch(r"emulation\s+(?:GetTimeSourceInfo|IsStarted)", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)):
                     return self.operation(command, assertion=True)
+                if re.match(r"(?:include|i|ExecuteScript)\s", command):
+                    self.inspect_startup(command)
                 self.commands.append(command)
                 self.calls[-1]["stage"] = "queued_monitor_command"
                 return ""
@@ -724,7 +726,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                            elapsed_s=time.monotonic() - begin, stage="emulation")
         if uart_captures:
             measurement["groups"] = groups
-        if status == "MATCH" or status == "OK" and assertion:
+        if status in {"MATCH", "REJECTED"} or status == "OK" and assertion:
             measurement["result"] = "pass"
             self.measurements.append(measurement)
         elif status == "FAIL" or status == "ERROR" and re.search(
