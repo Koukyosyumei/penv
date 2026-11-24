@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 710 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 738 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,686 |
+| 移植待ち | 2,658 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 57 fixture の
@@ -33,10 +33,14 @@ StampingTests が4件、OpenStreamSerializationTests が5件、ObjectReaderWrite
 新規22件は対象に絞った Rust 実行で合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-stamps-symbol-dedup.tsv) · [Rust の対象実行ログ](nunit-evidence/targeted-stamps-symbol-dedup.log)
 
-今回の追加は32件。Migrant の SurrogateTests が12件、配列の SerializationTests が6件、
+前回の追加は32件。Migrant の SurrogateTests が12件、配列の SerializationTests が6件、
 既存の範囲検索を使う SymbolLookupTests が14件。対象を絞った Rust 実行で
 新規32件すべてが合格した。対応するサロゲート12件は固定 C# 側でも合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-surrogates-arrays-symbols.tsv) · [対象実行ログ](nunit-evidence/targeted-surrogates-arrays-symbols.log)
+
+今回の追加は28件。Migrant の SurrogateTests が22件、既存の範囲検索を使う
+SymbolLookupTests が6件。対象を絞った Rust 実行で新規28件すべてが合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-hierarchy-symbol-lookup.tsv) · [対象実行ログ](nunit-evidence/targeted-hierarchy-symbol-lookup.log)
 
 SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
 パラメーター付き登録、null CPU の登録に対応する API が必要。

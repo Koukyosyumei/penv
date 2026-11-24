@@ -75,6 +75,13 @@ SurrogateTests は反射読み書き・型スタンプの有無2設定で6メソ
 型スタンプの有無2設定で計6件を移植した。
 [公式 ID 別の結果](nunit-evidence/targeted-surrogates-arrays-symbols.tsv) · [固定 C# の SurrogateTests ログ](nunit-evidence/surrogates-official.log)
 
-残りは9 fixture・2,087ケース。弱参照保持、生成読み書き、コレクションと CLR 型の
-コーデック、継承・インターフェース・ジェネリックに基づくサロゲート選択、
-フック、バージョン許容を伴う型変更の復元が必要。
+SurrogateTests の継承、インターフェース、ジェネリック定義による選択を
+反射読み書き・型スタンプの有無2設定で11メソッド、計22件追加した。
+型関係は Rust 側で明示的に登録する。適用可能な候補の中で型の特殊化を優先し、
+比較できない候補は上流の登録順を維持する。具体型での無効化は基底型への
+フォールバックを止める。固定 C# の保存済み結果と Rust の対象実行で22件が合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-hierarchy-symbol-lookup.tsv)
+
+残りは9 fixture・2,065ケース。弱参照保持、生成読み書き、コレクションと CLR 型の
+コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
+伴う型変更の復元が必要。
