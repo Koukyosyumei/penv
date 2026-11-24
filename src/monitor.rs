@@ -544,7 +544,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                 command.action,
                 Action::CreateHostPty(..) | Action::RtcMode(_) | Action::RtcDateTime
                     | Action::AssembleBlock(..) | Action::BusScalar(_)
-                    | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
+                    | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_) | Action::ExecutionMode(..)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
                     | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
@@ -3548,6 +3548,7 @@ fn execute(
                         | Action::AssembleBlock(..)
                         | Action::AssertCpuValue(..)
                         | Action::ReadCpuPc(_)
+                        | Action::ExecutionMode(..)
                         | Action::CpuPc(..)
                         | Action::CpuStep(..)
                         | Action::CpuRegister(..)
