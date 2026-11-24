@@ -4155,10 +4155,19 @@ fn duration_steps(value: &str) -> Result<u64, String> {
         })
         .unwrap_or(value);
     let seconds = seconds.strip_suffix('s').unwrap_or(seconds);
-    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
-    let invalid =
-        || format!("expected nonnegative decimal seconds at 10 ns resolution, got {value:?}");
-    let whole: u64 = whole.parse().map_err(|_| invalid())?;
+    let invalid = || format!("expected a nonnegative time interval at 10 ns resolution, got {value:?}");
+    let mut parts = seconds.rsplit(':');
+    let last = parts.next().ok_or_else(invalid)?;
+    let (whole, fraction) = last.split_once('.').unwrap_or((last, ""));
+    let mut whole: u64 = whole.parse().map_err(|_| invalid())?;
+    for (part, multiplier) in parts.by_ref().take(2).zip([60, 3600]) {
+        let field: u64 = part.parse().map_err(|_| invalid())?;
+        whole = field.checked_mul(multiplier).and_then(|field| whole.checked_add(field))
+            .ok_or_else(invalid)?;
+    }
+    if parts.next().is_some() {
+        return Err(invalid());
+    }
     let fraction = fraction.trim_end_matches('0');
     if fraction.len() > 8 || !fraction.bytes().all(|digit| digit.is_ascii_digit()) {
         return Err(invalid());
