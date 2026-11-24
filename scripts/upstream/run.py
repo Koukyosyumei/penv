@@ -183,6 +183,7 @@ def discover_nunit(root, dotnet, projects, host, output):
     rows, runs = [], []
     for i, item in enumerate(projects):
         project = item["project"]
+        print(f"NUnit discovery {i + 1}/{len(projects)} {project}", flush=True)
         directory = output / str(i)
         directory.mkdir()
         build = log_command(directory, "build",
@@ -332,31 +333,36 @@ def main():
                                                "--bin", "penv", "--target-dir", out / "cargo"], ROOT)
         metadata["build"] = build
         if build["exit_code"] != 0:
-            write_json(out / "results.json", dict(metadata=metadata, cases=[
-                dict(case, status="startup_error") for case in selected]))
-            return 1
-        binary = Path(shutil.copy2(out / "cargo/release/penv", out / "penv"))
-        metadata["penv_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
-        assets = out / "assets"
-        assets.mkdir()
-        from batch import run_batch
-        results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs))
-        if args.negative_control:
-            pilot, = [row for row in rows if row["path"] == DEFAULT_ROBOT[0]
-                      and row["name"] == "Should Load HEX"]
-            directory = out / "negative-control"
-            directory.mkdir()
-            result = run_robot(pilot, providers[pilot["path"]], options, renode, binary,
-                               directory, assets, True)
-            record = dict(pilot, engine="penv", **result)
-            write_json(directory / "case.json", record)
-            results.append(record)
+            results.extend(dict(case, engine="penv", status="not_run", category="environment",
+                                reason="penv build failed", evidence=build["log"])
+                           for case in selected)
+        else:
+            binary = Path(shutil.copy2(out / "cargo/release/penv", out / "penv"))
+            metadata["penv_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+            assets = out / "assets"
+            assets.mkdir()
+            from batch import run_batch
+            results.extend(run_batch(selected, options, renode, binary, out, assets, args.jobs))
+            if args.negative_control:
+                pilot, = [row for row in rows if row["path"] == DEFAULT_ROBOT[0]
+                          and row["name"] == "Should Load HEX"]
+                directory = out / "negative-control"
+                directory.mkdir()
+                result = run_robot(pilot, providers[pilot["path"]], options, renode, binary,
+                                   directory, assets, True)
+                record = dict(pilot, engine="penv", **result)
+                write_json(directory / "case.json", record)
+                results.append(record)
     if nunit_root:
         metadata["dotnet"] = log_command(out, "dotnet-version", [args.dotnet, "--version"], nunit_root)
         nunit, nunit_runs = discover_nunit(nunit_root, args.dotnet, projects, host, out / "nunit")
         for row in nunit:
             if row["status"] == "not_run" and row["rust_test"] and not args.inventory_only:
-                row = run_rust(row, out / "nunit", out / "cargo")
+                if "penv_sha256" in metadata:
+                    print(f"NUnit Rust {row['id']}", flush=True)
+                    row = run_rust(row, out / "nunit", out / "cargo")
+                else:
+                    row.update(reason="penv build failed", evidence=metadata["build"]["log"])
             row["engine"] = "penv-rust"
             row["category"] = {"pass": "passed", "fail": "assertion_failed",
                                "skipped": "skip", "excluded": "skip",

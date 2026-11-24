@@ -21,6 +21,10 @@ class PenvExecutionError(RuntimeError):
     pass
 
 
+class PenvStartupError(RuntimeError):
+    pass
+
+
 class AssertionFailed(RuntimeError):
     pass
 
@@ -67,6 +71,9 @@ class Endpoint:
             call.update(status="unsupported", category="adapter_missing", message=str(exc))
         except AssertionFailed as exc:
             call.update(status="error", category="assertion_failed", message=str(exc))
+        except PenvStartupError as exc:
+            call.update(status="error", category="penv_execution_failure", stage="launch",
+                        message=str(exc))
         except PenvExecutionError as exc:
             call.update(status="error", category="penv_execution_failure", message=str(exc))
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:

@@ -10,7 +10,8 @@ import subprocess
 import tempfile
 import time
 
-from penv_robot import AssertionFailed, Endpoint, PenvExecutionError, PenvUnsupported, Unsupported
+from penv_robot import (AssertionFailed, Endpoint, PenvExecutionError, PenvStartupError,
+                        PenvUnsupported, Unsupported)
 
 
 class LiveEndpoint(Endpoint):
@@ -249,7 +250,7 @@ class LiveEndpoint(Endpoint):
             cmd.extend(["--script", str(script), "--asset-dir", str(self.assets)])
         else:
             cmd.extend(["--platform", str(platform)])
-        self.calls[-1]["command"] = cmd
+        self.calls[-1].update(command=cmd, stage="launch")
         with (self.out / "penv.stderr").open("wb") as stderr:
             self.proc = subprocess.Popen(cmd, cwd=self.out, stdin=subprocess.PIPE,
                                          stdout=subprocess.PIPE, stderr=stderr, bufsize=0)
@@ -259,11 +260,13 @@ class LiveEndpoint(Endpoint):
             if re.search(r"unsupported (?:platform model|peripheral|CPU|monitor command|command)|"
                          r"unknown (?:model|CPU)", str(exc), re.I):
                 raise PenvUnsupported(str(exc)) from exc
-            raise
+            if re.search(r"No such file|Permission denied|missing firmware image", str(exc), re.I):
+                raise
+            raise PenvStartupError(str(exc)) from exc
         if status != "READY":
             raise RuntimeError(f"expected penv READY, got {status}")
         self.process_command = cmd
-        self.calls[-1]["penv_ready"] = True
+        self.calls[-1].update(penv_ready=True, stage="emulation")
 
     def operation(self, command, assertion=False):
         self.ensure_running()
@@ -289,7 +292,8 @@ class LiveEndpoint(Endpoint):
         with (self.out / "monitor.jsonl").open("a") as log:
             print(json.dumps(measurement), file=log)
         if status == "UNSUPPORTED" or status == "ERROR" and re.search(
-                r"UART peripheral not found|unknown STM32 UART|unknown LED", value, re.I):
+                r"UART peripheral not found|unknown STM32 UART|unknown LED|not a Cortex-M CPU|"
+                r"requires a Cortex-M platform|unsupported monitor", value, re.I):
             raise PenvUnsupported(value)
         if measurement.get("result") == "fail":
             raise AssertionFailed(value)

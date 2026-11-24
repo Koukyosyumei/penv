@@ -13,6 +13,10 @@ from live import LiveEndpoint
 # These suites launch host services or invoke the upstream runner recursively.
 HOST_SUITES = {"tests/peripherals/VirtIO.robot", "tests/tools/renode-test.robot",
                "tests/network-logging/network-logging.robot"}
+EXTERNAL_INPUTS = {
+    "tests/unit-tests/riscv-isa-tests.robot": ("RISCV_TESTS_PATH", "/riscv-tests/isa"),
+    "tests/unit-tests/riscv-arch-tests.robot": ("RISCV_ARCH_TESTS_PATH", "/riscv-arch-test/work"),
+}
 
 
 def status_record(case, status, reason):
@@ -34,7 +38,8 @@ def assess(test, endpoint):
     elif failures:
         issue = failures[-1]
         category, reason = issue["category"], issue["message"]
-        status = "fail" if category in {"assertion_failed", "penv_execution_failure"} else "not_run"
+        status = ("fail" if category in {"assertion_failed", "penv_execution_failure"}
+                  and issue.get("stage") != "launch" else "not_run")
         if test.status == "PASS":
             status, category = "not_run", "environment"
             reason = f"error handled by Robot without a verified penv assertion: {reason}"
@@ -170,6 +175,12 @@ def run_suite(task, *, options, renode, binary, assets):
                         r"Parent suite setup failed|Connection refused|Timeout exceeded",
                         records[name]["reason"], re.I):
                     records[name]["category"] = "environment"
+                if records[name]["category"] == "no_measurement" and path in EXTERNAL_INPUTS:
+                    variable, default = EXTERNAL_INPUTS[path]
+                    source = Path(os.environ.get(variable, default))
+                    if not source.is_dir():
+                        records[name].update(category="environment",
+                                             reason=f"{variable} input directory missing: {source}")
                 case, directory = active[name]
                 write_case(case, records[name], directory)
         return [dict(case, engine="penv", **records.get(case["name"], dict(
