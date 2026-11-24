@@ -2,10 +2,12 @@
 """Discover mapped fixtures in a built Renode checkout and run the Rust batch."""
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
+import csv
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -32,6 +34,41 @@ def run(command, cwd, log, timeout=600):
                               timeout=timeout, env={**os.environ, "DOTNET_CLI_UI_LANGUAGE": "en-US"}).returncode
 
 
+def manifest_projects(source):
+    manifest = git(source, "show", "HEAD:tests/tests.yaml")
+    projects = re.findall(r"^- ([^\s]+\.csproj)$", manifest, re.MULTILINE)
+    if not projects or len(projects) != len(set(projects)):
+        raise ValueError("Invalid NUnit project list in the pinned manifest")
+    return projects
+
+
+def case_nodes(node, categories=frozenset()):
+    categories = categories.union(
+        prop.attrib["value"] for prop in node.findall("properties/property[@name='Category']")
+    )
+    if node.tag == "test-case":
+        yield node.attrib, categories
+    else:
+        for child in node:
+            if child.tag in {"test-run", "test-suite", "test-case"}:
+                yield from case_nodes(child, categories)
+
+
+def host_exclusions():
+    system = {"Linux": "linux", "Darwin": "osx"}.get(platform.system(), "windows")
+    arch = "aarch64" if platform.machine() in {"aarch64", "arm64"} else "i386"
+    return {"excluded", f"exclude_{system}", f"exclude_host_{arch}"}
+
+
+def fixture_notes():
+    with Path(__file__).with_name("nunit_gaps.tsv").open(newline="") as source:
+        rows = list(csv.DictReader(source, delimiter="\t"))
+    notes = {row["fixture"]: row["missing_api"] for row in rows}
+    if len(notes) != len(rows):
+        raise ValueError("Duplicate fixture in NUnit gap notes")
+    return notes
+
+
 def discover(project, mapping, clone, dotnet, output):
     command = [dotnet, "test", "--no-build", "--configuration", "Release", "--list-tests",
                project, "--", "NUnit.DisplayName=FullName", "NUnit.DumpXmlTestDiscovery=true"]
@@ -50,27 +87,35 @@ def discover(project, mapping, clone, dotnet, output):
         raise ValueError(f"Expected a fresh discovery dump inside {clone}: {dump}")
     xml = output / "discovery.xml"
     shutil.copy2(dump, xml)
-    nodes = list(ET.parse(xml).iter("test-case"))
-    actual = Counter(node.attrib["fullname"] for node in nodes)
+    nodes = list(case_nodes(ET.parse(xml).getroot()))
+    actual = Counter(case["fullname"] for case, _ in nodes)
     listed = Counter(line.strip() for line in listing.splitlines() if line.startswith("    "))
     if not actual or actual != listed:
         raise ValueError(f"VSTest and NUnit discovery differ, see {log} and {xml}")
 
-    fixtures = {name.rsplit(".", 1)[0] for name in mapping}
-    fixture_cases = Counter(node.attrib["fullname"] for node in nodes
-                            if node.attrib["classname"] in fixtures)
-    if fixture_cases != Counter(mapping.keys()):
-        raise ValueError(f"Mapped fixtures differ from official discovery: {project}")
-
+    exclusions = host_exclusions()
     cases = []
-    for node in nodes:
-        case = node.attrib
+    for case, categories in nodes:
         name = case["fullname"]
-        if name not in mapping:
-            continue
-        if case["runstate"] != "Runnable":
-            raise ValueError(f"Mapped case is {case['runstate']}: {name}")
-        cases.append(dict(mapping[name], id=f"{project}::{name}", nunit_id=case["id"],
+        engine_id = case["id"]
+        unique_name = name if actual[name] == 1 else f"{name} [NUnit {engine_id}]"
+        if name in mapping and actual[name] > 1:
+            raise ValueError(f"Ambiguous mapped fixture case, use discovery ID suffix: {name}")
+        row = mapping.get(unique_name)
+        runstate = case["runstate"]
+        if not exclusions.isdisjoint(categories):
+            status = "excluded"
+        elif runstate != "Runnable":
+            status = {"Ignored": "ignored", "Skipped": "skipped",
+                      "Explicit": "explicit"}.get(runstate, "not_runnable")
+        else:
+            status = "not_run" if row else "unmapped"
+        cases.append(dict(project=project, official_fullname=name,
+                          id=f"{project}::{unique_name}", nunit_id=engine_id,
+                          fixture=case["classname"], runstate=runstate,
+                          categories=sorted(categories), status=status,
+                          rust_test=row["rust_test"] if row else "",
+                          origin=row["origin"] if row else "",
                           parameters=case_parameters(case["methodname"], case["name"])))
     return cases, dict(project=project, command=command, discovered=len(nodes),
                        xml=str(xml.relative_to(output.parent)), log=str(log.relative_to(output.parent)),
@@ -91,9 +136,15 @@ def main():
     for path in (renode, clone):
         if git(path, "rev-parse", "HEAD") != PIN or git(path, "status", "--porcelain", "-uno"):
             parser.error(f"expected clean Renode source at {PIN}: {path}")
-    infra = Path("src/Infrastructure")
-    if git(clone / infra, "rev-parse", "HEAD") != git(renode, "rev-parse", f"HEAD:{infra}"):
-        parser.error("Infrastructure checkout does not match the pinned Renode gitlink")
+    projects = manifest_projects(renode)
+    submodules = {Path(*Path(project).parts[:2]) for project in projects
+                  if Path(project).parts[:2] != ("tests", "unit-tests")}
+    revisions = {}
+    for path in sorted(submodules):
+        revision = git(clone / path, "rev-parse", "HEAD")
+        if revision != git(renode, "rev-parse", f"HEAD:{path}"):
+            parser.error(f"{path} checkout does not match the pinned Renode gitlink")
+        revisions[str(path)] = revision
     if git(ROOT, "status", "--porcelain", "-uno"):
         parser.error("commit tracked changes before collecting evidence")
 
@@ -103,16 +154,23 @@ def main():
     dotnet = str(Path(dotnet_path).resolve())
     mapping = load_mapping()
     out.mkdir(parents=True)
-    cases, projects = [], []
-    for index, project in enumerate(sorted({project for project, _ in mapping}), 1):
+    cases, discovery_runs = [], []
+    for index, project in enumerate(projects, 1):
         directory = out / f"nunit-{index}"
         directory.mkdir()
         rows, discovery = discover(project, {name: row for (p, name), row in mapping.items()
                                               if p == project}, clone, dotnet, directory)
         cases.extend(rows)
-        projects.append(discovery)
+        discovery_runs.append(discovery)
 
-    tests = sorted(case["rust_test"] for case in cases)
+    if len({case["id"] for case in cases}) != len(cases):
+        raise ValueError("Discovery contains duplicate case IDs")
+    mapped = [case for case in cases if case["rust_test"]]
+    if {case["rust_test"] for case in mapped} != {row["rust_test"] for row in mapping.values()}:
+        raise ValueError("Some mapped Rust tests have no official discovery ID")
+    tests = sorted(case["rust_test"] for case in mapped if case["status"] == "not_run")
+    if not tests:
+        raise ValueError("No runnable mappings for this host")
     command = ["cargo", "test", "--locked", "--color", "never", "--bin", "penv", "--",
                "--exact", "--test-threads=1", *tests]
     log = out / "rust.log"
@@ -124,18 +182,43 @@ def main():
     if len(dict(results)) != len(results) or not set(dict(results)).issubset(tests):
         raise ValueError(f"Unexpected Rust test results in {log}")
     outcomes = dict(results)
-    totals = Counter()
+    notes = fixture_notes()
+    fixtures = defaultdict(Counter)
     for case in cases:
-        case["status"] = {"ok": "pass", "FAILED": "fail"}.get(outcomes.get(case["rust_test"]), "not_run")
-        totals[case["status"]] += 1
-    summary = dict(ported=len(cases), newly_ported=sum(case["origin"] == "new" for case in cases),
-                   passed=totals["pass"], failed=totals["fail"], not_run=totals["not_run"])
-    report = dict(renode_sha=PIN, infrastructure_sha=git(clone / infra, "rev-parse", "HEAD"),
-                  penv_sha=git(ROOT, "rev-parse", "HEAD"), discovery=projects, summary=summary,
-                  rust=dict(command=command, exit_code=status, log=log.name, binary_sha256=binary_sha), cases=cases)
+        if case["status"] == "not_run":
+            case["status"] = {"ok": "pass", "FAILED": "fail"}.get(
+                outcomes.get(case["rust_test"]), "not_run"
+            )
+        elif case["status"] == "unmapped" and case["fixture"] in notes:
+            case["status"] = "api_missing"
+        fixtures[(case["project"], case["fixture"])][case["status"]] += 1
+
+    totals = Counter(case["status"] for case in cases)
+    summary = dict(ported=len(mapped), newly_ported=sum(case["origin"] == "new" for case in mapped),
+                   passed=totals["pass"], failed=totals["fail"], not_run=totals["not_run"],
+                   discovered=len(cases), api_missing=totals["api_missing"],
+                   unmapped=totals["unmapped"], selected=len(tests))
+    report = dict(renode_sha=PIN, submodule_shas=revisions,
+                  penv_sha=git(ROOT, "rev-parse", "HEAD"), discovery=discovery_runs, summary=summary,
+                  rust=dict(command=command, exit_code=status, log=log.name, binary_sha256=binary_sha),
+                  cases=mapped)
     (out / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+
+    fields = ("id", "nunit_id", "fixture", "runstate", "categories", "parameters", "status", "rust_test")
+    with (out / "inventory.jsonl").open("w") as inventory:
+        for case in cases:
+            inventory.write(json.dumps({field: case[field] for field in fields}, ensure_ascii=False) + "\n")
+    states = ("pass", "fail", "not_run", "api_missing", "unmapped", "excluded",
+              "ignored", "skipped", "explicit", "not_runnable")
+    with (out / "fixtures.tsv").open("w", newline="") as summary_file:
+        writer = csv.writer(summary_file, delimiter="\t", lineterminator="\n")
+        writer.writerow(("project", "fixture", "discovered", *states, "missing_api"))
+        for (project, fixture), counts in sorted(fixtures.items()):
+            writer.writerow((project, fixture, sum(counts.values()), *(counts[state] for state in states),
+                             notes.get(fixture, "") if counts["api_missing"] else ""))
+
     print(json.dumps(summary), out)
-    return int(status != 0 or totals["pass"] != len(cases))
+    return int(status != 0 or totals["pass"] != len(tests))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,9 @@
+mod bit_helper;
+mod circular_buffer;
 mod misc;
 mod parser_primitives;
+mod range;
+mod time_interval;
 
 use crate::{parse_address64, repl_syntax};
 
@@ -33,3 +37,5 @@ fn hexadecimal_unsigned_long_12ab() {
 fn hexadecimal_unsigned_long_0ff() {
     assert_eq!(parse_address64("0x0ff"), Ok(0xff));
 }
+
+mod memory;

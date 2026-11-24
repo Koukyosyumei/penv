@@ -1,6 +1,9 @@
+pub mod address_range;
 mod andes_csr;
+mod bit_field;
 mod bitmanip;
 mod bus;
+pub mod circular_buffer;
 mod clint;
 mod collapsed_profile;
 mod compressed;
@@ -159,6 +162,7 @@ Usage: penv run [OPTIONS] IMAGE
        penv check-platform PATH [--platform-root PATH]
        penv check-platform --from-string REPL [--platform-root PATH]
        penv validate-platform REPL
+       penv platform prelex < REPL
        penv thumb-assemble SOURCE
        penv thumb-disassemble ADDRESS HEXBYTES
        penv thumb-disassemble-memory REPL ELF ADDRESS SIZE
@@ -519,6 +523,18 @@ fn run() -> Result<ExitCode, String> {
             let guests = &ports[1..];
             ethernet_switch::run(*local, guests)
                 .map_err(|error| format!("Ethernet switch: {error}"))?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        Some(Some("platform")) => {
+            if args.next().as_deref() != Some(std::ffi::OsStr::new("prelex"))
+                || args.next().is_some()
+            {
+                return Err("expected 'platform prelex' with REPL source on stdin".into());
+            }
+            let mut source = String::new();
+            io::stdin().read_to_string(&mut source).map_err(|e| e.to_string())?;
+            let lines = repl_parser::prelex(&source)?;
+            io::stdout().write_all(lines.join("\n").as_bytes()).map_err(|e| e.to_string())?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(Some("check-platform")) => {

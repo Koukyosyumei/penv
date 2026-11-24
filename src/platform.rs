@@ -3465,9 +3465,12 @@ fn uses_vex_irq(entry: &Entry) -> bool {
 }
 
 fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(usize, u8), String> {
-    if let Some((pin, target)) = wire.split_once("->")
-        && matches!(pin.trim(), "" | "IRQ")
-        && let Some((cpu, line)) = target.split_once('@')
+    use crate::repl_parser::{IrqDestination, IrqEnd, irq_connection};
+
+    if let Ok(connection) = irq_connection(wire)
+        && matches!(connection.sources.as_deref(), None | Some([IrqEnd::Property("IRQ")]))
+        && let [IrqDestination { name: cpu, local: None, groups }] = connection.destinations.as_slice()
+        && let [IrqEnd::Number(line)] = groups.as_slice()
         && let Some((hart, &(_, target, _, _, _))) =
             configs
                 .iter()
@@ -3477,9 +3480,8 @@ fn vex_irq(entry: &Entry, wire: &str, configs: &[RiscvConfig<'_>]) -> Result<(us
                         && (uses_vex_irq(target) || target.model == "CPU.Minerva")
                 })
     {
-        let line = number(line.trim()).map_err(|e| entry.error(&e))?;
-        return match line {
-            0..=31 => Ok((hart, line as u8)),
+        return match *line {
+            0..=31 => Ok((hart, *line as u8)),
             1000..=1031 if uses_vex_irq(target) => Ok((hart, (line - 1000 + 32) as u8)),
             _ => Err(entry.error("VexRiscv external IRQ must be in 0–31 or 1000–1031")),
         };

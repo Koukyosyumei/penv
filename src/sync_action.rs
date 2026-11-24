@@ -23,10 +23,13 @@ impl<T> SyncAction<T> {
 #[cfg(test)]
 mod tests {
     use super::SyncAction;
+    use crate::time_source::TimeSource;
 
     #[derive(Default)]
     struct TimeSourceFixture {
-        round: u64,
+        master: TimeSource<10>,
+        slave: TimeSource<10>,
+        requested: bool,
         calls: Vec<u64>,
         action: Option<SyncAction<()>>,
     }
@@ -34,17 +37,20 @@ mod tests {
     impl TimeSourceFixture {
         fn run(&mut self, rounds: u64, request: impl Fn(u64, u64) -> Option<u64>) {
             for _ in 0..rounds {
-                let boundary = self.round * 10;
+                let round = self.master.sync_points();
+                self.master.grant_until(round * 10);
                 // Round zero is the initial synchronization with no sink grant.
-                if self.round != 0
-                    && let Some(timestamp) = request(self.round, boundary)
-                {
-                    self.action = Some(SyncAction::new(timestamp, ()));
+                if round != 0 {
+                    self.slave.grant_until(self.master.elapsed());
+                    let boundary = self.slave.elapsed();
+                    if let Some(timestamp) = request(round, boundary) {
+                        self.requested = true;
+                        self.action = Some(SyncAction::new(timestamp, ()));
+                    }
+                    if SyncAction::take_due(&mut self.action, boundary).is_some() {
+                        self.calls.push(boundary);
+                    }
                 }
-                if SyncAction::take_due(&mut self.action, boundary).is_some() {
-                    self.calls.push(boundary);
-                }
-                self.round += 1;
             }
         }
     }
@@ -55,7 +61,9 @@ mod tests {
         let request = |round, boundary| (round == 1).then_some(boundary);
         clock.run(1, request);
         assert!(clock.calls.is_empty());
+        assert!(!clock.requested);
         clock.run(1, request);
+        assert!(clock.requested);
         assert_eq!(clock.calls, [10]);
         clock.run(1, request);
         assert_eq!(clock.calls, [10]);

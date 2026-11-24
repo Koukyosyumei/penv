@@ -565,6 +565,7 @@ impl NetworkControl {
 #[cfg(test)]
 mod upstream_rcc_tests {
     use super::*;
+    use crate::machine::Machine;
 
     const BASE: u32 = 0x1000;
     const CR: u32 = BASE;
@@ -577,24 +578,41 @@ mod upstream_rcc_tests {
     const PLL1: u32 = 1 << 24;
     const DIV_READY: u32 = 1 << 5;
 
-    fn new() -> NetworkControl {
-        NetworkControl::new(BASE, None, None)
+    struct Fixture(Machine);
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut machine = Machine::without_default_ram();
+            machine
+                .bus
+                .map_h7_network_control(NetworkControl::new(BASE, None, None))
+                .unwrap();
+            Self(machine)
+        }
+
+        fn read(&mut self, address: u32) -> u32 {
+            self.0.bus.read::<4>(address).unwrap()
+        }
+
+        fn write(&mut self, address: u32, value: u32) {
+            self.0.bus.write(address, 4, value, &mut std::io::sink()).unwrap();
+        }
     }
 
     fn check_oscillator(source: u32, on: u32, expected: u32) {
-        let mut rcc = new();
-        let read = rcc.read(CR).unwrap();
-        rcc.write(CR, read | on).unwrap();
-        rcc.write(CFGR, source).unwrap();
-        rcc.write(CR, 0).unwrap();
-        assert_eq!(rcc.read(CR), Some(expected | DIV_READY));
+        let mut rcc = Fixture::new();
+        let read = rcc.read(CR);
+        rcc.write(CR, read | on);
+        rcc.write(CFGR, source);
+        rcc.write(CR, 0);
+        assert_eq!(rcc.read(CR), expected | DIV_READY);
     }
 
     #[test]
     fn should_prevent_disabling_hsi() {
-        let mut rcc = new();
-        rcc.write(CR, 0).unwrap();
-        assert_eq!(rcc.read(CR), Some(HSI | DIV_READY));
+        let mut rcc = Fixture::new();
+        rcc.write(CR, 0);
+        assert_eq!(rcc.read(CR), HSI | DIV_READY);
     }
 
     #[test]
@@ -614,34 +632,33 @@ mod upstream_rcc_tests {
 
     #[test]
     fn should_prevent_plls_modification_while_running() {
-        let mut rcc = new();
-        let initial = rcc.read(CR).unwrap();
+        let mut rcc = Fixture::new();
+        let initial = rcc.read(CR);
         for (pll, source) in [(PLL1, 1), (1 << 26, 2), (1 << 28, 3)] {
-            rcc.write(CR, initial | pll).unwrap();
-            let before = rcc.read(PLLCKSELR).unwrap();
-            rcc.write(PLLCKSELR, before | source).unwrap();
-            assert_eq!(rcc.read(PLLCKSELR), Some(before));
+            rcc.write(CR, initial | pll);
+            let before = rcc.read(PLLCKSELR);
+            rcc.write(PLLCKSELR, before | source);
+            assert_eq!(rcc.read(PLLCKSELR), before);
         }
     }
 
     #[test]
     fn should_keep_hsecsson_enabled() {
-        let mut rcc = new();
-        let before = rcc.read(CR).unwrap();
-        rcc.write(CR, before | 1 << 19).unwrap();
-        rcc.write(CR, before & !(1 << 19)).unwrap();
-        assert_eq!(rcc.read(CR).unwrap() & (1 << 19), 1 << 19);
+        let mut rcc = Fixture::new();
+        let before = rcc.read(CR);
+        rcc.write(CR, before | 1 << 19);
+        rcc.write(CR, before & !(1 << 19));
+        assert_eq!(rcc.read(CR) & (1 << 19), 1 << 19);
     }
 
     #[test]
     fn should_prevent_invalid_writes_to_divp1() {
-        let mut rcc = new();
-        let before = rcc.read(PLL1DIVR).unwrap();
+        let mut rcc = Fixture::new();
+        let before = rcc.read(PLL1DIVR);
         let mask = 0x7f << 9;
         for (written, expected) in [(3, 3), (2, 3), (0, 0)] {
-            rcc.write(PLL1DIVR, (before & !mask) | (written << 9))
-                .unwrap();
-            assert_eq!(rcc.read(PLL1DIVR).unwrap() & mask, expected << 9);
+            rcc.write(PLL1DIVR, (before & !mask) | (written << 9));
+            assert_eq!(rcc.read(PLL1DIVR) & mask, expected << 9);
         }
     }
 }

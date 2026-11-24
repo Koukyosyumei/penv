@@ -81,6 +81,7 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
     .map_err(|_| format!("invalid 32-bit number {value:?}"))
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum IrqEnd<'a> {
     Number(u32),
     Range(u32, u32),
@@ -123,6 +124,38 @@ pub(crate) fn irq_ends(input: &str, source: bool) -> Result<Vec<IrqEnd<'_>>, Str
         .split(',')
         .map(|item| irq_end(item, source))
         .collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct IrqDestination<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) local: Option<u32>,
+    pub(crate) groups: Vec<IrqEnd<'a>>,
+}
+
+pub(crate) struct IrqConnection<'a> {
+    pub(crate) sources: Option<Vec<IrqEnd<'a>>>,
+    pub(crate) destinations: Vec<IrqDestination<'a>>,
+}
+
+pub(crate) fn irq_connection(input: &str) -> Result<IrqConnection<'_>, String> {
+    fn groups(input: &str, source: bool) -> Result<Vec<IrqEnd<'_>>, String> {
+        let input = input.trim();
+        if input.starts_with('[') {
+            irq_ends(input, source)
+        } else {
+            irq_end(input, source).map(|end| vec![end])
+        }
+    }
+
+    let (source, destinations) = input.split_once("->").ok_or("expected IRQ connection")?;
+    let sources = (!source.trim().is_empty()).then(|| groups(source, true)).transpose()?;
+    let destinations = destinations.split('|').map(|destination| {
+        let (name, pins) = destination.split_once('@').ok_or("expected IRQ destination pins")?;
+        let (name, local) = crate::platform::irq_receiver(name)?;
+        Ok(IrqDestination { name, local, groups: groups(pins, false)? })
+    }).collect::<Result<_, String>>()?;
+    Ok(IrqConnection { sources, destinations })
 }
 
 #[derive(Default)]
@@ -222,6 +255,69 @@ impl ReplComments {
         }
         self.braces += brace_depth(&result);
         Ok(result)
+    }
+}
+
+pub(crate) fn prelex(source: &str) -> Result<Vec<String>, &'static str> {
+    let source = source.replace('\r', "");
+    let mut comments = ReplComments::default();
+    let mut lines: Vec<_> = source
+        .split('\n')
+        .map(|line| comments.line(line))
+        .collect::<Result<_, _>>()?;
+    if comments.in_block {
+        return Err("unterminated block comment");
+    }
+    let mut nonempty = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (!line.trim().is_empty()).then_some(index));
+    let Some(first) = nonempty.next() else {
+        return Ok(lines);
+    };
+    if repl_indent(&lines[first])? != 0 {
+        return Err("WrongIndent: First line with text cannot be indented.");
+    }
+
+    let indices: Vec<_> = std::iter::once(first).chain(nonempty).collect();
+    let mut indent = 0;
+    let mut braces = 0;
+    for pair in indices.windows(2) {
+        let (current, next) = (pair[0], pair[1]);
+        braces += brace_depth(&lines[current]);
+        if braces <= 0 {
+            let next_indent = repl_indent(&lines[next])?;
+            decorate_repl_line(&mut lines[current], indent, next_indent, false);
+            indent = next_indent;
+        }
+        for blank in &mut lines[current + 1..next] {
+            blank.clear();
+        }
+    }
+    let last = *indices.last().unwrap();
+    decorate_repl_line(&mut lines[last], indent, 0, true);
+    for blank in &mut lines[last + 1..] {
+        blank.clear();
+    }
+    Ok(lines)
+}
+
+fn repl_indent(line: &str) -> Result<usize, &'static str> {
+    let spaces = line.bytes().take_while(|&byte| byte == b' ').count();
+    if spaces % 4 != 0 {
+        return Err("WrongIndent: Indent length must be a multiple of four spaces.");
+    }
+    Ok(spaces / 4)
+}
+
+fn decorate_repl_line(line: &mut String, indent: usize, next: usize, last: bool) {
+    if next > indent {
+        line.extend(std::iter::repeat_n('{', next - indent));
+    } else {
+        line.extend(std::iter::repeat_n('}', indent - next));
+        if !last {
+            line.push(';');
+        }
     }
 }
 
@@ -428,14 +524,9 @@ fn parse(
         ));
     }
     let content = fs::read_to_string(&canonical).map_err(|e| format!("{}: {e}", path.display()))?;
-    let result = parse_text(
-        &content,
-        path,
-        canonical.parent().unwrap(),
-        root,
-        visiting,
-        entries,
-    );
+    let result = parse_text(&content, path, entries, |filename, entries| {
+        load_using(filename, canonical.parent().unwrap(), root, visiting, entries)
+    });
     visiting.remove(&canonical);
     result
 }
@@ -756,13 +847,27 @@ fn declaration_alias(declaration: &str) -> Result<(&str, Option<String>), &'stat
     Ok((declaration, None))
 }
 
-fn parse_text(
-    content: &str,
-    path: &Path,
+fn load_using(
+    filename: &str,
     include_dir: &Path,
     root: &Path,
     visiting: &mut HashSet<PathBuf>,
     entries: &mut Vec<Entry>,
+) -> Result<(), String> {
+    let include = resolve_using(filename, include_dir, root).map_err(|error| error.to_string())?;
+    match parse(&include, root, visiting, entries) {
+        Err(_) if matches!(include.try_exists(), Ok(false)) => {
+            Err(format!("Using '{filename}' does not exist"))
+        }
+        result => result,
+    }
+}
+
+fn parse_text(
+    content: &str,
+    path: &Path,
+    entries: &mut Vec<Entry>,
+    mut include: impl FnMut(&str, &mut Vec<Entry>) -> Result<(), String>,
 ) -> Result<(), String> {
     let source_path = Rc::<Path>::from(path);
     let mut current: Option<Entry> = None;
@@ -889,20 +994,12 @@ fn parse_text(
             entry.body.append(&mut init);
             definitions.push(entry);
         }
-        if let Some(include) = text.strip_prefix("using ") {
-            let filename = using_path(include).map_err(error)?;
-            let include_path = resolve_using(&filename, include_dir, root)
-                .map_err(|detail| error(&detail.to_string()))?;
+        if let Some(argument) = text.strip_prefix("using ") {
+            let filename = using_path(argument).map_err(error)?;
             if !seen_usings.insert(filename.clone()) {
                 return Err(error("Duplicate using entry."));
             }
-            match parse(&include_path, root, visiting, entries) {
-                Err(_) if matches!(include_path.try_exists(), Ok(false)) => {
-                    return Err(error(&format!("Using '{filename}' does not exist")));
-                }
-                Err(detail) => return Err(error(&detail)),
-                Ok(()) => {}
-            }
+            include(&filename, entries).map_err(|detail| error(&detail))?;
             continue;
         }
         let (name, declaration) = text
@@ -1102,14 +1199,9 @@ pub(crate) fn parse_inline(
 ) -> Result<Vec<crate::network_repl::Entry>, String> {
     let source = Path::new("<inline REPL>");
     let mut entries = Vec::new();
-    parse_text(
-        content,
-        source,
-        root,
-        root,
-        &mut HashSet::new(),
-        &mut entries,
-    )?;
+    parse_text(content, source, &mut entries, |filename, entries| {
+        load_using(filename, root, root, &mut HashSet::new(), entries)
+    })?;
     convert(entries)
 }
 
@@ -1144,3 +1236,11 @@ fn convert(entries: Vec<Entry>) -> Result<Vec<crate::network_repl::Entry>, Strin
 pub(crate) fn sized_sysbus_address(registration: &str, size: u32) -> Result<u32, String> {
     sized_address(registration_point(registration)?, size)
 }
+
+#[cfg(test)]
+#[path = "upstream_nunit/repl_parser.rs"]
+mod upstream_parser_tests;
+
+#[cfg(test)]
+#[path = "upstream_nunit/prelexer.rs"]
+mod upstream_prelexer_tests;
