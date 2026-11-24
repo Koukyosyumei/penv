@@ -899,14 +899,19 @@ fn load_using(
     }
 }
 
-pub(crate) fn init_header(text: &str) -> Option<(bool, bool)> {
-    match text {
-        "init:" => Some((false, false)),
-        "init add:" => Some((false, true)),
-        "preinit:" => Some((true, false)),
-        "preinit add:" => Some((true, true)),
-        _ => None,
-    }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptSection { Init, Preinit, Reset }
+
+pub(crate) fn init_header(text: &str) -> Option<(ScriptSection, bool)> {
+    let marker = text.strip_suffix(':')?;
+    let (name, append) = marker.strip_suffix(" add").map_or((marker, false), |name| (name, true));
+    let section = match name {
+        "init" => ScriptSection::Init,
+        "preinit" => ScriptSection::Preinit,
+        "reset" => ScriptSection::Reset,
+        _ => return None,
+    };
+    Some((section, append))
 }
 
 fn parse_text(
@@ -1016,7 +1021,11 @@ fn parse_text(
                 return Err(error("init section has no declaration"));
             }
             if init.iter().any(|(_, marker)| init_header(marker).is_some_and(|(phase, _)| phase == preinit)) {
-                return Err(error(if preinit { "MoreThanOnePreinitAttribute: duplicate section" } else { "MoreThanOneInitAttribute: duplicate section" }));
+                return Err(error(match preinit {
+                    ScriptSection::Init => "MoreThanOneInitAttribute: duplicate section",
+                    ScriptSection::Preinit => "MoreThanOnePreinitAttribute: duplicate section",
+                    ScriptSection::Reset => "MoreThanOneResetAttribute: duplicate section",
+                }));
             }
             init_indent = Some(indent);
             init.push((source, text.into()));

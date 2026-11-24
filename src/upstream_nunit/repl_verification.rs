@@ -1277,6 +1277,7 @@ peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
 struct RecordingInit {
     reject: bool,
     executed: Vec<(Option<String>, Vec<String>)>,
+    resets: Vec<(String, Vec<String>)>,
 }
 
 impl creation::InitHandler for RecordingInit {
@@ -1291,6 +1292,12 @@ impl creation::InitHandler for RecordingInit {
     fn execute(&mut self, name: Option<&str>, commands: &[&str]) {
         self.executed.push((
             name.map(str::to_owned),
+            commands.iter().map(|&command| command.into()).collect(),
+        ));
+    }
+    fn register_reset(&mut self, name: &str, commands: &[&str]) {
+        self.resets.push((
+            name.into(),
             commands.iter().map(|&command| command.into()).collect(),
         ));
     }
@@ -1557,5 +1564,61 @@ peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
         .err()
         .unwrap();
     assert!(error.starts_with("InitSectionValidationError:"), "{error}");
+    assert!(handler.executed.is_empty());
+}
+
+#[test]
+fn should_replace_reset() {
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus <0, 1>
+    reset:
+        Increment 1
+
+peri:
+    reset:
+        Increment 2
+        Increment 3"#,
+        Path::new("."),
+        &mut handler,
+    )
+    .unwrap();
+    assert_eq!(
+        handler.resets,
+        [(
+            "peri".into(),
+            ["Increment 2", "Increment 3"].map(str::to_owned).to_vec()
+        )]
+    );
+    assert!(handler.executed.is_empty());
+}
+
+#[test]
+fn should_add_reset() {
+    let mut handler = RecordingInit::default();
+    creation::create_with_init(
+        r#"
+peri: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral
+    reset:
+        Increment 1
+
+peri:
+    reset add:
+        Increment 2
+        Increment 3"#,
+        Path::new("."),
+        &mut handler,
+    )
+    .unwrap();
+    assert_eq!(
+        handler.resets,
+        [(
+            "peri".into(),
+            ["Increment 1", "Increment 2", "Increment 3"]
+                .map(str::to_owned)
+                .to_vec()
+        )]
+    );
     assert!(handler.executed.is_empty());
 }

@@ -347,6 +347,7 @@ impl CreatedPlatform {
 pub(crate) trait InitHandler {
     fn validate(&mut self, name: Option<&str>, command: &str) -> Result<(), String>;
     fn execute(&mut self, name: Option<&str>, commands: &[&str]);
+    fn register_reset(&mut self, _: &str, _: &[&str]) {}
 }
 
 struct NoopInit;
@@ -449,6 +450,7 @@ pub(crate) fn create_with_init(
     globals.insert("sysbus", sysbus);
     let mut init = Vec::new();
     let mut preinit = Vec::new();
+    let mut reset = Vec::new();
     let resolve = |scope: &Path, name: &str| {
         locals
             .get(&(scope, name))
@@ -611,7 +613,7 @@ pub(crate) fn create_with_init(
             )?;
         }
         while let Some((_, marker)) = sections.next() {
-            let (early, append) = init_header(marker).unwrap();
+            let (section, append) = init_header(marker).unwrap();
             let mut additions = Vec::new();
             while sections
                 .peek()
@@ -619,7 +621,11 @@ pub(crate) fn create_with_init(
             {
                 additions.push(sections.next().unwrap().1.as_str());
             }
-            let plan = if early { &mut preinit } else { &mut init };
+            let plan = match section {
+                ScriptSection::Init => &mut init,
+                ScriptSection::Preinit => &mut preinit,
+                ScriptSection::Reset => &mut reset,
+            };
             merge_script(plan, id, &entry.name, append, additions);
         }
     }
@@ -702,6 +708,9 @@ pub(crate) fn create_with_init(
     }
     platform.check_constructor_cycles()?;
     run_scripts(handler, init, false)?;
+    for (_, name, commands) in reset {
+        handler.register_reset(name, &commands);
+    }
     Ok(platform)
 }
 

@@ -1,0 +1,3 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldReplaceReset	0-1071	repl_parser::upstream_verification_tests::should_replace_reset	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldAddReset	0-1072	repl_parser::upstream_verification_tests::should_add_reset	passed
