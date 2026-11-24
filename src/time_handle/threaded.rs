@@ -168,14 +168,23 @@ mod tests {
         request_grant(&Arc::new(ThreadedTimeHandle::default()), true);
     }
 
+    fn assert_wait_blocks_until_report(request_first: bool) {
+        let handle = Arc::new(ThreadedTimeHandle::default());
+        request_grant(&handle, request_first);
+        let wait = blocked(&handle, TimeHandle::wait);
+        // Finish the pending Rust worker after observing that the wait blocked.
+        handle.update(TimeHandle::report_continue).unwrap();
+        wait.finish();
+    }
+
     #[test]
     fn renode_threaded_time_handle_wait_blocks_request_first() {
-        wait_for_report(true, false);
+        assert_wait_blocks_until_report(true);
     }
 
     #[test]
     fn renode_threaded_time_handle_wait_blocks_grant_first() {
-        wait_for_report(false, false);
+        assert_wait_blocks_until_report(false);
     }
 
     #[test]
@@ -197,20 +206,40 @@ mod tests {
     fn renode_threaded_time_handle_break_wakes_wait_grant_first() {
         wait_for_report(false, true);
     }
+    fn assert_report_before_wait(request_first: bool, interrupted: bool) {
+        let handle = Arc::new(ThreadedTimeHandle::default());
+        request_grant(&handle, request_first);
+        if interrupted {
+            handle.update(|core| core.report_break(0)).unwrap();
+        } else {
+            handle.update(TimeHandle::report_continue).unwrap();
+        }
+        // One poll must complete immediately. A blocking call could hide the
+        // failure by waiting for an additional wakeup.
+        assert_eq!(
+            handle.update(TimeHandle::wait),
+            Ok(Poll::Ready((!interrupted, false, INTERVAL)))
+        );
+    }
+
     #[test]
     fn renode_threaded_time_handle_wait_after_continue_is_immediate() {
-        let handle = Arc::new(ThreadedTimeHandle::default());
-        request_grant(&handle, true);
-        handle.update(TimeHandle::report_continue).unwrap();
-        assert_eq!(handle.wait(), Ok((true, false, INTERVAL)));
+        assert_report_before_wait(true, false);
+    }
+
+    #[test]
+    fn upstream_wait_after_continue_grant_first() {
+        assert_report_before_wait(false, false);
     }
 
     #[test]
     fn renode_threaded_time_handle_wait_after_break_is_immediate() {
-        let handle = Arc::new(ThreadedTimeHandle::default());
-        request_grant(&handle, true);
-        handle.update(|core| core.report_break(0)).unwrap();
-        assert_eq!(handle.wait(), Ok((false, false, INTERVAL)));
+        assert_report_before_wait(true, true);
+    }
+
+    #[test]
+    fn upstream_wait_after_break_grant_first() {
+        assert_report_before_wait(false, true);
     }
 
     #[test]
@@ -272,6 +301,14 @@ mod tests {
         let request = blocked(&handle, TimeHandle::request);
         handle.update(TimeHandle::dispose);
         assert_eq!(request.finish(), None);
+    }
+
+    #[test]
+    fn upstream_unblock_handle_after_break() {
+        let handle = break_before_unblock();
+        // The official case checks that the call finishes successfully, even
+        // though the sink has not posted a new request since it broke.
+        handle.update(TimeHandle::unblock).unwrap();
     }
 
     #[test]
