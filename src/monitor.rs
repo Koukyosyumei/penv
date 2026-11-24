@@ -93,10 +93,29 @@ const SESSION_SNAPSHOT_V2: &[u8; 9] = b"PENVSESS\x02";
 const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x03";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
+fn write_snapshot(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<(), String>,
+) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let temporary = path.with_file_name(format!(
+        ".penv-snapshot-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
+        .map_err(|error| format!("{}: {error}", temporary.display()))?;
+    let result = write(&mut file)
+        .and_then(|()| file.sync_all().map_err(|error| error.to_string()));
+    drop(file);
+    let result = result.and_then(|()| fs::rename(&temporary, path).map_err(|error| error.to_string()));
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result.map_err(|error| format!("{}: {error}", path.display()))
+}
+
 impl Session {
     fn save(&self, machine: &Machine, path: &Path) -> Result<(), String> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT: AtomicU64 = AtomicU64::new(0);
         let mut data = Vec::new();
         let mut entries: Vec<_> = self.variables.iter()
             .filter(|(key, _)| !matches!(key.as_str(), "global.CWD" | "global.ORIGIN"))
@@ -115,25 +134,15 @@ impl Session {
             encode(&mut data, key)?;
             encode(&mut data, value)?;
         }
-        let temporary = path.with_file_name(format!(".penv-snapshot-{}-{}", std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)));
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
-            .map_err(|e| format!("{}: {e}", temporary.display()))?;
-        let result = (|| {
+        write_snapshot(path, |file| {
             file.write_all(SESSION_SNAPSHOT).map_err(|e| e.to_string())?;
             file.write_all(&machine.monitor_quantum.to_le_bytes()).map_err(|e| e.to_string())?;
             let mips = (machine.bus.monitor_step_hz() / 1_000_000) as u32;
             file.write_all(&mips.to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&(data.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
             file.write_all(&data).map_err(|e| e.to_string())?;
-            machine.write_boot_snapshot(&mut file)?;
-            file.sync_all().map_err(|e| e.to_string())?;
-            fs::rename(&temporary, path).map_err(|e| e.to_string())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(temporary);
-        }
-        result.map_err(|e| format!("{}: {e}", path.display()))
+            machine.write_boot_snapshot(file)
+        })
     }
 
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
@@ -528,7 +537,7 @@ fn run_commands(
                 .map(|()| None),
             Action::SaveMemory(path) => match session.as_deref() {
                 Some(session) => session.save(machine, path),
-                None => machine.save_memory_snapshot(path),
+                None => write_snapshot(path, |file| machine.write_boot_snapshot(file)),
             }.map(|()| None),
             Action::ClearMemory => machine.clear_memory_snapshot().map(|()| {
                 cleared = true;

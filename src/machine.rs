@@ -914,12 +914,6 @@ impl Machine {
         Ok(())
     }
 
-    pub fn save_memory_snapshot(&self, path: &Path) -> Result<(), String> {
-        self.check_memory_snapshot()?;
-        let mut file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.write_boot_snapshot(&mut file).map_err(|e| format!("{}: {e}", path.display()))
-    }
-
     pub(crate) fn write_boot_snapshot(&self, output: &mut impl Write) -> Result<(), String> {
         self.check_memory_snapshot()?;
         (|| -> std::io::Result<()> {
