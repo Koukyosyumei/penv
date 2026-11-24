@@ -231,3 +231,29 @@ cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
         .unwrap();
     assert_eq!(nested.placeholder.as_deref(), Some("something"));
 }
+
+#[test]
+fn should_fail_on_wrong_object_registration_point_type() {
+    assert_error(
+        r#"
+device: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @ sysbus new Antmicro.Renode.UnitTests.Mocks.MockCPU { Placeholder: "abc" }"#,
+        "TypeMismatch",
+    );
+}
+
+#[test]
+fn should_register_peripheral_with_many_registration_points() {
+    let platform = creation::create_objects(
+        r#"
+peripheral: Antmicro.Renode.UnitTests.Mocks.EmptyPeripheral @{
+    sysbus <0x100, +0x10>;
+    sysbus <0x200, +0x20>} as "alias"
+"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let ranges = platform.peripheral_ranges("sysbus.alias").unwrap();
+    assert_eq!(ranges[0], (0x100, 0x10));
+    assert_eq!(ranges[1], (0x200, 0x20));
+    assert_eq!(ranges.len(), 2);
+}

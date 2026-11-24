@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 2,978 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 2,980 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 417 |
+| 移植待ち | 415 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -416,3 +416,5 @@ treatCollectionsAsUserObjects=true の6つのリストメソッドを追加し�
 `VerificationTests` の登録点診断を3件追加した。既存パーサーで登録点を分類し、未解決参照、型不一致、使用可能なコンストラクタがない文字列を区別する。対象の17件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-verification-registration.tsv)・[実行ログ](nunit-evidence/targeted-repl-verification-registration.log)
 
 REPL のインラインオブジェクト生成を追加し、不明な型、参照型の不一致、入れ子のプロパティ型不一致、孫オブジェクトのプロパティ設定の4件を移植した。対象の21件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-inline.tsv)・[実行ログ](nunit-evidence/targeted-repl-inline.log)
+
+インラインオブジェクトを登録点として指定した際の型不一致と、別名で登録した周辺機器から複数のアドレス範囲を宣言順に取得するケースを移植した。対象の23件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-registration-list.tsv)・[実行ログ](nunit-evidence/targeted-repl-registration-list.log)

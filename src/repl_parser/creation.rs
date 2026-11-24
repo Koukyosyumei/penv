@@ -41,10 +41,16 @@ pub(crate) struct CreatedPlatform {
 struct CreatedObject {
     model: Model,
     cpu: Option<Cpu>,
-    range: Option<(u64, u64)>,
+    ranges: Vec<(u64, u64)>,
 }
 
 impl CreatedPlatform {
+    #[cfg(test)]
+    pub(crate) fn peripheral_ranges(&self, qualified_name: &str) -> Option<&[(u64, u64)]> {
+        let object = &self.objects[*self.registered.get(qualified_name)?];
+        (object.model == Model::EmptyPeripheral).then_some(object.ranges.as_slice())
+    }
+
     pub(crate) fn cpu(&self, qualified_name: &str) -> Option<&Cpu> {
         self.registered
             .get(qualified_name)
@@ -87,7 +93,7 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
         platform.objects.push(CreatedObject {
             model,
             cpu: (model == Model::Cpu).then(Cpu::default),
-            range: None,
+            ranges: Vec::new(),
         });
         targets.push(Some(id));
     }
@@ -106,32 +112,50 @@ pub(crate) fn create_objects(content: &str, root: &Path) -> Result<CreatedPlatfo
             if platform.objects[id].model == Model::External {
                 return Err(entry.error("NoUsableRegisterInterface: external object"));
             }
-            let (parent, point) =
-                registration_point(registration).map_err(|error| entry.error(error))?;
-            if parent != "sysbus" {
-                return Err(entry.error("NoUsableRegisterInterface: expected sysbus"));
-            }
-            match point {
-                Some(RegistrationValue::Range { base, size }) => {
-                    platform.objects[id].range = Some((base, size));
+            let points = if let Some(list) = registration
+                .strip_prefix('{')
+                .and_then(|list| list.strip_suffix('}'))
+            {
+                registration_points(list).map_err(|error| entry.error(error))?
+            } else {
+                vec![registration_point(registration).map_err(|error| entry.error(error))?]
+            };
+            for (parent, point) in points {
+                if parent != "sysbus" {
+                    return Err(entry.error("NoUsableRegisterInterface: expected sysbus"));
                 }
-                Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
-                Some(RegistrationValue::Other(value)) => {
-                    let target = resolve(&entry.source, value)
-                        .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
-                    let model = match platform.objects[target].model {
-                        Model::Cpu => "CPU",
-                        Model::EmptyPeripheral => "peripheral",
-                        Model::External => "external",
-                    };
-                    return Err(entry.error(&format!(
-                        "TypeMismatch: {model} is not a registration point"
-                    )));
+                match point {
+                    Some(RegistrationValue::Range { base, size }) => {
+                        platform.objects[id].ranges.push((base, size));
+                    }
+                    Some(RegistrationValue::Other(value)) if number(value).is_ok() => {}
+                    Some(RegistrationValue::Other(value)) if value.starts_with("new ") => {
+                        let (object, _) =
+                            object_prefix(value).map_err(|error| entry.error(error))?;
+                        Model::parse(object.model).ok_or_else(|| {
+                            entry.error(&format!("TypeNotResolved: {}", object.model))
+                        })?;
+                        return Err(
+                            entry.error("TypeMismatch: inline object is not a registration point")
+                        );
+                    }
+                    Some(RegistrationValue::Other(value)) => {
+                        let target = resolve(&entry.source, value)
+                            .ok_or_else(|| entry.error(&format!("MissingReference: {value}")))?;
+                        let model = match platform.objects[target].model {
+                            Model::Cpu => "CPU",
+                            Model::EmptyPeripheral => "peripheral",
+                            Model::External => "external",
+                        };
+                        return Err(entry.error(&format!(
+                            "TypeMismatch: {model} is not a registration point"
+                        )));
+                    }
+                    Some(RegistrationValue::String(_)) => {
+                        return Err(entry.error("NoCtorForRegistrationPoint: string value"));
+                    }
+                    None => {}
                 }
-                Some(RegistrationValue::String(_)) => {
-                    return Err(entry.error("NoCtorForRegistrationPoint: string value"));
-                }
-                None => {}
             }
             let name = format!("sysbus.{}", entry.alias.as_deref().unwrap_or(&entry.name));
             if platform.registered.insert(name, id).is_some() {
@@ -185,7 +209,7 @@ impl CreatedPlatform {
                 self.objects.push(CreatedObject {
                     model,
                     cpu: Some(Cpu::default()),
-                    range: None,
+                    ranges: Vec::new(),
                 });
                 let mut seen = HashSet::new();
                 for (key, value) in object.fields {

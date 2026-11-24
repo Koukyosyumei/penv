@@ -455,6 +455,16 @@ fn inline_body<'a>(
             Ok((declaration, Vec::new()))
         };
     };
+    if let Some((_, registration)) = declaration.split_once('@')
+        && let Some((_, value)) = registration.trim_start().split_once(char::is_whitespace)
+        && value.trim_start().starts_with("new ")
+    {
+        let (_, tail) = object_prefix(value.trim_start())?;
+        if tail.trim().is_empty() || tail.trim_start().starts_with("as ") {
+            return Ok((declaration, Vec::new()));
+        }
+        return Err("unexpected text after registration object");
+    }
     if declaration[..begin].trim_end().ends_with('@') {
         let mut depth = 1;
         let end = braces
