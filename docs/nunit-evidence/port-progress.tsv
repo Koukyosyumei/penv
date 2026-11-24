@@ -4,7 +4,7 @@ lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	40	0	120	0	All 40 reflection read/write cases are ported across both stamp modes. The other 120 cases require generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	7	0	21	0	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	28	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.PrimitiveReaderWriterTests	102	102	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.SerializationTests	1504	168	0	1336	0	Stamped and unstamped reflection modes restore record, array and ordered list graphs. Remaining settings and cases need generated reader/writer paths, collection-as-user-object layouts, dictionary and other CLR codecs, surrogate and hook dispatch, and delegate/state restoration.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.StampingTests	16	16	0	0	0	-

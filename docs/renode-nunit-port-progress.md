@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,328 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,349 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,068 |
+| 移植待ち | 2,047 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 20 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 19 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -300,3 +300,9 @@ Rust マクロで型ごとの専用フィールドコーデックを生成し、
 コレクションのレコードと boxed Int32 に専用コーデックを使い、配列と文字列のストリーム処理は共通経路を再利用した。生成読み書き、XML サポート、型スタンプの16設定で、整数、null を含むオブジェクト、文字列の多重集合を検証した。公式48件すべてが対象実行で合格した。
 
 - [追加36件の公式 ID](nunit-evidence/targeted-migrant-blocking-generated.tsv)と[48件の実行ログ](nunit-evidence/targeted-migrant-blocking-generated.log)
+
+## Migrant OpenStreamSerializationTests の生成経路
+
+生成読み書きの3組み合わせで、参照を保持しない場合、強参照、弱参照、バッファなしの連続復元を検証した。整数と浮動小数点のタプル、および空のオブジェクトには型別コーデックを使う。追加の公式21件が対象実行で合格した。
+
+- [公式 ID](nunit-evidence/targeted-migrant-open-generated.tsv)と[実行ログ](nunit-evidence/targeted-migrant-open-generated.log)

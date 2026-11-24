@@ -1218,6 +1218,14 @@ impl RecordOutput for ValidateGeneratedFields {
             Err(invalid("expected generated integer field"))
         }
     }
+    fn float(&mut self, value: &Value) -> io::Result<()> {
+        if matches!(value, Value::Float(_)) {
+            Ok(())
+        } else {
+            Err(invalid("expected generated float field"))
+        }
+    }
+
     fn reference(&mut self, value: &Value) -> io::Result<()> {
         if matches!(value, Value::Null | Value::Ref(_)) {
             Ok(())
@@ -1242,6 +1250,14 @@ impl<W: Write> RecordOutput for GeneratedOutput<'_, W> {
         };
         self.data.bytes(&[1])?;
         self.data.signed(*value)
+    }
+
+    fn float(&mut self, value: &Value) -> io::Result<()> {
+        let Value::Float(value) = value else {
+            return Err(invalid("expected generated float field"));
+        };
+        self.data.bytes(&[2])?;
+        self.data.bytes(&value.to_le_bytes())
     }
 
     fn reference(&mut self, value: &Value) -> io::Result<()> {
@@ -1278,6 +1294,15 @@ impl<R: Read> RecordInput for GeneratedInput<'_, R> {
             return Err(invalid("expected generated integer field"));
         }
         Ok(Value::Integer(self.data.signed()?))
+    }
+
+    fn float(&mut self) -> io::Result<Value> {
+        if self.data.byte()? != 2 {
+            return Err(invalid("expected generated float field"));
+        }
+        let mut bytes = [0; 8];
+        self.data.bytes(&mut bytes)?;
+        Ok(Value::Float(f64::from_le_bytes(bytes)))
     }
 
     fn reference(&mut self) -> io::Result<Value> {

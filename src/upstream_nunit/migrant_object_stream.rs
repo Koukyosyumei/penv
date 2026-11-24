@@ -1,3 +1,4 @@
+use crate::migrant::generated_record::{generated_record, Codec};
 use crate::migrant::object_stream::{
     FieldInitializer, FieldKind, Graph, LateRecordHook, NativeResource, NonSerializableResource,
     Object, ObjectId, ObjectReader, ObjectWriter, References, Transients, TypeStamp, Value,
@@ -568,21 +569,42 @@ fn should_handle_two_writes_and_reads() {
     assert_eq!(position, stream.position());
 }
 
+const OPEN_STREAM_CODECS: &[Codec] = &[
+    generated_record!("System.Object";),
+    generated_record!("Tuple<int,int>"; first: integer, second: integer),
+    generated_record!("Tuple<int,double>"; first: integer, second: float),
+];
+
+#[derive(Clone, Copy, Default)]
+struct OpenStreamMethods {
+    write: bool,
+    read: bool,
+}
+
 fn open_stream(
     graph: &Graph,
     roots: &[ObjectId],
     references: References,
     buffered: bool,
+    methods: OpenStreamMethods,
 ) -> ObjectReader<'static, 'static, Cursor<Vec<u8>>> {
     let mut stream = Cursor::new(Vec::new());
     let mut writer =
         ObjectWriter::new(&mut stream, graph, references, buffered).with_type_stamps(STAMPS);
+    if methods.write {
+        writer = writer.with_generated_records(OPEN_STREAM_CODECS);
+    }
     for &root in roots {
         writer.write_object(root).unwrap();
     }
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
-    ObjectReader::new(stream, references, buffered).with_type_stamps(STAMPS)
+    let reader = ObjectReader::new(stream, references, buffered).with_type_stamps(STAMPS);
+    if methods.read {
+        reader.with_generated_records(OPEN_STREAM_CODECS)
+    } else {
+        reader
+    }
 }
 
 fn tuple(first: i64, second: i64) -> Object {
@@ -599,9 +621,9 @@ fn tuples() -> (Graph, [ObjectId; 3]) {
     (graph, [first, first, second])
 }
 
-fn basic_open_stream(references: References) {
+fn basic_open_stream(references: References, methods: OpenStreamMethods) {
     let (graph, roots) = tuples();
-    let mut reader = open_stream(&graph, &roots, references, true);
+    let mut reader = open_stream(&graph, &roots, references, true, methods);
     let objects = roots.map(|_| reader.read_object().unwrap());
     for (expected, actual) in roots.into_iter().zip(objects) {
         assert_eq!(graph.get(expected), reader.graph().get(actual));
@@ -611,35 +633,38 @@ fn basic_open_stream(references: References) {
 
 #[test]
 fn basic_open_stream_do_not_preserve() {
-    basic_open_stream(References::PerRoot);
+    basic_open_stream(References::PerRoot, OpenStreamMethods::default());
 }
 
 #[test]
 fn basic_open_stream_preserve() {
-    basic_open_stream(References::Preserve);
+    basic_open_stream(References::Preserve, OpenStreamMethods::default());
 }
 
-#[test]
-fn should_preserve_references() {
+fn should_preserve_references_with_methods(methods: OpenStreamMethods) {
     let (graph, roots) = tuples();
-    let mut reader = open_stream(&graph, &roots, References::Preserve, true);
+    let mut reader = open_stream(&graph, &roots, References::Preserve, true, methods);
     let [first, duplicate, second] = roots.map(|_| reader.read_object().unwrap());
     assert_eq!(first, duplicate);
     assert_ne!(duplicate, second);
     reader.finish().unwrap();
 }
 
-#[test]
-fn shouldnt_preserve_references() {
+fn shouldnt_preserve_references_with_methods(methods: OpenStreamMethods) {
     let mut graph = Graph::default();
     let object = graph.insert(record("System.Object", vec![]));
-    let mut reader = open_stream(&graph, &[object, object], References::PerRoot, true);
+    let mut reader = open_stream(
+        &graph,
+        &[object, object],
+        References::PerRoot,
+        true,
+        methods,
+    );
     assert_ne!(reader.read_object().unwrap(), reader.read_object().unwrap());
     reader.finish().unwrap();
 }
 
-#[test]
-fn should_deserialize_many() {
+fn should_deserialize_many_with_methods(methods: OpenStreamMethods) {
     let mut graph = Graph::default();
     let roots: Vec<_> = (1..=10)
         .map(|x| {
@@ -649,7 +674,7 @@ fn should_deserialize_many() {
             ))
         })
         .collect();
-    let mut reader = open_stream(&graph, &roots, References::Preserve, false);
+    let mut reader = open_stream(&graph, &roots, References::Preserve, false, methods);
     let restored = reader.read_many().collect::<Result<Vec<_>, _>>().unwrap();
     let before: Vec<_> = roots.iter().map(|&id| graph.get(id).unwrap()).collect();
     let after: Vec<_> = restored
@@ -739,21 +764,29 @@ stamp_modes!(mixed_array_plain, mixed_array_stamped, mixed_array);
 fn weak_open_stream(
     graph: &Graph,
     roots: &[ObjectId],
+    methods: OpenStreamMethods,
 ) -> ObjectReader<'static, 'static, Cursor<Vec<u8>>> {
     let mut stream = Cursor::new(Vec::new());
     let mut writer = ObjectWriter::new_weak(&mut stream, true).with_type_stamps(STAMPS);
+    if methods.write {
+        writer = writer.with_generated_records(OPEN_STREAM_CODECS);
+    }
     for &root in roots {
         writer.write_weak_object(graph, root).unwrap();
     }
     writer.finish().unwrap();
     stream.seek(SeekFrom::Start(0)).unwrap();
-    ObjectReader::new(stream, References::Weak, true).with_type_stamps(STAMPS)
+    let reader = ObjectReader::new(stream, References::Weak, true).with_type_stamps(STAMPS);
+    if methods.read {
+        reader.with_generated_records(OPEN_STREAM_CODECS)
+    } else {
+        reader
+    }
 }
 
-#[test]
-fn basic_open_stream_weak() {
+fn basic_open_stream_weak_with_methods(methods: OpenStreamMethods) {
     let (graph, roots) = tuples();
-    let mut reader = weak_open_stream(&graph, &roots);
+    let mut reader = weak_open_stream(&graph, &roots, methods);
     let objects = roots.map(|_| reader.read_weak_object().unwrap());
     for (expected, actual) in roots.into_iter().zip(objects) {
         assert_eq!(graph.get(expected), actual.get(actual.id()));
@@ -761,10 +794,9 @@ fn basic_open_stream_weak() {
     reader.finish().unwrap();
 }
 
-#[test]
-fn should_preserve_weak_references() {
+fn should_preserve_weak_references_with_methods(methods: OpenStreamMethods) {
     let (graph, roots) = tuples();
-    let mut reader = weak_open_stream(&graph, &roots);
+    let mut reader = weak_open_stream(&graph, &roots, methods);
     let [first, duplicate, second] = roots.map(|_| reader.read_weak_object().unwrap());
     let first_obj = first.get(first.id()).unwrap();
     let duplicate_obj = duplicate.get(duplicate.id()).unwrap();
@@ -779,7 +811,7 @@ fn weak_reader_releases_a_cycle_when_its_last_root_is_dropped() {
     let mut graph = Graph::default();
     let root = graph.insert(Object::Array(vec![]));
     *graph.get_mut(root).unwrap() = Object::Array(vec![Value::Ref(root)]);
-    let mut reader = weak_open_stream(&graph, &[root, root, root]);
+    let mut reader = weak_open_stream(&graph, &[root, root, root], OpenStreamMethods::default());
     let one = reader.read_weak_object().unwrap();
     let two = reader.read_weak_object().unwrap();
     assert_eq!(
@@ -1801,12 +1833,10 @@ fn class_with_guid(stamped: bool) {
     let mut random = super::migrant::Random(0x67f9_e71b_25da_1d98);
     let id = random.guid();
     let number = i64::from(id.0[1]) * i64::from(id.0[0]);
-    let text: String = std::iter::from_fn(|| {
-        loop {
-            let character = char::from(random.next(256) as u8);
-            if !character.is_control() {
-                return Some(character);
-            }
+    let text: String = std::iter::from_fn(|| loop {
+        let character = char::from(random.next(256) as u8);
+        if !character.is_control() {
+            return Some(character);
         }
     })
     .take((number / 256) as usize)
@@ -2380,3 +2410,136 @@ stamp_modes!(
     generic_late_hook_stamped,
     generic_late_hook
 );
+
+#[test]
+fn should_preserve_references() {
+    should_preserve_references_with_methods(OpenStreamMethods::default());
+}
+
+#[test]
+fn shouldnt_preserve_references() {
+    shouldnt_preserve_references_with_methods(OpenStreamMethods::default());
+}
+
+#[test]
+fn should_deserialize_many() {
+    should_deserialize_many_with_methods(OpenStreamMethods::default());
+}
+
+#[test]
+fn basic_open_stream_weak() {
+    basic_open_stream_weak_with_methods(OpenStreamMethods::default());
+}
+
+#[test]
+fn should_preserve_weak_references() {
+    should_preserve_weak_references_with_methods(OpenStreamMethods::default());
+}
+
+mod open_generated_reader {
+    use super::*;
+    const METHOD: OpenStreamMethods = OpenStreamMethods {
+        write: false,
+        read: true,
+    };
+    #[test]
+    fn basic_do_not_preserve() {
+        basic_open_stream(References::PerRoot, METHOD);
+    }
+    #[test]
+    fn basic_preserve() {
+        basic_open_stream(References::Preserve, METHOD);
+    }
+    #[test]
+    fn should_preserve_references() {
+        should_preserve_references_with_methods(METHOD);
+    }
+    #[test]
+    fn shouldnt_preserve_references() {
+        shouldnt_preserve_references_with_methods(METHOD);
+    }
+    #[test]
+    fn should_deserialize_many() {
+        should_deserialize_many_with_methods(METHOD);
+    }
+    #[test]
+    fn basic_open_stream_weak() {
+        basic_open_stream_weak_with_methods(METHOD);
+    }
+    #[test]
+    fn should_preserve_weak_references() {
+        should_preserve_weak_references_with_methods(METHOD);
+    }
+}
+
+mod open_generated_writer {
+    use super::*;
+    const METHOD: OpenStreamMethods = OpenStreamMethods {
+        write: true,
+        read: false,
+    };
+    #[test]
+    fn basic_do_not_preserve() {
+        basic_open_stream(References::PerRoot, METHOD);
+    }
+    #[test]
+    fn basic_preserve() {
+        basic_open_stream(References::Preserve, METHOD);
+    }
+    #[test]
+    fn should_preserve_references() {
+        should_preserve_references_with_methods(METHOD);
+    }
+    #[test]
+    fn shouldnt_preserve_references() {
+        shouldnt_preserve_references_with_methods(METHOD);
+    }
+    #[test]
+    fn should_deserialize_many() {
+        should_deserialize_many_with_methods(METHOD);
+    }
+    #[test]
+    fn basic_open_stream_weak() {
+        basic_open_stream_weak_with_methods(METHOD);
+    }
+    #[test]
+    fn should_preserve_weak_references() {
+        should_preserve_weak_references_with_methods(METHOD);
+    }
+}
+
+mod open_generated_both {
+    use super::*;
+    const METHOD: OpenStreamMethods = OpenStreamMethods {
+        write: true,
+        read: true,
+    };
+    #[test]
+    fn basic_do_not_preserve() {
+        basic_open_stream(References::PerRoot, METHOD);
+    }
+    #[test]
+    fn basic_preserve() {
+        basic_open_stream(References::Preserve, METHOD);
+    }
+    #[test]
+    fn should_preserve_references() {
+        should_preserve_references_with_methods(METHOD);
+    }
+    #[test]
+    fn shouldnt_preserve_references() {
+        shouldnt_preserve_references_with_methods(METHOD);
+    }
+    #[test]
+    fn should_deserialize_many() {
+        should_deserialize_many_with_methods(METHOD);
+    }
+    #[test]
+    fn basic_open_stream_weak() {
+        basic_open_stream_weak_with_methods(METHOD);
+    }
+    #[test]
+    fn should_preserve_weak_references() {
+        should_preserve_weak_references_with_methods(METHOD);
+    }
+}
