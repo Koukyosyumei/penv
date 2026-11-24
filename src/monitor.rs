@@ -2499,7 +2499,13 @@ fn expand_macro(name: &str, state: &mut ScriptState, root: &Path) -> Result<(), 
     // Retain the script directory without mistaking a macro call for an include of its defining file.
     let canonical = canonical.with_file_name(format!("<macro:{}>", name.replace(['/', '\\'], "_")));
     for (index, text) in &body.commands {
-        load_text_at(&body.script, canonical.clone(), root, state, text, *index)?;
+        let mut separators = Vec::new();
+        command_tokens(text, Some(&mut separators))?;
+        let mut start = 0;
+        for end in separators.into_iter().chain(std::iter::once(text.len())) {
+            load_text_at(&body.script, canonical.clone(), root, state, &text[start..end], *index)?;
+            start = end + 1;
+        }
     }
     Ok(())
 }
@@ -4792,6 +4798,10 @@ fn path_value(value: &str) -> String {
 const UNTERMINATED_ARGUMENT: &str = "unterminated quoted argument";
 
 fn command_words(text: &str) -> Result<Vec<&str>, String> {
+    command_tokens(text, None)
+}
+
+fn command_tokens<'a>(text: &'a str, mut separators: Option<&mut Vec<usize>>) -> Result<Vec<&'a str>, String> {
     let mut words = Vec::new();
     let mut start = None;
     let mut quote = None;
@@ -4815,6 +4825,15 @@ fn command_words(text: &str) -> Result<Vec<&str>, String> {
         }
         if quote.is_none() && character == '#' && start.is_none() {
             return Ok(words);
+        }
+        if quote.is_none() && character == ';'
+            && let Some(separators) = separators.as_deref_mut()
+        {
+            if let Some(start) = start.take() {
+                words.push(&text[start..index]);
+            }
+            separators.push(index);
+            continue;
         }
         if quote.is_none() && character.is_whitespace() {
             if let Some(start) = start.take() {
