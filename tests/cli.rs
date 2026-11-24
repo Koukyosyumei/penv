@@ -377,6 +377,36 @@ say "restored alias"
 }
 
 #[test]
+fn renode_resc_snapshot_paths_use_the_current_monitor_directory() {
+    let directory = std::env::temp_dir().join(format!("penv-monitor-cwd-{}", std::process::id()));
+    fs::create_dir(&directory).unwrap();
+    fs::create_dir(directory.join("first")).unwrap();
+    fs::create_dir(directory.join("second")).unwrap();
+    let script = directory.join("snapshot.resc");
+    fs::write(&script, r#"mach create
+set global.CWD $ORIGIN/first
+set marker "first"
+Save $CWD/slot.save
+set global.CWD $ORIGIN/second
+set marker "second"
+Save $CWD/slot.save
+set marker "changed"
+Load $CWD/slot.save
+echo $marker
+set global.CWD $ORIGIN/first
+Load $CWD/slot.save
+echo $marker
+"#).unwrap();
+    let output = penv_command().args(["run", "--script"]).arg(script).output().unwrap();
+    let saved_both = ["first", "second"].iter()
+        .all(|subdir| directory.join(subdir).join("slot.save").is_file());
+    fs::remove_dir_all(directory).unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(saved_both);
+    assert_eq!(output.stdout, b"second\nfirst\n");
+}
+
+#[test]
 fn renode_resc_array_memory_save_clear_load_restores_boot_state() {
     let directory = std::env::temp_dir().join(format!("penv-array-save-{}", std::process::id()));
     fs::create_dir(&directory).unwrap();

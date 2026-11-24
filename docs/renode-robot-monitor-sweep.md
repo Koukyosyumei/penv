@@ -1479,3 +1479,16 @@ Rust モニターテスト26件、引用符付き相対パスを使う CLI 回�
 既存のメモリ保存・復元 CLI テストが合格。
 未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
 残り2,193件は未実行（`target/monitor-snapshot-quoted-robot/results.json`）。
+
+### 保存・復元時の作業ディレクトリ
+
+`dda5afc` は `Save` / `Load` の `$CWD/...` を、共通 Rust モニターが
+実行する時点のディレクトリで解決する。二つのディレクトリに同じ名前で
+別の状態を保存し、ディレクトリを切り替えて読み込むと、固定 Renode、
+通常 CLI、Robot RPC のすべてで値が `second`、`first` の順に戻った。
+旧ビルドの通常 CLI では `second` が二度返ることを確認した
+（`target/monitor-anchor-runtime-proof/`）。
+
+Rust モニターテスト26件と CLI 回帰テスト2件が合格。
+未変更の Robot は保存・復元、HEX、STM32F072b Console Echo の4件合格。
+残り2,193件は未実行（`target/monitor-anchor-runtime-robot/results.json`）。
