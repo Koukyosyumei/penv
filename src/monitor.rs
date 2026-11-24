@@ -801,6 +801,9 @@ pub fn serve(
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
                     }
+                    Err(error) if error.starts_with("<monitor>:1: unsupported ADXL372 target ") => {
+                        frame(&mut output, "UNSUPPORTED", error.as_bytes())
+                    }
                     Err(error) => {
                         frame(&mut output, "ERROR", error.as_bytes())
                     }
