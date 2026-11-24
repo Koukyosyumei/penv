@@ -584,20 +584,46 @@ pub fn run(
     Ok((Stop::ScriptComplete, retired))
 }
 
+pub(crate) struct AutoLoadCommand {
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) execute: fn(&mut Machine, &[&str]) -> Result<String, String>,
+}
+
+impl AutoLoadCommand {
+    pub(crate) fn register(self, monitor: &mut MonitorBuiltins) -> Result<(), String> {
+        if self.name.split_whitespace().collect::<Vec<_>>().as_slice() != [self.name]
+            || matches!(self.name, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file")
+            || monitor.commands.contains_key(self.name)
+        {
+            return Err(format!("invalid or duplicate monitor command {:?}", self.name));
+        }
+        monitor.commands.insert(self.name, self);
+        Ok(())
+    }
+}
+
 /// Execute one runtime command at a time on the same machine. Separate command
 /// status from UART/monitor bytes so firmware output cannot create a reply frame.
 #[derive(Default)]
 pub(crate) struct MonitorBuiltins {
     next_value: i64,
+    commands: std::collections::BTreeMap<&'static str, AutoLoadCommand>,
 }
 
 impl MonitorBuiltins {
     pub(crate) fn execute(&mut self, machine: &mut Machine, text: &str) -> Option<Result<String, String>> {
         let command = text.split_whitespace().next()?;
-        if !matches!(command, "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
+        if let Some(registered) = self.commands.get(command) {
+            return Some(command_words(text).and_then(|words| (registered.execute)(machine, &words[1..])));
+        }
+        if !matches!(command, "help" | "next_value" | "sleep" | "echo" | "dump" | "dump_file") {
             return None;
         }
         Some(command_words(text).and_then(|words| match words.as_slice() {
+            ["help"] => Ok(self.commands.values().map(|command| {
+                format!("{}: {}\n", command.name, command.description)
+            }).collect()),
             ["next_value"] | ["next_value", _] => {
                 let offset = words.get(1).map_or(Ok(0), |value| value.parse::<i64>())
                     .map_err(|_| "expected a next_value offset")?;

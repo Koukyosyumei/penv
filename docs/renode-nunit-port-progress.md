@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,103 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,104 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 292 |
+| 移植待ち | 291 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -482,3 +482,5 @@ IRQ の切断と再接続4件を移植した。単一出力、数値範囲、複
 辞書の重複キー1件を移植した。回復可能エラーと型付きの原因を分け、上流と同じ原因メッセージの先頭を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-dict-duplicate.tsv)・[実行ログ](nunit-evidence/targeted-repl-dict-duplicate.log)
 
 CLINT の CPU スコープ付き登録を実際のプラットフォームローダーで扱い、CLINT へのタイムプロバイダー参照と CPU への IRQ 配線を持つ上流入力が読み込めることを検証した。同 fixture の残りは、同じアドレスに CPU 別の NVIC を登録する2コアのケース1件。[公式IDとの対応](nunit-evidence/targeted-repl-signal-cycle.tsv)・[実行ログ](nunit-evidence/targeted-repl-signal-cycle.log)
+
+モニターのコマンド登録と `help` の統合を追加し、登録したコマンドの説明が表示される `AutoLoadCommandTest` を移植した。Rust 側では型を直接登録する。[公式IDとの対応](nunit-evidence/targeted-monitor-features.tsv)・[実行ログ](nunit-evidence/targeted-monitor-features.log)
