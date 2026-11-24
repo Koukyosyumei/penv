@@ -506,6 +506,16 @@ impl ScalarWidth {
 struct ScriptOutput<'a, W> {
     output: &'a mut W,
     history: Option<UartHistory>,
+    replies: Option<&'a mut dyn Write>,
+}
+
+impl<W: Write> ScriptOutput<'_, W> {
+    fn reply(&mut self) -> &mut dyn Write {
+        match self.replies.as_deref_mut() {
+            Some(replies) => replies,
+            None => self.output,
+        }
+    }
 }
 
 impl<W: Write> Write for ScriptOutput<'_, W> {
@@ -548,16 +558,28 @@ pub fn run(
     budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
-    run_commands(machine, commands, budget, output, session, false)
+    run_commands(machine, commands, budget, output, session, false, None)
 }
 
-fn run_commands(
+pub fn run_startup(
+    machine: &mut Machine,
+    session: &mut Session,
+    commands: &[RuntimeCommand],
+    budget: u64,
+    guest_output: &mut impl Write,
+    replies: &mut impl Write,
+) -> Result<(Stop, u64), String> {
+    run_commands(machine, commands, budget, guest_output, session, false, Some(replies))
+}
+
+fn run_commands<'a>(
     machine: &mut Machine,
     commands: &[RuntimeCommand],
     mut budget: u64,
-    output: &mut impl Write,
+    output: &'a mut impl Write,
     session: &mut Session,
     save_session: bool,
+    replies: Option<&'a mut dyn Write>,
 ) -> Result<(Stop, u64), String> {
     if commands.is_empty() {
         return machine.run(budget, output);
@@ -565,6 +587,7 @@ fn run_commands(
     let mut output = ScriptOutput {
         output,
         history: None,
+        replies,
     };
     for command in commands {
         match &command.action {
@@ -616,7 +639,13 @@ fn run_commands(
                 None
             }),
             Action::SelectMachineZero => Ok(None),
-            Action::BusScalar(access) => access.apply(&mut machine.bus, &mut output).map(|()| None),
+            Action::BusScalar(access) => {
+                if access.value.is_none() {
+                    access.apply(&mut machine.bus, &mut output.reply())
+                } else {
+                    access.apply(&mut machine.bus, &mut output)
+                }
+            }.map(|()| None),
             Action::FindBytes(search) => search
                 .write_matches(&machine.bus, "", output.output)
                 .map(|()| None),
@@ -681,7 +710,7 @@ fn run_commands(
                 mode.print(machine.bus.monitor_step_hz() / 1_000_000, 4, output.output).map(|()| None)
             }
             Action::TimeSourceInfo => {
-                writeln!(output.output, "Elapsed Virtual Time: {}\nQuantum: {}",
+                writeln!(output.reply(), "Elapsed Virtual Time: {}\nQuantum: {}",
                     monitor_timestamp(machine.monitor_elapsed_ns()),
                     monitor_timestamp(u128::from(machine.monitor_quantum) * 10))
                     .map(|()| None).map_err(|error| error.to_string())
@@ -851,7 +880,7 @@ fn run_commands(
             Action::LogUart(target) => machine.bus.log_uart(target).map(|()| None),
             Action::Illuminance(sensor, value) => machine.bus.set_illuminance(sensor, *value).map(|()| None),
             Action::IlluminanceFeed(sensor, path) => machine.bus.feed_illuminance(sensor, path).map(|()| None),
-            Action::Echo(message) => writeln!(output.output, "{message}")
+            Action::Echo(message) => writeln!(output.reply(), "{message}")
                 .map(|()| None).map_err(|error| error.to_string()),
             Action::UserState(value) => {
                 if let Some(value) = value {
@@ -867,7 +896,7 @@ fn run_commands(
                 crate::monitor_log::record(*level, message);
                 Ok(None)
             }
-            Action::LastLog(count) => write_last_log(*count, output.output).map(|()| None),
+            Action::LastLog(count) => write_last_log(*count, &mut output.reply()).map(|()| None),
             Action::LogLevel(level) => {
                 machine.bus.set_monitor_log_level(*level);
                 Ok(None)
@@ -1167,14 +1196,14 @@ pub fn serve(
     machine: &mut Machine,
     mut input: impl BufRead,
     mut output: impl Write,
-    startup_output: &str,
+    startup_output: &[u8],
     mut session: Session,
     root: &Path,
 ) -> Result<(), String> {
     let initial: Vec<_> = (0..machine.hart_count()).map(|id| machine.hart_mut(id).clone()).collect();
     let path = Path::new("<monitor>");
     let mut line = String::new();
-    frame(&mut output, "READY", startup_output.as_bytes()).map_err(|error| error.to_string())?;
+    frame(&mut output, "READY", startup_output).map_err(|error| error.to_string())?;
     loop {
         line.clear();
         if input.read_line(&mut line).map_err(|error| error.to_string())? == 0 {
@@ -1317,7 +1346,7 @@ pub fn serve(
                 let echo_assertion = matches!(commands,
                     [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo), .. }]
                         if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
-                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true) {
+                match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true, None) {
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
                         if let Some(variables) = included_variables.take() {
@@ -4464,6 +4493,7 @@ mod tests {
         let mut uart = ScriptOutput {
             output: &mut output,
             history: Some(history),
+            replies: None,
         };
         uart.write_all(b"ADC reading: \n745\r\n").unwrap();
         assert!(!uart.history.as_ref().unwrap().matched());

@@ -375,6 +375,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                     if reply == "OK":
                         return value
                     return self.operation(command, assertion=True)
+                if re.fullmatch(r"emulation\s+GetTimeSourceInfo", command):
+                    return self.operation(command, assertion=True)
                 self.commands.append(command)
                 self.calls[-1]["stage"] = "queued_monitor_command"
                 return ""

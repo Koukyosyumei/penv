@@ -2241,21 +2241,22 @@ fn run() -> Result<ExitCode, String> {
                 return Err(format!("monitor script stopped before completion: {stop:?}"));
             }
         }
+        let mut output = monitor_output.join("\r\n").into_bytes();
+        if !output.is_empty() {
+            output.extend_from_slice(b"\r\n");
+        }
         if !runtime.is_empty() {
-            let (stop, _) = monitor::run(
+            let (stop, _) = monitor::run_startup(
                 &mut machine,
                 &mut monitor_session,
                 &runtime,
                 command_budget,
                 &mut io::stderr().lock(),
+                &mut output,
             )?;
             if stop != Stop::ScriptComplete {
                 return Err(format!("monitor script stopped before completion: {stop:?}"));
             }
-        }
-        let mut output = monitor_output.join("\r\n");
-        if !output.is_empty() {
-            output.push_str("\r\n");
         }
         monitor::serve(&mut machine, io::stdin().lock(), io::stdout().lock(), &output, monitor_session, platform_root.as_deref().unwrap_or(std::path::Path::new(".")))?;
         return Ok(ExitCode::SUCCESS);
