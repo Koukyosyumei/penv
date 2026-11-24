@@ -1144,3 +1144,33 @@ Rust の UART テストは35件合格。未変更の最終 Robot 実行では
 （`target/monitor-uart-results-robot/results.json`）。
 別実行の SiFive FE310 を使う UART 2件は
 `UART.SiFive_UART` で未対応（`target/monitor-clear-uart-robot/results.json`）。
+
+### UART テスターのマシン指定と生入力
+
+`0d00fd1` は Robot のテスター作成引数を Rust に渡し、名前付き
+マシンを共通モニターで検証する。固定 Renode と同じコマンド列で
+`missing` を拒否し、空白を含む `uart bench` を受理して ID 0 を返した。
+停止中の `Write Char On Uart` も受理され、結果オブジェクトと実行状態
+`IsStarted = False` が一致した。通常 CLI でも同じ Rust 書き込みを確認した
+（`target/monitor-uart-selection-proof/`）。
+
+`772a574` は `Write To Uart` と `Send Key To Uart` を同じ入力処理へ
+渡す。Rust は固定 Renode の `TerminalTester.Write` に沿って、UTF-16
+コード単位から下位8ビットをUARTに渡す。固定 Renode と同じ入力で
+両方の RPC が成功し、返却オブジェクトが一致した。penv の通常 CLI
+とRPCで `é` とキー255をレジスターから `0xE9`、`0xFF` と読み戻した
+（`target/monitor-uart-raw-proof/`）。
+
+停止中の配送時刻には差がある。固定 Renode の `STM32F7_USART.WriteChar`
+は受信スレッドへキューし、停止中の即時読み出しでは `0x00` を返した。
+penv は同条件で入力を直ちに読み出せた。
+
+Rust UART テスト35件とモニターテスト22件が合格。
+マシン指定変更時の未変更 Robot は全256バイト、STM32F072b Console Echo、
+モニター保存・復元の4件合格
+（`target/monitor-uart-selection-robot/results.json`）。
+生入力変更後も全256バイトと Console Echo は合格した。
+`Should Passthrough Characters Via Uart Hub` は
+`uart_hub_nucleo_h753.resc:8` の2台目の作成で起動前停止し、未実行。
+最終実行は2件合格、2,195件未実行
+（`target/monitor-uart-raw-robot/results.json`）。
