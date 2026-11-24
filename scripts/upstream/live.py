@@ -22,6 +22,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     rust_monitor = False
     keywords = dict(Endpoint.keywords, **MemoryKeywords.memory_keywords, **{
         "Wait For Prompt On Uart": "prompt",
+        "Wait For Bytes On Uart": "wait_for_uart_bytes",
         "PC Should Be Equal": "assert_program_counter",
         "Register Should Be Equal": "assert_cpu_register",
         "Set Default Tester": "set_default_tester",
@@ -653,7 +654,14 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         except (BrokenPipeError, RuntimeError) as exc:
             raise PenvExecutionError(f"penv monitor stopped during {command}: {exc}") from exc
         groups = []
-        if status == "MATCHCAPTURES":
+        binary_result = None
+        if status == "MATCHBYTES":
+            content, *fields = value.split("\t")
+            binary_result = {"Content": bytes.fromhex(content),
+                             "Groups": [None if field == "-" else bytes.fromhex(field) for field in fields],
+                             "Timestamp": 0.0}
+            status = "MATCH"
+        elif status == "MATCHCAPTURES":
             line, *captures = value.split("\t")
             value = bytes.fromhex(line).decode()
             groups = [bytes.fromhex(field).decode() for field in captures]
@@ -686,6 +694,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise AssertionFailed(value)
         if status not in {"OK", "MATCH"}:
             raise PenvExecutionError(value)
+        if binary_result is not None:
+            return binary_result
         return {"Line": value, "Groups": groups} if uart_captures else value
 
     @staticmethod
@@ -730,7 +740,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             raise Unsupported(f"Create Terminal Tester: {uart}")
         allowed = {"timeout", "defaultPauseEmulation"}
         if self.rust_monitor:
-            allowed.update(("defaultWaitForEcho", "endLineOption", "defaultMatchNextLine"))
+            allowed.update(("defaultWaitForEcho", "endLineOption", "defaultMatchNextLine", "binaryMode"))
         options = self.log_options(args, allowed, ("timeout",))
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
@@ -747,7 +757,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         first = ""
         if "defaultMatchNextLine" in options:
             first = f" defaultMatchNextLine={str(self.log_bool(options['defaultMatchNextLine'])).lower()}"
-        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}").strip())
+        binary = ""
+        if "binaryMode" in options:
+            binary = f" binaryMode={str(self.log_bool(options['binaryMode'])).lower()}"
+        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}{delimiter}{first}{binary}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result
 
@@ -839,6 +852,22 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         if "matchNextLine" in options:
             command += f" matchNextLine={str(self.log_bool(options['matchNextLine'])).lower()}"
         return self.operation(command, uart_captures=True)
+
+    def wait_for_uart_bytes(self, pattern, *args):
+        if not self.rust_monitor:
+            raise Unsupported("binary UART wait requires the Rust monitor")
+        positional = ("timeout", "testerId", "treatAsRegex", "pauseEmulation", "matchStart")
+        options = self.log_options(args, set(positional), positional)
+        if "pauseEmulation" in options:
+            self.log_bool(options["pauseEmulation"])
+        tester = self.parse_tester_id(options.get("testerId"))
+        selector = f" testerId={tester}" if tester is not None else ""
+        deadline = f" timeout={self.duration(options['timeout'])}" if "timeout" in options else ""
+        regex = self.log_bool(options.get("treatAsRegex", "false"))
+        start = self.log_bool(options.get("matchStart", "false"))
+        self.started = True
+        return self.operation(f"WaitForBytesOnUart {self.uart_text(pattern)}{selector}{deadline}"
+                              f" treatAsRegex={str(regex).lower()} matchStart={str(start).lower()}")
 
     def wait(self, expected, *args):
         return self.wait_for("WaitForLineOnUart", expected, *args)

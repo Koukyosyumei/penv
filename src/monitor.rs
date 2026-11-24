@@ -968,11 +968,8 @@ fn run_commands(
             Action::WaitForBytes(id, pattern, match_start, timeout) => {
                 let cycles = uart_wait_cycles(machine, *id, *timeout)?.min(budget);
                 let start = machine.elapsed_steps();
-                machine.bus.watch_uart_bytes(*id, pattern, *match_start).and_then(|watch| {
-                    let result = drive_uart_watch(machine, watch, cycles, &mut output);
-                    let matched = machine.bus.take_uart_byte_match(watch);
-                    machine.bus.finish_stm32_uart_watch(watch);
-                    result.and_then(|(stop, count)| {
+                wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, &mut output)
+                    .and_then(|(stop, count, matched)| {
                         retired += count;
                         budget -= machine.elapsed_steps().wrapping_sub(start);
                         let matched = matched.ok_or_else(|| format!("Terminal tester failed! Byte pattern was not received ({stop:?})"))?;
@@ -985,7 +982,6 @@ fn run_commands(
                         }
                         Ok(None)
                     })
-                })
             }
             Action::WaitForTester(id, pattern, regex, mode, timeout, absent, _, first_only) => {
                 let cycles = uart_wait_cycles(machine, *id, *timeout)?;
@@ -1204,6 +1200,16 @@ pub fn serve(
                 }
             }
 
+            (Ok(()), [RuntimeCommand { action: Action::WaitForBytes(id, pattern, match_start, timeout), .. }]) => {
+                let result = uart_wait_cycles(machine, *id, *timeout)
+                    .and_then(|cycles| wait_for_uart_bytes(machine, *id, pattern, *match_start, cycles, &mut io::sink()));
+                match result {
+                    Ok((_, _, Some(matched))) => frame(&mut output, "MATCHBYTES", uart_byte_payload(matched).as_bytes()),
+                    Ok((Stop::Limit, _, None)) => frame(&mut output, "FAIL", b"Terminal tester failed! Byte pattern was not received (Limit)"),
+                    Ok((stop, _, None)) => frame(&mut output, "STOP", format!("{stop:?}").as_bytes()),
+                    Err(error) => frame(&mut output, "ERROR", error.as_bytes()),
+                }
+            }
             (Ok(()), [RuntimeCommand { action: Action::WaitForTester(id, expected, regex, mode, timeout, absent, capture_groups, first_only), .. }]) => {
                 let result = uart_wait_cycles(machine, *id, *timeout).and_then(|cycles| {
                     let watch = machine.bus.watch_uart_tester_text(*id, expected, regex.clone(), *mode, *first_only)?;
@@ -1309,6 +1315,24 @@ fn read_bus_bytes(
     writeln!(output, "]").map_err(|error| error.to_string())
 }
 
+fn uart_byte_payload(matched: crate::uart::BinaryUartMatch) -> String {
+    use std::fmt::Write;
+    let mut payload = String::new();
+    for (index, field) in std::iter::once(Some(matched.content)).chain(matched.groups).enumerate() {
+        if index != 0 {
+            payload.push('\t');
+        }
+        if let Some(field) = field {
+            for byte in field {
+                write!(payload, "{byte:02x}").expect("writing to String");
+            }
+        } else {
+            payload.push('-');
+        }
+    }
+    payload
+}
+
 fn uart_capture_payload(line: &str, regex: Option<&regex::Regex>) -> String {
     use std::fmt::Write;
 
@@ -1405,6 +1429,21 @@ fn uart_wait_cycles(machine: &Machine, id: Option<usize>, timeout: Option<u64>) 
         None => machine.bus.uart_tester_timeout(id)?,
     };
     duration_cycles(timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
+}
+
+fn wait_for_uart_bytes(
+    machine: &mut Machine,
+    id: Option<usize>,
+    pattern: &BinaryUartPattern,
+    match_start: bool,
+    cycles: u64,
+    output: &mut impl Write,
+) -> Result<(Stop, u64, Option<crate::uart::BinaryUartMatch>), String> {
+    let watch = machine.bus.watch_uart_bytes(id, pattern, match_start)?;
+    let result = drive_uart_watch(machine, watch, cycles, output);
+    let matched = machine.bus.take_uart_byte_match(watch);
+    machine.bus.finish_stm32_uart_watch(watch);
+    result.map(|(stop, count)| (stop, count, matched))
 }
 
 fn wait_for_uart_idle(
@@ -2483,20 +2522,21 @@ fn execute(
         }
         ["WaitForBytesOnUart", ..] => {
             let args = text["WaitForBytesOnUart".len()..].trim_start();
-            let (pattern, arguments) = quoted_argument(args)
-                .filter(|(pattern, _)| !pattern.is_empty())
-                .ok_or("expected WaitForBytesOnUart \"bytes or regex\" [options]")?;
+            let (pattern, arguments) = uart_text_argument(args)?;
+            if pattern.is_empty() {
+                return Err("UART byte wait pattern must be nonempty".into());
+            }
             let options = tester_wait_options(arguments, resolve, TesterOptionsKind::Bytes)?;
             let pattern = if options.regex {
                 BinaryUartPattern::Regex(
-                    regex::bytes::RegexBuilder::new(pattern)
+                    regex::bytes::RegexBuilder::new(&pattern)
                         .unicode(false)
                         .dot_matches_new_line(true)
                         .build()
                         .map_err(|e| format!("invalid UART byte regex: {e}"))?,
                 )
             } else {
-                let bytes = hex_pattern(pattern)?;
+                let bytes = hex_pattern(&pattern)?;
                 if bytes.is_empty() || bytes.len() > crate::uart::UART_HISTORY_BYTES {
                     return Err("UART byte pattern must contain 1 to 65536 bytes".into());
                 }
