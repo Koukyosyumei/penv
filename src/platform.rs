@@ -3659,12 +3659,22 @@ pub(crate) fn irq_receiver(target: &str) -> Result<(&str, Option<u32>), String> 
 pub(crate) use crate::repl_parser::{ListItem, boolean_value, list_value, object_fields};
 
 pub(crate) fn multiline_value(value: &str) -> Option<String> {
+    decode_multiline_value(value, false)
+}
+
+pub(crate) fn decode_multiline_value(value: &str, keep_lone_line_escape: bool) -> Option<String> {
     let body = value.trim().strip_prefix("'''")?.strip_suffix("'''")?;
     let mut decoded = String::new();
     let mut start = 0;
     for (index, _) in body.match_indices("\\'''") {
         if index != 0 && body.as_bytes()[index - 1] == b'\\' {
             continue;
+        }
+        if keep_lone_line_escape && body[index + 4..].starts_with('\n') {
+            let line_start = body[..index].rfind('\n').map_or(0, |end| end + 1);
+            if !body[line_start..index].contains("'''") {
+                continue;
+            }
         }
         decoded.push_str(&body[start..index]);
         start = index + 1;

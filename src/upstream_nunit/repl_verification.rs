@@ -2062,3 +2062,65 @@ peripheral: Antmicro.Renode.Tests.UnitTests.Mocks.MachineTestPeripheral @ sysbus
     )
     .unwrap();
 }
+
+#[test]
+fn should_handle_escaped_multiline_string_sign_at_the_end_of_aline() {
+    let platform = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is \'''
+not a single line '''"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is \\'''\nnot a single line ")
+    );
+}
+
+#[test]
+fn should_handle_escaped_multiline_string_sign_in_new_line() {
+    let platform = creation::create_objects(
+        concat!(
+            r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is"#,
+            " \n",
+            r#"\'''
+not a single line '''"#,
+        ),
+        Path::new("."),
+    )
+    .unwrap();
+    let cpu = platform.cpu("sysbus.cpu").unwrap();
+    assert_eq!(
+        cpu.placeholder.as_deref(),
+        Some("this is \n\\'''\nnot a single line ")
+    );
+}
+
+#[test]
+fn should_fail_on_unclosed_multiline_quoted_string_between_quoted_strings() {
+    let error = creation::create_objects(
+        r#"
+cpu: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline
+string'''
+cpu2: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline
+string
+cpu3: Antmicro.Renode.UnitTests.Mocks.MockCPU @ sysbus
+    Placeholder: '''this is
+multiline'''
+string"#,
+        Path::new("."),
+    )
+    .err()
+    .unwrap();
+    assert!(error.starts_with("SyntaxError:"));
+    assert_eq!(error.lines().nth(1), Some("At 12:9:"));
+}

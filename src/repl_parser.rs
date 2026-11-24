@@ -917,6 +917,34 @@ pub(crate) fn init_header(text: &str) -> Option<(ScriptSection, bool)> {
     Some((section, append))
 }
 
+fn unescaped_multiline_quotes(line: &str) -> impl Iterator<Item = usize> {
+    line.match_indices("'''").filter_map(|(at, _)| {
+                    let escapes = line.as_bytes()[..at]
+                        .iter()
+                        .rev()
+                        .take_while(|&&byte| byte == b'\\')
+                        .count();
+                    (escapes % 2 == 0).then_some(at)
+                })
+}
+
+fn unclosed_multiline_after<'a>(lines: impl Iterator<Item = (usize, &'a str)>) -> Option<(usize, usize)> {
+    // Like the upstream line prepass, an open string consumes through the next
+    // unescaped delimiter before the remaining lines are handed to the grammar.
+    let mut open = None;
+    for (index, line) in lines {
+        let mut quotes = unescaped_multiline_quotes(line);
+        if let Some(first) = quotes.next() {
+            if open.is_some() {
+                open = None;
+            } else if quotes.next().is_none() {
+                open = Some((index + 1, line[..first].chars().count()));
+            }
+        }
+    }
+    open
+}
+
 fn parse_text(
     content: &str,
     path: &Path,
@@ -946,20 +974,16 @@ fn parse_text(
             let mut line_number = index + 1;
             let mut offset = start_offset;
             loop {
-                let closing = line.match_indices("'''").find_map(|(at, _)| {
-                    let escapes = line.as_bytes()[..at]
-                        .iter()
-                        .rev()
-                        .take_while(|&&byte| byte == b'\\')
-                        .count();
-                    (escapes % 2 == 0).then_some(at)
-                });
+                let closing = unescaped_multiline_quotes(line).next();
                 if let Some(at) = closing {
                     property.push_str(&line[..at + 3]);
                     let suffix = &line[at + 3..];
                     let tail = comments.line(suffix)
                         .map_err(|error| format!("{}:{line_number}: {error}", path.display()))?;
                     if !tail.trim().is_empty() {
+                        if offset == 0 && let Some((line, column)) = unclosed_multiline_after(lines.clone()) {
+                            return Err(format!("SyntaxError: unclosed multiline string\nAt {line}:{column}:"));
+                        }
                         let prefix = offset + at + 3;
                         let whitespace = if suffix.trim_start().starts_with("'''") {
                             0
