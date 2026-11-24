@@ -1391,6 +1391,7 @@ fn run() -> Result<ExitCode, String> {
     let mut monitor_unhandled_access = None;
     let mut monitor_uart_timeout = None;
     let mut monitor_output = Vec::new();
+    let mut empty_monitor_machine = false;
     let mut monitor_session = monitor::Session::default();
     let mut _generated_repl = None;
     if monitor_stdio || script.is_some() {
@@ -1519,6 +1520,7 @@ fn run() -> Result<ExitCode, String> {
             monitor::run_console_script(&boot, &mut io::stdout().lock())?;
             return Ok(ExitCode::SUCCESS);
         }
+        empty_monitor_machine = boot.empty_machine;
         sd_setup_only = boot.is_sd_setup_only() && boot.image.is_none() && boot.binaries.is_empty();
         if let Some(server) = boot.network.into_tftp()? {
             let file = server.file.input_path(root, asset_dir.as_deref())?;
@@ -1601,7 +1603,7 @@ fn run() -> Result<ExitCode, String> {
     {
         return Err("--max-steps requires a positive integer outside memory setup".into());
     }
-    let memory_only = !has_firmware
+    let memory_only = empty_monitor_machine || !has_firmware
         && platform_path.is_some()
         && (max_steps == Some(0) || static_memory_script || sd_setup_only || monitor_stdio);
     let inspect_only = path.is_none()
@@ -1655,6 +1657,14 @@ fn run() -> Result<ExitCode, String> {
                                 .map_err(|error| format!("{original}; network REPL: {error}"))
                         })?
                 }
+            }
+            None if empty_monitor_machine => {
+                if ram_mib.is_some() || !extra_ram.is_empty() || clint.is_some() {
+                    return Err("empty monitor machines cannot use manual memory mappings".into());
+                }
+                let mut machine = Machine::without_default_ram();
+                machine.cpu_less = true;
+                machine
             }
             None => {
                 if platform_root.is_some() {

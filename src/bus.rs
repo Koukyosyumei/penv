@@ -3984,6 +3984,26 @@ impl Bus {
         Ok(())
     }
 
+    fn log_unmapped_monitor_access(&self, address: u32, width: usize, value: Option<u32>) {
+        if self.unhandled_access == Some(UnhandledAccess::DoNotReport)
+            || self.policy_tags.iter().any(|tag| tag.start <= address && address <= tag.end)
+            || self.stm32f0_tagged(address, width)
+        {
+            return;
+        }
+        let width = match width {
+            1 => "Byte",
+            2 => "Word",
+            4 => "DoubleWord",
+            _ => return,
+        };
+        let message = match value {
+            Some(value) => format!("sysbus: Write{width} to non existing peripheral at 0x{address:X}, value 0x{value:X}."),
+            None => format!("sysbus: Read{width} from non existing peripheral at 0x{address:X}."),
+        };
+        crate::monitor_log::record(2, &message);
+    }
+
     fn unhandled_value(&self, address: u32, width: usize, monitor: bool) -> Result<u32, BusError> {
         let tag = self
             .policy_tags
@@ -6075,7 +6095,13 @@ impl Bus {
                 self.log_memory_access(false, address, N, value);
                 Ok(value)
             }
-            Err(BusError::Unmapped(..)) => self.unhandled_value(address, N, monitor),
+            Err(BusError::Unmapped(..)) => {
+                let value = self.unhandled_value(address, N, monitor)?;
+                if monitor {
+                    self.log_unmapped_monitor_access(address, N, None);
+                }
+                Ok(value)
+            }
             result => result,
         }
     }
@@ -6856,7 +6882,11 @@ impl Bus {
                 Ok(())
             }
             Err(BusError::Unmapped(..)) => {
-                self.unhandled_value(address, width, monitor).map(|_| ())
+                self.unhandled_value(address, width, monitor)?;
+                if monitor {
+                    self.log_unmapped_monitor_access(address, width, Some(value));
+                }
+                Ok(())
             }
             result => result,
         }

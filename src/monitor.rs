@@ -53,6 +53,7 @@ pub struct Boot {
     pub monitor_user_state: Option<String>,
     pub monitor_output: Vec<String>,
     pub console_only: bool,
+    pub empty_machine: bool,
     pub cpu_registers: Vec<CpuRegisterCommand>,
     pub mask: Option<u32>,
     pub supervisor_mask: Option<u32>,
@@ -1820,6 +1821,13 @@ fn is_console_action(action: &Action) -> bool {
     matches!(action, Action::ScriptLog(..) | Action::LogLevel(_) | Action::LastLog(_) | Action::Echo(_))
 }
 
+fn is_empty_machine_action(action: &Action) -> bool {
+    is_console_action(action) || matches!(action,
+        Action::BusScalar(_) | Action::MonitorLog(_) | Action::UnhandledAccess(_)
+        | Action::TimeSourceInfo | Action::RunFor(_) | Action::RunUntil(_)
+        | Action::RunToSyncPoint | Action::SetQuantum(_) | Action::SetEmulationPaused(_) | Action::SelectMachineZero)
+}
+
 pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), String> {
     crate::monitor_log::enable_history();
     if let Some(level) = boot.monitor_log_level {
@@ -1871,6 +1879,12 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
         && boot.runtime.iter().all(|command| is_console_action(&command.action))
     {
         boot.console_only = true;
+        return Ok(boot);
+    }
+    if state.machine && !boot.has_platform() && (session || !boot.runtime.is_empty())
+        && boot.runtime.iter().all(|command| is_empty_machine_action(&command.action))
+    {
+        boot.empty_machine = true;
         return Ok(boot);
     }
     boot.materialize_platform()?;
@@ -3293,7 +3307,8 @@ fn execute(
         _ => None,
     };
     if let Some(action) = action {
-        if !matches!(action, Action::ScriptLog(..) | Action::LastLog(_))
+        let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
+        if !empty_machine_command && !is_console_action(&action)
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
