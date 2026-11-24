@@ -103,7 +103,8 @@ const SESSION_SNAPSHOT_V3: &[u8; 9] = b"PENVSESS\x03";
 const SESSION_SNAPSHOT_V4: &[u8; 9] = b"PENVSESS\x04";
 const SESSION_SNAPSHOT_V5: &[u8; 9] = b"PENVSESS\x05";
 const SESSION_SNAPSHOT_V6: &[u8; 9] = b"PENVSESS\x06";
-const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x07";
+const SESSION_SNAPSHOT_V7: &[u8; 9] = b"PENVSESS\x07";
+const SESSION_SNAPSHOT: &[u8; 9] = b"PENVSESS\x08";
 const MAX_MONITOR_PAYLOAD: usize = 8 * 1024 * 1024;
 
 fn write_snapshot(
@@ -130,6 +131,7 @@ fn write_snapshot(
 struct SnapshotMetadata {
     selected: String,
     user_state: String,
+    number_mode: NumberMode,
     machine_cleared: bool,
     quantum: Option<u64>,
     cpu_mips: Option<u32>,
@@ -141,6 +143,8 @@ struct SnapshotMetadata {
 fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMetadata>, String> {
     let header = input.fill_buf().map_err(|e| e.to_string())?;
     let version = if header.starts_with(SESSION_SNAPSHOT) {
+        8
+    } else if header.starts_with(SESSION_SNAPSHOT_V7) {
         7
     } else if header.starts_with(SESSION_SNAPSHOT_V6) {
         6
@@ -208,6 +212,18 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
         false
     };
     let user_state = if version >= 7 { read_string(&mut data)? } else { String::new() };
+    let number_mode = if version >= 8 {
+        let (&mode, remaining) = data.split_first().ok_or("missing monitor number format")?;
+        data = remaining;
+        match mode {
+            0 => NumberMode::Hexadecimal,
+            1 => NumberMode::Decimal,
+            2 => NumberMode::Both,
+            _ => return Err("invalid monitor number format".into()),
+        }
+    } else {
+        NumberMode::Hexadecimal
+    };
     let mut macros = HashMap::new();
     if version >= 4 {
         let count = read_size(&mut data)?;
@@ -244,7 +260,7 @@ fn read_snapshot_metadata(input: &mut impl BufRead) -> Result<Option<SnapshotMet
             return Err("invalid monitor variable snapshot".into());
         }
     }
-    Ok(Some(SnapshotMetadata { selected, user_state, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
+    Ok(Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, variables, macros, aliases }))
 }
 
 fn restore_snapshot_platform(path: &Path) -> Result<(Option<String>, Option<String>), String> {
@@ -281,13 +297,22 @@ impl Session {
             data.extend_from_slice(text.as_bytes());
             Ok(())
         }
+        let number_mode = match self.number_mode {
+            NumberMode::Hexadecimal => 0,
+            NumberMode::Decimal => 1,
+            NumberMode::Both => 2,
+        };
         let has_user_state = !machine.bus.monitor_user_state.is_empty();
+        let version_has_user_state = has_user_state || number_mode != 0;
         encode(&mut data, self.machine.as_deref().unwrap_or_default())?;
-        if has_user_state || self.machine_cleared {
+        if version_has_user_state || self.machine_cleared {
             data.push(u8::from(self.machine_cleared));
         }
-        if has_user_state {
+        if version_has_user_state {
             encode(&mut data, &machine.bus.monitor_user_state)?;
+        }
+        if number_mode != 0 {
+            data.push(number_mode);
         }
         fn encode_size(data: &mut Vec<u8>, value: usize) -> Result<(), String> {
             if data.len() > MAX_MONITOR_PAYLOAD - 4 {
@@ -297,7 +322,7 @@ impl Session {
             data.extend_from_slice(&value.to_le_bytes());
             Ok(())
         }
-        if has_user_state || self.machine_cleared || !self.macros.is_empty() || !self.aliases.is_empty() {
+        if version_has_user_state || self.machine_cleared || !self.macros.is_empty() || !self.aliases.is_empty() {
             let mut macros: Vec<_> = self.macros.iter().collect();
             macros.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, macros.len())?;
@@ -311,7 +336,7 @@ impl Session {
                 }
             }
         }
-        if has_user_state || self.machine_cleared || !self.aliases.is_empty() {
+        if version_has_user_state || self.machine_cleared || !self.aliases.is_empty() {
             let mut aliases: Vec<_> = self.aliases.iter().collect();
             aliases.sort_unstable_by_key(|(name, _)| *name);
             encode_size(&mut data, aliases.len())?;
@@ -325,8 +350,10 @@ impl Session {
             encode(&mut data, value)?;
         }
         write_snapshot(path, |file| {
-            let version = if has_user_state {
+            let version = if number_mode != 0 {
                 SESSION_SNAPSHOT
+            } else if has_user_state {
+                SESSION_SNAPSHOT_V7
             } else if self.machine_cleared {
                 SESSION_SNAPSHOT_V6
             } else if !self.aliases.is_empty() {
@@ -349,7 +376,7 @@ impl Session {
     fn load(&mut self, machine: &mut Machine, path: &Path) -> Result<(), String> {
         let mut input = io::BufReader::new(fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
         let result = (|| {
-            let Some(SnapshotMetadata { selected, user_state, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
+            let Some(SnapshotMetadata { selected, user_state, number_mode, machine_cleared, quantum, cpu_mips, mut variables, macros, aliases }) =
                 read_snapshot_metadata(&mut input)?
             else {
                 return machine.read_boot_snapshot(&mut input);
@@ -378,6 +405,7 @@ impl Session {
             machine.bus.monitor_user_state = user_state;
             self.variables = variables;
             self.machine_cleared = machine_cleared;
+            self.number_mode = number_mode;
             self.macros = macros;
             self.aliases = aliases;
             Ok(())
@@ -1608,8 +1636,8 @@ pub fn serve(
                         if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
                 match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, None) {
                     Ok((Stop::ScriptComplete, _)) => {
-                        session.number_mode = boot.session.number_mode;
                         if let Some((variables, macros, aliases)) = included_state.take() {
+                            session.number_mode = boot.session.number_mode;
                             session.machine_cleared = boot.session.machine_cleared;
                             session.variables = variables;
                             session.macros = macros;
@@ -2581,6 +2609,7 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         // A restore can change both machine selection and variable bindings.
         if (matches!(words.as_slice(),
                 ["mach" | "machine", "set", _]
+                | ["numbersMode", _]
                 | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
             || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
             && has_snapshot_boundary(&state.boot)
@@ -4968,6 +4997,7 @@ greet "hello world"
         let session = Session {
             machine: Some("clock board".into()),
             machine_cleared: true,
+            number_mode: NumberMode::Both,
             variables: HashMap::from([("global.marker".into(), "42".into())]),
             ..Session::default()
         };
@@ -4984,6 +5014,7 @@ greet "hello world"
         run(&mut restored, &mut boot.session, &boot.runtime, u64::MAX, &mut io::sink()).unwrap();
         assert_eq!(restored.elapsed_steps(), 9);
         assert_eq!(restored.bus.monitor_user_state, "saved state");
+        assert!(matches!(boot.session.number_mode, NumberMode::Both));
         assert_eq!(boot.session.selected_machine(), None);
         assert_eq!(boot.session.machine.as_deref(), Some("clock board"));
         assert_eq!(resolve(&boot.session.variables, "$marker").unwrap(), "42");
