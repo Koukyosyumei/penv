@@ -357,6 +357,15 @@ const GRAPH_CODECS: &[Codec] = &[
     generated_record!("SimpleStruct"; first: integer, text: reference),
     generated_record!("ComplexStruct"; first: integer, nested: integer, text: reference),
     generated_record!("GenericBox<SimpleStruct>"; value: integer, text: reference),
+    generated_record!("Box"; element: reference),
+    generated_record!("GenericBox<long>"; element: integer),
+    generated_record!("GenericBox<int?>"; element: nullable_integer),
+    generated_record!("System.Int32"; value: integer),
+    generated_record!("Tuple<string,string,string>"; first: reference, second: reference, third: reference),
+    generated_record!("List<int>"; items: reference),
+    generated_record!("List<List<int>>"; items: reference),
+    generated_record!("List<Box>"; items: reference),
+    generated_record!("List<object>"; items: reference),
 ];
 
 #[derive(Clone, Copy, Default)]
@@ -1024,20 +1033,20 @@ stamp_modes!(
     four_dimensional_array
 );
 
-fn box_with_lazy_scan(stamped: bool) {
+fn box_with_lazy_scan(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let text = graph.insert(string("Something"));
     let root = graph.insert(record("Box", vec![Value::Ref(text)]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let field = &fields(reader.graph().get(copy).unwrap())[0];
     assert_eq!(reader.graph().get(reference(field)), graph.get(text));
 }
 
-fn field_with_different_formal_and_actual_type(stamped: bool) {
+fn field_with_different_formal_and_actual_type(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let inner = graph.insert(record("Box", vec![Value::Null]));
     let root = graph.insert(record("Box", vec![Value::Ref(inner)]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let field = &fields(reader.graph().get(copy).unwrap())[0];
     let Some(Object::Record { class, .. }) = reader.graph().get(reference(field)) else {
         panic!("expected the concrete record type");
@@ -1045,22 +1054,22 @@ fn field_with_different_formal_and_actual_type(stamped: bool) {
     assert_eq!(class, "Box");
 }
 
-fn box_with_long(stamped: bool) {
+fn box_with_long(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = graph.insert(record("GenericBox<long>", vec![Value::Integer(1234)]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         fields(graph.get(root).unwrap())[0]
     );
 }
 
-fn string_tuple(stamped: bool) {
+fn string_tuple(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let contents = ["One", "Two", "Three"];
     let ids = contents.map(|text| Value::Ref(graph.insert(string(text))));
     let root = graph.insert(record("Tuple<string,string,string>", ids.to_vec()));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let Some(Object::Record { class, fields }) = reader.graph().get(copy) else {
         panic!("expected a tuple");
     };
@@ -1084,11 +1093,11 @@ stamp_modes!(
 stamp_modes!(box_with_long_plain, box_with_long_stamped, box_with_long);
 stamp_modes!(string_tuple_plain, string_tuple_stamped, string_tuple);
 
-fn nullable_field(stamped: bool, value: Option<i32>) {
+fn nullable_field(methods: impl Into<GraphMethods>, value: Option<i32>) {
     let mut graph = Graph::default();
     let element = value.map_or(Value::Null, |value| Value::Integer(i64::from(value)));
     let root = graph.insert(record("GenericBox<int?>", vec![element]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     assert_eq!(
         fields(reader.graph().get(copy).unwrap())[0],
         fields(graph.get(root).unwrap())[0]
@@ -1102,11 +1111,11 @@ fn boxed_integer(graph: &mut Graph, value: i32) -> Value {
     )))
 }
 
-fn boxed_nullable_field(stamped: bool, value: Option<i32>) {
+fn boxed_nullable_field(methods: impl Into<GraphMethods>, value: Option<i32>) {
     let mut graph = Graph::default();
     let element = value.map_or(Value::Null, |value| boxed_integer(&mut graph, value));
     let root = graph.insert(record("Box", vec![element.clone()]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let actual = &fields(reader.graph().get(copy).unwrap())[0];
     match element {
         Value::Ref(id) => assert_eq!(reader.graph().get(reference(actual)), graph.get(id)),
@@ -1115,18 +1124,18 @@ fn boxed_nullable_field(stamped: bool, value: Option<i32>) {
     }
 }
 
-fn non_null_nullable(stamped: bool) {
-    nullable_field(stamped, Some(3));
+fn non_null_nullable(methods: impl Into<GraphMethods>) {
+    nullable_field(methods, Some(3));
 }
-fn null_nullable(stamped: bool) {
-    nullable_field(stamped, None);
+fn null_nullable(methods: impl Into<GraphMethods>) {
+    nullable_field(methods, None);
 }
 // The upstream method names are reversed relative to their inputs.
-fn boxed_null_nullable(stamped: bool) {
-    boxed_nullable_field(stamped, Some(66));
+fn boxed_null_nullable(methods: impl Into<GraphMethods>) {
+    boxed_nullable_field(methods, Some(66));
 }
-fn boxed_non_null_nullable(stamped: bool) {
-    boxed_nullable_field(stamped, None);
+fn boxed_non_null_nullable(methods: impl Into<GraphMethods>) {
+    boxed_nullable_field(methods, None);
 }
 
 stamp_modes!(
@@ -1206,22 +1215,22 @@ fn list_values<'a>(graph: &'a Graph, id: ObjectId, class: &str) -> &'a [Value] {
     array_values(graph, reference(&fields[0]))
 }
 
-fn primitive_list(stamped: bool, range: std::ops::Range<i64>) {
+fn primitive_list(methods: impl Into<GraphMethods>, range: std::ops::Range<i64>) {
     let mut graph = Graph::default();
     let elements: Vec<_> = range.map(Value::Integer).collect();
     let root = list(&mut graph, "List<int>", elements.clone());
-    let (reader, root) = deep_clone(&graph, root, stamped);
+    let (reader, root) = methods.into().clone(&graph, root);
     assert_eq!(list_values(reader.graph(), root, "List<int>"), elements);
 }
 
-fn list_of_lists(stamped: bool) {
+fn list_of_lists(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let inputs = [[1, 2, 3], [97, 98, 99]].map(|values| values.map(Value::Integer));
     let roots = inputs
         .clone()
         .map(|values| Value::Ref(list(&mut graph, "List<int>", values.to_vec())));
     let root = list(&mut graph, "List<List<int>>", roots.to_vec());
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let restored = list_values(reader.graph(), copy, "List<List<int>>");
     for index in 0..2 {
         assert_eq!(
@@ -1231,14 +1240,14 @@ fn list_of_lists(stamped: bool) {
     }
 }
 
-fn list_self_identity(stamped: bool) {
+fn list_self_identity(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let root = list(&mut graph, "List<Box>", vec![]);
     let first = graph.insert(record("Box", vec![Value::Ref(root)]));
     let second = graph.insert(record("Box", vec![Value::Ref(root)]));
     let backing = reference(&fields(graph.get(root).unwrap())[0]);
     *graph.get_mut(backing).unwrap() = Object::Array(vec![Value::Ref(first), Value::Ref(second)]);
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let items = list_values(graph, copy, "List<Box>");
     let first = reference(&fields(graph.get(reference(&items[0])).unwrap())[0]);
@@ -1247,11 +1256,11 @@ fn list_self_identity(stamped: bool) {
     assert_eq!(first, second);
 }
 
-fn boxed_primitive(stamped: bool) {
+fn boxed_primitive(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let three = boxed_integer(&mut graph, 3);
     let root = graph.insert(record("Box", vec![three]));
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let element = reference(&fields(reader.graph().get(copy).unwrap())[0]);
     assert_eq!(
         reader.graph().get(element),
@@ -1259,7 +1268,7 @@ fn boxed_primitive(stamped: bool) {
     );
 }
 
-fn boxed_identity(stamped: bool) {
+fn boxed_identity(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let primitive = boxed_integer(&mut graph, 1234);
     let first = graph.insert(record("Box", vec![primitive.clone()]));
@@ -1269,7 +1278,7 @@ fn boxed_identity(stamped: bool) {
         "List<Box>",
         vec![Value::Ref(first), Value::Ref(second)],
     );
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let items = list_values(graph, copy, "List<Box>");
     let element =
@@ -1277,7 +1286,7 @@ fn boxed_identity(stamped: bool) {
     assert_eq!(element(0), element(1));
 }
 
-fn list_with_null(stamped: bool) {
+fn list_with_null(methods: impl Into<GraphMethods>) {
     let mut graph = Graph::default();
     let one = graph.insert(string("One"));
     let two = graph.insert(string("Two"));
@@ -1286,7 +1295,7 @@ fn list_with_null(stamped: bool) {
         "List<object>",
         vec![Value::Ref(one), Value::Null, Value::Ref(two)],
     );
-    let (reader, copy) = deep_clone(&graph, root, stamped);
+    let (reader, copy) = methods.into().clone(&graph, root);
     let graph = reader.graph();
     let actual = list_values(graph, copy, "List<object>");
     assert_eq!(actual.len(), 3);
@@ -2741,4 +2750,29 @@ mod serial_generated_values {
         "ComplexStruct",
         &[6, 5]
     ));
+}
+
+mod serial_generated_boxes_lists {
+    use super::*;
+    configurations!(lazy_box, box_with_lazy_scan);
+    configurations!(actual_type, field_with_different_formal_and_actual_type);
+    configurations!(long_box, box_with_long);
+    configurations!(tuple, string_tuple);
+    configurations!(non_null_nullable, non_null_nullable);
+    configurations!(null_nullable, null_nullable);
+    configurations!(boxed_null_nullable, boxed_null_nullable);
+    configurations!(boxed_non_null_nullable, boxed_non_null_nullable);
+    configurations!(boxed_primitive, boxed_primitive);
+    configurations!(boxed_identity, boxed_identity);
+    configurations!(struct_in_class, |m| struct_with_string(
+        m,
+        "GenericBox<SimpleStruct>",
+        &[1]
+    ));
+    configurations!(primitive_list, |m| primitive_list(m, 1..4));
+    configurations!(long_primitive_list, |m| primitive_list(m, 0..100_000));
+    configurations!(empty_list, |m| primitive_list(m, 0..0));
+    configurations!(list_of_lists, list_of_lists);
+    configurations!(list_with_null, list_with_null);
+    configurations!(list_identity, list_self_identity);
 }

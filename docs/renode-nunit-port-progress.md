@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,715 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,817 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 1,681 |
+| 移植待ち | 1,579 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 17 fixture の
@@ -330,3 +330,9 @@ Rust マクロで型ごとの専用フィールドコーデックを生成し、
 上流の列挙値とフラグ、nullable 列挙型、キー値ペア、継承、構造体、汎用・非汎用スタックを、生成読み書き3組み合わせと型スタンプ有無で検証した。追加66件が合格した。
 
 - [公式 ID](nunit-evidence/targeted-migrant-serialization-values.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-values.log)
+
+## Migrant SerializationTests のボックスとリスト
+
+nullable 整数、ボックス化された整数の参照共有、文字列タプル、空・入れ子・null を含むリスト、100,000要素のリストを追加した。生成読み書き3組み合わせと型スタンプ有無の公式102件が対象実行で合格した。今回のコレクション設定は treatCollectionsAsUserObjects=false。
+
+- [公式 ID](nunit-evidence/targeted-migrant-serialization-boxes-lists.tsv)と[実行ログ](nunit-evidence/targeted-migrant-serialization-boxes-lists.log)
