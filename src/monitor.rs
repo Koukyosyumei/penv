@@ -1503,7 +1503,15 @@ pub fn serve(
             }.map_err(|error| error.to_string())?;
             continue;
         }
-        if let Some(result) = crate::monitor_log::handle(machine, text, u64::MAX, &mut io::sink()) {
+        let log_result = if text.split_ascii_whitespace().next().is_some_and(crate::monitor_log::is_command) {
+            match resolve_log_command(text, &session.variables) {
+                Ok(command) => crate::monitor_log::handle(machine, &command, u64::MAX, &mut io::sink()),
+                Err(error) => Some(Err(error)),
+            }
+        } else {
+            None
+        };
+        if let Some(result) = log_result {
             match result {
                 Ok((status, value)) => frame(&mut output, status, value.as_bytes()),
                 Err(error) if error.starts_with("unsupported") => {
@@ -2693,7 +2701,8 @@ fn load_text_at(path: &Path, canonical: PathBuf, root: &Path, state: &mut Script
                     | "WaitForLineOnUart" | "WaitForTesterPrompt" | "WaitForNextLineOnUart"
                     | "WaitForBytesOnUart" | "ShouldNotBeOnUart" | "WriteTesterUart"
                     | "RegisterFailingUartString" | "UnregisterFailingUartString", ..]
-                | ["WaitForMonitorLog" | "AssertAbsentMonitorLog" | "log" | "logLevel" | "lastLog", ..]
+                | ["WaitForMonitorLog" | "AssertAbsentMonitorLog" | "RegisterFailingMonitorLog"
+                    | "UnregisterFailingMonitorLog" | "log" | "logLevel" | "lastLog", ..]
                 | ["emulation", "SetGlobalQuantum" | "SetQuantum" | "RunFor" | "RunUntil", _]
                 | ["machine", "UserState" | "GetTimeSourceInfo" | "SetQuantum" | "Reset", ..])
             || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
@@ -3131,6 +3140,43 @@ fn monitor_echo(value: &str, variables: &HashMap<String, String>, origin: &Path)
     Ok(monitor_string(value).unwrap_or_else(|| value.to_owned()))
 }
 
+fn resolve_log_command(text: &str, variables: &HashMap<String, String>) -> Result<String, String> {
+    if !text.contains('$') {
+        return Ok(text.to_owned());
+    }
+    let words = command_words(text)?;
+    let (timeout_index, pattern_index) = match words.as_slice() {
+        ["WaitForMonitorLog" | "AssertAbsentMonitorLog", _, _, _, _, _, ..] => (Some(1), 5),
+        ["RegisterFailingMonitorLog" | "UnregisterFailingMonitorLog", _, _] => (None, 2),
+        _ => return Ok(text.to_owned()),
+    };
+    let mut command = String::new();
+    for (index, word) in words.into_iter().enumerate() {
+        if index != 0 {
+            command.push(' ');
+        }
+        if word.starts_with('$') && Some(index) == timeout_index {
+            let timeout = unquote(resolve(variables, word)?);
+            if timeout.is_empty() || timeout.chars().any(char::is_whitespace) {
+                return Err("expected a single log timeout value".into());
+            }
+            command.push_str(timeout);
+        } else if word.starts_with('$') && index == pattern_index {
+            use std::fmt::Write;
+            let pattern = monitor_string(resolve(variables, word)?).ok_or("expected a log string variable")?;
+            if pattern.is_empty() {
+                command.push('-');
+            }
+            for byte in pattern.bytes() {
+                write!(command, "{byte:02x}").unwrap();
+            }
+        } else {
+            command.push_str(word);
+        }
+    }
+    Ok(command)
+}
+
 fn requires_selected_machine(target: &str) -> bool {
     matches!(target, "machine" | "cpu" | "sysbus") || target.starts_with("sysbus.")
 }
@@ -3278,22 +3324,8 @@ fn execute(
                 triple.to_owned(), source.to_owned(), boot.session.number_mode,
             ))
         }
-        [command @ ("WaitForMonitorLog" | "AssertAbsentMonitorLog"), timeout, args @ ..]
-            if timeout.starts_with('$') =>
-        {
-            let timeout = unquote(resolve(timeout)?);
-            if timeout.is_empty() || timeout.chars().any(char::is_whitespace) {
-                return Err("expected a single log timeout value".into());
-            }
-            let mut command = format!("{command} {timeout}");
-            for argument in args {
-                command.push(' ');
-                command.push_str(argument);
-            }
-            Some(Action::MonitorLog(command))
-        }
         [command, ..] if crate::monitor_log::is_command(command) => {
-            Some(Action::MonitorLog(text.to_owned()))
+            Some(Action::MonitorLog(resolve_log_command(text, variables)?))
         }
         [target, "VendorSpecific1", value] if boot.started => Some(Action::PhyRegister(
             (*target).to_owned(), u16::try_from(crate::parse_address(resolve(value)?)?)
@@ -4995,6 +5027,22 @@ mod tests {
         let links = parse_gpio_overlay("gpioPortA: { 6 -> gpioPortD@12 }", root).unwrap();
         assert_eq!(links, [("gpioPortA".into(), 6, "gpioPortD".into(), 12)]);
         assert!(parse_gpio_overlay("gpioPortA: { someProperty: 1 }", root).is_err());
+    }
+
+    #[test]
+    fn log_command_resolves_utf8_pattern_and_duration_separately() {
+        let variables = HashMap::from([
+            ("global.pattern".into(), r#""µ original""#.into()),
+            ("global.timeout".into(), r#""0.002s""#.into()),
+        ]);
+        assert_eq!(
+            resolve_log_command("WaitForMonitorLog $timeout literal keep any $pattern", &variables).unwrap(),
+            "WaitForMonitorLog 0.002s literal keep any c2b5206f726967696e616c",
+        );
+        assert_eq!(
+            resolve_log_command("RegisterFailingMonitorLog regex $pattern", &variables).unwrap(),
+            "RegisterFailingMonitorLog regex c2b5206f726967696e616c",
+        );
     }
 
     #[test]
