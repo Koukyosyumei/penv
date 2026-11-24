@@ -923,7 +923,7 @@ fn run_commands<'a>(
                 }
             }
             Action::EmulationIsStarted => {
-                writeln!(output.reply(), "{}", if machine.monitor_is_active() { "True" } else { "False" })
+                write!(output.reply(), "{}", emulation_started_reply(machine.monitor_is_active()))
                     .map(|()| None).map_err(|error| error.to_string())
             }
             Action::TimeSourceInfo => {
@@ -2384,6 +2384,16 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }
+    if matches!(command_words(command.trim()).as_deref(), Ok(["emulation", "IsStarted"])) {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && !state.boot.started
+            && !state.boot.has_platform()
+            && state.boot.runtime.iter().all(|entry| is_console_action(&entry.action))
+        {
+            return Ok(StartupInput::Reply("OK", emulation_started_reply(state.boot.started).into()));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     // Inspect only read-only commands that resolve in startup state.
     // A queued runtime operation may change that state, so use the live monitor then.
     if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _] | ["printenv"]))
@@ -2405,6 +2415,10 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
         output.pop(); // The inspection protocol returns the echo value without a trailing newline.
     }
     Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?))
+}
+
+fn emulation_started_reply(started: bool) -> &'static str {
+    if started { "True\n" } else { "False\n" }
 }
 
 fn is_console_action(action: &Action) -> bool {
@@ -2444,6 +2458,8 @@ pub fn run_console_script(boot: &Boot, output: &mut impl Write) -> Result<(), St
             Action::LogLevel(level) => crate::monitor_log::set_level(*level),
             Action::LastLog(count) => write_last_log(*count, output)?,
             Action::Echo(message) => writeln!(output, "{message}").map_err(|error| error.to_string())?,
+            Action::EmulationIsStarted => output.write_all(emulation_started_reply(boot.started).as_bytes())
+                .map_err(|error| error.to_string())?,
             _ => return Err("command requires a booted monitor".into()),
         }
     }
@@ -2480,7 +2496,8 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
     boot.session.aliases = state.aliases;
     if !session && !state.machine && !boot.has_platform() && !boot.started
         && (!boot.monitor_output.is_empty() || !boot.runtime.is_empty())
-        && boot.runtime.iter().all(|command| is_console_action(&command.action))
+        && boot.runtime.iter().all(|command|
+            is_console_action(&command.action) || matches!(command.action, Action::EmulationIsStarted))
     {
         boot.console_only = true;
         return Ok(boot);
@@ -2491,7 +2508,7 @@ fn load_script(path: &Path, root: &Path, session: bool, source: Option<&str>) ->
             is_monitor_snapshot_action(&command.action) || matches!(command.action, Action::MonitorLog(_))))
         && boot.runtime.iter().all(|command|
             is_console_action(&command.action) || is_monitor_snapshot_action(&command.action)
-                || matches!(command.action, Action::MonitorLog(_)))
+                || matches!(command.action, Action::MonitorLog(_) | Action::EmulationIsStarted))
     {
         boot.empty_machine = true;
         return Ok(boot);
@@ -4312,7 +4329,7 @@ fn execute(
     if let Some(action) = action {
         let empty_machine_command = *machine && !boot.has_platform() && is_empty_machine_action(&action);
         if !empty_machine_command && !is_console_action(&action) && !is_monitor_snapshot_action(&action)
-            && !matches!(action, Action::MonitorLog(_))
+            && !matches!(action, Action::MonitorLog(_) | Action::EmulationIsStarted)
             && (!boot.has_platform() || (boot.image.is_none()
                 && boot.binaries.is_empty()
                 && !matches!(
@@ -5257,6 +5274,9 @@ greet "hello world"
         assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
         assert_eq!(inspect("", "set var 1234").0, "DEFER");
         let machine = "mach create \"bench board\"\n";
+        assert_eq!(inspect("", "emulation IsStarted"), ("OK", "False\n".into()));
+        assert_eq!(inspect(machine, "emulation IsStarted"), ("OK", "False\n".into()));
+        assert_eq!(inspect("mach create\nstart\n", "emulation IsStarted").0, "DEFER");
         assert_eq!(inspect(machine, "mach set 0").0, "DEFER");
         assert_eq!(inspect(machine, "mach set 9").0, "REJECTED");
         assert_eq!(inspect(machine, "logLevel 4").0, "REJECTED");

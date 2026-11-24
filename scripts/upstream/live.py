@@ -390,12 +390,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         self.commands.append(command)
                         return value
                 # Only route read-only queries here. Rust parses and evaluates the original command.
-                if re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command):
+                if (re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command)
+                        or re.fullmatch(r"emulation\s+IsStarted", command)):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
                         return value
                     return self.operation(command, assertion=True)
-                if (re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|IsStarted|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
+                if (re.fullmatch(r"(?:emulation\s+(?:GetTimeSourceInfo|SingleStepBlocking)|machine\s+(?:GetTimeSourceInfo|UserState))", command)
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)
                         or re.fullmatch(r"[\w.]+\s+(?:PC|MSTATUS|MEPC|MCAUSE|MTVAL|ExecutionMode)", command)):
                     return self.operation(command, assertion=True)
