@@ -1886,6 +1886,16 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
                 let status = if missing_include(&error) { "REJECTED" } else { "ERROR" };
                 return Ok(StartupInput::Reply(status, error));
             }
+            if !state.machine && state.boot.runtime.is_empty() {
+                state.boot.monitor_output.clear();
+                if load_text(&source, source.clone(), root, &mut state, &command).is_ok()
+                    && !state.machine && !state.boot.has_platform() && state.boot.runtime.is_empty()
+                {
+                    let mut output = Vec::new();
+                    run_console_script(&state.boot, &mut output)?;
+                    return Ok(StartupInput::Reply("OK", String::from_utf8(output).map_err(|e| e.to_string())?));
+                }
+            }
         }
         return Ok(StartupInput::Reply("DEFER", String::new()));
     }

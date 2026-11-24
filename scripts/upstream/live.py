@@ -380,7 +380,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                         or re.match(r"sysbus\s+Read(?:Byte|Word|DoubleWord|QuadWord)\s", command)):
                     return self.operation(command, assertion=True)
                 if re.match(r"(?:include|i|ExecuteScript)\s", command):
-                    self.inspect_startup(command)
+                    reply, value = self.inspect_startup(command)
+                    if reply == "OK":
+                        self.commands.append(command)
+                        return value
                 self.commands.append(command)
                 self.calls[-1]["stage"] = "queued_monitor_command"
                 return ""
