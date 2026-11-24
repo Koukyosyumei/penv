@@ -28,6 +28,13 @@ pub enum RegistrationError {
 pub trait NativePeripheral {
     fn read(&mut self, region: Option<&str>, offset: u64) -> u64;
     fn write(&mut self, region: Option<&str>, offset: u64, value: u64);
+    fn read_width(&mut self, region: Option<&str>, offset: u64, _width: Width) -> u64 {
+        self.read(region, offset)
+    }
+
+    fn write_width(&mut self, region: Option<&str>, offset: u64, _width: Width, value: u64) {
+        self.write(region, offset, value);
+    }
 }
 
 pub struct Port {
@@ -39,36 +46,53 @@ pub struct Port {
 pub(crate) struct Registration {
     pub handle: PeripheralHandle,
     pub ports: Vec<Port>,
-    width: Width,
+    widths: Vec<Vec<Width>>,
     peripheral: Box<dyn NativePeripheral>,
 }
 
 impl Registration {
     pub fn new(
         handle: PeripheralHandle,
-        ports: Vec<Port>,
-        width: Width,
+        ports: Vec<(Port, Vec<Width>)>,
         peripheral: Box<dyn NativePeripheral>,
     ) -> Self {
+        let (ports, widths) = ports.into_iter().unzip();
         Self {
             handle,
             ports,
-            width,
+            widths,
             peripheral,
         }
     }
 
-    pub fn read(&mut self, address: u32, requested: Width, enabled: bool) -> Option<u64> {
-        let (port, offset) = find(&self.ports, address, requested)?;
-        if requested != self.width && !enabled {
-            return Some(0);
+    pub fn remove_port(&mut self, address: u32) {
+        if let Some(index) = self.ports.iter().position(|port| port.base == address) {
+            self.ports.remove(index);
+            self.widths.remove(index);
         }
+    }
+
+    fn native_width(&self, port: usize, requested: Width, enabled: bool) -> Option<Width> {
+        let widths = &self.widths[port];
+        if widths.contains(&requested) {
+            Some(requested)
+        } else {
+            enabled.then_some(widths[0])
+        }
+    }
+
+    pub fn read(&mut self, address: u32, requested: Width, enabled: bool) -> Option<u64> {
+        let (index, offset) = find(&self.ports, address, requested)?;
+        let Some(native) = self.native_width(index, requested, enabled) else {
+            return Some(0);
+        };
+        let region = self.ports[index].region.as_deref();
         Some(read_using(
             offset,
             requested,
-            self.width,
+            native,
             Endian::Little,
-            |offset| self.peripheral.read(port.region.as_deref(), offset),
+            |offset| self.peripheral.read_width(region, offset, native),
         ))
     }
 
@@ -79,17 +103,18 @@ impl Registration {
         value: u64,
         enabled: bool,
     ) -> Option<()> {
-        let (port, offset) = find(&self.ports, address, requested)?;
-        if requested == self.width || enabled {
+        let (index, offset) = find(&self.ports, address, requested)?;
+        if let Some(native) = self.native_width(index, requested, enabled) {
             let mut device = Region {
                 peripheral: self.peripheral.as_mut(),
-                region: port.region.as_deref(),
+                region: self.ports[index].region.as_deref(),
+                width: native,
             };
             write_using(
                 offset,
                 value,
                 requested,
-                self.width,
+                native,
                 Endian::Little,
                 &mut device,
             );
@@ -98,25 +123,27 @@ impl Registration {
     }
 }
 
-fn find(ports: &[Port], address: u32, requested: Width) -> Option<(&Port, u64)> {
-    ports.iter().find_map(|port| {
+fn find(ports: &[Port], address: u32, requested: Width) -> Option<(usize, u64)> {
+    ports.iter().enumerate().find_map(|(index, port)| {
         let offset = u64::from(address.checked_sub(port.base)?);
-        (offset + requested as u64 <= u64::from(port.length)).then_some((port, offset))
+        (offset + requested as u64 <= u64::from(port.length)).then_some((index, offset))
     })
 }
 
 struct Region<'a> {
     peripheral: &'a mut dyn NativePeripheral,
     region: Option<&'a str>,
+    width: Width,
 }
 
 impl NativeWrite for Region<'_> {
     fn read_for_write(&mut self, offset: u64) -> u64 {
-        self.peripheral.read(self.region, offset)
+        self.peripheral.read_width(self.region, offset, self.width)
     }
 
     fn write_native(&mut self, offset: u64, value: u64) {
-        self.peripheral.write(self.region, offset, value);
+        self.peripheral
+            .write_width(self.region, offset, self.width, value);
     }
 }
 

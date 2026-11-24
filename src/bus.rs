@@ -1093,7 +1093,7 @@ impl Bus {
                 return Err("cannot unregister a peripheral independently of its group".into());
             }
             let device = &mut self.translated_peripherals[index];
-            device.ports.retain(|port| port.base != address);
+            device.remove_port(address);
             if device.ports.is_empty() {
                 let device = self.translated_peripherals.remove(index);
                 self.remove_translated_children(&device.handle);
@@ -1322,22 +1322,33 @@ impl Bus {
         width: crate::dma_engine::Width,
         peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
     ) -> Result<(), String> {
+        self.register_translated_port_widths(
+            handle, ports.into_iter().map(|port| (port, vec![width])).collect(), peripheral,
+        )
+    }
+
+    pub fn register_translated_port_widths(
+        &mut self,
+        handle: &crate::bus_translation::PeripheralHandle,
+        ports: Vec<(crate::bus_translation::Port, Vec<crate::dma_engine::Width>)>,
+        peripheral: Box<dyn crate::bus_translation::NativePeripheral>,
+    ) -> Result<(), String> {
         if self.is_peripheral_registered(handle) {
             return Err("translated peripheral already registered".into());
         }
         if ports.is_empty() {
             return Err("translated peripheral requires at least one port".into());
         }
-        for (index, port) in ports.iter().enumerate() {
+        for (index, (port, widths)) in ports.iter().enumerate() {
             let base = u64::from(port.base);
             let end = base + u64::from(port.length);
-            if port.length == 0 || end > 1 << 32 || self.overlaps(base, end)
-                || ports[..index].iter().any(|other| overlaps_range(base, end, other.base, other.length))
+            if widths.is_empty() || port.length == 0 || end > 1 << 32 || self.overlaps(base, end)
+                || ports[..index].iter().any(|(other, _)| overlaps_range(base, end, other.base, other.length))
             {
                 return Err("invalid or overlapping translated peripheral port".into());
             }
         }
-        self.translated_peripherals.push(crate::bus_translation::Registration::new(handle.clone(), ports, width, peripheral));
+        self.translated_peripherals.push(crate::bus_translation::Registration::new(handle.clone(), ports, peripheral));
         Ok(())
     }
 

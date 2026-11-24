@@ -107,3 +107,125 @@ fn should_test_enable_all_translations() {
         }
     }
 }
+
+use crate::{
+    bus_translation::{NativePeripheral, PeripheralHandle, Port},
+    dma_engine::{DmaBus, Width},
+};
+use std::{cell::RefCell, rc::Rc};
+
+struct CallbackPeripheral(Rc<RefCell<[bool; 6]>>);
+
+impl CallbackPeripheral {
+    fn callback(&self, region: Option<&str>, width: Width, write: bool) {
+        let index = match (region, width, write) {
+            (Some("region1" | "parameterized"), Width::Byte, false) => 0,
+            (Some("region2"), Width::Byte, false) => 1,
+            (Some("region1" | "parameterized"), Width::Byte, true) => 2,
+            (Some("region2"), Width::Byte, true) => 3,
+            (None | Some("parameterized"), Width::DoubleWord, false) => 4,
+            (None | Some("parameterized"), Width::DoubleWord, true) => 5,
+            _ => panic!("unexpected port and width combination"),
+        };
+        self.0.borrow_mut()[index] = true;
+    }
+}
+
+impl NativePeripheral for CallbackPeripheral {
+    fn read(&mut self, region: Option<&str>, offset: u64) -> u64 {
+        self.read_width(region, offset, Width::DoubleWord)
+    }
+
+    fn write(&mut self, region: Option<&str>, offset: u64, value: u64) {
+        self.write_width(region, offset, Width::DoubleWord, value);
+    }
+
+    fn read_width(&mut self, region: Option<&str>, _: u64, width: Width) -> u64 {
+        self.callback(region, width, false);
+        0
+    }
+
+    fn write_width(&mut self, region: Option<&str>, _: u64, width: Width, _: u64) {
+        self.callback(region, width, true);
+    }
+}
+
+fn callback_test(
+    ports: &[(u32, u32, Option<&str>, &[Width])],
+    accesses: &[(u64, Width, bool, usize)],
+) {
+    let mut machine = Machine::without_default_ram();
+    let bus = &mut machine.bus;
+    let flags = Rc::new(RefCell::new([false; 6]));
+    let ports = ports
+        .iter()
+        .map(|&(base, length, name, widths)| {
+            (
+                Port {
+                    base,
+                    length,
+                    region: name.map(str::to_owned),
+                },
+                widths.to_vec(),
+            )
+        })
+        .collect();
+    bus.register_translated_port_widths(
+        &PeripheralHandle::default(),
+        ports,
+        Box::new(CallbackPeripheral(Rc::clone(&flags))),
+    )
+    .unwrap();
+    let mut expected = [false; 6];
+    assert_eq!(*flags.borrow(), expected);
+    for &(address, width, write, index) in accesses {
+        if write {
+            bus.write_unit(address, width, 0, &mut std::io::sink())
+                .unwrap();
+        } else {
+            bus.read_unit(address, width).unwrap();
+        }
+        expected[index] = true;
+        assert_eq!(*flags.borrow(), expected);
+    }
+}
+
+#[test]
+fn should_register_multi_function_peripheral() {
+    callback_test(
+        &[
+            (0, 100, Some("region1"), &[Width::Byte]),
+            (100, 200, Some("region2"), &[Width::Byte]),
+            (300, 100, None, &[Width::DoubleWord]),
+        ],
+        &[
+            (10, Width::Byte, false, 0),
+            (110, Width::Byte, false, 1),
+            (10, Width::Byte, true, 2),
+            (110, Width::Byte, true, 3),
+            (310, Width::DoubleWord, false, 4),
+            (310, Width::DoubleWord, true, 5),
+        ],
+    );
+}
+
+#[test]
+fn should_register_parametrized_peripheral() {
+    callback_test(
+        &[
+            (
+                0,
+                100,
+                Some("parameterized"),
+                &[Width::DoubleWord, Width::Byte],
+            ),
+            (200, 100, None, &[Width::DoubleWord]),
+        ],
+        &[
+            (10, Width::Byte, false, 0),
+            (10, Width::Byte, true, 2),
+            (10, Width::DoubleWord, false, 4),
+            (10, Width::DoubleWord, true, 5),
+        ],
+    );
+}
