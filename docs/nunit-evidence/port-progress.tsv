@@ -1,7 +1,7 @@
 project	fixture	discovered	ported	ported_excluded	pending	inactive	remaining_api
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BlockingCollectionSerializationTests	48	0	0	48	0	Migrant serialization of BlockingCollection and its synchronization state is unavailable.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.BuiltinSurrogatesTests	16	2	0	14	0	Regex pattern round-trip is ported for reflection mode. Remaining cases need the custom IXmlSerializable adapter and generated reader/writer paths.
-lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	16	0	144	0	Reflection graph streams support registered read hooks and global observers. Remaining cases need mutating serialization hooks, failure and ordering semantics, virtual method dispatch, and generated reader/writer paths.
+lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.HooksTests	160	40	0	120	0	All 40 reflection read/write cases are ported across both stamp modes. The other 120 cases require generated reader and/or writer paths.
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.IdGeneratorTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.ObjectReaderWriterTests	1	1	0	0	0	-
 lib/Migrant/Tests/Tests.csproj	Antmicro.Migrant.Tests.OpenStreamSerializationTests	28	7	0	21	0	All seven reflection-mode open-stream cases are ported, including weak references. The other 21 cases need generated reader and/or writer paths.
