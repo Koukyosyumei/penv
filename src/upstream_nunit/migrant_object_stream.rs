@@ -527,3 +527,85 @@ array_modes!(
 );
 array_modes!(strings_array_plain, strings_array_stamped, strings_array);
 array_modes!(mixed_array_plain, mixed_array_stamped, mixed_array);
+
+fn weak_open_stream(
+    graph: &Graph,
+    roots: &[ObjectId],
+) -> ObjectReader<'static, 'static, Cursor<Vec<u8>>> {
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new_weak(&mut stream, true).with_type_stamps(STAMPS);
+    for &root in roots {
+        writer.write_weak_object(graph, root).unwrap();
+    }
+    writer.finish().unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    ObjectReader::new(stream, References::Weak, true).with_type_stamps(STAMPS)
+}
+
+#[test]
+fn basic_open_stream_weak() {
+    let (graph, roots) = tuples();
+    let mut reader = weak_open_stream(&graph, &roots);
+    let objects = roots.map(|_| reader.read_weak_object().unwrap());
+    for (expected, actual) in roots.into_iter().zip(objects) {
+        assert_eq!(graph.get(expected), actual.get(actual.id()));
+    }
+    reader.finish().unwrap();
+}
+
+#[test]
+fn should_preserve_weak_references() {
+    let (graph, roots) = tuples();
+    let mut reader = weak_open_stream(&graph, &roots);
+    let [first, duplicate, second] = roots.map(|_| reader.read_weak_object().unwrap());
+    let first_obj = first.get(first.id()).unwrap();
+    let duplicate_obj = duplicate.get(duplicate.id()).unwrap();
+    let second_obj = second.get(second.id()).unwrap();
+    assert!(std::ptr::eq(first_obj, duplicate_obj));
+    assert!(!std::ptr::eq(duplicate_obj, second_obj));
+    reader.finish().unwrap();
+}
+
+#[test]
+fn weak_reader_releases_a_cycle_when_its_last_root_is_dropped() {
+    let mut graph = Graph::default();
+    let root = graph.insert(Object::Array(vec![]));
+    *graph.get_mut(root).unwrap() = Object::Array(vec![Value::Ref(root)]);
+    let mut reader = weak_open_stream(&graph, &[root, root, root]);
+    let one = reader.read_weak_object().unwrap();
+    let two = reader.read_weak_object().unwrap();
+    assert_eq!(
+        one.get(one.id()),
+        Some(&Object::Array(vec![Value::Ref(one.id())]))
+    );
+    assert!(std::ptr::eq(
+        one.get(one.id()).unwrap(),
+        two.get(two.id()).unwrap()
+    ));
+    drop(one);
+    drop(two);
+    assert_eq!(
+        reader.read_weak_object().err().unwrap().kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    reader.finish().unwrap();
+}
+
+#[test]
+fn weak_writer_keeps_separate_slots_for_independent_graphs() {
+    let mut stream = Cursor::new(Vec::new());
+    let mut writer = ObjectWriter::new_weak(&mut stream, false);
+    for value in ["first", "second"] {
+        let mut graph = Graph::default();
+        let root = graph.insert(Object::String(value.into()));
+        writer.write_weak_object(&graph, root).unwrap();
+    }
+    writer.finish().unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut reader = ObjectReader::new(stream, References::Weak, false);
+    let one = reader.read_weak_object().unwrap();
+    let two = reader.read_weak_object().unwrap();
+    assert_ne!(one.id(), two.id());
+    assert_eq!(one.get(one.id()), Some(&Object::String("first".into())));
+    assert_eq!(two.get(two.id()), Some(&Object::String("second".into())));
+}

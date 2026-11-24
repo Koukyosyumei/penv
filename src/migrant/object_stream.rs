@@ -5,6 +5,7 @@ use super::primitive::{Reader, Writer};
 use super::surrogate::Surrogates;
 use std::collections::{HashMap, hash_map::Entry};
 use std::io::{self, Read, Write};
+use std::sync::{Arc, Weak};
 
 const MAX_ITEMS: usize = 1_000_000;
 const ROOT: u8 = 1;
@@ -98,22 +99,23 @@ pub enum Object {
 
 #[derive(Default)]
 pub struct Graph {
-    objects: Vec<Object>,
+    objects: Vec<Option<Arc<Object>>>,
+    identity: Arc<()>,
 }
 
 impl Graph {
     pub fn insert(&mut self, object: Object) -> ObjectId {
         let id = ObjectId(self.objects.len());
-        self.objects.push(object);
+        self.objects.push(Some(Arc::new(object)));
         id
     }
 
     pub fn get(&self, id: ObjectId) -> Option<&Object> {
-        self.objects.get(id.0)
+        self.objects.get(id.0)?.as_deref()
     }
 
     pub fn get_mut(&mut self, id: ObjectId) -> Option<&mut Object> {
-        self.objects.get_mut(id.0)
+        Some(Arc::make_mut(self.objects.get_mut(id.0)?.as_mut()?))
     }
 }
 
@@ -121,6 +123,31 @@ impl Graph {
 pub enum References {
     PerRoot,
     Preserve,
+    Weak,
+}
+
+/// A read result owns exactly the objects reachable from its root. Edges are
+/// object IDs, so even a cycle expires after the last owner is dropped.
+pub struct RetainedRoot {
+    id: ObjectId,
+    objects: HashMap<ObjectId, Arc<Object>>,
+}
+
+impl RetainedRoot {
+    pub fn id(&self) -> ObjectId {
+        self.id
+    }
+
+    pub fn get(&self, id: ObjectId) -> Option<&Object> {
+        self.objects.get(&id).map(Arc::as_ref)
+    }
+}
+
+type SourceObject = (*const (), ObjectId);
+
+struct WeakWriteHistory {
+    ids: HashMap<SourceObject, (Weak<()>, usize)>,
+    slots: usize,
 }
 
 fn invalid(message: &'static str) -> io::Error {
@@ -129,10 +156,12 @@ fn invalid(message: &'static str) -> io::Error {
 
 pub struct ObjectWriter<'a, 's, W: Write> {
     data: Writer<W>,
-    graph: &'a Graph,
+    graph: Option<&'a Graph>,
+    weak: Option<WeakWriteHistory>,
     references: References,
     ids: HashMap<ObjectId, usize>,
     pending: Vec<ObjectId>,
+    frame_base: usize,
     replacements: HashMap<ObjectId, Object>,
     stamps: Option<&'a [TypeStamp<'a>]>,
     surrogates: Option<&'a mut Surrogates<'s>>,
@@ -140,16 +169,55 @@ pub struct ObjectWriter<'a, 's, W: Write> {
 
 impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     pub fn new(stream: W, graph: &'a Graph, references: References, buffered: bool) -> Self {
+        Self::with_source(stream, Some(graph), references, buffered)
+    }
+
+    fn with_source(
+        stream: W,
+        graph: Option<&'a Graph>,
+        references: References,
+        buffered: bool,
+    ) -> Self {
         Self {
             data: Writer::new(stream, buffered),
             graph,
+            weak: (references == References::Weak).then(|| WeakWriteHistory {
+                ids: HashMap::new(),
+                slots: 0,
+            }),
             references,
             ids: HashMap::new(),
             pending: Vec::new(),
+            frame_base: 0,
             replacements: HashMap::new(),
             stamps: None,
             surrogates: None,
         }
+    }
+
+    /// In weak mode, sources are borrowed only for the duration of each root write.
+    pub fn new_weak(stream: W, buffered: bool) -> Self {
+        Self::with_source(stream, None, References::Weak, buffered)
+    }
+
+    pub fn write_weak_object(&mut self, graph: &Graph, root: ObjectId) -> io::Result<()> {
+        let history = self
+            .weak
+            .as_mut()
+            .ok_or_else(|| invalid("writer is not in weak mode"))?;
+        history
+            .ids
+            .retain(|_, (object, _)| object.strong_count() != 0);
+        self.write_from(graph, root)?;
+        let history = self.weak.as_mut().unwrap();
+        for id in &self.pending {
+            let source = (Arc::as_ptr(&graph.identity), *id);
+            history
+                .ids
+                .insert(source, (Arc::downgrade(&graph.identity), self.ids[id]));
+        }
+        history.slots += self.pending.len();
+        Ok(())
     }
 
     pub fn with_surrogates(mut self, surrogates: &'a mut Surrogates<'s>) -> Self {
@@ -162,13 +230,25 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         self
     }
 
-    fn intern(&mut self, id: ObjectId) -> io::Result<usize> {
-        let next = self.ids.len();
+    fn intern(&mut self, graph: &Graph, id: ObjectId) -> io::Result<usize> {
         match self.ids.entry(id) {
             Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(entry) => {
-                if next >= MAX_ITEMS || self.graph.get(id).is_none() {
-                    return Err(invalid("invalid graph reference or object limit exceeded"));
+                if graph.get(id).is_none() {
+                    return Err(invalid("invalid graph reference"));
+                }
+                let next = if let Some(history) = &self.weak {
+                    let source = (Arc::as_ptr(&graph.identity), id);
+                    if let Some((_, slot)) = history.ids.get(&source) {
+                        entry.insert(*slot);
+                        return Ok(*slot);
+                    }
+                    history.slots + self.pending.len()
+                } else {
+                    self.pending.len() + self.frame_base
+                };
+                if next >= MAX_ITEMS {
+                    return Err(invalid("object limit exceeded"));
                 }
                 entry.insert(next);
                 self.pending.push(id);
@@ -178,12 +258,20 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
     }
 
     pub fn write_object(&mut self, root: ObjectId) -> io::Result<()> {
-        if self.references == References::PerRoot {
+        if self.references == References::Weak {
+            return Err(invalid("weak mode requires write_weak_object"));
+        }
+        self.write_from(self.graph.unwrap(), root)
+    }
+
+    fn write_from(&mut self, graph: &Graph, root: ObjectId) -> io::Result<()> {
+        if self.references != References::Preserve {
             self.ids.clear();
         }
+        self.frame_base = self.ids.len();
         self.pending.clear();
         self.replacements.clear();
-        let root = match self.discover(root) {
+        let root = match self.discover(graph, root) {
             Ok(root) => root,
             Err(error) => {
                 for id in self.pending.drain(..) {
@@ -192,15 +280,15 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
                 return Err(error);
             }
         };
-        self.write_frame(root)
+        self.write_frame(graph, root)
     }
 
-    fn discover(&mut self, root: ObjectId) -> io::Result<usize> {
-        let root = self.intern(root)?;
+    fn discover(&mut self, graph: &Graph, root: ObjectId) -> io::Result<usize> {
+        let root = self.intern(graph, root)?;
         let mut index = 0;
         // Reserve identities before visiting children, including forward and cyclic edges.
         while let Some(id) = self.pending.get(index).copied() {
-            let original = self.graph.get(id).unwrap();
+            let original = graph.get(id).unwrap();
             let replacement = self
                 .surrogates
                 .as_mut()
@@ -223,7 +311,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             }
             for value in values {
                 if let Value::Ref(id) = value {
-                    self.intern(*id)?;
+                    self.intern(graph, *id)?;
                 }
             }
             if let Some(replacement) = replacement {
@@ -235,7 +323,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
         Ok(root)
     }
 
-    fn write_frame(&mut self, root: usize) -> io::Result<()> {
+    fn write_frame(&mut self, graph: &Graph, root: usize) -> io::Result<()> {
         self.data.bytes(&[if self.stamps.is_some() {
             STAMPED_ROOT
         } else {
@@ -247,7 +335,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
             match self
                 .replacements
                 .get(id)
-                .or_else(|| self.graph.get(*id))
+                .or_else(|| graph.get(*id))
                 .unwrap()
             {
                 Object::String(value) => {
@@ -305,6 +393,7 @@ impl<'a, 's, W: Write> ObjectWriter<'a, 's, W> {
 pub struct ObjectReader<'a, 's, R: Read> {
     data: Reader<R>,
     graph: Graph,
+    weak_history: Vec<Weak<Object>>,
     references: References,
     stamps: Option<&'a [TypeStamp<'a>]>,
     surrogates: Option<&'a mut Surrogates<'s>>,
@@ -315,6 +404,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
         Self {
             data: Reader::new(stream, buffered),
             graph: Graph::default(),
+            weak_history: Vec::new(),
             references,
             stamps: None,
             surrogates: None,
@@ -335,7 +425,53 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
         &self.graph
     }
 
+    pub fn read_weak_object(&mut self) -> io::Result<RetainedRoot> {
+        if self.references != References::Weak {
+            return Err(invalid("reader is not in weak mode"));
+        }
+        self.graph.objects = self.weak_history.iter().map(Weak::upgrade).collect();
+        let result = self.next_impl().and_then(|root| {
+            let root = root.ok_or(io::ErrorKind::UnexpectedEof)?;
+            let mut retained = RetainedRoot {
+                id: root,
+                objects: HashMap::new(),
+            };
+            let mut pending = vec![root];
+            while let Some(id) = pending.pop() {
+                if let Entry::Vacant(entry) = retained.objects.entry(id) {
+                    let object = self
+                        .graph
+                        .objects
+                        .get(id.0)
+                        .and_then(Option::as_ref)
+                        .ok_or_else(|| invalid("weak stream reference has expired"))?;
+                    match object.as_ref() {
+                        Object::Record { fields, .. } | Object::Array(fields) => {
+                            pending.extend(fields.iter().filter_map(|value| match value {
+                                Value::Ref(id) => Some(*id),
+                                _ => None,
+                            }));
+                        }
+                        Object::String(_) => {}
+                    }
+                    entry.insert(Arc::clone(object));
+                }
+            }
+            Ok(retained)
+        });
+        self.weak_history = self
+            .graph
+            .objects
+            .drain(..)
+            .map(|object| object.as_ref().map_or_else(Weak::new, Arc::downgrade))
+            .collect();
+        result
+    }
+
     pub fn read_object(&mut self) -> io::Result<ObjectId> {
+        if self.references == References::Weak {
+            return Err(invalid("weak mode requires read_weak_object"));
+        }
         self.next_impl()?
             .ok_or_else(|| io::ErrorKind::UnexpectedEof.into())
     }
@@ -346,7 +482,12 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             if done {
                 return None;
             }
-            match self.next_impl() {
+            let result = if self.references == References::Weak {
+                Err(invalid("weak mode requires read_weak_object"))
+            } else {
+                self.next_impl()
+            };
+            match result {
                 Ok(Some(id)) => Some(Ok(id)),
                 Ok(None) => {
                     done = true;
@@ -372,7 +513,7 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             Ok(_) => return Err(invalid("invalid object record marker")),
         }
         let old_len = self.graph.objects.len();
-        let base = if self.references == References::Preserve {
+        let base = if self.references != References::PerRoot {
             0
         } else {
             old_len
@@ -427,7 +568,9 @@ impl<'a, 's, R: Read> ObjectReader<'a, 's, R> {
             }
         }
         // Publish all objects together after validating every edge.
-        self.graph.objects.extend(objects);
+        self.graph
+            .objects
+            .extend(objects.into_iter().map(|object| Some(Arc::new(object))));
         Ok(Some(ObjectId(base + root)))
     }
 
