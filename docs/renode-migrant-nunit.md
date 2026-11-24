@@ -96,6 +96,13 @@ SerializationTests の反射読み書き・型スタンプ有無の2設定に14�
 型付きフィールドと文字列タプルでは、参照先の型と値を復元した。
 [公式 ID 別の結果](nunit-evidence/targeted-cache-rectangular-records.tsv)
 
-残りは9 fixture・2,049ケース。生成読み書き、コレクションと CLR 型の
+SerializationTests の反射読み書き・型スタンプ有無の2設定に24件を追加した。
+nullable の null と整数、ボックス化された整数の参照同一性、入れ子と自己参照を
+含むリスト、100,000要素のリスト、同一ストリーム上で独立した2回の
+シリアライズ結果を確認した。順序付きリストは Rust の型付きレコードと
+参照可能な要素配列で表現する。
+[公式 ID 別の結果](nunit-evidence/targeted-memory-nullable-lists.tsv)
+
+残りは9 fixture・2,025ケース。生成読み書き、コレクションと CLR 型の
 コーデック、ジェネリック変換器の生成とキャッシュ、フック、バージョン許容を
 伴う型変更の復元が必要。
