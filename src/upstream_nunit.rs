@@ -24,6 +24,7 @@ mod cadence_ttc;
 mod cadence_uart;
 mod bmc050;
 mod register_enum;
+mod register_fields;
 mod packet_layout;
 mod monitor_tokenizer;
 mod machine_registry;

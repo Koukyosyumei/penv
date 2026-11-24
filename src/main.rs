@@ -18,6 +18,7 @@ pub mod cadence_ttc;
 pub mod cadence_uart;
 pub mod bmc050;
 pub mod register_enum;
+pub mod register_fields;
 pub mod packet_layout;
 pub mod monitor_tokenizer;
 pub mod weak_multi_table;

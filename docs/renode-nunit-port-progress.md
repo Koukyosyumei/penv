@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,153 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,162 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,243 |
+| 移植待ち | 2,234 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 29 fixture の
@@ -231,3 +231,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 公式19件のシンボル、照会アドレス、期待区間を移植した。ゼロ長シンボルによる区間分割と、切り詰め後に同じ範囲となるシンボルの優先順位を修正した。対象19件と既存の SymbolLookupTests 23件が合格した。
 
 - [公式 ID](nunit-evidence/targeted-elf_merge.tsv)と[実行ログ](nunit-evidence/targeted-elf_merge.log)
+
+## RegistersTests のフィールド定義と全幅アクセス
+
+9件を移植した。負の幅、8・16・32・64 ビットの末尾境界、重複、値の範囲外、全幅読み書き、書き込みコールバックを検証した。列挙型と数値は同じビットフィールド API を介して扱い、共有セットアップは移植したケースで使うフィールドに絞った。残り25件にはアクセスモード、リセット、読み出し・変更・レジスタ全体のコールバック、値プロバイダーが必要。
+
+- [公式 ID](nunit-evidence/targeted-register-fields.tsv)と[実行ログ](nunit-evidence/targeted-register-fields.log)

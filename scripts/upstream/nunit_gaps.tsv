@@ -23,7 +23,7 @@ Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests	The active R
 Antmicro.Renode.UnitTests.PlatformDescription.UsingTests	The remaining runnable cases require the CreationDriver's mock CPU object creation, scoped cross-include CPU reference resolution and post-load sysbus.cpu lookup.
 Antmicro.Renode.UnitTests.PlatformDescription.VerificationTests	The REPL loaders lack the fixture's generic reflection-based creation and verification pipeline, including typed constructor, registration and property diagnostics on managed mock types.
 Antmicro.Renode.UnitTests.PythonPeripherals.SerializationTests	The Rust Python peripheral subset lacks IronPython object-state serialization across reload.
-Antmicro.Renode.UnitTests.RegistersTests	There is no generic declarative register-field API implementing read/write callbacks, field modes and register collections for the fixture.
+Antmicro.Renode.UnitTests.RegistersTests	Nine cases cover field definition and bounds, full-width values, and field write callbacks. The other 25 need the complete shared register setup, including access modes, reset, read and change callbacks, value providers, and register-level callbacks.
 Antmicro.Renode.UnitTests.SVDParserTests	There is no SVD XML parser implementing peripheral/register inheritance, dimensions and bus registration.
 Antmicro.Renode.UnitTests.SerializationTests	Memory snapshots do not serialize a whole emulation graph with the fixture's machine, peripherals, relationships and event state.
 Antmicro.Renode.Utilities.AdHocCompilerTests	There is no in-process compilation and loading of arbitrary C# source into the emulator.
