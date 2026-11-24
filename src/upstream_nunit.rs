@@ -23,6 +23,7 @@ mod system_bus;
 mod peripherals_group;
 mod null_registration;
 mod time_interval;
+mod time_source;
 mod clock_source;
 mod comparing_timer;
 mod tracked_register_bytes;

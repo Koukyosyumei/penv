@@ -1037,3 +1037,5 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldRegisterParametrizedPeripheral	upstream_nunit::system_bus::should_register_parametrized_peripheral	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldFailToRegisterNonClusteredCpuOnNull	upstream_nunit::system_bus::should_fail_to_register_non_clustered_cpu_on_null	new
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests.ShouldPauseAndResumeOnlyOnce	upstream_nunit::system_bus::should_pause_and_resume_only_once	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests.ShouldNotSleepOnAdvanceImmediately	upstream_nunit::time_source::should_not_sleep_on_advance_immediately	new
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	UnitTests.TimeSourceTests.ShouldNotTickDisconnectedSlaveTimeSource	upstream_nunit::time_source::should_not_tick_disconnected_slave_time_source	new
