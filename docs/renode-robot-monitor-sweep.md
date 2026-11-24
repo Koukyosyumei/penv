@@ -507,3 +507,24 @@ R0–R14 と PC を保存する。旧 RAM 専用形式も読み込める。
 通常 CLI、ライブモニターで読み込み、`pause` 後に報告された仮想時間
 1 ms、3 ms、3.1 ms が一致した。penv の通常 CLI と Robot のライブ経路は
 `start` と `pause` を共通の Rust アクションで扱う。
+
+UART の既定期限とテスター選択は Rust が処理する。
+`target/monitor-uart-default-proof/` で固定 Renode と penv が
+未受信を失敗と判定することを確認した。penv はテスター既定の 2 ms と
+呼び出し指定の 3 ms を観測して計 5 ms に達した。固定 Renode は
+バックグラウンドでも進むため、照会時刻は異なる。
+`short.log` はステップ上限による打ち切りで不在確認が失敗した証跡。
+
+`target/monitor-global-uart-proof/` では全体の既定値を変更しても
+作成済みテスターの期限が保持され、新しいテスターには新しい値が
+適用された。`target/monitor-failing-uart-proof/` には、既定テスターの
+失敗文字列を登録して失敗し、解除後に同じファームウェアからの次の行を
+受信して合格した固定 Renode と penv の RPC 結果がある。
+
+`target/monitor-uart-symbol-proof/` では同じ ELF に対し
+`cpu PC \`sysbus GetSymbolAddress "main"\`` を実行し、固定 Renode、
+通常 CLI、ライブモニターで PC が `0x400027c0` になった。
+未変更の `Should Respect The Default Tester Id` は固定 Renode で合格した。
+penv は ELF シンボルを使う起動コマンドの解析を通過し、次の
+`UART.SiFive_UART` のロードで未対応となった
+（`target/monitor-uart-symbol-selected/results.json`）。
