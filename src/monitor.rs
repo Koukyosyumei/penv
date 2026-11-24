@@ -867,7 +867,7 @@ pub fn serve(
             (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps), .. }]) => {
                 let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
                     .and_then(|cycles| machine.bus.uart_activity().and_then(|(id, previous)| {
-                        machine.run_until(cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
+                        run_until_deadline(machine, cycles, &mut bytes, |bus, _| bus.uart_activity_changed(id, previous))
                     }));
 
                 match result {
@@ -1008,6 +1008,20 @@ fn wait_for_led(
     Ok(retired + count)
 }
 
+pub(crate) fn run_until_deadline<W: Write>(
+    machine: &mut Machine,
+    cycles: u64,
+    output: &mut W,
+    matched: impl Fn(&crate::bus::Bus, &W) -> bool,
+) -> Result<(Stop, u64), String> {
+    let start = machine.elapsed_steps();
+    let (stop, retired) = machine.run_until(cycles, output, matched)?;
+    if stop == Stop::Limit && machine.elapsed_steps().wrapping_sub(start) < cycles {
+        return Ok((Stop::Paused, retired));
+    }
+    Ok((stop, retired))
+}
+
 fn drive_uart_watch(
     machine: &mut Machine,
     watch: UartWatch,
@@ -1017,7 +1031,7 @@ fn drive_uart_watch(
     if machine.bus.stm32_uart_matched(watch) {
         Ok((Stop::OutputMatch, 0))
     } else {
-        machine.run_until(budget, output, |bus, _| bus.stm32_uart_matched(watch))
+        run_until_deadline(machine, budget, output, |bus, _| bus.stm32_uart_matched(watch))
     }
 }
 

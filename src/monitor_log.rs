@@ -179,7 +179,7 @@ pub(crate) fn handle(
                     })
                 };
                 let checked = std::cell::Cell::new(revision());
-                (stop, _) = machine.run_until(steps, &mut io::sink(), |_, _| {
+                (stop, _) = crate::monitor::run_until_deadline(machine, steps, &mut io::sink(), |_, _| {
                     let current = revision();
                     checked.replace(current) != current && find(true).is_some()
                 })?;
@@ -232,6 +232,17 @@ fn decode(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paused_monitor_does_not_satisfy_a_positive_absence_window() {
+        let mut machine = Machine::new(4096).unwrap();
+        machine.primary.monitor_paused = true;
+        attach(4).unwrap();
+        let (status, reason) = handle(
+            &mut machine, "AssertAbsentMonitorLog 1 literal keep any 78",
+        ).unwrap().unwrap();
+        assert_eq!((status, reason.as_str()), ("STOP", "Paused"));
+    }
 
     #[test]
     fn log_absence_rejects_matches_and_dropped_entries() {
