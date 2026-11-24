@@ -2318,9 +2318,7 @@ fn run() -> Result<ExitCode, String> {
         } else {
             machine.run_radio_pair(&mut peer, limit, &mut output)
         }
-    } else if let Some(script) = script.as_deref().filter(|_| {
-        !runtime.is_empty() && (machine.is_cortex_m() || static_memory_script)
-    }) {
+    } else if let Some(script) = script.as_deref().filter(|_| !runtime.is_empty()) {
         monitor::run(&mut machine, script, &runtime, limit, &mut output)
     } else {
         run_machine(

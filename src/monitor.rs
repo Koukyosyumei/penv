@@ -2074,7 +2074,7 @@ fn execute(
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
             Some(Action::CpuMips(mips))
         }
-        ["emulation", "GetTimeSourceInfo"] if boot.started => Some(Action::TimeSourceInfo),
+        ["emulation", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
         ["TestMonitorUartIdle", timeout, options @ ..] if boot.started && options.len() <= 1 => {
             let tester = options.first().map(|option| {
                 let id = option.strip_prefix("testerId=").ok_or("expected testerId=ID")?;
