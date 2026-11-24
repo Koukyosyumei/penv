@@ -1193,3 +1193,30 @@ CPU を停止し、USART に `X` を送信した直後の RDR は両方 `0x00`�
 Rust の UART テスト36件が合格。未変更の Robot は全256バイト、
 STM32F072b Console Echo、モニター保存・復元の4件合格。
 残り2,193件は未実行（`target/monitor-uart-rx-schedule-robot/results.json`）。
+
+### マシン選択の起動前検証と保存・復元
+
+`6f6b589` は `mach set` と Robot の `Execute Command` のマシン引数を
+起動前の Rust セッションで検証する。無効な選択はその場で拒否し、
+起動コマンド列に残さない。固定 Renode と penv に同じコマンドを送り、
+無効な番号・名前のあとも正しい名前・番号を選択し、変数 `ready` を
+読み出せた。通常 CLI の正しい番号・名前による選択も確認した
+（`target/monitor-mach-selection-proof/`）。
+
+`c8dab66` は単一マシンセッションで登録と選択を区別する。
+`mach clear` 後はグローバル変数へ戻り、`mach set 0` でローカル変数へ
+戻る。ライブ状態で選択解除中の `sysbus` は固定 Renode と同様に拒否した。
+選択解除を保存すると v6 を書き、v1–v5 の読み込みも維持する。
+固定 Renode と penv の保存・復元列では変数の表示が
+`local`、`global`、`global`、`local` の順で一致し、通常 CLI でも
+同じ順序だった（`target/monitor-mach-clear-reference/`）。
+Rust モニターテスト22件と CLI スナップショット回帰テストが合格。
+
+複数マシンの実行と、すべてのデバイスコマンドを対象にした
+選択解除時の検証は残っている。
+
+未変更の最終 Robot 実行はモニター保存・復元、HEX、STM32F072b Console Echo
+の4件合格。残り2,193件は未実行
+（`target/monitor-mach-clear-robot/results.json`）。
+起動前検証の変更単体では全256バイトのUARTケースも合格した
+（`target/monitor-mach-selection-robot/results.json`）。
