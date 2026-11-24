@@ -572,3 +572,15 @@ penv の結果は `target/monitor-cpuless-uart-regex/results.json` と
 `target/monitor-cpuless-uart-bytes/results.json` にある。
 通常の RESC の実行は `target/monitor-cpuless-uart-proof/all-bytes.resc`
 と `file.log` に記録した。
+
+`Wait For Next Line On Uart` は Rust で次の完成行を受信する。
+`target/monitor-next-any-proof/` では、固定 Renode と penv が CPU なしの
+`TrivialUart` から `A`、空行、`B` を順に受信し、4回目の待機で
+失敗した。通常 RESC からも同じ3行を読み出した。
+
+CPU なしの構成の仮想時計は 10 ns 刻みで動作する。通常 RESC、
+ライブモニター、固定 Renode で 50 ns と 150 ns を確認した
+（`target/monitor-cpuless-time-proof/`）。命令数の指定なしで
+250 ms まで進めるコマンド列も一致した
+（`target/monitor-cpuless-long-proof/`）。明示した
+`--max-steps 1` は引き続き実行を打ち切った。
