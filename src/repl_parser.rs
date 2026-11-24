@@ -81,6 +81,7 @@ pub(crate) fn number(value: &str) -> Result<u32, String> {
     .map_err(|_| format!("invalid 32-bit number {value:?}"))
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum IrqEnd<'a> {
     Number(u32),
     Range(u32, u32),
@@ -123,6 +124,38 @@ pub(crate) fn irq_ends(input: &str, source: bool) -> Result<Vec<IrqEnd<'_>>, Str
         .split(',')
         .map(|item| irq_end(item, source))
         .collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct IrqDestination<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) local: Option<u32>,
+    pub(crate) groups: Vec<IrqEnd<'a>>,
+}
+
+pub(crate) struct IrqConnection<'a> {
+    pub(crate) sources: Option<Vec<IrqEnd<'a>>>,
+    pub(crate) destinations: Vec<IrqDestination<'a>>,
+}
+
+pub(crate) fn irq_connection(input: &str) -> Result<IrqConnection<'_>, String> {
+    fn groups(input: &str, source: bool) -> Result<Vec<IrqEnd<'_>>, String> {
+        let input = input.trim();
+        if input.starts_with('[') {
+            irq_ends(input, source)
+        } else {
+            irq_end(input, source).map(|end| vec![end])
+        }
+    }
+
+    let (source, destinations) = input.split_once("->").ok_or("expected IRQ connection")?;
+    let sources = (!source.trim().is_empty()).then(|| groups(source, true)).transpose()?;
+    let destinations = destinations.split('|').map(|destination| {
+        let (name, pins) = destination.split_once('@').ok_or("expected IRQ destination pins")?;
+        let (name, local) = crate::platform::irq_receiver(name)?;
+        Ok(IrqDestination { name, local, groups: groups(pins, false)? })
+    }).collect::<Result<_, String>>()?;
+    Ok(IrqConnection { sources, destinations })
 }
 
 #[derive(Default)]
