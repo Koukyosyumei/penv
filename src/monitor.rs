@@ -28,6 +28,7 @@ pub struct Boot {
     pub run_steps: Option<u64>,
     pub quantum: Option<u64>,
     pub cpu_mips: Option<u32>,
+    pub unhandled_access: Option<UnhandledAccess>,
     pub post_run: Vec<PostRun>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -2478,10 +2479,15 @@ fn execute(
         ["sysbus", "UnhandledAccessBehaviour", policy] => {
             let policy = match resolve(policy)? {
                 "DoNotReport" => UnhandledAccess::DoNotReport,
+                "Report" => UnhandledAccess::Report,
                 "ThrowException" => UnhandledAccess::ThrowException,
                 "ThrowExceptionIfNotTagged" => UnhandledAccess::ThrowExceptionIfNotTagged,
                 other => return Err(format!("unsupported UnhandledAccessBehaviour {other:?}")),
             };
+            if *machine && !boot.started && boot.runtime.is_empty() {
+                boot.unhandled_access = Some(policy);
+                return Ok(());
+            }
             Some(Action::UnhandledAccess(policy))
         }
         ["sysbus", "Tag", ..] => {
@@ -2804,6 +2810,7 @@ fn execute(
                 && !matches!(
                     action,
                     Action::BusScalar(_)
+                        | Action::UnhandledAccess(_)
                         | Action::FindBytes(_)
                         | Action::CreateHostPty(..)
                         | Action::RtcMode(_)
