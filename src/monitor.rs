@@ -371,14 +371,14 @@ enum Action {
     WaitForLed(String, bool, u64, u64),
     Adc(String, usize, f64),
     WaitForUart(Option<String>, String, UartWaitMode, Option<u64>),
-    CreateUartTester(String, bool, Option<u64>),
+    CreateUartTester(String, bool, Option<u64>, Option<bool>),
     DefaultUartTester(Option<usize>),
     DefaultUartTimeout(u64),
     WaitForTester(Option<usize>, String, Option<regex::Regex>, UartWaitMode, Option<u64>, bool, bool),
     WaitForBytes(Option<usize>, BinaryUartPattern, bool, Option<u64>),
     SetUartFailure(Option<usize>, FailingUartPattern, bool),
     WriteUartLine(String, String, &'static [u8]),
-    WriteTesterUart(Option<usize>, String, &'static [u8], bool),
+    WriteTesterUart(Option<usize>, String, &'static [u8], Option<bool>),
 }
 
 struct BusScalar {
@@ -947,11 +947,12 @@ fn run_commands(
             Action::Adc(name, channel, volts) => machine
                 .external_event(ExternalEvent::Adc(name.clone(), *channel, *volts))
                 .map(|()| None),
-            Action::CreateUartTester(target, binary, timeout) => machine
-                .bus
-                .create_uart_tester(target, *binary, *timeout)
-                .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
-                .map(|()| None),
+            Action::CreateUartTester(target, binary, timeout, echo) => {
+                machine.bus.set_default_uart_echo(*echo);
+                machine.bus.create_uart_tester(target, *binary, *timeout)
+                    .and_then(|id| writeln!(output.output, "{id}").map_err(|e| e.to_string()))
+                    .map(|()| None)
+            }
             Action::DefaultUartTimeout(timeout) => {
                 machine.bus.set_default_uart_timeout(*timeout);
                 Ok(None)
@@ -1051,7 +1052,7 @@ fn run_commands(
             }
             Action::WriteTesterUart(id, text, ending, echo) => {
                 let target = machine.bus.uart_tester_target(*id)?.to_owned();
-                let cycles = if *echo && !text.is_empty() {
+                let cycles = if echo.unwrap_or_else(|| machine.bus.default_uart_echo()) && !text.is_empty() {
                     Some(uart_wait_cycles(machine, *id, None)?)
                 } else {
                     None
@@ -1235,13 +1236,16 @@ pub fn serve(
                 }
             }
             (Ok(()), commands) if included_variables.is_some() || commands.len() == 1 => {
+                let echo_assertion = matches!(commands,
+                    [RuntimeCommand { action: Action::WriteTesterUart(_, text, _, echo), .. }]
+                        if !text.is_empty() && echo.unwrap_or_else(|| machine.bus.default_uart_echo()));
                 match run_commands(machine, commands, u64::MAX, &mut bytes, &mut session, true) {
                     Ok((Stop::ScriptComplete, _)) => {
                         session.number_mode = boot.session.number_mode;
                         if let Some(variables) = included_variables.take() {
                             session.variables = variables;
                         }
-                        frame(&mut output, "OK", &bytes)
+                        frame(&mut output, if echo_assertion { "MATCH" } else { "OK" }, &bytes)
                     }
                     Ok((stop, _)) => {
                         frame(&mut output, "STOP", format!("{stop:?}").as_bytes())
@@ -2421,10 +2425,14 @@ fn execute(
         ["CreateTerminalTester", target, options @ ..] => {
             let mut binary = None;
             let mut timeout = None;
+            let mut echo = None;
             for option in options {
                 match option.split_once('=') {
                     Some(("timeout", value)) if timeout.is_none() => {
                         timeout = Some(duration_steps(resolve(value)?)?);
+                    }
+                    Some(("defaultWaitForEcho", value)) if echo.is_none() => {
+                        echo = Some(parse_tester_bool(resolve(value)?)?);
                     }
                     Some(("binaryMode", value)) if binary.is_none() => {
                         binary = Some(parse_tester_bool(resolve(value)?)?);
@@ -2441,6 +2449,7 @@ fn execute(
                 resolve(target)?.to_owned(),
                 binary.unwrap_or(false),
                 timeout,
+                echo,
             ))
         }
         ["SetDefaultUartTimeout", value] => Some(Action::DefaultUartTimeout(duration_steps(resolve(value)?)?)),
@@ -2577,7 +2586,7 @@ fn execute(
                 "None" => b"",
                 _ => return Err("expected UART ending CR or None".into()),
             };
-            let echo = parse_tester_bool(resolve(echo)?)?;
+            let echo = (*echo != "default").then(|| parse_tester_bool(resolve(echo)?)).transpose()?;
             let id = match selector {
                 [] => None,
                 [value] => {

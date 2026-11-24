@@ -728,12 +728,19 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def terminal(self, uart, *args):
         if not (self.image or self.rust_monitor) or not re.fullmatch(r"(?:sysbus\.)?[\w.]+", uart):
             raise Unsupported(f"Create Terminal Tester: {uart}")
-        options = self.log_options(args, {"timeout", "defaultPauseEmulation"}, ("timeout",))
+        allowed = {"timeout", "defaultPauseEmulation"}
+        if self.rust_monitor:
+            allowed.add("defaultWaitForEcho")
+        options = self.log_options(args, allowed, ("timeout",))
         if "defaultPauseEmulation" in options:
             self.log_bool(options["defaultPauseEmulation"])
         timeout = self.duration(options.get("timeout", self.timeout))
         deadline = f" timeout={timeout}" if self.rust_monitor and "timeout" in options else ""
-        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}").strip())
+        echo = ""
+        if "defaultWaitForEcho" in options:
+            enabled = self.log_bool(options["defaultWaitForEcho"])
+            echo = f" defaultWaitForEcho={str(enabled).lower()}"
+        result = int(self.operation(f"CreateTerminalTester {uart}{deadline}{echo}").strip())
         self.uart_testers.setdefault(result, (uart, timeout))
         return result
 
@@ -840,8 +847,8 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def write_tester_uart(self, content, ending, echo, tester):
         tester = self.parse_tester_id(tester)
         selector = f" testerId={tester}" if tester is not None else ""
-        self.operation(f"WriteTesterUart {self.uart_text(content)} {ending} {str(echo).lower()}{selector}",
-                       assertion=echo and bool(content))
+        mode = "default" if echo is None else str(echo).lower()
+        self.operation(f"WriteTesterUart {self.uart_text(content)} {ending} {mode}{selector}")
         return {"Line": ""}
 
     def uart_idle(self, timeout, *args):
@@ -854,11 +861,12 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
     def write_line(self, content="", *args):
         positional = ("testerId", "waitForEcho")
         options = self.log_options(args, set(positional), positional)
+        if self.rust_monitor:
+            echo = self.log_bool(options["waitForEcho"]) if "waitForEcho" in options else None
+            return self.write_tester_uart(content, "CR", echo, options.get("testerId"))
         if not self.started:
             raise Unsupported("requires a running UART tester")
         echo = self.log_bool(options.get("waitForEcho", "true"))
-        if self.rust_monitor:
-            return self.write_tester_uart(content, "CR", echo, options.get("testerId"))
         tester_id, (uart, _) = self.select_uart(options.get("testerId"))
         self.operation(f"{uart} WriteLine {self.uart_text(content)} CR")
         if echo:

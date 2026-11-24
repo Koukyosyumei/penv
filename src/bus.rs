@@ -445,6 +445,7 @@ pub struct Bus {
     step_hz: Option<u32>,
     uart_testers: Vec<UartTester>,
     default_uart_timeout: Option<u64>,
+    default_uart_echo: Option<bool>,
     default_uart_tester: Option<usize>,
     exti: Option<Exti>,
     stm32_gpios: Vec<Stm32Gpio>,
@@ -5073,6 +5074,14 @@ impl Bus {
         }
         self.default_uart_tester = id;
         Ok(())
+    }
+
+    pub(crate) fn default_uart_echo(&self) -> bool {
+        self.default_uart_echo.unwrap_or(true)
+    }
+
+    pub(crate) fn set_default_uart_echo(&mut self, echo: Option<bool>) {
+        self.default_uart_echo = echo;
     }
 
     pub(crate) fn default_uart_timeout(&self) -> u64 {
