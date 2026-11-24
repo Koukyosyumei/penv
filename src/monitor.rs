@@ -2567,16 +2567,15 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
         }
         let words = command_words(text).map_err(|e| error(&e))?;
         // A restore can change both machine selection and variable bindings.
-        if matches!(words.as_slice(), ["mach" | "machine", "set", _])
-            || words.first().is_some_and(|word| *word == "sysbus" || word.starts_with("sysbus."))
+        if (matches!(words.as_slice(), ["mach" | "machine", "set", _])
+            || words.first().is_some_and(|word| requires_selected_machine(word) && *word != "machine"))
+            && has_snapshot_boundary(&state.boot)
         {
-            if has_snapshot_boundary(&state.boot) {
-                state.boot.runtime.push(RuntimeCommand {
-                    line: line + 1, source: path.to_owned(),
-                    action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
-                });
-                continue;
-            }
+            state.boot.runtime.push(RuntimeCommand {
+                line: line + 1, source: path.to_owned(),
+                action: Action::InvokeMonitorScript(text.to_owned(), canonical.clone(), root.to_owned()),
+            });
+            continue;
         }
         let assignment = text.starts_with('$') || matches!(words.as_slice(), ["set", _, _]);
         let follows_snapshot = (assignment || matches!(words.as_slice(), ["echo", _] | ["printenv"] | ["alias", _, _]))
@@ -3002,6 +3001,10 @@ fn monitor_echo(value: &str, variables: &HashMap<String, String>, origin: &Path)
     Ok(monitor_string(value).unwrap_or_else(|| value.to_owned()))
 }
 
+fn requires_selected_machine(target: &str) -> bool {
+    matches!(target, "machine" | "cpu" | "sysbus") || target.starts_with("sysbus.")
+}
+
 fn execute(
     text: &str,
     words: &[&str],
@@ -3012,8 +3015,7 @@ fn execute(
     root: &Path,
     line: usize,
 ) -> Result<(), String> {
-    if boot.session.machine_cleared && words.first().is_some_and(|word|
-        matches!(*word, "machine" | "cpu" | "sysbus") || word.starts_with("sysbus."))
+    if boot.session.machine_cleared && words.first().is_some_and(|word| requires_selected_machine(word))
     {
         return Err(format!("No such command or device: {}", words[0]));
     }
