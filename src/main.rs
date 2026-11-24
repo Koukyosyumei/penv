@@ -1510,6 +1510,7 @@ fn run() -> Result<ExitCode, String> {
             ));
         }
         _generated_repl = boot.generated_repl;
+        virtual_mips = boot.cpu_mips.or(virtual_mips);
         monitor_session = boot.session;
         platform_path = boot.platform;
         script_elf_addresses = Some(boot.use_virtual_elf_addresses);
@@ -1688,12 +1689,7 @@ fn run() -> Result<ExitCode, String> {
         let renode_default_mips = (script.is_some() && machine.is_cortex_m())
             .then_some((bus::CORTEX_M_STEP_HZ / 1_000_000) as u32);
         if let Some(mips) = cli_mips.or(virtual_mips).or(renode_default_mips) {
-            if !machine.is_cortex_m() {
-                return Err("--virtual-mips requires Cortex-M".into());
-            }
-            machine
-                .bus
-                .set_step_hz(mips.checked_mul(1_000_000).ok_or("virtual MIPS overflow")?);
+            machine.set_monitor_cpu_rate(mips)?;
         }
         if let Some((name, server)) = &tftp {
             machine.bus.attach_litex_tftp(name, server.clone())?;

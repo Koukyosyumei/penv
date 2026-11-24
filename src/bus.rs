@@ -1327,6 +1327,16 @@ impl Bus {
             .unwrap_or(crate::machine::VIRTUAL_STEPS_PER_SECOND)
     }
 
+    pub(crate) fn set_monitor_cpu_mips(&mut self, mips: u32) -> Result<(), String> {
+        let rate = mips.checked_mul(1_000_000).filter(|&rate| rate > 0)
+            .ok_or("PerformanceInMips requires a positive supported rate")?;
+        if !self.nrf_peripherals.is_empty() {
+            self.set_nrf_cpu_mips(mips)?;
+        }
+        self.set_step_hz(rate);
+        Ok(())
+    }
+
     pub(crate) fn monitor_step_hz(&self) -> u64 {
         if self.nrf_peripherals.is_empty() {
             u64::from(self.step_hz())

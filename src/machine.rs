@@ -1412,8 +1412,11 @@ impl Machine {
     }
 
     pub(crate) fn set_monitor_cpu_rate(&mut self, mips: u32) -> Result<(), String> {
+        if !self.is_cortex_m() {
+            return Err("PerformanceInMips requires a Cortex-M CPU".into());
+        }
         let now = self.monitor_elapsed_ns();
-        self.bus.set_nrf_cpu_mips(mips)?;
+        self.bus.set_monitor_cpu_mips(mips)?;
         self.monitor_clock_ns = now;
         self.monitor_clock_step = self.elapsed_steps();
         Ok(())

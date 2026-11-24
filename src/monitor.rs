@@ -27,6 +27,7 @@ pub struct Boot {
     pub pcm_outputs: Vec<(String, PathBuf)>,
     pub run_steps: Option<u64>,
     pub quantum: Option<u64>,
+    pub cpu_mips: Option<u32>,
     pub post_run: Vec<PostRun>,
     pub buttons: Vec<(String, crate::litex_panel::ButtonAction)>,
     pub silence_ranges: Vec<(u32, u32)>,
@@ -271,7 +272,8 @@ enum Action {
     RtcDateTime,
     CreateHostPty(String, PathBuf, bool),
     CpuStep(String, u64),
-    NrfCpuMips(u32),
+    CpuMips(u32),
+    ReadCpuMips,
     TraceStackAccess(String),
     VectorRegisterLength(String, u64),
     CpuCondition(String, u32),
@@ -559,7 +561,14 @@ fn run_commands(
             }),
             Action::VectorRegisterLength(cpu, bits) => machine.configure_rv64_vlen(cpu, *bits).map(|()| None),
             Action::TraceStackAccess(cpu) => machine.enable_rv64_stack_access_trace(cpu).map(|()| None),
-            Action::NrfCpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
+            Action::CpuMips(mips) => machine.set_monitor_cpu_rate(*mips).map(|()| None),
+            Action::ReadCpuMips => {
+                if !machine.is_cortex_m() {
+                    return Err("PerformanceInMips requires a Cortex-M CPU".into());
+                }
+                writeln!(output.output, "0x{:08X}", machine.bus.monitor_step_hz() / 1_000_000)
+                    .map(|()| None).map_err(|error| error.to_string())
+            }
             Action::TimeSourceInfo => {
                 writeln!(output.output, "Elapsed Virtual Time: {}\nQuantum: {}",
                     monitor_timestamp(machine.monitor_elapsed_ns()),
@@ -1958,9 +1967,10 @@ fn execute(
         ["TraceStackAccess", cpu] if boot.started => Some(Action::TraceStackAccess(
             cpu.trim_start_matches("sysbus.").to_owned(),
         )),
+        ["cpu" | "sysbus.cpu", "PerformanceInMips"] if boot.started => Some(Action::ReadCpuMips),
         ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.started => {
             let mips = resolve(value)?.parse().map_err(|_| "PerformanceInMips requires a positive integer")?;
-            Some(Action::NrfCpuMips(mips))
+            Some(Action::CpuMips(mips))
         }
         ["emulation", "GetTimeSourceInfo"] if boot.started => Some(Action::TimeSourceInfo),
         ["TestMonitorUartIdle", timeout] if boot.started => Some(Action::UartIdle(duration_steps(resolve(timeout)?)?)),
@@ -2703,6 +2713,9 @@ fn execute(
         return Err("commands after start are unsupported in a boot script".into());
     }
     match words {
+        ["cpu" | "sysbus.cpu", "PerformanceInMips", value] if boot.has_platform() => {
+            boot.cpu_mips = Some(resolve(value)?.parse().map_err(|_| "invalid PerformanceInMips")?);
+        }
         ["mach" | "machine", "create" | "add", name @ ..] if name.len() <= 1 => {
             if *machine {
                 return Err("multiple machines are unsupported".into());
