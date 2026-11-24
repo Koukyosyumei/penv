@@ -292,7 +292,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="queue all host-selected Robot suites")
     parser.add_argument("--jobs", type=int, choices=range(1, 11), default=10)
     parser.add_argument("--suite", action="append", help="manifest-relative Robot suite path")
-    parser.add_argument("--case", help="exact Robot test name")
+    parser.add_argument("--case", action="append", help="exact Robot test name, repeatable for dependencies")
     parser.add_argument("--host-case-timeout", type=int, default=130,
                         help="elapsed host seconds allowed per Robot case (default 130)")
     parser.add_argument("--rust-monitor", action="store_true",
@@ -321,7 +321,7 @@ def main():
     if args.all and (args.suite or args.case):
         parser.error("--all cannot be combined with --suite or --case")
     selected = [row for row in rows if (args.all or row["path"] in (args.suite or DEFAULT_ROBOT))
-                and (args.case is None or row["name"] == args.case)]
+                and (args.case is None or row["name"] in args.case)]
     if not args.inventory_only and not selected:
         parser.error("no host-selected Robot cases match")
     nunit_root = args.nunit_root.resolve() if args.nunit_root else None

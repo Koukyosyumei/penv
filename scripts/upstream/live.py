@@ -93,7 +93,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             with tempfile.NamedTemporaryFile(dir=self.out, prefix="state-", suffix=".save", delete=False) as file:
                 snapshot = Path(file.name)
             try:
-                self.operation(f"SaveRestorableMonitorSnapshot {at_path(snapshot)}")
+                self.operation(f"SaveRestorableMonitorSnapshot {at_path(snapshot)}", assertion=True)
             except Exception:
                 snapshot.unlink(missing_ok=True)
                 raise
@@ -371,7 +371,7 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
                 if select:
                     self.commands.append(select)
                 # Only route read-only queries here. Rust parses and evaluates the original command.
-                if re.match(r"(?:echo|lastLog)(?:\s|$)", command):
+                if re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)
                     if reply == "OK":
                         return value

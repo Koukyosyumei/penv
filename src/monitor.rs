@@ -1348,7 +1348,7 @@ pub fn serve(
                 _ => None,
             };
             if include.is_some() || words.first().is_some_and(|verb|
-                matches!(*verb, "alias" | "macro" | "runMacro")
+                matches!(*verb, "alias" | "macro" | "runMacro" | "printenv")
                     || monitor_alias(&session.aliases, session.machine.as_deref(), verb).is_some())
             {
                 let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -1990,6 +1990,59 @@ struct ScriptState {
     machine: bool,
 }
 
+impl ScriptState {
+    fn describe_environment(&self) -> String {
+        use std::fmt::Write;
+        let mut output = String::from("Variables:\n");
+        let mut variables: Vec<_> = self.variables.iter().collect();
+        variables.sort_unstable_by_key(|(name, _)| *name);
+        for (name, token) in variables {
+            if !name.contains('.') || name == "global.ORIGIN" {
+                continue;
+            }
+            let (kind, value) = describe_monitor_token(token);
+            let _ = writeln!(output, "\t{kind} {name} = {value} ({token})");
+        }
+        output.push_str("Macros:\n");
+        let mut macros: Vec<_> = self.macros.iter().collect();
+        macros.sort_unstable_by_key(|(name, _)| *name);
+        for (name, body) in macros {
+            let body = body.commands.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n\t");
+            let prefix = if name.contains('.') { "" } else { "global." };
+            let _ = writeln!(output, "{prefix}{name} \"{body}\"");
+        }
+        output.push_str("Aliases:");
+        let mut aliases: Vec<_> = self.aliases.iter().collect();
+        aliases.sort_unstable_by_key(|(name, _)| *name);
+        for (name, command) in aliases {
+            let _ = write!(output, "\n\t{name} = {command}");
+        }
+        output
+    }
+}
+
+fn describe_monitor_token(token: &str) -> (&'static str, String) {
+    if let Some(path) = token.strip_prefix('@') {
+        return ("PathToken", path_value(path));
+    }
+    if let Some(value) = monitor_string(token) {
+        return ("StringToken", value);
+    }
+    if token.eq_ignore_ascii_case("true") {
+        return ("BooleanToken", "True".into());
+    }
+    if token.eq_ignore_ascii_case("false") {
+        return ("BooleanToken", "False".into());
+    }
+    if let Some(value) = token.strip_prefix("0x").and_then(|value| u64::from_str_radix(value, 16).ok()) {
+        return ("HexToken", value.to_string());
+    }
+    if let Ok(value) = token.parse::<i64>() {
+        return ("DecimalIntegerToken", value.to_string());
+    }
+    ("LiteralToken", token.to_owned())
+}
+
 pub fn load(path: &Path, root: &Path) -> Result<Boot, String> {
     load_script(path, root, false, None)
 }
@@ -2072,7 +2125,7 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     }
     // Inspect only read-only commands that resolve in startup state.
     // A queued runtime operation may change that state, so use the live monitor then.
-    if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _]))
+    if !matches!(command_words(command.trim()).as_deref(), Ok(["echo", _] | ["lastLog"] | ["lastLog", _] | ["printenv"]))
         || load_text(&source, source.clone(), root, &mut state, &body).is_err()
         || state.machine
         || state.boot.has_platform()
@@ -2394,6 +2447,16 @@ fn load_text(path: &Path, canonical: PathBuf, root: &Path, state: &mut ScriptSta
                         return Err(error("unsupported command: include needs an available loader"));
                     }
                     _ => load_file(&included, root, state).map_err(|e| error(&e))?,
+                }
+            }
+            ["printenv"] => {
+                let message = state.describe_environment();
+                if state.boot.started || !state.boot.runtime.is_empty() {
+                    state.boot.runtime.push(RuntimeCommand {
+                        line: line + 1, source: path.to_owned(), action: Action::Echo(message),
+                    });
+                } else {
+                    state.boot.monitor_output.push(message);
                 }
             }
             ["alias", name, command] => {
