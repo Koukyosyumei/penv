@@ -487,6 +487,19 @@ impl Machine {
             .translate_read(&mut self.bus, address)
     }
 
+    pub fn set_peripheral_local_name(
+        &mut self, handle: &crate::bus_translation::PeripheralHandle, name: Option<&str>,
+    ) -> Result<(), String> {
+        let name = name.ok_or("missing peripheral name")?;
+        self.bus.name_translated_peripheral(handle, name)
+    }
+
+    pub fn peripheral_by_path(
+        &self, path: &str,
+    ) -> Option<&crate::bus_translation::PeripheralHandle> {
+        self.bus.translated_peripheral_by_path(path)
+    }
+
     pub fn set_named_entry(&mut self, name: &str, entry: u32) -> Result<(), String> {
         let hart = self.named_hart(name)?;
         if let Some(cpu) = &mut hart.rv64 {

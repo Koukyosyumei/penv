@@ -1387,6 +1387,15 @@ impl Bus {
         Ok(())
     }
 
+    pub fn translated_peripheral_by_path(
+        &self, path: &str,
+    ) -> Option<&crate::bus_translation::PeripheralHandle> {
+        let name = path.strip_prefix("sysbus.")?;
+        self.translated_peripherals.iter()
+            .find(|device| device.name.as_deref() == Some(name))
+            .map(|device| &device.handle)
+    }
+
     pub(crate) fn dispatch_external_call(&mut self, time: u64, peripheral: &str, method: &str, arguments: &[i32]) -> Result<(), String> {
         let name = peripheral.strip_prefix("sysbus.").unwrap_or(peripheral);
         let device = self.translated_peripherals.iter_mut().find(|device| device.name.as_deref() == Some(name))

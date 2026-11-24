@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,114 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,118 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,282 |
+| 移植待ち | 2,278 |
 | 上流 Ignore | 14 |
 
 進捗表は公式インベントリと対応表から生成した。移植待ち 32 fixture の
@@ -212,3 +212,9 @@ PacketTests の4ケースは、固定上流のレイアウト長、ビットフ�
 公式18件の入力、型、値、未消費文字数を検証した。専用の型付きトークナイザーで再現し、既存のモニターコマンドの引数解析は従来どおりの経路で動作する。
 
 - [公式 ID](nunit-evidence/targeted-monitor_tokenizer.tsv)と[実行ログ](nunit-evidence/targeted-monitor_tokenizer.log)
+
+## MachineTests のバス登録と名前検索
+
+元の登録範囲を使い、重複名、空文字と null、1台または2台のパス検索を検証した。残る1件はマシン所有の周期処理をエミュレーション同期点で開始・停止する機能を必要とする。
+
+- [公式 ID](nunit-evidence/targeted-machine-registry.tsv)と[実行ログ](nunit-evidence/targeted-machine-registry.log)

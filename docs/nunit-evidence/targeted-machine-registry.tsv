@@ -1,0 +1,5 @@
+official_id	nunit_id	rust_test	rust_outcome
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MachineTests.ShouldThrowOnRegisteringAnotherPeripheralWithTheSameName	0-1324	upstream_nunit::machine_registry::should_throw_on_registering_another_peripheral_with_the_same_name	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MachineTests.ShouldFindPeripheralByPath	0-1325	upstream_nunit::machine_registry::should_find_peripheral_by_path	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MachineTests.ShouldFindPeripheralByPathWhenThereAreTwo	0-1326	upstream_nunit::machine_registry::should_find_peripheral_by_path_when_there_are_two	passed
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj::Antmicro.Renode.UnitTests.MachineTests.ShouldThrowOnNullOrEmptyPeripheralName	0-1327	upstream_nunit::machine_registry::should_throw_on_null_or_empty_peripheral_name	passed
