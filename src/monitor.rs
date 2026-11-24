@@ -2547,6 +2547,13 @@ fn execute(
         _ => {}
     }
     let resolve = |value| resolve(variables, value);
+    if let ["emulation", "SetGlobalSerialExecution", value] = words {
+        if parse_tester_bool(resolve(value)?)? {
+            // This scheduler executes harts serially.
+            return Ok(());
+        }
+        return Err("unsupported monitor parallel execution".into());
+    }
     if let ["machine", "UserState", value] = words
         && !boot.started && boot.runtime.is_empty()
     {
