@@ -1327,6 +1327,10 @@ pub fn serve(
                     }
                 }
             }
+            (Err(error), _) if error.starts_with("Wrong machine number.")
+                || (error.starts_with("Machine ") && error.ends_with(" not found.")) => {
+                frame(&mut output, "ERROR", error.as_bytes())
+            }
             (result, _) => frame(&mut output, "UNSUPPORTED",
                                 result.err().as_deref().unwrap_or("not a runtime command").as_bytes()),
         };
@@ -2456,10 +2460,15 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
-        ["mach" | "machine", "set", name] if *machine => {
-            let name = unquote(resolve(name)?);
-            if name != "0" && boot.session.machine.as_deref() != Some(name) {
-                return Err(format!("unknown machine {name:?}"));
+        ["mach" | "machine", "set", selector] if *machine => {
+            let selector = resolve(selector)?;
+            let name = unquote(selector);
+            if let Ok(index) = crate::parse_address64(selector) {
+                if index != 0 {
+                    return Err("Wrong machine number. Type mach to show a list of available machines.".into());
+                }
+            } else if boot.session.machine.as_deref() != Some(name) {
+                return Err(format!("Machine {name} not found."));
             }
             if !boot.started && boot.runtime.is_empty() {
                 return Ok(());
