@@ -1,6 +1,8 @@
 mod bit_helper;
+mod circular_buffer;
 mod misc;
 mod parser_primitives;
+mod time_interval;
 
 use crate::{parse_address64, repl_syntax};
 

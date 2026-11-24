@@ -292,7 +292,7 @@ struct UartLineMatch {
     prompt: bool,
     pattern: Vec<u8>,
     tail: VecDeque<u8>,
-    line: VecDeque<u8>,
+    line: crate::circular_buffer::CircularBuffer<u8>,
     contains: bool,
     matched: bool,
 }
@@ -307,7 +307,7 @@ impl UartLineMatch {
             prompt: matches!(end, UartWaitMode::Prompt),
             pattern: pattern.as_bytes().to_vec(),
             tail: VecDeque::new(),
-            line: VecDeque::new(),
+            line: crate::circular_buffer::CircularBuffer::new(UART_HISTORY_BYTES),
             contains: false,
             matched: false,
         }
@@ -327,10 +327,7 @@ impl UartLineMatch {
             }
             self.contains = false;
         } else {
-            if self.line.len() == UART_HISTORY_BYTES {
-                self.line.pop_front();
-            }
-            self.line.push_back(byte);
+            self.line.enqueue(byte);
             if !self.contains {
                 if self.tail.len() == self.pattern.len() {
                     self.tail.pop_front();

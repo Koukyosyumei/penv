@@ -2,6 +2,7 @@ mod andes_csr;
 mod bit_field;
 mod bitmanip;
 mod bus;
+pub mod circular_buffer;
 mod clint;
 mod collapsed_profile;
 mod compressed;
