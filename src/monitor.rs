@@ -354,7 +354,7 @@ enum Action {
     PhyRegister(String, u16),
     AdxlAxis(String, usize, i16),
     LiteXLedState(String),
-    UartIdle(u64, Option<usize>),
+    UartIdle(u64, Option<usize>, Option<bool>),
     StartCollapsedProfile(String, PathBuf, bool, Option<u64>),
     StopProfile(String),
     DescribeSnapshotPlatform,
@@ -544,7 +544,7 @@ pub fn is_configuration_only(commands: &[RuntimeCommand]) -> bool {
                     | Action::CpuStep(..) | Action::CpuPc(..) | Action::ReadCpuPc(_)
                     | Action::AssertCpuValue(..) | Action::CpuRegister(..) | Action::SetEmulationPaused(_)
                     | Action::PeripheralWrite(..) | Action::CreateUartTester(..)
-                    | Action::DefaultUartTester(_) | Action::WaitForBytes(..) | Action::WaitForTester(..)
+                    | Action::DefaultUartTester(_) | Action::UartIdle(..) | Action::WaitForBytes(..) | Action::WaitForTester(..)
                     | Action::RunFor(_) | Action::RunUntil(_) | Action::RunToSyncPoint | Action::Echo(_) | Action::ScriptLog(..) | Action::LastLog(_) | Action::LogLevel(_)
                     | Action::DescribeSnapshotPlatform | Action::TimeSourceInfo | Action::SaveMemory(..) | Action::ClearMemory | Action::LoadMemory(_)
             )
@@ -740,11 +740,11 @@ fn run_commands<'a>(
                 machine.primary.monitor_paused = *paused;
                 Ok(None)
             }
-            Action::UartIdle(timeout, tester) => {
+            Action::UartIdle(timeout, tester, pause) => {
                 let cycles = duration_cycles(*timeout, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())?;
                 let start = machine.elapsed_steps();
                 let limit = cycles.min(budget);
-                let (stop, count) = wait_for_uart_idle(machine, *tester, limit, &mut output)?;
+                let (stop, count) = wait_for_uart_idle(machine, *tester, cycles, *pause, budget, &mut output)?;
                 retired += count;
                 budget -= machine.elapsed_steps().wrapping_sub(start);
                 match stop {
@@ -1286,9 +1286,9 @@ pub fn serve(
                 }
                 frame(&mut output, "OK", &[])
             }
-            (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps, tester), .. }]) => {
+            (Ok(()), [RuntimeCommand { action: Action::UartIdle(steps, tester, pause), .. }]) => {
                 let result = duration_cycles(*steps, CORTEX_M_STEP_HZ, machine.bus.monitor_step_hz())
-                    .and_then(|cycles| wait_for_uart_idle(machine, *tester, cycles, &mut bytes));
+                    .and_then(|cycles| wait_for_uart_idle(machine, *tester, cycles, *pause, u64::MAX, &mut bytes));
 
                 match result {
                     Ok((Stop::Limit, _)) => frame(&mut output, "MATCH", &[]),
@@ -1584,10 +1584,20 @@ fn wait_for_uart_idle(
     machine: &mut Machine,
     tester: Option<usize>,
     cycles: u64,
+    pause: Option<bool>,
+    budget: u64,
     output: &mut impl Write,
 ) -> Result<(Stop, u64), String> {
     let (id, previous) = machine.bus.uart_activity(tester)?;
-    run_until_deadline(machine, cycles, output, |bus, _| bus.uart_activity_changed(id, previous))
+    let limit = cycles.min(budget);
+    if limit != 0 {
+        machine.primary.monitor_paused = false;
+    }
+    let result = run_until_deadline(machine, limit, output, |bus, _| bus.uart_activity_changed(id, previous))?;
+    if limit == cycles && result.0 == Stop::Limit && pause.unwrap_or(machine.bus.default_uart_pause) {
+        machine.primary.monitor_paused = true;
+    }
+    Ok(result)
 }
 
 fn drive_uart_watch(
@@ -2593,12 +2603,21 @@ fn execute(
             Some(Action::LastLog(count))
         }
         ["emulation", "GetTimeSourceInfo"] => Some(Action::TimeSourceInfo),
-        ["TestMonitorUartIdle", timeout, options @ ..] if boot.started && options.len() <= 1 => {
-            let tester = options.first().map(|option| {
-                let id = option.strip_prefix("testerId=").ok_or("expected testerId=ID")?;
-                crate::parse_address(resolve(id)?).map(|id| id as usize)
-            }).transpose()?;
-            Some(Action::UartIdle(duration_steps(resolve(timeout)?)?, tester))
+        ["TestMonitorUartIdle", timeout, args @ ..] => {
+            let mut tester = None;
+            let mut pause = None;
+            for option in args {
+                match option.split_once('=') {
+                    Some(("testerId", value)) if tester.is_none() => {
+                        tester = Some(crate::parse_address(resolve(value)?)? as usize);
+                    }
+                    Some(("pauseEmulation", value)) if pause.is_none() => {
+                        pause = Some(parse_tester_bool(resolve(value)?)?);
+                    }
+                    _ => return Err(format!("unsupported or duplicate UART idle option {option:?}")),
+                }
+            }
+            Some(Action::UartIdle(duration_steps(resolve(timeout)?)?, tester, pause))
         }
 
         [target, "Frequency"] if boot.started => Some(Action::TimerProperty(
@@ -3407,6 +3426,7 @@ fn execute(
                         | Action::PeripheralWrite(..)
                         | Action::CreateUartTester(..)
                         | Action::DefaultUartTester(_)
+                        | Action::UartIdle(..)
                         | Action::WaitForBytes(..)
                         | Action::WaitForTester(..)
                         | Action::RunFor(_)
@@ -4243,6 +4263,13 @@ mod tests {
         assert_eq!(run_uart_watch(&mut machine, watch, 10, Some(false), &mut output).unwrap().0, Stop::Limit);
         assert!(!machine.primary.monitor_paused);
         assert_eq!(machine.elapsed_steps(), 10);
+
+        machine.bus.default_uart_pause = true;
+        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 5, &mut output).unwrap().0, Stop::Limit);
+        assert!(!machine.primary.monitor_paused);
+        assert_eq!(wait_for_uart_idle(&mut machine, Some(id), 10, None, 10, &mut output).unwrap().0, Stop::Limit);
+        assert!(machine.primary.monitor_paused);
+        assert_eq!(machine.elapsed_steps(), 25);
     }
 
     #[test]

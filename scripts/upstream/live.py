@@ -969,11 +969,13 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
         return {"Line": ""}
 
     def uart_idle(self, timeout, *args):
-        options = self.log_options(args, {"testerId"}, ("testerId",))
+        positional = ("testerId", "pauseEmulation") if self.rust_monitor else ("testerId",)
+        options = self.log_options(args, set(positional), positional)
         tester = self.parse_tester_id(options.get("testerId"))
         selector = f" testerId={tester}" if tester is not None else ""
+        pause = self.uart_bool_option(options, "pauseEmulation")
         self.started = True
-        self.operation(f"TestMonitorUartIdle {self.duration(timeout)}{selector}")
+        self.operation(f"TestMonitorUartIdle {self.duration(timeout)}{selector}{pause}")
 
     def write_line(self, content="", *args):
         positional = ("testerId", "waitForEcho")
