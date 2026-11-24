@@ -162,6 +162,19 @@ pub(crate) struct CreatedPlatform {
     registered: HashMap<String, usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum IrqOutput {
+    Named(&'static str),
+    Pin(u32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Endpoint {
+    pub(crate) receiver: usize,
+    pub(crate) pin: u32,
+    pub(crate) local: Option<u32>,
+}
+
 struct CreatedObject {
     model: Model,
     cpu: Option<Cpu>,
@@ -173,6 +186,7 @@ struct CreatedObject {
     dependency: Option<usize>,
     throw_on_construction: bool,
     gpio_count: u32,
+    endpoints: HashMap<IrqOutput, Vec<Endpoint>>,
     collections: Collections,
 }
 
@@ -321,6 +335,26 @@ impl Collections {
 
 impl CreatedPlatform {
     #[cfg(test)]
+    pub(crate) fn object_id(&self, name: &str) -> Option<usize> {
+        self.registered.get(name).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn irq_endpoints(&self, id: usize, name: &str) -> &[Endpoint] {
+        let object = &self.objects[id];
+        let output = object
+            .model
+            .irq_outputs()
+            .iter()
+            .copied()
+            .find(|&output| output == name)
+            .map(IrqOutput::Named)
+            .or_else(|| name.parse().ok().map(IrqOutput::Pin))
+            .unwrap();
+        object.endpoints.get(&output).map_or(&[], Vec::as_slice)
+    }
+
+    #[cfg(test)]
     pub(crate) fn cpu_id(&self, qualified_name: &str) -> Option<usize> {
         let id = *self.registered.get(qualified_name)?;
         (self.objects[id].model == Model::Cpu).then_some(id)
@@ -454,6 +488,7 @@ pub(crate) fn create_with_init(
             dependency: None,
             throw_on_construction: false,
             gpio_count: 0,
+            endpoints: HashMap::new(),
             collections: Collections::default(),
         });
         targets.push(Some(id));
@@ -470,6 +505,7 @@ pub(crate) fn create_with_init(
         dependency: None,
         throw_on_construction: false,
         gpio_count: 0,
+        endpoints: HashMap::new(),
         collections: Collections::default(),
     });
     globals.insert("sysbus", sysbus);
@@ -649,7 +685,7 @@ pub(crate) fn create_with_init(
         check_irq_source_overlap(platform.objects[id].model, &connections)?;
         for (source, property) in connections {
             platform
-                .verify_irq(id, property, |name| resolve(&entry.source, name))
+                .connect_irq(id, property, |name| resolve(&entry.source, name))
                 .map_err(|error| format!("{source}: {error}"))?;
         }
         while let Some((_, marker)) = sections.next() {
@@ -883,8 +919,8 @@ impl CreatedPlatform {
         Ok(())
     }
 
-    fn verify_irq(
-        &self,
+    fn connect_irq(
+        &mut self,
         id: usize,
         text: &str,
         resolve: impl Fn(&str) -> Option<usize>,
@@ -892,6 +928,7 @@ impl CreatedPlatform {
         let connection = irq_connection(text)?;
         let sender = &self.objects[id];
         let outputs = sender.model.irq_outputs();
+        let mut receivers = Vec::new();
         for destination in &connection.destinations {
             let target =
                 resolve(destination.name).ok_or("IrqDestinationDoesNotExist: missing receiver")?;
@@ -903,6 +940,7 @@ impl CreatedPlatform {
                     "IrqDestinationIsNotIrqReceiver: model does not implement IGPIOReceiver".into(),
                 );
             }
+            receivers.push(target);
         }
         let width = |end: &IrqEnd<'_>| match end {
             IrqEnd::Range(a, b) => u64::from(a.abs_diff(*b)) + 1,
@@ -946,6 +984,44 @@ impl CreatedPlatform {
             .any(|destination| destination.groups.iter().map(width).sum::<u64>() != source_width)
         {
             return Err("WrongIrqArity: source and destination widths differ".into());
+        }
+        let mut sources = Vec::new();
+        match connection.sources {
+            None => sources.push(IrqOutput::Named(outputs[0])),
+            Some(groups) => {
+                for group in groups {
+                    match group {
+                        IrqEnd::Property(name) => {
+                            let name = outputs
+                                .iter()
+                                .copied()
+                                .find(|&output| output == name)
+                                .unwrap();
+                            sources.push(IrqOutput::Named(name));
+                        }
+                        IrqEnd::Number(pin) => sources.push(IrqOutput::Pin(pin)),
+                        IrqEnd::Range(a, b) => sources.extend(irq_range(a, b).map(IrqOutput::Pin)),
+                    }
+                }
+            }
+        }
+        let endpoints = &mut self.objects[id].endpoints;
+        for (destination, receiver) in connection.destinations.into_iter().zip(receivers) {
+            let pins = destination
+                .groups
+                .into_iter()
+                .flat_map(|group| match group {
+                    IrqEnd::Number(pin) => irq_range(pin, pin),
+                    IrqEnd::Range(a, b) => irq_range(a, b),
+                    IrqEnd::Property(_) => unreachable!("destination groups consist of pins"),
+                });
+            for (&output, pin) in sources.iter().zip(pins) {
+                endpoints.entry(output).or_default().push(Endpoint {
+                    receiver,
+                    pin,
+                    local: destination.local,
+                });
+            }
         }
         Ok(())
     }
@@ -1001,6 +1077,7 @@ impl CreatedPlatform {
                     dependency: None,
                     throw_on_construction: false,
                     gpio_count: 0,
+                    endpoints: HashMap::new(),
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();
@@ -1106,6 +1183,7 @@ impl CreatedPlatform {
                     dependency: None,
                     throw_on_construction: false,
                     gpio_count: 0,
+                    endpoints: HashMap::new(),
                     collections: Collections::default(),
                 });
                 let mut seen = HashSet::new();

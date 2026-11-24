@@ -1748,3 +1748,63 @@ sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender
         "IrqSourceUsedMoreThanOnce",
     );
 }
+
+#[test]
+fn should_merge_single_interrupt() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1>
+    [Irq] -> receiver@[0]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+sender:
+    Irq -> receiver@1"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let outputs = platform.irq_endpoints(sender, "Irq");
+    assert_eq!(outputs[0].pin, 0);
+    assert_eq!(outputs[1].pin, 1);
+}
+
+#[test]
+fn should_merge_with_default_irq() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockIrqSender @ sysbus <0, 1>
+    [Irq] -> receiver@[0]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+sender:
+    -> receiver@2"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let outputs = platform.irq_endpoints(sender, "Irq");
+    assert_eq!(outputs[0].pin, 0);
+    assert_eq!(outputs[1].pin, 2);
+}
+
+#[test]
+fn should_handle_many_multiplexed_multi_destination_interrupts() {
+    let platform = creation::create_objects(
+        r#"
+sender: Antmicro.Renode.UnitTests.Mocks.MockGPIOByNumberConnectorPeripheral @ sysbus <3, 4>
+    gpios: 2
+    [0, Irq] -> receiver@[1-2] | receiver2@[3-4] | receiver3@[5-6]
+receiver: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <0, 1>
+receiver2: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <1, 2>
+receiver3: Antmicro.Renode.UnitTests.Mocks.MockReceiver @ sysbus <2, 3>"#,
+        Path::new("."),
+    )
+    .unwrap();
+    let sender = platform.object_id("sysbus.sender").unwrap();
+    let targets = ["receiver", "receiver2", "receiver3"]
+        .map(|name| platform.object_id(&format!("sysbus.{name}")).unwrap());
+    let outputs = platform.irq_endpoints(sender, "Irq");
+    assert_eq!(outputs.len(), 3);
+    for ((output, target), pin) in outputs.iter().zip(targets).zip([2, 4, 6]) {
+        assert_eq!(output.pin, pin);
+        assert_eq!(output.receiver, target);
+    }
+}

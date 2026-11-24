@@ -1,0 +1,4 @@
+official_id	nunit_id	rust_test	rust_outcome
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldMergeSingleInterrupt	0-1040	repl_parser::upstream_verification_tests::should_merge_single_interrupt	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldMergeWithDefaultIrq	0-1055	repl_parser::upstream_verification_tests::should_merge_with_default_irq	passed
+tests/unit-tests/RenodeTests/RenodeTests.csproj::Antmicro.Renode.UnitTests.PlatformDescription.MergeAndCreationTests.ShouldHandleManyMultiplexedMultiDestinationInterrupts	0-1050	repl_parser::upstream_verification_tests::should_handle_many_multiplexed_multi_destination_interrupts	passed

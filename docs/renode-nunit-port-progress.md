@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,085 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,088 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 310 |
+| 移植待ち | 307 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -464,3 +464,5 @@ CPU参照を要素、キー、値に含むコレクション4件を移植した�
 IRQ の検証8件を移植した。モック型の出力と受信インターフェースに基づき、接続先、出力名、既定出力、ピン番号、接続数の診断を照合した。[公式IDとの対応](nunit-evidence/targeted-repl-irq.tsv)・[実行ログ](nunit-evidence/targeted-repl-irq.log)
 
 IRQ の数値範囲、重複する既定出力、既定名と明示名が同じ出力を指す場合の3件を移植した。`VerificationTests` は公式46件すべての対応が揃い、最終の対象実行では128件が合格した。[公式IDとの対応](nunit-evidence/targeted-repl-irq-overlap.tsv)・[実行ログ](nunit-evidence/targeted-repl-irq-overlap.log)
+
+IRQ 接続生成の3件を移植した。明示出力と既定出力の接続の追記、および複数の出力から複数の受信側へ接続する際のピン順と参照同一性を検証した。[公式IDとの対応](nunit-evidence/targeted-repl-wire.tsv)・[実行ログ](nunit-evidence/targeted-repl-wire.log)
