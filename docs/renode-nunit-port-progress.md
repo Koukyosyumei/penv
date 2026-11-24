@@ -5,12 +5,12 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 1,021 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 1,033 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 2,375 |
+| 移植待ち | 2,363 |
 | 上流 Ignore | 14 |
 
-進捗表は公式インベントリと対応表から生成した。移植待ち 44 fixture の
+進捗表は公式インベントリと対応表から生成した。移植待ち 43 fixture の
 ケース数と不足 API を各行に記録した。合否を示す列は含めていない。
 [現在の fixture 別進捗](nunit-evidence/port-progress.tsv)
 
@@ -115,13 +115,19 @@ ComparingTimerTests の比較値上限1件。対象を絞った Rust 実行で�
 固定 C# と対象 Rust 実行の両方で合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-migrant-hooks-reflection.tsv) · [対象実行ログ](nunit-evidence/targeted-migrant-hooks-reflection.log)
 
-今回の追加は5件。Migrant の XML サロゲート2件、PeripheralsGroupTests 全3件。
+前回の追加は5件。Migrant の XML サロゲート2件、PeripheralsGroupTests 全3件。
 周辺機器グループは SystemBus のネイティブアクセス幅変換対応の登録経路で検証した。
 対象を絞った Rust 実行で新規5件すべてが合格した。
 [公式 ID 別の結果](nunit-evidence/targeted-xml-peripheral-groups.tsv) · [対象実行ログ](nunit-evidence/targeted-xml-peripheral-groups.log)
 
-SystemBus の残り4件には、汎用登録の一時停止・再開、単一領域内の複数アクセスコールバック、
-パラメーター付き登録、null CPU の登録に対応する API が必要。
+今回の追加は12件。NullRegistrationPointPeripheralContainerTests 全10件と、
+SystemBusTests の複数機能・パラメーター付き登録2件。ネイティブ周辺機器の登録ハンドルで
+子の同一性を表し、アドレス範囲ごとにアクセス幅とコールバックを選択する。
+対象 Rust 実行では関連する既移植分を含む18件が合格した。
+[公式 ID 別の結果](nunit-evidence/targeted-child-and-native-ports.tsv) · [対象実行ログ](nunit-evidence/targeted-child-and-native-ports.log)
+
+SystemBus の残り2件には、汎用登録の一時停止・再開と、登録点を指定しない
+非クラスタ CPU の登録検証が必要。
 Migrant の未移植分には、生成読み書き、組み込みサロゲート、
 シリアライズ時のフック、型変更を伴うオブジェクトの復元が含まれる。
 全対象の移植と公式 ID 対応が揃ってから一括実行する。

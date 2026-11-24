@@ -34,7 +34,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MachineTests	5	0	0	5	0	There is no generic IMachine registry and lifecycle for the fixture's managed mock peripheral graph.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MemoryTests	2	2	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.MultiCPUTests	5	0	0	5	0	There is no generic registration and debugger/context naming API for the fixture's mock CPUs and CPU-local peripherals.
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	10	0	0	10	0	There is no generic single-peripheral container with NullRegistrationPoint, registration-point enumeration and typed registration failures.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.NullRegistrationPointPeripheralContainerTests	10	10	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PacketTests	18	0	0	18	0	There is no metadata-driven Packet encoder/decoder for fields with bit widths, offsets, nesting and endian annotations.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PeripheralsGroupTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.PseudorandomNumberGeneratorTests	3	3	0	0	0	-
@@ -50,7 +50,7 @@ src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.R
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.ElfMergeTests	19	0	0	19	0	ELF loaders lack the fixture's symbol-table merging and overlap-resolution API.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolLookupTests	23	23	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SymbolLookupTests.SymbolTests	5	4	0	1	0	The remaining ShouldDemangle case needs Itanium C++ demangling with Renode constructor labels and PLT suffix handling.
-src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests	27	22	0	4	1	The remaining runnable cases need the generic object-registration pause/resume lifecycle, multiple native access callbacks within one region, parametrized registration or null CPU registration APIs.
+src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.SystemBusTests	27	24	0	2	1	The remaining two runnable cases need generic object-registration pause/resume lifecycle callbacks and validation of non-clustered CPU registration without a registration point.
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeIntervalTests	3	3	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.TimeTests	4	4	0	0	0	-
 src/Infrastructure/src/Emulator/Main/Tests/UnitTests/UnitTests.csproj	Antmicro.Renode.UnitTests.WriteExtensionsTest	26	26	0	0	0	-
