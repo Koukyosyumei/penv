@@ -1914,7 +1914,7 @@ fn run() -> Result<ExitCode, String> {
                 .map_err(|e| format!("{}: {e}", path.display()))?;
         }
         machine.bus.renode_unmapped_data = renode_unmapped_data
-            || (monitor_stdio && !machine.is_cortex_m());
+            || (monitor_stdio && !empty_monitor_machine && !machine.is_cortex_m());
         for action in &setup_actions {
             match action {
                 SetupAction::Assemble(cpu, address, instruction) => {
