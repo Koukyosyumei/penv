@@ -379,7 +379,10 @@ class LiveEndpoint(MemoryKeywords, Endpoint):
             select = f"mach set {self.literal(machine)}" if machine and machine.strip() else None
             if self.proc is None:
                 if select:
+                    self.inspect_startup(select)
                     self.commands.append(select)
+                if re.fullmatch(r"(?:mach|machine)\s+set\s+.+", command, re.DOTALL):
+                    self.inspect_startup(command)
                 # Only route read-only queries here. Rust parses and evaluates the original command.
                 if re.match(r"(?:echo|lastLog|printenv)(?:\s|$)", command):
                     reply, value = self.inspect_startup(command)

@@ -2154,6 +2154,16 @@ pub fn load_session_stream(mut input: impl BufRead, root: &Path) -> Result<Start
     let length = header.strip_prefix("PENV-COMMAND ").ok_or("expected PENV-COMMAND")?;
     let command = read_monitor_text(&mut input, length)?;
     let mut state = script_state()?;
+    if let Ok(["mach" | "machine", "set", selector]) = command_words(command.trim()).as_deref() {
+        if load_text(&source, source.clone(), root, &mut state, &body).is_ok()
+            && let Err(error) = validate_machine_selection(
+                selector, &state.variables, state.boot.session.machine.as_deref(), state.machine,
+            )
+        {
+            return Ok(StartupInput::Reply("REJECTED", error));
+        }
+        return Ok(StartupInput::Reply("DEFER", String::new()));
+    }
     if let Ok([verb @ ("include" | "i" | "ExecuteScript"), value]) = command_words(command.trim()).as_deref() {
         if load_text(&source, source.clone(), root, &mut state, &body).is_ok() {
             let origin = source.parent().unwrap_or(Path::new("."));
@@ -2782,6 +2792,24 @@ fn assign_variable(
     Ok(true)
 }
 
+fn validate_machine_selection(
+    selector: &str, variables: &HashMap<String, String>, machine: Option<&str>, exists: bool,
+) -> Result<(), String> {
+    let selector = resolve(variables, selector)?;
+    if let Ok(index) = crate::parse_address64(selector) {
+        if exists && index == 0 {
+            return Ok(());
+        }
+        return Err("Wrong machine number. Type mach to show a list of available machines.".into());
+    }
+    let name = unquote(selector);
+    if machine == Some(name) {
+        Ok(())
+    } else {
+        Err(format!("Machine {name} not found."))
+    }
+}
+
 fn normalized_monitor_scope(name: &str) -> String {
     name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
 }
@@ -3162,16 +3190,8 @@ fn execute(
             Some(Action::UserState(value))
         }
         ["Clear"] => Some(Action::ClearMemory),
-        ["mach" | "machine", "set", selector] if *machine => {
-            let selector = resolve(selector)?;
-            let name = unquote(selector);
-            if let Ok(index) = crate::parse_address64(selector) {
-                if index != 0 {
-                    return Err("Wrong machine number. Type mach to show a list of available machines.".into());
-                }
-            } else if boot.session.machine.as_deref() != Some(name) {
-                return Err(format!("Machine {name} not found."));
-            }
+        ["mach" | "machine", "set", selector] => {
+            validate_machine_selection(selector, variables, boot.session.machine.as_deref(), *machine)?;
             if !boot.started && boot.runtime.is_empty() {
                 return Ok(());
             }
@@ -4784,6 +4804,10 @@ greet "hello world"
         assert_eq!(inspect("$var=1234\n$var?=5678\n", "echo $var"), ("OK", "1234".into()));
         assert_eq!(inspect("mach create\nstart\n", "echo $var").0, "DEFER");
         assert_eq!(inspect("", "set var 1234").0, "DEFER");
+        let machine = "mach create \"bench board\"\n";
+        assert_eq!(inspect(machine, "mach set 0").0, "DEFER");
+        assert_eq!(inspect(machine, "mach set 9").0, "REJECTED");
+        assert_eq!(inspect(machine, "mach set \"missing\"").0, "REJECTED");
         assert_eq!(inspect("", "echo $var").0, "ERROR");
         let macro_setup = "macro greet \"echo $label\"\nset label ready\n";
         assert_eq!(inspect(macro_setup, "runMacro $greet"), ("OK", "ready\n".into()));
