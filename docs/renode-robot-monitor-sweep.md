@@ -633,3 +633,36 @@ UART 配置からマシンを構成する。Python が依存状態に保持す�
 Arty LiteX の `Should Boot` はゲストの起動出力を受信し、
 保存コマンドが CPU 付き構成を拒否したため未対応のまま
 （`target/monitor-restorable-arty/suite-0000.json`）。
+
+`7920259` は明示的な `$global.name` とマシンローカルの検索を
+分離し、文字列の先頭の `@` とパストークンを区別する。
+時刻照会などの実行コマンドに続く `echo` はその順序で実行する。
+`8f914a2` は入れ子 RESC 内の `machine LoadPlatformDescription` で
+`$ORIGIN` と `$CWD` を展開する。
+`target/monitor-scope-proof/` の `compare.resc` と `include.resc` を
+固定 Renode の `include` および `penv run --script` から実行した。
+変数の値、パストークンの出力、仮想時刻 10 ms と同期量 2 ms、
+時刻照会後の出力順、入れ子 RESC から読み込む REPL パスが一致した。
+`penv-frames.jsonl` はライブモニターの変数読み出しと、
+明示的なグローバル名で存在しない変数を拒否した応答を記録する。
+
+`1dc723e` は `set definition $ORIGIN/board.repl` で、代入した RESC の
+ディレクトリをパスに保持する。親 RESC に戻ってから変数で REPL を読み込む
+`alias.resc` を固定 Renode と通常 CLI に渡し、展開結果と時刻が一致した。
+`penv-alias-frames.jsonl` でストリーム起動と起動後の変数参照でも確認した。
+
+`88b06b7` は `mach set 0` と `mach set "0"` を区別する。固定 Renode
+の Robot RPC と penv のフレーム応答を `renode-mach.jsonl` と
+`penv-mach.jsonl` に記録した。添字 0、16 進数の 0、実在する名前は成功。
+存在しない名前と範囲外の添字はエラーを返し、直後のローカル変数は引き続き
+選択済みマシンの値を返した。
+
+未変更の HEX と STM32F072b の 7 件を `8f914a2` で実行した。
+5 件が合格し、Blinky と Button は LED 待機中に 30 秒のホスト制限に達して
+`NOT_RUN` になった（`target/monitor-anchored-robot/results.json`）。
+`1dc723e` で 120 秒に延ばした再計測では両方とも合格した
+（`target/monitor-frozen-blinky/results.json`、
+`target/monitor-frozen-button/results.json`）。再計測バイナリの SHA-256 は
+`11f8d8b9222fdbcc7c616571d3aa453b5800aeaf224b04264bf5465eea03a8a4`。
+
+マシン選択変更後も HEX は合格した（`target/monitor-selection-88b06b7-hex/results.json`）。
