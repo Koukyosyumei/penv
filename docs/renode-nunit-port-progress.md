@@ -5,9 +5,9 @@
 
 | 状態 | ケース数 |
 | --- | ---: |
-| Linux 対象で Rust 移植・公式 ID 対応済み | 3,362 |
+| Linux 対象で Rust 移植・公式 ID 対応済み | 3,369 |
 | 移植・対応済みの Windows 専用ケース | 3 |
-| 移植待ち | 33 |
+| 移植待ち | 26 |
 | 上流 Ignore | 14 |
 | 上流 Inconclusive | 1 |
 
@@ -520,3 +520,7 @@ CMD6 のパーティション切り替え、CMD8 の `EXT_CSD` 転送、CMD0 の
 OpenTitan SPI Device の FIFO 4件を移植した。バスに同じアドレス範囲で登録し、SRAM のバイトアクセス、レジスタのワードアクセス、SPI ホストからの転送を使用した。[公式IDとの対応](nunit-evidence/targeted-opentitan-spi-fifo.tsv)・[実行ログ](nunit-evidence/targeted-opentitan-spi-fifo.log)
 
 OpenTitan SPI Device の割り込み5件を移植した。RX 満杯、RX オーバーフロー、RX/TX ウォーターマーク、TX アンダーフローの境界を上流入力で照合した。同 fixture の全9件が合格した。実装範囲は上流 fixture が使う汎用 FIFO と割り込み。[公式IDとの対応](nunit-evidence/targeted-opentitan-spi-interrupts.tsv)・[実行ログ](nunit-evidence/targeted-opentitan-spi-interrupts.log)
+
+CAST_CANCTRL のリセット値、送信バッファ、割り込み、カウンターの7件を移植した。
+対象実行は7件合格、0件失敗。
+[公式 ID 別の結果](nunit-evidence/targeted-cast-can-transmit.tsv) · [対象実行ログ](nunit-evidence/targeted-cast-can-transmit.log)

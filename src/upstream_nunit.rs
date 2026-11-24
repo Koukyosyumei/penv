@@ -104,3 +104,5 @@ mod migrant_two_domains;
 mod sd_emmc;
 
 mod opentitan_spi_device;
+
+mod cast_canctrl;

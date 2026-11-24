@@ -23,6 +23,7 @@ pub mod svd;
 pub mod opentitan_aes;
 pub mod opentitan_i2c;
 pub mod opentitan_spi_device;
+pub mod cast_canctrl;
 pub mod pac1934;
 pub mod packet_layout;
 pub mod monitor_tokenizer;
